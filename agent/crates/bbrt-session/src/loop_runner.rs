@@ -75,7 +75,7 @@ struct FastSummarizer<'a> {
 impl Summarizer for FastSummarizer<'_> {
     fn summarize(&self, text: &str) -> Result<String, String> {
         let req = ChatRequest {
-            model: self.model.clone(),
+            model: "bbw-fast".to_string(),
             messages: vec![
                 ChatMessage {
                     role: "system".into(),
@@ -245,7 +245,7 @@ impl SessionRunner {
                 });
                 let summarizer = FastSummarizer {
                     client: deps.model.as_ref(),
-                    model: "fast".into(),
+                    model: "bbw-fast".into(), // 19 篇档位别名
                 };
                 match compact(&deps.budget, &self.history, &summarizer) {
                     Ok(CompactionOutcome {
@@ -297,9 +297,10 @@ impl SessionRunner {
                 },
             );
             let messages = to_chat_messages(&assembled);
+            // 19 篇 §3.2：调用方 model 只允许档位别名
             let model_name = match self.model_policy {
-                ModelTier::Fast => "fast".to_string(),
-                ModelTier::Strong => "strong".to_string(),
+                ModelTier::Fast => "bbw-fast".to_string(),
+                ModelTier::Strong => "bbw-strong".to_string(),
             };
             let req = ChatRequest {
                 model: model_name,

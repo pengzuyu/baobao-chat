@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/baobaowork/server/internal/aigw"
 	"github.com/baobaowork/server/internal/auth"
 	"github.com/baobaowork/server/internal/auth/api"
 	"github.com/baobaowork/server/internal/auth/repo"
@@ -34,6 +35,7 @@ import (
 	"github.com/baobaowork/server/internal/platform/eventbus"
 	"github.com/baobaowork/server/internal/platform/httpx"
 	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -52,12 +54,14 @@ func main() {
 		deviceRepo  authrepo.DeviceRepo
 		attemptRepo authrepo.LoginAttemptStore
 	)
+	var pgPool *pgxpool.Pool
 	if cfg.DBDSN != "" {
 		pool, err := bbwpg.New(context.Background(), cfg.DBDSN) // AfterConnect 会话级 SET app.tenant=1（RLS 兜底）
 		if err != nil {
 			log.Fatalf("PG 连接失败: %v", err)
 		}
 		defer pool.Close()
+		pgPool = pool
 		if err := bbwpg.Migrate(context.Background(), pool); err != nil {
 			log.Fatalf("PG 迁移失败: %v", err)
 		}
@@ -125,6 +129,13 @@ func main() {
 	mux.Handle("PATCH /api/v1/convs/{id}/state", authed(handleConvState(msgMod.API())))
 	// 增量同步（API-IM-01：登录/重连补投）
 	mux.Handle("GET /api/v1/sync", authed(handleSync(msgMod.API())))
+
+	// AI 网关（docs/19 §6：OpenAI 兼容入口；独立鉴权链——JWT/OBO/开发令牌，不走 /api/v1 authed）
+	aigwMod := aigw.NewModule(pgPool, func(token string) (*authjwt.Claims, error) {
+		return authAPI.Verify(context.Background(), token)
+	})
+	mux.HandleFunc("POST /v1/chat/completions", aigwMod.Gateway.HandleChat)
+	mux.HandleFunc("POST /v1/embeddings", aigwMod.Gateway.HandleEmbeddings)
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))

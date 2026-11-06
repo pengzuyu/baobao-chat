@@ -22,10 +22,15 @@ var initSQL string
 //go:embed 0002_message_edit_version.sql
 var editVersionSQL string
 
+//go:embed 0003_ai_gateway.sql
+var aiGatewaySQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
 	// Probe 必须留空：message 表 0001 即存在，探测会误判 0002 已应用而漏执行 ALTER；
 	// 幂等性由 SQL 内 IF NOT EXISTS 兜底（版本记录丢失重放安全）。
 	{Version: 2, Name: "0002_message_edit_version", Probe: "", SQL: editVersionSQL},
+	// 0003 同理留空：ai_provider 表仅本迁移创建；幂等由 IF NOT EXISTS 兜底
+	{Version: 3, Name: "0003_ai_gateway", Probe: "", SQL: aiGatewaySQL},
 }
