@@ -20,6 +20,7 @@ import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { dayKey, formatDayDivider } from '../../../shared/utils/time';
 import { useConversationMessages, useConversations } from '../api/hooks';
 import { fetchMessagesBefore, mapMsgNew, editMessage, recallMessage, setReaction } from '../api/im';
+import { hydrateConv, hydrateLocal, hookSyncOnReconnect, resendOutbox, runSync } from '../api/local';
 import type {
   ConvStatePushPayload,
   Message,
@@ -83,6 +84,19 @@ export function ChatPage() {
   useEffect(() => {
     if (convQuery.data) setConvs(convQuery.data.items);
   }, [convQuery.data, setConvs]);
+  // 本地缓存编排（D03 §6.2/API-IM-01）：启动恢复 outbox + 首开缓存上屏 + 重连增量同步。
+  // 注意：挂载时 WS 可能已在线（登录流程先于本页），offline→online 转换错过——须查当前态兜底
+  useEffect(() => {
+    void hydrateLocal().then(() => {
+      if (useConnectionStore.getState().status === 'online') {
+        void runSync().then(() => resendOutbox());
+      }
+    });
+    return hookSyncOnReconnect();
+  }, []);
+  useEffect(() => {
+    if (convId) void hydrateConv(convId);
+  }, [convId]);
   useEffect(() => {
     if (convId && msgQuery.data) replaceMessages(convId, msgQuery.data.items);
   }, [convId, msgQuery.data, replaceMessages]);

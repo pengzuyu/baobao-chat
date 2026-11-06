@@ -89,6 +89,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     if (refreshTimer) clearTimeout(refreshTimer);
     refreshTimer = null;
     set({ token: null, refreshToken: null, expiresAt: null, user: null, loginStatus: 'idle', error: null, lockUntil: 0 });
+    // 本地缓存清理（IM 消息/outbox/游标随账号退出抹除，D03 §6.2 隐私面）
+    void import('../../im/api/local').then((m) => m.localLogoutCleanup());
   },
 
   clearError: () => set({ error: null }),

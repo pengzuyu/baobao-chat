@@ -9,6 +9,8 @@ import { create } from 'zustand';
 import { emit } from '../../../shared/bus';
 import { wsClient } from '../../../shared/api/ws';
 import { sendTextMessage, updateConvState as apiUpdateConvState } from '../api/im';
+// 本地持久化（写穿/outbox）——与 ../api/local 互引为运行时环（函数体引用，模块初始化无环序依赖）
+import { outboxBumpRetry, outboxEnqueue, outboxSettle, persistMessage, persistReadSeq, persistUpdatedLocal } from '../api/local';
 import type { Conversation, Message, MsgExt } from '../model/types';
 import '../events'; // 装载 bus 事件类型声明（im:unread-changed 等）
 
@@ -65,6 +67,10 @@ interface ImState {
   sendText: (convId: string, text: string, replyToSeq?: number) => Promise<void>;
   /** 失败重试：复用原 client_msg_id（幂等回原 seq，INT-IM-01a） */
   retrySend: (convId: string, clientMsgId: string) => Promise<void>;
+  /** 本地恢复：outbox 行重建端内 sending 消息（hydrateLocal 用） */
+  enqueueOutbox: (clientMsgId: string, convId: string, text: string) => void;
+  /** 本地恢复后的重放（重连/启动 resendOutbox 用） */
+  replayOutbox: (clientMsgId: string, convId: string, text: string) => Promise<void>;
 }
 
 // ---- msg.read 上报节流（1s trailing，D03 INT-IM-12）----
@@ -173,6 +179,7 @@ export const useImStore = create<ImState>((set, get) => ({
     const since = Date.now() - last;
     if (since >= READ_THROTTLE_MS) {
       flushRead(convId);
+      void persistReadSeq(convId, readLatestSeq.get(convId) ?? upToSeq);
       get().clearUnread(convId);
       return;
     }
@@ -183,6 +190,7 @@ export const useImStore = create<ImState>((set, get) => ({
         setTimeout(() => {
           readTimers.delete(convId);
           flushRead(convId);
+          void persistReadSeq(convId, readLatestSeq.get(convId) ?? 0);
           useImStore.getState().clearUnread(convId);
         }, READ_THROTTLE_MS - since),
       );
@@ -200,7 +208,9 @@ export const useImStore = create<ImState>((set, get) => ({
       return { convs };
     }),
 
-  appendIncoming: (msg) =>
+  appendIncoming: (msg) => {
+    // 写穿本地库（服务端态消息；幂等 put）
+    void persistMessage(msg);
     set((s) => {
       const list = s.messagesByConv[msg.convId] ?? [];
       // 幂等：重连补投与实时推送可能重复（client_msg_id 去重）。
@@ -210,6 +220,8 @@ export const useImStore = create<ImState>((set, get) => ({
       if (hitIdx >= 0) {
         const next = [...list];
         next[hitIdx] = { ...next[hitIdx], localState: 'sent', seq: msg.seq, msgId: msg.msgId, ts: msg.ts };
+        // 服务端真值到达即自愈：清 outbox 行 + 落本地库（settle 的 ack 写幂等兜底）
+        void outboxSettle(msg.clientMsgId, true, next[hitIdx]);
         return { messagesByConv: { ...s.messagesByConv, [msg.convId]: next } };
       }
       const convs = s.convs.map((c) => {
@@ -226,9 +238,11 @@ export const useImStore = create<ImState>((set, get) => ({
       });
       broadcastUnread(convs);
       return { convs, messagesByConv: { ...s.messagesByConv, [msg.convId]: sortMessages([...list, msg]) } };
-    }),
+    });
+  },
 
-  applyRecall: (convId, msgId, operatorId) =>
+  applyRecall: (convId, msgId, operatorId) => {
+
     set((s) => {
       const list = s.messagesByConv[convId];
       if (!list) return s;
@@ -247,9 +261,13 @@ export const useImStore = create<ImState>((set, get) => ({
       });
       if (!hit) return s;
       return { messagesByConv: { ...s.messagesByConv, [convId]: next } };
-    }),
+    });
+      void persistUpdatedLocal(convId, msgId);
+    },
 
-  applyUpdated: (convId, msgId, body, editedAt, editVersion) =>
+
+  applyUpdated: (convId, msgId, body, editedAt, editVersion) => {
+
     set((s) => {
       const list = s.messagesByConv[convId];
       if (!list) return s;
@@ -257,9 +275,13 @@ export const useImStore = create<ImState>((set, get) => ({
         m.msgId === msgId ? { ...m, body: { text: body.text }, status: 3 as const, editedAt, editVersion } : m,
       );
       return { messagesByConv: { ...s.messagesByConv, [convId]: next } };
-    }),
+    });
+      void persistUpdatedLocal(convId, msgId);
+    },
 
-  applyReactions: (convId, msgId, reactions) =>
+
+  applyReactions: (convId, msgId, reactions) => {
+
     set((s) => {
       const list = s.messagesByConv[convId];
       if (!list) return s;
@@ -269,7 +291,10 @@ export const useImStore = create<ImState>((set, get) => ({
         return { ...m, ext };
       });
       return { messagesByConv: { ...s.messagesByConv, [convId]: next } };
-    }),
+    });
+      void persistUpdatedLocal(convId, msgId);
+    },
+
 
   typing: {},
   applyTyping: (convId, uid) => set((s) => ({ typing: { ...s.typing, [convId]: { uid, at: Date.now() } } })),
@@ -314,6 +339,8 @@ export const useImStore = create<ImState>((set, get) => ({
       messagesByConv: { ...s.messagesByConv, [convId]: sortMessages([...(s.messagesByConv[convId] ?? []), optimistic]) },
       convs: touchConv(s.convs, convId, `我: ${text}`, optimistic.ts),
     }));
+    // outbox 入队（弱网重发源，跨刷新存活，D03 §1.2）
+    void outboxEnqueue(clientMsgId, convId, text);
     await settle(set, get, convId, clientMsgId, replyToSeq);
   },
 
@@ -329,15 +356,48 @@ export const useImStore = create<ImState>((set, get) => ({
     }));
     await settle(set, get, convId, clientMsgId);
   },
+
+  /** 本地恢复：把 outbox 行重建为端内 sending 消息（hydrateLocal 用；已存在则跳过） */
+  enqueueOutbox: (clientMsgId, convId, text) => {
+    const { myUid, messagesByConv } = get();
+    if ((messagesByConv[convId] ?? []).some((m) => m.clientMsgId === clientMsgId)) return;
+    const optimistic: Message = {
+      msgId: '',
+      convId,
+      seq: nextLocalSeq(),
+      clientMsgId,
+      senderId: myUid,
+      senderName: '我',
+      type: 'text',
+      body: { text },
+      status: 1,
+      ts: Date.now(),
+      localState: 'sending',
+    };
+    set((s) => ({
+      messagesByConv: { ...s.messagesByConv, [convId]: sortMessages([...(s.messagesByConv[convId] ?? []), optimistic]) },
+    }));
+  },
+
+  /** 本地恢复后的重放（重连/启动 resendOutbox 用）：复用幂等键走 settle */
+  replayOutbox: async (clientMsgId, convId, text) => {
+    const { myUid, messagesByConv } = get();
+    if (!(messagesByConv[convId] ?? []).some((m) => m.clientMsgId === clientMsgId)) {
+      get().enqueueOutbox(clientMsgId, convId, text);
+    }
+    void myUid;
+    await settle(set, get, convId, clientMsgId);
+  },
 }));
 
-/** 统一收尾：ack → sent（回填 seq/msgId/ts）；异常 → failed（红叹号+重试入口） */
+/** 统一收尾：ack → sent（回填 seq/msgId/ts）；异常 → 自动重试≤3 后 failed（红叹号+重试入口） */
 async function settle(
   set: (partial: Partial<ImState> | ((s: ImState) => Partial<ImState>)) => void,
   get: () => ImState,
   convId: string,
   clientMsgId: string,
   replyToSeq?: number,
+  attempt = 0,
 ): Promise<void> {
   const pending = (get().messagesByConv[convId] ?? []).find((m) => m.clientMsgId === clientMsgId);
   const text = pending && 'text' in pending.body ? pending.body.text : '';
@@ -351,7 +411,21 @@ async function settle(
         ),
       },
     }));
+    // outbox 出队 + 服务端态消息落库（pending 必在：乐观上屏先行）
+    if (pending) {
+      const sent: Message = { ...pending, localState: 'sent', seq: ack.seq, msgId: ack.msgId, ts: ack.ts };
+      void outboxSettle(clientMsgId, true, sent);
+    } else {
+      void outboxSettle(clientMsgId, true);
+    }
   } catch {
+    // 自动重试 3 次指数退避（14 §2.2）；重试期间保持 sending 灰钟
+    const retries = await outboxBumpRetry(clientMsgId).catch(() => attempt + 1);
+    if (retries <= 3) {
+      const backoff = Math.min(1000 * 2 ** (retries - 1), 8000);
+      setTimeout(() => void settle(set, get, convId, clientMsgId, replyToSeq, retries), backoff);
+      return;
+    }
     set((s) => ({
       messagesByConv: {
         ...s.messagesByConv,
@@ -360,6 +434,7 @@ async function settle(
         ),
       },
     }));
+    void outboxSettle(clientMsgId, false);
   }
 }
 
