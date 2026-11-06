@@ -7,11 +7,14 @@
 import { useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Bot, FileText, Phone, Settings2, BrainCircuit } from 'lucide-react';
+import { FileText, Phone, Settings2, BrainCircuit } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { LoginPage } from '../features/auth/pages/LoginPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
 import { useImStore } from '../features/im/store/im';
+import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
+import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
+import { AgentReportsPage } from '../features/agent/pages/AgentReportsPage';
 import { wsClient } from '../shared/api/ws';
 import { bindWsToConnectionStore, useConnectionStore } from '../shared/store/connection';
 import { MainLayout } from './MainLayout';
@@ -97,7 +100,11 @@ export function App() {
         <Route path="/rtc" element={<PlaceholderPage title="通话" designDoc="D04" icon={Phone} blurb="音视频通话、来电接听与通话历史" />} />
         <Route path="/doc" element={<PlaceholderPage title="文档中心" designDoc="D05/D06" icon={FileText} blurb="在线文档协同、文件传输与分享" />} />
         <Route path="/kb" element={<PlaceholderPage title="知识库" designDoc="D11" icon={BrainCircuit} blurb="企业知识空间检索、摄入与授权治理" />} />
-        <Route path="/agent" element={<PlaceholderPage title="Agent 工作台" designDoc="D08" icon={Bot} blurb="AI Agent 会话、审批卡与检查点" />} />
+        {/* Agent 工作台域（D08）：PAG-01/02/03 工作台 + PAG-11 记忆 + 日报 */}
+        <Route path="/agent" element={<AgentWorkbenchPage />} />
+        <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />
+        <Route path="/agent/memory" element={<AgentMemoryPage />} />
+        <Route path="/agent/reports" element={<AgentReportsPage />} />
         <Route path="/admin/*" element={<PlaceholderPage title="管理后台" designDoc="D10" icon={Settings2} blurb="租户、组织、策略与审计管理" />} />
         {/* 设置页族（D01 §4.2）：通用/通知/传输/Agent/关于；通用页主题切换真实生效 */}
         <Route path="/settings" element={<SettingsLayout />}>
