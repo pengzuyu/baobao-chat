@@ -1512,3 +1512,444 @@ body {
     padding: var(--bbw-space-4);
   }
 }
+
+/* ─────────────── IM 对话细节（D03 §3.2/§4.1 打磨） ─────────────── */
+
+/* 悬浮操作条（INT-IM-25）：气泡 hover 出现，快捷表情 + 回复/编辑/撤回/转发 */
+.msg-row__bubble-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  max-width: 100%;
+}
+
+.msg-actions {
+  position: absolute;
+  top: -22px;
+  right: 4px;
+  display: none;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  background: var(--bbw-bg-card, #fff);
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  z-index: 5;
+}
+
+.msg-row:hover .msg-actions,
+.msg-actions:hover {
+  display: inline-flex;
+}
+
+.msg-actions__emoji {
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  padding: 2px 3px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.msg-actions__emoji:hover,
+.msg-actions__btn:hover {
+  background: var(--bbw-gray-2);
+}
+
+.msg-actions__btn {
+  border: none;
+  background: transparent;
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-7);
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.msg-actions__btn--danger {
+  color: var(--bbw-danger, #d54941);
+}
+
+/* 引用条（INT-IM-04）：气泡顶部灰底 + 左主色条，点击定位 */
+.msg-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bbw-gray-1, rgba(0, 0, 0, 0.03));
+  border-left: 3px solid var(--bbw-primary);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  max-width: 360px;
+}
+
+.msg-quote__sender {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-primary);
+  font-weight: 500;
+}
+
+.msg-quote__digest {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 表情回应条（INT-IM-23） */
+.msg-reactions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.msg-reactions__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--bbw-gray-3);
+  background: var(--bbw-gray-1, rgba(0, 0, 0, 0.02));
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.msg-reactions__item--mine {
+  border-color: var(--bbw-primary);
+  background: var(--bbw-primary-light);
+}
+
+.msg-reactions__count {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+}
+
+/* 已编辑角标（INT-IM-02） */
+.msg-edited-tag {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--bbw-gray-5);
+  margin-left: 6px;
+  transform: scale(0.9);
+}
+
+/* @提及高亮（INT-IM-24） */
+.msg-mention {
+  color: var(--bbw-primary);
+  background: var(--bbw-primary-light);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+/* 引用定位闪烁（INT-IM-04） */
+.msg-row--flash {
+  animation: msg-flash 0.6s ease-in-out 3;
+}
+
+@keyframes msg-flash {
+  50% {
+    background: var(--bbw-primary-light);
+  }
+}
+
+/* 合并转发卡片（PIM-11 前置） */
+.msg-merge {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.msg-merge__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  font-size: var(--bbw-font-13);
+}
+
+.msg-merge__hint {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-5);
+}
+
+/* 输入框上下文条：引用回复 / 编辑（INT-IM-02/04） */
+.input-context-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-2);
+  margin: var(--bbw-space-2) var(--bbw-space-3) 0;
+  padding: 4px 8px;
+  background: var(--bbw-gray-2);
+  border-left: 3px solid var(--bbw-primary);
+  border-radius: 4px;
+  font-size: var(--bbw-font-12);
+}
+
+.input-context-bar--edit {
+  border-left-color: var(--bbw-warning, #d59020);
+}
+
+.input-context-bar__label {
+  color: var(--bbw-primary);
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+.input-context-bar__digest {
+  color: var(--bbw-gray-6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.input-context-bar__close {
+  border: none;
+  background: transparent;
+  color: var(--bbw-gray-5);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+}
+
+/* 表情面板 / @面板（INT-IM-24 / 输入工具） */
+.emoji-panel {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  padding: var(--bbw-space-2);
+  margin: 0 var(--bbw-space-3);
+  background: var(--bbw-bg-card, #fff);
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-control);
+}
+
+.emoji-panel__item {
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  padding: 3px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.emoji-panel__item:hover {
+  background: var(--bbw-gray-2);
+}
+
+.mention-panel {
+  position: absolute;
+  bottom: 100%;
+  left: var(--bbw-space-3);
+  z-index: 20;
+  min-width: 220px;
+  background: var(--bbw-bg-card, #fff);
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-control);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+.mention-panel__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--bbw-space-2);
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--bbw-font-13);
+}
+
+.mention-panel__item--active,
+.mention-panel__item:hover {
+  background: var(--bbw-gray-2);
+}
+
+.mention-panel__name {
+  color: var(--bbw-text-1);
+}
+
+.mention-panel__uid {
+  color: var(--bbw-gray-5);
+  font-size: var(--bbw-font-12);
+}
+
+/* 正在输入副标题（INT-IM-11） */
+.chat-header__typing {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-5);
+  margin-left: var(--bbw-space-2);
+  font-weight: 400;
+}
+
+/* 未读分隔线（INT-IM-08） */
+.unread-divider {
+  align-self: stretch;
+  text-align: center;
+  color: var(--bbw-primary);
+  font-size: var(--bbw-font-12);
+  border-top: 1px solid var(--bbw-primary);
+  margin: var(--bbw-space-2) 0;
+  padding-top: 3px;
+}
+
+/* 上翻加载提示 + 回到底部浮标（INT-IM-13） */
+.load-older-hint {
+  text-align: center;
+  color: var(--bbw-gray-5);
+  font-size: var(--bbw-font-12);
+  padding: var(--bbw-space-2) 0;
+}
+
+.scroll-bottom-fab {
+  position: absolute;
+  right: var(--bbw-space-6);
+  bottom: 140px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--bbw-gray-3);
+  background: var(--bbw-bg-card, #fff);
+  color: var(--bbw-primary);
+  font-size: var(--bbw-font-12);
+  padding: 5px 10px;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  z-index: 10;
+}
+
+/* 会话右键菜单（INT-IM-07） */
+.ctx-menu {
+  position: fixed;
+  z-index: var(--bbw-z-modal, 1000);
+  min-width: 140px;
+  background: var(--bbw-bg-card, #fff);
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-control);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+}
+
+.ctx-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-2);
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 6px 10px;
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-text-1);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ctx-menu__item:hover {
+  background: var(--bbw-gray-2);
+}
+
+/* 转发弹窗（PIM-10 简版） */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: var(--bbw-mask);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--bbw-z-modal, 1000);
+}
+
+.forward-modal {
+  width: 420px;
+  max-width: 90vw;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bbw-bg-card, #fff);
+  border-radius: var(--bbw-radius-card, 12px);
+  padding: var(--bbw-space-4);
+  gap: var(--bbw-space-3);
+}
+
+.forward-modal__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 500;
+}
+
+.forward-modal__list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.forward-modal__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--bbw-space-2);
+  border: none;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.forward-modal__item--active,
+.forward-modal__item:hover {
+  background: var(--bbw-gray-2);
+}
+
+.forward-modal__name {
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-text-1);
+}
+
+.forward-modal__hint {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.forward-modal__note {
+  resize: none;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-control);
+  padding: var(--bbw-space-2);
+  font-size: var(--bbw-font-13);
+}
+
+.forward-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--bbw-space-2);
+}
+
+/* 免打扰图标（会话列表项） */
+.conv-item__mute-icon {
+  margin-right: 2px;
+  color: var(--bbw-gray-5);
+}

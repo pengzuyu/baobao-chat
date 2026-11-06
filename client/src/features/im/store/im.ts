@@ -8,8 +8,8 @@
 import { create } from 'zustand';
 import { emit } from '../../../shared/bus';
 import { wsClient } from '../../../shared/api/ws';
-import { sendTextMessage } from '../api/im';
-import type { Conversation, Message } from '../model/types';
+import { sendTextMessage, updateConvState as apiUpdateConvState } from '../api/im';
+import type { Conversation, Message, MsgExt } from '../model/types';
 import '../events'; // 装载 bus 事件类型声明（im:unread-changed 等）
 
 interface ImState {
@@ -27,6 +27,8 @@ interface ImState {
   messagesByConv: Record<string, Message[] | undefined>;
   /** Query 拉取成功后整体写入（替换式，保留本端未决消息） */
   replaceMessages: (convId: string, items: Message[]) => void;
+  /** 上翻加载更早：prepend（INT-IM-13；去重按 seq） */
+  prependMessages: (convId: string, items: Message[]) => void;
 
   /** 对方已读游标：convId → peer read_seq（msg.receipt 推送维护，✓✓ 渲染依据） */
   peerReadSeq: Record<string, number>;
@@ -34,16 +36,33 @@ interface ImState {
   applyReceipt: (convId: string, userId: string, readSeq: number) => void;
   /** 已读上报（INT-IM-12：进会话/当前会话新消息两时机，1s 节流 trailing；服务端只进不退，失败静默） */
   markRead: (convId: string, upToSeq: number) => void;
+  /** 清零本地未读徽标（进会话/已读上报后；服务端真值由 convs 刷新对齐） */
+  clearUnread: (convId: string) => void;
 
-  /** 草稿（切换会话即存，INT-IM-10；正式版落 Rust SQLite 经 PATCH state 多端同步） */
+  /** 草稿（切换会话即存，INT-IM-10；500ms 防抖 PATCH state 多端同步） */
   drafts: Record<string, string>;
   setDraft: (convId: string, text: string) => void;
 
   /** msg.new 推送入流 */
   appendIncoming: (msg: Message) => void;
 
-  /** 发送文本（乐观更新） */
-  sendText: (convId: string, text: string) => Promise<void>;
+  /** msg.recall 推送：原地转撤回占位（seq 不断裂，INT-IM-03） */
+  applyRecall: (convId: string, msgId: string, operatorId: string) => void;
+  /** msg.updated 推送：编辑原地更新（INT-IM-02） */
+  applyUpdated: (convId: string, msgId: string, body: { text: string }, editedAt: number, editVersion: number) => void;
+  /** msg.reaction.new 推送：全量快照幂等合并（INT-IM-23） */
+  applyReactions: (convId: string, msgId: string, reactions: Record<string, string[]>) => void;
+
+  /** 正在输入：convId → uid（TTL 5s 由 applyTyping 的时间戳判定，INT-IM-11） */
+  typing: Record<string, { uid: string; at: number } | undefined>;
+  applyTyping: (convId: string, uid: string) => void;
+
+  /** 会话态（置顶/免打扰）：乐观更新 + PATCH（INT-IM-07） */
+  togglePin: (convId: string) => void;
+  toggleMute: (convId: string) => void;
+
+  /** 发送文本（乐观更新；replyToSeq 携带引用） */
+  sendText: (convId: string, text: string, replyToSeq?: number) => Promise<void>;
   /** 失败重试：复用原 client_msg_id（幂等回原 seq，INT-IM-01a） */
   retrySend: (convId: string, clientMsgId: string) => Promise<void>;
 }
@@ -53,6 +72,13 @@ const READ_THROTTLE_MS = 1000;
 const readLastSent = new Map<string, number>(); // convId → 上次发送时刻
 const readLatestSeq = new Map<string, number>(); // convId → 待上报的最新 seq
 const readTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// ---- 草稿多端同步防抖（INT-IM-10：500ms 静默后 PATCH state；空串=清除）----
+const DRAFT_SYNC_DEBOUNCE_MS = 500;
+const draftTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** 停止 typing 展示的过期阈值（TTL 5s，D03 INT-IM-11） */
+export const TYPING_TTL_MS = 5000;
 
 function flushRead(convId: string): void {
   const seq = readLatestSeq.get(convId);
@@ -108,8 +134,27 @@ export const useImStore = create<ImState>((set, get) => ({
       return { messagesByConv: { ...s.messagesByConv, [convId]: sortMessages([...items, ...localPending]) } };
     }),
 
+  prependMessages: (convId, items) =>
+    set((s) => {
+      const cur = s.messagesByConv[convId] ?? [];
+      const known = new Set(cur.map((m) => m.seq));
+      const fresh = items.filter((m) => !known.has(m.seq));
+      if (fresh.length === 0) return s;
+      return { messagesByConv: { ...s.messagesByConv, [convId]: sortMessages([...cur, ...fresh]) } };
+    }),
+
   drafts: {},
-  setDraft: (convId, text) => set((s) => ({ drafts: { ...s.drafts, [convId]: text } })),
+  setDraft: (convId, text) => {
+    set((s) => ({ drafts: { ...s.drafts, [convId]: text } }));
+    clearTimeout(draftTimers.get(convId));
+    draftTimers.set(
+      convId,
+      setTimeout(() => {
+        draftTimers.delete(convId);
+        void apiUpdateConvState(convId, { draft: useImStore.getState().drafts[convId] ?? '' }).catch(() => undefined);
+      }, DRAFT_SYNC_DEBOUNCE_MS),
+    );
+  },
 
   peerReadSeq: {},
   applyReceipt: (convId, _userId, readSeq) =>
@@ -128,6 +173,7 @@ export const useImStore = create<ImState>((set, get) => ({
     const since = Date.now() - last;
     if (since >= READ_THROTTLE_MS) {
       flushRead(convId);
+      get().clearUnread(convId);
       return;
     }
     // trailing：窗口末补发窗口内最新游标
@@ -137,10 +183,22 @@ export const useImStore = create<ImState>((set, get) => ({
         setTimeout(() => {
           readTimers.delete(convId);
           flushRead(convId);
+          useImStore.getState().clearUnread(convId);
         }, READ_THROTTLE_MS - since),
       );
     }
   },
+
+  clearUnread: (convId) =>
+    set((s) => {
+      const conv = s.convs.find((c) => c.id === convId);
+      if (!conv?.my || (conv.my.unreadBadge === 0 && !conv.my.mentionUnread)) return s;
+      const convs = s.convs.map((c) =>
+        c.id === convId && c.my ? { ...c, my: { ...c.my, unreadBadge: 0, mentionUnread: false, readSeq: c.latestSeq } } : c,
+      );
+      broadcastUnread(convs);
+      return { convs };
+    }),
 
   appendIncoming: (msg) =>
     set((s) => {
@@ -170,7 +228,71 @@ export const useImStore = create<ImState>((set, get) => ({
       return { convs, messagesByConv: { ...s.messagesByConv, [msg.convId]: sortMessages([...list, msg]) } };
     }),
 
-  sendText: async (convId, text) => {
+  applyRecall: (convId, msgId, operatorId) =>
+    set((s) => {
+      const list = s.messagesByConv[convId];
+      if (!list) return s;
+      let hit = false;
+      const next = list.map((m) => {
+        if (m.msgId !== msgId || m.status === 2) return m;
+        hit = true;
+        // 占位转 system 形态渲染（seq 保留不断裂）；文案区分本人/他人（INT-IM-03）
+        return {
+          ...m,
+          status: 2 as const,
+          type: 'system' as const,
+          body: { text: operatorId === s.myUid ? '你撤回了一条消息' : '对方撤回了一条消息' },
+          ext: undefined,
+        };
+      });
+      if (!hit) return s;
+      return { messagesByConv: { ...s.messagesByConv, [convId]: next } };
+    }),
+
+  applyUpdated: (convId, msgId, body, editedAt, editVersion) =>
+    set((s) => {
+      const list = s.messagesByConv[convId];
+      if (!list) return s;
+      const next = list.map((m) =>
+        m.msgId === msgId ? { ...m, body: { text: body.text }, status: 3 as const, editedAt, editVersion } : m,
+      );
+      return { messagesByConv: { ...s.messagesByConv, [convId]: next } };
+    }),
+
+  applyReactions: (convId, msgId, reactions) =>
+    set((s) => {
+      const list = s.messagesByConv[convId];
+      if (!list) return s;
+      const next = list.map((m) => {
+        if (m.msgId !== msgId) return m;
+        const ext: MsgExt = { ...m.ext, reactions };
+        return { ...m, ext };
+      });
+      return { messagesByConv: { ...s.messagesByConv, [convId]: next } };
+    }),
+
+  typing: {},
+  applyTyping: (convId, uid) => set((s) => ({ typing: { ...s.typing, [convId]: { uid, at: Date.now() } } })),
+
+  togglePin: (convId) => {
+    const cur = get().convs.find((c) => c.id === convId);
+    const next = !cur?.my?.pinned;
+    set((s) => ({
+      convs: s.convs.map((c) => (c.id === convId ? { ...c, my: { ...c.my!, pinned: next } } : c)),
+    }));
+    void apiUpdateConvState(convId, { pinned: next }).catch(() => undefined);
+  },
+
+  toggleMute: (convId) => {
+    const cur = get().convs.find((c) => c.id === convId);
+    const next = !cur?.my?.mute;
+    set((s) => ({
+      convs: s.convs.map((c) => (c.id === convId ? { ...c, my: { ...c.my!, mute: next } } : c)),
+    }));
+    void apiUpdateConvState(convId, { mute: next }).catch(() => undefined);
+  },
+
+  sendText: async (convId, text, replyToSeq) => {
     const { myUid } = get();
     const clientMsgId = crypto.randomUUID(); // 发送幂等键（14 篇 §4.1）
     // 乐观更新：先上屏 sending（灰钟），临时负序置底
@@ -183,6 +305,7 @@ export const useImStore = create<ImState>((set, get) => ({
       senderName: '我',
       type: 'text',
       body: { text },
+      replyToSeq,
       status: 1,
       ts: Date.now(),
       localState: 'sending',
@@ -191,7 +314,7 @@ export const useImStore = create<ImState>((set, get) => ({
       messagesByConv: { ...s.messagesByConv, [convId]: sortMessages([...(s.messagesByConv[convId] ?? []), optimistic]) },
       convs: touchConv(s.convs, convId, `我: ${text}`, optimistic.ts),
     }));
-    await settle(set, get, convId, clientMsgId);
+    await settle(set, get, convId, clientMsgId, replyToSeq);
   },
 
   retrySend: async (convId, clientMsgId) => {
@@ -214,11 +337,12 @@ async function settle(
   get: () => ImState,
   convId: string,
   clientMsgId: string,
+  replyToSeq?: number,
 ): Promise<void> {
   const pending = (get().messagesByConv[convId] ?? []).find((m) => m.clientMsgId === clientMsgId);
   const text = pending && 'text' in pending.body ? pending.body.text : '';
   try {
-    const ack = await sendTextMessage(convId, clientMsgId, text);
+    const ack = await sendTextMessage(convId, clientMsgId, text, replyToSeq);
     set((s) => ({
       messagesByConv: {
         ...s.messagesByConv,

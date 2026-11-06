@@ -8,12 +8,14 @@ import type { Conversation } from '../model/types';
 
 interface ChatHeaderProps {
   conv: Conversation;
+  /** 副标题：正在输入…（INT-IM-11 TTL 5s，超时回退空） */
+  typing?: string;
   /** S 档两级导航：返回列表 */
   onBack?: () => void;
   onToggleDetail: () => void;
 }
 
-export function ChatHeader({ conv, onBack, onToggleDetail }: ChatHeaderProps) {
+export function ChatHeader({ conv, typing, onBack, onToggleDetail }: ChatHeaderProps) {
   const typeName = conv.type === 1 ? '' : conv.type === 2 ? ` (${conv.memberCount})` : ' · 广播群';
 
   return (
@@ -28,6 +30,7 @@ export function ChatHeader({ conv, onBack, onToggleDetail }: ChatHeaderProps) {
       <span className="chat-header__title">
         {conv.name}
         {typeName}
+        {typing ? <span className="chat-header__typing">{typing}</span> : null}
       </span>
       <div className="chat-header__actions">
         <button className="icon-btn" onClick={onToggleDetail} title="会话信息">
