@@ -130,3 +130,6 @@ GRAFANA_ADMIN_PASSWORD=grafana_change_me     # ★上线必改（helm 侧: 独�
 MAIL_DOMAIN=mail.example.internal            # helm: mail.domain
 MAIL_ADMIN_PASSWORD=mail_change_me           # helm: secrets.mailAdminPassword ★上线必改
 # 首次启用前必须完成 DNS 五项检测：MX / SPF / DKIM / DMARC / autodiscover（22 篇 §8）
+
+# PostgreSQL 镜像（官方 tag 国内拉取慢时可指内网 Harbor；pgvector 版为 kb_chunk 预备）
+# POSTGRES_IMAGE=172.16.105.109:30003/pengzuyu/postgres-pgvector:16

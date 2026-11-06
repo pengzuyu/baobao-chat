@@ -114,7 +114,7 @@ services:
   # ===========================================================================
   app-init:
     # 借用 postgres 镜像的 psql/pg_isready 执行 init 脚本（bbw-app 为 distroless 无 shell）
-    image: postgres:16.4-alpine3.20
+    image: ${POSTGRES_IMAGE:-postgres:16.4-alpine3.20}   # 国内网络可指内网/加速镜像，如 172.16.105.109:30003/pengzuyu/postgres-pgvector:16（含 pgvector）
     profiles: [core]
     restart: "no"
     entrypoint: ["sh", "/init/01-init.sh"]
@@ -138,7 +138,7 @@ services:
   # 容量基线（§3.3 1k 档）：2C4G、shared_buffers 1G、应用侧连接池 50
   # ===========================================================================
   pg:
-    image: postgres:16.4-alpine3.20
+    image: ${POSTGRES_IMAGE:-postgres:16.4-alpine3.20}   # 国内网络可指内网/加速镜像，如 172.16.105.109:30003/pengzuyu/postgres-pgvector:16（含 pgvector）
     profiles: [core]
     restart: unless-stopped
     logging: *default-logging
