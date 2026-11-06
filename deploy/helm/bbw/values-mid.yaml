@@ -1,0 +1,42 @@
+# =============================================================================
+# 中规模档覆盖（16 篇 §3.3：5k 用户 / ~1.5k 在线 / ~1,300 msg/s；4 worker 上下）
+# 用法：helm upgrade --install bbw deploy/helm/bbw -f deploy/helm/bbw/values-mid.yaml -n bbw --create-namespace
+# 仅列出相对 values.yaml 的差异键
+# =============================================================================
+
+app:
+  replicaCount: 3                      # §3.3：×2–3（2C）
+  resources:
+    requests: {cpu: "1", memory: 1Gi}
+    limits: {cpu: "2", memory: 2Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 6
+
+gateway:
+  replicaCount: 2                      # §3.3：并入或独立 ×2
+  autoscaling:
+    minReplicas: 2
+    maxReplicas: 5
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {cpu: "2", memory: 4Gi}
+
+media:
+  replicas: 2                          # §3.3：200 路通话（1–2 节点，每节点 8C16G/万兆）
+  resources:
+    requests: {cpu: "4", memory: 8Gi}
+    limits: {cpu: "8", memory: 16Gi}
+  autoscaling:
+    enabled: true
+    maxReplicas: 4
+
+onlyoffice:
+  replicas: 2                          # §3.3：~150 会话（4C8G×2）
+  pdb:
+    enabled: true
+
+# 外部组件容量（§3.3 中档基线，由 Operator/独立 release 落地）：
+#   PG 主从 4C16G：shared_buffers 4G、池 100、读走副本
+#   Redis 主从+哨兵 2G；MinIO 4 节点 8TB（EC）

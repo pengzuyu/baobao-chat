@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <title>BaobaoWork · 企业协作工作台</title>
+    <script>
+      // 主题防闪烁：React 挂载前按本地偏好设定 data-theme（键 bbw-theme 与 shared/store/theme.ts 对齐；UI 偏好非业务数据）
+      (function () {
+        try {
+          var m = localStorage.getItem('bbw-theme');
+          var dark =
+            m === 'dark' ||
+            ((m === null || m === 'system') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        } catch (e) {
+          /* localStorage 不可用时回落默认亮色 */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,61 @@
+# =============================================================================
+# BaobaoWork .gitignore（三栈通用：client(Tauri/React) + server(Go) + agent(Rust) + 交付物运行时数据）
+# =============================================================================
+
+# ---- 通用 ----
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+.idea/
+.vscode/
+*.code-workspace
+
+# ---- 环境与密钥（敏感配置不入 git，16 篇 §5.3；模板除外）----
+.env
+.env.*
+!.env.tpl
+deploy/compose/.env
+*.pem
+*.key
+!docs/**/*.key
+
+# ---- client（Tauri 2 + React，D01）----
+node_modules/
+dist/
+build/
+.vite/
+*.local
+.turbo/
+coverage/
+src-tauri/target/
+src-tauri/gen/
+
+# ---- server（Go，D02）----
+bin/
+target/                   # server/ 侧若复用 target 命名
+*.exe
+*.exe~
+*.test
+*.out
+coverage.txt
+vendor/
+
+# ---- agent（Rust sidecar，D11）----
+agent/target/
+agent/Cargo.lock.bak
+**/*.rs.bk
+
+# ---- 部署交付物运行时数据（compose 形态；数据/证书/备份不入库，16 篇 §3.4）----
+deploy/compose/volumes/
+deploy/compose/backups/
+*.dump
+*.tar.gz.bak
+
+# ---- 本地覆盖 values（helm install 时自动拾取，见 Makefile helm-install）----
+deploy/helm/bbw/.local-values.yaml
+
+# ---- 本地构建产物/会话目录 ----
+server/bbw-server
+.zcode/

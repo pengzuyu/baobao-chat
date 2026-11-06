@@ -1,0 +1,44 @@
+{{ include "bbw.fullname" . }} 已部署（chart {{ .Chart.Version }} / app {{ .Chart.AppVersion }}）。
+
+形态：K8s（16 篇 §3.2 中大规模；Docker compose 形态见 deploy/compose/README.md，
+双形态等价：同一组镜像、同一套配置键）。
+
+1. 入口
+{{- if .Values.ingress.enabled }}
+   · 主入口 https://{{ .Values.ingress.hosts.api }}（/api /ws{{ if .Values.modules.media }} /rtc{{ end }}）
+{{- if .Values.modules.docs }}
+   · 文档编辑 https://{{ .Values.ingress.hosts.office }}
+{{- end }}
+   · TLS Secret：{{ .Values.ingress.tls.secretName }}（内部 CA 签发；客户端 pinning 根 CA，15 篇 §3.1）
+{{- else }}
+   · ingress.enabled=false：请自行暴露 {{ include "bbw.fullname" . }}-gateway:80
+{{- end }}
+
+2. 首次初始化（16 篇 §2.2）
+   · 迁移已由 pre-install Job（{{ include "bbw.fullname" . }}-migrate）执行
+   · 引导平台管理员：
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "bbw.fullname" . }}-app -- \
+       bbw-server admin bootstrap --admin-password '<强密码>'
+   · 访问 Web 管理台完成租户初始化（12 篇）
+
+3. 依赖确认（本 chart 不渲染，由 Operator/独立 release 提供，§3.2）
+{{- if not .Values.secrets.existingSecretDb }}
+   · Secret bbw-db / bbw-s3 已由本 chart 从 values.secrets 渲染——生产建议改用
+     external-secrets 接管（见 templates/secret.yaml 头注释）
+{{- else }}
+   · 已引用既有 Secret：{{ .Values.secrets.existingSecretDb }} / {{ .Values.secrets.existingSecretS3 }}
+{{- end }}
+   · PostgreSQL（CNPG/StatefulSet 主从+读副本，WAL 归档至对象存储，§4.6）
+   · Redis（哨兵 StatefulSet）· MinIO（分布式 StatefulSet，EC）
+   · prometheus-adapter：暴露 bbw_ws_connections / bbw_queue_depth /
+     bbw_rooms_active / bbw_wopi_sessions 自定义指标（HPA 依赖，§3.2）
+
+4. 升级 / 回滚（§3.4 升级路径表）
+   · helm upgrade --install {{ .Release.Name }} . -f values[-mid|-large].yaml -n {{ .Release.Namespace }}
+   · 回滚：helm rollback {{ .Release.Name }} -n {{ .Release.Namespace }}（迁移向后兼容承诺，§4.4）
+
+{{- if .Values.modules.media }}
+5. media 注意（§3.2/§4.5）
+   · hostNetwork + UDP {{ .Values.media.rtcMinPort }}-{{ .Values.media.rtcMaxPort }} 独占：
+     驱逐/缩容前确认通话避让窗口（draining → 通话结束不迁 → 下线）
+{{- end }}

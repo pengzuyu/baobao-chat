@@ -1,0 +1,71 @@
+{{/*
+PDB（16 篇 §3.2）
+· gateway：minAvailable=1（多可用区打散下的最小可用）
+· app：minAvailable=1
+· media：默认关闭——任何驱逐前必须确认通话避让窗口（§4.4/§4.5：
+  标记 draining → 现有通话结束不迁 → 下线；drain 前检查在线房间）
+· onlyoffice：会话粘滞，缩容会话自然衰减，大规模档建议开启
+*/}}
+{{- if .Values.gateway.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "bbw.fullname" . }}-gateway
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  minAvailable: {{ .Values.gateway.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+---
+{{- end }}
+{{- if .Values.app.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "bbw.fullname" . }}-app
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  minAvailable: {{ .Values.app.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
+---
+{{- end }}
+{{- if and .Values.modules.media .Values.media.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "bbw.fullname" . }}-media
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: media
+spec:
+  maxUnavailable: {{ .Values.media.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: media
+---
+{{- end }}
+{{- if and .Values.modules.docs .Values.onlyoffice.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "bbw.fullname" . }}-onlyoffice
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: onlyoffice
+spec:
+  minAvailable: {{ .Values.onlyoffice.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: onlyoffice
+{{- end }}

@@ -1,0 +1,21 @@
+# BaobaoWork Agent Runtime workspace（D11 §1.2 crate 总览）
+# 依赖方向由 CI cargo-deny 强制（禁止环）：protocol ← 所有。
+[workspace]
+resolver = "2"
+members = ["crates/bbrt-protocol", "crates/bbrt-session"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+# 版本统一在此管理，crate 内只写 workspace = true，禁止散落版本号
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+bbrt-protocol = { path = "crates/bbrt-protocol" }
+
+# Runtime 二进制随客户端分发、有 <80MB 空闲内存预算（08 §1.2）：发布构建开全程序 LTO
+[profile.release]
+lto = true
+codegen-units = 1

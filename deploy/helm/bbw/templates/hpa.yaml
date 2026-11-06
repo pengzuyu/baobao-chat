@@ -1,0 +1,141 @@
+{{/*
+HPA（16 篇 §3.2 指标表）
+· gateway：在线连接数（目标 3.5 万/实例、上限 5 万，§6.7）——pods 自定义指标，
+  需 prometheus-adapter 将 bbw_ws_connections 暴露为 custom.metrics.k8s.io
+· app：CPU 70% + 各域队列深度（file/kb worker，external 指标）
+· media：房间数/转发流数；onlyoffice：并发编辑会话数（压测校准，§3.3）
+*/}}
+{{- if .Values.gateway.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "bbw.fullname" . }}-gateway
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "bbw.fullname" . }}-gateway
+  minReplicas: {{ .Values.gateway.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.gateway.autoscaling.maxReplicas }}
+  metrics:
+    # §3.2：在线连接数（主指标）
+    - type: Pods
+      pods:
+        metric:
+          name: {{ .Values.gateway.autoscaling.connectionsMetric.name }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.gateway.autoscaling.connectionsMetric.averageValue | quote }}
+    # 辅助：CPU 兜底（连接数指标缺失时不阻塞伸缩）
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.gateway.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      # WSS 缩容前先摘流量+通知重连（§4.5），冷却期拉长
+      stabilizationWindowSeconds: 600
+---
+{{- end }}
+{{- if .Values.app.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "bbw.fullname" . }}-app
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "bbw.fullname" . }}-app
+  minReplicas: {{ .Values.app.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.app.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.app.autoscaling.targetCPUUtilizationPercentage }}
+    {{- if .Values.app.autoscaling.queueDepth.enabled }}
+    # §3.2：file/kb 队列深度（external 指标，需 prometheus-adapter + 标签选择器）
+    - type: External
+      external:
+        metric:
+          name: {{ .Values.app.autoscaling.queueDepth.metricName }}
+          {{- with .Values.app.autoscaling.queueDepth.metricSelector }}
+          selector:
+            matchLabels:
+              {{- toYaml . | nindent 12 }}
+          {{- end }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.app.autoscaling.queueDepth.targetAverageValue | quote }}
+    {{- end }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+---
+{{- end }}
+{{- if and .Values.modules.media .Values.media.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "bbw.fullname" . }}-media
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: media
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "bbw.fullname" . }}-media
+  minReplicas: {{ .Values.media.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.media.autoscaling.maxReplicas }}
+  metrics:
+    # §3.2：房间数/转发流数（压测校准目标值，§3.3）
+    - type: Pods
+      pods:
+        metric:
+          name: {{ .Values.media.autoscaling.roomsMetric.name }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.media.autoscaling.roomsMetric.averageValue | quote }}
+  behavior:
+    scaleDown:
+      # §4.5：缩容 = 标记 draining → 现有通话结束不迁 → 再下线
+      stabilizationWindowSeconds: 900
+---
+{{- end }}
+{{- if and .Values.modules.docs .Values.onlyoffice.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "bbw.fullname" . }}-onlyoffice
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: onlyoffice
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "bbw.fullname" . }}-onlyoffice
+  minReplicas: {{ .Values.onlyoffice.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.onlyoffice.autoscaling.maxReplicas }}
+  metrics:
+    # §3.2：并发编辑会话数（会话粘滞下水平扩展，§3.3）
+    - type: Pods
+      pods:
+        metric:
+          name: {{ .Values.onlyoffice.autoscaling.sessionsMetric.name }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.onlyoffice.autoscaling.sessionsMetric.averageValue | quote }}
+{{- end }}

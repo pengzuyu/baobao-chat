@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "bbw.fullname" . }}-gateway
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  {{- if not .Values.gateway.autoscaling.enabled }}
+  replicas: {{ .Values.gateway.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # WSS 长连接：先增后减；旧实例进入优雅迁移（通知重连，§4.5 缩容流程）
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "bbw.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "bbw.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # §4.4 第 3 步：接入层最后切换；终止宽限 = in-flight ack 窗口 60s（D02 §6）
+      terminationGracePeriodSeconds: {{ .Values.gateway.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: bbw-gateway
+          image: {{ include "bbw.image" (dict "root" $ "repo" "bbw-gateway") }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - name: TZ
+              value: {{ .Values.global.timezone | quote }}
+            - name: BBW_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbw.secretName.db" . }}
+                  key: dbDsn
+          envFrom:
+            - configMapRef:
+                name: {{ include "bbw.fullname" . }}-config
+          ports:
+            - name: http-ws       # http + ws 同端口（§3.4 镜像清单：8081）
+              containerPort: {{ .Values.gateway.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http-ws
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http-ws
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+      {{- if .Values.gateway.antiAffinity.enabled }}
+      # §3.2：多可用区打散（软约束；大规模可在 values 强化为 required）
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "bbw.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: gateway
+            - weight: 50
+              podAffinityTerm:
+                topologyKey: topology.kubernetes.io/zone
+                labelSelector:
+                  matchLabels:
+                    {{- include "bbw.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: gateway
+      {{- end }}
+      {{- with .Values.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

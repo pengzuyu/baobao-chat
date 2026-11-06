@@ -1,0 +1,102 @@
+{{/*
+OnlyOffice Document Server（docs 模块 ↔ compose docs profile，§3.4）
+§3.2 约束：与 doc 服务同机房（同 namespace 默认满足）、会话粘滞（SessionAffinity）、
+HPA 指标=并发编辑会话数。JWT 与 app 侧共享（Secret bbw-*-secrets/onlyofficeJwtSecret）。
+*/}}
+{{- if .Values.modules.docs }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "bbw.fullname" . }}-onlyoffice
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: onlyoffice
+spec:
+  {{- if not .Values.onlyoffice.autoscaling.enabled }}
+  replicas: {{ .Values.onlyoffice.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: onlyoffice
+  template:
+    metadata:
+      labels:
+        {{- include "bbw.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: onlyoffice
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101          # onlyoffice 镜像内置用户 ds
+        fsGroup: 101
+      containers:
+        - name: documentserver
+          image: onlyoffice/documentserver:8.2.2   # 与 compose 侧钉死同版（§3.4）
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - name: JWT_ENABLED
+              value: "true"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbw.secretName.app" . }}
+                  key: onlyofficeJwtSecret
+          ports:
+            - name: http
+              containerPort: {{ .Values.onlyoffice.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.onlyoffice.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/onlyoffice/Data
+            - name: logs
+              mountPath: /var/log/onlyoffice
+      volumes:
+        - name: data
+          emptyDir: {}   # TODO: 持久化（PVC/对象存储），编辑缓存丢失仅影响未保存会话
+        - name: logs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bbw.fullname" . }}-onlyoffice
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: onlyoffice
+spec:
+  type: ClusterIP
+  # 会话粘滞（§3.2）：编辑会话生命周期内路由到同一实例
+  sessionAffinity: {{ .Values.onlyoffice.sessionAffinity }}
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  selector:
+    {{- include "bbw.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: onlyoffice
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+{{- end }}

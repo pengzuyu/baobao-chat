@@ -1,0 +1,56 @@
+{{/*
+服务暴露：app / gateway（media 见 deployment-media.yaml 内 hostNetwork 说明：
+hostNetwork 模式下信令经 Ingress 直连宿主端口，Service 仅作发现占位）
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bbw.fullname" . }}-app
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "bbw.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bbw.fullname" . }}-gateway
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "bbw.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: http-ws
+      port: 80
+      targetPort: http-ws
+---
+{{- if .Values.modules.media }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bbw.fullname" . }}-media
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: media
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "bbw.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: media
+  ports:
+    - name: signaling
+      port: {{ .Values.media.signalingPort }}
+      targetPort: signaling
+{{- end }}

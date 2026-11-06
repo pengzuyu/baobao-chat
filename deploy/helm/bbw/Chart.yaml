@@ -1,0 +1,13 @@
+apiVersion: v2
+name: bbw
+description: >-
+  BaobaoWork 服务端 Helm Chart（K8s 中大规模形态，16 篇 §3.2）。
+  与 deploy/compose 同一组镜像、同一套配置键（双形态一等公民，§3.4）。
+type: application
+# chart 版本随交付物演进；appVersion 与 compose 侧 BBW_IMAGE_TAG 同源锁定
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://example.internal/baobaowork
+maintainers:
+  - name: BaobaoWork DevOps

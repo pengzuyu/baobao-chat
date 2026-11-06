@@ -1,0 +1,240 @@
+# =============================================================================
+# BaobaoWork Helm values —— 默认【小规模 K8s 档】（16 篇 §3.3 容量表：3 worker 起步）
+# 中规模叠加：helm install ... -f values-mid.yaml；大规模：-f values-large.yaml
+# 键与 deploy/compose/.env.tpl 一一对应（行内 “compose:” 注释标注来源键）
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 全局
+# ---------------------------------------------------------------------------
+global:
+  domain: bbw.example.internal          # compose: BBW_PUBLIC_DOMAIN
+  imageRegistry: registry.example.com/baobaowork   # compose: BBW_IMAGE_REGISTRY
+  imageTag: 0.1.0                       # compose: BBW_IMAGE_TAG（同一 tag 锁定，§3.4）
+  timezone: Asia/Shanghai
+  imagePullSecrets: []                  # 内部 Registry 凭据：[{ name: regcred }]
+
+imagePullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# ---------------------------------------------------------------------------
+# 模块启停（compose 侧等价物 = profiles + BBW_APP_MODULES，§3.4 映射表）
+#   auth/org/message 不可关闭；media/docs/mail 为 infra 开关（对应 compose
+#   media/docs/mail profile），控制 media / onlyoffice 组件是否渲染
+# ---------------------------------------------------------------------------
+modules:
+  auth: true
+  org: true
+  message: true
+  file: true
+  doc: true
+  kb: true
+  eco: true
+  admin: true
+  audit: true
+  notify: true
+  aigw: true
+  media: true          # ↔ compose media profile（deployment-media）
+  docs: true           # ↔ compose docs profile（deployment-onlyoffice）
+  mail: false          # ↔ compose mail profile（22 篇；独立组件组，本 chart 未含模板）
+
+# ---------------------------------------------------------------------------
+# 特性开关（BBW_FEATURE_*，16 篇 §5.3；租户级灰度走 DB feature_flag 表）
+# ---------------------------------------------------------------------------
+features:                              # compose: BBW_FEATURE_*
+  agent: true
+  kb: true
+  doc: true
+  rtc: true
+  ai: true
+  mail: false
+
+# ---------------------------------------------------------------------------
+# 非敏感运行配置 → ConfigMap bbw-config
+# ---------------------------------------------------------------------------
+config:
+  logLevel: info                       # compose: BBW_LOG_LEVEL
+  updateChannel: stable                # compose: BBW_UPDATE_CHANNEL
+  otelEndpoint: http://otel-collector.observability.svc.cluster.local:4318   # compose: BBW_OTEL_EXPORTER_OTLP_ENDPOINT
+
+# ---------------------------------------------------------------------------
+# 外部组件（§3.2：PG=CNPG Operator/StatefulSet，Redis=哨兵 StatefulSet，
+# MinIO=分布式 StatefulSet——由 Operator/独立 release 管理，本 chart 只引用）
+# ---------------------------------------------------------------------------
+externalServices:
+  redis:
+    address: bbw-redis.bbw-data.svc.cluster.local:6379      # compose: BBW_REDIS_ADDR
+  s3:
+    endpoint: http://minio.bbw-data.svc.cluster.local:9000  # compose: BBW_S3_ENDPOINT
+    bucket: bbw-data                                        # compose: BBW_S3_BUCKET
+    backupBucket: bbw-backup                                # compose: BBW_S3_BACKUP_BUCKET
+    usePathStyle: true                                      # compose: BBW_S3_USE_PATH_STYLE
+
+# ---------------------------------------------------------------------------
+# 敏感配置 → Secret bbw-db / bbw-s3 / bbw-secrets（不入 git/镜像/日志，§5.3）
+# ★ 生产建议改用 external-secrets 引用 KMS/Vault（见 templates/secret.yaml 头注释）
+# ---------------------------------------------------------------------------
+secrets:
+  # 非空则不渲染对应 Secret，改引用集群内既有 Secret（键名见 secret.yaml）
+  existingSecretDb: ""                 # 例：bbw-db-vault
+  existingSecretS3: ""                 # 例：bbw-s3-vault
+  dbDsn: postgres://bbw:CHANGE_ME@bbw-pg-rw.bbw-data.svc.cluster.local:5432/bbw?sslmode=disable   # compose: BBW_DB_DSN
+  dbReadDsn: ""                        # compose: BBW_DB_RO_DSN（空=读回落主库）
+  s3AccessKey: CHANGE_ME               # compose: BBW_S3_ACCESS_KEY
+  s3SecretKey: CHANGE_ME               # compose: BBW_S3_SECRET_KEY
+  aiUpstreamApiKey: ""                 # compose: BBW_AI_UPSTREAM_API_KEY
+  onlyofficeJwtSecret: CHANGE_ME       # compose: ONLYOFFICE_JWT_SECRET
+  turnSecret: CHANGE_ME                # compose: BBW_TURN_SECRET
+
+# ---------------------------------------------------------------------------
+# app：模块化单体 bbw-server（D02 §2；--enable 由 modules.* 推导）
+# ---------------------------------------------------------------------------
+app:
+  replicaCount: 2
+  port: 8080
+  resources:                           # 1k 档 ≈1C/实例（§3.3）
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: false                     # 小规模默认关（×2 固定副本）
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70 # §3.2：CPU 70%
+    queueDepth:                        # §3.2：file/kb 域队列深度（需 prometheus-adapter）
+      enabled: false
+      metricName: bbw_queue_depth
+      metricSelector: ""               # 如：domain=file
+      targetAverageValue: "100"
+  pdb:
+    enabled: true
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}                         # 大规模：message/admin 就近 PG、audit 独立节点组（§3.2）
+
+# ---------------------------------------------------------------------------
+# gateway：WSS/REST 接入层（独立部署，水平扩展）
+# ---------------------------------------------------------------------------
+gateway:
+  replicaCount: 2
+  port: 8081                           # http+ws（§3.4 镜像清单）
+  terminationGracePeriodSeconds: 60    # WS 优雅迁移宽限（D02 §6：60s in-flight ack）
+  resources:                           # WSS 单节点 5 万连接 <8GB 为上限（§6.7），小档 2Gi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    # §3.2/§6.7：在线连接数目标 3.5 万/实例、上限 5 万/实例
+    # （pods 自定义指标，需 prometheus-adapter 暴露 bbw_ws_connections）
+    connectionsMetric:
+      name: bbw_ws_connections
+      averageValue: "35000"
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    minAvailable: 1                    # §3.2：PDB minAvailable=1
+  nodeSelector: {}
+  tolerations: []
+  # 多可用区打散（§3.2）：默认软反亲和 hostname + zone，大规模可在 values-large 强化
+  antiAffinity:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# media：mediasoup SFU（§3.2：hostNetwork + UDP 40000-50100 独占 + 节点污点隔离）
+# ---------------------------------------------------------------------------
+media:
+  replicas: 1
+  signalingPort: 8082                  # compose: 8082
+  rtcMinPort: 40000                    # compose: BBW_MEDIA_RTC_MIN_PORT
+  rtcMaxPort: 50100                    # compose: BBW_MEDIA_RTC_MAX_PORT
+  hostNetwork: true                    # UDP 段直接绑宿主网络（§3.2 硬约束）
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  autoscaling:
+    enabled: false                     # §3.2：房间数/转发流数（压测校准后启用）
+    minReplicas: 1
+    maxReplicas: 3
+    roomsMetric:
+      name: bbw_rooms_active
+      averageValue: "150"
+  pdb:
+    enabled: false                     # 缩容/驱逐须先确认通话避让（§4.5：draining→结束不迁）
+    maxUnavailable: 1
+  nodeSelector: {}                     # 例：bbw.media=true（专用节点组）
+  tolerations: []                      # 例：[{key: bbw/media, operator: Exists, effect: NoSchedule}]
+
+# ---------------------------------------------------------------------------
+# onlyoffice：Document Server + WOPI（§3.2：与 doc 同机房、会话粘滞）
+# ---------------------------------------------------------------------------
+onlyoffice:
+  replicas: 1
+  port: 80
+  sessionAffinity: ClientIP            # 会话粘滞（§3.2 约束）
+  resources:                           # §3.3：~50 并发会话 4C8G×1
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  autoscaling:
+    enabled: false                     # §3.2：并发编辑会话数
+    minReplicas: 1
+    maxReplicas: 2
+    sessionsMetric:
+      name: bbw_wopi_sessions
+      averageValue: "40"
+  pdb:
+    enabled: false
+    minAvailable: 1
+
+# ---------------------------------------------------------------------------
+# Ingress / TLS（15 篇 §3.1 企业 CA；16 篇 §4.7 双证书轮换）
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    api: bbw.example.internal          # 主入口：/api /ws /rtc /update
+    office: office.bbw.example.internal  # OnlyOffice 编辑器（docs 模块）
+  tls:
+    enabled: true
+    secretName: bbw-tls                # 证书由内部 CA 签发后注入（或 cert-manager）
+  annotations:
+    # WSS：升级头透传 + 长读超时（>心跳 30s 的整数倍，14 篇）
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # WSS 会话保持：按客户端 IP 哈希（compose 侧等价物 = nginx ip_hash，§3.1）；
+    # 精确按 did 粘滞需网关自身一致性哈希（§3.1 要点）
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+
+# ---------------------------------------------------------------------------
+# 迁移 Job（§3.4：DB 迁移 = helm pre-install/upgrade Job，同镜像 bbw-app migrate）
+# ---------------------------------------------------------------------------
+migrateJob:
+  enabled: true
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}

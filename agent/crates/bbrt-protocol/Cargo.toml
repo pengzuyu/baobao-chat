@@ -1,0 +1,11 @@
+[package]
+name = "bbrt-protocol"
+description = "宿主↔Runtime stdio JSONL 协议：全消息类型、信封与行式编解码（D11 §2.1/§4）"
+version.workspace = true
+edition.workspace = true
+
+# 硬性约束：协议 crate 仅依赖 serde/serde_json（+thiserror 错误派生），不含业务逻辑
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

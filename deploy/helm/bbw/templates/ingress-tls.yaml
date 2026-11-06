@@ -1,0 +1,78 @@
+{{/*
+Ingress + TLS（16 篇 §3.4：BBW_TLS_* 的 K8s 形态 = TLS Secret + ingress）
+· 主域 api：/ /api /ws → gateway（WSS 长连接）；/rtc → media（media 模块）
+· office 域：OnlyOffice 编辑器（docs 模块，会话粘滞见其 Service）
+· 客户端 pinning 企业根 CA（15 篇 §3.1）；叶证书轮换走 §4.7 双证书流程，
+  换 Secret 即可，客户端无感。
+· TODO：update-src（§3.2 Deployment×2 + 内网 CDN）未含本 chart——大档通常
+  由内网 CDN 承接 /update/，如需在集群内分发请补 deployment-updatesrc.yaml。
+*/}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "bbw.fullname" . }}
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.hosts.api | quote }}
+        {{- if .Values.modules.docs }}
+        - {{ .Values.ingress.hosts.office | quote }}
+        {{- end }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.hosts.api | quote }}
+      http:
+        paths:
+          - path: /ws/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "bbw.fullname" . }}-gateway
+                port:
+                  name: http-ws
+          - path: /api/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "bbw.fullname" . }}-gateway
+                port:
+                  name: http-ws
+          {{- if .Values.modules.media }}
+          - path: /rtc/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "bbw.fullname" . }}-media
+                port:
+                  name: signaling
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "bbw.fullname" . }}-gateway
+                port:
+                  name: http-ws
+    {{- if .Values.modules.docs }}
+    - host: {{ .Values.ingress.hosts.office | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "bbw.fullname" . }}-onlyoffice
+                port:
+                  name: http
+    {{- end }}
+{{- end }}

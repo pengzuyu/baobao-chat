@@ -1,0 +1,633 @@
+# =============================================================================
+# BaobaoWork 单 VM 全量拓扑（docker-compose，16 篇 §3.1 / §3.3 / §3.4）
+# -----------------------------------------------------------------------------
+# · compose spec 语法（无 version 字段），Docker Compose v2.20+。
+# · profiles 分组（16 篇 §3.4 模块启停 = compose profiles ↔ Helm values.modules.*）：
+#     core   核心链路：nginx-lb / app×2 / pg16 / redis7 / minio / update-src / 初始化
+#     media  音视频：media(mediasoup UDP 40000-50100 独占) / coturn(跨园区兜底，可选)
+#     docs   文档协作：onlyoffice(WOPI)
+#     ops    可观测栈：prometheus / grafana / otel-collector / alertmanager
+#     mail   邮件栈（22 篇，可选）：stalwart 占位（或替换 docker-mailserver 组件组）
+#   ★ 所有组均需显式启用，例如：docker compose --profile core up -d
+#     （scripts/dev-up.sh 与 README 已封装常用组合）
+# · 镜像版本一律钉死；BBW 自有镜像与 Helm 共用同一 tag 锁定（§3.4“同一组镜像”），
+#   生产建议再叠加 @sha256 digest 双重钉死（TODO：CI 注入）。
+# · 配置键与 Helm values 一一对应，见同目录 .env.tpl 行内 “helm:” 注释。
+# =============================================================================
+
+x-logging: &default-logging
+  # 日志轮转（低日志量服务沿用引擎默认即可）
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+x-bbw-env: &bbw-env
+  # —— 统一配置键（与 Helm 完全一致；K8s 来源见 helm/bbw/templates/configmap.yaml）——
+  TZ: Asia/Shanghai
+  BBW_PUBLIC_DOMAIN: ${BBW_PUBLIC_DOMAIN:-bbw.example.internal}
+  BBW_LOG_LEVEL: ${BBW_LOG_LEVEL:-info}
+  BBW_DB_DSN: ${BBW_DB_DSN}
+  BBW_DB_RO_DSN: ${BBW_DB_RO_DSN:-}
+  BBW_REDIS_ADDR: ${BBW_REDIS_ADDR:-redis:6379}
+  BBW_S3_ENDPOINT: ${BBW_S3_ENDPOINT:-http://minio:9000}
+  BBW_S3_USE_PATH_STYLE: ${BBW_S3_USE_PATH_STYLE:-true}
+  BBW_S3_BUCKET: ${BBW_S3_BUCKET:-bbw-data}
+  BBW_S3_BACKUP_BUCKET: ${BBW_S3_BACKUP_BUCKET:-bbw-backup}
+  BBW_S3_ACCESS_KEY: ${BBW_S3_ACCESS_KEY}
+  BBW_S3_SECRET_KEY: ${BBW_S3_SECRET_KEY}
+  BBW_OTEL_EXPORTER_OTLP_ENDPOINT: ${BBW_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+  BBW_UPDATE_CHANNEL: ${BBW_UPDATE_CHANNEL:-stable}
+  BBW_FEATURE_AGENT: ${BBW_FEATURE_AGENT:-true}
+  BBW_FEATURE_KB: ${BBW_FEATURE_KB:-true}
+  BBW_FEATURE_DOC: ${BBW_FEATURE_DOC:-true}
+  BBW_FEATURE_RTC: ${BBW_FEATURE_RTC:-true}
+  BBW_FEATURE_AI: ${BBW_FEATURE_AI:-true}
+  BBW_FEATURE_MAIL: ${BBW_FEATURE_MAIL:-false}
+  BBW_AI_UPSTREAM_BASE_URL: ${BBW_AI_UPSTREAM_BASE_URL:-}
+  BBW_AI_UPSTREAM_API_KEY: ${BBW_AI_UPSTREAM_API_KEY:-}
+
+services:
+  # ===========================================================================
+  # nginx-lb：TLS 终止 + 反向代理 + WSS 会话保持（16 篇 §3.1）
+  # 小规模档 gateway 并入 nginx-lb（§3.3“gateway 并入”行），接入层在升级顺序中
+  # 最后切换（§4.4 第 3 步）。
+  # ===========================================================================
+  nginx-lb:
+    image: nginx:1.27.4-alpine3.21
+    profiles: [core]
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "80:80"
+      - "443:443"      # https/wss 主入口（客户端 + Web 管理台）
+      - "8443:8443"    # OnlyOffice 编辑器独立 TLS 入口（docs profile）
+    volumes:
+      # 证书目录：volumes/certs/tls.crt|tls.key|ca.crt（15 篇 §3.1；开发自签见 scripts/dev-up.sh）
+      - ./volumes/certs:/etc/nginx/certs:ro
+    configs:
+      - source: nginx-conf
+        target: /etc/nginx/nginx.conf
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # ===========================================================================
+  # app×2：模块化单体 bbw-server（auth/org/message/file/doc/kb/eco/admin/audit/
+  # notify/aigw，D02 §2；--enable 控制启用域）。副本 2 = 滚动升级 + 单实例冗余。
+  # 扩缩容：docker compose --profile core up -d --scale app=N
+  # ===========================================================================
+  app:
+    image: ${BBW_IMAGE_REGISTRY:-registry.example.com/baobaowork}/bbw-app:${BBW_IMAGE_TAG:-0.1.0}
+    profiles: [core]
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["--enable", "${BBW_APP_MODULES:-auth,org,message,file,doc,kb,eco,admin,audit,notify,aigw}"]
+    environment: *bbw-env
+    expose:
+      - "8080"         # http + ws（app 内嵌模式；独立 gateway 拆分见 K8s 形态 §3.2）
+    healthcheck:
+      # bbw-app 为 distroless（无 shell/wget）：镜像内自带静态编译 /healthprobe，
+      # 探测 /healthz（§3.4 镜像清单）。TODO：CI 断言镜像内 /healthprobe 存在。
+      test: ["CMD", "/healthprobe", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      pg:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  # ===========================================================================
+  # app-init：首次初始化（幂等）。等待 pg 就绪 → 执行 /migrations → 引导内置管理员
+  # 提示（16 篇 §2.2 初始化工具；正式 migrate 通道为 bbw-app migrate，§3.4）
+  # ===========================================================================
+  app-init:
+    # 借用 postgres 镜像的 psql/pg_isready 执行 init 脚本（bbw-app 为 distroless 无 shell）
+    image: postgres:16.4-alpine3.20
+    profiles: [core]
+    restart: "no"
+    entrypoint: ["sh", "/init/01-init.sh"]
+    environment:
+      POSTGRES_HOST: pg
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-bbw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-bbw}
+      BBW_ADMIN_BOOTSTRAP_PASSWORD: ${BBW_ADMIN_BOOTSTRAP_PASSWORD:-}
+    volumes:
+      - ./init:/init:ro
+      # golang-migrate 迁移目录（D02 §7 按域分目录）；server/ 未落地前目录可为空
+      - ${BBW_MIGRATIONS_DIR:-../../server/migrations}:/migrations:ro
+    depends_on:
+      pg:
+        condition: service_healthy
+
+  # ===========================================================================
+  # pg 16：主实例 + WAL 归档（16 篇 §3.1/§4.6）
+  # 容量基线（§3.3 1k 档）：2C4G、shared_buffers 1G、应用侧连接池 50
+  # ===========================================================================
+  pg:
+    image: postgres:16.4-alpine3.20
+    profiles: [core]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      TZ: Asia/Shanghai
+      POSTGRES_USER: ${POSTGRES_USER:-bbw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-bbw}
+      # pgvector / zhparser 扩展官方镜像未内置：生产需自建镜像预装（13 篇）；
+      # init/01-init.sh 对 CREATE EXTENSION 失败仅告警不阻断。
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      # WAL 连续归档到独立卷（§4.6：RPO≤5min；生产换 pgBackRest/WAL-G → MinIO 独立桶）
+      - archive_command=test ! -f /wal_archive/wal/%f && cp %p /wal_archive/wal/%f
+      - -c
+      - wal_level=replica
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - max_connections=100
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - pg-wal-archive:/wal_archive
+    ports:
+      - "127.0.0.1:5432:5432"   # 仅本机调试（宿主机 go run）；生产可移除
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bbw} -d ${POSTGRES_DB:-bbw}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  # ===========================================================================
+  # redis 7：缓存/队列（仅缓存用途；AOF 持久化关闭优先，16 篇 §3.2）
+  # ===========================================================================
+  redis:
+    image: redis:7.4.1-alpine3.20
+    profiles: [core]
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # ===========================================================================
+  # minio：单节点对象存储（t/{tenant_id}/ 前缀多租户布局，13 篇 §6；单节点 2TB 档）
+  # ===========================================================================
+  minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    profiles: [core]
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "127.0.0.1:9001:9001"   # 运维控制台（仅本机/SSH 隧道访问）
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # 桶初始化（幂等）：bbw-data（版本化，误删恢复 §4.6）+ bbw-backup（独立备份桶）
+  minio-init:
+    image: minio/mc:RELEASE.2024-11-05T11-40-11Z
+    profiles: [core]
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        # 桶初始化占位脚本（生产建议换为 KMS 托管的独立备份桶凭据，15 篇 §3.3）
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb -p local/bbw-data || true
+        mc version enable local/bbw-data || true
+        mc mb -p local/bbw-backup || true
+        echo "[minio-init] 桶初始化完成：bbw-data(版本化) / bbw-backup"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+
+  # ===========================================================================
+  # update-src：客户端更新静态源（manifest + 安装包，16 篇 §5.1；nginx-alpine 基）
+  # 数据由制品库/rsync 同步至 updates-data 卷（TODO：与 CI 发布流水线对接）
+  # ===========================================================================
+  update-src:
+    image: ${BBW_IMAGE_REGISTRY:-registry.example.com/baobaowork}/bbw-update-src:${BBW_IMAGE_TAG:-0.1.0}
+    profiles: [core]
+    restart: unless-stopped
+    volumes:
+      - updates-data:/srv/updates
+    configs:
+      # 占位 manifest：保证健康探测可过；正式清单由发布流水线以 ed25519 签名写入
+      - source: updates-manifest
+        target: /srv/updates/update-manifest.json
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/update-manifest.json"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # media（media profile）：mediasoup SFU；8082 信令 + 40000-50100/udp 独占（§3.1）
+  # 单 VM 与 app 同机时独占 UDP 端口段；跨园区兜底由 coturn 提供。
+  # 生产提示：万级端口映射对 iptables 有压力，Linux 下建议改 network_mode: host
+  # （与 pg/redis 通过宿主机端口 127.0.0.1:5432/6379 互通）。
+  # ===========================================================================
+  media:
+    image: ${BBW_IMAGE_REGISTRY:-registry.example.com/baobaowork}/bbw-media:${BBW_IMAGE_TAG:-0.1.0}
+    profiles: [media]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      <<: *bbw-env
+      BBW_MEDIA_RTC_MIN_PORT: ${BBW_MEDIA_RTC_MIN_PORT:-40000}
+      BBW_MEDIA_RTC_MAX_PORT: ${BBW_MEDIA_RTC_MAX_PORT:-50100}
+    ports:
+      - "8082:8082"
+      - "${BBW_MEDIA_RTC_MIN_PORT:-40000}-${BBW_MEDIA_RTC_MAX_PORT:-50100}:${BBW_MEDIA_RTC_MIN_PORT:-40000}-${BBW_MEDIA_RTC_MAX_PORT:-50100}/udp"
+    healthcheck:
+      # bbw-media 为 ubuntu 基（内核依赖，§3.4），镜像内置 curl
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8082/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      pg:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ===========================================================================
+  # coturn（media profile，可选）：跨园区 NAT 穿透兜底（02 篇；3478 udp/tcp）
+  # 单园区内网部署可不启用（16 篇 §3.1 “coturn?”）。host 网络保证真实客户端 IP。
+  # 中继端口段 55000-56000 刻意避开 media 的 40000-50100。
+  # ===========================================================================
+  coturn:
+    image: coturn/coturn:4.6.1
+    profiles: [media]
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - -n
+      - --log-binding
+      - --lt-cred-mech
+      - --use-auth-secret
+      - --static-auth-secret=${BBW_TURN_SECRET:-turn_change_me}
+      - --realm=${BBW_TURN_PUBLIC_HOST:-turn.example.internal}
+      - --listening-port=3478
+      - --min-port=55000
+      - --max-port=56000
+    healthcheck:
+      # 占位探测：确认 3478 监听（debian 基镜像自带 bash /dev/tcp）
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/3478' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ===========================================================================
+  # onlyoffice（docs profile）：Document Server + WOPI（06 篇）
+  # 正式流量经 nginx-lb:8443 TLS 入口；JWT 鉴权与 app 侧共享密钥
+  # ===========================================================================
+  onlyoffice:
+    image: onlyoffice/documentserver:8.2.2
+    profiles: [docs]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-onlyoffice_change_me}
+    volumes:
+      - onlyoffice-data:/var/www/onlyoffice/Data
+      - onlyoffice-log:/var/log/onlyoffice
+    ports:
+      - "127.0.0.1:8088:80"    # 仅本机调试；正式走 nginx-lb 8443
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthcheck"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ===========================================================================
+  # 可观测栈（ops profile）：prometheus / grafana / otel-collector / alertmanager
+  # 指标清单与告警规则见 16 篇 §6；K8s 形态为独立监控 namespace（§3.2）
+  # ===========================================================================
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: [ops]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d   # 指标保留 30d（§3.2）
+    volumes:
+      - prometheus-data:/prometheus
+    configs:
+      - source: prometheus-conf
+        target: /etc/prometheus/prometheus.yml
+    ports:
+      - "127.0.0.1:9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.0
+    profiles: [ops]
+    restart: unless-stopped
+    configs:
+      - source: otel-conf
+        target: /etc/otelcol-contrib/config.yaml
+    # 镜像为 distroless 系，无法 exec 健康探测；已启用 health_check 扩展(13133)，
+    # 由 prometheus 侧拉取指标判断（TODO：接入 kubelet/引擎探测）
+    expose:
+      - "4317"    # OTLP gRPC
+      - "4318"    # OTLP HTTP（app 的 BBW_OTEL_EXPORTER_OTLP_ENDPOINT 指向此处）
+      - "13133"   # health_check 扩展
+      - "8889"    # prometheus exporter（供 prometheus 抓取）
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    profiles: [ops]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-grafana_change_me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      # TODO: 看板 JSON（16 篇 §6.4 八块看板）随制品分发后取消下行注释
+      # - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"   # 仅本机/SSH 隧道访问
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: [ops]
+    restart: unless-stopped
+    # 告警路由（Webhook→IM）配置 TODO：接 16 篇 §6.5 告警规则表与值班通道
+    ports:
+      - "127.0.0.1:9093:9093"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9093/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ===========================================================================
+  # mail（mail profile，可选，22 篇）：stalwart 一体化邮件栈占位
+  # 上线前置：DNS 五项检测（MX/SPF/DKIM/DMARC/autodiscover）+ 证书 + SSO 桥接。
+  # 备选形态：docker-mailserver 组件组（postfix/dovecot/rspamd）。
+  # TODO：健康探测依赖镜像内置 curl，正式接入时按 22 篇校准（遗留项见 README）
+  # ===========================================================================
+  mail:
+    image: stalwartlabs/mail-server:0.10.7
+    profiles: [mail]
+    restart: unless-stopped
+    environment:
+      MAIL_DOMAIN: ${MAIL_DOMAIN:-mail.example.internal}
+      MAIL_ADMIN_PASSWORD: ${MAIL_ADMIN_PASSWORD:-mail_change_me}
+    volumes:
+      - mail-data:/opt/stalwart
+      - ./volumes/certs:/etc/stalwart/certs:ro
+    ports:
+      - "25:25"        # SMTP（入站）
+      - "465:465"      # SMTPS（客户端提交，强制 TLS）
+      - "993:993"      # IMAPS
+      - "143:143"      # IMAP（明文端口默认关闭，22 篇 §7）
+
+# =============================================================================
+# 数据卷（生产建议宿主独立盘/独立目录 bind mount，便于快照与容量监控）
+# =============================================================================
+volumes:
+  pg-data:            # PG 主数据
+  pg-wal-archive:     # WAL 归档 + 基础备份（backup.sh 使用；§4.6）
+  redis-data:
+  minio-data:         # 对象存储（单节点 2TB 档，§3.3）
+  updates-data:       # 客户端更新静态文件
+  onlyoffice-data:
+  onlyoffice-log:
+  prometheus-data:
+  grafana-data:
+  mail-data:
+
+# =============================================================================
+# 内联配置（compose spec configs.content；$$ 为 compose 转义，渲染后为单个 $）
+# =============================================================================
+configs:
+  nginx-conf:
+    content: |
+      # BaobaoWork 接入层 nginx（16 篇 §3.1）
+      # —— WSS 会话保持：小规模单 nginx 用 ip_hash 固定客户端→app 实例；
+      #    双接入层时必须改按 did 一致性哈希（16 篇 §3.1 要点）——
+      worker_processes auto;
+      events { worker_connections 4096; }
+      http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+        sendfile on;
+        tcp_nopush on;
+        keepalive_timeout 65s;
+
+        map $$http_upgrade $$connection_upgrade {
+          default upgrade;
+          ''      close;
+        }
+
+        upstream bbw_app {
+          ip_hash;                                  # WSS 会话保持（见上）
+          server app:8080 max_fails=3 fail_timeout=10s;
+          keepalive 64;
+        }
+        upstream bbw_media { server media:8082; keepalive 16; }
+        upstream bbw_update { server update-src:80; }
+
+        server {
+          listen 80;
+          server_name _;
+          # 健康检查端点（容器 healthcheck / SLB 探测专用，不记日志）
+          location = /healthz { access_log off; return 200 "ok\n"; }
+          location / { return 301 https://$$host$$request_uri; }
+        }
+
+        server {
+          listen 443 ssl;
+          http2 on;
+          server_name _;
+          ssl_certificate     /etc/nginx/certs/tls.crt;
+          ssl_certificate_key /etc/nginx/certs/tls.key;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_session_cache shared:SSL:10m;
+          # 大文件上传走预签名直传 MinIO，接入层不做 body 限额（应用层限流，07 篇）
+          client_max_body_size 0;
+
+          # REST API
+          location /api/ {
+            proxy_pass http://bbw_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Real-IP $$remote_addr;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_read_timeout 60s;
+          }
+
+          # WSS 长连接（/ws/connect，14 篇）：升级头透传 + 长读超时
+          # （> 心跳 30s 的整数倍，避免接入层空闲断连）
+          location /ws/ {
+            proxy_pass http://bbw_app;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $$http_upgrade;
+            proxy_set_header Connection $$connection_upgrade;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+          }
+
+          # 通话信令（media profile 未启用时该 upstream 不可达，客户端按 02 篇 §7 降级）
+          location /rtc/ {
+            proxy_pass http://bbw_media;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $$http_upgrade;
+            proxy_set_header Connection $$connection_upgrade;
+            proxy_read_timeout 120s;
+          }
+
+          # 客户端更新源（manifest + 安装包，16 篇 §5.1）
+          location /update/ {
+            proxy_pass http://bbw_update/;
+          }
+        }
+
+        # OnlyOffice 独立 TLS 入口（docs profile；与主站同证书统一终止）
+        server {
+          listen 8443 ssl;
+          http2 on;
+          server_name _;
+          ssl_certificate     /etc/nginx/certs/tls.crt;
+          ssl_certificate_key /etc/nginx/certs/tls.key;
+          location / {
+            proxy_pass http://onlyoffice:80;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-Proto https;
+          }
+        }
+      }
+
+  prometheus-conf:
+    content: |
+      # Prometheus 最小抓取配置（16 篇 §6.1 指标清单由应用侧 /metrics 暴露）
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets: ["localhost:9090"]
+        - job_name: bbw-app
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["app:8080"]
+        # media profile 未启用时该项 DOWN 属预期
+        - job_name: bbw-media
+          static_configs:
+            - targets: ["media:8082"]
+        - job_name: otel-collector
+          static_configs:
+            - targets: ["otel-collector:8889"]
+
+  otel-conf:
+    content: |
+      # OTel Collector 最小管线：OTLP 接入 → Prometheus 暴露（16 篇 §6.1/§6.3）
+      extensions:
+        health_check:
+          endpoint: 0.0.0.0:13133
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+      processors:
+        batch: {}
+      exporters:
+        prometheus:
+          endpoint: 0.0.0.0:8889
+        debug: {}
+      service:
+        extensions: [health_check]
+        telemetry:
+          logs:
+            level: info
+        pipelines:
+          metrics:
+            receivers: [otlp]
+            processors: [batch]
+            exporters: [prometheus]
+          traces:
+            receivers: [otlp]
+            processors: [batch]
+            # TODO: 后端追踪存储（Tempo/Jaeger）接入后替换 debug
+            exporters: [debug]
+
+  updates-manifest:
+    content: |
+      {
+        "v": 1,
+        "channel": "stable",
+        "platforms": {},
+        "agent_runtime": {},
+        "rollout": { "percentage": 0 },
+        "force": { "min_version": "0.0.0", "deadline": "2099-01-01" },
+        "notes_url": "",
+        "signed_at": "",
+        "sig": {}
+      }

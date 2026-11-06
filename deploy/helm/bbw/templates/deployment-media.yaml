@@ -1,0 +1,108 @@
+{{/*
+media（mediasoup SFU）Deployment —— §3.2 硬约束：
+hostNetwork + UDP 40000–50100 端口段独占 + 节点污点隔离；
+每节点固定可配端口范围（§3.3）。缩容/驱逐须先通话避让（§4.5）。
+*/}}
+{{- if .Values.modules.media }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "bbw.fullname" . }}-media
+  labels:
+    {{- include "bbw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: media
+spec:
+  {{- if not .Values.media.autoscaling.enabled }}
+  replicas: {{ .Values.media.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: media
+  template:
+    metadata:
+      labels:
+        {{- include "bbw.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: media
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "bbw.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # UDP 40000-50100 段无法以 containerPort 区间声明：hostNetwork 下由
+      # bbw-media worker 直接绑宿主端口（§3.2 “hostNetwork + 端口段独占”）
+      hostNetwork: {{ .Values.media.hostNetwork }}
+      dnsPolicy: ClusterFirstWithHostNet
+      # 内核依赖（§3.4 ubuntu 基镜像）：允许上调 UDP 缓冲
+      securityContext:
+        sysctls:
+          - name: net.core.rmem_max
+            value: "16777216"
+          - name: net.core.wmem_max
+            value: "16777216"
+      containers:
+        - name: bbw-media
+          image: {{ include "bbw.image" (dict "root" $ "repo" "bbw-media") }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          securityContext:
+            # mediasoup worker 绑定低延迟/端口段需要的能力
+            capabilities:
+              add: ["NET_BIND_SERVICE", "IPC_LOCK"]
+          env:
+            - name: TZ
+              value: {{ .Values.global.timezone | quote }}
+            - name: BBW_MEDIA_RTC_MIN_PORT
+              value: {{ .Values.media.rtcMinPort | quote }}
+            - name: BBW_MEDIA_RTC_MAX_PORT
+              value: {{ .Values.media.rtcMaxPort | quote }}
+            - name: BBW_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbw.secretName.db" . }}
+                  key: dbDsn
+            - name: BBW_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbw.secretName.s3" . }}
+                  key: s3AccessKey
+            - name: BBW_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbw.secretName.s3" . }}
+                  key: s3SecretKey
+          envFrom:
+            - configMapRef:
+                name: {{ include "bbw.fullname" . }}-config
+          ports:
+            - name: signaling        # 8082 控制面/信令（§3.4）
+              containerPort: {{ .Values.media.signalingPort }}
+              protocol: TCP
+            # UDP 40000-50100 经 hostNetwork 直通（见上注）
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: signaling
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: signaling
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.media.resources | nindent 12 }}
+      {{- with .Values.media.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.media.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
