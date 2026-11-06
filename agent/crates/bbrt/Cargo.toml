@@ -1,0 +1,26 @@
+# bbrt：Runtime 进程入口/装配（D11 §1.2）
+[package]
+name = "bbrt"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "bbrt"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bbrt-protocol = { workspace = true }
+bbrt-sec = { workspace = true }
+bbrt-memory = { workspace = true }
+bbrt-store = { workspace = true }
+bbrt-context = { workspace = true }
+bbrt-aigw = { workspace = true }
+bbrt-hostapi = { workspace = true }
+bbrt-session = { workspace = true }
+bbrt-tools = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

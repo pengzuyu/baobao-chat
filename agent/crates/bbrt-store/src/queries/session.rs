@@ -1,0 +1,269 @@
+//! 会话生命周期持久化（agent_session，D11 §11 / 状态机 §3）。
+//!
+//! status 取值为 D11 §3 状态机枚举；ended/error 为终态，
+//! 进入终态时补写 ended_at（已有值保留首次结束时间，重试结束不覆盖）。
+
+use rusqlite::{params, OptionalExtension, Row};
+
+use crate::{now_ms, Store, StoreError};
+
+/// agent_session 行。workspace_id/backend/ended_at/summary 可空。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")] // 嵌套 struct 自带 rename_all（历史 bug 教训）
+pub struct SessionRow {
+    /// sess-<ulid>
+    pub id: String,
+    pub workspace_id: Option<String>,
+    pub title: String,
+    /// embedded | workbench
+    pub form: String,
+    /// ask | auto-edit | full-auto
+    pub mode: String,
+    /// 委派后端 zcode|claude|generic|builtin（17 篇增列）
+    pub backend: Option<String>,
+    /// fast | strong | auto
+    pub model_policy: String,
+    /// D11 §3 状态机枚举
+    pub status: String,
+    pub share_enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub ended_at: Option<i64>,
+    pub summary: Option<String>,
+}
+
+/// SELECT 列清单（顺序与 from_row 一致）
+const COLS: &str = "id, workspace_id, title, form, mode, backend, model_policy, status, \
+                    share_enabled, created_at, updated_at, ended_at, summary";
+
+fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
+    Ok(SessionRow {
+        id: row.get(0)?,
+        workspace_id: row.get(1)?,
+        title: row.get(2)?,
+        form: row.get(3)?,
+        mode: row.get(4)?,
+        backend: row.get(5)?,
+        model_policy: row.get(6)?,
+        status: row.get(7)?,
+        share_enabled: row.get::<_, i64>(8)? != 0,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+        ended_at: row.get(11)?,
+        summary: row.get(12)?,
+    })
+}
+
+impl Store {
+    /// 新会话登记（id 主键冲突由约束兜底报 Sqlite 错）。
+    pub fn insert_session(&self, s: &SessionRow) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO agent_session
+                 (id, workspace_id, title, form, mode, backend, model_policy, status,
+                  share_enabled, created_at, updated_at, ended_at, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                s.id,
+                s.workspace_id,
+                s.title,
+                s.form,
+                s.mode,
+                s.backend,
+                s.model_policy,
+                s.status,
+                s.share_enabled,
+                s.created_at,
+                s.updated_at,
+                s.ended_at,
+                s.summary
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 更新会话状态与摘要（updated_at 刷新为 now）；
+    /// status 进入终态（ended/error）时补 ended_at，非终态不动它。
+    pub fn update_session(
+        &self,
+        id: &str,
+        status: &str,
+        summary: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let now = now_ms();
+        self.conn.execute(
+            "UPDATE agent_session
+             SET status     = ?2,
+                 summary    = ?3,
+                 updated_at = ?4,
+                 ended_at   = CASE WHEN ?2 IN ('ended','error')
+                                   THEN COALESCE(ended_at, ?4)
+                                   ELSE ended_at END
+             WHERE id = ?1",
+            params![id, status, summary, now],
+        )?;
+        Ok(())
+    }
+
+    /// 按 id 精确查会话。
+    pub fn get_session(&self, id: &str) -> Result<Option<SessionRow>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {COLS} FROM agent_session WHERE id = ?1"))?;
+        let row = stmt
+            .query_row(params![id], from_row)
+            .optional()
+            .map_err(StoreError::from)?;
+        Ok(row)
+    }
+
+    /// 会话列表：可按状态过滤，updated_at 倒序（最近活动在前），limit 截断。
+    pub fn list_sessions(
+        &self,
+        status: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<SessionRow>, StoreError> {
+        match status {
+            Some(st) => {
+                let mut stmt = self.conn.prepare(&format!(
+                    "SELECT {COLS} FROM agent_session WHERE status = ?1 \
+                     ORDER BY updated_at DESC LIMIT ?2"
+                ))?;
+                let rows = stmt.query_map(params![st, limit as i64], from_row)?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            }
+            None => {
+                let mut stmt = self.conn.prepare(&format!(
+                    "SELECT {COLS} FROM agent_session ORDER BY updated_at DESC LIMIT ?1"
+                ))?;
+                let rows = stmt.query_map(params![limit as i64], from_row)?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            }
+        }
+    }
+
+    /// 活跃会话数：status 不在终态（ended/error）即活跃（首页红点/恢复提示用）。
+    pub fn count_active_sessions(&self) -> Result<u32, StoreError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM agent_session WHERE status NOT IN ('ended','error')",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(n as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::testutil;
+
+    /// 插入后按 id 取回，13 个字段全量一致（含可空字段与外键归属）。
+    #[test]
+    fn insert_and_get_roundtrip() {
+        let (_dir, store) = testutil::open_store();
+        // workspace_id 有外键：先登记工作区再挂会话
+        store
+            .upsert_workspace(&crate::Workspace {
+                id: "ws-1".to_string(),
+                path: "/repo/a".to_string(),
+                name: "项目".to_string(),
+                is_repo: true,
+                trusted: true,
+                extra_dirs: None,
+                last_opened_at: 1000,
+                created_at: 1000,
+            })
+            .unwrap();
+        let mut s = testutil::sample_session("sess-1");
+        s.workspace_id = Some("ws-1".to_string());
+        s.backend = Some("zcode".to_string());
+        s.share_enabled = true;
+        s.summary = Some("干了点活".to_string());
+        store.insert_session(&s).unwrap();
+
+        let got = store.get_session("sess-1").unwrap().expect("应查到");
+        assert_eq!(got, s);
+        assert!(store.get_session("sess-不存在").unwrap().is_none());
+    }
+
+    /// 状态机走 idle → running → ended：ended_at 只在终态补写且不覆盖。
+    #[test]
+    fn update_session_lifecycle_sets_ended_at() {
+        let (_dir, store) = testutil::open_store();
+        testutil::seed_session(&store, "sess-1");
+
+        // 非终态更新：ended_at 保持 NULL，status/summary 生效
+        store.update_session("sess-1", "running", None).unwrap();
+        let got = store.get_session("sess-1").unwrap().unwrap();
+        assert_eq!(got.status, "running");
+        assert!(got.ended_at.is_none(), "非终态不应写 ended_at");
+
+        // 终态：补 ended_at + summary
+        store
+            .update_session("sess-1", "ended", Some("任务完成"))
+            .unwrap();
+        let ended = store.get_session("sess-1").unwrap().unwrap();
+        assert_eq!(ended.status, "ended");
+        assert_eq!(ended.summary.as_deref(), Some("任务完成"));
+        assert!(ended.ended_at.is_some(), "终态应写 ended_at");
+
+        // 再次终态更新（error）：ended_at 保留首次结束时间
+        let first_end = ended.ended_at;
+        store.update_session("sess-1", "error", None).unwrap();
+        let failed = store.get_session("sess-1").unwrap().unwrap();
+        assert_eq!(failed.status, "error");
+        assert_eq!(failed.ended_at, first_end, "ended_at 不被二次结束覆盖");
+    }
+
+    /// 列表：状态过滤 + updated_at 倒序 + limit。
+    #[test]
+    fn list_sessions_filters_orders_and_limits() {
+        let (_dir, store) = testutil::open_store();
+        for (id, status, updated) in [
+            ("sess-a", "idle", 1000),
+            ("sess-b", "idle", 3000),
+            ("sess-c", "idle", 2000),
+            ("sess-d", "ended", 4000),
+        ] {
+            let mut s = testutil::sample_session(id);
+            s.status = status.to_string();
+            s.updated_at = updated;
+            store.insert_session(&s).unwrap();
+        }
+
+        // 全量：updated_at 倒序
+        let all = store.list_sessions(None, 10).unwrap();
+        let ids: Vec<&str> = all.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["sess-d", "sess-b", "sess-c", "sess-a"]);
+
+        // 过滤 idle：ended 不出现
+        let idle = store.list_sessions(Some("idle"), 10).unwrap();
+        let ids: Vec<&str> = idle.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["sess-b", "sess-c", "sess-a"]);
+
+        // limit 截断
+        let top = store.list_sessions(Some("idle"), 2).unwrap();
+        let ids: Vec<&str> = top.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["sess-b", "sess-c"]);
+    }
+
+    /// 活跃计数：终态（ended/error）不计入。
+    #[test]
+    fn count_active_sessions_excludes_terminal() {
+        let (_dir, store) = testutil::open_store();
+        for (id, status) in [
+            ("sess-a", "idle"),
+            ("sess-b", "running"),
+            ("sess-c", "ended"),
+            ("sess-d", "error"),
+        ] {
+            let mut s = testutil::sample_session(id);
+            s.status = status.to_string();
+            store.insert_session(&s).unwrap();
+        }
+        assert_eq!(store.count_active_sessions().unwrap(), 2);
+
+        // error → 恢复活跃
+        store.update_session("sess-d", "paused", None).unwrap();
+        assert_eq!(store.count_active_sessions().unwrap(), 3);
+    }
+}

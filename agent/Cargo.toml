@@ -2,7 +2,7 @@
 # 依赖方向由 CI cargo-deny 强制（禁止环）：protocol ← 所有。
 [workspace]
 resolver = "2"
-members = ["crates/bbrt-protocol", "crates/bbrt-session", "crates/bbrt-sec", "crates/bbrt-memory"]
+members = ["crates/bbrt-protocol", "crates/bbrt-session", "crates/bbrt-sec", "crates/bbrt-memory", "crates/bbrt-store", "crates/bbrt-context", "crates/bbrt-aigw", "crates/bbrt-hostapi", "crates/bbrt-tools", "crates/bbrt"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +14,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 bbrt-protocol = { path = "crates/bbrt-protocol" }
+bbrt-sec = { path = "crates/bbrt-sec" }
+bbrt-memory = { path = "crates/bbrt-memory" }
+bbrt-store = { path = "crates/bbrt-store" }
+bbrt-context = { path = "crates/bbrt-context" }
+bbrt-aigw = { path = "crates/bbrt-aigw" }
+bbrt-hostapi = { path = "crates/bbrt-hostapi" }
+bbrt-tools = { path = "crates/bbrt-tools" }
+bbrt-session = { path = "crates/bbrt-session" }
 
 # Runtime 二进制随客户端分发、有 <80MB 空闲内存预算（08 §1.2）：发布构建开全程序 LTO
 [profile.release]

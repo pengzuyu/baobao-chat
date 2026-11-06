@@ -1,0 +1,158 @@
+//! 内置工具实现（D11 §2.4 builtin/）。
+//!
+//! 模块划分与工具清单：
+//! - [`fs`]：read_file / list_dir / write_file / edit_file
+//! - [`search`]：search_files（递归 glob 文件名 + 内容子串，命中 ≤200）
+//! - [`cmd`]：run_command（经 bbrt-sec SandboxLauncher 真实沙箱执行）
+//! - [`git`]：git_status / git_diff（经沙箱跑 git）；git_commit / git_push（v0.1 拒绝 8028）
+//! - [`http`]：http_fetch（NetPolicy 白名单 + 沙箱 curl）
+//! - [`memory`]：memory_save（bbrt-memory W1 模型写入路径）
+//!
+//! 各实现返回 [`ExecOutput`]（成功）或 [`ToolBlock`]（带 8020-8026/8002 错误码的阻断），
+//! 脱敏统一由 pipeline 第 7 步完成（D11 §6），本层不重复打码——例外是 violation
+//! detail（落库/展示前即打码，见 [`ExecEnv::record_violation`]）。
+
+pub mod cmd;
+pub mod fs;
+pub mod git;
+pub mod http;
+pub mod memory;
+pub mod search;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
+
+use bbrt_memory::MemoryEngine;
+use bbrt_sec::sandbox::launcher::{SandboxLauncher, Violation, ViolationKind, ViolationSink};
+use bbrt_sec::sandbox::network::NetPolicy;
+use bbrt_sec::sandbox::path::PathPolicy;
+
+use crate::registry::ToolRegistry;
+
+/// journal 字符串事件回调类型（file.changed 等；bin 侧转 ActivityEvent 喂被动轨）
+pub(crate) type JournalHook = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// 执行环境（PipelineExecutor 构造期从 ToolsConfig 派生，全部工具共享）
+pub(crate) struct ExecEnv {
+    /// 工作区根（规范路径；命令 cwd 默认值）
+    pub workspace: PathBuf,
+    /// 路径策略（工作区根 + 例外可写；敏感拒读 8026/越界 8020/软链逃逸 8024）
+    pub path_policy: PathPolicy,
+    /// 网络出站白名单（8025）
+    pub net_policy: NetPolicy,
+    /// 沙箱执行器（探测/注入；含降级信息 B11）
+    pub launcher: SandboxLauncher,
+    /// 记忆引擎（memory_save；None=不可用）
+    pub memory: Option<Arc<MemoryEngine>>,
+    /// journal 字符串事件回调（修改类先记 file.changed）
+    pub journal_hook: Option<JournalHook>,
+    /// violation 出口
+    pub sink: Arc<dyn ViolationSink>,
+}
+
+impl ExecEnv {
+    /// 记录一条沙箱违规（detail 先打码再落 sink；09 §5.1 agent_sandbox_violation）
+    pub(crate) fn record_violation(
+        &self,
+        kind: ViolationKind,
+        code: u32,
+        detail: impl Into<String>,
+    ) {
+        let masked = bbrt_sec::masking::mask(&detail.into());
+        self.sink.append(Violation::now(kind, code, masked));
+    }
+
+    /// journal 字符串事件回调（无 hook 静默跳过；事件由 bin 侧转 ActivityEvent 喂被动轨）
+    pub(crate) fn emit_journal(&self, event: &str) {
+        if let Some(hook) = &self.journal_hook {
+            hook(event);
+        }
+    }
+}
+
+/// 工具执行成功产物（D11 §6 步骤 6-8 浓缩；summary 由 pipeline 打码后回填上下文）
+#[derive(Debug, Clone)]
+pub(crate) struct ExecOutput {
+    /// 结果摘要（将被 masking::mask 打码）
+    pub summary: String,
+    /// 是否发生截断（输出 1MB / 摘录 400 行 / 命中 200 条）
+    pub truncated: bool,
+    /// 进程退出码（非进程类工具为 None）
+    pub exit_code: Option<i32>,
+    /// 执行时长（毫秒）
+    pub duration_ms: u64,
+}
+
+/// 工具执行阻断（携带 09 §6.4 错误码：8002 参数/未注册、8020-8026 沙箱域、8028 钥匙串）
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{code}: {message}")]
+pub(crate) struct ToolBlock {
+    /// 错误码
+    pub code: u32,
+    /// 人读原因
+    pub message: String,
+}
+
+/// 阻断快捷构造
+pub(crate) fn deny(code: u32, message: impl Into<String>) -> ToolBlock {
+    ToolBlock {
+        code,
+        message: message.into(),
+    }
+}
+
+/// 计时辅助：闭包执行 → (结果, 毫秒)
+pub(crate) fn timed<T>(f: impl FnOnce() -> T) -> (T, u64) {
+    let started = Instant::now();
+    let out = f();
+    (out, started.elapsed().as_millis() as u64)
+}
+
+/// epoch 毫秒（授权记忆 granted_at_ms 等审计字段）
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// 相对路径以工作区根为基准解析（模型产出的相对路径语义 = 工作区内相对路径；
+/// 不随 Runtime 进程 cwd 漂移）
+pub(crate) fn resolve_against(workspace: &std::path::Path, p: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(p);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace.join(path)
+    }
+}
+
+/// 取字符串参数（trim 非空）
+pub(crate) fn str_arg(args: &serde_json::Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// 取非负整数参数
+pub(crate) fn usize_arg(args: &serde_json::Value, key: &str) -> Option<usize> {
+    args.get(key).and_then(|v| v.as_u64()).map(|v| v as usize)
+}
+
+/// 注册全部内置工具（registry.builtin() 调用）
+pub(crate) fn register_all(registry: &mut ToolRegistry) {
+    registry.register(fs::read_file_def());
+    registry.register(fs::list_dir_def());
+    registry.register(fs::write_file_def());
+    registry.register(fs::edit_file_def());
+    registry.register(search::search_files_def());
+    registry.register(cmd::run_command_def());
+    registry.register(git::git_status_def());
+    registry.register(git::git_diff_def());
+    registry.register(git::git_commit_def());
+    registry.register(git::git_push_def());
+    registry.register(http::http_fetch_def());
+    registry.register(memory::memory_save_def());
+}

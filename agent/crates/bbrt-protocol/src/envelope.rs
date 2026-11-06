@@ -1,4 +1,4 @@
-//! stdio JSONL 协议消息与信封（D11 §2.1 / §4 全消息表，v1 共 38 个消息类型）。
+//! stdio JSONL 协议消息与信封（D11 §2.1 / §4 全消息表，v1 共 44 个消息类型 = 38 + D15 追加 6）。
 //!
 //! 落码约定：
 //! - 消息枚举用 `#[serde(tag = "type")]` 判别：序列化形如 `{"type":"session.start", ...字段}`；
@@ -235,6 +235,47 @@ pub enum Preview {
 }
 
 // ---------------------------------------------------------------------------
+// D15 记忆/日报协议增量（D15 §2.4/§3.3，追加进 D11 §4 全消息表）
+// 嵌套 struct 一律自带 rename_all（rename_all 不随枚举变体传导，7698c52 教训）
+// ---------------------------------------------------------------------------
+
+/// 日报轻量统计（report.daily.stats 与 report.list 回执条目共用；D15 §3.3）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyStatsLite {
+    pub sessions: u32,
+    pub tools: u32,
+    pub blocked: u32,
+    pub files_changed: u32,
+    pub memory_saved: u32,
+}
+
+/// memory.list 回执条目（D15 §2.4：{name,title,type,updated_at,hook}）
+/// wire 字段名逐字照 D15：type 与 updated_at 显式 rename 覆盖 camelCase
+/// （嵌套 struct 无 tag 冲突，可以持有名为 type 的线路字段）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryListItem {
+    pub name: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub memory_type: String,
+    #[serde(rename = "updated_at")]
+    pub updated_at: u64,
+    /// 召回触发特征（W2 启发式正则；无则为空串）
+    pub hook: String,
+}
+
+/// report.list 回执条目（D15 §3.3：{date, stats}）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportListItem {
+    /// YYYY-MM-DD
+    pub date: String,
+    pub stats: DailyStatsLite,
+}
+
+// ---------------------------------------------------------------------------
 // 会话状态枚举（D11 §3 状态机，starting + 9 态）
 // session.state 消息 payload 与 §11 agent_session.status 共用此枚举。
 // 有意不加 #[non_exhaustive]：状态集合一旦变化，bbrt-session 状态机必须同步修改（编译期强制）。
@@ -300,7 +341,7 @@ impl fmt::Display for SessionState {
 // Host → Runtime 消息（D11 §4 表"宿主→RT"全部 + 双向 ping/pong）
 // ---------------------------------------------------------------------------
 
-/// 宿主下发消息（15 个宿主→RT 类型 + 双向 ping/pong）
+/// 宿主下发消息（15 个宿主→RT 类型 + D15 追加 3 类型 + 双向 ping/pong）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive] // 前向兼容：新增变体不破坏下游匹配（D11 §2.1）
 #[serde(tag = "type")]
@@ -441,13 +482,34 @@ pub enum HostToRuntime {
     /// 健康（ping 应答；标注"双向"故两枚举都保留）
     #[serde(rename = "pong")]
     Pong,
+
+    // -- D15 §2.4/§3.3 追加（REQ；成对回执见 RuntimeToHost 的 *.result 变体） --
+    /// 记忆列表查询（D15 §2.4；REQ→memory.list.result）
+    #[serde(rename = "memory.list", rename_all = "camelCase")]
+    MemoryList {
+        /// 条数上限（D15 标注 limit?，可缺省）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
+
+    /// 记忆删除（D15 §2.4；REQ→memory.delete.result{ok}）
+    #[serde(rename = "memory.delete", rename_all = "camelCase")]
+    MemoryDelete { name: String },
+
+    /// 日报列表查询（D15 §3.3；REQ→report.list.result）
+    #[serde(rename = "report.list", rename_all = "camelCase")]
+    ReportList {
+        /// 条数上限（同 memory.list，可缺省）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
 }
 
 // ---------------------------------------------------------------------------
 // Runtime → Host 消息（D11 §4 表"RT→宿主"全部 + 双向 ping/pong）
 // ---------------------------------------------------------------------------
 
-/// Runtime 上行消息（21 个 RT→宿主类型 + 双向 ping/pong）
+/// Runtime 上行消息（21 个 RT→宿主类型 + D15 追加 6 类型 + 双向 ping/pong）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive] // 前向兼容：新增变体不破坏下游匹配（D11 §2.1）
 #[serde(tag = "type")]
@@ -665,6 +727,57 @@ pub enum RuntimeToHost {
         fatal: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
+    },
+
+    // -- D15 §2.4/§3.3 追加（UNT 事件 + REQ 成对回执） --
+    /// 记忆写入/更新（D15 §2.4；UNT）
+    /// 字段名 memory_type：内部 tag 模式下变体字段不得与 tag 名 type 同名（D15 实现既有约定），
+    /// 线路名即 memoryType，不与信封层 type 冲突。
+    #[serde(rename = "memory.saved", rename_all = "camelCase")]
+    MemorySaved {
+        session_id: String,
+        name: String,
+        title: String,
+        memory_type: String,
+        /// true=同题更新既有条目；false=新建（D15 §2.2）
+        updated: bool,
+    },
+
+    /// 记忆淘汰（D15 §2.4；UNT；reason 目前取值 "capacity"）
+    #[serde(rename = "memory.evicted", rename_all = "camelCase")]
+    MemoryEvicted {
+        /// LRU 淘汰可能发生在会话之外（启动索引重建），可缺省
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        name: String,
+        reason: String,
+    },
+
+    /// 日报产出/更新（D15 §3.3；UNT；path 指向 UI 消费的 json 产物）
+    #[serde(rename = "report.daily", rename_all = "camelCase")]
+    ReportDaily {
+        /// YYYY-MM-DD
+        date: String,
+        path: String,
+        stats: DailyStatsLite,
+    },
+
+    /// memory.list 回执（D15 §2.4；回执 type 命名沿用 initialize→initialize.result 的 *.result 约定）
+    #[serde(rename = "memory.list.result", rename_all = "camelCase")]
+    MemoryListResult {
+        #[serde(default)]
+        items: Vec<MemoryListItem>,
+    },
+
+    /// memory.delete 回执（D15 §2.4）
+    #[serde(rename = "memory.delete.result", rename_all = "camelCase")]
+    MemoryDeleteResult { ok: bool },
+
+    /// report.list 回执（D15 §3.3）
+    #[serde(rename = "report.list.result", rename_all = "camelCase")]
+    ReportListResult {
+        #[serde(default)]
+        items: Vec<ReportListItem>,
     },
 }
 

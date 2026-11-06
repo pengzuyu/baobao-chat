@@ -1,0 +1,11 @@
+# bbrt-hostapi（D11 §1.2 crate 总览）
+[package]
+name = "bbrt-hostapi"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bbrt-protocol = { workspace = true }

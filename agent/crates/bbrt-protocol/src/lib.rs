@@ -8,11 +8,12 @@ pub mod envelope;
 
 pub use codec::{read_message, write_message, MAX_LINE_BYTES};
 pub use envelope::{
-    Blocked, BriefContextItem, CheckpointReason, CompactionPhase, Decision, DelegateEventKind,
-    EndReason, Envelope, FileChange, GrantScope, HostToRuntime, ModelPolicy, ModelSwitchReason,
-    PermissionMode, Preview, ProtocolError, RenewReason, ReviewDecision, RiskLevel, RuntimeToHost,
-    SessionState, StreamChannel, SubagentPhase, SubagentResult, TaskBrief, ToolSource,
-    ToolsReloadReason, Usage, PROTOCOL_VERSION,
+    Blocked, BriefContextItem, CheckpointReason, CompactionPhase, DailyStatsLite, Decision,
+    DelegateEventKind, EndReason, Envelope, FileChange, GrantScope, HostToRuntime, MemoryListItem,
+    ModelPolicy, ModelSwitchReason, PermissionMode, Preview, ProtocolError, RenewReason,
+    ReportListItem, ReviewDecision, RiskLevel, RuntimeToHost, SessionState, StreamChannel,
+    SubagentPhase, SubagentResult, TaskBrief, ToolSource, ToolsReloadReason, Usage,
+    PROTOCOL_VERSION,
 };
 // CodecError 定义于 codec 模块（envelope 内不再重复导出）
 pub use codec::CodecError;

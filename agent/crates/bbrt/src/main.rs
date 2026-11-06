@@ -1,0 +1,419 @@
+//! bbrt：Runtime 进程入口（D11 §1.2 装配）。
+//!
+//! 组装：hostapi stdio 传输 × SessionManager × bbrt-tools 管线 ×
+//! bbrt-aigw 客户端 × bbrt-store(SQLite WAL) × bbrt-memory 双轨。
+//!
+//! 线程模型：主线程阻塞读 stdin 信封（REQ 分发）；user.message 的 turn
+//! 在独立线程跑（流式事件经共享写锁即时外发）；审批回执经 BrtSink 的
+//! request→session 路由表投递。
+//!
+//! 环境变量（宿主拉起时注入）：
+//! - BBW_RT_DATA_DIR   数据目录（默认 {TMPDIR}/bbrt）
+//! - BBW_RT_GATEWAY    AI 网关 base（默认 http://127.0.0.1:8091）
+//! - BBW_RT_TOKEN      网关令牌（v0.1 静态；OBO 通道阶段二接 hostapi::OboCache）
+
+mod bridge;
+
+use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use bbrt_aigw::AigwClient;
+use bbrt_hostapi::handshake;
+use bbrt_hostapi::{IdGen, RuntimeHandler, StdioTransport};
+use bbrt_memory::MemoryEngine;
+use bbrt_protocol::{Envelope, HostToRuntime, RuntimeToHost};
+use bbrt_session::events::ModelTier;
+use bbrt_session::{LoopDeps, SessionManager, StartParams};
+use bbrt_store::Store;
+
+use bridge::BrtSink;
+
+fn main() {
+    if let Err(e) = run() {
+        // fatal：退出前尽力吐 error 信封（D11 §4 error.fatal 语义）
+        let _ = writeln!(std::io::stderr(), "bbrt fatal: {e}");
+        if let Ok(env) = Envelope::wrap(
+            1,
+            "r-fatal",
+            &RuntimeToHost::Error {
+                code: 9000,
+                message: e.to_string(),
+                fatal: true,
+                session_id: None,
+            },
+        ) {
+            let mut out = std::io::stdout().lock();
+            let _ = bbrt_protocol::codec::write_message(&mut out, &env);
+            let _ = out.flush();
+        }
+        std::process::exit(1);
+    }
+}
+
+/// stdin/stdout 双工：读独占 stdin 锁；写走全局 stdout()（内部自锁，turn 线程与主线程共用）
+struct StdioDuplex {
+    input: std::io::StdinLock<'static>,
+}
+impl Read for StdioDuplex {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.input.read(buf)
+    }
+}
+impl Write for StdioDuplex {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::io::stdout().write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stdout().flush()
+    }
+}
+
+fn run() -> Result<(), String> {
+    let data_dir = PathBuf::from(std::env::var("BBW_RT_DATA_DIR").unwrap_or_else(|_| {
+        std::env::temp_dir()
+            .join("bbrt")
+            .to_string_lossy()
+            .into_owned()
+    }));
+    let gateway =
+        std::env::var("BBW_RT_GATEWAY").unwrap_or_else(|_| "http://127.0.0.1:8091".into());
+    let token = std::env::var("BBW_RT_TOKEN").unwrap_or_default();
+
+    std::fs::create_dir_all(&data_dir).map_err(|e| format!("数据目录不可建: {e}"))?;
+
+    // ── 装配 ──
+    let store = Arc::new(Mutex::new(
+        Store::open(&data_dir.join("runtime.db")).map_err(|e| format!("SQLite 打开失败: {e}"))?,
+    ));
+    let memory = Arc::new(
+        MemoryEngine::open(&data_dir, Arc::new(bbrt_memory::SystemClock))
+            .map_err(|e| format!("记忆引擎打开失败: {e}"))?,
+    );
+    // 启动回补漏日日报（D15 §3.2 触发 2；产物经 report.daily 事件补报宿主）
+    let backfilled = memory.startup_backfill().unwrap_or_default();
+
+    let tools = Arc::new(bbrt_tools::PipelineExecutor::new(bbrt_tools::ToolsConfig {
+        workspace: PathBuf::from("."),
+        launcher: None, // detect() 探测（Seatbelt/Baseline + 降级徽标）
+        memory: Some(memory.clone()),
+        ..Default::default()
+    }));
+    let model = Arc::new(AigwClient::new(&gateway, move || token.clone()));
+
+    let sink = Arc::new(BrtSink {
+        pending: Mutex::new(std::collections::HashMap::new()),
+        seq: Mutex::new(0),
+    });
+    let deps = LoopDeps {
+        model,
+        tools,
+        memory: Some(memory.clone()),
+        wal: store.clone(),
+        sink: sink.clone(),
+        budget: Default::default(),
+    };
+    let mgr = Arc::new(SessionManager::new(deps, Some(store.clone())));
+
+    // ── stdio：StdioTransport 双工（写共用全局 stdout）──
+    let mut transport = StdioTransport::new(StdioDuplex {
+        input: std::io::stdin().lock(),
+    });
+    let mut ids = IdGen::new();
+
+    // 握手（10s 首条 initialize；版本协商按 D11 §10.2）——handler 提供 capabilities
+    let handler = RtHandler {
+        mgr: mgr.clone(),
+        memory: memory.clone(),
+    };
+    let _outcome = handshake::handshake(&mut transport, &handler, &mut ids)
+        .map_err(|e| format!("握手失败: {e}"))?;
+
+    // runtime.ready（D11 §4：可接收 session.start 信号）
+    send(
+        &mut ids,
+        &RuntimeToHost::RuntimeReady {
+            runtime_version: env!("CARGO_PKG_VERSION").into(),
+            active_sessions: mgr.active_count() as u32,
+            wal_healthy: true,
+        },
+    );
+
+    // 启动回补的日报补报
+    for rep in backfilled {
+        send(
+            &mut ids,
+            &RuntimeToHost::ReportDaily {
+                date: rep.date,
+                path: rep.json_path.display().to_string(),
+                stats: to_lite(&rep.stats),
+            },
+        );
+    }
+
+    // 主循环：阻塞读信封 → 分发（REQ 成对回执带 reply_to）
+    loop {
+        let env = match transport.recv() {
+            Ok(Some(e)) => e,
+            Ok(None) => return Ok(()), // EOF 优雅退出
+            Err(_) => continue,        // 坏行：codec 已丢弃（忽略+计数对齐 D11 §4）
+        };
+        let reply = dispatch(&mgr, &memory, &sink, &env);
+        if let Some(msg) = reply {
+            if let Ok(mut ack) = Envelope::wrap(1, format!("r-{}", ids.next_id()), &msg) {
+                ack.reply_to = Some(env.id.clone());
+                write_env(&ack);
+            }
+        }
+    }
+}
+
+/// host→runtime 分发；REQ 返回成对回执
+fn dispatch(
+    mgr: &Arc<SessionManager>,
+    memory: &Arc<MemoryEngine>,
+    sink: &Arc<BrtSink>,
+    env: &Envelope,
+) -> Option<RuntimeToHost> {
+    let msg: HostToRuntime = match serde_json::from_value(envelope_payload(env)) {
+        Ok(m) => m,
+        Err(_) => {
+            return Some(RuntimeToHost::Error {
+                code: 9001,
+                message: "payload 解析失败".into(),
+                fatal: false,
+                session_id: None,
+            });
+        }
+    };
+    match msg {
+        HostToRuntime::Ping => Some(RuntimeToHost::Pong),
+        HostToRuntime::Initialize { .. } => Some(RuntimeToHost::InitializeResult {
+            runtime_version: env!("CARGO_PKG_VERSION").into(),
+            tools: vec![],
+            capabilities: vec![
+                "session".into(),
+                "tools".into(),
+                "memory".into(),
+                "reports".into(),
+            ],
+        }),
+        HostToRuntime::SessionStart {
+            session_id,
+            workspace,
+            mode,
+            model_policy,
+            ..
+        } => {
+            let tier = match model_policy {
+                bbrt_protocol::ModelPolicy::Fast => ModelTier::Fast,
+                _ => ModelTier::Strong,
+            };
+            let sec_mode = match mode {
+                bbrt_protocol::PermissionMode::Ask => bbrt_sec::gate::PermissionMode::Ask,
+                bbrt_protocol::PermissionMode::AutoEdit => bbrt_sec::gate::PermissionMode::AutoEdit,
+                bbrt_protocol::PermissionMode::FullAuto => bbrt_sec::gate::PermissionMode::FullAuto,
+            };
+            // 被动轨：session.started 入 journal（D15 §3.1）
+            let _ = memory.record(&bbrt_memory::ActivityEvent::SessionStarted {
+                session: session_id.clone(),
+                workspace: workspace.clone(),
+                mode: format!("{mode:?}").to_lowercase(),
+            });
+            match mgr.start(
+                session_id.clone(),
+                StartParams {
+                    workspace,
+                    mode: sec_mode,
+                    model_policy: tier,
+                    title: session_id.clone(),
+                },
+            ) {
+                Ok(()) => Some(RuntimeToHost::SessionReady {
+                    session_id,
+                    restored: false,
+                    replayed_events: Some(0),
+                    warnings: vec![],
+                }),
+                Err(e) => Some(RuntimeToHost::Error {
+                    code: 8001,
+                    message: e.to_string(),
+                    fatal: false,
+                    session_id: Some(session_id),
+                }),
+            }
+        }
+        HostToRuntime::UserMessage {
+            session_id, text, ..
+        } => {
+            let mgr2 = mgr.clone();
+            let sid = session_id.clone();
+            // turn 独立线程：流式事件经共享 stdout 即时外发
+            std::thread::spawn(move || {
+                let _ = mgr2.run_turn(&sid, &text);
+            });
+            // 回执=状态镜像（协议无独立 ack 变体，D11 §4 user.message"接受入队"）
+            Some(RuntimeToHost::SessionStateReport {
+                session_id,
+                state: bbrt_protocol::SessionState::Running,
+                reason: "queued".into(),
+            })
+        }
+        HostToRuntime::PermissionResponse {
+            request_id,
+            decision,
+            scope,
+            edited_args,
+            ..
+        } => {
+            let resp = bbrt_session::loop_runner::PermissionResponse {
+                request_id,
+                decision: match decision {
+                    bbrt_protocol::Decision::Allow => {
+                        bbrt_session::loop_runner::PermissionDecision::Allow
+                    }
+                    bbrt_protocol::Decision::Deny => {
+                        bbrt_session::loop_runner::PermissionDecision::Deny
+                    }
+                },
+                scope: match scope {
+                    bbrt_protocol::GrantScope::Once => bbrt_sec::memory::GrantScope::Once,
+                    bbrt_protocol::GrantScope::Session => bbrt_sec::memory::GrantScope::Session,
+                    bbrt_protocol::GrantScope::Permanent => bbrt_sec::memory::GrantScope::Permanent,
+                },
+                edited: edited_args.map(|v| v.to_string()),
+            };
+            // permission.response 无会话字段：按 BrtSink 登记的 request→session 路由表投递
+            if let Some(sid) = sink.route_of(&resp.request_id) {
+                let _ = mgr.respond_permission(&sid, resp);
+            }
+            None // 循环层的 PermissionResolved 镜像事件即回显
+        }
+        HostToRuntime::SessionPause { session_id } => {
+            let _ = mgr.interrupt(&session_id);
+            Some(RuntimeToHost::SessionStateReport {
+                session_id,
+                state: bbrt_protocol::SessionState::Paused,
+                reason: "user-pause".into(),
+            })
+        }
+        HostToRuntime::SessionEnd { session_id, .. } => {
+            let _ = mgr.end(&session_id, "");
+            Some(RuntimeToHost::SessionEnded {
+                session_id,
+                summary: String::new(),
+            })
+        }
+        HostToRuntime::MemoryList { .. } => Some(RuntimeToHost::MemoryListResult {
+            items: memory
+                .knowledge()
+                .list()
+                .into_iter()
+                .map(|e| bbrt_protocol::MemoryListItem {
+                    name: e.name,
+                    title: e.title,
+                    memory_type: match e.mtype {
+                        bbrt_memory::MemoryType::User => "user".into(),
+                        bbrt_memory::MemoryType::Project => "project".into(),
+                        bbrt_memory::MemoryType::Feedback => "feedback".into(),
+                        bbrt_memory::MemoryType::Reference => "reference".into(),
+                    },
+                    // MemorySummary.updated_at 为 RFC3339 字符串；协议要毫秒——解析失败回 0（展示层兜底）
+                    updated_at: chrono_free_ms(&e.updated_at),
+                    hook: e.hook,
+                })
+                .collect(),
+        }),
+        HostToRuntime::MemoryDelete { name } => Some(RuntimeToHost::MemoryDeleteResult {
+            ok: memory.knowledge().delete(&name).unwrap_or(false),
+        }),
+        HostToRuntime::ReportList { .. } => Some(RuntimeToHost::ReportListResult {
+            items: vec![], // v0.1：日报经 report.daily 事件流补报；历史检索阶段二接 reports 目录扫描
+        }),
+        _ => None, // 其余 REQ（checkpoint/obo/...）阶段二；NTF 误投忽略
+    }
+}
+
+/// RFC3339 → 毫秒（无 chrono：手解 YYYY-MM-DDTHH:MM:SS[.fff](Z|+08:00) 简化形）
+fn chrono_free_ms(rfc3339: &str) -> u64 {
+    let num = |a: usize, b: usize| -> Option<u64> {
+        rfc3339.get(a..b).and_then(|s| s.parse::<u64>().ok())
+    };
+    let parts = (|| -> Option<u64> {
+        if rfc3339.len() < 19 {
+            return None;
+        }
+        let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+        let (h, mi, sec) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
+        let days = days_from_civil(y as i64, mo as i64, d as i64);
+        Some(((days * 86400 + h as i64 * 3600 + mi as i64 * 60 + sec as i64) * 1000) as u64)
+    })();
+    parts.unwrap_or(0)
+}
+
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn envelope_payload(env: &Envelope) -> serde_json::Value {
+    // codec 层已把 type 提升走；消息枚举反序列化需要 type 回填
+    let mut v = env.payload.clone();
+    if let serde_json::Value::Object(map) = &mut v {
+        map.insert(
+            "type".into(),
+            serde_json::Value::String(env.msg_type.clone()),
+        );
+    }
+    v
+}
+
+// ---- stdout 写（全局 stdout()，内部自锁跨线程安全）----
+
+fn write_env(env: &Envelope) {
+    let mut out = std::io::stdout();
+    let _ = bbrt_protocol::codec::write_message(&mut out, env);
+    let _ = out.flush();
+}
+
+fn send(ids: &mut IdGen, msg: &RuntimeToHost) {
+    if let Ok(env) = Envelope::wrap(1, format!("r-{}", ids.next_id()), msg) {
+        write_env(&env);
+    }
+}
+
+fn to_lite(s: &bbrt_memory::DailyStats) -> bbrt_protocol::DailyStatsLite {
+    bbrt_protocol::DailyStatsLite {
+        sessions: s.sessions as u32,
+        tools: s.tool_calls as u32,
+        blocked: s.blocked as u32,
+        files_changed: s.files_changed as u32,
+        memory_saved: s.memory_saved.len() as u32,
+    }
+}
+
+/// 握手期 capabilities 提供者（后续消息走 dispatch 主循环，不经 serve）
+struct RtHandler {
+    #[allow(dead_code)]
+    mgr: Arc<SessionManager>,
+    #[allow(dead_code)]
+    memory: Arc<MemoryEngine>,
+}
+impl RuntimeHandler for RtHandler {
+    fn handle(&mut self, _msg: HostToRuntime, _env: &Envelope) -> Option<RuntimeToHost> {
+        None // 握手只消费 initialize；回执由 handshake 内部生成
+    }
+    fn capabilities(&self) -> Vec<String> {
+        vec![
+            "session".into(),
+            "tools".into(),
+            "memory".into(),
+            "reports".into(),
+        ]
+    }
+}

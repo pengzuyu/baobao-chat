@@ -1,9 +1,19 @@
 [package]
 name = "bbrt-session"
-description = "会话生命周期与状态机（D11 §2.2/§3，骨架：当前仅 state.rs）"
+description = "会话生命周期、状态机与核心循环（D11 §2.2/§3/§4）"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 bbrt-protocol = { workspace = true }
+bbrt-sec = { workspace = true }
+bbrt-memory = { workspace = true }
+bbrt-store = { workspace = true }
+bbrt-context = { workspace = true }
+bbrt-aigw = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

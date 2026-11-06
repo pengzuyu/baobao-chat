@@ -1,0 +1,25 @@
+# bbrt-tools（D11 §1.2 crate 总览 / §2.4 文件级结构）
+[package]
+name = "bbrt-tools"
+description = "工具注册表与执行管线（D11 §2.4/§6）"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bbrt-protocol = { workspace = true }
+bbrt-sec = { workspace = true }
+bbrt-context = { workspace = true }
+bbrt-aigw = { workspace = true }
+bbrt-memory = { workspace = true }
+# violation 持久化（StoreViolationSink → agent_sandbox_violation 表）
+bbrt-store = { workspace = true }
+# 实现 bbrt_session::ToolExecutor（依赖倒置契约）。workspace.dependencies 实际未登记
+# bbrt-session（与任务说明不符），受"不动 agent/Cargo.toml"约束改用 path 依赖。
+bbrt-session = { path = "../bbrt-session" }
+
+# 测试专用（workspace 未登记，按惯例在 crate 内写具体版本；参见 bbrt-sec）
+[dev-dependencies]
+tempfile = "3"

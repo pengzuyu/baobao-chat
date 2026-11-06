@@ -7,11 +7,11 @@ use std::io::Cursor;
 
 use bbrt_protocol::{
     read_message, write_message, Blocked, BriefContextItem, CheckpointReason, CodecError,
-    CompactionPhase, Decision, DelegateEventKind, EndReason, Envelope, FileChange, GrantScope,
-    HostToRuntime, ModelPolicy, ModelSwitchReason, PermissionMode, Preview, ProtocolError,
-    RenewReason, ReviewDecision, RiskLevel, RuntimeToHost, SessionState, StreamChannel,
-    SubagentPhase, SubagentResult, TaskBrief, ToolSource, ToolsReloadReason, Usage,
-    PROTOCOL_VERSION,
+    CompactionPhase, DailyStatsLite, Decision, DelegateEventKind, EndReason, Envelope, FileChange,
+    GrantScope, HostToRuntime, MemoryListItem, ModelPolicy, ModelSwitchReason, PermissionMode,
+    Preview, ProtocolError, RenewReason, ReportListItem, ReviewDecision, RiskLevel, RuntimeToHost,
+    SessionState, StreamChannel, SubagentPhase, SubagentResult, TaskBrief, ToolSource,
+    ToolsReloadReason, Usage, PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -113,6 +113,12 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
         },
         HostToRuntime::Ping,
         HostToRuntime::Pong,
+        // D15 §2.4/§3.3 追加
+        HostToRuntime::MemoryList { limit: Some(7) },
+        HostToRuntime::MemoryDelete {
+            name: "gitee-remote".into(),
+        },
+        HostToRuntime::ReportList { limit: None },
     ]
 }
 
@@ -261,6 +267,52 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             fatal: false,
             session_id: Some("sess-1".into()),
         },
+        // D15 §2.4/§3.3 追加（3 UNT + 3 回执）
+        RuntimeToHost::MemorySaved {
+            session_id: "sess-1".into(),
+            name: "gitee-remote".into(),
+            title: "Gitee 远端".into(),
+            memory_type: "knowledge".into(),
+            updated: true,
+        },
+        RuntimeToHost::MemoryEvicted {
+            session_id: None,
+            name: "old-note".into(),
+            reason: "capacity".into(),
+        },
+        RuntimeToHost::ReportDaily {
+            date: "2026-11-06".into(),
+            path: "/data/agent/reports/2026-11-06.json".into(),
+            stats: DailyStatsLite {
+                sessions: 3,
+                tools: 47,
+                blocked: 2,
+                files_changed: 12,
+                memory_saved: 3,
+            },
+        },
+        RuntimeToHost::MemoryListResult {
+            items: vec![MemoryListItem {
+                name: "gitee-remote".into(),
+                title: "Gitee 远端".into(),
+                memory_type: "knowledge".into(),
+                updated_at: 1_790_000_000_000,
+                hook: "记住.*远端".into(),
+            }],
+        },
+        RuntimeToHost::MemoryDeleteResult { ok: true },
+        RuntimeToHost::ReportListResult {
+            items: vec![ReportListItem {
+                date: "2026-11-06".into(),
+                stats: DailyStatsLite {
+                    sessions: 3,
+                    tools: 47,
+                    blocked: 2,
+                    files_changed: 12,
+                    memory_saved: 3,
+                },
+            }],
+        },
     ]
 }
 
@@ -288,7 +340,11 @@ fn golden<T: Serialize>(msg: &T, expected: Value) {
 #[test]
 fn roundtrip_all_host_to_runtime() {
     let all = all_host_to_runtime();
-    assert_eq!(all.len(), 17, "D11 §4 宿主→RT 15 类型 + 双向 ping/pong");
+    assert_eq!(
+        all.len(),
+        20,
+        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + 双向 ping/pong"
+    );
     for msg in &all {
         roundtrip(msg);
     }
@@ -297,7 +353,11 @@ fn roundtrip_all_host_to_runtime() {
 #[test]
 fn roundtrip_all_runtime_to_host() {
     let all = all_runtime_to_host();
-    assert_eq!(all.len(), 23, "D11 §4 RT→宿主 21 类型 + 双向 ping/pong");
+    assert_eq!(
+        all.len(),
+        29,
+        "D11 §4 RT→宿主 21 类型 + D15 追加 6 类型 + 双向 ping/pong"
+    );
     for msg in &all {
         roundtrip(msg);
     }
@@ -575,6 +635,140 @@ fn golden_ping_empty_payload() {
     golden(&HostToRuntime::Pong, json!({"type":"pong"}));
     golden(&RuntimeToHost::Ping, json!({"type":"ping"}));
     golden(&RuntimeToHost::Pong, json!({"type":"pong"}));
+}
+
+// ---------------------------------------------------------------------------
+// D15 §2.4/§3.3 协议增量：六个消息 + 三个 REQ 回执的逐字断言
+// ---------------------------------------------------------------------------
+
+#[test]
+fn golden_d15_memory_and_report_messages() {
+    // memory.saved：变体字段名 memory_type（内部 tag 模式不得与 tag 名 type 同名），线路名 memoryType
+    golden(
+        &RuntimeToHost::MemorySaved {
+            session_id: "sess-1".into(),
+            name: "gitee-remote".into(),
+            title: "Gitee 远端".into(),
+            memory_type: "knowledge".into(),
+            updated: false,
+        },
+        json!({
+            "type":"memory.saved","sessionId":"sess-1","name":"gitee-remote",
+            "title":"Gitee 远端","memoryType":"knowledge","updated":false
+        }),
+    );
+    // memory.evicted：sessionId 可缺省（会话外 LRU 淘汰）
+    golden(
+        &RuntimeToHost::MemoryEvicted {
+            session_id: None,
+            name: "old-note".into(),
+            reason: "capacity".into(),
+        },
+        json!({"type":"memory.evicted","name":"old-note","reason":"capacity"}),
+    );
+    golden(
+        &RuntimeToHost::MemoryEvicted {
+            session_id: Some("sess-1".into()),
+            name: "old-note".into(),
+            reason: "capacity".into(),
+        },
+        json!({"type":"memory.evicted","sessionId":"sess-1","name":"old-note","reason":"capacity"}),
+    );
+    // report.daily：嵌套 DailyStatsLite 自带 camelCase（filesChanged/memorySaved 逐字）
+    golden(
+        &RuntimeToHost::ReportDaily {
+            date: "2026-11-06".into(),
+            path: "/data/agent/reports/2026-11-06.json".into(),
+            stats: DailyStatsLite {
+                sessions: 3,
+                tools: 47,
+                blocked: 2,
+                files_changed: 12,
+                memory_saved: 3,
+            },
+        },
+        json!({
+            "type":"report.daily","date":"2026-11-06","path":"/data/agent/reports/2026-11-06.json",
+            "stats":{"sessions":3,"tools":47,"blocked":2,"filesChanged":12,"memorySaved":3}
+        }),
+    );
+    // 宿主→RT 三个 REQ：limit 可缺省
+    golden(
+        &HostToRuntime::MemoryList { limit: Some(7) },
+        json!({"type":"memory.list","limit":7}),
+    );
+    golden(
+        &HostToRuntime::MemoryList { limit: None },
+        json!({"type":"memory.list"}),
+    );
+    golden(
+        &HostToRuntime::MemoryDelete {
+            name: "gitee-remote".into(),
+        },
+        json!({"type":"memory.delete","name":"gitee-remote"}),
+    );
+    golden(
+        &HostToRuntime::ReportList { limit: None },
+        json!({"type":"report.list"}),
+    );
+
+    // 三个 REQ 回执：条目 wire 名逐字照 D15（type/updated_at 保留原样）
+    golden(
+        &RuntimeToHost::MemoryListResult {
+            items: vec![MemoryListItem {
+                name: "gitee-remote".into(),
+                title: "Gitee 远端".into(),
+                memory_type: "knowledge".into(),
+                updated_at: 1_790_000_000_000,
+                hook: "记住.*远端".into(),
+            }],
+        },
+        json!({
+            "type":"memory.list.result",
+            "items":[{"name":"gitee-remote","title":"Gitee 远端","type":"knowledge",
+                      "updated_at":1790000000000u64,"hook":"记住.*远端"}]
+        }),
+    );
+    golden(
+        &RuntimeToHost::MemoryDeleteResult { ok: true },
+        json!({"type":"memory.delete.result","ok":true}),
+    );
+    golden(
+        &RuntimeToHost::ReportListResult {
+            items: vec![ReportListItem {
+                date: "2026-11-06".into(),
+                stats: DailyStatsLite {
+                    sessions: 3,
+                    tools: 47,
+                    blocked: 2,
+                    files_changed: 12,
+                    memory_saved: 3,
+                },
+            }],
+        },
+        json!({
+            "type":"report.list.result",
+            "items":[{"date":"2026-11-06",
+                      "stats":{"sessions":3,"tools":47,"blocked":2,"filesChanged":12,"memorySaved":3}}]
+        }),
+    );
+
+    // 信封路径：memory.saved 打包后 payload 不含 type 键，unwrap 可原样还原
+    let saved = RuntimeToHost::MemorySaved {
+        session_id: "sess-1".into(),
+        name: "gitee-remote".into(),
+        title: "Gitee 远端".into(),
+        memory_type: "knowledge".into(),
+        updated: true,
+    };
+    let env = Envelope::wrap(PROTOCOL_VERSION, "r-1", &saved).expect("wrap");
+    assert_eq!(env.msg_type, "memory.saved");
+    assert_eq!(
+        env.payload,
+        json!({"sessionId":"sess-1","name":"gitee-remote","title":"Gitee 远端",
+               "memoryType":"knowledge","updated":true})
+    );
+    assert_eq!(env.unwrap::<RuntimeToHost>().expect("unwrap"), saved);
 }
 
 #[test]

@@ -1,0 +1,349 @@
+//! 工具执行管线（D11 §6 九步伪码的落地；实现 bbrt_session::ToolExecutor 契约）。
+//!
+//! 管线对照（D11 §6 步骤 → 本 crate 归属）：
+//!
+//! | §6 步骤 | 归属 | 说明 |
+//! |---|---|---|
+//! | 0 展示（tool.call，args 打码） | session loop_runner | 已在 bbrt-session 实现 |
+//! | 1 风险级判定（未注册 8002） | [`PipelineExecutor::check`] ① | registry.get |
+//! | 2 矩阵检查（gate ①→③） | [`PipelineExecutor::check`] ② | sec::gate::permission_gate |
+//! | 3 三级记忆（gate ④） | [`PipelineExecutor::check`] ② | gate 内部第④步（GrantStore） |
+//! | 4 需确认 → permission.request | session loop_runner | check 返回 NeedConfirm{preview,options} |
+//! | 5 沙箱校验（路径/网络） | [`PipelineExecutor::execute`] | 各 builtin 内 PathPolicy/NetPolicy（8020/8024/8025/8026）+ cmd 词法预检 |
+//! | 6 执行 | [`PipelineExecutor::execute`] | builtin 分发（沙箱真实执行） |
+//! | 7 结果脱敏 | [`PipelineExecutor::execute`] | masking::mask 统一打码 |
+//! | 8 审计 JSONL | session/store 层 | args_digest 已由 session 回填（§6 步骤 0） |
+//! | 9 回填上下文 | session loop_runner | ToolOutcome 摘要入上下文 |
+//!
+//! 审批通过后的记忆落库（§4.2）由 [`PipelineExecutor::record_grant`] 承担：
+//! run_command 按命令原文精确匹配（同调用语义），其余工具按 `*` 整工具授权
+//! （gate 的记忆匹配只对 command 字段取值，见 bbrt-sec gate.rs command_arg）。
+
+use std::sync::Arc;
+
+use bbrt_sec::danger_rules::DangerRuleSet;
+use bbrt_sec::errors::CODE_NO_PERMISSION_POINT;
+use bbrt_sec::gate::{permission_gate, AllowSource, Decision, GateCtx, ToolCall as GateCall};
+use bbrt_sec::masking::mask;
+use bbrt_sec::memory::{Grant, GrantScope, GrantStore};
+use bbrt_sec::sandbox::launcher::MemoryViolationSink;
+use bbrt_session::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview};
+use serde_json::Value;
+
+use crate::builtin::{self, ExecEnv, ExecOutput, ToolBlock};
+use crate::config::ToolsConfig;
+use crate::registry::ToolRegistry;
+
+/// 管线执行器（实现 session 的 ToolExecutor trait；bin 经 Arc<dyn ToolExecutor> 装配 LoopDeps）
+pub struct PipelineExecutor {
+    /// 工具注册表（§6 步骤 1）
+    registry: ToolRegistry,
+    /// 配置（工作区/白名单/记忆引擎/journal 回调/门控上下文）
+    config: Arc<ToolsConfig>,
+    /// 三级授权记忆（gate ④ 与 record_grant 共享；bin 可经 grants() 持有同源实例）
+    grants: Arc<GrantStore>,
+    /// 危险命令规则库（分类③用；v0.1 内置库）
+    rules: DangerRuleSet,
+    /// 执行环境（builtin 共享）
+    env: ExecEnv,
+}
+
+impl PipelineExecutor {
+    /// 标准构造：内置工具注册表 + 配置派生执行环境 + 空授权记忆。
+    /// 接受 `ToolsConfig` 或 `Arc<ToolsConfig>`（bin 装配与测试两种形态）。
+    pub fn new(config: impl Into<Arc<ToolsConfig>>) -> Self {
+        let config = config.into();
+        let sink: Arc<dyn bbrt_sec::sandbox::launcher::ViolationSink> = config
+            .violation_sink
+            .clone()
+            .unwrap_or_else(|| Arc::new(MemoryViolationSink::new()));
+        let launcher = config.launcher.clone().unwrap_or_default();
+        let env = ExecEnv {
+            workspace: std::fs::canonicalize(&config.workspace)
+                .unwrap_or_else(|_| config.workspace.clone()),
+            path_policy: config.path_policy(),
+            net_policy: config.net_policy(),
+            launcher,
+            memory: config.memory.clone(),
+            journal_hook: config.journal_hook.clone(),
+            sink,
+        };
+        Self {
+            registry: ToolRegistry::builtin(),
+            config,
+            grants: Arc::new(GrantStore::new()),
+            rules: DangerRuleSet::builtin(),
+            env,
+        }
+    }
+
+    /// 替换注册表（bin 注入 app.*/技能合并后的注册表；10 篇 §4.6）
+    pub fn with_registry(mut self, registry: ToolRegistry) -> Self {
+        self.registry = registry;
+        self
+    }
+
+    /// 注册表只读访问
+    pub fn registry(&self) -> &ToolRegistry {
+        &self.registry
+    }
+
+    /// 授权记忆同源句柄（bin 侧会话结束 clear_session / 持久化导出）
+    pub fn grants(&self) -> Arc<GrantStore> {
+        Arc::clone(&self.grants)
+    }
+
+    /// 解析调用参数（非法 JSON → 8002 拒绝）
+    fn parse_args(call: &ToolInvocation) -> Result<Value, ToolBlock> {
+        serde_json::from_str(&call.args_json).map_err(|e| ToolBlock {
+            code: CODE_NO_PERMISSION_POINT,
+            message: format!("参数不是合法 JSON: {e}"),
+        })
+    }
+
+    /// 组装 gate 参数：run_command 保证 command 字段存在（cmd 别名归一），
+    /// 使分类③/记忆④/危险规则扫描基于同一命令文本
+    fn gate_args(name: &str, args: &Value) -> Value {
+        if name == "run_command" && args.get("command").is_none() {
+            if let Some(cmd) = builtin::cmd::command_text(args) {
+                let mut patched = args.clone();
+                patched["command"] = Value::String(cmd);
+                return patched;
+            }
+        }
+        args.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ToolExecutor 实现（bbrt-session executor.rs 契约）
+// ---------------------------------------------------------------------------
+
+impl ToolExecutor for PipelineExecutor {
+    /// 门控判定（§6 步骤 1-4 浓缩；不执行、不发审批）
+    fn check(&self, mode: bbrt_sec::gate::PermissionMode, call: &ToolInvocation) -> CheckOutcome {
+        // ① ToolDef 查询（§6 步骤 1：未注册 → 8002）
+        let Some(_def) = self.registry.get(&call.name) else {
+            return CheckOutcome::Deny {
+                code: CODE_NO_PERMISSION_POINT,
+                message: format!("工具 {} 未注册（8002）", call.name),
+            };
+        };
+        // 参数解析（非法 JSON → 8002）
+        let args = match Self::parse_args(call) {
+            Ok(v) => v,
+            Err(b) => {
+                return CheckOutcome::Deny {
+                    code: b.code,
+                    message: b.message,
+                }
+            }
+        };
+        // ② permission_gate（09 §4.1 ①→⑥；矩阵/记忆/不可信全在 gate 内）
+        let gate_args = Self::gate_args(&call.name, &args);
+        let permission_points: Vec<&str> = self
+            .config
+            .permission_points
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let whitelist: Vec<String> = self.config.whitelist_prefixes.clone();
+        let ctx = GateCtx {
+            policy: self.config.policy.as_ref(),
+            permission_points: &permission_points,
+            memory: Some(&self.grants),
+            rules: &self.rules,
+            whitelist_prefixes: &whitelist,
+            untrusted: self.config.untrusted,
+        };
+        let gate_call = GateCall {
+            tool: &call.name,
+            args: &gate_args,
+        };
+        match permission_gate(mode, &gate_call, &ctx) {
+            Decision::Allow { source } => CheckOutcome::Allow {
+                source: allow_source_str(&source),
+            },
+            Decision::Confirm {
+                double_prompt,
+                reason,
+                scopes,
+            } => CheckOutcome::NeedConfirm {
+                // 高危双重提示前缀（A4 长按交互由宿主实现；此处标记语义）
+                reason: if double_prompt {
+                    format!("【双重提示】{reason}")
+                } else {
+                    reason
+                },
+                preview: build_preview(&call.name, &args),
+                options: scopes.iter().map(scope_str).collect(),
+            },
+            Decision::Deny { code, reason } => CheckOutcome::Deny {
+                code,
+                message: reason,
+            },
+        }
+    }
+
+    /// 执行（§6 步骤 5-7：沙箱校验 + 执行 + 脱敏；权限路径由调用方保证）
+    fn execute(&self, _mode: bbrt_sec::gate::PermissionMode, call: &ToolInvocation) -> ToolOutcome {
+        let args = match Self::parse_args(call) {
+            Ok(v) => v,
+            Err(b) => return blocked(&b),
+        };
+        // ⑥ 分发执行（未注册兜底 8002）
+        let result: Result<ExecOutput, ToolBlock> = match call.name.as_str() {
+            "read_file" => builtin::fs::read_file(&self.env, &args),
+            "list_dir" => builtin::fs::list_dir(&self.env, &args),
+            "write_file" => builtin::fs::write_file(&self.env, &args),
+            "edit_file" => builtin::fs::edit_file(&self.env, &args),
+            "search_files" => builtin::search::search_files(&self.env, &args),
+            "run_command" => builtin::cmd::run(&self.env, &args),
+            "git_status" => builtin::git::git_status(&self.env, &args),
+            "git_diff" => builtin::git::git_diff(&self.env, &args),
+            "git_commit" => builtin::git::git_commit(&self.env, &args),
+            "git_push" => builtin::git::git_push(&self.env, &args),
+            "http_fetch" => builtin::http::fetch(&self.env, &args),
+            "memory_save" => builtin::memory::save(&self.env, &args, &call.session_id),
+            _ => Err(ToolBlock {
+                code: CODE_NO_PERMISSION_POINT,
+                message: format!("工具 {} 未注册（8002）", call.name),
+            }),
+        };
+        match result {
+            // ⑦ 结果脱敏（先打码再回填上下文/UI；09 §7.2）
+            Ok(out) => ToolOutcome::Ok {
+                summary: mask(&out.summary),
+                truncated: out.truncated,
+                exit_code: out.exit_code,
+                duration_ms: out.duration_ms,
+            },
+            Err(b) => blocked(&ToolBlock {
+                code: b.code,
+                message: mask(&b.message),
+            }),
+        }
+    }
+
+    /// 审批通过后落记忆（§4.2；高危 permanent 由 GrantStore 硬名单拒绝）
+    fn record_grant(
+        &self,
+        _mode: bbrt_sec::gate::PermissionMode,
+        call: &ToolInvocation,
+        scope: GrantScope,
+    ) -> Result<(), String> {
+        let args = Self::parse_args(call).map_err(|b| b.message)?;
+        let pattern = grant_pattern(&call.name, &args);
+        // A5 补充：命令命中危险规则 → 拒绝永久（GrantStore 硬名单只覆盖永不全自动工具）
+        if scope == GrantScope::Permanent {
+            if let Some(cmd) = builtin::cmd::command_text(&args) {
+                if let Some(hit) = self.rules.scan(&cmd) {
+                    return Err(format!(
+                        "高危命令禁止永久记忆（D13-A5）：{}（规则：{}）",
+                        cmd, hit.rule.reason
+                    ));
+                }
+            }
+        }
+        let grant = Grant {
+            tool: call.name.clone(),
+            pattern,
+            scope,
+            granted_at_ms: builtin::now_ms(),
+        };
+        self.grants.insert(grant).map_err(|e| e.to_string())
+    }
+
+    /// 工具清单（assemble 注入模型 tools 参数）
+    fn tool_specs(&self) -> Vec<bbrt_aigw::ToolSpec> {
+        self.registry.specs()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 辅助
+// ---------------------------------------------------------------------------
+
+/// blocked 映射
+fn blocked(b: &ToolBlock) -> ToolOutcome {
+    ToolOutcome::Blocked {
+        code: b.code,
+        summary: b.message.clone(),
+    }
+}
+
+/// 放行来源 → 审计字符串（decision_source）
+fn allow_source_str(source: &AllowSource) -> String {
+    match source {
+        AllowSource::Matrix => "matrix".to_string(),
+        AllowSource::Memory { scope, pattern } => {
+            format!("memory:{}({pattern})", scope_str(scope))
+        }
+    }
+}
+
+/// scope 字符串（审批卡 options 与审计）
+fn scope_str(scope: &GrantScope) -> String {
+    match scope {
+        GrantScope::Once => "once".to_string(),
+        GrantScope::Session => "session".to_string(),
+        GrantScope::Permanent => "permanent".to_string(),
+    }
+}
+
+/// 审批卡预览（§3.4：command 可编辑回传 / diff 摘要 / none）
+fn build_preview(name: &str, args: &Value) -> ToolPreview {
+    match name {
+        "run_command" => ToolPreview {
+            kind: "command".into(),
+            content: builtin::cmd::command_text(args).unwrap_or_default(),
+        },
+        "write_file" => {
+            let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+            let content = args.get("content").and_then(Value::as_str).unwrap_or("");
+            ToolPreview {
+                kind: "diff".into(),
+                content: format!(
+                    "写入 {path}（{} 字节）\n{}",
+                    content.len(),
+                    head(content, 400)
+                ),
+            }
+        }
+        "edit_file" => {
+            let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+            let old = args.get("old").and_then(Value::as_str).unwrap_or("");
+            let new = args.get("new").and_then(Value::as_str).unwrap_or("");
+            ToolPreview {
+                kind: "diff".into(),
+                content: format!("编辑 {path}\n- {}\n+ {}", head(old, 200), head(new, 200)),
+            }
+        }
+        "git_commit" => ToolPreview {
+            kind: "diff".into(),
+            content: format!(
+                "提交信息：{}",
+                args.get("message").and_then(Value::as_str).unwrap_or("")
+            ),
+        },
+        _ => ToolPreview {
+            kind: "none".into(),
+            content: String::new(),
+        },
+    }
+}
+
+/// 头部截断（按字符数，UTF-8 安全）
+fn head(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
+/// 授权 pattern 推导：run_command = 命令原文（同调用精确匹配）；
+/// 其余工具 = "*"（gate 记忆匹配只对 command 字段取值，路径 pattern 无法生效）
+fn grant_pattern(name: &str, args: &Value) -> String {
+    if name == "run_command" {
+        builtin::cmd::command_text(args).unwrap_or_else(|| "*".to_string())
+    } else {
+        "*".to_string()
+    }
+}
