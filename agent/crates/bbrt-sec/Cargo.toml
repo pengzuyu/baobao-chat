@@ -1,0 +1,10 @@
+# bbrt-sec：权限门控、危险命令规则库、三级(权限)记忆、沙箱、审计（D11 §2.5；沙箱权威=D13 Part B）
+[package]
+name = "bbrt-sec"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

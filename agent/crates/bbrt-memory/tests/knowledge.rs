@@ -1,0 +1,267 @@
+//! 知识记忆集成测试（D15 §6"知识"行全表）：
+//! 增/查/删；同题更新不重复（created_at 保留）；LRU 淘汰+索引重建；
+//! 正文含密钥特征拒写；recall 注入截断。全部走 tempfile 临时目录。
+
+use std::fs;
+use std::sync::Arc;
+
+use bbrt_memory::knowledge::store::INDEX_FILE;
+use bbrt_memory::{FixedClock, KnowledgeStore, MemoryError, MemoryType, SaveInput};
+
+/// 固定时钟 + 临时记忆目录的测试脚手架
+fn setup(now: &str, today: &str) -> (KnowledgeStore, Arc<FixedClock>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let clock = Arc::new(FixedClock::new(now, today));
+    let store = KnowledgeStore::new(dir.path().join("memory"), clock.clone()).expect("打开存储");
+    (store, clock, dir)
+}
+
+fn input(title: &str, body: &str) -> SaveInput {
+    SaveInput {
+        title: title.to_string(),
+        mtype: MemoryType::Project,
+        body: body.to_string(),
+        session: "sess-1".to_string(),
+        links: vec![],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 增 / 查 / 删
+// ---------------------------------------------------------------------------
+
+#[test]
+fn save_list_get_delete_roundtrip() {
+    let (store, _clock, dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    let r1 = store
+        .save(&input("端口 8090 约定", "开发服务固定走 8090。"))
+        .unwrap();
+    let r2 = store
+        .save(&input("Gitee 远端", "推送走 gitee 镜像。"))
+        .unwrap();
+    assert_eq!(r1.name, "端口-8090-约定");
+    assert!(!r1.updated && !r2.updated);
+
+    // 条目文件 + 索引同在（先写条目再重写索引）。
+    // 同刻（固定时钟）写入的条目按 name 字典序排列（确定性输出）
+    assert!(dir.path().join("memory/端口-8090-约定.md").is_file());
+    let index = fs::read_to_string(dir.path().join("memory").join(INDEX_FILE)).unwrap();
+    assert_eq!(
+        index,
+        "- [Gitee 远端](gitee-远端.md) — 推送走 gitee 镜像。\n\
+         - [端口 8090 约定](端口-8090-约定.md) — 开发服务固定走 8090。\n"
+    );
+
+    // list：updated_at 新→旧（固定时钟同刻 → name 字典序）
+    let list = store.list();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].name, "gitee-远端");
+    assert_eq!(list[0].hook, "推送走 gitee 镜像。");
+    assert_eq!(list[0].title, "Gitee 远端");
+
+    // get：命中与缺失
+    let got = store.get("端口-8090-约定").unwrap().unwrap();
+    assert_eq!(got.title, "端口 8090 约定");
+    assert_eq!(got.mtype, MemoryType::Project);
+    assert_eq!(got.session, "sess-1");
+    assert!(store.get("不存在").unwrap().is_none());
+    // 非法记忆名（路径逃逸/撞索引名）直接拒绝
+    assert!(matches!(
+        store.get("../etc").unwrap_err(),
+        MemoryError::InvalidName(_)
+    ));
+    assert!(matches!(
+        store.get("").unwrap_err(),
+        MemoryError::InvalidName(_)
+    ));
+
+    // delete：删除条目并重写索引；再删返回 false
+    assert!(store.delete("端口-8090-约定").unwrap());
+    assert!(!store.delete("端口-8090-约定").unwrap());
+    assert_eq!(store.list().len(), 1);
+    let index = fs::read_to_string(dir.path().join("memory").join(INDEX_FILE)).unwrap();
+    assert!(!index.contains("端口 8090"));
+    assert!(index.contains("Gitee 远端"));
+}
+
+// ---------------------------------------------------------------------------
+// 同题更新不重复（created_at 保留）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn same_topic_update_keeps_created_at_and_no_duplicate() {
+    let (store, clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    store.save(&input("端口 8090 约定", "v1 正文")).unwrap();
+
+    clock.set("2026-11-06T12:00:00+08:00", "2026-11-06"); // 推进时间
+    let r2 = store.save(&input("端口 8090 约定", "v2 改写正文")).unwrap();
+    assert!(r2.updated, "title 完全相等 → 同题更新");
+    assert_eq!(store.list().len(), 1);
+
+    let entry = store.get("端口-8090-约定").unwrap().unwrap();
+    assert_eq!(
+        entry.created_at, "2026-11-06T10:00:00+08:00",
+        "created_at 保留"
+    );
+    assert_eq!(
+        entry.updated_at, "2026-11-06T12:00:00+08:00",
+        "updated_at 推进"
+    );
+    assert_eq!(entry.body, "v2 改写正文");
+
+    // slug 相等（标题仅标点差异）也视为同题 → 原地更新而非新增
+    let r3 = store
+        .save(&SaveInput {
+            title: "端口 8090 约定！".to_string(),
+            mtype: MemoryType::User,
+            body: "v3".to_string(),
+            session: "sess-2".to_string(),
+            links: vec!["gitee-远端".to_string()],
+        })
+        .unwrap();
+    assert!(r3.updated);
+    assert_eq!(store.list().len(), 1);
+    let entry = store.get("端口-8090-约定").unwrap().unwrap();
+    assert_eq!(entry.links, vec!["gitee-远端".to_string()]); // links 随更新覆盖
+
+    // 不同标题 → 新增
+    let r4 = store.save(&input("另一个事实", "x")).unwrap();
+    assert!(!r4.updated);
+    assert_eq!(store.list().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// LRU 淘汰 + 索引重建
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lru_evicts_oldest_beyond_capacity_and_keeps_just_saved() {
+    let (store, clock, _dir) = setup("2026-11-06T08:00:00+08:00", "2026-11-06");
+    // 逐分钟推进写入 201 条（title 各不相同）→ 超限 1 条，淘汰最旧
+    let mut last = None;
+    for i in 0..201 {
+        clock.set(
+            &format!("2026-11-06T{:02}:{:02}:00+08:00", 8 + i / 60, i % 60),
+            "2026-11-06",
+        );
+        last = Some(
+            store
+                .save(&input(&format!("事实编号 {i:03}"), "b"))
+                .unwrap(),
+        );
+    }
+    assert_eq!(store.list().len(), 200, "超限回落到 200");
+    // 最后一次保存触发淘汰，受害者 = updated_at 最旧的 000（返回 evicted 列表）
+    assert_eq!(last.unwrap().evicted, vec!["事实编号-000".to_string()]);
+    assert!(store.get("事实编号-000").unwrap().is_none(), "最旧被淘汰");
+    assert!(store.get("事实编号-001").unwrap().is_some());
+    assert!(store.get("事实编号-200").unwrap().is_some(), "刚写入的保留");
+    // 索引行数与条目数一致（淘汰后重建）
+    let index = fs::read_to_string(store.dir().join(INDEX_FILE)).unwrap();
+    assert_eq!(index.lines().count(), 200);
+    assert!(!index.contains("事实编号 000"));
+}
+
+#[test]
+fn rebuild_index_from_directory_skips_bad_files() {
+    let (store, _clock, dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    store.save(&input("好条目甲", "甲正文")).unwrap();
+    store.save(&input("好条目乙", "乙正文")).unwrap();
+    // 手工塞两个坏文件 + 一个陈旧索引
+    let mem = dir.path().join("memory");
+    fs::write(mem.join("坏文件.md"), "不是 frontmatter 格式").unwrap();
+    fs::write(mem.join("半截.md"), "---\nname: 半截\ntitle: 缺闭合\n").unwrap();
+    fs::write(mem.join(INDEX_FILE), "陈旧索引").unwrap();
+
+    let outcome = store.rebuild_index().unwrap();
+    assert_eq!(outcome.indexed, 2);
+    assert_eq!(outcome.skipped, 2, "坏文件跳过并计数");
+
+    let index = fs::read_to_string(mem.join(INDEX_FILE)).unwrap();
+    assert!(index.contains("好条目甲") && index.contains("好条目乙"));
+    assert!(!index.contains("陈旧"));
+    assert_eq!(index.lines().count(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// 密钥特征拒写（D15 §4）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn save_rejects_secret_like_body_and_oversize() {
+    let (store, _clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    let secrets = [
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEpA..", // 私钥
+        "-----BEGIN PRIVATE KEY-----\nMIIE..",       // PKCS#8
+        "jwt: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIi", // JWT
+        "conn?password=p@ss",                        // 口令
+        "aws AKIAIOSFODNN7EXAMPLE",                  // AWS 键
+    ];
+    for (i, body) in secrets.iter().enumerate() {
+        let err = store.save(&input(&format!("秘密 {i}"), body)).unwrap_err();
+        assert!(
+            matches!(err, MemoryError::SensitiveContent(_)),
+            "第 {i} 例应拒写: {err}"
+        );
+    }
+    // 命中即拒：不留任何文件与索引行（索引文件尚未生成）
+    assert!(store.list().is_empty());
+    assert!(!store.dir().join(INDEX_FILE).exists());
+
+    // 正文超 4KB 拒写
+    let big = "x".repeat(4 * 1024 + 1);
+    assert!(matches!(
+        store.save(&input("大正文", &big)).unwrap_err(),
+        MemoryError::BodyTooLarge {
+            actual: 4097,
+            max: 4096
+        }
+    ));
+    // 4KB 整（含多字节字符按字节计）边界可写
+    let edge = "忆".repeat(2048); // 3 字节 × 2048 = 6144 > 4096 → 应拒
+    assert!(matches!(
+        store.save(&input("中文超限", &edge)).unwrap_err(),
+        MemoryError::BodyTooLarge { .. }
+    ));
+    store.save(&input("正常", "ok 正文")).unwrap();
+    assert_eq!(store.list().len(), 1);
+
+    // 空标题拒写
+    assert!(matches!(
+        store.save(&input("   ", "x")).unwrap_err(),
+        MemoryError::EmptyTitle
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// recall 注入截断（D15 §2.3）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn recall_returns_full_index_under_limit() {
+    let (store, _clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    assert_eq!(store.recall().unwrap(), "", "无记忆 → 空串");
+    store
+        .save(&input("端口 8090 约定", "开发服务固定走 8090。"))
+        .unwrap();
+    let recalled = store.recall().unwrap();
+    assert_eq!(
+        recalled,
+        "- [端口 8090 约定](端口-8090-约定.md) — 开发服务固定走 8090。\n"
+    );
+}
+
+#[test]
+fn recall_truncates_over_200_lines_with_marker() {
+    let (store, _clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    // 直接塞一份 250 行索引（模拟容量外手工场景），recall 必须截断并标注
+    let long: String = (0..250)
+        .map(|i| format!("- [条目 {i}](条目-{i}.md) — 钩子 {i}\n"))
+        .collect();
+    fs::write(store.dir().join(INDEX_FILE), long).unwrap();
+    let recalled = store.recall().unwrap();
+    let lines: Vec<&str> = recalled.lines().collect();
+    assert_eq!(lines.len(), 201, "200 行内容 + 1 行标注");
+    assert!(lines[199].starts_with("- [条目 199]"));
+    assert!(lines[200].contains("已截断") && lines[200].contains("250"));
+}

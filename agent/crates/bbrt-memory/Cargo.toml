@@ -1,0 +1,14 @@
+# bbrt-memory：知识记忆双轨与日报（权威=docs/detail/D15）
+[package]
+name = "bbrt-memory"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# 测试专用（workspace 未登记，按任务约束在 crate 内写具体版本）
+[dev-dependencies]
+tempfile = "3"
