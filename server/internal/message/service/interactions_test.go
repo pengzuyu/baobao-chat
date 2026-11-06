@@ -326,3 +326,41 @@ func countEvents(bus *eventbus.InMemory, topic string) func() int {
 	})
 	return func() int { return n }
 }
+
+func TestSyncIncremental(t *testing.T) {
+	svc, _, _ := seedFixture(t, Options{})
+	ctx := context.Background()
+	// bob 视角：seq 1-3 落库，bob 已读到 1
+	for i := 1; i <= 3; i++ {
+		_ = sendText(t, svc, 1, fmt.Sprintf("sy-%d", i), fmt.Sprintf("消息%d", i))
+	}
+	_, _ = svc.MarkRead(ctx, 10002, messageapi.ReadPayload{ConvID: "1", ReadSeq: 1})
+	// 游标=1 → 增量 2,3
+	res, err := svc.Sync(ctx, 10002, map[string]int64{"1": 1}, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Convs) != 1 || len(res.Convs[0].Messages) != 2 || res.Convs[0].Messages[0].Seq != 2 {
+		t.Fatalf("sync 增量=%+v", res.Convs[0])
+	}
+	if res.Convs[0].Unread != 2 || res.Badges.TotalUnread != 2 {
+		t.Fatalf("unread=%d total=%d", res.Convs[0].Unread, res.Badges.TotalUnread)
+	}
+	// 游标=latest → 无消息体
+	res2, _ := svc.Sync(ctx, 10002, map[string]int64{"1": 3}, 200)
+	if len(res2.Convs[0].Messages) != 0 {
+		t.Fatalf("最新游标不应带货: %+v", res2.Convs[0].Messages)
+	}
+	// 非成员会话不下发；非法游标 3018
+	if res3, _ := svc.Sync(ctx, 10003, map[string]int64{"1": 0}, 200); len(res3.Convs) != 0 {
+		t.Fatalf("非成员 sync=%+v", res3.Convs)
+	}
+	if _, err := svc.Sync(ctx, 10002, map[string]int64{"1": -1}, 200); errx.From(err).Code != errx.CodeIMInvalidCursor {
+		t.Fatalf("负游标应 3018: %v", err)
+	}
+	// gap：limit=1 时缺口标记
+	res4, _ := svc.Sync(ctx, 10002, map[string]int64{"1": 0}, 1)
+	if !res4.Convs[0].Gap || len(res4.Convs[0].Messages) != 1 {
+		t.Fatalf("gap 语义=%+v", res4.Convs[0])
+	}
+}

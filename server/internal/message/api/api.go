@@ -227,6 +227,34 @@ type MessageService interface {
 	ListMessagesLatest(ctx context.Context, convID int64, limit int) ([]Message, error)
 	// ListUserConversations 会话列表（API-IM-02：按成员身份聚合 + 我的态）
 	ListUserConversations(ctx context.Context, userID int64) ([]ConversationDTO, error)
+	// Sync 增量同步（API-IM-01：cursors convId→seq，登录/重连补投）
+	Sync(ctx context.Context, userID int64, cursors map[string]int64, limit int) (*SyncResult, error)
+}
+
+// ── 增量同步（API-IM-01）──
+
+// SyncConvItem 单会话增量项（gap=true 时端侧翻页补洞；广播群仅游标）
+type SyncConvItem struct {
+	ConvID    string    `json:"convId"`
+	Type      int       `json:"type"`
+	Name      string    `json:"name"`
+	LatestSeq int64     `json:"latestSeq"`
+	Unread    int64     `json:"unread"`
+	Gap       bool      `json:"gap,omitempty"`
+	Messages  []Message `json:"messages,omitempty"`
+}
+
+// SyncBadges 徽标汇总
+type SyncBadges struct {
+	TotalUnread int64 `json:"totalUnread"`
+}
+
+// SyncResult 增量同步响应（presences 阶段一恒空——presence 域未建，登记）
+type SyncResult struct {
+	Convs     []SyncConvItem   `json:"convs"`
+	Presences []map[string]any `json:"presences"`
+	Badges    SyncBadges       `json:"badges"`
+	ServerTS  int64            `json:"serverTs"`
 }
 
 // ── 编辑/撤回/回应/正在输入/会话态/转发（D03 §5） ──

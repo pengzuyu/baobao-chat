@@ -123,6 +123,8 @@ func main() {
 	mux.Handle("PATCH /api/v1/messages/{id}", authed(handleEditMessage(msgMod.API())))
 	mux.Handle("POST /api/v1/messages/forward", authed(handleForward(msgMod.API())))
 	mux.Handle("PATCH /api/v1/convs/{id}/state", authed(handleConvState(msgMod.API())))
+	// 增量同步（API-IM-01：登录/重连补投）
+	mux.Handle("GET /api/v1/sync", authed(handleSync(msgMod.API())))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -408,6 +410,32 @@ func handleConvState(svc messageapi.MessageService) http.HandlerFunc {
 			return
 		}
 		res, err := svc.UpdateConvState(r.Context(), uid, convID, patch)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleSync 增量同步（API-IM-01：GET ?cursors={"1":10}&limit=100）
+func handleSync(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		raw := r.URL.Query().Get("cursors")
+		cursors := map[string]int64{}
+		if raw != "" {
+			if err := json.Unmarshal([]byte(raw), &cursors); err != nil {
+				httpx.Fail(w, r, errx.New(errx.CodeIMInvalidCursor, "cursors 非法 JSON"))
+				return
+			}
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		res, err := svc.Sync(r.Context(), uid, cursors, limit)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return
