@@ -118,6 +118,11 @@ func main() {
 	// 消息 REST（04 篇 §6.1 摘要：会话列表 + 历史拉取；其余走 WS）
 	mux.Handle("GET /api/v1/convs", authed(handleListConvs(msgMod.API())))
 	mux.Handle("GET /api/v1/convs/{id}/messages", authed(handleListMessages(msgMod.API())))
+	// 会话交互 REST（D03 §5.1：编辑/撤回/转发/会话态）
+	mux.Handle("POST /api/v1/messages/{id}/recall", authed(handleRecallMessage(msgMod.API())))
+	mux.Handle("PATCH /api/v1/messages/{id}", authed(handleEditMessage(msgMod.API())))
+	mux.Handle("POST /api/v1/messages/forward", authed(handleForward(msgMod.API())))
+	mux.Handle("PATCH /api/v1/convs/{id}/state", authed(handleConvState(msgMod.API())))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -287,13 +292,138 @@ func handleListMessages(svc messageapi.MessageService) http.HandlerFunc {
 		after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 		before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		msgs, err := svc.ListMessages(r.Context(), convID, after, before, limit)
-		if err != nil {
-			httpx.Fail(w, r, err)
+		// order=-seq（缺省）：最新 N 条首屏；after/before 补洞走升序区间（D03 API-IM-04）
+		var (
+			msgs []messageapi.Message
+			gerr error
+		)
+		if after == 0 && before == 0 && r.URL.Query().Get("order") != "seq" {
+			msgs, gerr = svc.ListMessagesLatest(r.Context(), convID, limit)
+		} else {
+			msgs, gerr = svc.ListMessages(r.Context(), convID, after, before, limit)
+		}
+		if gerr != nil {
+			httpx.Fail(w, r, gerr)
 			return
 		}
 		httpx.OK(w, r, map[string]any{"items": msgs, "has_more": false})
 	}
+}
+
+// handleRecallMessage 撤回（D03 API-IM-07）
+func handleRecallMessage(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		msgID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || msgID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "消息 ID 非法"))
+			return
+		}
+		var req struct {
+			Reason string `json:"reason"`
+		}
+		_ = decodeJSON(r, &req) // body 可空
+		res, err := svc.Recall(r.Context(), uid, msgID, req.Reason)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleEditMessage 编辑（D03 API-IM-08：body.text）
+func handleEditMessage(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		msgID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || msgID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "消息 ID 非法"))
+			return
+		}
+		var req struct {
+			Body struct {
+				Text string `json:"text"`
+			} `json:"body"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.Edit(r.Context(), uid, msgID, req.Body.Text)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleForward 转发（D03 API-IM-09）
+func handleForward(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req messageapi.ForwardPayload
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.Forward(r.Context(), uid, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleConvState 置顶/免打扰/草稿（D03 API-IM-13）
+func handleConvState(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		convID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || convID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "会话 ID 非法"))
+			return
+		}
+		var patch messageapi.ConvStatePatch
+		if err := decodeJSON(r, &patch); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.UpdateConvState(r.Context(), uid, convID, patch)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// uidFrom 从 auth claims 取 uid（REST 壳统一入口）
+func uidFrom(r *http.Request) (int64, error) {
+	claims := httpx.Claims(r.Context())
+	uid, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil || uid <= 0 {
+		return 0, errx.New(errx.CodeBadRequest, "身份非法")
+	}
+	return uid, nil
 }
 
 // seedDemo 演示数据：alice/bob（口令 demo-pass-123）+ 单聊会话。

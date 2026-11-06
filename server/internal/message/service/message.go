@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +20,11 @@ import (
 // Options 策略参数（租户策略热更接入点：admin_policy → policy.updated，D02 §8）
 type Options struct {
 	MaxTextRunes   int                   // text 上限（默认 5000，04 篇 §1.2）
+	MaxDraftRunes  int                   // 草稿上限（默认 2000，3020）
 	SensitiveWords []string              // 敏感词（阶段二：租户词库缓存 + 变更热更，04 篇 §7.3）
+	EditWindow     time.Duration         // 编辑窗口（默认 5min，D03 INT-IM-02）
+	RecallWindow   time.Duration         // 撤回窗口（默认 24h，D03 INT-IM-03）
+	MaxMentions    int                   // 单条 @ 上限（默认 50）
 	Now            func() time.Time      // 时钟注入（测试用）
 	NameOf         func(id int64) string // 发送人名称解析（main 注入 org 域；缺省回落 uid 字符串）
 }
@@ -29,6 +32,18 @@ type Options struct {
 func (o *Options) fillDefaults() {
 	if o.MaxTextRunes == 0 {
 		o.MaxTextRunes = 5000
+	}
+	if o.MaxDraftRunes == 0 {
+		o.MaxDraftRunes = 2000
+	}
+	if o.EditWindow == 0 {
+		o.EditWindow = 5 * time.Minute
+	}
+	if o.RecallWindow == 0 {
+		o.RecallWindow = 24 * time.Hour
+	}
+	if o.MaxMentions == 0 {
+		o.MaxMentions = 50
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -142,14 +157,28 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 				return nil, errx.New(errx.CodeBadRequest, "text 消息 body 应为 {\"text\":...}")
 			}
 		}
-		if len([]rune(tb.Text)) > s.opts.MaxTextRunes {
-			return nil, errx.New(errx.CodeIMContentTooLong, "消息内容超过长度限制")
+		if err := s.validateText(tb.Text); err != nil {
+			return nil, err
 		}
-		for _, w := range s.opts.SensitiveWords {
-			if w != "" && strings.Contains(tb.Text, w) {
-				return nil, errx.New(errx.CodeIMSensitiveBlocked, "包含违禁词")
-			}
+	}
+	// ③b mentions 上限 + 引用目标校验/快照（D03 §5.2：reply_digest 服务端冗余入 ext）
+	if len(p.Mentions) > s.opts.MaxMentions {
+		return nil, errx.New(errx.CodeBadRequest, "mentions 超上限")
+	}
+	var extRaw json.RawMessage
+	if p.ReplyToSeq > 0 {
+		orig, _ := s.repo.GetMessageBySeq(ctx, convID, p.ReplyToSeq)
+		if orig == nil {
+			return nil, errx.New(errx.CodeIMInvalidCursor, "reply_to_seq 不存在")
 		}
+		digest := digestOf(*orig)
+		if orig.Status == messageapi.MsgRecalled {
+			digest = "原消息已撤回"
+		}
+		extRaw = mustJSON(messageapi.MsgExt{ReplyDigest: &messageapi.ReplyDigest{
+			SenderID: strconv.FormatInt(orig.SenderID, 10), SenderName: s.nameOf(orig.SenderID),
+			Type: orig.Type, Digest: digest, Seq: orig.Seq,
+		}})
 	}
 
 	// ④+⑤ seq 分配 + 落库（会话级锁内原子完成；并发同 client_msg_id 由 UK 兜底）
@@ -164,7 +193,7 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 		ConvID: convID, Seq: seq, ClientMsgID: p.ClientMsgID, SenderID: senderID,
 		SenderName: s.nameOf(senderID),
 		Type:       p.Type, Body: p.Body, Mentions: p.Mentions, ReplyToSeq: p.ReplyToSeq,
-		Status: messageapi.MsgNormal, TS: now.UnixMilli(),
+		Ext: extRaw, Status: messageapi.MsgNormal, TS: now.UnixMilli(),
 	}
 	msg.ID = nextMsgID()
 	if err := s.repo.InsertMessage(ctx, msg); err != nil {
@@ -248,6 +277,23 @@ func (s *Service) ListMessages(ctx context.Context, convID, after, before int64,
 	return msgs, nil
 }
 
+// ListMessagesLatest 最新 N 条（首屏，order=-seq；升序返回供端内直接渲染）
+func (s *Service) ListMessagesLatest(ctx context.Context, convID int64, limit int) ([]messageapi.Message, error) {
+	if _, err := s.repo.GetConversation(ctx, convID); err != nil {
+		return nil, errx.New(errx.CodeIMConvNotFound, "会话不存在")
+	}
+	msgs, err := s.repo.ListMessagesLatest(ctx, convID, limit)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	for i := range msgs {
+		if msgs[i].SenderName == "" {
+			msgs[i].SenderName = s.nameOf(msgs[i].SenderID)
+		}
+	}
+	return msgs, nil
+}
+
 // ListUserConversations 会话列表（API-IM-02）：我的会话 + 我的态（未读=latest-read，只进不退保证非负）
 func (s *Service) ListUserConversations(ctx context.Context, userID int64) ([]messageapi.ConversationDTO, error) {
 	convs, err := s.repo.ListUserConversations(ctx, userID)
@@ -257,6 +303,7 @@ func (s *Service) ListUserConversations(ctx context.Context, userID int64) ([]me
 	out := make([]messageapi.ConversationDTO, 0, len(convs))
 	for _, c := range convs {
 		r, _ := s.repo.GetReceipt(ctx, c.ID, userID)
+		st, _ := s.repo.UserConvState(ctx, userID, c.ID)
 		unread := c.LatestSeq - r.ReadSeq
 		if unread < 0 {
 			unread = 0
@@ -265,10 +312,15 @@ func (s *Service) ListUserConversations(ctx context.Context, userID int64) ([]me
 			ID: strconv.FormatInt(c.ID, 10), Type: c.Type, Name: c.Name,
 			LatestSeq: c.LatestSeq, LastMsgTS: c.LastMsgTS, MemberCount: c.MemberCount,
 			Status: c.Status,
-			My:     messageapi.UserConvStateDTO{ReadSeq: r.ReadSeq, UnreadBadge: unread},
+			My: messageapi.UserConvStateDTO{
+				Pinned: st.Pinned, Mute: st.Mute, Draft: st.Draft,
+				ReadSeq: r.ReadSeq, UnreadBadge: unread,
+			},
 		}
-		// 摘要：取最后一条消息生成类型化文案（04 篇 D3 §3.1）
-		if last, err := s.repo.LastMessage(ctx, c.ID); err == nil && last != nil {
+		// 摘要：草稿优先（D03 §3.1 列表项规则），否则取最后一条消息类型化文案
+		if st.Draft != "" {
+			dto.LastMsgDigest = "[草稿] " + truncateRunes(st.Draft, 30)
+		} else if last, err := s.repo.LastMessage(ctx, c.ID); err == nil && last != nil {
 			dto.LastMsgDigest = digestOf(*last)
 		}
 		out = append(out, dto)
@@ -276,18 +328,26 @@ func (s *Service) ListUserConversations(ctx context.Context, userID int64) ([]me
 	return out, nil
 }
 
-// digestOf 摘要规则：text 截断 30 rune，其余类型化占位
+// digestOf 摘要规则：text 截断 30 rune，其余类型化占位；已撤回固定文案（D03 §3.1）
 func digestOf(m messageapi.Message) string {
+	if m.Status == messageapi.MsgRecalled {
+		return "撤回了一条消息"
+	}
 	if m.Type == "text" {
 		var tb textBody
 		_ = json.Unmarshal(m.Body, &tb)
-		r := []rune(tb.Text)
-		if len(r) > 30 {
-			return string(r[:30]) + "…"
-		}
-		return tb.Text
+		return truncateRunes(tb.Text, 30)
 	}
 	return "[" + m.Type + "]"
+}
+
+// truncateRunes 截断 + 省略号
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 // msgIDSeq 消息 ID 自增占位（阶段二换雪花：趋势递增，13 篇 §1）

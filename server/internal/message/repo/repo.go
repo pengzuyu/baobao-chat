@@ -55,7 +55,16 @@ type Repo interface {
 	InsertMessage(ctx context.Context, m messageapi.Message) error
 	// FindByClientMsgID 幂等查询：命中返回已落库消息
 	FindByClientMsgID(ctx context.Context, convID int64, clientMsgID string) (*messageapi.Message, error)
+	// GetMessageByID 按消息 ID 查（编辑/撤回/回应入口；不存在返回 ErrNotFound）
+	GetMessageByID(ctx context.Context, msgID int64) (*messageapi.Message, error)
+	// GetMessageBySeq 按会话内 seq 查（引用快照 reply_digest 构建，D03 §5.2）
+	GetMessageBySeq(ctx context.Context, convID, seq int64) (*messageapi.Message, error)
+	// UpdateMessage 全量行更新（body/status/ext/edited_at/edit_version；乐观并发不做——
+	// 编辑窗口 5min 内同一消息并发编辑由 service 层窗口校验兜底）
+	UpdateMessage(ctx context.Context, m messageapi.Message) error
 	ListMessages(ctx context.Context, convID, after, before int64, limit int) ([]messageapi.Message, error)
+	// ListMessagesLatest 最新 N 条（order=-seq 语义：倒序取 N 再升序返回，D03 API-IM-04）
+	ListMessagesLatest(ctx context.Context, convID int64, limit int) ([]messageapi.Message, error)
 	// MemberOf 成员查询（含角色/禁言/状态）
 	MemberOf(ctx context.Context, convID, userID int64) (*Member, error)
 	MembersOf(ctx context.Context, convID int64) ([]int64, error)
@@ -69,6 +78,18 @@ type Repo interface {
 	GetReceipt(ctx context.Context, convID, userID int64) (Receipt, error)
 	// SetReadSeq 已读游标（调用方保证只进不退）
 	SetReadSeq(ctx context.Context, convID, userID, readSeq int64) error
+
+	// UserConvState 用户会话态（置顶/免打扰/草稿，04 篇 §5.1；游标在 Receipt）
+	UserConvState(ctx context.Context, userID, convID int64) (UserConvState, error)
+	// SetUserConvState upsert（按字段覆盖由 service 层合并后全量写）
+	SetUserConvState(ctx context.Context, userID, convID int64, s UserConvState) error
+}
+
+// UserConvState 置顶/免打扰/草稿（多端同步字段集，D03 API-IM-13）
+type UserConvState struct {
+	Pinned bool
+	Mute   bool
+	Draft  string // ≤2000 字（3020）
 }
 
 // PG 实现占位（阶段二，表见 migrations/0001_init.sql）：

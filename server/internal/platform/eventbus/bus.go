@@ -15,7 +15,10 @@ import (
 const (
 	TopicMsgCreated      = "msg.created"         // message → gateway(扇出)/notify/audit
 	TopicMsgReadUpdated  = "msg.read.updated"    // message → gateway(推送 msg.receipt 给其他成员，04 篇 §4.2)
-	TopicMsgRecalled     = "msg.recalled"        // message → gateway/audit
+	TopicMsgRecalled     = "msg.recalled"        // message → gateway(推 msg.recall 占位)/audit
+	TopicMsgEdited       = "msg.edited"          // message → gateway(推 msg.updated 全端原地更新，D03 INT-IM-02)
+	TopicMsgReaction     = "msg.reaction"        // message → gateway(推 msg.reaction.new 全量快照，D03 INT-IM-23)
+	TopicMsgTyping       = "msg.typing"          // message → gateway(瞬时推其他成员，不落库，D03 INT-IM-11)
 	TopicConvUpdated     = "conv.updated"        // message → gateway/audit
 	TopicFileScanDone    = "file.scan.completed" // file → gateway/message
 	TopicDocVersion      = "doc.version.created" // doc → gateway/kb

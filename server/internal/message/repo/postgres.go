@@ -73,19 +73,22 @@ func timeOrNull(t time.Time) any {
 	return t
 }
 
-// msgCols 消息列（ts 毫秒化；SenderName 不落库，由 service 层 NameOf 实时解析）
+// msgCols 消息列（ts/edited_at 毫秒化；SenderName 不落库，由 service 层 NameOf 实时解析）
 const msgCols = `id, conv_id, seq, client_msg_id, sender_id, type, body, mentions,
-	reply_to_seq, status, (extract(epoch from ts)*1000)::bigint`
+	reply_to_seq, ext, status,
+	(extract(epoch from COALESCE(edited_at, to_timestamp(0)))*1000)::bigint,
+	COALESCE(edit_version, 1), (extract(epoch from ts)*1000)::bigint`
 
 func scanMessage(row pgx.Row) (*messageapi.Message, error) {
 	var (
 		m        messageapi.Message
 		body     []byte
 		mentions []byte
+		ext      []byte
 		replyTo  *int64
 	)
 	if err := row.Scan(&m.ID, &m.ConvID, &m.Seq, &m.ClientMsgID, &m.SenderID, &m.Type,
-		&body, &mentions, &replyTo, &m.Status, &m.TS); err != nil {
+		&body, &mentions, &replyTo, &ext, &m.Status, &m.EditedAt, &m.EditVersion, &m.TS); err != nil {
 		return nil, err
 	}
 	if len(body) > 0 {
@@ -94,8 +97,15 @@ func scanMessage(row pgx.Row) (*messageapi.Message, error) {
 	if len(mentions) > 0 {
 		_ = json.Unmarshal(mentions, &m.Mentions)
 	}
+	if len(ext) > 0 {
+		m.Ext = json.RawMessage(ext)
+	}
 	if replyTo != nil {
 		m.ReplyToSeq = *replyTo
+	}
+	// 旧版语义：首版 edit_version 落库默认 1，API 侧"未编辑=0"对齐（D03 §6.3）
+	if m.EditVersion <= 1 {
+		m.EditVersion = 0
 	}
 	return &m, nil
 }
@@ -228,12 +238,13 @@ func (p *Postgres) InsertMessage(ctx context.Context, m messageapi.Message) erro
 	}
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO message (id, tenant_id, conv_id, seq, client_msg_id, sender_id, type,
-			body, mentions, reply_to_seq, status, ts)
-		SELECT $1, c.tenant_id, c.id, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9,
-		       to_timestamp($10::double precision/1000)
-		FROM conversation c WHERE c.id = $11`,
+			body, mentions, reply_to_seq, ext, status, ts)
+		SELECT $1, c.tenant_id, c.id, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, $10,
+		       to_timestamp($11::double precision/1000)
+		FROM conversation c WHERE c.id = $12`,
 		m.ID, m.Seq, m.ClientMsgID, m.SenderID, m.Type,
-		jsonOrNull(m.Body), mentionsJSON(m.Mentions), i64OrNull(m.ReplyToSeq), m.Status, m.TS, m.ConvID)
+		jsonOrNull(m.Body), mentionsJSON(m.Mentions), i64OrNull(m.ReplyToSeq),
+		jsonOrNull(m.Ext), m.Status, m.TS, m.ConvID)
 	if err != nil {
 		var pe *pgconn.PgError
 		if errors.As(err, &pe) && pe.Code == "23505" { // 唯一冲突兜底（未来补建分区本地 UK 时生效）
@@ -255,6 +266,100 @@ func (p *Postgres) FindByClientMsgID(ctx context.Context, convID int64, clientMs
 		return nil, err
 	}
 	return m, nil
+}
+
+// GetMessageByID 按消息 ID 查（编辑/撤回/回应入口；不存在返回 ErrNotFound）
+func (p *Postgres) GetMessageByID(ctx context.Context, msgID int64) (*messageapi.Message, error) {
+	m, err := scanMessage(p.pool.QueryRow(ctx,
+		`SELECT `+msgCols+` FROM message WHERE id=$1 ORDER BY created_at DESC LIMIT 1`, msgID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, messageapi.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// GetMessageBySeq 会话内按 seq 查（引用快照构建；不存在返回 nil,nil——service 兜底空快照）
+func (p *Postgres) GetMessageBySeq(ctx context.Context, convID, seq int64) (*messageapi.Message, error) {
+	m, err := scanMessage(p.pool.QueryRow(ctx,
+		`SELECT `+msgCols+` FROM message WHERE conv_id=$1 AND seq=$2 LIMIT 1`, convID, seq))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// UpdateMessage 行更新（body/ext/status/edited_at/edit_version；分区表按 id+最新 created_at 定位）
+func (p *Postgres) UpdateMessage(ctx context.Context, m messageapi.Message) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE message SET body=$2::jsonb, ext=$3::jsonb, status=$4,
+			edited_at=CASE WHEN $5::bigint > 0 THEN to_timestamp($5::double precision/1000) ELSE NULL END,
+			edit_version=$6
+		WHERE id=$1 AND created_at = (SELECT max(created_at) FROM message WHERE id=$1)`,
+		m.ID, jsonOrNull(m.Body), jsonOrNull(m.Ext), m.Status, m.EditedAt, max(m.EditVersion, 1))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return messageapi.ErrNotFound
+	}
+	return nil
+}
+
+// UserConvState 读用户会话态（无记录返回零值）
+func (p *Postgres) UserConvState(ctx context.Context, userID, convID int64) (UserConvState, error) {
+	var s UserConvState
+	err := p.pool.QueryRow(ctx,
+		`SELECT pinned, mute, COALESCE(draft,'') FROM user_conv_state WHERE user_id=$1 AND conv_id=$2`,
+		userID, convID).Scan(&s.Pinned, &s.Mute, &s.Draft)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UserConvState{}, nil
+	}
+	return s, err
+}
+
+// SetUserConvState upsert（全字段覆盖，service 层合并后写）；首写 tenant_id 取自会话行（同 SetReadSeq）
+func (p *Postgres) SetUserConvState(ctx context.Context, userID, convID int64, s UserConvState) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO user_conv_state (user_id, conv_id, tenant_id, pinned, mute, draft)
+		SELECT $2, c.id, c.tenant_id, $3, $4, $5 FROM conversation c WHERE c.id = $1
+		ON CONFLICT (user_id, conv_id) DO UPDATE
+			SET pinned=$3, mute=$4, draft=$5, updated_at=now()`,
+		convID, userID, s.Pinned, s.Mute, s.Draft)
+	return err
+}
+
+// ListMessagesLatest 最新 N 条（order=-seq 语义）：倒序取 N 再升序返回（D03 API-IM-04）
+func (p *Postgres) ListMessagesLatest(ctx context.Context, convID int64, limit int) ([]messageapi.Message, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := p.pool.Query(ctx,
+		`SELECT `+msgCols+` FROM message WHERE conv_id=$1 ORDER BY seq DESC LIMIT $2`, convID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []messageapi.Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
 }
 
 // ListMessages after<seq<before 升序；limit≤0 或 >100 取 20（与内存版一致，14 篇 §4.2）

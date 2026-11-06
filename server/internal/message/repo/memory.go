@@ -12,11 +12,12 @@ import (
 type Memory struct {
 	mu       sync.Mutex
 	convs    map[int64]*Conversation
-	members  map[int64][]*Member             // convID → members
-	msgs     map[int64][]*messageapi.Message // convID → 按 seq 有序
-	dupIndex map[int64]map[string]int64      // convID → clientMsgID → msgID
-	receipts map[int64]map[int64]*Receipt    // convID → userID
-	seqs     map[int64]int64                 // convID → 已分配最大 seq（对齐 Redis INCR 语义）
+	members  map[int64][]*Member                // convID → members
+	msgs     map[int64][]*messageapi.Message    // convID → 按 seq 有序
+	dupIndex map[int64]map[string]int64         // convID → clientMsgID → msgID
+	receipts map[int64]map[int64]*Receipt       // convID → userID
+	seqs     map[int64]int64                    // convID → 已分配最大 seq（对齐 Redis INCR 语义）
+	states   map[int64]map[int64]*UserConvState // userID → convID → 态
 	nextID   int64
 }
 
@@ -29,6 +30,7 @@ func NewMemory() *Memory {
 		dupIndex: map[int64]map[string]int64{},
 		receipts: map[int64]map[int64]*Receipt{},
 		seqs:     map[int64]int64{},
+		states:   map[int64]map[int64]*UserConvState{},
 		nextID:   0, // 会话 ID 从 1 起（雪花占位）
 	}
 }
@@ -162,6 +164,94 @@ func (m *Memory) ListMessages(_ context.Context, convID, after, before int64, li
 		if len(out) >= limit {
 			break
 		}
+	}
+	return out, nil
+}
+
+// GetMessageByID 按消息 ID 全表查（内存版线性扫；量级见 04 篇 §1.1）
+func (m *Memory) GetMessageByID(_ context.Context, msgID int64) (*messageapi.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, list := range m.msgs {
+		for _, msg := range list {
+			if msg.ID == msgID {
+				cp := *msg
+				return &cp, nil
+			}
+		}
+	}
+	return nil, messageapi.ErrNotFound
+}
+
+// GetMessageBySeq 会话内按 seq 查（引用快照构建）
+func (m *Memory) GetMessageBySeq(_ context.Context, convID, seq int64) (*messageapi.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, msg := range m.msgs[convID] {
+		if msg.Seq == seq {
+			cp := *msg
+			return &cp, nil
+		}
+	}
+	return nil, nil // seq 不存在（引用目标已被物理清理等）→ 空快照由 service 兜底
+}
+
+// UpdateMessage 全量替换（按 ID 定位原指针）
+func (m *Memory) UpdateMessage(_ context.Context, u messageapi.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, list := range m.msgs {
+		for i, msg := range list {
+			if msg.ID == u.ID {
+				cp := u
+				list[i] = &cp
+				return nil
+			}
+		}
+	}
+	return messageapi.ErrNotFound
+}
+
+// UserConvState 读用户会话态（无记录返回零值）
+func (m *Memory) UserConvState(_ context.Context, userID, convID int64) (UserConvState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if byConv, ok := m.states[userID]; ok {
+		if s, ok2 := byConv[convID]; ok2 {
+			return *s, nil
+		}
+	}
+	return UserConvState{}, nil
+}
+
+// SetUserConvState upsert
+func (m *Memory) SetUserConvState(_ context.Context, userID, convID int64, s UserConvState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	byConv, ok := m.states[userID]
+	if !ok {
+		byConv = map[int64]*UserConvState{}
+		m.states[userID] = byConv
+	}
+	cp := s
+	byConv[convID] = &cp
+	return nil
+}
+
+// ListMessagesLatest 最新 N 条：尾取 N 后反转（msgs 按 seq 有序）
+func (m *Memory) ListMessagesLatest(_ context.Context, convID int64, limit int) ([]messageapi.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	list := m.msgs[convID]
+	out := []messageapi.Message{}
+	for i := len(list) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, *list[i])
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
 	}
 	return out, nil
 }

@@ -156,6 +156,47 @@ func TestPGSmoke(t *testing.T) {
 	if last, err := mr.LastMessage(ctx, conv.ID); err != nil || last == nil || last.ClientMsgID != msg.ClientMsgID {
 		t.Fatalf("LastMessage: %v %+v", err, last)
 	}
+	// 新交互路径（D03）：按 ID/seq 查、编辑更新（edit_version/ext）、会话态 upsert
+	if got, err := mr.GetMessageByID(ctx, msg.ID); err != nil || got == nil || got.Seq != seq1 {
+		t.Fatalf("GetMessageByID: %v %+v", err, got)
+	}
+	if got, err := mr.GetMessageBySeq(ctx, conv.ID, seq1); err != nil || got == nil || got.ID != msg.ID {
+		t.Fatalf("GetMessageBySeq: %v %+v", err, got)
+	}
+	if got, err := mr.GetMessageBySeq(ctx, conv.ID, 424242); err != nil || got != nil {
+		t.Fatalf("GetMessageBySeq(幽灵 seq) 应 nil,nil: %v %+v", err, got)
+	}
+	upd, err := mr.GetMessageByID(ctx, msg.ID)
+	if err != nil || upd == nil {
+		t.Fatalf("GetMessageByID(编辑前): %v %+v", err, upd)
+	}
+	upd.Status = messageapi.MsgEdited
+	upd.EditedAt = time.Now().UnixMilli()
+	upd.EditVersion = 2
+	upd.Ext = []byte(`{"reactions":{"👍":["1"]},"reply_digest":{"sender_id":"1","type":"text","digest":"d","seq":1}}`)
+	if err := mr.UpdateMessage(ctx, *upd); err != nil {
+		t.Fatalf("UpdateMessage: %v", err)
+	}
+	if got, err := mr.GetMessageByID(ctx, msg.ID); err != nil || got.Status != messageapi.MsgEdited ||
+		got.EditVersion != 2 || got.EditedAt == 0 || !strings.Contains(string(got.Ext), `"👍"`) {
+		t.Fatalf("UpdateMessage 落库校验: %v %+v %s", err, got, got.Ext)
+	}
+	if _, err := mr.UserConvState(ctx, u1.ID, conv.ID); err != nil {
+		t.Fatalf("UserConvState(空): %v", err)
+	}
+	if err := mr.SetUserConvState(ctx, u1.ID, conv.ID, UserConvState{Pinned: true, Draft: "写一半"}); err != nil {
+		t.Fatalf("SetUserConvState: %v", err)
+	}
+	if st, err := mr.UserConvState(ctx, u1.ID, conv.ID); err != nil || !st.Pinned || st.Draft != "写一半" {
+		t.Fatalf("UserConvState 读回: %v %+v", err, st)
+	}
+	// upsert 覆盖（pinned 翻回 false）
+	if err := mr.SetUserConvState(ctx, u1.ID, conv.ID, UserConvState{Draft: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := mr.UserConvState(ctx, u1.ID, conv.ID); st.Pinned {
+		t.Fatal("upsert 未覆盖 pinned")
+	}
 	if err := mr.TouchConversation(ctx, conv.ID, seq1, msg.TS); err != nil {
 		t.Fatalf("TouchConversation: %v", err)
 	}

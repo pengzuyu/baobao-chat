@@ -64,6 +64,80 @@ func New(hub *Hub, bus eventbus.Bus, msgs messageapi.MessageService, verify Toke
 			return nil
 		})
 	})
+	// 撤回：全端 msg.recall（占位渲染，seq 不断裂，D03 §5.3）
+	bus.Subscribe(eventbus.TopicMsgRecalled, func(ctx context.Context, evt eventbus.Event) error {
+		return g.dedup.Once(evt.ID, func() error {
+			e, ok := evt.Payload.(messageapi.MsgRecalledEvent)
+			if !ok {
+				log.Printf("[gateway] msg.recalled payload 类型异常: %T", evt.Payload)
+				return nil
+			}
+			g.hub.PushToUsers(e.MemberIDs, NewPush("msg.recall", messageapi.MsgRecallPayload{
+				MsgID: strconv.FormatInt(e.Message.ID, 10), ConvID: strconv.FormatInt(e.Message.ConvID, 10),
+				Seq: e.Message.Seq, OperatorID: strconv.FormatInt(e.OperatorID, 10), TS: e.Message.TS,
+			}))
+			return nil
+		})
+	})
+	// 编辑：全端 msg.updated 原地更新（D03 INT-IM-02）
+	bus.Subscribe(eventbus.TopicMsgEdited, func(ctx context.Context, evt eventbus.Event) error {
+		return g.dedup.Once(evt.ID, func() error {
+			e, ok := evt.Payload.(messageapi.MsgEditedEvent)
+			if !ok {
+				log.Printf("[gateway] msg.edited payload 类型异常: %T", evt.Payload)
+				return nil
+			}
+			g.hub.PushToUsers(e.MemberIDs, NewPush("msg.updated", messageapi.MsgUpdatedPayload{
+				MsgID: strconv.FormatInt(e.Message.ID, 10), ConvID: strconv.FormatInt(e.Message.ConvID, 10),
+				Seq: e.Message.Seq, Body: e.Message.Body, EditedAt: e.Message.EditedAt,
+				EditVersion: e.Message.EditVersion,
+			}))
+			return nil
+		})
+	})
+	// 表情回应：全端 msg.reaction.new 全量快照（端侧幂等合并，D03 INT-IM-23）
+	bus.Subscribe(eventbus.TopicMsgReaction, func(ctx context.Context, evt eventbus.Event) error {
+		return g.dedup.Once(evt.ID, func() error {
+			e, ok := evt.Payload.(messageapi.MsgReactionEvent)
+			if !ok {
+				log.Printf("[gateway] msg.reaction payload 类型异常: %T", evt.Payload)
+				return nil
+			}
+			g.hub.PushToUsers(e.MemberIDs, NewPush("msg.reaction.new", messageapi.MsgReactionNewPayload{
+				MsgID: strconv.FormatInt(e.MsgID, 10), ConvID: strconv.FormatInt(e.ConvID, 10),
+				Seq: e.Seq, Reactions: e.Reactions,
+			}))
+			return nil
+		})
+	})
+	// 正在输入：瞬时事件，只推其他成员（不落库不重试，D03 INT-IM-11）
+	bus.Subscribe(eventbus.TopicMsgTyping, func(ctx context.Context, evt eventbus.Event) error {
+		e, ok := evt.Payload.(messageapi.TypingEvent)
+		if !ok {
+			log.Printf("[gateway] msg.typing payload 类型异常: %T", evt.Payload)
+			return nil
+		}
+		g.hub.PushToUsers(e.OtherMemberIDs, NewPush("msg.typing", messageapi.TypingPushPayload{
+			ConvID: strconv.FormatInt(e.ConvID, 10), UserID: strconv.FormatInt(e.UserID, 10),
+		}))
+		return nil // 瞬时事件不入 dedup（无副作用，重复推送由客户端 TTL 合并）
+	})
+	// 会话态（置顶/免打扰/草稿）：仅推本人多端（conv.updated kind=state，D03 §10-1）
+	bus.Subscribe(eventbus.TopicConvUpdated, func(ctx context.Context, evt eventbus.Event) error {
+		return g.dedup.Once(evt.ID, func() error {
+			e, ok := evt.Payload.(messageapi.ConvStateEvent)
+			if !ok {
+				return nil // conv.updated 其它 kind（meta/member/...）现阶段无发布方，静默
+			}
+			g.hub.PushToUsers([]int64{e.UserID}, NewPush("conv.updated", map[string]any{
+				"conv_id": strconv.FormatInt(e.ConvID, 10),
+				"kind":    "state",
+				"state":   e.State,
+				"applied": e.Applied,
+			}))
+			return nil
+		})
+	})
 	return g
 }
 
@@ -178,6 +252,31 @@ func (g *Gateway) handleEnvelope(ctx context.Context, uid int64, env *Envelope) 
 			return NewAck(env, int(e.Code), errBody(e.Msg))
 		}
 		return NewAck(env, 0, res)
+
+	case "msg.typing":
+		var p messageapi.TypingPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		if err := g.msgs.Typing(ctx, uid, p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, map[string]any{})
+
+	case "msg.reaction.set":
+		var p messageapi.ReactionSetPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		if _, err := g.msgs.ReactionSet(ctx, uid, p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		// 全量快照经 msg.reaction.new 推送（含本人端），ack 载荷为空（D03 §5.2）
+		return NewAck(env, 0, map[string]any{})
 
 	default:
 		// 未知 type：ack 9001（前向兼容由客户端忽略未注册推送承担，14 篇 §8）
