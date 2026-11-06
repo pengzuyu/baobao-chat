@@ -13,9 +13,10 @@
 pub use bbrt_protocol::SessionState;
 
 /// 非法迁移错误（实现 std::error::Error）
+/// Display 用 SessionState 线路名（小写 snake），与日志/消息契约一致
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TransitionError {
-    #[error("非法状态迁移: {from:?} → {to:?}（{reason}）")]
+    #[error("非法状态迁移: {from} → {to}（{reason}）")]
     Illegal {
         from: SessionState,
         to: SessionState,
@@ -33,7 +34,11 @@ fn expect(
     if actual == from {
         Ok(to)
     } else {
-        Err(TransitionError::Illegal { from: actual, to, reason })
+        Err(TransitionError::Illegal {
+            from: actual,
+            to,
+            reason,
+        })
     }
 }
 

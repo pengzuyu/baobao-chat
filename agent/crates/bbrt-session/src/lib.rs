@@ -8,9 +8,8 @@
 pub mod state;
 
 pub use state::{
-    SessionState, TransitionError, accept_user_message, begin, begin_delegation, begin_fanout,
-    complete_delegation, complete_round, end, fail_delegation, fail_initialization,
-    fail_unrecoverable, initialized, join_subagents, pause, permission_exhausted,
-    permission_resolved, request_permission, request_review, resolve_review, resume,
-    retry_from_error,
+    accept_user_message, begin, begin_delegation, begin_fanout, complete_delegation,
+    complete_round, end, fail_delegation, fail_initialization, fail_unrecoverable, initialized,
+    join_subagents, pause, permission_exhausted, permission_resolved, request_permission,
+    request_review, resolve_review, resume, retry_from_error, SessionState, TransitionError,
 };

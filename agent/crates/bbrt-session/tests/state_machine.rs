@@ -23,10 +23,7 @@ const ALL: [SessionState; 10] = [
 ];
 
 /// 断言合法：迁移成功且到达目标态
-fn ok(
-    result: Result<SessionState, TransitionError>,
-    want: SessionState,
-) {
+fn ok(result: Result<SessionState, TransitionError>, want: SessionState) {
     assert_eq!(result, Ok(want));
 }
 
@@ -62,7 +59,10 @@ fn row_3_starting_to_error() {
 
 #[test]
 fn row_4_idle_to_running() {
-    ok(accept_user_message(SessionState::Idle), SessionState::Running);
+    ok(
+        accept_user_message(SessionState::Idle),
+        SessionState::Running,
+    );
 }
 
 #[test]
@@ -96,7 +96,10 @@ fn row_8_waiting_permission_to_paused() {
 
 #[test]
 fn row_9_running_to_subagent_fanout() {
-    ok(begin_fanout(SessionState::Running), SessionState::SubagentFanout);
+    ok(
+        begin_fanout(SessionState::Running),
+        SessionState::SubagentFanout,
+    );
 }
 
 #[test]
@@ -125,12 +128,18 @@ fn row_12_delegating_to_running() {
 
 #[test]
 fn row_13_delegating_to_error() {
-    ok(fail_delegation(SessionState::Delegating), SessionState::Error);
+    ok(
+        fail_delegation(SessionState::Delegating),
+        SessionState::Error,
+    );
 }
 
 #[test]
 fn row_14_running_to_waiting_review() {
-    ok(request_review(SessionState::Running), SessionState::WaitingReview);
+    ok(
+        request_review(SessionState::Running),
+        SessionState::WaitingReview,
+    );
 }
 
 #[test]
@@ -187,9 +196,18 @@ fn illegal_initialization_paths() {
 #[test]
 fn illegal_input_paths() {
     // running/paused 下不接受"新输入"迁移（paused 恢复必须走 resume）
-    illegal(accept_user_message(SessionState::Running), SessionState::Running);
-    illegal(accept_user_message(SessionState::Paused), SessionState::Paused);
-    illegal(accept_user_message(SessionState::Ended), SessionState::Ended);
+    illegal(
+        accept_user_message(SessionState::Running),
+        SessionState::Running,
+    );
+    illegal(
+        accept_user_message(SessionState::Paused),
+        SessionState::Paused,
+    );
+    illegal(
+        accept_user_message(SessionState::Ended),
+        SessionState::Ended,
+    );
     // 任务完成只发生在 running
     illegal(complete_round(SessionState::Idle), SessionState::Idle);
     illegal(
@@ -207,9 +225,18 @@ fn illegal_permission_paths() {
         SessionState::WaitingReview,
     );
     // 回填/升级只从 waiting_permission
-    illegal(permission_resolved(SessionState::Running), SessionState::Running);
-    illegal(permission_resolved(SessionState::Paused), SessionState::Paused);
-    illegal(permission_exhausted(SessionState::Running), SessionState::Running);
+    illegal(
+        permission_resolved(SessionState::Running),
+        SessionState::Running,
+    );
+    illegal(
+        permission_resolved(SessionState::Paused),
+        SessionState::Paused,
+    );
+    illegal(
+        permission_exhausted(SessionState::Running),
+        SessionState::Running,
+    );
 }
 
 #[test]
@@ -237,7 +264,10 @@ fn illegal_delegation_paths() {
         complete_delegation(SessionState::Running),
         SessionState::Running,
     );
-    illegal(fail_delegation(SessionState::Running), SessionState::Running);
+    illegal(
+        fail_delegation(SessionState::Running),
+        SessionState::Running,
+    );
     // 注意：delegating 不允许直连 waiting_review（按权威迁移表 #14，须先回 running）
     illegal(
         request_review(SessionState::Delegating),
@@ -257,7 +287,10 @@ fn illegal_review_paths() {
 #[test]
 fn illegal_pause_resume_paths() {
     illegal(pause(SessionState::Idle), SessionState::Idle);
-    illegal(pause(SessionState::WaitingPermission), SessionState::WaitingPermission);
+    illegal(
+        pause(SessionState::WaitingPermission),
+        SessionState::WaitingPermission,
+    );
     illegal(pause(SessionState::Paused), SessionState::Paused);
     illegal(pause(SessionState::Ended), SessionState::Ended);
     illegal(resume(SessionState::Running), SessionState::Running);
@@ -268,9 +301,15 @@ fn illegal_pause_resume_paths() {
 #[test]
 fn illegal_error_paths() {
     illegal(fail_unrecoverable(SessionState::Idle), SessionState::Idle);
-    illegal(fail_unrecoverable(SessionState::Paused), SessionState::Paused);
+    illegal(
+        fail_unrecoverable(SessionState::Paused),
+        SessionState::Paused,
+    );
     illegal(retry_from_error(SessionState::Paused), SessionState::Paused);
-    illegal(retry_from_error(SessionState::Running), SessionState::Running);
+    illegal(
+        retry_from_error(SessionState::Running),
+        SessionState::Running,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -366,7 +405,7 @@ fn session_state_enum_is_shared_with_protocol() {
     // bbrt-protocol/tests/roundtrip.rs 的 golden_session_state_report_names，
     // 此处只验证 re-export 一致与名称往返。
     for st in ALL {
-        assert_eq!(SessionState::parse(st.to_string()), Some(st));
+        assert_eq!(SessionState::parse(&st.to_string()), Some(st));
     }
     assert_eq!(
         SessionState::parse("delegating"),

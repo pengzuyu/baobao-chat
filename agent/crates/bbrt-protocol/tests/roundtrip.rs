@@ -6,14 +6,16 @@
 use std::io::Cursor;
 
 use bbrt_protocol::{
-    Blocked, BriefContextItem, CheckpointReason, CodecError, CompactionPhase, Decision,
-    DelegateEventKind, EndReason, Envelope, FileChange, GrantScope, HostToRuntime, ModelPolicy,
-    ModelSwitchReason, PROTOCOL_VERSION, PermissionMode, Preview, ProtocolError, RenewReason,
-    ReviewDecision, RiskLevel, RuntimeToHost, SessionState, StreamChannel, SubagentPhase,
-    SubagentResult, TaskBrief, ToolSource, ToolsReloadReason, Usage, read_message, write_message,
+    read_message, write_message, Blocked, BriefContextItem, CheckpointReason, CodecError,
+    CompactionPhase, Decision, DelegateEventKind, EndReason, Envelope, FileChange, GrantScope,
+    HostToRuntime, ModelPolicy, ModelSwitchReason, PermissionMode, Preview, ProtocolError,
+    RenewReason, ReviewDecision, RiskLevel, RuntimeToHost, SessionState, StreamChannel,
+    SubagentPhase, SubagentResult, TaskBrief, ToolSource, ToolsReloadReason, Usage,
+    PROTOCOL_VERSION,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use serde_json::{json, Value};
 
 // ---------------------------------------------------------------------------
 // 构造样本
@@ -595,7 +597,8 @@ fn golden_session_state_report_names() {
         assert_eq!(SessionState::parse(name), Some(st));
         assert_eq!(st.to_string(), name);
         golden(
-            &SessionStateReport {
+            // SessionStateReport 是 RuntimeToHost 的变体（非独立 struct），线路形态即消息 JSON
+            &RuntimeToHost::SessionStateReport {
                 session_id: "s".into(),
                 state: st,
                 reason: "test".into(),
@@ -613,11 +616,9 @@ fn golden_session_state_report_names() {
 #[test]
 fn unknown_message_type_fails_decode_but_not_panics() {
     // D11 §4：未知 type → 忽略+计数上报（调用方决策）。此处仅保证可判别不 panic。
-    let res: Result<HostToRuntime, _> =
-        serde_json::from_str(r#"{"type":"future.thing","x":1}"#);
+    let res: Result<HostToRuntime, _> = serde_json::from_str(r#"{"type":"future.thing","x":1}"#);
     assert!(res.is_err());
-    let res: Result<RuntimeToHost, _> =
-        serde_json::from_str(r#"{"type":"another.future"}"#);
+    let res: Result<RuntimeToHost, _> = serde_json::from_str(r#"{"type":"another.future"}"#);
     assert!(res.is_err());
 }
 
@@ -685,8 +686,7 @@ fn envelope_wrap_unwrap_roundtrip() {
 #[test]
 fn envelope_unwrap_ping_without_payload() {
     // ping 无字段：信封可无 payload 键
-    let env: Envelope =
-        serde_json::from_str(r#"{"v":1,"id":"h-7","type":"ping"}"#).unwrap();
+    let env: Envelope = serde_json::from_str(r#"{"v":1,"id":"h-7","type":"ping"}"#).unwrap();
     assert_eq!(env.payload, Value::Null);
     assert_eq!(env.unwrap::<HostToRuntime>().unwrap(), HostToRuntime::Ping);
 }
@@ -694,7 +694,8 @@ fn envelope_unwrap_ping_without_payload() {
 #[test]
 fn envelope_unwrap_payload_must_be_object() {
     let env: Envelope =
-        serde_json::from_str(r#"{"v":1,"id":"h-7","type":"session.start","payload":[1,2]}"#).unwrap();
+        serde_json::from_str(r#"{"v":1,"id":"h-7","type":"session.start","payload":[1,2]}"#)
+            .unwrap();
     assert!(matches!(
         env.unwrap::<HostToRuntime>(),
         Err(ProtocolError::PayloadNotObject)
@@ -709,12 +710,16 @@ fn envelope_unwrap_payload_must_be_object() {
 fn codec_write_read_roundtrip() {
     let mut buf = Vec::new();
     let env1 = Envelope::wrap(PROTOCOL_VERSION, "h-1", &HostToRuntime::Ping).unwrap();
-    let env2 = Envelope::wrap(PROTOCOL_VERSION, "r-2", &RuntimeToHost::Error {
-        code: 8010,
-        message: "压缩后仍超限".into(),
-        fatal: false,
-        session_id: None,
-    })
+    let env2 = Envelope::wrap(
+        PROTOCOL_VERSION,
+        "r-2",
+        &RuntimeToHost::Error {
+            code: 8010,
+            message: "压缩后仍超限".into(),
+            fatal: false,
+            session_id: None,
+        },
+    )
     .unwrap();
     write_message(&mut buf, &env1).unwrap();
     write_message(&mut buf, &env2).unwrap();
@@ -755,7 +760,10 @@ fn codec_rejects_malformed_json_and_bad_utf8() {
         Err(CodecError::MalformedJson(_))
     ));
     let mut cur = Cursor::new(vec![0xff, b'\n']);
-    assert!(matches!(read_message(&mut cur), Err(CodecError::InvalidUtf8)));
+    assert!(matches!(
+        read_message(&mut cur),
+        Err(CodecError::InvalidUtf8)
+    ));
 }
 
 // ---------------------------------------------------------------------------

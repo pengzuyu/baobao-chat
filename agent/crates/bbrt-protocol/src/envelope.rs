@@ -186,7 +186,9 @@ pub struct FileChange {
 }
 
 /// 子 Agent 汇总结果（summary ≤2k tokens，不回传原文，D11 §7）
+/// 线路契约 camel：嵌套 struct 的 rename_all 不随枚举变体传导，必须自带
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubagentResult {
     pub sub_id: String,
     pub ok: bool,
@@ -637,10 +639,7 @@ pub enum RuntimeToHost {
 
     /// 会话结束回执
     #[serde(rename = "session.ended", rename_all = "camelCase")]
-    SessionEnded {
-        session_id: String,
-        summary: String,
-    },
+    SessionEnded { session_id: String, summary: String },
 
     /// 请求 OBO 续签（REQ；到期前 2min / scope 不足）
     #[serde(rename = "obo.renew", rename_all = "camelCase")]
@@ -696,7 +695,8 @@ impl Envelope {
         id: impl Into<String>,
         message: &M,
     ) -> Result<Self, ProtocolError> {
-        let value = serde_json::to_value(message).map_err(|e| ProtocolError::Serialize(e.to_string()))?;
+        let value =
+            serde_json::to_value(message).map_err(|e| ProtocolError::Serialize(e.to_string()))?;
         let mut map = match value {
             Value::Object(map) => map,
             _ => return Err(ProtocolError::PayloadNotObject),
@@ -724,7 +724,8 @@ impl Envelope {
             _ => return Err(ProtocolError::PayloadNotObject),
         };
         obj.insert("type".to_string(), Value::String(self.msg_type.clone()));
-        serde_json::from_value(Value::Object(obj)).map_err(|e| ProtocolError::Deserialize(e.to_string()))
+        serde_json::from_value(Value::Object(obj))
+            .map_err(|e| ProtocolError::Deserialize(e.to_string()))
     }
 
     /// 设置 reply_to（REQ 成对结果指向原请求 id）
