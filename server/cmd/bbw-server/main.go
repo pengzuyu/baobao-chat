@@ -18,6 +18,7 @@ import (
 
 	"github.com/baobaowork/server/internal/auth"
 	"github.com/baobaowork/server/internal/auth/api"
+	"github.com/baobaowork/server/internal/auth/repo"
 	"github.com/baobaowork/server/internal/auth/service"
 	"github.com/baobaowork/server/internal/gateway"
 	"github.com/baobaowork/server/internal/message"
@@ -32,6 +33,7 @@ import (
 	errx "github.com/baobaowork/server/internal/platform/errors"
 	"github.com/baobaowork/server/internal/platform/eventbus"
 	"github.com/baobaowork/server/internal/platform/httpx"
+	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
 )
 
 func main() {
@@ -42,12 +44,41 @@ func main() {
 	signer := authjwt.NewSigner([]byte(cfg.JWTSecret))
 	bus := eventbus.New()
 
-	// ── 模块装配（D02 §3：构造注入，禁止全局单例） ──
-	orgRepo := orgrepo.NewMemory()
-	orgMod := org.NewModule(orgRepo)
-	authMod := auth.NewModule(orgMod.API(), signer, cfg)
+	// ── 存储装配：BBW_DB_DSN 非空 → PostgreSQL（迁移 + 三域 PG 仓）；空 → 内存回退 ──
+	var (
+		orgRepo     orgrepo.Repo
+		msgRepo     messagerepo.Repo
+		tokenRepo   authrepo.RefreshTokenRepo
+		deviceRepo  authrepo.DeviceRepo
+		attemptRepo authrepo.LoginAttemptStore
+	)
+	if cfg.DBDSN != "" {
+		pool, err := bbwpg.New(context.Background(), cfg.DBDSN) // AfterConnect 会话级 SET app.tenant=1（RLS 兜底）
+		if err != nil {
+			log.Fatalf("PG 连接失败: %v", err)
+		}
+		defer pool.Close()
+		if err := bbwpg.Migrate(context.Background(), pool); err != nil {
+			log.Fatalf("PG 迁移失败: %v", err)
+		}
+		orgRepo = orgrepo.NewPostgres(pool)
+		msgRepo = messagerepo.NewPostgres(pool)
+		tokenRepo = authrepo.NewPostgresTokens(pool)
+		deviceRepo = authrepo.NewPostgresDevices(pool)
+		attemptRepo = authrepo.NewMemory() // 防爆破计数短时态：保留内存（生产 Redis TTL，03 篇 §2.3）
+		log.Printf("存储模式：PostgreSQL（RLS app.tenant=%d 兜底已启用）", bbwpg.DefaultTenantID)
+	} else {
+		orgRepo = orgrepo.NewMemory()
+		msgRepo = messagerepo.NewMemory()
+		memAuth := authrepo.NewMemory()
+		tokenRepo, deviceRepo, attemptRepo = memAuth, memAuth, memAuth
+		log.Println("存储模式：memory（未设置 BBW_DB_DSN）")
+	}
 
-	msgRepo := messagerepo.NewMemory()
+	// ── 模块装配（D02 §3：构造注入，禁止全局单例） ──
+	orgMod := org.NewModule(orgRepo)
+	authMod := auth.NewModule(orgMod.API(), signer, cfg, tokenRepo, deviceRepo, attemptRepo)
+
 	msgMod := message.NewModule(msgRepo, bus, messageservice.Options{
 		// 发送人名称解析：闭包经 org 仓查询（跨模块不引 org 包，D02 §4 依赖规则）
 		NameOf: func(id int64) string {
@@ -265,9 +296,15 @@ func handleListMessages(svc messageapi.MessageService) http.HandlerFunc {
 	}
 }
 
-// seedDemo 演示数据：alice/bob（口令 demo-pass-123）+ 单聊会话
-func seedDemo(orgRepo *orgrepo.Memory, msgRepo *messagerepo.Memory) {
+// seedDemo 演示数据：alice/bob（口令 demo-pass-123）+ 单聊会话。
+// 幂等：alice 已存在即跳过——PG 模式重启不重复灌数据（users 有 UK(tenant,empno)，
+// 重复 INSERT 必失败）；内存模式每次进程内冷启动照常灌。
+func seedDemo(orgRepo orgrepo.Repo, msgRepo messagerepo.Repo) {
 	ctx := context.Background()
+	if u, err := orgRepo.GetUserByLogin(ctx, 1, "alice"); err == nil && u != nil {
+		log.Printf("demo 数据已存在（alice uid=%d），跳过 seed", u.ID)
+		return
+	}
 	hash, err := authservice.HashPassword("demo-pass-123")
 	if err != nil {
 		log.Fatalf("seed: %v", err)

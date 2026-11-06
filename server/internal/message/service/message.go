@@ -6,7 +6,6 @@ package messageservice
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +49,20 @@ type Service struct {
 // New 构造
 func New(opts Options, r messagerepo.Repo, bus eventbus.Bus) *Service {
 	opts.fillDefaults()
+	// PG 持久化：启动时把内存 ID 计数器对齐到库内 max(id)，防重启后 ID 回卷复用
+	//（内存仓无历史可查自然跳过；雪花 ID 接入后本段移除，13 篇 §1）
+	if m, ok := r.(interface {
+		MaxMessageID(ctx context.Context) (int64, error)
+	}); ok {
+		if maxID, err := m.MaxMessageID(context.Background()); err == nil {
+			for {
+				cur := msgIDSeq.Load()
+				if maxID <= cur || msgIDSeq.CompareAndSwap(cur, maxID) {
+					break
+				}
+			}
+		}
+	}
 	return &Service{repo: r, bus: bus, opts: opts}
 }
 
@@ -215,7 +228,6 @@ func (s *Service) MarkRead(ctx context.Context, userID int64, p messageapi.ReadP
 	_ = s.bus.Publish(ctx, eventbus.TopicMsgReadUpdated, messageapi.MsgReadEvent{
 		ConvID: convID, UserID: userID, ReadSeq: p.ReadSeq, OtherMemberIDs: others,
 	})
-	log.Printf("[debug] MarkRead conv=%d user=%d seq=%d others=%v", convID, userID, p.ReadSeq, others)
 	return &messageapi.ReadResult{ConvID: string(p.ConvID), UserID: strconv.FormatInt(userID, 10), ReadSeq: p.ReadSeq}, nil
 }
 

@@ -15,9 +15,9 @@ type Module struct {
 	svc *authservice.Service
 }
 
-// NewModule 装配：内存仓储 + 配置默认值
-func NewModule(users orgapi.UserReader, signer *authjwt.Signer, cfg *config.Config) *Module {
-	mem := authrepo.NewMemory()
+// NewModule 装配：仓储经构造注入（PG 或内存，D02 §3 构造注入），service 无感知
+func NewModule(users orgapi.UserReader, signer *authjwt.Signer, cfg *config.Config,
+	tokens authrepo.RefreshTokenRepo, devices authrepo.DeviceRepo, attempts authrepo.LoginAttemptStore) *Module {
 	opts := authservice.Options{
 		AccessTTL:     cfg.AccessTTL,
 		OBOTTL:        cfg.OBOTTL,
@@ -25,7 +25,7 @@ func NewModule(users orgapi.UserReader, signer *authjwt.Signer, cfg *config.Conf
 		MaxLoginFails: cfg.LoginMaxFails,
 		LockTTL:       cfg.LoginLockTTL,
 	}
-	return &Module{svc: authservice.New(opts, users, mem, mem, mem, signer)}
+	return &Module{svc: authservice.New(opts, users, tokens, devices, attempts, signer)}
 }
 
 // API 对外服务接口

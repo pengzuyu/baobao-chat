@@ -1,8 +1,8 @@
 # bbw-server（阶段一：模块化单体骨架）
 
-BaobaoWork 服务端阶段一代码骨架：**Go 1.22 · 零第三方依赖 · 标准库自研 WS/JWT**。
-范围：auth / org / message 三模块 + gateway + platform 基础设施，内存仓储跑通全链路，
-PG 侧只落 DDL（RLS + 按月分区），接口位已留好。
+BaobaoWork 服务端阶段一代码骨架：**Go 1.22 · 标准库自研 WS/JWT · pgx（唯一第三方依赖）**。
+范围：auth / org / message 三模块 + gateway + platform 基础设施。
+存储双模：`BBW_DB_DSN` 非空 → PostgreSQL（pgx + 启动迁移 + RLS 兜底）；空 → 内存仓储（测试路径不变）。
 
 ## 目录职责
 
@@ -33,12 +33,20 @@ service 只依赖本模块 repo 与其他模块 api；任何模块不得 import 
 ## 运行 / 测试 / 构建
 
 ```bash
-# 本地运行（默认 :8080，含 alice/bob 演示数据，口令 demo-pass-123）
+# 本地运行（默认 :8080，含 alice/bob 演示数据，口令 demo-pass-123；不设 DSN 即内存模式）
 export BBW_JWT_SECRET="$(openssl rand -hex 32)"
+go run ./cmd/bbw-server
+
+# PG 模式：设 BBW_DB_DSN（启动自动迁移，幂等；seed 幂等，重启不重复灌数据）
+export BBW_DB_DSN='postgres://bbw:...@127.0.0.1:5432/bbw?sslmode=disable'
 go run ./cmd/bbw-server
 
 # 单测（表驱动，覆盖 auth/message/ws/eventbus/httpx/gateway 核心逻辑）
 go vet ./... && go test ./...
+
+# PG 集成测试（build tag `pg`，未设 BBW_PG_TEST_DSN 自动 skip；CI 用 service container）
+BBW_PG_TEST_DSN='postgres://bbw:...@127.0.0.1:5432/bbw?sslmode=disable' \
+  go test -tags pg ./internal/message/repo/ -run TestPGSmoke -v
 
 # Docker
 docker build -t bbw-server . && docker run -p 8080:8080 -e BBW_JWT_SECRET=... bbw-server
@@ -82,7 +90,8 @@ wscat "ws://localhost:8080/ws/connect?token=<access>&did=dev-1"
 
 - [ ] 口令哈希换 argon2id（现 PBKDF2-SHA256 自实现，向量测试已锚定 RFC 7914）
 - [ ] JWT 换 ES256 + `/.well-known/jwks.json`（现 HS256）
-- [ ] repo 内存实现 → PG（pgx+sqlc，接口已留）；seq 分配 → Redis INCR（启动对齐 max(seq)+1）
+- [x] repo 内存实现 → PG（pgx，`BBW_DB_DSN` 切换，接口不变；sqlc 代码生成待接）
+- [ ] seq 分配 → Redis INCR（现 PG 行锁 UPDATE 原子分配；启动对齐 max(seq)+1）
 - [ ] 事件总线 → NATS/Redis Streams（接口不变）；audit 死信接告警
 - [ ] 限流三档（租户/用户/Agent）接 Redis；WS 在线状态 `t:{tid}:online:{uid}`
 - [ ] 其余模块（file/doc/kb/eco/admin/audit/notify/aigw）按 D02 §2 表补齐

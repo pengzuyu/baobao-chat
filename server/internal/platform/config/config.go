@@ -6,9 +6,10 @@ import (
 	"time"
 )
 
-// Config 服务端配置（阶段一全部单机内存态；PG/Redis/MinIO 接入点见各 TODO）
+// Config 服务端配置（默认值 < 环境变量；Redis/MinIO 接入点见各 TODO）
 type Config struct {
 	HTTPAddr      string        // HTTP+WS 监听地址
+	DBDSN         string        // PostgreSQL DSN（空 → 内存仓储回退，测试路径不变；阶段二存储接入）
 	JWTSecret     string        // HS256 密钥（≥32 字节；生产经 KMS 注入，15 篇）
 	AccessTTL     time.Duration // access token 有效期（03 篇 §2.2: 15min）
 	OBOTTL        time.Duration // OBO token 上限（≤15min）
@@ -37,6 +38,9 @@ func Load() *Config {
 	}
 	if v := os.Getenv("BBW_JWT_SECRET"); v != "" {
 		c.JWTSecret = v
+	}
+	if v := os.Getenv("BBW_DB_DSN"); v != "" {
+		c.DBDSN = v
 	}
 	if v := os.Getenv("BBW_SEED_DEMO"); v == "0" || v == "false" {
 		c.SeedDemoData = false

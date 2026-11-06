@@ -44,8 +44,7 @@ func New(hub *Hub, bus eventbus.Bus, msgs messageapi.MessageService, verify Toke
 				return nil
 			}
 			// 推送载荷走 snake（客户端 mapMsgNew 契约，D03 §5.3）
-			n := g.hub.PushToUsers(e.MemberIDs, NewPush("msg.new", e.Message.ToMsgNew()))
-			log.Printf("[debug] fanout msg.new seq=%d members=%v delivered=%d", e.Message.Seq, e.MemberIDs, n)
+			g.hub.PushToUsers(e.MemberIDs, NewPush("msg.new", e.Message.ToMsgNew()))
 			return nil
 		})
 	})
@@ -57,12 +56,11 @@ func New(hub *Hub, bus eventbus.Bus, msgs messageapi.MessageService, verify Toke
 				log.Printf("[gateway] msg.read.updated payload 类型异常: %T", evt.Payload)
 				return nil
 			}
-			n := g.hub.PushToUsers(e.OtherMemberIDs, NewPush("msg.receipt", messageapi.MsgReceiptPayload{
+			g.hub.PushToUsers(e.OtherMemberIDs, NewPush("msg.receipt", messageapi.MsgReceiptPayload{
 				ConvID:  strconv.FormatInt(e.ConvID, 10),
 				UserID:  strconv.FormatInt(e.UserID, 10),
 				ReadSeq: e.ReadSeq,
 			}))
-			log.Printf("[debug] fanout msg.receipt conv=%d reader=%d seq=%d targets=%v delivered=%d", e.ConvID, e.UserID, e.ReadSeq, e.OtherMemberIDs, n)
 			return nil
 		})
 	})
