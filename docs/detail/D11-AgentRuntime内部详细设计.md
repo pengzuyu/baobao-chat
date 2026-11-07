@@ -48,6 +48,7 @@ tools 与 delegate 互不依赖（coding.* 工具在 tools 侧定义门控，执
 | bbrt-aigw | ai-gateway SSE 客户端、重试降档、计量上报 |
 | bbrt-store | SQLite 封装、迁移、查询 |
 | bbrt-hostapi | 与宿主的 stdio 传输、OBO 令牌获取/续签、心跳 |
+| bbrt-mcp | MCP client：连接管理（stdio/SSE）、list_tools 动态发现、OBO 注入调用、断连降级（D14 §6） |
 
 ## 2. crate 划分（文件级）
 
@@ -119,7 +120,7 @@ bbrt-context/src/
 
 ### 2.4 bbrt-tools
 
-职责：工具注册表（内置 + app.* + 技能合并，10 篇 §4.6）、执行管线（§6）、内置工具实现；coding.* 三工具是 delegate 的薄门面（定义 inputSchema/风险级，执行转交 session 装配的事件桥）。
+职责：工具注册表（三来源合并：本地内置 + mcp.*（bbrt-mcp 连接期发现，含生态 app.*，D14 §6.1）+ 技能，10 篇 §4.6）、执行管线（§6）、本地内置工具实现（**仅文件/命令/git/检索类本地能力**；公司域工具 kb_query/doc_*/im_send/file_upload 不再硬编码，经 MCP 网关动态供给，09 篇 §3.1 注记）；coding.* 三工具是 delegate 的薄门面（定义 inputSchema/风险级，执行转交 session 装配的事件桥）。
 
 ```
 bbrt-tools/src/
@@ -133,11 +134,10 @@ bbrt-tools/src/
    ├─ cmd.rs         # run_command（转 sec.sandbox 执行）
    ├─ git.rs         # git_status / git_diff / git_commit / git_push（钥匙串注入）
    ├─ http.rs        # http_fetch（内网白名单 GET）
-   ├─ corp.rs        # kb_query / doc_read / doc_write / im_send / file_upload（OBO 直连 REST）
    └─ coding.rs      # coding.delegate / coding.resume / coding.cancel（→ bbrt-delegate）
 ```
 
-依赖：protocol、sec、context（摘录/截断）、store（审计元数据）、hostapi（OBO token 取用）。
+依赖：protocol、sec、context（摘录/截断）、store（审计元数据）、hostapi（OBO token 取用）、mcp（网关工具执行转发）。
 
 ### 2.5 bbrt-sec
 
@@ -229,6 +229,26 @@ bbrt-hostapi/src/
 
 依赖：protocol。
 
+### 2.10 bbrt-mcp（2026-11-07 裁决新增，D14 §6）
+
+职责：MCP client——公司域 MCP 网关与个人/外部 MCP server 的连接管理、工具发现与受控调用。
+
+```
+bbrt-mcp/src/
+├─ lib.rs
+├─ transport.rs      # stdio（本地子进程）/ SSE+HTTP（远程网关）；帧式与重连经验复用 aigw/hostapi
+├─ conn.rs           # 连接管理：initialize 握手、健康探测、断连重连（指数退避）与降级
+├─ discovery.rs      # list_tools → 以 mcp.{server}.{tool} 命名空间注入 bbrt-tools 注册表
+│                    # （风险级取 server 清单声明，缺失默认"中"；数量上限并入 10 篇 §4.6 规则）
+├─ call.rs           # tools/call：从 hostapi OboCache 取主体令牌**逐请求注入**（sub=用户传播，
+│                    # D14 §6.2 三层身份）；连接凭证仅 ① 连接层，由网关/配置代持
+└─ policy.rs         # 租户策略缓存（mcp.{server}.* 通配禁用）；断连/未注册 → 注册表标灰，调用拒绝 8002
+```
+
+依赖：protocol、hostapi（OBO 令牌）；被 tools 依赖（网关工具执行转发）。**不依赖 session**——连接生命周期与宿主进程一致，非会话级。
+
+**实现顺序（当前排期）**：checkpoint 接线（§4 预留消息落地）→ **bbrt-mcp（本节）** → 技能注入（tools.reload+技能索引）→ 探查子 Agent fanout（§7）→ 专家装配器（D14）。公司域工具（kb_query/doc_*/im_send/file_upload）的供给迁移随本 crate 落地，`builtin/corp.rs` 直连 REST 路线废止（09 篇 §3.1 注记）。
+
 ## 3. 会话状态机全图
 
 内部 9 态（+starting）；`session.state` 上报即用此枚举（D11 细化，见 §4 与开放问题 1）：
@@ -318,8 +338,9 @@ bbrt-hostapi/src/
 | RT→宿主 | permission.request | 权限确认 | requestId, tool, risk, args, reason, preview{kind:command/diff/obo, …}, options[once/session/permanent?] | 门控第⑥步 | UNT（等待下行 response，120s） |
 | 宿主→RT | permission.response | 确认回执 | requestId, decision(allow/deny), scope, editedArgs?, acceptedHunks? | 用户 y/n/a | REQ |
 | 宿主→RT | checkpoint.create ★ | 手动建检查点 | sessionId, reason=manual | PAG-06 [+手动创建] | REQ→checkpoint.created |
-| RT→宿主 | checkpoint.created ★（=08 checkpoint.event 细化） | 检查点已建 | checkpointId, sessionId, filesChanged[], reason(pre-edit/pre-command/manual/delegate), gitRef | 修改类工具首次执行前/手动 | UNT |
-| 宿主→RT | checkpoint.restore | 恢复 | checkpointId | 用户确认恢复 | REQ→回执{ok, newSnapshotId} |
+| RT→宿主 | checkpoint.created ★（=08 checkpoint.event 细化） | 检查点已建 | checkpointId, sessionId, filesChanged[], reason(pre-edit/pre-command/manual/delegate/pre-restore), gitRef | 修改类工具首次执行前/委派启动前/恢复前/手动 | UNT |
+| 宿主→RT | checkpoint.restore ★ | 恢复 | checkpointId | 用户确认恢复 | REQ→checkpoint.restored {ok, newCheckpointId}（恢复前自动建 pre-restore 保护快照；2026-11-07 落地命名） |
+| RT→宿主 | checkpoint.restored | 恢复回执 | ok, newCheckpointId, error | 同上 | REQ 成对回执 |
 | RT→宿主 | compaction.event | 压缩通知 | sessionId, phase(start/done), freedTokens, keptRounds | §5.2 | UNT |
 | RT→宿主 | model.switched | 档位切换 | sessionId, from, to, reason(auto/user/降档) | §路由规则 | UNT |
 | RT→宿主 | subagent.spawn ★ | 子 Agent 派生 | sessionId, subId, taskDigest, toolSubset | §7 fan-out | UNT |
@@ -400,7 +421,7 @@ function execute_pipeline(session, call):
   # 0) 展示
   emit(tool.call, callId, tool, args=masking(args), risk)
   # 1) 风险级判定
-  risk = registry.risk(tool)（app.* 取清单；未注册 → 拒绝 8002）
+  risk = registry.risk(tool)（mcp.*/app.* 取 server/生态清单，缺失默认"中"；未注册 → 拒绝 8002）
   # 2) 权限模式矩阵检查（gate①→③）
   d1 = sec.gate.policy(tool)            # 租户禁用 → 8006
   d2 = sec.gate.perm_point(tool)        # run_command/full-auto 权限点 → 8002
@@ -416,9 +437,13 @@ function execute_pipeline(session, call):
   # 5) 沙箱校验（09 §4.3 [3][4][5]）
   sandbox.check_paths(args)  ∉ 白名单/符号链接逃逸 → 8020/8024（写 agent_sandbox_violation）
   sandbox.check_network(args) 越白名单 → 8025 + 杀进程
-  # 6) 执行
-  result = builtin.execute(call)         # 超时默认 300s（1–600s）→ SIGKILL 进程组(8023)
-                                         # 输出累计 1MB 截断头尾各 50%；资源超限→杀+8022
+  # 6) 执行（按注册表来源分派）
+  result = dispatch_by_source(call)      # builtin.execute（本地工具，沙箱内执行）
+                                         # | mcp.call(call, obo)（网关/外部 MCP 工具：OboCache 取主体
+                                         #   令牌逐请求注入，连接凭证由 bbrt-mcp 持有，D14 §6.2）
+                                         # | coding.* → delegate 事件桥（§8）
+                                         # 超时默认 300s（1–600s）→ 取消（本地 SIGKILL 进程组 8023 / MCP 侧取消请求）
+                                         # 输出累计 1MB 截断头尾各 50%；资源超限→杀+8022（本地进程）
   # 7) 结果脱敏
   result = masking(result)               # 打码先于上下文/UI/审计 args_digest
   # 8) 审计 JSONL 追加（哈希链）

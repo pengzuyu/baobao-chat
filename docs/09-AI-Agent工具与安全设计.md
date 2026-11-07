@@ -63,7 +63,7 @@
 | a2a.call（二期预留） | 外呼外部 A2A Agent（跨系统/跨组织互操作；子 Agent 本地运行不依赖此工具，见 D14 决策记录） | 按目标 Agent Card 声明（默认高） | 默认隐藏，租户开关启用后按声明门控 | 调用者身份透传 |
 | app.* | 生态应用工具，动态注册 | 按清单（低/中/高） | 按清单风险级套用上述规则 | 按清单 OBO scope（10 篇） |
 
-> 工具协议（inputSchema/结果格式）对齐 MCP tool jsonschema 概念（10 篇 §1.2）；本表为**内置工具**全集，注册与合并规则见 10 篇 §4.6。
+> 工具协议（inputSchema/结果格式）对齐 MCP tool jsonschema 概念（10 篇 §1.2）。**供给方式注记（2026-11-07 裁决，D14 §6）**：本表中公司域工具（kb_query / doc_read / doc_write / im_send / file_upload 及 app.*）经**服务端 MCP 网关动态供给**（Runtime 的 bbrt-mcp 连接期 list_tools 发现注册，D11 §2.10），不再作为 Runtime 内置工具硬编码；本地内置仅保留文件/命令/git/检索类。风险级、OBO scope 与门控要求**不变**——供给方式与治理解耦，本表仍是治理属性（风险级/scope/门控）的权威源。注册与合并规则见 10 篇 §4.6。
 
 ### 3.2 高危/重点工具详述
 
@@ -240,7 +240,7 @@
 | metadata（默认） | 上述摘要字段批量上报 audit 域（≤100 条或 5 min 一批；离线暂存 ≤ 7 天补传） |
 | full | 额外含命令全文/编辑 diff 原文（高合规租户；UI 向用户明示） |
 
-**哈希链锚定**：每批上报携带链头（chain_head），audit 服务记录锚点；本地日志文件被篡改 → 重放校验断裂 → 事件标记 + UI 告警（8027）。**服务端 API 调用审计**：OBO 调用由各服务中间件双写 `subject=user / actor=agent:{session}`（03 篇 §6.3），与本地日志互为印证。
+**哈希链锚定**：每批上报携带链头（chain_head），audit 服务记录锚点；本地日志文件被篡改 → 重放校验断裂 → 事件标记 + UI 告警（8027）。**服务端 API 调用审计**：OBO 调用由各服务中间件双写 `subject=user / actor=agent:{session}`（03 篇 §6.3），与本地日志互为印证；act 值域扩展 `expert:{personaId}:{activationId}`（D14 专家调用，机制不变）。
 
 ### 4.6 故障与恢复
 
