@@ -62,6 +62,7 @@ import (
 type testServer struct {
 	srv     *httptest.Server
 	msgRepo *messagerepo.Memory
+	msgSvc  messageapi.MessageService
 	auth    authapi.AuthService
 	aliceID int64
 	bobID   int64
@@ -131,7 +132,7 @@ func newServer(t *testing.T) *testServer {
 	mux.Handle("/ws", http.HandlerFunc(gw.ServeWS))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return &testServer{srv: srv, msgRepo: msgRepo, auth: authSvc, aliceID: alice.ID, bobID: bob.ID}
+	return &testServer{srv: srv, msgRepo: msgRepo, msgSvc: msgSvc, auth: authSvc, aliceID: alice.ID, bobID: bob.ID}
 }
 
 // ---------------------------------------------------------------------------
@@ -968,4 +969,115 @@ func doReq(t *testing.T, method, url string, body any) []byte {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return b
+}
+
+// ---------------------------------------------------------------------------
+// S11 搜索与收藏 REST（harness 自挂；PIM-07 服务端态 / PIM-08）
+// ---------------------------------------------------------------------------
+
+func TestE2ESearchAndFavorites(t *testing.T) {
+	s := newServer(t)
+	alice := s.dial(t, "alice")
+	_ = s.dial(t, "bob") // bob 在线（会话可见性前提：单聊双方都是成员）
+
+	// 造数据：两条含特征词 + 一条其他
+	for i, text := range []string{"量子菠萝计划启动", "红烧肉火候要点", "无关流水"} {
+		id := alice.send("msg.send", map[string]any{
+			"conv_id": "1", "client_msg_id": fmt.Sprintf("e2e-s11-%d", i), "type": "text",
+			"body": map[string]string{"text": text},
+		})
+		if ack := alice.awaitAck(id); ack.Code != 0 {
+			t.Fatalf("send %d code=%d", i, ack.Code)
+		}
+	}
+
+	// 搜索：命中两条 + 高亮区间 + 无关不回；bob 视角同样命中（成员可见）
+	search := func(uid int64, kw string) *struct {
+		Items []struct {
+			Msg struct {
+				Body struct {
+					Text string `json:"text"`
+				} `json:"body"`
+			} `json:"msg"`
+			Highlight []struct {
+				Start int `json:"start"`
+			} `json:"highlight"`
+		} `json:"items"`
+	} {
+		resp, err := s.msgSvc.SearchMessages(context.Background(), uid, messageapi.SearchParams{Keyword: kw, Limit: 20})
+		if err != nil {
+			t.Fatalf("search %s: %v", kw, err)
+		}
+		raw, _ := json.Marshal(resp)
+		var out *struct {
+			Items []struct {
+				Msg struct {
+					Body struct {
+						Text string `json:"text"`
+					} `json:"body"`
+				} `json:"msg"`
+				Highlight []struct {
+					Start int `json:"start"`
+				} `json:"highlight"`
+			} `json:"items"`
+		}
+		_ = json.Unmarshal(raw, &out)
+		return out
+	}
+	both := search(s.aliceID, "菠萝")
+	if len(both.Items) != 1 || !strings.Contains(both.Items[0].Msg.Body.Text, "量子菠萝") {
+		t.Fatalf("菠萝命中=%d", len(both.Items))
+	}
+	if len(both.Items[0].Highlight) == 0 {
+		t.Fatal("缺高亮区间")
+	}
+	none := search(s.aliceID, "不存在词")
+	if len(none.Items) != 0 {
+		t.Fatalf("无关词命中=%d", len(none.Items))
+	}
+	bobView := search(s.bobID, "火候")
+	if len(bobView.Items) != 1 {
+		t.Fatalf("bob 视角命中=%d（成员可见性）", len(bobView.Items))
+	}
+
+	// 收藏：幂等（Duplicate）/列表倒序/取消——msgID 从 ack 取真实值（全局自增非 seq）
+	// ack 已被发送时 await 消费，msgID 从 repo 按内容回查（全局自增非 seq）
+	msgs, _ := s.msgSvc.ListMessages(context.Background(), 1, 0, 0, 20)
+	var msgA, msgB int64
+	for _, m := range msgs {
+		if strings.Contains(string(m.Body), "量子菠萝") {
+			msgA = m.ID
+		}
+		if strings.Contains(string(m.Body), "红烧肉") {
+			msgB = m.ID
+		}
+	}
+	if msgA == 0 || msgB == 0 {
+		t.Fatalf("消息未落库 a=%d b=%d", msgA, msgB)
+	}
+	fav1, err := s.msgSvc.Favorite(context.Background(), s.aliceID, msgA)
+	if err != nil || fav1.FavoriteID == 0 {
+		t.Fatalf("fav1=%v err=%v", fav1, err)
+	}
+	fav1b, _ := s.msgSvc.Favorite(context.Background(), s.aliceID, msgA)
+	if !fav1b.Duplicate || fav1b.FavoriteID != fav1.FavoriteID {
+		t.Fatalf("幂等失效: %+v vs %+v", fav1, fav1b)
+	}
+	_, _ = s.msgSvc.Favorite(context.Background(), s.aliceID, msgB)
+	list, err := s.msgSvc.ListFavorites(context.Background(), s.aliceID, "", 0, 20)
+	if err != nil || len(list.Items) != 2 {
+		t.Fatalf("列表=%d err=%v", len(list.Items), err)
+	}
+	if err := s.msgSvc.Unfavorite(context.Background(), s.aliceID, msgB); err != nil {
+		t.Fatalf("unfavorite: %v", err)
+	}
+	list2, _ := s.msgSvc.ListFavorites(context.Background(), s.aliceID, "", 0, 20)
+	if len(list2.Items) != 1 {
+		t.Fatalf("取消后=%d", len(list2.Items))
+	}
+	// bob 视角隔离
+	bobList, _ := s.msgSvc.ListFavorites(context.Background(), s.bobID, "", 0, 20)
+	if len(bobList.Items) != 0 {
+		t.Fatalf("bob 收藏=%d（应隔离 0）", len(bobList.Items))
+	}
 }
