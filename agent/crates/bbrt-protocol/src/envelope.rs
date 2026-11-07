@@ -440,6 +440,18 @@ pub enum HostToRuntime {
         graceful: bool,
     },
 
+    /// 模型档位切换（D11 §4 model.switched 产生方；回执经 model.switched 事件，
+    /// 非 REQ→RES——切换结果事件化与 14 篇推送语义一致）
+    #[serde(rename = "model.switch", rename_all = "camelCase")]
+    ModelSwitch {
+        /// 目标会话（None=全部活跃会话）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        to: ModelPolicy,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+
     /// 委派审查结论（17 §8 确认侧）
     #[serde(rename = "delegate.review", rename_all = "camelCase")]
     DelegateReview {

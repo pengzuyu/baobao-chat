@@ -119,6 +119,11 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             name: "gitee-remote".into(),
         },
         HostToRuntime::ReportList { limit: None },
+        HostToRuntime::ModelSwitch {
+            session_id: Some("s1".into()),
+            to: bbrt_protocol::ModelPolicy::Fast,
+            reason: Some("user".into()),
+        },
     ]
 }
 
@@ -347,8 +352,8 @@ fn roundtrip_all_host_to_runtime() {
     let all = all_host_to_runtime();
     assert_eq!(
         all.len(),
-        20,
-        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + 双向 ping/pong"
+        21,
+        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong"
     );
     for msg in &all {
         roundtrip(msg);

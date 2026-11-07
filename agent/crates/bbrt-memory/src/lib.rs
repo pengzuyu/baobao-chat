@@ -280,6 +280,11 @@ impl MemoryEngine {
         self.digest.backfill(&self.clock.today())
     }
 
+    /// 已有日报列表（D15 §3.3 report.list：reports 目录统计，日期倒序）
+    pub fn list_reports(&self, limit: usize) -> Vec<DailyStats> {
+        self.digest.list(limit)
+    }
+
     /// journal 90 天保留清理（D15 §3.1；im_db_prune 同节奏）。返回被删日期。
     pub fn rotate_journal(&self) -> io::Result<Vec<String>> {
         self.journal.rotate(&self.clock.today())

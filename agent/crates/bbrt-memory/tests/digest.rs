@@ -345,3 +345,28 @@ fn empty_day_produces_no_artifact() {
     // 空日也不出现在回补结果里
     assert!(digest.backfill("2026-11-06").unwrap().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// list（D15 §3.3 report.list：reports 目录扫描倒序）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_returns_stats_desc_and_skips_broken() {
+    let (journal, digest, _dir) = setup();
+    for date in ["2026-11-01", "2026-11-03"] {
+        seed_day(&journal, date);
+        digest.generate(date).unwrap();
+    }
+    // 坏产物（形状合法日期名但内容损坏）→ 跳过不阻塞
+    fs::write(digest.dir().join("2026-11-02.json"), "{ not valid json").unwrap();
+    let list = digest.list(0);
+    assert_eq!(list.len(), 2, "坏文件跳过");
+    assert_eq!(list[0].date, "2026-11-03", "倒序：最新在前");
+    assert_eq!(list[1].date, "2026-11-01");
+    assert!(list[0].sessions > 0);
+    // limit 生效
+    assert_eq!(digest.list(1).len(), 1);
+    // 非日期形状文件不入列（.md 产物/其他 json）
+    let list_all = digest.list(0);
+    assert!(list_all.iter().all(|s| s.date.starts_with("2026-11")));
+}

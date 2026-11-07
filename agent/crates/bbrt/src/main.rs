@@ -458,9 +458,41 @@ fn dispatch(
         HostToRuntime::MemoryDelete { name } => Some(RuntimeToHost::MemoryDeleteResult {
             ok: memory.knowledge().delete(&name).unwrap_or(false),
         }),
-        HostToRuntime::ReportList { .. } => Some(RuntimeToHost::ReportListResult {
-            items: vec![], // v0.1：日报经 report.daily 事件流补报；历史检索阶段二接 reports 目录扫描
+        HostToRuntime::ReportList { limit } => Some(RuntimeToHost::ReportListResult {
+            // reports 目录统计扫描（D15 §3.3；日期倒序，损坏文件跳过）
+            items: memory
+                .list_reports(limit.unwrap_or(0) as usize)
+                .into_iter()
+                .map(|st| bbrt_protocol::ReportListItem {
+                    date: st.date.clone(),
+                    stats: bbrt_protocol::DailyStatsLite {
+                        sessions: st.sessions as u32,
+                        tools: st.tool_calls as u32,
+                        blocked: st.blocked as u32,
+                        files_changed: st.files_changed as u32,
+                        memory_saved: st.memory_saved.len() as u32,
+                    },
+                })
+                .collect(),
         }),
+        HostToRuntime::ModelSwitch {
+            session_id,
+            to,
+            reason,
+        } => {
+            // model.switched 产生方（D11 §4）：空闲会话档位切换；turn 中跳过
+            let tier = match to {
+                bbrt_protocol::ModelPolicy::Fast => bbrt_session::ModelTier::Fast,
+                bbrt_protocol::ModelPolicy::Strong => bbrt_session::ModelTier::Strong,
+                bbrt_protocol::ModelPolicy::Auto => bbrt_session::ModelTier::Strong,
+            };
+            let _ = mgr.switch_model(
+                session_id.as_deref(),
+                tier,
+                reason.as_deref().unwrap_or("user"),
+            );
+            None
+        }
         HostToRuntime::DelegateLaunch {
             backend,
             task_brief,

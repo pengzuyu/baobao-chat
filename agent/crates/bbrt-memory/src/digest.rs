@@ -254,6 +254,35 @@ impl Digest {
         }
         Ok(out)
     }
+
+    /// 已有日报列表（D15 §3.3 report.list）：扫 reports 目录 *.json 反序列化
+    /// 统计，按日期倒序取前 limit（0=默认 30）。单文件损坏跳过不阻塞
+    /// （与生成侧降级语义一致）；不含路径信息（列表视角只要统计）。
+    pub fn list(&self, limit: usize) -> Vec<DailyStats> {
+        let limit = if limit == 0 { 30 } else { limit };
+        let rd = match fs::read_dir(&self.reports_dir) {
+            Ok(rd) => rd,
+            Err(_) => return vec![],
+        };
+        let mut dates: Vec<String> = rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
+            .filter_map(|p| p.file_stem()?.to_str().map(str::to_string))
+            .filter(|d| d.len() == 10 && d.as_bytes().get(4) == Some(&b'-')) // YYYY-MM-DD 形状
+            .collect();
+        dates.sort();
+        dates.dedup();
+        dates.reverse(); // 倒序：最新在前
+        dates
+            .into_iter()
+            .take(limit)
+            .filter_map(|date| {
+                let raw = fs::read_to_string(self.json_path(&date)).ok()?;
+                serde_json::from_str::<DailyStats>(&raw).ok()
+            })
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------

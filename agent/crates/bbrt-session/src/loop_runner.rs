@@ -417,11 +417,29 @@ impl SessionRunner {
             // ② 组装 + 请求模型
             report.steps += 1;
             // 技能命中注入（10 篇 §4.5：用户消息含 trigger 的技能正文进 skills
-            // 区块，context 预算 5% 截断兜底；索引空/未命中=空段零成本）
-            let skills_text = {
+            // 区块，context 预算 5% 截断兜底；索引空/未命中=空段零成本）+
+            // 工具面收紧（10 篇 §4.6 pick_tools 条件①：命中技能**全体**声明
+            // 非空 allowedTools → tools 收紧到并集；任一未声明=不限制——
+            // 无声明技能语义即全量；快模型预筛/近期调用/目录化 system 随下轮）
+            let (skills_text, allowed_tools) = {
                 let idx = deps.skills.lock().unwrap_or_else(|p| p.into_inner());
                 let matched = idx.match_for(user_text);
-                idx.render(&matched)
+                let text = idx.render(&matched);
+                let allow =
+                    if matched.is_empty() || matched.iter().any(|e| e.allowed_tools.is_empty()) {
+                        None
+                    } else {
+                        let mut union: Vec<String> = vec![];
+                        for e in &matched {
+                            for t in &e.allowed_tools {
+                                if !union.contains(t) {
+                                    union.push(t.clone());
+                                }
+                            }
+                        }
+                        Some(union)
+                    };
+                (text, allow)
             };
             let assembled = assemble(
                 &deps.budget,
@@ -443,7 +461,7 @@ impl SessionRunner {
             let req = ChatRequest {
                 model: model_name,
                 messages,
-                tools: deps.tools.tool_specs(),
+                tools: pick_tools(deps.tools.tool_specs(), &allowed_tools),
             };
 
             // ③ 流式消费（delta 即时外发；错误→8011 语义暂停）
@@ -775,6 +793,11 @@ impl SessionRunner {
         {
             Ok(DelegateHostMsg::Launch { backend, brief }) => (backend, brief),
             Ok(_) | Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {
+                deps.wal.append(
+                    &self.session_id,
+                    "delegate.brief_timeout",
+                    &format!("{{\"task_id\":\"{task_id}\",\"code\":8030}}"),
+                );
                 self.state =
                     state::complete_delegation(self.state).unwrap_or(SessionState::Running);
                 return ToolOutcome::Blocked {
@@ -797,6 +820,14 @@ impl SessionRunner {
         let mut stream = match delegator.launch(&req) {
             Ok(s) => s,
             Err(e) => {
+                deps.wal.append(
+                    &self.session_id,
+                    "delegate.launch_failed",
+                    &format!(
+                        "{{\"task_id\":\"{task_id}\",\"code\":8035,\"error\":\"{}\"}}",
+                        crate::subagent::truncate_chars(&e, 120)
+                    ),
+                );
                 emit(deps, &self.session_id, |id| SessionEvent::Error {
                     session_id: id,
                     code: 8035,
@@ -835,6 +866,13 @@ impl SessionRunner {
         // 事件流：归一化事件外发；Input/Cancel 即时处理；interrupt 优雅取消
         loop {
             if self.interrupted.load(Ordering::Relaxed) {
+                deps.wal.append(
+                    &self.session_id,
+                    "delegate.cancel",
+                    &format!(
+                        "{{\"task_id\":\"{task_id}\",\"graceful\":true,\"source\":\"interrupt\"}}"
+                    ),
+                );
                 stream.cancel(true);
             }
             while let Ok(msg) = self.delegate_rx.try_recv() {
@@ -847,7 +885,14 @@ impl SessionRunner {
                             payload: text,
                         });
                     }
-                    DelegateHostMsg::Cancel { graceful } => stream.cancel(graceful),
+                    DelegateHostMsg::Cancel { graceful } => {
+                        deps.wal.append(
+                            &self.session_id,
+                            "delegate.cancel",
+                            &format!("{{\"task_id\":\"{task_id}\",\"graceful\":{graceful}}}"),
+                        );
+                        stream.cancel(graceful);
+                    }
                     _ => {}
                 }
             }
@@ -867,14 +912,30 @@ impl SessionRunner {
                         ),
                     },
                 ),
-                DelegateEvt::ToolUse { call_id, tool, .. } => (
-                    "tool_use",
-                    format!("{{\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
-                ),
-                DelegateEvt::ToolResult { call_id, ok, .. } => (
-                    "tool_result",
-                    format!("{{\"call_id\":\"{call_id}\",\"ok\":{ok}}}"),
-                ),
+                DelegateEvt::ToolUse { call_id, tool, .. } => {
+                    deps.wal.append(
+                        &self.session_id,
+                        "delegate.tool_use",
+                        &format!("{{\"task_id\":\"{task_id}\",\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
+                    );
+                    (
+                        "tool_use",
+                        format!("{{\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
+                    )
+                }
+                DelegateEvt::ToolResult { call_id, ok, .. } => {
+                    deps.wal.append(
+                        &self.session_id,
+                        "delegate.tool_result",
+                        &format!(
+                            "{{\"task_id\":\"{task_id}\",\"call_id\":\"{call_id}\",\"ok\":{ok}}}"
+                        ),
+                    );
+                    (
+                        "tool_result",
+                        format!("{{\"call_id\":\"{call_id}\",\"ok\":{ok}}}"),
+                    )
+                }
                 DelegateEvt::Warning { text } => ("warning", text),
                 DelegateEvt::Exit { .. } => ("exit", String::new()),
             };
@@ -933,6 +994,14 @@ impl SessionRunner {
                 Err(_) => break false,
             }
         };
+        deps.wal.append(
+            &self.session_id,
+            "delegate.review",
+            &format!(
+                "{{\"task_id\":\"{task_id}\",\"decision\":\"{}\"}}",
+                if accepted { "accept" } else { "reject" }
+            ),
+        );
         emit(deps, &self.session_id, |id| {
             SessionEvent::DelegateReviewResolved {
                 session_id: id,
@@ -1294,6 +1363,24 @@ fn escape_json(s: &str) -> String {
 }
 
 /// 事件外发小工具（闭包拿 session_id，避免重复借用）
+/// pick_tools 工具面过滤（10 篇 §4.6 条件①）：allow=Some 并集 → 白名单过滤；
+/// 与注册表零交集时回退全量（技能声明错位防会话裸跑）。
+fn pick_tools(
+    mut all: Vec<bbrt_aigw::ToolSpec>,
+    allow: &Option<Vec<String>>,
+) -> Vec<bbrt_aigw::ToolSpec> {
+    match allow {
+        None => all,
+        Some(names) => {
+            if !all.iter().any(|s| names.contains(&s.name)) {
+                return all; // 声明错位兜底：全量回退（技能正文仍提示允许集）
+            }
+            all.retain(|s| names.contains(&s.name));
+            all
+        }
+    }
+}
+
 fn emit(deps: &LoopDeps, session_id: &str, f: impl FnOnce(String) -> SessionEvent) {
     deps.sink.emit(f(session_id.to_string()));
 }

@@ -108,6 +108,7 @@ const KNOWN_HOST_TYPES: &[&str] = &[
     "memory.list",
     "memory.delete",
     "report.list",
+    "model.switch",
 ];
 
 fn is_known_host_type(t: &str) -> bool {

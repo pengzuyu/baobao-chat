@@ -1156,3 +1156,187 @@ fn system_prompt_carries_memory_guidance_and_recall() {
     assert!(sys.contains("[记忆]"));
     assert!(sys.contains("端口 8090 约定"), "记忆索引应注入 system");
 }
+
+// ---------------------------------------------------------------------------
+// 委派审计链（delegate.* WAL 全点）与 model.switch
+// ---------------------------------------------------------------------------
+
+/// 记录型 WAL（WAL 断言用）
+struct LogSink(std::sync::Mutex<Vec<String>>);
+impl bbrt_session::loop_runner::EventLog for LogSink {
+    fn append(&self, _sid: &str, type_: &str, _payload: &str) {
+        self.0.lock().unwrap().push(type_.into());
+    }
+}
+
+/// 全链 WAL：brief → launch → end → review（accept）均落账
+#[test]
+fn delegate_wal_audit_trail() {
+    use std::sync::atomic::AtomicUsize;
+    let sink = Arc::new(CollectSink::default());
+    let log = Arc::new(LogSink(std::sync::Mutex::new(vec![])));
+    let model = Arc::new(DelegateToolModel {
+        calls: AtomicUsize::new(0),
+    });
+    let d = LoopDeps {
+        model,
+        tools: Arc::new(FakeTools {
+            confirm: false,
+            executed: Mutex::new(vec![]),
+            fail: false,
+        }),
+        delegator: Some(Arc::new(FakeDelegator)),
+        memory: None,
+        wal: log.clone(),
+        sink,
+        snapshots: None,
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let mut runner = SessionRunner::new(
+        "s-dwal".into(),
+        "/ws".into(),
+        PermissionMode::AutoEdit,
+        ModelTier::Strong,
+    );
+    runner.permission_timeout = Duration::from_millis(800);
+    let dtx = runner.delegate_sender();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(60));
+        let _ = dtx.send(DelegateHostMsg::Launch {
+            backend: "fake".into(),
+            brief: None,
+        });
+        std::thread::sleep(Duration::from_millis(120));
+        let _ = dtx.send(DelegateHostMsg::Review { accept: true });
+    });
+    let _ = runner.run_turn("委派修一下构建", &d);
+    let types = log.0.lock().unwrap().clone();
+    for expect in [
+        "delegate.brief",
+        "delegate.launch",
+        "delegate.end",
+        "delegate.review",
+    ] {
+        assert!(
+            types.iter().any(|t| t == expect),
+            "WAL 缺 {expect}: {types:?}"
+        );
+    }
+}
+
+/// brief 超时 8030 也落 WAL（放弃路径审计）
+#[test]
+fn delegate_brief_timeout_wal() {
+    use std::sync::atomic::AtomicUsize;
+    let sink = Arc::new(CollectSink::default());
+    let log = Arc::new(LogSink(std::sync::Mutex::new(vec![])));
+    let model = Arc::new(DelegateToolModel {
+        calls: AtomicUsize::new(0),
+    });
+    let d = LoopDeps {
+        model,
+        tools: Arc::new(FakeTools {
+            confirm: false,
+            executed: Mutex::new(vec![]),
+            fail: false,
+        }),
+        delegator: Some(Arc::new(FakeDelegator)),
+        memory: None,
+        wal: log.clone(),
+        sink,
+        snapshots: None,
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let mut runner = SessionRunner::new(
+        "s-dto".into(),
+        "/ws".into(),
+        PermissionMode::AutoEdit,
+        ModelTier::Strong,
+    );
+    runner.permission_timeout = Duration::from_millis(200);
+    // 不发 Launch → brief 超时
+    let _ = runner.run_turn("委派但没人确认", &d);
+    let types = log.0.lock().unwrap().clone();
+    assert!(
+        types.iter().any(|t| t == "delegate.brief_timeout"),
+        "超时应落账: {types:?}"
+    );
+}
+
+/// model.switch（D11 §4 ModelSwitched 产生方）：空闲切换 → 事件 + WAL；
+/// 同档幂等；turn 中（runner 被取走）跳过
+#[test]
+fn manager_switch_model_emits() {
+    use bbrt_session::events::SessionEvent;
+    use bbrt_session::loop_runner::NoopEventLog;
+    use bbrt_session::manager::SessionManager;
+    use bbrt_session::StartParams;
+
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeModel {
+        calls: AtomicUsize::new(0),
+        tool_name: None,
+    });
+    let log = Arc::new(LogSink(std::sync::Mutex::new(vec![])));
+    let d = LoopDeps {
+        model,
+        tools: Arc::new(FakeTools {
+            confirm: false,
+            executed: Mutex::new(vec![]),
+            fail: false,
+        }),
+        delegator: None,
+        memory: None,
+        wal: log.clone(),
+        sink: sink.clone(),
+        snapshots: None,
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let mgr = SessionManager::new(d, None);
+    mgr.start(
+        "s-sw".into(),
+        StartParams {
+            workspace: "/ws-sw".into(),
+            mode: PermissionMode::AutoEdit,
+            model_policy: ModelTier::Strong,
+            title: "切换测试".into(),
+            restored: None,
+        },
+    )
+    .unwrap();
+
+    // 同档幂等：不产生事件
+    assert_eq!(
+        mgr.switch_model(Some("s-sw"), ModelTier::Strong, "user")
+            .unwrap(),
+        0
+    );
+    // 切档：事件 + WAL
+    assert_eq!(
+        mgr.switch_model(Some("s-sw"), ModelTier::Fast, "user")
+            .unwrap(),
+        1
+    );
+    assert!(events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::ModelSwitched { to, .. } if *to == ModelTier::Fast)));
+    assert!(log
+        .0
+        .lock()
+        .unwrap()
+        .contains(&"model.switched".to_string()));
+    // 不存在的会话 → NotFound
+    assert!(mgr
+        .switch_model(Some("nope"), ModelTier::Fast, "user")
+        .is_err());
+    let _ = NoopEventLog; // 引用保持（避免 unused import 波动）
+}

@@ -10,7 +10,7 @@ use bbrt_sec::gate::PermissionMode;
 use bbrt_session::events::{ModelTier, SessionEvent, SessionSink};
 use bbrt_session::executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome};
 use bbrt_session::loop_runner::{LoopDeps, NoopEventLog, SessionRunner};
-use bbrt_session::SkillIndex;
+use bbrt_session::{SkillEntry, SkillIndex};
 
 struct CollectSink(Mutex<Vec<SessionEvent>>);
 impl SessionSink for CollectSink {
@@ -148,4 +148,185 @@ fn skill_body_injected_on_trigger_only() {
     assert!(!systems[1].contains("报销三步"), "未命中轮不应注入技能正文");
 
     let _ = std::fs::remove_dir_all(&eco);
+}
+
+// ---------------------------------------------------------------------------
+// pick_tools 工具面收紧（10 篇 §4.6 条件①）
+// ---------------------------------------------------------------------------
+
+/// 记录 req.tools 名集的模型（首轮文本收尾）
+struct ToolsCaptureModel(std::sync::Mutex<Vec<Vec<String>>>, AtomicUsize);
+impl ChatClient for ToolsCaptureModel {
+    fn chat(
+        &self,
+        req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        self.0
+            .lock()
+            .unwrap()
+            .push(req.tools.iter().map(|t| t.name.clone()).collect());
+        let n = self.1.fetch_add(1, Ordering::SeqCst);
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if n == 0 {
+            vec![
+                Ok(StreamEvent::TextDelta {
+                    text: "收到".into(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 4,
+                        completion_tokens: 1,
+                    },
+                }),
+            ]
+        } else {
+            vec![Ok(StreamEvent::Done {
+                finish: FinishReason::Stop,
+                usage: Usage {
+                    prompt_tokens: 4,
+                    completion_tokens: 1,
+                },
+            })]
+        };
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+/// 三工具注册表（read_file/list_dir/search_files）
+struct ThreeTools;
+impl ToolExecutor for ThreeTools {
+    fn check(&self, _m: PermissionMode, _c: &ToolInvocation) -> CheckOutcome {
+        CheckOutcome::Allow {
+            source: "matrix".into(),
+        }
+    }
+    fn execute(&self, _m: PermissionMode, _c: &ToolInvocation) -> ToolOutcome {
+        ToolOutcome::Ok {
+            summary: "ok".into(),
+            truncated: false,
+            exit_code: Some(0),
+            duration_ms: 0,
+        }
+    }
+    fn record_grant(
+        &self,
+        _m: PermissionMode,
+        _c: &ToolInvocation,
+        _s: bbrt_sec::memory::GrantScope,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn tool_specs(&self) -> Vec<ToolSpec> {
+        ["read_file", "list_dir", "search_files"]
+            .into_iter()
+            .map(|n| ToolSpec {
+                name: n.into(),
+                description: "t".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            })
+            .collect()
+    }
+}
+
+/// 命中技能全体声明 allowedTools → tools 收紧到并集
+#[test]
+fn pick_tools_narrows_to_declared_union() {
+    let skills = SkillIndex {
+        entries: vec![
+            SkillEntry {
+                name: "deploy".into(),
+                triggers: vec!["部署".into()],
+                allowed_tools: vec!["read_file".into()],
+                risk: "low".into(),
+                body: "部署流程".into(),
+                dir: "/tmp/skills/deploy".into(),
+            },
+            SkillEntry {
+                name: "audit".into(),
+                triggers: vec!["部署".into()], // 同 trigger 双技能并集
+                allowed_tools: vec!["search_files".into()],
+                risk: "low".into(),
+                body: "审计流程".into(),
+                dir: "/tmp/skills/audit".into(),
+            },
+        ],
+    };
+    let model = Arc::new(ToolsCaptureModel(
+        std::sync::Mutex::new(vec![]),
+        AtomicUsize::new(0),
+    ));
+    let deps = LoopDeps {
+        model: model.clone(),
+        tools: Arc::new(ThreeTools),
+        delegator: None,
+        memory: None,
+        wal: Arc::new(bbrt_session::loop_runner::NoopEventLog),
+        sink: Arc::new(CollectSink(std::sync::Mutex::new(vec![]))),
+        snapshots: None,
+        skills: Arc::new(Mutex::new(skills)),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let mut runner = bbrt_session::loop_runner::SessionRunner::new(
+        "s-pick".into(),
+        "/ws".into(),
+        PermissionMode::AutoEdit,
+        ModelTier::Strong,
+    );
+    runner.run_turn("帮我部署服务", &deps);
+    let seen = model.0.lock().unwrap().clone();
+    assert!(!seen.is_empty());
+    // 收紧：并集 {read_file, search_files}，不含 list_dir
+    assert!(
+        seen.iter()
+            .all(|names| names.contains(&"read_file".to_string())
+                && names.contains(&"search_files".to_string())
+                && !names.contains(&"list_dir".to_string())),
+        "工具面应收紧到并集: {seen:?}"
+    );
+}
+
+/// 命中技能未声明 allowedTools → 不收紧（全量）
+#[test]
+fn pick_tools_keeps_full_when_undeclared() {
+    let skills = SkillIndex {
+        entries: vec![SkillEntry {
+            name: "free".into(),
+            triggers: vec!["自由".into()],
+            allowed_tools: vec![], // 未声明=全量语义
+            risk: "low".into(),
+            body: "不限工具".into(),
+            dir: "/tmp/skills/free".into(),
+        }],
+    };
+    let model = Arc::new(ToolsCaptureModel(
+        std::sync::Mutex::new(vec![]),
+        AtomicUsize::new(0),
+    ));
+    let deps = LoopDeps {
+        model: model.clone(),
+        tools: Arc::new(ThreeTools),
+        delegator: None,
+        memory: None,
+        wal: Arc::new(bbrt_session::loop_runner::NoopEventLog),
+        sink: Arc::new(CollectSink(std::sync::Mutex::new(vec![]))),
+        snapshots: None,
+        skills: Arc::new(Mutex::new(skills)),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let mut runner = bbrt_session::loop_runner::SessionRunner::new(
+        "s-pick2".into(),
+        "/ws".into(),
+        PermissionMode::AutoEdit,
+        ModelTier::Strong,
+    );
+    runner.run_turn("自由发挥", &deps);
+    let seen = model.0.lock().unwrap().clone();
+    assert!(seen.iter().all(|n| n.len() == 3), "未声明不收紧: {seen:?}");
 }

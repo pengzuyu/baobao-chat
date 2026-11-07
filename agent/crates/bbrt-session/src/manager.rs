@@ -236,6 +236,65 @@ impl SessionManager {
         Ok(())
     }
 
+    /// model.switch（D11 §4 ModelSwitched 产生方）：空闲会话档位切换 →
+    /// 事件 + WAL。turn 进行中（runner 被取走）返回 Busy——排队切换随
+    /// 阶段二登记（切换通常发生在空闲的设置面板场景，v0.1 空闲即切）。
+    /// session_id None=全部活跃会话；同档幂等不产生事件。
+    pub fn switch_model(
+        &self,
+        session_id: Option<&str>,
+        to: crate::events::ModelTier,
+        reason: &str,
+    ) -> Result<usize, ManagerError> {
+        let entries: Vec<(String, Arc<ManagedSession>)> = {
+            let sessions = self.sessions.lock().unwrap();
+            match session_id {
+                Some(id) => {
+                    let e = sessions
+                        .get(id)
+                        .cloned()
+                        .ok_or_else(|| ManagerError::NotFound(id.into()))?;
+                    vec![(id.to_string(), e)]
+                }
+                None => sessions
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            }
+        };
+        let mut switched = 0usize;
+        for (sid, entry) in entries {
+            let mut guard = entry.runner.lock().unwrap();
+            let Some(runner) = guard.as_mut() else {
+                continue; // turn 中：跳过该会话（广播语义尽力而为）
+            };
+            let from = runner.model_policy;
+            if from == to {
+                continue; // 同档幂等
+            }
+            runner.model_policy = to;
+            drop(guard);
+            self.deps
+                .sink
+                .emit(crate::events::SessionEvent::ModelSwitched {
+                    session_id: sid.clone(),
+                    from,
+                    to,
+                    reason: reason.to_string(),
+                });
+            self.deps.wal.append(
+                &sid,
+                "model.switched",
+                &format!(
+                    "{{\"from\":\"{from:?}\",\"to\":\"{to:?}\",\"reason\":\"{}\"}}",
+                    reason
+                ),
+            );
+            switched += 1;
+        }
+        Ok(switched)
+    }
+
     /// session.end：runner 收口 + 存档 + WAL 闭合 + 路由清理。
     /// 竞态容忍：turn 线程尚未归还 runner 时短轮询等待（turn 已至收尾，≤2s）
     pub fn end(&self, session_id: &str, summary: &str) -> Result<(), ManagerError> {
