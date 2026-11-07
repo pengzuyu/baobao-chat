@@ -118,6 +118,14 @@ fn run() -> Result<(), String> {
             eprintln!("[bbrt] MCP server '{name}' 连接降级: {e}");
         }
     }
+    // 专家库同步（D14 §5 分发阶段一）：BBW_RT_EXPERTS_URL 指向服务端
+    // /api/v1/eco/experts（公开只读）→ 清单 → 逐个下载落 {dataDir}/eco/experts/
+    // （ExpertIndex 扫描格式；本地手放文件共存——远端不覆盖本地同名，登记）。
+    // 失败降级不阻塞启动（内网断连=沿用上次同步产物）
+    if let Ok(base) = std::env::var("BBW_RT_EXPERTS_URL") {
+        sync_experts(&data_dir, &base);
+    }
+
     // 技能索引（10 篇 §4.5）：扫描 {dataDir}/eco/skills/*/SKILL.md；
     // tools.reload{reason:skill} 热重载（宿主安装/更新/卸载技能包后触发）
     let skills_index = Arc::new(Mutex::new(bbrt_session::SkillIndex::scan(
@@ -600,6 +608,54 @@ fn dispatch(
             None // 效果经后续轮次注入体现（协议无独立回执变体）
         }
         _ => None, // 其余 REQ 阶段二；NTF 误投忽略
+    }
+}
+
+/// 专家库同步：清单（scope=all published）→ 下载 → 落 eco/experts/*.yaml。
+/// 文件名 = expert_id 的 '.' 换 '_'（corp.x → corp_x.yaml）；本地同名不
+/// 覆盖（用户手改保护）；单条失败跳过继续。
+fn sync_experts(data_dir: &std::path::Path, base: &str) {
+    let dir = data_dir.join("eco/experts");
+    if std::fs::create_dir_all(&dir).is_err() {
+        eprintln!("[bbrt] 专家目录不可建，跳过同步");
+        return;
+    }
+    let base = base.trim_end_matches('/');
+    let list_url = format!("{base}?scope=all");
+    let Ok(list_json) = bbrt_mcp::http::get_text(&list_url) else {
+        eprintln!("[bbrt] 专家库清单拉取失败（沿用本地）: {list_url}");
+        return;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&list_json) else {
+        eprintln!("[bbrt] 专家库清单解析失败");
+        return;
+    };
+    let empty = vec![];
+    let items = v.get("data").and_then(|d| d.as_array()).unwrap_or(&empty);
+    let mut synced = 0usize;
+    for item in items {
+        let (Some(id), Some(expert_id)) = (
+            item.get("id").and_then(|x| x.as_str()),
+            item.get("expert_id").and_then(|x| x.as_str()),
+        ) else {
+            continue;
+        };
+        let dl_url = format!("{base}/{id}/download");
+        let Ok(yaml) = bbrt_mcp::http::get_text(&dl_url) else {
+            eprintln!("[bbrt] 专家 {expert_id} 下载失败，跳过");
+            continue;
+        };
+        let fname = format!("{}.yaml", expert_id.replace('.', "_"));
+        let path = dir.join(&fname);
+        if path.exists() {
+            continue; // 本地同名不覆盖（手改保护）
+        }
+        if std::fs::write(&path, &yaml).is_ok() {
+            synced += 1;
+        }
+    }
+    if synced > 0 {
+        eprintln!("[bbrt] 专家库同步 +{synced}（{dir:?}）");
     }
 }
 

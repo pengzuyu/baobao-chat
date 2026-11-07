@@ -35,6 +35,9 @@ import (
 	docapi "github.com/baobaowork/server/internal/doc/api"
 	docrepo "github.com/baobaowork/server/internal/doc/repo"
 	docservice "github.com/baobaowork/server/internal/doc/service"
+	"github.com/baobaowork/server/internal/eco"
+	ecoapi "github.com/baobaowork/server/internal/eco/api"
+	ecorepo "github.com/baobaowork/server/internal/eco/repo"
 	"github.com/baobaowork/server/internal/file"
 	fileapi "github.com/baobaowork/server/internal/file/api"
 	filerepo "github.com/baobaowork/server/internal/file/repo"
@@ -685,6 +688,20 @@ func main() {
 	mux.Handle("GET /api/v1/admin/acl", adminOnly(handleACLList(aclSvc)))
 	mux.Handle("POST /api/v1/admin/acl", adminOnly(handleACLGrant(aclSvc)))
 	mux.Handle("DELETE /api/v1/admin/acl/{id}", adminOnly(handleACLRevoke(aclSvc)))
+
+	// ── 生态域首建（D14 §5/10 篇通道阶段一）：专家定义包分发 ──
+	// 公司库（adminOnly 发布）/个人库（用户自建 usr.{uid}. 前缀归属）；
+	// 公开只读=Agent 拉取端点（内网单租户口径，多租户外网部署时收紧，登记）
+	var ecoRepoInst ecorepo.Repo
+	if pgPool != nil {
+		ecoRepoInst = ecorepo.NewPostgres(pgPool)
+	} else {
+		ecoRepoInst = ecorepo.NewMemory()
+	}
+	ecoMod := eco.NewModule(ecoRepoInst)
+	ecoapi.RegisterUserRoutes(mux, authed, ecoMod.API())
+	ecoapi.RegisterPublicRoutes(mux, ecoMod.API())
+	ecoapi.RegisterAdminRoutes(mux, adminOnly, ecoMod.API())
 
 	// ── 会议域（21 篇阶段一务实版）：预约/日历/RSVP/忙闲 ──
 	// 媒体/信令复用 rtc（入会=join 模式群通话，call_id=meeting_no 约定）；

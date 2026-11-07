@@ -1,0 +1,20 @@
+// eco 模块装配（D02 §3：构造注入）。
+package eco
+
+import (
+	ecorepo "github.com/baobaowork/server/internal/eco/repo"
+	ecoservice "github.com/baobaowork/server/internal/eco/service"
+)
+
+// Module 生态域模块
+type Module struct {
+	svc *ecoservice.Service
+}
+
+// NewModule 装配（main 调用）
+func NewModule(r ecorepo.Repo) *Module {
+	return &Module{svc: ecoservice.New(r)}
+}
+
+// API 域服务
+func (m *Module) API() *ecoservice.Service { return m.svc }

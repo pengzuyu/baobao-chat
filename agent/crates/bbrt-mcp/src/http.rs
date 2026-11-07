@@ -114,6 +114,31 @@ pub(crate) fn post_json(
 
 /// 拆响应：状态行 + 头部 + body（Content-Length / chunked / 原样兜底）。
 /// body 按**字节**截取/解码（chunk 大小是字节计数，中文正文跨块也正确）。
+/// GET 文本（Agent 拉取生态分发：专家清单/定义包；http:// 内网口径，
+/// https 随 TLS 依赖阶段二登记；Connection: close 单请求单连接惯例同 post_json）
+pub fn get_text(url: &str) -> Result<String, String> {
+    use std::io::{Read, Write as _};
+
+    let parsed = parse_url(url).map_err(|e| format!("url 非法: {e}"))?;
+    let mut stream = std::net::TcpStream::connect((parsed.host.as_str(), parsed.port))
+        .map_err(|e| format!("连接失败: {e}"))?;
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: text/yaml, application/json\r\nConnection: close\r\n\r\n",
+        parsed.path, parsed.host
+    );
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    let (status, body) = split_response(&raw).map_err(|e| e.to_string())?;
+    if (200..300).contains(&status) {
+        Ok(body)
+    } else {
+        Err(format!("http {status}"))
+    }
+}
+
 fn split_response(raw: &[u8]) -> Result<(u16, String), McpError> {
     let split_at = find_subslice(raw, b"\r\n\r\n")
         .ok_or_else(|| McpError::Protocol("响应头不完整（无空行终止）".into()))?;
@@ -220,5 +245,47 @@ mod tests {
             split_response(chunked.as_bytes()).unwrap(),
             (200, "hello,".into())
         );
+    }
+}
+
+#[cfg(test)]
+mod get_text_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// GET 文本：本地假服务（Content-Length 与 chunked 两形态）
+    #[test]
+    fn get_text_content_length_and_error() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut s, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let req = String::from_utf8_lossy(&buf);
+                if req.contains("/ok") {
+                    let body = "id: corp.x\ntype: local\n";
+                    let _ = s.write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    );
+                } else {
+                    let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+                }
+            }
+        });
+        assert_eq!(
+            get_text(&format!("http://127.0.0.1:{port}/ok")).unwrap(),
+            "id: corp.x\ntype: local\n"
+        );
+        assert!(get_text(&format!("http://127.0.0.1:{port}/miss"))
+            .unwrap_err()
+            .contains("404"));
+        handle.join().unwrap();
     }
 }
