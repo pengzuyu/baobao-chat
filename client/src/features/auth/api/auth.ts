@@ -76,3 +76,10 @@ export async function apiRefresh(refreshToken: string): Promise<LoginResult> {
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/** 当前用户权限摘要（03 篇 §7；RBAC 阶段二——perm.changed 后重拉，导航显隐实时收窄） */
+export async function apiMyPermissions(): Promise<string[]> {
+  if (USE_MOCK) return ['im:*', 'doc:read', 'kb:read'];
+  const data = await http.get<{ perms: string[] }>('/me/permissions');
+  return data.perms;
+}

@@ -1,16 +1,18 @@
 /**
  * 角色编辑器（D10 PAD-08 阶段二）：角色列表（内置徽标/授权人数/权限点数）+
  * 新建/编辑抽屉（名称/描述/权限点分组勾选）+ 删除（内置拒）+ 用户授权管理
- * （输入 uid → 角色下拉授权/收回）。scope 部门范围授权随 D12 组织树阶段二。
+ * （输入 uid → 角色下拉授权/收回）。权限点字典来自 GET /admin/perm-points
+ * （服务端权威清单 D12 §2.4，API-ADM-02——前端不硬编码；字典外点服务端拒绝，
+ * 旧种子裸码 admin 编辑时自动收敛）。scope 部门范围授权随 D12 组织树阶段二。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Plus, ShieldCheck, Trash2, X } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import {
-  PERMISSION_GROUPS,
   createRole,
   deleteRole,
+  fetchPermPoints,
   fetchRoles,
   fetchUserGrants,
   grantRole,
@@ -18,6 +20,7 @@ import {
   updateRole,
   type AdminGrant,
   type AdminRole,
+  type PermPointsDoc,
 } from '../api/admin';
 
 interface EditorState {
@@ -30,6 +33,7 @@ interface EditorState {
 
 export function RolesPage() {
   const [roles, setRoles] = useState<AdminRole[] | null>(null);
+  const [permDoc, setPermDoc] = useState<PermPointsDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -48,12 +52,18 @@ export function RolesPage() {
 
   useEffect(() => {
     void reload();
+    // 权限点字典（服务端下发；失败不阻断角色列表——编辑器内给出重试）
+    fetchPermPoints().then(setPermDoc).catch(() => setPermDoc(null));
   }, [reload]);
 
   const openCreate = () =>
     setEditor({ mode: 'create', name: '', description: '', permissions: new Set() });
-  const openEdit = (r: AdminRole) =>
-    setEditor({ mode: 'edit', role: r, name: r.name, description: r.description ?? '', permissions: new Set(r.permissions) });
+  const openEdit = (r: AdminRole) => {
+    // 旧种子可能含字典外点（如裸码 admin）——编辑口径收敛到字典内，保存后落库收敛
+    const known = new Set((permDoc?.groups ?? []).flatMap((g) => g.points.map((p) => p.code)));
+    const keep = known.size > 0 ? r.permissions.filter((p) => known.has(p)) : r.permissions;
+    setEditor({ mode: 'edit', role: r, name: r.name, description: r.description ?? '', permissions: new Set(keep) });
+  };
 
   const save = async () => {
     if (!editor) return;
@@ -126,8 +136,6 @@ export function RolesPage() {
     else next.add(p);
     setEditor({ ...editor, permissions: next });
   };
-
-  const allPerms = useMemo(() => PERMISSION_GROUPS.flatMap((g) => g.items), []);
 
   return (
     <div className="admin-page__section" data-testid="admin-roles">
@@ -268,32 +276,28 @@ export function RolesPage() {
                 onChange={(e) => setEditor({ ...editor, description: e.target.value })}
               />
               <label className="gm-field__label">
-                权限点（已选 {editor.permissions.size} 项；字典外权限点随 D12 接口下发，登记）
+                权限点（已选 {editor.permissions.size} 项；字典共 {permDoc?.total ?? '…'} 项，服务端权威清单 D12 §2.4）
               </label>
-              <div className="role-editor__perms">
-                {PERMISSION_GROUPS.map((g) => (
-                  <div className="role-editor__group" key={g.group}>
-                    <div className="role-editor__group-label">{g.group}</div>
-                    {g.items.map((p) => (
-                      <label key={p} className={`role-editor__perm${editor.permissions.has(p) ? ' role-editor__perm--on' : ''}`}>
-                        <input type="checkbox" checked={editor.permissions.has(p)} onChange={() => togglePerm(p)} />
-                        <code>{p}</code>
-                      </label>
-                    ))}
-                  </div>
-                ))}
-              </div>
-              <label className="gm-field__label">附加权限点（逗号分隔；含字典外项）</label>
-              <input
-                className="bbw-input"
-                placeholder="如 oa:todo:read, custom:perm"
-                onChange={(e) => {
-                  const extras = e.target.value.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean);
-                  const next = new Set([...editor.permissions].filter((p) => allPerms.includes(p)));
-                  extras.forEach((p) => next.add(p));
-                  setEditor({ ...editor, permissions: next });
-                }}
-              />
+              {permDoc === null ? (
+                <div className="admin-page__empty">权限点字典加载失败（编辑需字典校验）——请稍后重开编辑器重试</div>
+              ) : (
+                <div className="role-editor__perms">
+                  {permDoc.groups.map((g) => (
+                    <div className="role-editor__group" key={g.domain}>
+                      <div className="role-editor__group-label">
+                        {g.label} <span className="admin-role__perms">{g.points.length} 项</span>
+                      </div>
+                      {g.points.map((p) => (
+                        <label key={p.code} className={`role-editor__perm${editor.permissions.has(p.code) ? ' role-editor__perm--on' : ''}`}>
+                          <input type="checkbox" checked={editor.permissions.has(p.code)} onChange={() => togglePerm(p.code)} />
+                          <code>{p.code}</code>
+                          <span className="admin-role__desc">{p.desc}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="role-editor__foot">
               <button type="button" className="btn" onClick={() => setEditor(null)}>

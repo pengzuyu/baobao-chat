@@ -6,7 +6,7 @@
 
 import { create } from 'zustand';
 import { setTokenProvider, setUnauthorizedHandler, ApiError } from '../../../shared/api/http';
-import { apiLogin, apiRefresh, type AuthUser, type LoginResult } from '../api/auth';
+import { apiLogin, apiMyPermissions, apiRefresh, type AuthUser, type LoginResult } from '../api/auth';
 
 type LoginStatus = 'idle' | 'submitting' | 'locked';
 
@@ -25,6 +25,8 @@ interface AuthState {
   login: (account: string, password: string) => Promise<void>;
   logout: () => void;
   clearError: () => void;
+  /** 重拉权限摘要（perm.changed 推送后；导航显隐实时收窄，03 篇 §4） */
+  refreshPerms: () => Promise<void>;
 }
 
 /** 静默刷新定时器（模块级，登出即清） */
@@ -94,6 +96,20 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  refreshPerms: async () => {
+    const { token, user } = useAuthStore.getState();
+    if (!token || !user) return;
+    try {
+      const perms = await apiMyPermissions();
+      // 仅权限变化才写（避免无谓重渲染导航）
+      if (perms.length !== user.perms.length || perms.some((p, i) => p !== user.perms[i])) {
+        useAuthStore.setState({ user: { ...user, perms } });
+      }
+    } catch {
+      // 拉取失败保持现状——权限判定以服务端守卫为准（2001/2003 拒绝兜底）
+    }
+  },
 }));
 
 /** 应用装配期调用（main.tsx）：注入 token 提供者与 401 处理（避免 shared→features 反向依赖） */

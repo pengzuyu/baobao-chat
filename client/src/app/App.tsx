@@ -71,6 +71,7 @@ function useWsLifecycle(): void {
   const token = useAuthStore((s) => s.token);
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const refreshPerms = useAuthStore((s) => s.refreshPerms);
   const setMyUid = useImStore((s) => s.setMyUid);
   const setRtcUid = useRtcStore((s) => s.setMyUid);
   const queryClient = useQueryClient();
@@ -92,12 +93,18 @@ function useWsLifecycle(): void {
     const offNotification = wsClient.on('notification.new', () => {
       void queryClient.invalidateQueries({ queryKey: ['im', 'notifications'] });
     });
+    // 权限实时生效（03 篇 §4）：授权/收回/角色变更 → perm.changed → 重拉 /me/permissions
+    // 更新 auth store（管理入口与模块树显隐即时收窄；进行中操作由服务端守卫 2001 拒绝）
+    const offPermChanged = wsClient.on('perm.changed', () => {
+      void refreshPerms();
+    });
     return () => {
       wsClient.onResync = null;
       wsClient.onAuthError = null;
       offNotification();
+      offPermChanged();
     };
-  }, [logout, queryClient]);
+  }, [logout, queryClient, refreshPerms]);
 
   useEffect(() => {
     if (token && !USE_MOCK) {

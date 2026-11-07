@@ -94,6 +94,8 @@ export const qk = {
     usage: (days: number = 7): QueryKeyRO => ['admin', 'usage', days],
     /** 审计时间线 ['admin','audit',cursor]（管理写操作后前缀 ['admin','audit'] 失效） */
     audit: (cursor: string = ''): QueryKeyRO => ['admin', 'audit', cursor],
+    /** 权限点字典 ['admin','permPoints']（API-ADM-02 服务端权威清单；版本演进时失效重拉） */
+    permPoints: ['admin', 'permPoints'] as const,
   },
 } as const;
 
@@ -113,4 +115,5 @@ export const wsInvalidationPrefixes: Record<string, QueryKeyRO[]> = {
   'mail.new': [['mail', 'summary'], ['mail', 'messages'], ['mail', 'shared'], ['mail', 'sharedMessages']], // 邮箱角标/列表/共享邮箱（MAI，22 §6.2）
   'meeting.invited': [['meeting']], 'meeting.updated': [['meeting']], 'meeting.canceled': [['meeting']],
   'meeting.rsvp': [['meeting']], 'meeting.ended': [['meeting']], // 会议事件全量前缀失效（21 §6.2）
+  'perm.changed': [], // 权限变更（03 §4）：不走缓存失效——App 壳层重拉 /me/permissions 刷新 auth store（导航显隐实时收窄）
 };

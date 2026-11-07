@@ -270,15 +270,55 @@ const MOCK_ROLES: AdminRole[] = [
   },
 ];
 
-/** 常用权限点分组（v0.1 前端静态字典；正式 53 项字典随 D12 权限点字典接口下发，登记） */
-export const PERMISSION_GROUPS: Array<{ group: string; items: string[] }> = [
-  { group: 'IM', items: ['im:message:send', 'im:message:recall', 'im:conv:manage'] },
-  { group: 'Agent', items: ['agent:session:use', 'agent:delegate:use', 'agent:tool:run_command'] },
-  { group: '知识库/文档', items: ['kb:query:use', 'doc:file:view', 'doc:file:edit'] },
-  { group: '文件/通话', items: ['file:upload', 'rtc:call:start'] },
-  { group: '机器人', items: ['bot:manage', 'bot:install'] },
-  { group: '管理', items: ['admin', 'admin:user:manage', 'admin:role:manage', 'admin:policy:manage', 'admin:kb:govern', 'admin:audit:read', 'admin:usage:read', 'admin:app:publish'] },
-];
+/** 权限点字典（API-ADM-02；服务端内嵌权威清单 D12 §2.4 经接口下发，前端不硬编码） */
+export interface PermPoint {
+  code: string;
+  domain: string;
+  desc: string;
+}
+export interface PermGroup {
+  domain: string;
+  label: string;
+  points: PermPoint[];
+}
+export interface PermPointsDoc {
+  version: number;
+  total: number;
+  groups: PermGroup[];
+}
+
+export async function fetchPermPoints(): Promise<PermPointsDoc> {
+  if (USE_MOCK) return MOCK_PERM_DOC;
+  return http.get<PermPointsDoc>('/admin/perm-points');
+}
+
+/** mock 字典（USE_MOCK 走查用；真实环境以服务端下发为准） */
+const MOCK_PERM_DOC: PermPointsDoc = {
+  version: 1,
+  total: 12,
+  groups: [
+    { domain: 'im', label: '即时通讯', points: [
+      { code: 'im:message:send', domain: 'im', desc: '发消息' },
+      { code: 'im:group:manage', domain: 'im', desc: '群管理' },
+    ] },
+    { domain: 'kb', label: '知识库', points: [
+      { code: 'kb:query:use', domain: 'kb', desc: '检索使用' },
+      { code: 'kb:doc:contribute', domain: 'kb', desc: '投稿文档' },
+    ] },
+    { domain: 'agent', label: '智能体', points: [
+      { code: 'agent:session:use', domain: 'agent', desc: '使用 Agent 会话' },
+      { code: 'agent:tool:run_command', domain: 'agent', desc: '执行命令工具' },
+    ] },
+    { domain: 'admin', label: '租户管理', points: [
+      { code: 'admin:user:manage', domain: 'admin', desc: '用户生命周期' },
+      { code: 'admin:role:manage', domain: 'admin', desc: '角色 CRUD' },
+      { code: 'admin:role:assign', domain: 'admin', desc: '成员授权' },
+      { code: 'admin:policy:manage', domain: 'admin', desc: '安全/合规策略' },
+      { code: 'admin:audit:read', domain: 'admin', desc: '审计检索' },
+      { code: 'admin:notice:publish', domain: 'admin', desc: '租户公告' },
+    ] },
+  ],
+};
 
 /* ── 平台公告（PAD-15） ── */
 
