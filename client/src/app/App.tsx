@@ -15,6 +15,7 @@ import { DocTrashPage } from '../features/doc/pages/DocTrashPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
 import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
+import { ShareResolvePage } from '../features/im/pages/ShareResolvePage';
 import { KbPage } from '../features/kb/pages/KbPage';
 import { useImStore } from '../features/im/store/im';
 import { useRtcStore } from '../features/rtc/store/rtcStore';
@@ -113,6 +114,15 @@ export function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/auth" element={<LoginPage />} />
+        {/* 分享外链解析（D06 §4.4：登录态访问——企业内不匿名；独立轻页面不走主布局） */}
+        <Route
+          path="/s/:code"
+          element={
+            <RequireAuth>
+              <ShareResolvePage />
+            </RequireAuth>
+          }
+        />
       <Route
         element={
           <RequireAuth>

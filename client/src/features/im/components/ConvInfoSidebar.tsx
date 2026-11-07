@@ -1,17 +1,19 @@
 /**
- * 详情侧栏（D03 §3.5 PIM-05）：
+ * 详情侧栏（D03 §3.5 PIM-05 + §3.6 群文件页签）：
  * - 单聊：对方名片（元信息只读）
- * - 群聊/广播群：四 tab（信息/成员/设置/公告）——设置 tab 仅 owner/admin 可见
+ * - 群聊/广播群：五 tab（信息/成员/群文件/设置/公告）——设置 tab 仅 owner/admin 可见
  * - 操作全接真实 API：退群/转让/解散（危险确认）、添加成员（手输 uid）、
- *   设/取消管理员、单人禁言（预设时长）、移出、群名/策略/全员禁言、公告编辑
+ *   设/取消管理员、单人禁言（预设时长）、移出、群名/策略/全员禁言、公告编辑、
+ *   群文件列表+票据下载（GET /files/convs/{id}，D06 阶段二）
  * - conv.updated 推送经 conv 摘要变化触发详情重拉（memberCount/groupSetting 依赖）
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Hash, Megaphone, ScrollText, Settings2, Shield, Tag, Users, VolumeX, X } from 'lucide-react';
+import { FileText, Hash, Megaphone, ScrollText, Settings2, Shield, Tag, Users, VolumeX, X } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { Button } from '../../../shared/ui/Button';
 import { getErrorText } from '../../../shared/api/http';
+import { formatBytes } from '../../../shared/utils/format';
 import {
   convDissolve,
   convQuit,
@@ -22,6 +24,7 @@ import {
   memberRemove,
   memberRole,
 } from '../api/im';
+import { downloadUrl, fetchConvFiles, getDownloadTicket, type MyFileItem } from '../api/files';
 import { formatMuteUntil } from '../pages/systemMessageRegistry';
 import type { Conversation, ConversationMember, MemberRole } from '../model/types';
 
@@ -35,7 +38,7 @@ interface ConvInfoSidebarProps {
   onLeft?: (convId: string) => void;
 }
 
-type TabKey = 'info' | 'members' | 'setting' | 'announcement';
+type TabKey = 'info' | 'members' | 'files' | 'setting' | 'announcement';
 
 const ROLE_LABEL: Record<number, string> = { 1: '群主', 2: '管理员', 3: '成员', 4: '发布者' };
 
@@ -109,6 +112,7 @@ export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onL
     const base: Array<{ key: TabKey; label: string; icon: typeof Tag }> = [
       { key: 'info', label: '信息', icon: Tag },
       { key: 'members', label: '成员', icon: Users },
+      { key: 'files', label: '群文件', icon: FileText }, // D03 §3.6（成员可见，服务端成员判定）
     ];
     if (isMgr) base.push({ key: 'setting', label: '设置', icon: Settings2 }); // 仅 owner/admin（D03 §3.5）
     base.push({ key: 'announcement', label: '公告', icon: Megaphone });
@@ -236,6 +240,8 @@ export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onL
                   void run(() => convSetting(conv.id, { mute_member: { uid, until } }))
                 }
               />
+            ) : tab === 'files' ? (
+              <ConvFilesTab convId={conv.id} />
             ) : tab === 'setting' ? (
               <SettingTab conv={conv} busy={busy} onPatch={(patch) => void run(() => convSetting(conv.id, patch))} />
             ) : (
@@ -500,6 +506,78 @@ function MembersTab({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/* ── 群文件 tab（D03 §3.6；GET /files/convs/{id} 成员可见 + 票据下载） ── */
+
+function ConvFilesTab({ convId }: { convId: string }) {
+  const [items, setItems] = useState<MyFileItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    setError(null);
+    try {
+      setItems(await fetchConvFiles(convId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '加载失败');
+      setItems([]);
+    }
+  }, [convId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  /** 下载 = 取一次性票据（120s）→ 打开绝对地址（服务端流式回放） */
+  const download = async (f: MyFileItem) => {
+    setDownloading(f.id);
+    setError(null);
+    try {
+      const ticket = await getDownloadTicket(f.id);
+      window.open(downloadUrl(ticket.url), '_blank');
+    } catch (e) {
+      setError(e && typeof e === 'object' && 'code' in e ? getErrorText((e as { code: number }).code) : '下载失败');
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  return (
+    <div className="gm-section">
+      {error ? <div className="gm-error">{error}</div> : null}
+      {items === null ? (
+        <div className="gm-empty">加载中…</div>
+      ) : items.length === 0 ? (
+        <div className="gm-empty">暂无群文件</div>
+      ) : (
+        <div className="gm-members" data-testid="conv-files-list">
+          {items.map((f) => (
+            <div className="gm-member" key={f.id}>
+              <div className="gm-member__main">
+                <span className="gm-member__name">
+                  <FileText size={13} /> {f.name}
+                </span>
+                <span className="gm-member__uid">
+                  {formatBytes(f.size)} · {formatMuteUntil(f.createdAt)}
+                </span>
+              </div>
+              <div className="gm-member__ops">
+                <button
+                  type="button"
+                  className="gm-op-btn"
+                  disabled={downloading === f.id}
+                  onClick={() => void download(f)}
+                >
+                  {downloading === f.id ? '取票据…' : '下载'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
