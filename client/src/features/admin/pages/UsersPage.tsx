@@ -175,21 +175,23 @@ export function UsersPage() {
                 </td>
                 <td data-testid={`admin-action-${u.employee_no}`}>
                   {u.status === 1 ? (
-                    <Button
-                      variant="danger"
-                      loading={statusMutation.isPending && statusMutation.variables?.userId === u.id}
-                      onClick={() => toggle(u)}
-                    >
-                      <ShieldBan size={13} /> 禁用
-                    </Button>
-                    <Button
-                      variant="danger"
-                      disabled={statusMutation.isPending}
-                      onClick={() => offboard(u)}
-                      data-testid="offboard-btn"
-                    >
-                      离职交接
-                    </Button>
+                    <span className="admin-role__ops">
+                      <Button
+                        variant="danger"
+                        loading={statusMutation.isPending && statusMutation.variables?.userId === u.id}
+                        onClick={() => toggle(u)}
+                      >
+                        <ShieldBan size={13} /> 禁用
+                      </Button>
+                      <Button
+                        variant="danger"
+                        disabled={statusMutation.isPending}
+                        onClick={() => offboard(u)}
+                        data-testid="offboard-btn"
+                      >
+                        离职交接
+                      </Button>
+                    </span>
                   ) : (
                     <Button
                       variant="secondary"
