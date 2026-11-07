@@ -28,6 +28,10 @@ import (
 	fileservice "github.com/baobaowork/server/internal/file/service"
 	filestore "github.com/baobaowork/server/internal/file/store"
 	"github.com/baobaowork/server/internal/gateway"
+	"github.com/baobaowork/server/internal/kb"
+	kbapi "github.com/baobaowork/server/internal/kb/api"
+	kbrepo "github.com/baobaowork/server/internal/kb/repo"
+	kbservice "github.com/baobaowork/server/internal/kb/service"
 	"github.com/baobaowork/server/internal/message"
 	"github.com/baobaowork/server/internal/message/api"
 	"github.com/baobaowork/server/internal/message/repo"
@@ -186,6 +190,74 @@ func main() {
 	})
 	mux.HandleFunc("POST /v1/chat/completions", aigwMod.Gateway.HandleChat)
 	mux.HandleFunc("POST /v1/embeddings", aigwMod.Gateway.HandleEmbeddings)
+
+	// 知识库域（D07 阶段一务实版）：摄入管线同步版（嵌入经网关 bbw-embed）+
+	// 混合检索（向量余弦 + 关键词 ILIKE，RRF 融合，权限前置过滤）
+	var kbRepo kbrepo.Repo
+	if pgPool != nil {
+		kbRepo = kbrepo.NewPostgres(pgPool)
+		if kp, ok := kbRepo.(*kbrepo.Postgres); ok {
+			if vOK, ver := kp.VectorMode(); vOK {
+				log.Printf("kb 检轨：pgvector %s（kb_chunk.embedding=vector(1024)，<=> 余弦排序）", ver)
+			} else {
+				log.Printf("kb 检轨：pgvector 不可用 → embedding 降级 float8[]（内存余弦 + ILIKE 兜底，登记）")
+			}
+		}
+	} else {
+		kbRepo = kbrepo.NewMemory()
+	}
+	// 嵌入链路：优先 HTTP 自调本服务网关 /v1/embeddings（bbw-embed，开发令牌通道——
+	// 与真实调用方同路径：鉴权/限流/计量全过）；未配开发令牌时直调网关 Router 的
+	// mock 供应商（联调零配置兜底）。测试注入假 EmbedFn 不走网络（任务约束）
+	var kbEmbed kbservice.EmbedFn
+	if devTok := os.Getenv("BBW_AIGW_DEV_TOKEN"); devTok != "" {
+		kbEmbed = kbservice.GatewayEmbedFn("http://127.0.0.1"+cfg.HTTPAddr, devTok, nil)
+		log.Printf("kb 嵌入链路：HTTP 网关 http://127.0.0.1%s/v1/embeddings（bbw-embed，开发令牌）", cfg.HTTPAddr)
+	} else if cands, ok := aigwMod.Router.Route(aigw.AliasEmbed); ok && len(cands) > 0 {
+		prov := cands[0].Provider
+		kbEmbed = func(ctx context.Context, in []string) ([][]float32, error) {
+			v, _, err := prov.Embed(ctx, in)
+			return v, err
+		}
+		log.Println("kb 嵌入链路：直调网关 Router mock 供应商（未配 BBW_AIGW_DEV_TOKEN，1024 维确定性向量）")
+	}
+	kbMod := kb.NewModule(kbservice.Options{
+		Embedder: kbEmbed,
+		// 文件来源摄入：经 file 域票据通道取内容（IssueTicket 校验 owner/成员 →
+		// Download 一次性票据回放流；跨模块不引 file 包，D02 §4 依赖规则）
+		OpenFile: func(ctx context.Context, tenantID, userID, fileID int64) (kbservice.FileSource, error) {
+			t, err := fileSvc.IssueTicket(ctx, tenantID, userID, fileID)
+			if err != nil {
+				return kbservice.FileSource{}, err
+			}
+			tok := strings.TrimPrefix(t.URL, "/api/v1/files/dl?t=")
+			target, rc, err := fileSvc.Download(ctx, tok)
+			if err != nil {
+				return kbservice.FileSource{}, err
+			}
+			ext := ""
+			if i := strings.LastIndex(target.Name, "."); i >= 0 {
+				ext = strings.ToLower(target.Name[i+1:])
+			}
+			return kbservice.FileSource{
+				Name: target.Name, Ext: ext, ContentType: target.ContentType,
+				Size: target.Size, Body: rc,
+			}, nil
+		},
+	}, kbRepo)
+	kbSvc := kbMod.API()
+
+	// 知识库 REST（D07 §5.1 阶段一务实版 10 项；摄入同步返回，jobs 为 docs 简版）
+	mux.Handle("GET /api/v1/kb/spaces", authed(handleKBListSpaces(kbSvc)))
+	mux.Handle("POST /api/v1/kb/spaces", authed(handleKBCreateSpace(kbSvc)))
+	mux.Handle("GET /api/v1/kb/spaces/{id}/nodes", authed(handleKBListNodes(kbSvc)))
+	mux.Handle("POST /api/v1/kb/spaces/{id}/nodes", authed(handleKBCreateNode(kbSvc)))
+	mux.Handle("POST /api/v1/kb/spaces/{id}/docs", authed(handleKBIngest(kbSvc)))
+	mux.Handle("GET /api/v1/kb/docs/{id}", authed(handleKBGetDoc(kbSvc)))
+	mux.Handle("GET /api/v1/kb/docs/{id}/chunks", authed(handleKBGetChunks(kbSvc)))
+	mux.Handle("POST /api/v1/kb/docs/{id}/reingest", authed(handleKBReingest(kbSvc)))
+	mux.Handle("POST /api/v1/kb/query", authed(handleKBQuery(kbSvc)))
+	mux.Handle("GET /api/v1/kb/jobs", authed(handleKBJobs(kbSvc)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -883,6 +955,293 @@ func handleFileDownload(svc fileapi.FileService) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(w, rc)
 	}
+}
+
+// ── 知识库 REST 壳（D07 阶段一务实版）──
+
+// handleKBListSpaces 可见空间列表（个人空间惰性创建；?type= 过滤）
+func handleKBListSpaces(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		spaces, err := svc.ListSpaces(r.Context(), tenant, uid)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if typ := r.URL.Query().Get("type"); typ != "" {
+			filtered := make([]kbapi.SpaceDTO, 0, len(spaces))
+			for _, s := range spaces {
+				if s.SpaceType == typ {
+					filtered = append(filtered, s)
+				}
+			}
+			spaces = filtered
+		}
+		httpx.OK(w, r, map[string]any{"items": spaces})
+	}
+}
+
+// handleKBCreateSpace 新建空间（dept|company；personal 幂等返回惰性创建结果）
+func handleKBCreateSpace(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		space, err := svc.CreateSpace(r.Context(), tenant, uid, req.Type, req.Name)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, space)
+	}
+}
+
+// handleKBListNodes 目录懒加载（?parent_id= 缺省空间根：子目录 + 目录下文档）
+func handleKBListNodes(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		spaceID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		parentID, _ := strconv.ParseInt(r.URL.Query().Get("parent_id"), 10, 64)
+		children, err := svc.ListNodes(r.Context(), tenant, uid, spaceID, parentID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, children)
+	}
+}
+
+// handleKBCreateNode 新建目录（7014 同名 / >10 层 9001）
+func handleKBCreateNode(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		spaceID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Name     string `json:"name"`
+			ParentID int64  `json:"parent_id"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		node, err := svc.CreateNode(r.Context(), tenant, uid, spaceID, req.ParentID, req.Name)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, node)
+	}
+}
+
+// handleKBIngest 摄入（同步版 v0.1）：body {title?, text?, format?, file_id?, node_id?}
+// —— text 粘贴 / file_id 引用 D06 文件二选一；返回即终态（ready/failed+error_msg）
+func handleKBIngest(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		spaceID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Title  string `json:"title"`
+			Text   string `json:"text"`
+			Format string `json:"format"`
+			FileID int64  `json:"file_id"`
+			NodeID int64  `json:"node_id"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		doc, err := svc.IngestDoc(r.Context(), tenant, uid, spaceID, req.NodeID, req.Title, req.Format, req.Text, req.FileID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, doc)
+	}
+}
+
+// handleKBGetDoc 文档详情（含状态/版本/错误）
+func handleKBGetDoc(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		doc, err := svc.GetDoc(r.Context(), tenant, uid, docID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, doc)
+	}
+}
+
+// handleKBGetChunks 分块三形态：?outline=1 大纲 / ?around=seq 上下文 / 缺省全量
+func handleKBGetChunks(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		ctx := r.Context()
+		switch {
+		case r.URL.Query().Get("outline") != "":
+			items, err := svc.GetOutline(ctx, tenant, uid, docID)
+			if err != nil {
+				httpx.Fail(w, r, err)
+				return
+			}
+			httpx.OK(w, r, map[string]any{"items": items})
+		case r.URL.Query().Get("around") != "":
+			seq, _ := strconv.Atoi(r.URL.Query().Get("around"))
+			items, err := svc.ChunksAround(ctx, tenant, uid, docID, seq)
+			if err != nil {
+				httpx.Fail(w, r, err)
+				return
+			}
+			httpx.OK(w, r, map[string]any{"items": items})
+		default:
+			items, err := svc.ListChunks(ctx, tenant, uid, docID)
+			if err != nil {
+				httpx.Fail(w, r, err)
+				return
+			}
+			httpx.OK(w, r, map[string]any{"items": items})
+		}
+	}
+}
+
+// handleKBReingest 重摄入（version+1；file 来源重读，源失效 → failed 终态）
+func handleKBReingest(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		doc, err := svc.ReingestDoc(r.Context(), tenant, uid, docID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, doc)
+	}
+}
+
+// handleKBQuery 混合检索（keyword 必填；向量余弦 + ILIKE 两路 RRF 融合）
+func handleKBQuery(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req kbapi.QueryReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		resp, err := svc.Query(r.Context(), tenant, uid, req.SpaceIDs, req.Keyword, req.TopK)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleKBJobs jobs 简版（?space_id= 必填，?status= 过滤；docs 列表代，登记）
+func handleKBJobs(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		spaceID, err := strconv.ParseInt(r.URL.Query().Get("space_id"), 10, 64)
+		if err != nil || spaceID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "space_id 必填"))
+			return
+		}
+		items, err := svc.ListJobs(r.Context(), tenant, uid, spaceID, r.URL.Query().Get("status"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items})
+	}
+}
+
+// kbActor 知识库请求方（tenant + uid）
+func kbActor(r *http.Request) (int64, int64, error) {
+	uid, err := uidFrom(r)
+	if err != nil {
+		return 0, 0, err
+	}
+	return httpx.TenantID(r.Context()), uid, nil
+}
+
+// pathID 路径 ID 解析（kb 路由共用）
+func pathID(r *http.Request, name string) (int64, error) {
+	id, err := strconv.ParseInt(r.PathValue(name), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, errx.New(errx.CodeBadRequest, "路径 ID 非法")
+	}
+	return id, nil
 }
 
 // seedDemo 演示数据：alice/bob（口令 demo-pass-123）+ 单聊会话。

@@ -7,12 +7,13 @@
 import { useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { FileText, Phone, Settings2, BrainCircuit } from 'lucide-react';
+import { FileText, Phone, Settings2 } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { LoginPage } from '../features/auth/pages/LoginPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
 import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
+import { KbPage } from '../features/kb/pages/KbPage';
 import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
@@ -111,7 +112,8 @@ export function App() {
         <Route path="/im/notifications" element={<NotificationCenterPage />} />
         <Route path="/rtc" element={<PlaceholderPage title="通话" designDoc="D04" icon={Phone} blurb="音视频通话、来电接听与通话历史" />} />
         <Route path="/doc" element={<PlaceholderPage title="文档中心" designDoc="D05/D06" icon={FileText} blurb="在线文档协同、文件传输与分享" />} />
-        <Route path="/kb" element={<PlaceholderPage title="知识库" designDoc="D11" icon={BrainCircuit} blurb="企业知识空间检索、摄入与授权治理" />} />
+        {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
+        <Route path="/kb" element={<KbPage />} />
         {/* Agent 工作台域（D08）：PAG-01/02/03 工作台 + PAG-11 记忆 + 日报 */}
         <Route path="/agent" element={<AgentWorkbenchPage />} />
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />

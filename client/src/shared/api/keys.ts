@@ -29,6 +29,18 @@ export const qk = {
   auth: {
     session: ['auth', 'session'] as const,
   },
+  kb: {
+    /** 空间列表 ['kb','spaces',type]（D07；摄入/重摄入后失效 ['kb','spaces'] 前缀） */
+    spaces: (type: string = 'all'): QueryKeyRO => ['kb', 'spaces', type],
+    /** 目录懒加载 ['kb','nodes',spaceId,parent] */
+    nodes: (spaceId: string, parentId: string = ''): QueryKeyRO => ['kb', 'nodes', spaceId, parentId],
+    /** 文档详情 ['kb','doc',docId] */
+    doc: (docId: string): QueryKeyRO => ['kb', 'doc', docId],
+    /** 分块 ['kb','chunks',docId]（outline/around 派生查询同前缀失效） */
+    chunks: (docId: string): QueryKeyRO => ['kb', 'chunks', docId],
+    /** jobs 简版 ['kb','jobs',spaceId,status] */
+    jobs: (spaceId: string, status: string = 'all'): QueryKeyRO => ['kb', 'jobs', spaceId, status],
+  },
 } as const;
 
 /**
