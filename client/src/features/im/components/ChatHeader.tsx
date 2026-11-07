@@ -11,6 +11,8 @@ import type { Conversation } from '../model/types';
 
 interface ChatHeaderProps {
   conv: Conversation;
+  /** 对端在线状态（单聊在线点；D03 §5.3——away/dnd 黄点、其余灰/无） */
+  peerStatus?: string;
   /** 副标题：正在输入…（INT-IM-11 TTL 5s，超时回退空） */
   typing?: string;
   /** S 档两级导航：返回列表 */
@@ -18,7 +20,7 @@ interface ChatHeaderProps {
   onToggleDetail: () => void;
 }
 
-export function ChatHeader({ conv, typing, onBack, onToggleDetail }: ChatHeaderProps) {
+export function ChatHeader({ conv, typing, peerStatus, onBack, onToggleDetail }: ChatHeaderProps) {
   const typeName = conv.type === 1 ? '' : conv.type === 2 ? ` (${conv.memberCount})` : ' · 广播群';
   // [通话▾] 菜单开合（点击外部收起）
   const [callMenuOpen, setCallMenuOpen] = useState(false);
@@ -45,8 +47,12 @@ export function ChatHeader({ conv, typing, onBack, onToggleDetail }: ChatHeaderP
           <ArrowLeft size={18} />
         </button>
       ) : null}
-      {/* 在线状态点：presence.changed 订阅接入点（D03 §3.2） */}
-      {conv.type === 1 ? <span className="chat-header__presence" title="在线" /> : null}
+      {/* 在线状态点（D03 §3.2：online 绿/away·dnd 黄/offline 不亮） */}
+      {conv.type === 1 && peerStatus === 'online' ? (
+        <span className="chat-header__presence" title="在线" />
+      ) : conv.type === 1 && (peerStatus === 'away' || peerStatus === 'dnd') ? (
+        <span className="chat-header__presence chat-header__presence--busy" title={peerStatus === 'dnd' ? '请勿打扰' : '离开'} />
+      ) : null}
       <span className="chat-header__title">
         {conv.name}
         {typeName}

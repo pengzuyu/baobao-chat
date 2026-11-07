@@ -633,3 +633,34 @@ func (k rtcCardSink) SendCard(ctx context.Context, senderID, convID int64, clien
 func (k rtcCardSink) FinishCard(ctx context.Context, msgID int64, body json.RawMessage) {
 	_ = k.msgs.UpdateCallCard(ctx, msgID, body)
 }
+
+// ---------------------------------------------------------------------------
+// S12 在线状态（D03 §5.3）：上下线转变广播 / pres.set 自报态 / 断线清 typing
+// ---------------------------------------------------------------------------
+
+func TestE2EPresence(t *testing.T) {
+	s := newServer(t)
+	alice := s.dial(t, "alice")
+	// alice 上线时自身转变已广播（无订阅者，无断言）
+	bob := s.dial(t, "bob")
+	// alice 应收到 bob online
+	alice.until("presence.changed", func(p json.RawMessage) bool {
+		return bytes.Contains(p, []byte(fmt.Sprintf(`"uid":"%d"`, s.bobID))) &&
+			bytes.Contains(p, []byte(`"status":"online"`))
+	}, 3*time.Second)
+	// bob 自报 dnd → alice 收 dnd
+	dndID := bob.send("pres.set", map[string]any{"status": "dnd"})
+	if ack := bob.awaitAck(dndID); ack.Code != 0 {
+		t.Fatalf("pres.set code=%d payload=%s", ack.Code, ack.Payload)
+	}
+	alice.until("presence.changed", func(p json.RawMessage) bool {
+		return bytes.Contains(p, []byte(fmt.Sprintf(`"uid":"%d"`, s.bobID))) &&
+			bytes.Contains(p, []byte(`"status":"dnd"`))
+	}, 3*time.Second)
+	// bob 断开 → offline
+	_ = bob.nc.Close()
+	alice.until("presence.changed", func(p json.RawMessage) bool {
+		return bytes.Contains(p, []byte(fmt.Sprintf(`"uid":"%d"`, s.bobID))) &&
+			bytes.Contains(p, []byte(`"status":"offline"`))
+	}, 5*time.Second)
+}

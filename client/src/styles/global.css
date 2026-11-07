@@ -6832,3 +6832,8 @@ body {
   font-size: 11px;
   color: var(--bbw-gray-5, #8f959e);
 }
+
+/* 在线状态点（D03 §3.2 presence）——busy 态黄点 */
+.chat-header__presence--busy {
+  background: var(--bbw-warning, #d59020);
+}

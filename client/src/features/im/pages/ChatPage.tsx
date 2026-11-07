@@ -196,6 +196,10 @@ export function ChatPage() {
         void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
       }),
       wsClient.on('badge.updated', () => void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] })),
+      // 在线状态（D03 §5.3：presence.changed → store 投影）
+      wsClient.on<{ uid: string; status: string }>('presence.changed', (p) => {
+        useImStore.getState().applyPresence(p.uid, p.status);
+      }),
     ];
     return () => offs.forEach((off) => off());
   }, [queryClient, appendIncoming, markRead, applyTyping]);
@@ -400,6 +404,16 @@ export function ChatPage() {
     return () => clearInterval(t);
   }, []);
   const typingUid = convId ? typingMap[convId] : undefined;
+  // 单聊对端在线状态（presence store 投影；对端 uid=会话内非本人成员——由消息流推导）
+  const peerStatus = useImStore((s) => {
+    if (!activeConv || activeConv.type !== 1) return undefined;
+    const msgs = s.messagesByConv[activeConv.id] ?? [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const uid = msgs[i].senderId;
+      if (uid !== s.myUid) return s.presence[uid];
+    }
+    return undefined;
+  });
   const showTyping = !!typingUid && Date.now() - typingUid.at < TYPING_TTL_MS;
 
   // ---- 气泡操作集（INT-IM-25 条件显隐在 Bubble 内判定）----
@@ -617,6 +631,7 @@ export function ChatPage() {
         <ChatHeader
           conv={activeConv}
           typing={showTyping ? '对方正在输入…' : undefined}
+          peerStatus={peerStatus}
           onBack={bp === 'S' ? () => navigate('/im') : undefined}
           onToggleDetail={() => setDetailOpen((v) => !v)}
         />

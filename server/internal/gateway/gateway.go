@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/baobaowork/server/internal/gateway/presence"
 	"github.com/baobaowork/server/internal/message/api"
 	"github.com/baobaowork/server/internal/platform/authjwt"
 	errx "github.com/baobaowork/server/internal/platform/errors"
@@ -19,8 +20,10 @@ import (
 
 // Gateway /ws/connect 接入：鉴权 → 升级 → 注册 hub → 信封路由 → 心跳 → 清理（D02 §6）
 type Gateway struct {
-	hub       *Hub
-	msgs      messageapi.MessageService
+	hub  *Hub
+	msgs messageapi.MessageService
+	// presence 在线状态合成器（连接派生+自报态；D03 §5.3）
+	presence  *presence.Tracker
 	verify    TokenVerifier
 	dedup     *eventbus.Dedup
 	heartbeat time.Duration     // 读超时=无心跳断开窗口
@@ -48,7 +51,8 @@ func New(hub *Hub, bus eventbus.Bus, msgs messageapi.MessageService, verify Toke
 	if heartbeat <= 0 {
 		heartbeat = 90 * time.Second
 	}
-	g := &Gateway{hub: hub, msgs: msgs, verify: verify, dedup: eventbus.NewDedup(4096), heartbeat: heartbeat}
+	g := &Gateway{hub: hub, msgs: msgs, verify: verify, dedup: eventbus.NewDedup(4096), heartbeat: heartbeat,
+		presence: presence.NewTracker()}
 
 	// 推送扇出：进程内订阅（多实例部署换 Redis/NATS，D02 §11-1）
 	bus.Subscribe(eventbus.TopicMsgCreated, func(ctx context.Context, evt eventbus.Event) error {
@@ -218,8 +222,15 @@ func (g *Gateway) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 	client := NewClient(uid, did)
 	g.hub.Register(client)
+	// 在线转变：offline→online 广播 presence.changed（D03 §5.3）
+	if g.presence.ConnUp(uid) {
+		g.broadcastPresence(uid)
+	}
 	defer func() {
 		g.hub.Unregister(client)
+		if g.presence.ConnDown(uid) {
+			g.broadcastPresence(uid)
+		}
 		client.Close()
 		_ = conn.Close()
 	}()
@@ -280,6 +291,19 @@ func (g *Gateway) handleEnvelope(ctx context.Context, uid int64, env *Envelope) 
 	case "ping":
 		// 应用层心跳（14 篇 §2.1：30s 一次）
 		return NewAck(env, 0, nil)
+
+	case "pres.set":
+		var p struct {
+			Status  string `json:"status"`
+			ClearAt int64  `json:"clear_at,omitempty"`
+		}
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		g.presence.Set(uid, p.Status)
+		g.broadcastPresence(uid)
+		return NewAck(env, 0, map[string]any{})
 
 	case "msg.send":
 		var p messageapi.SendPayload
@@ -560,3 +584,16 @@ func rejectAuth(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	httpx.Fail(w, r, errx.New(code, "ws auth failed"))
 }
+
+// broadcastPresence presence.changed 广播（在线用户全体；v0.1 单租户口径，登记于 presence 包注释）
+func (g *Gateway) broadcastPresence(uid int64) {
+	env := NewPush("presence.changed", map[string]any{
+		"uid":            strconv.FormatInt(uid, 10),
+		"status":         g.presence.Get(uid),
+		"last_active_ts": time.Now().UnixMilli(),
+	})
+	g.hub.PushToUsers(g.presence.OnlineUIDs(), env)
+}
+
+// PresenceTracker 暴露给 REST/sync 装配（snapshot 用）
+func (g *Gateway) PresenceTracker() *presence.Tracker { return g.presence }

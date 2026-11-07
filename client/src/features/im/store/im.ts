@@ -60,6 +60,10 @@ interface ImState {
   typing: Record<string, { uid: string; at: number } | undefined>;
   applyTyping: (convId: string, uid: string) => void;
 
+  /** 在线状态：uid → status（presence.changed 维护，D03 §5.3；offline 含 invisible 投影） */
+  presence: Record<string, string | undefined>;
+  applyPresence: (uid: string, status: string) => void;
+
   /** conv.updated 推送入 store（D03 §5.3：kind=meta/member/setting/status/announcement 分发） */
   applyConvUpdated: (payload: ConvUpdatedPushPayload) => void;
 
@@ -331,6 +335,16 @@ export const useImStore = create<ImState>((set, get) => ({
 
   typing: {},
   applyTyping: (convId, uid) => set((s) => ({ typing: { ...s.typing, [convId]: { uid, at: Date.now() } } })),
+
+  presence: {},
+  applyPresence: (uid, status) =>
+    set((s) => {
+      // 离线清理 typing 态（对方断线即失效，防悬挂动画）
+      const typing = Object.fromEntries(
+        Object.entries(s.typing).filter(([, v]) => v?.uid !== uid),
+      );
+      return { presence: { ...s.presence, [uid]: status }, typing };
+    }),
 
   applyConvUpdated: (payload) =>
     set((s) => {
