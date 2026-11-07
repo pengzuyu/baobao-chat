@@ -28,6 +28,10 @@ use store::{find_secret, normalize_title, slugify, INDEX_FILE};
 
 /// 召回注入的行数上限（D15 §2.3：≤200 行，超限截断+提示）
 pub const RECALL_MAX_LINES: usize = 200;
+/// 条目数不超过该值时全量注入（v0.1 行为，D15 §2.3"条数少时成本可忽略"）
+pub const RECALL_FULL_ENTRIES: usize = 50;
+/// 精排注入条数上限（D15 §2.3 Top-K 关键词档；向量档待服务端真 embedding）
+pub const RECALL_TOP_K: usize = 50;
 
 /// 记忆列表项（`memory.list` REQ 应答 items 的单条：name/title/type/updated_at/hook）
 #[derive(Debug, Clone, PartialEq)]
@@ -239,10 +243,118 @@ impl KnowledgeStore {
         Ok(truncated)
     }
 
+    /// 按当前用户消息精排的召回注入（D15 §2.3 Top-K 关键词档）：
+    /// - 条目 ≤ `RECALL_FULL_ENTRIES` → 全量（退回 `recall()`，条数少时成本可忽略）；
+    /// - 否则按 query 关键词对条目评分（命中 title ×3、钩子行 ×1），
+    ///   有命中按分降序取前 `RECALL_TOP_K` 条；全零分退化为展示序
+    ///   （updated_at 新→旧）取前 K——保证注入面非空且偏新；
+    /// - 输出与 `MEMORY.md` 相同的索引行格式 + 尾注（提示模型为筛选结果）。
+    pub fn recall_for(&self, query: &str) -> Result<String, MemoryError> {
+        let (entries, _) = store::scan_entries(&self.dir);
+        if entries.len() <= RECALL_FULL_ENTRIES {
+            return self.recall();
+        }
+        let terms = extract_terms(query);
+        let mut scored: Vec<(usize, &MemoryEntry)> = entries
+            .iter()
+            .map(|e| {
+                let title = e.title.to_lowercase();
+                let hook = store::hook_of(e).to_lowercase();
+                let mut score = 0usize;
+                for t in &terms {
+                    if title.contains(t.as_str()) {
+                        score += 3; // 标题命中权重高（更强的相关性信号）
+                    }
+                    if hook.contains(t.as_str()) {
+                        score += 1;
+                    }
+                }
+                (score, e)
+            })
+            .collect();
+        if scored.iter().any(|(s, _)| *s > 0) {
+            // 分同的按展示序稳定化（updated_at 新→旧、name 升序）
+            scored.sort_by(|a, b| {
+                b.0.cmp(&a.0)
+                    .then_with(|| b.1.updated_at.cmp(&a.1.updated_at))
+                    .then_with(|| a.1.name.cmp(&b.1.name))
+            });
+        } // 全零分：保持 scan 的展示序（新→旧），偏新兜底
+        let mut out = String::new();
+        for (_, e) in scored.iter().take(RECALL_TOP_K) {
+            out.push_str(&store::index_line(e));
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "…（共 {total} 条记忆，按与当前消息的相关度注入前 {top} 条，全量见 memory/{INDEX_FILE}）\n",
+            total = entries.len(),
+            top = RECALL_TOP_K
+        ));
+        Ok(out)
+    }
+
     /// 从目录扫描重建 `MEMORY.md`（崩溃恢复入口；索引非权威，D15 §2.1）
     pub fn rebuild_index(&self) -> Result<IndexOutcome, io::Error> {
         store::rebuild_index(&self.dir)
     }
+}
+
+// ---------------------------------------------------------------------------
+// 查询分词（recall_for 评分用；与 aigw mock 嵌入同思路但不依赖该 crate）
+// ---------------------------------------------------------------------------
+
+/// query → 检索词集：CJK 连续段切 2-gram（单字段保留单字）、ASCII 连续
+/// 字母数字段取整词（≥2 字符，小写化）。不引分词库，确定性输出。
+fn extract_terms(query: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut ascii_run = String::new();
+    let mut cjk_run: Vec<char> = Vec::new();
+    let flush_ascii = |run: &mut String, out: &mut Vec<String>| {
+        if run.chars().count() >= 2 {
+            out.push(run.to_lowercase());
+        }
+        run.clear();
+    };
+    for ch in query.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if !cjk_run.is_empty() {
+                push_cjk_terms(&cjk_run, &mut terms);
+                cjk_run.clear();
+            }
+            ascii_run.push(ch);
+        } else {
+            flush_ascii(&mut ascii_run, &mut terms);
+            if is_cjk(ch) {
+                cjk_run.push(ch);
+            } else if !cjk_run.is_empty() {
+                push_cjk_terms(&cjk_run, &mut terms);
+                cjk_run.clear();
+            }
+        }
+    }
+    flush_ascii(&mut ascii_run, &mut terms);
+    push_cjk_terms(&cjk_run, &mut terms);
+    terms
+}
+
+/// CJK 连续段 → 2-gram 词集（单字段输出该字本身）
+fn push_cjk_terms(run: &[char], out: &mut Vec<String>) {
+    if run.is_empty() {
+        return;
+    }
+    if run.len() == 1 {
+        out.push(run.iter().collect());
+    } else {
+        for w in run.windows(2) {
+            out.push(w.iter().collect());
+        }
+    }
+}
+
+/// CJK 统一表意文字（含扩展 A）；不含标点/符号（它们不构成词）
+fn is_cjk(ch: char) -> bool {
+    let c = ch as u32;
+    (0x3400..=0x4DBF).contains(&c) || (0x4E00..=0x9FFF).contains(&c)
 }
 
 // ---------------------------------------------------------------------------

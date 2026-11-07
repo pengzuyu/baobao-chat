@@ -96,38 +96,44 @@ struct FastSummarizer<'a> {
 }
 impl Summarizer for FastSummarizer<'_> {
     fn summarize(&self, text: &str) -> Result<String, String> {
-        let req = ChatRequest {
-            model: "bbw-fast".to_string(),
-            messages: vec![
-                ChatMessage {
-                    role: "system".into(),
-                    content: "把以下对话压缩为要点摘要，≤300字。".into(),
-                    tool_calls: vec![],
-                    tool_call_id: None,
-                },
-                ChatMessage {
-                    role: "user".into(),
-                    content: text.to_string(),
-                    tool_calls: vec![],
-                    tool_call_id: None,
-                },
-            ],
-            tools: vec![],
-        };
-        let mut out = String::new();
-        let iter = self.client.chat(&req).map_err(|e| e.to_string())?;
-        for ev in iter {
-            match ev {
-                Ok(StreamEvent::TextDelta { text }) => out.push_str(&text),
-                Ok(_) => {}
-                Err(e) => return Err(e.to_string()),
-            }
+        chat_text(self.client, "把以下对话压缩为要点摘要，≤300字。", text)
+    }
+}
+
+/// bbw-fast 单轮调用共用壳（system+user → 流式汇总全文）；
+/// compaction 摘要与 W3 记忆提炼共用（19 篇档位别名固定 bbw-fast）
+fn chat_text(client: &dyn ChatClient, system: &str, user: &str) -> Result<String, String> {
+    let req = ChatRequest {
+        model: "bbw-fast".to_string(),
+        messages: vec![
+            ChatMessage {
+                role: "system".into(),
+                content: system.to_string(),
+                tool_calls: vec![],
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: user.to_string(),
+                tool_calls: vec![],
+                tool_call_id: None,
+            },
+        ],
+        tools: vec![],
+    };
+    let mut out = String::new();
+    let iter = client.chat(&req).map_err(|e| e.to_string())?;
+    for ev in iter {
+        match ev {
+            Ok(StreamEvent::TextDelta { text }) => out.push_str(&text),
+            Ok(_) => {}
+            Err(e) => return Err(e.to_string()),
         }
-        if out.trim().is_empty() {
-            Err("空摘要".into())
-        } else {
-            Ok(out)
-        }
+    }
+    if out.trim().is_empty() {
+        Err("空回复".into())
+    } else {
+        Ok(out)
     }
 }
 
@@ -149,6 +155,8 @@ pub struct SessionRunner {
     /// 委派宿主指令通道（launch/input/cancel/review；与审批通道分离）
     delegate_tx: Sender<DelegateHostMsg>,
     delegate_rx: Receiver<DelegateHostMsg>,
+    /// W2② 连续错误计数器（同工具同错 ≥2 次 → feedback 教训；跨 turn 保留）
+    err_tracker: bbrt_memory::ErrorTracker,
     /// 审批超时（测试注入）
     pub permission_timeout: Duration,
 }
@@ -187,6 +195,8 @@ impl SessionRunner {
             permission_rx: rx,
             delegate_tx: dtx,
             delegate_rx: drx,
+            // v0.1 恒开（`memory.heuristic=off` 开关随配置系统接线，D15 §2.2）
+            err_tracker: bbrt_memory::ErrorTracker::new(true),
             permission_timeout: PERMISSION_TIMEOUT,
         }
     }
@@ -220,17 +230,17 @@ impl SessionRunner {
             &format!("{{\"text_len\":{}}}", user_text.len()),
         );
 
-        // 记忆召回注入（D15 §2.3：MEMORY.md 全文进项目上下文区块）
+        // 记忆召回注入（D15 §2.3：按当前消息精排——条目少全量、多则 Top-K 关键词档）
         let memory_index = deps
             .memory
             .as_ref()
-            .map(|m| m.knowledge().recall().unwrap_or_default())
+            .map(|m| m.knowledge().recall_for(user_text).unwrap_or_default())
             .unwrap_or_default();
 
         self.history.push(Round::User {
             content: user_text.to_string(),
         });
-        // 被动轨：用户输入的启发式记忆提示（W2；正文取原句，标题截 40 字）
+        // 被动轨：用户输入的启发式记忆提示（W2①；正文取原句，标题截 40 字）
         if let Some(m) = deps.memory.as_ref() {
             if let Some(title) = bbrt_memory::detect_memory_hint(user_text) {
                 let input = bbrt_memory::SaveInput {
@@ -241,20 +251,7 @@ impl SessionRunner {
                     links: vec![],
                 };
                 if let Ok(outcome) = m.save_memory(&input) {
-                    let mt = outcome.saved.r#type;
-                    emit(deps, &self.session_id, |id| SessionEvent::MemorySaved {
-                        session_id: id,
-                        name: outcome.saved.name,
-                        title: outcome.saved.title,
-                        memory_type: match mt {
-                            bbrt_memory::MemoryType::User => "user",
-                            bbrt_memory::MemoryType::Project => "project",
-                            bbrt_memory::MemoryType::Feedback => "feedback",
-                            bbrt_memory::MemoryType::Reference => "reference",
-                        }
-                        .to_string(),
-                        updated: outcome.saved.updated,
-                    });
+                    emit_memory_saved(deps, &self.session_id, &outcome);
                 }
             }
         }
@@ -468,6 +465,26 @@ impl SessionRunner {
                 );
 
                 let outcome = self.run_tool(deps, &call, &masked, risk);
+                // W2② 连续错误教训（D15 §2.2：同工具同错 ≥2 次 → 自动记 feedback）
+                match &outcome {
+                    ToolOutcome::Ok { .. } => self.err_tracker.record_success(&tc.name),
+                    ToolOutcome::Blocked { summary, .. } => {
+                        if let Some(lesson) = self.err_tracker.record_failure(&tc.name, summary) {
+                            if let Some(m) = deps.memory.as_ref() {
+                                let input = bbrt_memory::SaveInput {
+                                    title: lesson.title,
+                                    body: lesson.body,
+                                    mtype: bbrt_memory::MemoryType::Feedback,
+                                    session: self.session_id.clone(),
+                                    links: vec![],
+                                };
+                                if let Ok(outcome) = m.save_memory(&input) {
+                                    emit_memory_saved(deps, &self.session_id, &outcome);
+                                }
+                            }
+                        }
+                    }
+                }
                 let summary = match &outcome {
                     ToolOutcome::Ok {
                         summary,
@@ -940,6 +957,16 @@ impl SessionRunner {
                 },
                 duration_ms: 0,
             });
+            // W3 会话结束提炼（D15 §2.2）：在日报重算前落盘——当日日报的
+            // memory_saved 计数即含提炼条目（§3.2 交叉印证）；失败静默不阻塞收口
+            let saved = distill_memories(deps, &self.session_id, &self.history);
+            if saved > 0 {
+                deps.wal.append(
+                    &self.session_id,
+                    "memory.distill",
+                    &format!("{{\"count\":{saved}}}"),
+                );
+            }
             if let Ok(Some(rep)) = m.on_session_end() {
                 emit(deps, &self.session_id, |_id| SessionEvent::ReportDaily {
                     date: rep.date.clone(),
@@ -976,8 +1003,8 @@ impl SessionRunner {
     }
 }
 
-/// 系统提示（08 篇行为规格的最小内化；技能注入阶段二）
-const SYSTEM_PROMPT: &str = "你是 BaobaoWork 的本机 Agent。遵守：1) 修改与命令执行受门控与沙箱约束；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定；4) 学到持久事实时优先记忆工具记录（接入后）。";
+/// 系统提示（08 篇行为规格 + D15 §2.2 W1 记忆使用规范；技能注入阶段二）
+const SYSTEM_PROMPT: &str = "你是 BaobaoWork 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n长期记忆（memory_save 工具，跨会话生效）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。";
 
 /// 组装结果 → 模型消息序列（system/记忆/项目 → history → 工具结果）
 fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {
@@ -1079,4 +1106,164 @@ fn escape_json(s: &str) -> String {
 /// 事件外发小工具（闭包拿 session_id，避免重复借用）
 fn emit(deps: &LoopDeps, session_id: &str, f: impl FnOnce(String) -> SessionEvent) {
     deps.sink.emit(f(session_id.to_string()));
+}
+
+// ---------------------------------------------------------------------------
+// W3 会话结束提炼（D15 §2.2 表第 3 行；bbw-fast，尽力而为）
+// ---------------------------------------------------------------------------
+
+/// W3 每会话最多提炼条数（防记忆膨胀）
+const DISTILL_MAX_ITEMS: usize = 3;
+/// W3 会话转录总量上限（字符；超出截断，保尾部最近的轮次）
+const DISTILL_TRANSCRIPT_MAX_CHARS: usize = 8_000;
+
+/// W3：会话结束把"决策/偏好/教训"提炼成长期记忆。模型失败、输出不可解析、
+/// 条目非法（空标题/未知类型）一律静默跳过——绝不阻塞会话收口。返回落盘条数。
+fn distill_memories(deps: &LoopDeps, session_id: &str, history: &[Round]) -> usize {
+    let Some(m) = deps.memory.as_ref() else {
+        return 0;
+    };
+    // 无 assistant 回复（如模型不可用即暂停）→ 无可提炼内容
+    if !history.iter().any(|r| matches!(r, Round::Assistant { .. })) {
+        return 0;
+    }
+    let transcript = transcript_of(history);
+    if transcript.is_empty() {
+        return 0;
+    }
+    // 已有索引喂给模型防重复（取头 60 行控提示长度；save 侧同题去重兜底）
+    let existing = m.knowledge().recall().unwrap_or_default();
+    let existing_head: String = existing.lines().take(60).collect::<Vec<_>>().join("\n");
+    let system = format!(
+        "从会话记录提炼值得跨会话记住的长期事实。只输出 JSON 数组（最多 {DISTILL_MAX_ITEMS} 条，\
+         无可记输出 []），每项形如 {{\"title\":\"一句话标题≤40字\",\
+         \"type\":\"user|project|feedback|reference\",\
+         \"body\":\"事实正文（feedback 须含 Why 与 How to apply 两行）\"}}。\
+         只记：用户身份/偏好/习惯、项目关键事实与决策、被用户纠正的教训。\
+         不记：临时内容、代码细节、密钥。以下为已有记忆索引，与其重复的不要产出：\n\
+         {existing_head}"
+    );
+    let raw = match chat_text(deps.model.as_ref(), &system, &transcript) {
+        Ok(s) => s,
+        Err(_) => return 0, // 提炼是增益路径：模型不可用/空回复 → 放弃
+    };
+    let mut saved = 0usize;
+    for item in parse_distill_items(&raw).into_iter().take(DISTILL_MAX_ITEMS) {
+        let input = bbrt_memory::SaveInput {
+            title: item.title,
+            body: item.body,
+            mtype: item.mtype,
+            session: session_id.to_string(),
+            links: vec![],
+        };
+        if let Ok(outcome) = m.save_memory(&input) {
+            emit_memory_saved(deps, session_id, &outcome);
+            saved += 1;
+        }
+    }
+    saved
+}
+
+/// 会话历史 → 提炼转录：仅 User/Assistant 文本轮（工具摘要信噪低不入），
+/// 每轮截 2K 字符；总量超限从头部丢弃（保最近的轮次）
+fn transcript_of(history: &[Round]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for r in history {
+        let (role, content) = match r {
+            Round::User { content } => ("用户", content.as_str()),
+            Round::Assistant { content, .. } => {
+                if content.trim().is_empty() {
+                    continue;
+                }
+                ("助手", content.as_str())
+            }
+            Round::Tool { .. } => continue,
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+        let cut: String = content.chars().take(2_000).collect();
+        lines.push(format!("{role}：{cut}"));
+    }
+    let mut total: usize = lines.iter().map(|l| l.chars().count()).sum();
+    while total > DISTILL_TRANSCRIPT_MAX_CHARS && !lines.is_empty() {
+        // 头部（最旧）轮次整行丢弃；仍超限则该行本身已被 2K 截断，退出
+        let dropped = lines.remove(0);
+        total -= dropped.chars().count();
+        if dropped.chars().count() > DISTILL_TRANSCRIPT_MAX_CHARS {
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+/// W3 提炼候选（解析中间态）
+struct DistillItem {
+    title: String,
+    body: String,
+    mtype: bbrt_memory::MemoryType,
+}
+
+/// 提炼输出解析：剥 ```json 围栏、截取最外层 [...] 段 → JSON 数组；
+/// 缺字段/未知类型/空串的条目逐项丢弃（坏一条不弃整批）
+fn parse_distill_items(raw: &str) -> Vec<DistillItem> {
+    let trimmed = raw.trim();
+    let body = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .map(|s| s.strip_suffix("```").unwrap_or(s))
+        .unwrap_or(trimmed);
+    let Some(start) = body.find('[') else {
+        return vec![];
+    };
+    let Some(end) = body.rfind(']') else {
+        return vec![];
+    };
+    if end <= start {
+        return vec![];
+    }
+    let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(&body[start..=end]) else {
+        return vec![];
+    };
+    arr.iter()
+        .filter_map(|v| {
+            let title = v.get("title")?.as_str()?.trim().to_string();
+            let text = v.get("body")?.as_str()?.trim().to_string();
+            let mtype = bbrt_memory::MemoryType::parse(v.get("type")?.as_str()?)?;
+            if title.is_empty() || text.is_empty() {
+                return None;
+            }
+            Some(DistillItem {
+                title,
+                body: text,
+                mtype,
+            })
+        })
+        .collect()
+}
+
+/// 记忆写入/更新 → 协议事件外发（memory.saved + memory.evicted；W1/W2/W3 共用）
+fn emit_memory_saved(deps: &LoopDeps, session_id: &str, outcome: &bbrt_memory::SaveOutcome) {
+    let type_str = match outcome.saved.r#type {
+        bbrt_memory::MemoryType::User => "user",
+        bbrt_memory::MemoryType::Project => "project",
+        bbrt_memory::MemoryType::Feedback => "feedback",
+        bbrt_memory::MemoryType::Reference => "reference",
+    };
+    emit(deps, session_id, |id| SessionEvent::MemorySaved {
+        session_id: id,
+        name: outcome.saved.name.clone(),
+        title: outcome.saved.title.clone(),
+        memory_type: type_str.to_string(),
+        updated: outcome.saved.updated,
+    });
+    for ev in &outcome.evicted {
+        emit(deps, session_id, |id| SessionEvent::MemoryEvicted {
+            session_id: id,
+            name: ev.name.clone(),
+            reason: ev.reason.clone(),
+        });
+    }
 }

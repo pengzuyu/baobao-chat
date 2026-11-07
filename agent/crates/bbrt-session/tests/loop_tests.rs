@@ -915,3 +915,222 @@ fn delegate_without_launcher_blocked_8030() {
         }
     )));
 }
+
+// ---------------------------------------------------------------------------
+// 记忆双轨接线（D15 §2.2）：W2② 连击教训 / W3 会话结束提炼 / 召回注入
+// ---------------------------------------------------------------------------
+
+/// 剧本模型：按调用次数回放预置回复；顺带捕获 system 消息文本（prompt 断言用）
+struct ScriptedModel {
+    calls: AtomicUsize,
+    replies: Vec<String>,
+    seen_system: Mutex<Vec<String>>,
+}
+impl ScriptedModel {
+    fn new(replies: Vec<String>) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            replies,
+            seen_system: Mutex::new(vec![]),
+        })
+    }
+}
+impl ChatClient for ScriptedModel {
+    fn chat(
+        &self,
+        req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(first) = req.messages.first() {
+            self.seen_system
+                .lock()
+                .unwrap()
+                .push(first.content.clone());
+        }
+        let text = self
+            .replies
+            .get(n)
+            .cloned()
+            .unwrap_or_else(|| "（剧本耗尽）".into());
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = vec![
+            Ok(StreamEvent::TextDelta { text }),
+            Ok(StreamEvent::Done {
+                finish: FinishReason::Stop,
+                usage: Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                },
+            }),
+        ];
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+#[test]
+fn w2_lesson_after_repeated_tool_failures() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(AlwaysToolModel); // 每轮都发起工具调用
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: true, // execute 恒 Blocked(8021 "危险命令")
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let mem = test_memory(tmp.path());
+    let d = deps(model, tools, sink.clone(), Some(mem.clone()));
+    let mut runner = SessionRunner::new(
+        "s-w2".into(),
+        "/ws".into(),
+        PermissionMode::FullAuto,
+        ModelTier::Strong,
+    );
+    let _ = runner.run_turn("跑一下构建", &d);
+
+    // 同工具同错连续 ≥2 次 → feedback 教训自动落盘（带 Why/How to apply）
+    let list = mem.knowledge().list();
+    assert!(
+        list.iter().any(|e| e.mtype == bbrt_memory::MemoryType::Feedback
+            && e.title.contains("run_command")),
+        "应产出 run_command 教训条目，实际: {list:?}"
+    );
+    let body = list
+        .iter()
+        .find(|e| e.title.contains("run_command"))
+        .map(|e| mem.knowledge().get(&e.name).unwrap().unwrap().body)
+        .unwrap();
+    assert!(body.contains("**Why:**") && body.contains("**How to apply:**"));
+    // 协议事件外发
+    assert!(events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::MemorySaved { memory_type, .. } if memory_type == "feedback")));
+}
+
+#[test]
+fn w3_distills_memories_on_session_end() {
+    let sink = Arc::new(CollectSink::default());
+    let model = ScriptedModel::new(vec![
+        "好的，我记住了你的偏好。".into(), // run_turn 对话
+        "[{\"title\":\"用户偏好先方案\",\"type\":\"user\",\"body\":\"用户做事前要先出方案再动手。\"}]".into(), // W3 提炼
+    ]);
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let mem = test_memory(tmp.path());
+    let d = deps(model.clone(), tools, sink.clone(), Some(mem.clone()));
+    let mut runner = SessionRunner::new(
+        "s-w3".into(),
+        "/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+    );
+    let _ = runner.run_turn("以后做事先给我方案再动手", &d);
+    runner.end(&d, "");
+
+    let list = mem.knowledge().list();
+    assert!(
+        list.iter().any(|e| e.title == "用户偏好先方案"),
+        "W3 应落盘提炼条目，实际: {list:?}"
+    );
+    assert!(events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::MemorySaved { title, .. } if title == "用户偏好先方案")));
+    // SessionEnded 正常外发（提炼不阻塞收口）
+    assert!(events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::SessionEnded { .. })));
+}
+
+#[test]
+fn w3_distill_swallows_unparseable_output() {
+    let sink = Arc::new(CollectSink::default());
+    let model = ScriptedModel::new(vec![
+        "完成了。".into(),
+        "我无法输出结构化内容。".into(), // 非法提炼输出
+    ]);
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let mem = test_memory(tmp.path());
+    let d = deps(model, tools, sink.clone(), Some(mem.clone()));
+    let mut runner = SessionRunner::new(
+        "s-w3b".into(),
+        "/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+    );
+    let _ = runner.run_turn("帮我看下配置", &d);
+    runner.end(&d, "");
+    // 非法输出 → 静默跳过：无记忆条目、无 MemorySaved，但会话正常收口
+    assert!(mem.knowledge().list().is_empty());
+    assert!(events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::SessionEnded { .. })));
+}
+
+#[test]
+fn w3_skipped_when_no_assistant_reply() {
+    let sink = Arc::new(CollectSink::default());
+    // 剧本只有 W3 位（run_turn 第 0 次就失败场景难构造，直接不跑 turn）
+    let model = ScriptedModel::new(vec!["[]".into()]);
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let mem = test_memory(tmp.path());
+    let d = deps(model.clone(), tools, sink, Some(mem));
+    let mut runner = SessionRunner::new(
+        "s-w3c".into(),
+        "/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+    );
+    runner.end(&d, ""); // 未发生任何对话
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "空会话不应调模型提炼");
+}
+
+#[test]
+fn system_prompt_carries_memory_guidance_and_recall() {
+    let sink = Arc::new(CollectSink::default());
+    let model = ScriptedModel::new(vec!["好的。".into()]);
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let mem = test_memory(tmp.path());
+    // 预置一条既有记忆：召回注入 + "同题不重复"引导可见
+    mem.save_memory(&bbrt_memory::SaveInput {
+        title: "端口 8090 约定".into(),
+        body: "服务端开发口令走 8090。".into(),
+        mtype: bbrt_memory::MemoryType::Project,
+        session: "seed".into(),
+        links: vec![],
+    })
+    .unwrap();
+    let d = deps(model.clone(), tools, sink, Some(mem));
+    let mut runner = SessionRunner::new(
+        "s-sys".into(),
+        "/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+    );
+    let _ = runner.run_turn("8090 端口起服务", &d);
+    let systems = model.seen_system.lock().unwrap().clone();
+    let sys = systems.first().expect("应捕获 system 消息");
+    assert!(sys.contains("memory_save"), "W1 工具引导应在 system 提示中");
+    assert!(sys.contains("长期记忆"));
+    assert!(sys.contains("[记忆]"));
+    assert!(sys.contains("端口 8090 约定"), "记忆索引应注入 system");
+}

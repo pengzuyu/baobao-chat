@@ -6,7 +6,10 @@ use std::fs;
 use std::sync::Arc;
 
 use bbrt_memory::knowledge::store::INDEX_FILE;
-use bbrt_memory::{FixedClock, KnowledgeStore, MemoryError, MemoryType, SaveInput};
+use bbrt_memory::{
+    FixedClock, KnowledgeStore, MemoryError, MemoryType, SaveInput, RECALL_FULL_ENTRIES,
+    RECALL_TOP_K,
+};
 
 /// 固定时钟 + 临时记忆目录的测试脚手架
 fn setup(now: &str, today: &str) -> (KnowledgeStore, Arc<FixedClock>, tempfile::TempDir) {
@@ -264,4 +267,64 @@ fn recall_truncates_over_200_lines_with_marker() {
     assert_eq!(lines.len(), 201, "200 行内容 + 1 行标注");
     assert!(lines[199].starts_with("- [条目 199]"));
     assert!(lines[200].contains("已截断") && lines[200].contains("250"));
+}
+
+// ---------------------------------------------------------------------------
+// recall_for Top-K 精排（D15 §2.3 关键词档）
+// ---------------------------------------------------------------------------
+
+/// 造 n 条记忆：前 n-1 条为"填充-i"，最后一条为目标条目（title/body 含关键词）
+fn seed_many(store: &KnowledgeStore, clock: &FixedClock, n: usize) {
+    for i in 0..n {
+        // 推进时钟：填充条目越早写入 updated_at 越旧（展示序在后）
+        clock.set(
+            &format!("2026-11-06T10:{:02}:{:02}+08:00", i / 60 % 60, i % 60),
+            "2026-11-06",
+        );
+        store.save(&input(&format!("填充条目 {i}"), "普通钩子行")).unwrap();
+    }
+    clock.set("2026-11-06T11:00:00+08:00", "2026-11-06");
+    store
+        .save(&input("端口 8090 约定", "开发服务固定走 8090，勿用 8080。"))
+        .unwrap();
+}
+
+#[test]
+fn recall_for_full_when_entries_below_threshold() {
+    let (store, _clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    store
+        .save(&input("端口 8090 约定", "开发服务固定走 8090。"))
+        .unwrap();
+    // 条目少 → 与全量 recall 完全一致（v0.1 行为保留）
+    assert_eq!(store.recall_for("随便问点啥").unwrap(), store.recall().unwrap());
+}
+
+#[test]
+fn recall_for_ranks_keyword_hit_first() {
+    let (store, clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    seed_many(&store, &clock, RECALL_FULL_ENTRIES); // +目标条目 = 51 条 > 阈值
+    let out = store.recall_for("端口 8090 被占了吗").unwrap();
+    let first_line = out.lines().next().unwrap();
+    assert!(
+        first_line.starts_with("- [端口 8090 约定]"),
+        "命中条目应排首位，实际: {first_line}"
+    );
+    assert!(out.lines().count() <= RECALL_TOP_K + 1, "Top-K + 尾注");
+    assert!(out.contains("按与当前消息的相关度"));
+}
+
+#[test]
+fn recall_for_no_hit_falls_back_to_recent_topk() {
+    let (store, clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    seed_many(&store, &clock, RECALL_FULL_ENTRIES);
+    // 无关 query → 全零分退化为展示序（新→旧）：首条 = 最后写入的目标条目
+    let out = store.recall_for("zzz qqq").unwrap();
+    let first_line = out.lines().next().unwrap();
+    assert!(
+        first_line.starts_with("- [端口 8090 约定]"),
+        "全零分应按新→旧兜底，实际: {first_line}"
+    );
+    // 51 条取前 50：最早写入的"填充条目 0"被截掉（按链接文件名唯一断言）
+    assert!(!out.contains("填充条目-0.md"));
+    assert!(out.contains("填充条目-1.md"));
 }

@@ -22,7 +22,7 @@ pub use journal::{ActivityEvent, DayRead, FileChangeKind, Journal, RETENTION_DAY
 pub use knowledge::{
     detect_memory_hint, ErrorTracker, Heuristic, IndexOutcome, KnowledgeStore, LessonCandidate,
     MemoryEntry, MemoryError, MemorySummary, MemoryType, SaveInput, SaveResult, MAX_BODY_BYTES,
-    MAX_ENTRIES,
+    MAX_ENTRIES, RECALL_FULL_ENTRIES, RECALL_TOP_K,
 };
 
 use std::io;
