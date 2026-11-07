@@ -55,6 +55,7 @@ import (
 	"github.com/baobaowork/server/internal/message/repo"
 	"github.com/baobaowork/server/internal/message/service"
 	"github.com/baobaowork/server/internal/org"
+	orgacl "github.com/baobaowork/server/internal/org/acl"
 	"github.com/baobaowork/server/internal/org/api"
 	"github.com/baobaowork/server/internal/org/repo"
 	"github.com/baobaowork/server/internal/platform/authjwt"
@@ -598,6 +599,32 @@ func main() {
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
+
+	// ── 资源级 ACL（03 §4.4 第三层）：统一授权模型 + 管理 REST ──
+	// dept/role 展开闭包：role 接 admin RoleRepo（user_role 表）；dept 展
+	// 开随 user_dept 查询接线（org 域暂无按用户查部门——未注入=dept 层跳过，登记）
+	var aclRepo orgacl.Repo
+	if pgPool != nil {
+		aclRepo = orgacl.NewPostgres(pgPool)
+	} else {
+		aclRepo = orgacl.NewMemory()
+	}
+	aclSvc := orgacl.New(aclRepo, orgacl.ResolveOptions{
+		RoleIDsOf: func(tenantID, userID int64) []int64 {
+			grants, err := roleStore.ListUserRoles(context.Background(), tenantID, userID)
+			if err != nil {
+				return nil
+			}
+			ids := make([]int64, 0, len(grants))
+			for _, g := range grants {
+				ids = append(ids, g.RoleID)
+			}
+			return ids
+		},
+	})
+	mux.Handle("GET /api/v1/admin/acl", adminOnly(handleACLList(aclSvc)))
+	mux.Handle("POST /api/v1/admin/acl", adminOnly(handleACLGrant(aclSvc)))
+	mux.Handle("DELETE /api/v1/admin/acl/{id}", adminOnly(handleACLRevoke(aclSvc)))
 
 	// ── 机器人域（20 篇阶段一务实版）：Incoming Webhook + 管理 REST ──
 	// bot=特殊 user(type=2 永不登录)；跨域全闭包（D02 §4：不引 org/message/admin 包）
@@ -2796,4 +2823,81 @@ func orgDeptErr(err error) error {
 		return errx.New(errx.CodeBadRequest, "部门下有子部门或成员，不可删除")
 	}
 	return err
+}
+
+// ── 资源级 ACL 管理端（03 §4.4；PAD 授权治理）──
+
+func handleACLList(svc *orgacl.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		items, err := svc.ListGrants(r.Context(), httpx.TenantID(r.Context()), orgacl.EntryFilter{
+			ResourceType: q.Get("resource_type"),
+			ResourceID:   q.Get("resource_id"),
+		})
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, items)
+	}
+}
+
+func handleACLGrant(svc *orgacl.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			ResourceType string     `json:"resource_type"`
+			ResourceID   string     `json:"resource_id"`
+			GrantType    int        `json:"grant_type"`
+			GrantTarget  int64      `json:"grant_target"`
+			Perm         int        `json:"perm"`
+			ExpiresAt    *time.Time `json:"expires_at"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var expires time.Time
+		if req.ExpiresAt != nil {
+			expires = *req.ExpiresAt
+		}
+		e, gerr := svc.Grant(r.Context(), orgacl.Entry{
+			TenantID:     httpx.TenantID(r.Context()),
+			ResourceType: req.ResourceType, ResourceID: req.ResourceID,
+			GrantType: req.GrantType, GrantTarget: req.GrantTarget,
+			Perm: req.Perm, GrantedBy: actor, ExpiresAt: expires,
+		})
+		if gerr != nil {
+			if orgacl.IsInvalid(gerr) {
+				httpx.Fail(w, r, errx.New(errx.CodeBadRequest, gerr.Error()))
+				return
+			}
+			httpx.Fail(w, r, gerr)
+			return
+		}
+		httpx.OK(w, r, e)
+	}
+}
+
+func handleACLRevoke(svc *orgacl.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "id 非法"))
+			return
+		}
+		if rerr := svc.Revoke(r.Context(), httpx.TenantID(r.Context()), id); rerr != nil {
+			if rerr == orgacl.ErrNotFound {
+				httpx.Fail(w, r, errx.New(errx.CodeNotFound, "授权不存在"))
+				return
+			}
+			httpx.Fail(w, r, rerr)
+			return
+		}
+		httpx.OK(w, r, map[string]bool{"ok": true})
+	}
 }

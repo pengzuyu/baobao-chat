@@ -64,6 +64,9 @@ var adminNoticeSQL string
 //go:embed 0016_mail.sql
 var mailSQL string
 
+//go:embed 0017_resource_acl.sql
+var resourceAclSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -98,4 +101,6 @@ var List = []Migration{
 	{Version: 15, Name: "0015_admin_notice", Probe: "", SQL: adminNoticeSQL},
 	// 0016 同理留空：mail_* 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（22 篇阶段一务实版）
 	{Version: 16, Name: "0016_mail", Probe: "", SQL: mailSQL},
+	// 0017 同理留空：resource_acl 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（03 §4.4 资源级 ACL）
+	{Version: 17, Name: "0017_resource_acl", Probe: "", SQL: resourceAclSQL},
 }
