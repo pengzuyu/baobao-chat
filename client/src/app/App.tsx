@@ -19,6 +19,7 @@ import { ShareResolvePage } from '../features/im/pages/ShareResolvePage';
 import { KbPage } from '../features/kb/pages/KbPage';
 import { MailPage } from '../features/mail/pages/MailPage';
 import { MeetingPage } from '../features/meeting/pages/MeetingPage';
+import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
 import { useImStore } from '../features/im/store/im';
 import { useRtcStore } from '../features/rtc/store/rtcStore';
 import { RtcOverlay } from '../features/rtc/components/RtcOverlay';
@@ -158,6 +159,8 @@ export function App() {
         <Route path="/mail" element={<MailPage />} />
         {/* 会议（21 篇 PMT-01~03：周日历/预约/详情；会中侧栏与纪要随 ASR） */}
         <Route path="/meetings" element={<MeetingPage />} />
+        {/* 专家库（D14 PAG-13~15：公司/个人库/编辑器；协作图视图随 agent_* 接线） */}
+        <Route path="/experts" element={<ExpertLibraryPage />} />
         {/* Agent 工作台域（D08）：PAG-01/02/03 工作台 + PAG-11 记忆 + 日报 */}
         <Route path="/agent" element={<AgentWorkbenchPage />} />
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />

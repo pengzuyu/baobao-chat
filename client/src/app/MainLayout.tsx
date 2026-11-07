@@ -8,7 +8,7 @@
 import { useMemo } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Dropdown, type MenuProps } from 'antd';
-import { Bot, BrainCircuit, CalendarDays, FileText, Gauge, Mail, MessageCircle, Phone } from 'lucide-react';
+import { Bot, BrainCircuit, CalendarDays, FileText, Gauge, Mail, MessageCircle, Phone, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
@@ -31,6 +31,7 @@ const NAV_ITEMS: NavItem[] = [
     { to: '/mail', icon: Mail, label: '邮件' },
     { to: '/meetings', icon: CalendarDays, label: '会议' },
   { to: '/agent', icon: Bot, label: 'Agent' },
+    { to: '/experts', icon: Sparkles, label: '专家' },
 ];
 
 const THEME_LABEL: Record<ThemeMode, string> = { light: '浅色', dark: '深色', system: '跟随系统' };
