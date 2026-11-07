@@ -26,6 +26,14 @@ export const qk = {
     /** 通知未读数（铃铛红点）['im','notifications','badge']（PIM-09；WS notification.new 触发失效） */
     notificationBadge: ['im', 'notifications', 'badge'] as const,
   },
+  meeting: {
+    /** 我的会议 ['meeting','list',from,to] */
+    list: (from: number, to: number) => ['meeting', 'list', from, to] as const,
+    /** 日历事件 ['meeting','calendar',from,to] */
+    calendar: (from: number, to: number) => ['meeting', 'calendar', from, to] as const,
+    /** 会议详情 ['meeting','detail',id] */
+    detail: (id: string) => ['meeting', 'detail', id] as const,
+  },
   mail: {
     /** 邮箱摘要（懒开户触发点） ['mail','summary'] */
     summary: ['mail', 'summary'] as const,
@@ -103,4 +111,6 @@ export const wsInvalidationPrefixes: Record<string, QueryKeyRO[]> = {
   'presence.changed': [], // 在线点走 store
   'notification.new': [['im', 'notifications']], // 通知中心（PIM-09）：列表 + 铃铛红点失效重拉
   'mail.new': [['mail', 'summary'], ['mail', 'messages'], ['mail', 'shared'], ['mail', 'sharedMessages']], // 邮箱角标/列表/共享邮箱（MAI，22 §6.2）
+  'meeting.invited': [['meeting']], 'meeting.updated': [['meeting']], 'meeting.canceled': [['meeting']],
+  'meeting.rsvp': [['meeting']], 'meeting.ended': [['meeting']], // 会议事件全量前缀失效（21 §6.2）
 };

@@ -7886,3 +7886,139 @@ body {
   font-size: 12px;
 }
 .mail-settings__pwd-empty { justify-content: center; color: var(--bbw-text-4, #c9cdd4); }
+
+/* ════ 会议域 PMT-01~03（mtg- 前缀；21 篇 §3.2 周视图） ════ */
+
+.mtg-page { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bbw-bg, #fff); }
+.mtg-page__bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px; border-bottom: 1px solid var(--bbw-line, #e5e6eb);
+}
+.mtg-page__nav { display: flex; align-items: center; gap: 6px; }
+.mtg-page__nav button {
+  border: 1px solid var(--bbw-line, #e5e6eb); background: none; border-radius: 6px;
+  padding: 4px 8px; cursor: pointer; color: var(--bbw-text-2, #4e5969); display: flex; align-items: center;
+}
+.mtg-page__nav button:hover { background: var(--bbw-fill-1, #f2f3f5); }
+.mtg-page__week { font-size: 14px; font-weight: 600; color: var(--bbw-text-1, #1d2129); min-width: 130px; text-align: center; }
+.mtg-page__today { font-size: 12px; }
+.mtg-page__actions { display: flex; gap: 8px; }
+
+.mtg-grid { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.mtg-grid__head {
+  display: grid; grid-template-columns: 52px repeat(7, 1fr); position: sticky; top: 0;
+  background: var(--bbw-bg, #fff); border-bottom: 1px solid var(--bbw-line, #e5e6eb); z-index: 2;
+}
+.mtg-grid__gutter { }
+.mtg-grid__day {
+  text-align: center; font-size: 12px; color: var(--bbw-text-3, #86909c); padding: 6px 0;
+}
+.mtg-grid__day.is-today { color: var(--bbw-primary, #165dff); font-weight: 600; }
+.mtg-grid__body {
+  display: grid; grid-template-columns: 52px repeat(7, 1fr); flex: 1; min-height: 1200px;
+}
+.mtg-grid__hours { display: flex; flex-direction: column; border-right: 1px solid var(--bbw-line-weak, #f2f3f5); }
+.mtg-grid__hours span {
+  flex: 1; font-size: 10px; color: var(--bbw-text-4, #c9cdd4); padding: 2px 6px 0 0; text-align: right;
+  border-bottom: 1px solid var(--bbw-line-weak, #f2f3f5);
+}
+.mtg-grid__col { position: relative; border-right: 1px solid var(--bbw-line-weak, #f2f3f5); }
+.mtg-block {
+  position: absolute; left: 3px; right: 3px; border: 0; border-radius: 4px; overflow: hidden;
+  background: var(--bbw-primary-light, #e8f3ff); color: var(--bbw-primary, #165dff);
+  font-size: 11px; cursor: pointer; padding: 2px 5px; text-align: left; line-height: 1.3;
+}
+.mtg-block b { font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mtg-block--s2 { background: #e8ffea; color: #00b42a; }
+.mtg-block--s3 { background: var(--bbw-fill-2, #e5e6eb); color: var(--bbw-text-4, #c9cdd4); }
+.mtg-block--s4 { background: var(--bbw-fill-1, #f7f8fa); color: var(--bbw-text-4, #c9cdd4); text-decoration: line-through; }
+
+/* PMT-02 预约弹窗 */
+.mtg-book__mask { position: fixed; inset: 0; background: rgb(0 0 0 / 32%); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.mtg-book { width: min(560px, 92vw); background: var(--bbw-bg, #fff); border-radius: 10px; box-shadow: 0 12px 40px rgb(0 0 0 / 18%); overflow: hidden; }
+.mtg-book__head {
+  display: flex; align-items: center; justify-content: space-between; padding: 12px 16px;
+  border-bottom: 1px solid var(--bbw-line, #e5e6eb); font-weight: 600;
+}
+.mtg-book__head span { display: flex; align-items: center; gap: 6px; }
+.mtg-book__close { border: 0; background: none; cursor: pointer; color: var(--bbw-text-3, #86909c); }
+.mtg-book__body { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; max-height: 66vh; overflow-y: auto; }
+.mtg-book__title {
+  border: 1px solid var(--bbw-line, #e5e6eb); border-radius: 6px; padding: 8px 10px; font-size: 14px; outline: none;
+}
+.mtg-book__title:focus { border-color: var(--bbw-primary, #165dff); }
+.mtg-book__row { display: flex; align-items: center; gap: 8px; color: var(--bbw-text-3, #86909c); }
+.mtg-book__row input {
+  flex: 1; border: 1px solid var(--bbw-line, #e5e6eb); border-radius: 6px; padding: 7px 10px; font-size: 13px; outline: none;
+}
+.mtg-book__times { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mtg-book__times label {
+  display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--bbw-text-3, #86909c); flex: 1;
+}
+.mtg-book__times input {
+  border: 1px solid var(--bbw-line, #e5e6eb); border-radius: 6px; padding: 5px 8px; font-size: 12px; outline: none; flex: 1;
+}
+.mtg-book__busy-check {
+  border: 1px solid var(--bbw-primary, #165dff); color: var(--bbw-primary, #165dff); background: none;
+  border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+}
+.mtg-book__duration { font-size: 11px; color: var(--bbw-text-4, #c9cdd4); margin: 0; }
+.mtg-book__conflict { font-size: 12px; color: var(--bbw-danger, #f53f3f); margin: 0; }
+.mtg-book__free { font-size: 12px; color: #00b42a; margin: 0; }
+.mtg-book textarea {
+  border: 1px solid var(--bbw-line, #e5e6eb); border-radius: 6px; padding: 8px 10px; font-size: 13px;
+  font-family: inherit; outline: none; resize: vertical;
+}
+.mtg-book__recur-toggle {
+  display: flex; align-items: center; gap: 6px; align-self: flex-start;
+  border: 0; background: none; color: var(--bbw-text-2, #4e5969); font-size: 12px; cursor: pointer; padding: 2px 0;
+}
+.mtg-book__recur { border: 1px dashed var(--bbw-line, #e5e6eb); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.mtg-book__recur label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--bbw-text-3, #86909c); }
+.mtg-book__recur select { border: 1px solid var(--bbw-line, #e5e6eb); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+.mtg-book__weekdays { display: flex; gap: 4px; }
+.mtg-book__weekdays button {
+  width: 28px; height: 26px; border: 1px solid var(--bbw-line, #e5e6eb); background: none; border-radius: 6px;
+  font-size: 12px; color: var(--bbw-text-3, #86909c); cursor: pointer;
+}
+.mtg-book__weekdays button.is-on { border-color: var(--bbw-primary, #165dff); color: var(--bbw-primary, #165dff); background: var(--bbw-primary-light, #e8f3ff); }
+.mtg-book__count input { width: 60px; border: 1px solid var(--bbw-line, #e5e6eb); border-radius: 6px; padding: 4px 6px; font-size: 12px; }
+.mtg-book__foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--bbw-line, #e5e6eb); }
+
+/* PMT-03 详情抽屉 */
+.mtg-detail__mask { position: fixed; inset: 0; background: rgb(0 0 0 / 28%); z-index: 1000; }
+.mtg-detail {
+  position: absolute; right: 0; top: 0; bottom: 0; width: min(420px, 92vw);
+  background: var(--bbw-bg, #fff); box-shadow: -8px 0 32px rgb(0 0 0 / 12%);
+  display: flex; flex-direction: column;
+}
+.mtg-detail__head {
+  display: flex; align-items: flex-start; justify-content: space-between; padding: 14px 18px;
+  border-bottom: 1px solid var(--bbw-line, #e5e6eb);
+}
+.mtg-detail__head h3 { margin: 0 0 4px; font-size: 16px; }
+.mtg-detail__head small { color: var(--bbw-text-3, #86909c); font-size: 12px; }
+.mtg-detail__close { border: 0; background: none; cursor: pointer; color: var(--bbw-text-3, #86909c); }
+.mtg-detail__body { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.mtg-detail__time { font-size: 13px; color: var(--bbw-text-2, #4e5969); }
+.mtg-detail__agenda {
+  font-family: inherit; font-size: 13px; white-space: pre-wrap; background: var(--bbw-fill-1, #f7f8fa);
+  border-radius: 8px; padding: 10px; margin: 0; color: var(--bbw-text-2, #4e5969);
+}
+.mtg-detail__body h4 { margin: 0; font-size: 13px; }
+.mtg-detail__parts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.mtg-detail__parts li {
+  display: flex; justify-content: space-between; font-size: 13px;
+  background: var(--bbw-fill-1, #f7f8fa); border-radius: 6px; padding: 7px 10px;
+}
+.mtg-detail__parts em { font-style: normal; font-size: 11px; }
+.rsvp-1 { color: var(--bbw-text-4, #c9cdd4); }
+.rsvp-2 { color: #00b42a; }
+.rsvp-3 { color: #ff7d00; }
+.rsvp-4 { color: var(--bbw-danger, #f53f3f); }
+.mtg-detail__rsvp { display: flex; gap: 8px; }
+.mtg-detail__started { font-size: 12px; color: var(--bbw-primary, #165dff); background: var(--bbw-primary-light, #e8f3ff); border-radius: 6px; padding: 8px 10px; }
+.mtg-detail__organizer { border-top: 1px solid var(--bbw-line, #e5e6eb); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.mtg-detail__org-actions { display: flex; gap: 8px; }
+.mtg-detail__resched label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--bbw-text-3, #86909c); }
+.mtg-detail__resched input { border: 1px solid var(--bbw-line, #e5e6eb); border-radius: 6px; padding: 5px 8px; font-size: 12px; }

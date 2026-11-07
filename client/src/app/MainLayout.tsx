@@ -8,7 +8,7 @@
 import { useMemo } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Dropdown, type MenuProps } from 'antd';
-import { Bot, BrainCircuit, FileText, Gauge, Mail, MessageCircle, Phone } from 'lucide-react';
+import { Bot, BrainCircuit, CalendarDays, FileText, Gauge, Mail, MessageCircle, Phone } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
@@ -29,6 +29,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/doc', icon: FileText, label: '文档' },
   { to: '/kb', icon: BrainCircuit, label: '知识库' },
     { to: '/mail', icon: Mail, label: '邮件' },
+    { to: '/meetings', icon: CalendarDays, label: '会议' },
   { to: '/agent', icon: Bot, label: 'Agent' },
 ];
 
