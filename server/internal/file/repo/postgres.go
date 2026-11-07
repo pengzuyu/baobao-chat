@@ -199,3 +199,96 @@ func (p *Postgres) SumStorageBytes(ctx context.Context, tenantID int64) (int64, 
 		tenantID).Scan(&n)
 	return n, err
 }
+
+// ── ShareRepo PG 实现（迁移 0013 file_share） ──
+
+// PostgresShares 分享外链 PG 仓储（advisory lock 9120）
+type PostgresShares struct{ pool *pgxpool.Pool }
+
+var _ ShareRepo = (*PostgresShares)(nil)
+
+const lockKeyFileShare int64 = 9120
+
+// NewPostgresShares 构造
+func NewPostgresShares(pool *pgxpool.Pool) ShareRepo { return &PostgresShares{pool: pool} }
+
+const shareCols = `id, tenant_id, file_id, creator_id, code, expire_mode,
+	COALESCE(expires_at, to_timestamp(0)), COALESCE(max_times,0), used_times,
+	COALESCE(password_hash,''), status, created_at`
+
+func scanShare(row pgx.Row) (*Share, error) {
+	var s Share
+	if err := row.Scan(&s.ID, &s.TenantID, &s.FileID, &s.CreatorID, &s.Code, &s.ExpireMode,
+		&s.ExpiresAt, &s.MaxTimes, &s.UsedTimes, &s.PasswordHash, &s.Status, &s.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (p *PostgresShares) InsertShare(ctx context.Context, s Share) (Share, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Share{}, err
+	}
+	defer tx.Rollback(ctx)
+	if s.ID == 0 {
+		if s.ID, err = bbwpg.AllocID(ctx, tx, lockKeyFileShare, "file_share"); err != nil {
+			return Share{}, err
+		}
+	}
+	if s.CreatedAt.IsZero() {
+		s.CreatedAt = time.Now()
+	}
+	var expiresAt *time.Time // 零值 → NULL（expire_mode=1/3 无时限）
+	if !s.ExpiresAt.IsZero() {
+		expiresAt = &s.ExpiresAt
+	}
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO file_share (id, tenant_id, file_id, creator_id, code, expire_mode,
+			expires_at, max_times, used_times, password_hash, status, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,0),$9,$10,$11,$12)
+		RETURNING created_at`,
+		s.ID, s.TenantID, s.FileID, s.CreatorID, s.Code, s.ExpireMode,
+		expiresAt, s.MaxTimes, s.UsedTimes, s.PasswordHash, s.Status, s.CreatedAt).
+		Scan(&s.CreatedAt); err != nil {
+		return Share{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Share{}, err
+	}
+	return s, nil
+}
+
+func (p *PostgresShares) GetShareByCode(ctx context.Context, tenantID int64, code string) (*Share, error) {
+	s, err := scanShare(p.pool.QueryRow(ctx,
+		`SELECT `+shareCols+` FROM file_share WHERE tenant_id=$1 AND code=$2`, tenantID, code))
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	return s, nil
+}
+
+func (p *PostgresShares) IncShareUsed(ctx context.Context, id int64) error {
+	tag, err := p.pool.Exec(ctx,
+		`UPDATE file_share SET used_times=used_times+1 WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (p *PostgresShares) DisableShare(ctx context.Context, tenantID, id, creatorID int64) error {
+	tag, err := p.pool.Exec(ctx,
+		`UPDATE file_share SET status=$1, updated_at=now()
+		 WHERE tenant_id=$2 AND id=$3 AND creator_id=$4`, ShareDisabled, tenantID, id, creatorID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

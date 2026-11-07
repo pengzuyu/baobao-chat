@@ -76,3 +76,46 @@ type FileStatsReader interface {
 	// SumStorageBytes 文件存储量（未软删行 size 求和）
 	SumStorageBytes(ctx context.Context, tenantID int64) (int64, error)
 }
+
+// ── 分享外链（07 §4.4：三要素=有效期/次数/密码；访问仍需登录） ──
+
+// expire_mode 取值（1 永不 2 时限 3 次数）
+const (
+	ShareExpireNever = 1
+	ShareExpireAt    = 2
+	ShareExpireTimes = 3
+)
+
+// share status（1 启用 2 取消）
+const (
+	ShareActive   = 1
+	ShareDisabled = 2
+)
+
+// Share 分享链接行（迁移 0013 file_share）
+type Share struct {
+	ID           int64
+	TenantID     int64
+	FileID       int64
+	CreatorID    int64
+	Code         string // UK，链接组成 /s/{code}（随机不可枚举）
+	ExpireMode   int    // 1 永不 2 时限 3 次数
+	ExpiresAt    time.Time
+	MaxTimes     int
+	UsedTimes    int
+	PasswordHash string // 可选；空=无密码（Hash/Verify 闭包注入，main 接 auth 域口径）
+	Status       int
+	CreatedAt    time.Time
+}
+
+// ShareRepo 分享外链仓储（独立接口：share 生命周期与文件行解耦）
+type ShareRepo interface {
+	// InsertShare 新增（code 冲突由随机性规避，UK 兜底）
+	InsertShare(ctx context.Context, s Share) (Share, error)
+	// GetShareByCode 按 code 查（含已取消行；状态判定在 service）
+	GetShareByCode(ctx context.Context, tenantID int64, code string) (*Share, error)
+	// IncShareUsed 命中计数 +1（解析成功路径）
+	IncShareUsed(ctx context.Context, id int64) error
+	// DisableShare 取消分享（creator 校验在 service；行不存在 ErrNotFound）
+	DisableShare(ctx context.Context, tenantID, id, creatorID int64) error
+}

@@ -107,23 +107,27 @@ func main() {
 	orgMod := org.NewModule(orgRepo)
 	authMod := auth.NewModule(orgMod.API(), signer, cfg, tokenRepo, deviceRepo, attemptRepo)
 
-	// 文件域（D06 阶段一务实版）：本地磁盘存储 + 短期一次性票据下载；
+	// 文件域（D06 阶段一+阶段二 server 侧）：本地磁盘存储 + 一次性票据下载 +
+	// 分片上传会话（check 秒传/uploads/PATCH 分片/complete）+ 分享外链；
 	// 会话成员判定经闭包查 message 仓（跨模块不引 message 包，D02 §4 依赖规则）
 	fileStore := filestore.NewLocal(envOr("BBW_DATA_DIR", "./data"))
 	var fileRepo filerepo.Repo
+	var fileShares filerepo.ShareRepo
 	if pgPool != nil {
 		fileRepo = filerepo.NewPostgres(pgPool)
+		fileShares = filerepo.NewPostgresShares(pgPool)
 	} else {
 		fileRepo = filerepo.NewMemory()
+		fileShares = filerepo.NewMemoryShares()
 	}
 	fileMod := file.NewModule(fileservice.Options{
-		MaxUploadBytes: 20 << 20, // 单文件 20MB（v0.1 无分片：客户端单请求 multipart 直传，登记）
+		MaxUploadBytes: 20 << 20, // 单文件 20MB（multipart 直传与 complete 合并共用上限）
 		TicketTTL:      120 * time.Second,
 		IsConvMember: func(ctx context.Context, userID, convID int64) bool {
 			m, err := msgRepo.MemberOf(ctx, convID, userID)
 			return err == nil && m != nil && m.Status == 1
 		},
-	}, fileRepo, fileStore)
+	}, fileRepo, fileShares, fileStore)
 	fileSvc := fileMod.API()
 
 	// 管理域仓储先行（D10 阶段一务实版）：敏感词库热更闭包需在 message 装配前就绪
@@ -245,12 +249,22 @@ func main() {
 	mux.Handle("POST /api/v1/notifications/read", authed(handleNotificationsRead(msgMod.API())))
 	mux.Handle("GET /api/v1/notifications/unread_count", authed(handleUnreadNotificationCount(msgMod.API())))
 
-	// 文件 REST（D06 阶段一务实版：multipart 直传/一次性票据下载/我的文件/软删；
-	// check/uploads/complete 分片会话与 shares 外链阶段二，登记）
+	// 文件 REST（D06 阶段一+阶段二 server 侧：multipart 直传/一次性票据下载/
+	// 我的文件/软删 + check 秒传/分片会话/complete + 分享外链）
 	mux.Handle("POST /api/v1/files/upload", authed(handleFileUpload(fileSvc)))
 	mux.Handle("GET /api/v1/files/me", authed(handleMyFiles(fileSvc)))
 	mux.Handle("GET /api/v1/files/{id}/ticket", authed(handleFileTicket(fileSvc)))
 	mux.Handle("DELETE /api/v1/files/{id}", authed(handleFileDelete(fileSvc)))
+	// 分片上传会话（07 §4.1 本地盘形态：PATCH 直传，无预签名；对象存储化阶段三换）
+	mux.Handle("POST /api/v1/files/check", authed(handleFileCheck(fileSvc)))
+	mux.Handle("POST /api/v1/files/uploads", authed(handleFileUploadInit(fileSvc)))
+	mux.Handle("GET /api/v1/files/uploads/{id}", authed(handleFileUploadStatus(fileSvc)))
+	mux.Handle("PATCH /api/v1/files/uploads/{id}/{no}", authed(handleFileUploadPart(fileSvc)))
+	mux.Handle("POST /api/v1/files/uploads/{id}/complete", authed(handleFileUploadComplete(fileSvc)))
+	// 分享外链（07 §4.4：访问仍需登录——authed；dl 票据即下载凭证）
+	mux.Handle("POST /api/v1/files/{id}/share", authed(handleFileShare(fileSvc)))
+	mux.Handle("GET /api/v1/files/s/{code}", authed(handleFileShareResolve(fileSvc)))
+	mux.Handle("DELETE /api/v1/files/s/{code}", authed(handleFileShareRevoke(fileSvc)))
 	// dl 不挂鉴权中间件——票据即凭证（120s 一次性；4014 失效/复用）
 	mux.HandleFunc("GET /api/v1/files/dl", handleFileDownload(fileSvc))
 
@@ -2057,5 +2071,168 @@ func handleDocShare(svc docapi.DocService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, resp)
+	}
+}
+
+// ── 文件 REST 壳（D06 阶段二：分片会话 + 分享外链） ──
+
+// handleFileCheck 秒传预检（策略再校验；命中直接可发消息）
+func handleFileCheck(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req fileapi.CheckReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.Check(r.Context(), httpx.TenantID(r.Context()), uid, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleFileUploadInit 建分片会话（秒传命中直接回 file_id）
+func handleFileUploadInit(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req fileapi.UploadInitReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.InitUpload(r.Context(), httpx.TenantID(r.Context()), uid, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleFileUploadStatus 断点续传位图
+func handleFileUploadStatus(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.UploadStatus(r.Context(), httpx.TenantID(r.Context()), uid, r.PathValue("id"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleFileUploadPart 分片直传（body 原始字节；part_size 上限由 service 判 4009）
+func handleFileUploadPart(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		no, err := strconv.Atoi(r.PathValue("no"))
+		if err != nil || no < 1 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "分片号非法"))
+			return
+		}
+		if err := svc.UploadPart(r.Context(), httpx.TenantID(r.Context()), uid,
+			r.PathValue("id"), no, r.Body); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, fileapi.UploadPartResult{Received: true})
+	}
+}
+
+// handleFileUploadComplete 合并+校验+落位（幂等：重复调用回放同结果）
+func handleFileUploadComplete(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.CompleteUpload(r.Context(), httpx.TenantID(r.Context()), uid, r.PathValue("id"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleFileShare 创建分享（owner only；code 一次性返回）
+func handleFileShare(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		fileID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req fileapi.ShareReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.Share(r.Context(), httpx.TenantID(r.Context()), uid, fileID, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleFileShareResolve 外链解析（登录态；密码经 ?password=；命中计数+发票据）
+func handleFileShareResolve(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.ResolveShare(r.Context(), httpx.TenantID(r.Context()), uid,
+			r.PathValue("code"), r.URL.Query().Get("password"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleFileShareRevoke 取消分享（creator only；链接即刻失效）
+func handleFileShareRevoke(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.RevokeShare(r.Context(), httpx.TenantID(r.Context()), uid, r.PathValue("code")); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
 	}
 }

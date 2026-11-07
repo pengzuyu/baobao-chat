@@ -54,10 +54,12 @@ var extBlacklist = map[string]bool{"exe": true, "sh": true}
 // Service 实现 fileapi.FileService
 type Service struct {
 	repo    filerepo.Repo
+	shares  filerepo.ShareRepo // 分享外链仓储（nil=分享未装配，阶段一形态）
 	store   filestore.Storage
 	opts    Options
 	mu      sync.Mutex
-	tickets map[string]ticketEntry // 一次性下载票据（内存态；阶段二 Redis TTL）
+	tickets map[string]ticketEntry    // 一次性下载票据（内存态；阶段二 Redis TTL）
+	uploads map[string]*uploadSession // 分片上传会话（内存态；重启由 ResetStaging 回收）
 }
 
 // ticketEntry 票据条目（绑定用户与文件，07 §4.3 ①）
@@ -67,10 +69,15 @@ type ticketEntry struct {
 	expires time.Time
 }
 
-// New 构造
-func New(opts Options, r filerepo.Repo, store filestore.Storage) *Service {
+// New 构造（shares 可为 nil——阶段一装配形态；启动回收 staging 孤儿分片：
+// 会话元数据内存态，重启即与磁盘失配）
+func New(opts Options, r filerepo.Repo, shares filerepo.ShareRepo, store filestore.Storage) *Service {
 	opts.fillDefaults()
-	return &Service{repo: r, store: store, opts: opts, tickets: map[string]ticketEntry{}}
+	_ = store.ResetStaging()
+	return &Service{
+		repo: r, shares: shares, store: store, opts: opts,
+		tickets: map[string]ticketEntry{}, uploads: map[string]*uploadSession{},
+	}
 }
 
 var _ fileapi.FileService = (*Service)(nil)
@@ -151,6 +158,11 @@ func (s *Service) IssueTicket(ctx context.Context, tenantID, userID int64, fileI
 		return nil, errx.New(errx.CodePermACLDenied, "无权访问该文件")
 	}
 
+	return s.issueTicketFor(ctx, f, userID)
+}
+
+// issueTicketFor 票据签发（IssueTicket 与 share 解析通道共用；绑定用户一次性）
+func (s *Service) issueTicketFor(_ context.Context, f *filerepo.File, userID int64) (*fileapi.TicketResult, error) {
 	// 一次性票据：32 字节随机 hex；过期条目顺带清理（无定时器，惰性回收）
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {

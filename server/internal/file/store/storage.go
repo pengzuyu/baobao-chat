@@ -14,6 +14,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 )
 
 // ErrTooLarge 超单文件大小上限（service 映射 4009）
@@ -34,6 +36,18 @@ type Storage interface {
 	Open(ctx context.Context, tenantID int64, sha256 string) (io.ReadCloser, error)
 	// Head 打开内容对象并返回前 n 字节（image.DecodeConfig 宽高解析用）
 	Head(ctx context.Context, tenantID int64, sha256 string, n int) ([]byte, io.ReadCloser, error)
+
+	// ── 分片暂存（07 §4.1 ④⑥⑦ 本地盘形态；对象存储实现走 staging 前缀） ──
+	// SaveStaging 写入/覆盖分片：staging/{uploadID}/{no:05d}（覆盖写支持坏块重传）
+	SaveStaging(ctx context.Context, uploadID string, no int, r io.Reader, maxBytes int64) error
+	// ListStaging 已落盘分片号（断点续传位图；无目录返回空）
+	ListStaging(ctx context.Context, uploadID string) ([]int, error)
+	// OpenStaging 打开指定分片（complete 顺序合并用；只读流）
+	OpenStaging(ctx context.Context, uploadID string, no int) (io.ReadCloser, error)
+	// RemoveStaging 清除整个会话暂存目录（complete 成功/作废后调用）
+	RemoveStaging(ctx context.Context, uploadID string) error
+	// ResetStaging 清空全部暂存（启动期孤儿回收——会话元数据内存态，重启即失配）
+	ResetStaging() error
 }
 
 // Local 本地磁盘实现
@@ -158,4 +172,115 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// ── 分片暂存实现（staging/{uploadID}/{no:05d}；07 §5.5 布局本地盘形态） ──
+
+// stagingDir 会话暂存目录
+func (l *Local) stagingDir(uploadID string) string {
+	return filepath.Join(l.dataDir, "staging", uploadID)
+}
+
+// stagingPath 分片文件路径（05d 定宽保序）
+func (l *Local) stagingPath(uploadID string, no int) string {
+	return filepath.Join(l.stagingDir(uploadID), fmt.Sprintf("%05d", no))
+}
+
+// SaveStaging 写入/覆盖分片（原子性：临时文件写满后 rename——读端只见完整分片）
+func (l *Local) SaveStaging(ctx context.Context, uploadID string, no int, r io.Reader, maxBytes int64) error {
+	dir := l.stagingDir(uploadID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("storage: mkdir staging: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, "part-*")
+	if err != nil {
+		return fmt.Errorf("storage: create staging tmp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	var size int64
+	buf := make([]byte, 64<<10)
+	for {
+		n, rerr := r.Read(buf)
+		if n > 0 {
+			size += int64(n)
+			if size > maxBytes {
+				tmp.Close()
+				os.Remove(tmpPath)
+				return ErrTooLarge
+			}
+			if _, werr := tmp.Write(buf[:n]); werr != nil {
+				tmp.Close()
+				os.Remove(tmpPath)
+				return fmt.Errorf("storage: write staging: %w", werr)
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			tmp.Close()
+			os.Remove(tmpPath)
+			return fmt.Errorf("storage: read staging: %w", rerr)
+		}
+		if ctx.Err() != nil {
+			tmp.Close()
+			os.Remove(tmpPath)
+			return ctx.Err()
+		}
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("storage: close staging: %w", err)
+	}
+	return os.Rename(tmpPath, l.stagingPath(uploadID, no))
+}
+
+// ListStaging 已落盘分片号升序
+func (l *Local) ListStaging(_ context.Context, uploadID string) ([]int, error) {
+	entries, err := os.ReadDir(l.stagingDir(uploadID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := []int{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if no, perr := strconv.Atoi(e.Name()); perr == nil {
+			out = append(out, no)
+		}
+	}
+	sort.Ints(out)
+	return out, nil
+}
+
+// OpenStaging 打开分片只读流
+func (l *Local) OpenStaging(_ context.Context, uploadID string, no int) (io.ReadCloser, error) {
+	f, err := os.Open(l.stagingPath(uploadID, no))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return f, nil
+}
+
+// RemoveStaging 清除会话暂存目录（不存在容忍）
+func (l *Local) RemoveStaging(_ context.Context, uploadID string) error {
+	if err := os.RemoveAll(l.stagingDir(uploadID)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// ResetStaging 清空全部暂存（启动孤儿回收）
+func (l *Local) ResetStaging() error {
+	if err := os.RemoveAll(filepath.Join(l.dataDir, "staging")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

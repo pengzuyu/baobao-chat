@@ -695,7 +695,7 @@ func (s *testServer) withRest(t *testing.T) {
 			m, _ := s.msgRepo.MemberOf(ctx, convID, userID)
 			return m != nil && m.Status == 1
 		},
-	}, fileRepo, fileStore).API()
+	}, fileRepo, filerepo.NewMemoryShares(), fileStore).API()
 
 	mux := s.srv.Config.Handler.(*http.ServeMux)
 	uidOf := func(r *http.Request) int64 { return s.aliceID }

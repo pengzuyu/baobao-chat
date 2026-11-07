@@ -52,6 +52,9 @@ var docSQL string
 //go:embed 0012_bot.sql
 var botSQL string
 
+//go:embed 0013_file_share.sql
+var fileShareSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -78,4 +81,6 @@ var List = []Migration{
 	{Version: 11, Name: "0011_doc", Probe: "", SQL: docSQL},
 	// 0012 同理留空：bot/bot_webhook 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（20 篇阶段一务实版）
 	{Version: 12, Name: "0012_bot", Probe: "", SQL: botSQL},
+	// 0013 同理留空：file_share 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D06 阶段二外链）
+	{Version: 13, Name: "0013_file_share", Probe: "", SQL: fileShareSQL},
 }

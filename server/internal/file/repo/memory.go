@@ -151,3 +151,68 @@ func (m *Memory) SumStorageBytes(_ context.Context, tenantID int64) (int64, erro
 	}
 	return n, nil
 }
+
+// ── ShareRepo 内存实现 ──
+
+type shareStore struct {
+	mu     sync.RWMutex
+	nextID int64
+	shares map[int64]Share
+	byCode map[string]int64
+}
+
+// NewMemoryShares 分享外链内存仓储
+func NewMemoryShares() ShareRepo {
+	return &shareStore{nextID: 200, shares: map[int64]Share{}, byCode: map[string]int64{}}
+}
+
+func (s *shareStore) InsertShare(_ context.Context, sh Share) (Share, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID++
+	sh.ID = s.nextID
+	if sh.CreatedAt.IsZero() {
+		sh.CreatedAt = time.Now()
+	}
+	s.shares[sh.ID] = sh
+	s.byCode[sh.Code] = sh.ID
+	return sh, nil
+}
+
+func (s *shareStore) GetShareByCode(_ context.Context, tenantID int64, code string) (*Share, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.byCode[code]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	sh := s.shares[id]
+	if sh.TenantID != tenantID {
+		return nil, ErrNotFound // 跨租户不暴露存在性
+	}
+	return &sh, nil
+}
+
+func (s *shareStore) IncShareUsed(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sh, ok := s.shares[id]
+	if !ok {
+		return ErrNotFound
+	}
+	sh.UsedTimes++
+	s.shares[id] = sh
+	return nil
+}
+
+func (s *shareStore) DisableShare(_ context.Context, tenantID, id, creatorID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sh, ok := s.shares[id]
+	if !ok || sh.TenantID != tenantID || sh.CreatorID != creatorID {
+		return ErrNotFound
+	}
+	sh.Status = ShareDisabled
+	s.shares[id] = sh
+	return nil
+}

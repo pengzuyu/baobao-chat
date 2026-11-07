@@ -1,8 +1,8 @@
-// Package fileapi 文件域对外接口与 DTO（D06 阶段一务实版）。
-// v0.1 务实口径（相对 docs/07 §6.1 API-FL 全表的裁剪，逐条登记）：
-//   - 不做 check/uploads/complete 分片会话（单请求 multipart 直传 ≤20MB）；
-//   - 下载不做对象存储预签名，走短期一次性票据 ?t=（120s，4014 失效/复用）；
-//   - /files/{id} 元数据、restore、shares、/transfers、/files/convs/{id} 阶段二。
+// Package fileapi 文件域对外接口与 DTO（D06 阶段一+阶段二 server 侧）。
+// v0.2 落地：check 秒传预检 / 分片上传会话（uploads 初始化/PATCH 分片/
+// complete 合并校验）/ 分享外链（share 出 code、/s/{code} 登录态解析）。
+// 仍裁剪登记：对象存储预签名直传（本地盘 PATCH 直传形态）、传输管理器
+// /transfers、restore、/files/{id} 元数据端点。
 package fileapi
 
 import (
@@ -38,6 +38,82 @@ type DownloadTarget struct {
 	Size        int64
 }
 
+// CheckReq POST /files/check（秒传预检；服务端策略再校验——不信任端侧结论）
+type CheckReq struct {
+	SHA256      string `json:"sha256"`
+	Size        int64  `json:"size"`
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	ConvID      int64  `json:"conv_id"`
+}
+
+// CheckResult 秒传判定（命中直接可发消息，跳过上传）
+type CheckResult struct {
+	FileID string `json:"file_id,omitempty"` // 命中才有
+	Dedup  bool   `json:"dedup"`
+}
+
+// UploadInitReq POST /files/uploads（初始化分片会话）
+type UploadInitReq struct {
+	SHA256      string `json:"sha256"` // 声明指纹（complete 整体校验依据，4006）
+	Name        string `json:"name"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type"`
+	ConvID      int64  `json:"conv_id"`
+	PartSize    int64  `json:"part_size"` // 缺省 4MB（07 §1.2；范围 1–8MB）
+}
+
+// UploadInitResult 会话建立响应（秒传命中直接返回 file_id 跳过分片）
+type UploadInitResult struct {
+	UploadID  string `json:"upload_id,omitempty"`
+	PartSize  int64  `json:"part_size,omitempty"`
+	PartTotal int    `json:"part_total,omitempty"`
+	FileID    string `json:"file_id,omitempty"` // 秒传命中（dedup=true）才有
+	Dedup     bool   `json:"dedup"`
+}
+
+// UploadStatus GET /files/uploads/{id}（断点续传：已收分片位图）
+type UploadStatus struct {
+	UploadID string `json:"upload_id"`
+	Received []int  `json:"received"` // 已落盘分片号（客户端跳过续传）
+}
+
+// UploadPartResult PATCH /files/uploads/{id}/{no} 响应
+type UploadPartResult struct {
+	Received bool `json:"received"` // 恒 true（失败走错误码）
+}
+
+// CompleteResult POST /files/uploads/{id}/complete（合并+校验+落位）
+type CompleteResult struct {
+	FileID string `json:"file_id"`
+	Dedup  bool   `json:"dedup,omitempty"` // 合并期间同 sha 已存在 → 复用
+}
+
+// ShareReq POST /files/{id}/share（三要素：有效期/次数/密码）
+type ShareReq struct {
+	ExpireMode int    `json:"expire_mode"` // 1 永不 2 时限 3 次数
+	ExpiresAt  int64  `json:"expires_at"`  // ms；mode=2 必填
+	MaxTimes   int    `json:"max_times"`   // mode=3 必填（1–10000）
+	Password   string `json:"password"`    // 可选；空=无密码
+}
+
+// ShareResult 分享创建响应（code 一次性返回；解析页 URL 由端侧拼）
+type ShareResult struct {
+	ShareID   string `json:"share_id"`
+	Code      string `json:"code"`
+	URL       string `json:"url"`                  // /api/v1/files/s/{code}（登录态访问）
+	ExpiresAt int64  `json:"expires_at,omitempty"` // ms
+}
+
+// ShareView GET /files/s/{code} 解析响应（命中即计数 +1；下载走内嵌票据）
+type ShareView struct {
+	File      FileDTO      `json:"file"`
+	UsedTimes int          `json:"used_times"`
+	MaxTimes  int          `json:"max_times,omitempty"`
+	NeedPwd   bool         `json:"need_pwd,omitempty"` // 密码错时提示（4011 伴随返回）
+	Ticket    TicketResult `json:"ticket"`             // 一次性下载票据（share 通道直发）
+}
+
 // FileDTO GET /files/me 列表项
 type FileDTO struct {
 	ID          string `json:"id"`
@@ -68,4 +144,24 @@ type FileService interface {
 	CheckSendable(ctx context.Context, senderID int64, fileID int64) error
 	// MarkSent 随消息发送后回填 source='message'+conv_id（message 域调用；尽力而为）
 	MarkSent(ctx context.Context, fileID int64, convID int64) error
+
+	// ── 分片上传会话（07 §4.1 ④⑤⑥⑦ 本地盘形态：PATCH 直传，无预签名） ──
+	// Check 秒传预检（策略再校验：大小/黑名单不因预检豁免）
+	Check(ctx context.Context, tenantID, ownerID int64, req CheckReq) (*CheckResult, error)
+	// InitUpload 建会话（7 天有效）；声明 sha 已存在 → 直接秒传建行
+	InitUpload(ctx context.Context, tenantID, ownerID int64, req UploadInitReq) (*UploadInitResult, error)
+	// UploadStatus 断点续传位图（会话过期 4008）
+	UploadStatus(ctx context.Context, tenantID, userID int64, uploadID string) (*UploadStatus, error)
+	// UploadPart 写分片（no 范围校验；超 part_size 4009；覆盖写支持坏块重传）
+	UploadPart(ctx context.Context, tenantID, userID int64, uploadID string, no int, r io.Reader) error
+	// CompleteUpload 合并+整体 sha 校验（不一致 4006 作废）→ 落位去重建行
+	CompleteUpload(ctx context.Context, tenantID, userID int64, uploadID string) (*CompleteResult, error)
+
+	// ── 分享外链（07 §4.4：访问仍需登录；命中校验有效期/次数/密码 4010/4012/4011） ──
+	// Share 创建（owner only；code 一次性返回）
+	Share(ctx context.Context, tenantID, userID int64, fileID int64, req ShareReq) (*ShareResult, error)
+	// ResolveShare 解析（密码可空；命中 used_times+1 并直发下载票据）
+	ResolveShare(ctx context.Context, tenantID, userID int64, code, password string) (*ShareView, error)
+	// RevokeShare 取消分享（creator only；链接即刻失效）
+	RevokeShare(ctx context.Context, tenantID, userID int64, code string) error
 }
