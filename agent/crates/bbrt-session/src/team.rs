@@ -46,13 +46,32 @@ pub struct TeamMember {
     pub expert: Arc<AssembledExpert>,
 }
 
-/// 协作图（v0.1 会诊型：全员并行，join 汇总；流水线/评审环结构预留）
-#[derive(Debug, Clone)]
+/// 协作拓扑（§3.1 三种）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TeamTopology {
+    /// ① 会诊型：并行 fan-out，join 汇总（默认）
+    #[default]
+    Consult,
+    /// ② 流水线：串行，上游结论经黑板流入下游简报
+    Pipeline,
+    /// ③ 评审环：producer⇄reviewer ≤N 轮，revise 带意见返工，超限转人工
+    ReviewLoop,
+}
+
+/// 评审环默认轮次上限（§3.1 ③：N=2 超限转人工）
+pub const REVIEW_MAX_ROUNDS: usize = 2;
+
+/// 协作图（三拓扑；成员数/步数预算按拓扑校验；Default=会诊空图）
+#[derive(Debug, Clone, Default)]
 pub struct TeamGraph {
     /// 共享任务简报（黑板：全员同一份，独立上下文无主历史）
     pub task: String,
-    /// 会诊成员（1..=4）
+    /// 成员（Consult 1..=4 并行 / Pipeline 有序串行 / ReviewLoop 恰 2：
+    /// [0]=producer [1]=reviewer）
     pub members: Vec<TeamMember>,
+    pub topology: TeamTopology,
+    /// ReviewLoop 轮次上限（缺省 2；其他拓扑忽略）
+    pub max_rounds: usize,
 }
 
 /// 图校验错误（编排前置，未产生任何 Activation）
@@ -64,15 +83,32 @@ pub enum TeamError {
     TotalStepsExceeded,
     #[error("成员标签为空或重复：{0}")]
     BadLabels(String),
+    #[error("评审环须恰 2 成员（producer + reviewer）")]
+    ReviewLoopMembers,
 }
 
-/// 校验图（Activation 前置；§3.2 并行度 + §8-5 总步数）
+/// 校验图（Activation 前置；§3.2 并行度 + §8-5 总步数——评审环按
+/// 单轮 Σ×(N+1) 折算预算：producer+reviewer 各跑一轮 + N 次 revise 返工）
 pub fn validate_graph(g: &TeamGraph) -> Result<(), TeamError> {
     if g.members.is_empty() || g.members.len() > TEAM_MAX_MEMBERS {
         return Err(TeamError::MembersOutOfRange);
     }
-    let total: usize = g.members.iter().map(|m| m.expert.max_steps).sum();
-    if total > TEAM_MAX_TOTAL_STEPS {
+    let per_round: usize = g.members.iter().map(|m| m.expert.max_steps).sum();
+    let budget = match g.topology {
+        TeamTopology::ReviewLoop => {
+            if g.members.len() != 2 {
+                return Err(TeamError::ReviewLoopMembers);
+            }
+            let rounds = if g.max_rounds == 0 {
+                REVIEW_MAX_ROUNDS
+            } else {
+                g.max_rounds
+            };
+            per_round.saturating_mul(rounds + 1)
+        }
+        _ => per_round,
+    };
+    if budget > TEAM_MAX_TOTAL_STEPS {
         return Err(TeamError::TotalStepsExceeded);
     }
     let mut seen = std::collections::HashSet::new();
@@ -89,6 +125,8 @@ pub fn validate_graph(g: &TeamGraph) -> Result<(), TeamError> {
 pub struct NodeResult {
     pub label: String,
     pub result: ExpertResult,
+    /// 评审环轮次（1 起；会诊/流水线恒 1）
+    pub round: usize,
 }
 
 /// TeamRun 汇总（全部节点终态后产出；摘要回填主上下文，PAG-17 卡片数据源）
@@ -100,6 +138,10 @@ pub struct TeamResult {
     pub summary: String,
     /// 失败节点标签（补派/降级决策位在编排上游）
     pub failed: Vec<String>,
+    /// ReviewLoop 实际轮次（会诊/流水线恒 1）
+    pub rounds: usize,
+    /// ReviewLoop 超限转人工（§3.1 ③ N=2 超限；编排上游据此介入）
+    pub escalated: bool,
 }
 
 /// TeamRun 序号（run_id 唯一化；WAL 审计关联）
@@ -127,12 +169,62 @@ pub fn run_team(
         session_id,
         "team.start",
         &format!(
-            "{{\"run_id\":\"{run_id}\",\"members\":{},\"task\":\"{}\"}}",
+            "{{\"run_id\":\"{run_id}\",\"topology\":\"{}\",\"members\":{},\"task\":\"{}\"}}",
+            topology_name(graph.topology),
             serde_json::to_string(&labels).unwrap_or_else(|_| "[]".into()),
             truncate_chars(&graph.task, 80)
         ),
     );
 
+    let (nodes, rounds, escalated) = match graph.topology {
+        TeamTopology::Pipeline => (run_pipeline(ctx, session_id, graph, sink, wal), 1, false),
+        TeamTopology::ReviewLoop => run_review_loop(ctx, session_id, graph, sink, wal),
+        TeamTopology::Consult => (run_consult(ctx, session_id, graph, sink, wal), 1, false),
+    };
+
+    let failed: Vec<String> = nodes
+        .iter()
+        .filter(|n| !n.result.ok)
+        .map(|n| n.label.clone())
+        .collect();
+    let ok_count = nodes.len() - failed.len();
+    wal.append(
+        session_id,
+        "team.joined",
+        &format!(
+            "{{\"run_id\":\"{run_id}\",\"total\":{},\"ok\":{ok_count},\"failed\":{},\"rounds\":{rounds},\"escalated\":{escalated}}}",
+            nodes.len(),
+            serde_json::to_string(&failed).unwrap_or_else(|_| "[]".into())
+        ),
+    );
+
+    Ok(TeamResult {
+        summary: team_summary(&nodes),
+        nodes,
+        failed,
+        run_id,
+        rounds,
+        escalated,
+    })
+}
+
+/// 拓扑 WAL 标识
+fn topology_name(t: TeamTopology) -> &'static str {
+    match t {
+        TeamTopology::Consult => "consult",
+        TeamTopology::Pipeline => "pipeline",
+        TeamTopology::ReviewLoop => "review_loop",
+    }
+}
+
+/// 会诊型：并行 Activation（原 run_team 主体；panic 兜底按索引挂标签）
+fn run_consult(
+    ctx: &ExpertCtx<'_>,
+    session_id: &str,
+    graph: &TeamGraph,
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
+) -> Vec<NodeResult> {
     // 并行 Activation（ChatClient: Send+Sync；共享简报=黑板中转，节点间零直连；
     // panic 兜底按 handle/member 同序索引取回标签，同 fanout join 口径）
     let nodes: Vec<NodeResult> = std::thread::scope(|s| {
@@ -156,7 +248,11 @@ pub fn run_team(
                         sink,
                         wal,
                     );
-                    NodeResult { label, result }
+                    NodeResult {
+                        label,
+                        result,
+                        round: 1,
+                    }
                 })
             })
             .collect();
@@ -166,6 +262,7 @@ pub fn run_team(
             .map(|(i, h)| match h.join() {
                 Ok(node) => node,
                 Err(_) => NodeResult {
+                    round: 1,
                     label: graph.members[i].label.clone(),
                     result: ExpertResult {
                         activation_id: String::new(),
@@ -177,29 +274,7 @@ pub fn run_team(
             })
             .collect()
     });
-
-    let failed: Vec<String> = nodes
-        .iter()
-        .filter(|n| !n.result.ok)
-        .map(|n| n.label.clone())
-        .collect();
-    let ok_count = nodes.len() - failed.len();
-    wal.append(
-        session_id,
-        "team.joined",
-        &format!(
-            "{{\"run_id\":\"{run_id}\",\"total\":{},\"ok\":{ok_count},\"failed\":{}}}",
-            nodes.len(),
-            serde_json::to_string(&failed).unwrap_or_else(|_| "[]".into())
-        ),
-    );
-
-    Ok(TeamResult {
-        summary: team_summary(&nodes),
-        nodes,
-        failed,
-        run_id,
-    })
+    nodes
 }
 
 /// 节点任务简报（黑板：共享任务 + 角色位提示；独立上下文无主历史）
@@ -208,6 +283,156 @@ fn brief_for(task: &str, label: &str) -> String {
         "【协作任务】{task}\n\n你的角色位：{label}。仅就本角色视角给出结构化结论，\
         其余成员并行工作，不可见彼此输出。"
     )
+}
+
+/// 流水线：有序串行——上游结论经黑板流入下游简报（§3.1 ②）；上游
+/// fail 不阻断：下游简报带失败标注继续（降级语义同 §3.2"失败不阻塞"）
+fn run_pipeline(
+    ctx: &ExpertCtx<'_>,
+    session_id: &str,
+    graph: &TeamGraph,
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
+) -> Vec<NodeResult> {
+    let mut nodes: Vec<NodeResult> = vec![];
+    let mut board = String::new(); // 黑板：上游结论链
+    for (i, m) in graph.members.iter().enumerate() {
+        let brief = if i == 0 {
+            brief_for(&graph.task, &m.label)
+        } else {
+            format!(
+                "【协作任务】{}\n\n你的角色位：{}（流水线第 {} 段）。上游结论（含失败标注，据此继续）：\n{}",
+                graph.task, m.label, i + 1, board
+            )
+        };
+        let result = run_expert(
+            ExpertCtx {
+                model: ctx.model,
+                tools: ctx.tools,
+                mode: ctx.mode,
+            },
+            session_id,
+            &m.expert,
+            &brief,
+            sink,
+            wal,
+        );
+        board.push_str(&format!(
+            "- [{}] {}：{}\n",
+            if result.ok { "ok" } else { "fail" },
+            m.label,
+            truncate_chars(&result.summary, 300)
+        ));
+        nodes.push(NodeResult {
+            label: m.label.clone(),
+            result,
+            round: 1,
+        });
+    }
+    nodes
+}
+
+/// 评审环：producer 产出 → reviewer 评审（VERDICT 首行约定）→ revise 带
+/// 意见返工 ≤N 轮，超限转人工（escalated；§3.1 ③）。verdict 解析失败按
+/// revise 保守处理（评审产出不明=不放行）。
+fn run_review_loop(
+    ctx: &ExpertCtx<'_>,
+    session_id: &str,
+    graph: &TeamGraph,
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
+) -> (Vec<NodeResult>, usize, bool) {
+    let producer = &graph.members[0];
+    let reviewer = &graph.members[1];
+    let max_rounds = if graph.max_rounds == 0 {
+        REVIEW_MAX_ROUNDS
+    } else {
+        graph.max_rounds
+    };
+    let mut nodes: Vec<NodeResult> = vec![];
+    for round in 1..=max_rounds + 1 {
+        // producer（第 1 轮任务简报；返工轮带评审意见）
+        let prod_brief = if round == 1 {
+            brief_for(&graph.task, &producer.label)
+        } else {
+            let last_review = nodes
+                .iter()
+                .rev()
+                .find(|n| n.label == reviewer.label)
+                .map(|n| n.result.summary.clone())
+                .unwrap_or_default();
+            format!(
+                "【协作任务】{}\n\n你的角色位：{}（评审返工第 {} 轮）。评审意见（按此修订产出）：\n{}",
+                graph.task, producer.label, round - 1, last_review
+            )
+        };
+        let prod = run_expert(
+            ExpertCtx {
+                model: ctx.model,
+                tools: ctx.tools,
+                mode: ctx.mode,
+            },
+            session_id,
+            &producer.expert,
+            &prod_brief,
+            sink,
+            wal,
+        );
+        let artifact = prod.summary.clone(); // 本轮产出（即产即用）
+        nodes.push(NodeResult {
+            label: producer.label.clone(),
+            result: prod,
+            round,
+        });
+
+        // reviewer（评审 producer 产物；persona 侧约定首行 VERDICT: pass|revise）
+        let rev_brief = format!(
+            "【协作任务】评审以下产出是否符合要求：{}\n\n你的角色位：{}。\
+            首行必须输出 VERDICT: pass 或 VERDICT: revise，随后给意见。",
+            graph.task, reviewer.label
+        );
+        let rev_input = format!(
+            "{rev_brief}\n\n待评审产出：\n{}",
+            truncate_chars(&artifact, 2000)
+        );
+        let rev = run_expert(
+            ExpertCtx {
+                model: ctx.model,
+                tools: ctx.tools,
+                mode: ctx.mode,
+            },
+            session_id,
+            &reviewer.expert,
+            &rev_input,
+            sink,
+            wal,
+        );
+        let passed = rev.ok && parse_verdict(&rev.summary);
+        nodes.push(NodeResult {
+            label: reviewer.label.clone(),
+            result: rev,
+            round,
+        });
+        if passed {
+            return (nodes, round, false);
+        }
+    }
+    // N 轮 revise 用尽：转人工（§3.1 ③）
+    wal.append(
+        session_id,
+        "team.escalated",
+        &format!("{{\"task\":\"{}\"}}", truncate_chars(&graph.task, 60)),
+    );
+    (nodes, max_rounds + 1, true)
+}
+
+/// VERDICT 首行解析（pass=放行；revise/解析失败=不放行——保守）
+fn parse_verdict(summary: &str) -> bool {
+    summary
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.trim().to_ascii_lowercase().starts_with("verdict: pass"))
+        .unwrap_or(false)
 }
 
 /// 汇总折叠（join 口径：ok/fail 标注 + 标签 + 结论截断；回填主上下文）
@@ -353,6 +578,7 @@ where
         let graph = TeamGraph {
             task: user_text.to_string(),
             members,
+            ..Default::default() // 选角引擎 v0.1 仅会诊拓扑（其余拓扑手动构图）
         };
         validate_graph(&graph).ok()?;
         Some(graph)
@@ -394,6 +620,7 @@ mod tests {
         TeamGraph {
             task: "评审 PR#42".into(),
             members,
+            ..Default::default()
         }
     }
 

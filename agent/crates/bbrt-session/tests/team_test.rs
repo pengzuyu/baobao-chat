@@ -160,6 +160,7 @@ fn team_consult_full_chain() {
             member("security", "安全人设：审查注入面。", 10),
             member("perf", "性能人设：查热点循环。", 2), // 2 步即超步自杀
         ],
+        ..Default::default()
     };
 
     let result = run_team(
@@ -224,6 +225,7 @@ fn team_invalid_graph_no_activation() {
             member("c", "安全人设：x。", 40),
             member("d", "安全人设：x。", 40),
         ],
+        ..Default::default()
     };
     assert_eq!(
         run_team(
@@ -423,6 +425,7 @@ impl ExpertSource for FixedTeam {
                 mk("corp.sec", "安全人设：查注入。", "安全"),
                 mk("corp.perf", "性能人设：查热点。", "性能"),
             ],
+            ..Default::default()
         })
     }
 }
@@ -554,6 +557,7 @@ fn loop_expert_invalid_graph_fallback() {
             Some(TeamGraph {
                 task: "t".into(),
                 members: vec![mk("corp.a"), mk("corp.b")], // 2×100=200 > 120
+                ..Default::default()
             })
         }
     }
@@ -608,4 +612,273 @@ fn loop_expert_invalid_graph_fallback() {
     let entries = log.0.lock().unwrap().clone();
     // team.start 未写（校验先于 WAL）
     assert!(!entries.iter().any(|(_, t, _)| *t == "team.start"));
+}
+
+// ---------------------------------------------------------------------------
+// 流水线与评审环拓扑（D14 §3.1 ②③）
+// ---------------------------------------------------------------------------
+
+use bbrt_session::team::{TeamTopology, REVIEW_MAX_ROUNDS};
+
+/// 剧本模型（拓扑专用）：按 user 简报内容分派——
+/// "流水线第 N 段"→段结论；"评审返工第 N 轮"→修订产出；
+/// "待评审产出"→VERDICT 首行（可配置每轮判定）；记录收到的简报
+struct TopoModel {
+    verdicts: Vec<&'static str>, // reviewer 逐轮判定（"pass"/"revise"）
+    seen: Mutex<Vec<String>>,
+}
+impl ChatClient for TopoModel {
+    fn chat(
+        &self,
+        req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        let m1 = req
+            .messages
+            .get(1)
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        self.seen.lock().unwrap().push(m1.clone());
+        let text = if m1.contains("待评审产出") {
+            // reviewer：按轮次出判定
+            let round = self
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|s| s.contains("待评审产出"))
+                .count();
+            let verdict = self.verdicts.get(round - 1).copied().unwrap_or("pass");
+            format!("VERDICT: {verdict}\n意见：命名不规范。")
+        } else if m1.contains("流水线第") || m1.contains("评审返工第") {
+            "依据上游输入的结论。".into()
+        } else if m1.contains("你的角色位") {
+            "首段结论：方案 A。".into() // 流水线首段/评审 producer 首轮（brief_for 简报）
+        } else {
+            "未预期分支".into()
+        };
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = vec![
+            Ok(StreamEvent::TextDelta { text }),
+            Ok(StreamEvent::Done {
+                finish: FinishReason::Stop,
+                usage: Usage {
+                    prompt_tokens: 6,
+                    completion_tokens: 3,
+                },
+            }),
+        ];
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+fn topo_team_model(verdicts: Vec<&'static str>) -> TopoModel {
+    TopoModel {
+        verdicts,
+        seen: Mutex::new(vec![]),
+    }
+}
+
+/// 流水线：三段串行，下游简报含上游结论（黑板链），nodes 保序
+#[test]
+fn pipeline_three_stages_flow() {
+    let model = topo_team_model(vec![]);
+    let sink = Arc::new(CollectSink(Mutex::new(vec![])));
+    let log = SharedLog::default();
+    let graph = TeamGraph {
+        task: "实现需求 R-7".into(),
+        members: vec![
+            member("analyst", "分析人设：拆需求。", 10),
+            member("coder", "编码人设：写代码。", 10),
+            member("reviewer2", "评审人设：看 diff。", 10),
+        ],
+        topology: TeamTopology::Pipeline,
+        ..Default::default()
+    };
+    let result = run_team(
+        &ExpertCtx {
+            model: &model,
+            tools: &AllowTools,
+            mode: PermissionMode::AutoEdit,
+        },
+        "sess-pipe",
+        &graph,
+        sink.as_ref(),
+        &log,
+    )
+    .unwrap();
+    assert_eq!(result.nodes.len(), 3);
+    assert_eq!(result.rounds, 1);
+    assert!(!result.escalated);
+    // 保序：analyst → coder → reviewer2
+    let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
+    assert_eq!(labels, vec!["analyst", "coder", "reviewer2"]);
+    // 黑板链：第 2/3 段简报含上游结论与"流水线第"
+    let seen = model.seen.lock().unwrap().clone();
+    assert!(seen
+        .iter()
+        .any(|s| s.contains("流水线第 2 段") && s.contains("首段结论")));
+    assert!(seen
+        .iter()
+        .any(|s| s.contains("流水线第 3 段") && s.contains("上游结论")));
+    // WAL：topology=pipeline
+    let entries = log.0.lock().unwrap().clone();
+    let start = entries.iter().find(|(_, t, _)| *t == "team.start").unwrap();
+    assert!(start.2.contains("\"topology\":\"pipeline\""));
+}
+
+/// 评审环：一轮 pass（reviewer 首行 VERDICT: pass）
+#[test]
+fn review_loop_pass_first_round() {
+    let model = topo_team_model(vec!["pass"]);
+    let sink = Arc::new(CollectSink(Mutex::new(vec![])));
+    let log = SharedLog::default();
+    let graph = TeamGraph {
+        task: "生成周报".into(),
+        members: vec![
+            member("writer", "写作人设：产出周报。", 10),
+            member("checker", "检查人设：审周报。", 10),
+        ],
+        topology: TeamTopology::ReviewLoop,
+        ..Default::default()
+    };
+    let result = run_team(
+        &ExpertCtx {
+            model: &model,
+            tools: &AllowTools,
+            mode: PermissionMode::AutoEdit,
+        },
+        "sess-rev1",
+        &graph,
+        sink.as_ref(),
+        &log,
+    )
+    .unwrap();
+    assert_eq!(result.rounds, 1);
+    assert!(!result.escalated);
+    assert_eq!(result.nodes.len(), 2, "一轮=producer+reviewer 各一");
+    assert!(result.nodes.iter().all(|n| n.round == 1));
+}
+
+/// 评审环：round1 revise → round2 pass（返工简报含评审意见）
+#[test]
+fn review_loop_revise_then_pass() {
+    let model = topo_team_model(vec!["revise", "pass"]);
+    let sink = Arc::new(CollectSink(Mutex::new(vec![])));
+    let log = SharedLog::default();
+    let graph = TeamGraph {
+        task: "生成周报".into(),
+        members: vec![
+            member("writer", "写作人设：产出周报。", 10),
+            member("checker", "检查人设：审周报。", 10),
+        ],
+        topology: TeamTopology::ReviewLoop,
+        ..Default::default()
+    };
+    let result = run_team(
+        &ExpertCtx {
+            model: &model,
+            tools: &AllowTools,
+            mode: PermissionMode::AutoEdit,
+        },
+        "sess-rev2",
+        &graph,
+        sink.as_ref(),
+        &log,
+    )
+    .unwrap();
+    assert_eq!(result.rounds, 2);
+    assert!(!result.escalated);
+    assert_eq!(result.nodes.len(), 4, "两轮×(producer+reviewer)");
+    // 返工简报：含评审意见（VERDICT 行被带给 producer）
+    let seen = model.seen.lock().unwrap().clone();
+    assert!(seen
+        .iter()
+        .any(|s| s.contains("评审返工第 1 轮") && s.contains("VERDICT: revise")));
+    // 轮次标注：round2 的两个节点
+    assert!(result.nodes.iter().filter(|n| n.round == 2).count() == 2);
+}
+
+/// 评审环：N=2 用尽仍 revise → escalated 转人工（WAL team.escalated）
+#[test]
+fn review_loop_escalates_after_max_rounds() {
+    let model = topo_team_model(vec!["revise", "revise", "revise"]);
+    let sink = Arc::new(CollectSink(Mutex::new(vec![])));
+    let log = SharedLog::default();
+    let graph = TeamGraph {
+        task: "生成周报".into(),
+        members: vec![
+            member("writer", "写作人设：产出周报。", 10),
+            member("checker", "检查人设：审周报。", 10),
+        ],
+        topology: TeamTopology::ReviewLoop,
+        ..Default::default()
+    };
+    let result = run_team(
+        &ExpertCtx {
+            model: &model,
+            tools: &AllowTools,
+            mode: PermissionMode::AutoEdit,
+        },
+        "sess-rev3",
+        &graph,
+        sink.as_ref(),
+        &log,
+    )
+    .unwrap();
+    assert!(result.escalated, "N={REVIEW_MAX_ROUNDS} 用尽应转人工");
+    assert_eq!(result.rounds, REVIEW_MAX_ROUNDS + 1);
+    assert_eq!(result.nodes.len(), (REVIEW_MAX_ROUNDS + 1) * 2);
+    let entries = log.0.lock().unwrap().clone();
+    let types: Vec<&str> = entries.iter().map(|(_, t, _)| t.as_str()).collect();
+    assert!(types.contains(&"team.escalated"), "{types:?}");
+    assert!(types.last() == Some(&"team.joined"));
+}
+
+/// 校验：评审环恰 2 成员；预算按 ×(N+1) 折算（2×40×3=240 > 120 拒）
+#[test]
+fn review_loop_graph_validation() {
+    let three = TeamGraph {
+        task: "x".into(),
+        members: vec![
+            member("w", "写。", 10),
+            member("c", "查。", 10),
+            member("e", "_extra。", 10),
+        ],
+        topology: TeamTopology::ReviewLoop,
+        ..Default::default()
+    };
+    assert!(run_team(
+        &ExpertCtx {
+            model: &topo_team_model(vec![]),
+            tools: &AllowTools,
+            mode: PermissionMode::AutoEdit
+        },
+        "s-x",
+        &three,
+        Arc::new(CollectSink(Mutex::new(vec![]))).as_ref(),
+        &SharedLog::default(),
+    )
+    .is_err());
+
+    let heavy = TeamGraph {
+        members: vec![member("w", "写。", 40), member("c", "查。", 40)],
+        topology: TeamTopology::ReviewLoop,
+        ..Default::default()
+    };
+    let g = TeamGraph {
+        task: "x".into(),
+        ..heavy
+    };
+    assert!(
+        bbrt_session::team::validate_graph(&g).is_err(),
+        "2×40×3=240 应超预算"
+    );
+    // 同预算会诊合法（2×40=80）——拓扑差异化校验生效
+    let consult = TeamGraph {
+        topology: TeamTopology::Consult,
+        ..g
+    };
+    assert!(bbrt_session::team::validate_graph(&consult).is_ok());
 }
