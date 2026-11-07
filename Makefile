@@ -215,3 +215,7 @@ verify-quick: ## 快速门禁（跳过测试）：四栈 build/typecheck/clippy
 	@cd server && go build ./... && go vet ./... && echo "server ✓"
 	@cd client && npx tsc -b --noEmit && echo "client ✓"
 	@cd agent && if command -v cargo >/dev/null; then cargo check --workspace && cargo clippy --workspace -- -D warnings && echo "agent ✓"; fi
+
+.PHONY: e2e
+e2e: ## 协议级 E2E 回归套件（进程内全栈：登录→WS→IM 全流，14 篇信封契约）
+	@cd server && go test ./internal/e2e/ -v -count=1
