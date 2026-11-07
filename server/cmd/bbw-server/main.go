@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"io"
 	"log"
 	"mime"
@@ -17,6 +18,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	// 时区内嵌（~450KB）：镜像不带 tzdata 时 TZ=Asia/Shanghai 仍生效（Dockerfile 注）
+	_ "time/tzdata"
 
 	"github.com/baobaowork/server/internal/admin"
 	adminapi "github.com/baobaowork/server/internal/admin/api"
@@ -72,13 +76,36 @@ import (
 	"github.com/baobaowork/server/internal/platform/httpx"
 	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
 	"github.com/baobaowork/server/internal/rtc"
+	"github.com/baobaowork/server/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
+	// ── 子命令模式（16 篇部署通道引用）──
+	// migrate：helm pre-install Job / upgrade.sh 升级前迁移通道；
+	// admin bootstrap：init/01-init.sh 与 helm NOTES 的管理员引导命令；
+	// 其余参数（如 compose 预留的 --enable 拆分部署）忽略并正常启动，保持向后兼容。
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "migrate":
+			runMigrate()
+			return
+		case "admin":
+			if len(os.Args) > 2 && os.Args[2] == "bootstrap" {
+				runAdminBootstrap(os.Args[3:])
+				return
+			}
+			log.Fatal("用法: bbw-server admin bootstrap --admin-password <强密码> [--empno admin]")
+		default:
+			log.Printf("忽略未识别参数 %q（--enable 拆分部署留待阶段三，当前单体全量启动）", os.Args[1])
+		}
+	}
 	cfg := config.Load()
 	if len(cfg.JWTSecret) < 32 {
 		log.Fatal("BBW_JWT_SECRET 长度需 ≥32 字节")
+	}
+	if cfg.JWTSecret == config.DevJWTSecret {
+		log.Println("⚠ BBW_JWT_SECRET 未设置，使用开发默认密钥（测试可用；生产必改，15 篇）")
 	}
 	signer := authjwt.NewSigner([]byte(cfg.JWTSecret))
 	bus := eventbus.New()
@@ -236,6 +263,17 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, r, map[string]string{"status": "ok", "stage": "stage1"})
+	})
+	// readyz：helm readinessProbe 指向（deployment-app）——PG ping 通即就绪；内存模式恒就绪
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if pgPool != nil {
+			if err := pgPool.Ping(r.Context()); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = io.WriteString(w, `{"code":503,"message":"pg not ready"}`)
+				return
+			}
+		}
+		httpx.OK(w, r, map[string]string{"status": "ready"})
 	})
 
 	// 认证 REST（03 篇 §7）
@@ -1855,6 +1893,97 @@ func pathID(r *http.Request, name string) (int64, error) {
 		return 0, errx.New(errx.CodeBadRequest, "路径 ID 非法")
 	}
 	return id, nil
+}
+
+// runMigrate 独立迁移子命令（upgrade.sh 第 3 步 / helm pre-install Job 引用；
+// 与启动自动迁移同实现 bbwpg.Migrate，幂等可重复执行，完成后退出）。
+func runMigrate() {
+	cfg := config.Load()
+	if cfg.DBDSN == "" {
+		log.Fatal("migrate: 需设置 BBW_DB_DSN（空 DSN 为内存模式，无库可迁）")
+	}
+	pool, err := bbwpg.New(context.Background(), cfg.DBDSN)
+	if err != nil {
+		log.Fatalf("migrate: PG 连接失败: %v", err)
+	}
+	defer pool.Close()
+	if err := bbwpg.Migrate(context.Background(), pool); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
+	log.Printf("migrate: 迁移完成（注册表 %d 个版本，已应用项幂等跳过）", len(migrations.List))
+}
+
+// runAdminBootstrap 内置平台管理员引导（16 篇 §2.2；init/01-init.sh 与 helm NOTES
+// 引用的命令）。口令仅经 flag/环境注入，不落盘不落日志；幂等：工号已存在则拒绝
+// 重复建户、不重置口令（重置走管理端）。RBAC 阶段二：建户后自动授予内置
+// 「管理员」角色——登录即得 admin:* 全集，无需配置白名单；BBW_ADMIN_ACCOUNTS
+// 降级为应急通道（角色链路失效时救砖用）。
+func runAdminBootstrap(args []string) {
+	fs := flag.NewFlagSet("admin bootstrap", flag.ContinueOnError)
+	password := fs.String("admin-password", os.Getenv("BBW_ADMIN_BOOTSTRAP_PASSWORD"),
+		"管理员口令（优先经 KMS 注入；兜底读 BBW_ADMIN_BOOTSTRAP_PASSWORD）")
+	empno := fs.String("empno", "admin", "管理员工号")
+	if err := fs.Parse(args); err != nil || *password == "" {
+		log.Fatal("用法: bbw-server admin bootstrap --admin-password <强密码> [--empno admin]")
+	}
+	cfg := config.Load()
+	if cfg.DBDSN == "" {
+		log.Fatal("admin bootstrap: 需设置 BBW_DB_DSN（管理员账号持久化于 PG）")
+	}
+	pool, err := bbwpg.New(context.Background(), cfg.DBDSN)
+	if err != nil {
+		log.Fatalf("admin bootstrap: PG 连接失败: %v", err)
+	}
+	defer pool.Close()
+	if err := bbwpg.Migrate(context.Background(), pool); err != nil {
+		log.Fatalf("admin bootstrap: 迁移失败（先迁库后建户）: %v", err)
+	}
+	repo := orgrepo.NewPostgres(pool)
+	ctx := context.Background()
+	if u, err := repo.GetUserByLogin(ctx, 1, *empno); err == nil && u != nil {
+		log.Fatalf("admin bootstrap: 工号 %s 已存在（uid=%d）——不重复建户、不重置口令；"+
+			"如需重置请走管理端", *empno, u.ID)
+	}
+	hash, err := authservice.HashPassword(*password)
+	if err != nil {
+		log.Fatalf("admin bootstrap: 口令哈希失败: %v", err)
+	}
+	created, err := repo.CreateUser(ctx, orgapi.User{
+		TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: *empno,
+		DisplayName: "平台管理员", Email: *empno + "@bbw.io",
+		PasswordHash: hash, Status: orgapi.UserStatusActive,
+	})
+	if err != nil {
+		log.Fatalf("admin bootstrap: 建户失败: %v", err)
+	}
+	// 鸡生蛋收口：自动挂「管理员」内置角色（先幂等种子再按名查找授权）
+	roleStore := adminrepo.NewPostgresRoles(pool)
+	seedBuiltinRoles(roleStore)
+	grantAdminRole(ctx, roleStore, created.ID)
+	log.Printf("admin bootstrap: 管理员就绪（uid=%d 工号=%s 租户=1，已授予内置「管理员」角色）。"+
+		"BBW_ADMIN_ACCOUNTS 白名单仅为应急通道，默认无需配置", created.ID, *empno)
+}
+
+// grantAdminRole 给用户挂内置「管理员」角色（幂等：重复授权静默忽略；失败不阻断
+// bootstrap——降级提示走管理端手动授权或应急白名单）
+func grantAdminRole(ctx context.Context, store adminrepo.RoleRepo, userID int64) {
+	roles, err := store.ListRoles(ctx, 1)
+	if err != nil {
+		log.Printf("admin bootstrap: 角色读取失败（%v）——可稍后在管理端授权，或配置 BBW_ADMIN_ACCOUNTS 应急", err)
+		return
+	}
+	for _, r := range roles {
+		if r.Name != "管理员" {
+			continue
+		}
+		if err := store.InsertUserRole(ctx, adminrepo.UserRole{
+			TenantID: 1, UserID: userID, RoleID: r.ID,
+		}); err != nil && err != adminrepo.ErrDupGrant {
+			log.Printf("admin bootstrap: 角色授权失败（%v）——可稍后在管理端授权，或配置 BBW_ADMIN_ACCOUNTS 应急", err)
+		}
+		return
+	}
+	log.Printf("admin bootstrap: 未找到内置「管理员」角色（种子异常）——可稍后在管理端授权，或配置 BBW_ADMIN_ACCOUNTS 应急")
 }
 
 // seedDemo 演示数据：alice/bob（口令 demo-pass-123）+ 单聊会话。

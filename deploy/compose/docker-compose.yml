@@ -4,6 +4,8 @@
 # · compose spec 语法（无 version 字段），Docker Compose v2.20+。
 # · profiles 分组（16 篇 §3.4 模块启停 = compose profiles ↔ Helm values.modules.*）：
 #     core   核心链路：nginx-lb / app×2 / pg16 / redis7 / minio / update-src / 初始化
+#     deps   开发依赖子组（core 去掉 app/nginx-lb：宿主直跑 server 的开发流；
+#            dev-up.sh 用此组——不起 app 容器、不占宿主 80/443）
 #     media  音视频：media(mediasoup UDP 40000-50100 独占) / coturn(跨园区兜底，可选)
 #     docs   文档协作：onlyoffice(WOPI)
 #     ops    可观测栈：prometheus / grafana / otel-collector / alertmanager
@@ -29,6 +31,14 @@ x-bbw-env: &bbw-env
   BBW_LOG_LEVEL: ${BBW_LOG_LEVEL:-info}
   BBW_DB_DSN: ${BBW_DB_DSN}
   BBW_DB_RO_DSN: ${BBW_DB_RO_DSN:-}
+  # HS256 签名密钥（03 篇 §2.2；≥32 字节；空回退开发默认密钥并打警告日志，生产必改）
+  BBW_JWT_SECRET: ${BBW_JWT_SECRET:-}
+  # 文件域本地盘（容器内固定 /data，卷 bbw-data 持久化；对象存储阶段二替换，07 篇 §4）
+  BBW_DATA_DIR: ${BBW_DATA_DIR:-/data}
+  # 演示种子数据（alice/bob 口令 demo-pass-123）：部署环境默认关；联调置 1 可免引导
+  BBW_SEED_DEMO: ${BBW_SEED_DEMO:-0}
+  # CORS 白名单（逗号分隔；空=服务端默认 http://localhost:5173 即 tauri dev origin）
+  BBW_CORS_ORIGINS: ${BBW_CORS_ORIGINS:-}
   BBW_REDIS_ADDR: ${BBW_REDIS_ADDR:-redis:6379}
   BBW_S3_ENDPOINT: ${BBW_S3_ENDPOINT:-http://minio:9000}
   BBW_S3_USE_PATH_STYLE: ${BBW_S3_USE_PATH_STYLE:-true}
@@ -90,6 +100,8 @@ services:
     logging: *default-logging
     command: ["--enable", "${BBW_APP_MODULES:-auth,org,message,file,doc,kb,eco,admin,audit,notify,aigw}"]
     environment: *bbw-env
+    volumes:
+      - bbw-data:/data          # 文件域本地盘（BBW_DATA_DIR=/data；对象存储阶段二替换）
     expose:
       - "8080"         # http + ws（app 内嵌模式；独立 gateway 拆分见 K8s 形态 §3.2）
     healthcheck:
@@ -115,7 +127,7 @@ services:
   app-init:
     # 借用 postgres 镜像的 psql/pg_isready 执行 init 脚本（bbw-app 为 distroless 无 shell）
     image: ${POSTGRES_IMAGE:-postgres:16.4-alpine3.20}   # 国内网络可指内网/加速镜像，如 172.16.105.109:30003/pengzuyu/postgres-pgvector:16（含 pgvector）
-    profiles: [core]
+    profiles: [core, deps]
     restart: "no"
     entrypoint: ["sh", "/init/01-init.sh"]
     environment:
@@ -139,7 +151,7 @@ services:
   # ===========================================================================
   pg:
     image: ${POSTGRES_IMAGE:-postgres:16.4-alpine3.20}   # 国内网络可指内网/加速镜像，如 172.16.105.109:30003/pengzuyu/postgres-pgvector:16（含 pgvector）
-    profiles: [core]
+    profiles: [core, deps]
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -179,7 +191,7 @@ services:
   # ===========================================================================
   redis:
     image: redis:7.4.1-alpine3.20
-    profiles: [core]
+    profiles: [core, deps]
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "no", "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
     volumes:
@@ -196,7 +208,7 @@ services:
   # ===========================================================================
   minio:
     image: minio/minio:RELEASE.2024-11-07T00-52-20Z
-    profiles: [core]
+    profiles: [core, deps]
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -216,7 +228,7 @@ services:
   # 桶初始化（幂等）：bbw-data（版本化，误删恢复 §4.6）+ bbw-backup（独立备份桶）
   minio-init:
     image: minio/mc:RELEASE.2024-11-05T11-40-11Z
-    profiles: [core]
+    profiles: [core, deps]
     restart: "no"
     depends_on:
       minio:
@@ -241,15 +253,18 @@ services:
   # 数据由制品库/rsync 同步至 updates-data 卷（TODO：与 CI 发布流水线对接）
   # ===========================================================================
   update-src:
-    image: ${BBW_IMAGE_REGISTRY:-registry.example.com/baobaowork}/bbw-update-src:${BBW_IMAGE_TAG:-0.1.0}
-    profiles: [core]
+    # 客户端更新静态源（16 篇 §5.1）：v0.1 以 nginx 官方镜像占位（serve 配置内联的
+    # 占位 manifest）；正式 bbw-update-src 镜像（rsync/CI 对接 + ed25519 签名清单）
+    # 随发布流水线落地后经 BBW_UPDATE_SRC_IMAGE 替换
+    image: ${BBW_UPDATE_SRC_IMAGE:-nginx:1.27.4-alpine3.21}
+    profiles: [core, deps]
     restart: unless-stopped
     volumes:
       - updates-data:/srv/updates
     configs:
       # 占位 manifest：保证健康探测可过；正式清单由发布流水线以 ed25519 签名写入
       - source: updates-manifest
-        target: /srv/updates/update-manifest.json
+        target: /usr/share/nginx/html/update-manifest.json
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/update-manifest.json"]
       interval: 30s
@@ -449,6 +464,7 @@ services:
 volumes:
   pg-data:            # PG 主数据
   pg-wal-archive:     # WAL 归档 + 基础备份（backup.sh 使用；§4.6）
+  bbw-data:           # app 文件域本地盘（BBW_DATA_DIR=/data；对象存储阶段二替换）
   redis-data:
   minio-data:         # 对象存储（单节点 2TB 档，§3.3）
   updates-data:       # 客户端更新静态文件
@@ -481,12 +497,15 @@ configs:
           ''      close;
         }
 
+        # Docker 内嵌 DNS：可选 profile（media/onlyoffice）缺席时，变量 proxy_pass
+        # 走此处运行期解析（失败→502 降级），避免 nginx 启动期静态解析直接 fatal
+        resolver 127.0.0.11 valid=10s ipv6=off;
+
         upstream bbw_app {
           ip_hash;                                  # WSS 会话保持（见上）
           server app:8080 max_fails=3 fail_timeout=10s;
           keepalive 64;
         }
-        upstream bbw_media { server media:8082; keepalive 16; }
         upstream bbw_update { server update-src:80; }
 
         server {
@@ -531,9 +550,11 @@ configs:
             proxy_send_timeout 300s;
           }
 
-          # 通话信令（media profile 未启用时该 upstream 不可达，客户端按 02 篇 §7 降级）
+          # 通话信令（media profile 未启用时运行期解析失败→502，客户端按 02 篇 §7 降级；
+          # 变量 proxy_pass 经 resolver 运行期解析，避免启动期静态解析 media fatal）
           location /rtc/ {
-            proxy_pass http://bbw_media;
+            set $$media_upstream media:8082;
+            proxy_pass http://$$media_upstream;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $$http_upgrade;
             proxy_set_header Connection $$connection_upgrade;
@@ -546,7 +567,8 @@ configs:
           }
         }
 
-        # OnlyOffice 独立 TLS 入口（docs profile；与主站同证书统一终止）
+        # OnlyOffice 独立 TLS 入口（docs profile；与主站同证书统一终止。
+        # onlyoffice 属可选 profile：变量 proxy_pass 运行期解析，缺席时 502 不 fatal）
         server {
           listen 8443 ssl;
           http2 on;
@@ -554,7 +576,8 @@ configs:
           ssl_certificate     /etc/nginx/certs/tls.crt;
           ssl_certificate_key /etc/nginx/certs/tls.key;
           location / {
-            proxy_pass http://onlyoffice:80;
+            set $$oo_upstream onlyoffice:80;
+            proxy_pass http://$$oo_upstream;
             proxy_set_header Host $$host;
             proxy_set_header X-Forwarded-Proto https;
           }

@@ -20,11 +20,15 @@ type Config struct {
 	LoginLockTTL  time.Duration // 锁定时长（10min）
 }
 
+// DevJWTSecret 开发默认 HS256 密钥（≥32 字节仅为通过长度校验；生产必经
+// BBW_JWT_SECRET/KMS 覆盖，15 篇。main 据此打"开发密钥在用"警告）。
+const DevJWTSecret = "dev-only-secret-change-me-0123456789abcdef"
+
 // Load 从环境变量装载（BBW_ 前缀）
 func Load() *Config {
 	c := &Config{
 		HTTPAddr:      ":8080",
-		JWTSecret:     "dev-only-secret-change-me-0123456789abcdef",
+		JWTSecret:     DevJWTSecret,
 		AccessTTL:     15 * time.Minute,
 		OBOTTL:        15 * time.Minute,
 		RefreshTTL:    30 * 24 * time.Hour,

@@ -73,6 +73,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "bbw.secretName.app" . }}
                   key: aiUpstreamApiKey
+            - name: BBW_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbw.secretName.app" . }}
+                  key: jwtSecret
           envFrom:
             - configMapRef:
                 name: {{ include "bbw.fullname" . }}-config

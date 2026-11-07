@@ -57,10 +57,13 @@ server-run: dev-up ## 本地运行 bbw-server（依赖 compose core，DSN 指向
 	  else echo "[make] server/ 尚未创建（设计阶段），跳过"; fi
 
 .PHONY: server-image
-server-image: ## 构建 bbw-app 容器镜像（版本取 .env 的 BBW_IMAGE_TAG）
+server-image: ## 构建 bbw-app 容器镜像（版本/tag 取 .env；基础镜像源可经 BBW_GO_BUILDER/BBW_RUNTIME_IMAGE 覆盖）
 	@if [ -f server/Dockerfile ]; then \
 	  source deploy/compose/.env 2>/dev/null || source deploy/compose/.env.tpl; \
-	  docker build -t $${BBW_IMAGE_REGISTRY}/bbw-app:$${BBW_IMAGE_TAG} server/; \
+	  docker build \
+	    --build-arg GO_BUILDER_IMAGE="$${BBW_GO_BUILDER:-golang:1.22-alpine}" \
+	    --build-arg RUNTIME_IMAGE="$${BBW_RUNTIME_IMAGE:-alpine:3.20}" \
+	    -t $${BBW_IMAGE_REGISTRY}/bbw-app:$${BBW_IMAGE_TAG} server/; \
 	  else echo "[make] server/Dockerfile 尚未创建（随 server/ 落地），跳过"; fi
 
 # ---------------------------------------------------------------------------

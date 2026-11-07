@@ -43,10 +43,12 @@ if [ ! -f "${CERT_DIR}/tls.crt" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. 拉起 core 依赖（.env 的 COMPOSE_PROFILES 控制；默认 core）
+# 3. 拉起开发依赖（deps 子组：pg / redis / minio / update-src / app-init；
+#    不起 app 容器与 nginx-lb——开发流为宿主直跑 server。全栈容器化测试：
+#    make server-image 先构建镜像，再 COMPOSE_PROFILES=core docker compose up -d）
 # ---------------------------------------------------------------------------
-log "启动 compose 依赖（core：pg / redis / minio / update-src / app-init）..."
-docker compose up -d
+log "启动 compose 开发依赖（deps：pg / redis / minio / update-src / app-init）..."
+COMPOSE_PROFILES=deps docker compose up -d
 
 log "等待核心依赖健康 ..."
 for svc in pg redis minio; do

@@ -18,11 +18,17 @@
 # @sha256 digest 双重钉死。
 BBW_IMAGE_REGISTRY=registry.example.com/baobaowork
 BBW_IMAGE_TAG=0.1.0
+# make server-image 构建用基础镜像源（内网覆盖；空=官方默认 golang:1.22-alpine /
+# alpine:3.20。例：BBW_GO_BUILDER=docker.m.daocloud.io/library/golang:1.22-alpine，
+# 或先 docker pull 代理源再 docker tag 别名成默认名——两者等效）
+# BBW_GO_BUILDER=golang:1.22-alpine
+# BBW_RUNTIME_IMAGE=alpine:3.20
 # app 副本数（compose 侧实际用 `docker compose up -d --scale app=N`；此键供脚本与
 # Helm values app.replicaCount 对齐，默认 2=滚动升级+单实例冗余，16 篇 §3.1）
 BBW_APP_REPLICAS=2
 # 启用的 profiles 组合（compose 原生变量；helm 侧对应 modules.*）：
-#   core(必选) media docs ops mail——按站点形态叠加，如 core,media,docs,ops
+#   core(必选，全栈：app/nginx-lb/依赖) media docs ops mail——按站点形态叠加；
+#   deps=开发依赖子组（dev-up.sh 用，不起 app 容器）；测试全栈保持 core 即可
 COMPOSE_PROFILES=core
 # 迁移目录（golang-migrate，按域分目录；D02 §7）。首次初始化时挂载进 app-init。
 BBW_MIGRATIONS_DIR=../../server/migrations
@@ -53,6 +59,10 @@ POSTGRES_DB=bbw
 # —— 统一配置键（与 Helm 完全一致；K8s 来源为 Secret bbw-db）——
 BBW_DB_DSN=postgres://bbw:bbw_change_me@pg:5432/bbw?sslmode=disable
 BBW_DB_RO_DSN=                               # 空=读回落主库；主从档位填写副本 DSN（16 篇 §3.3）
+# —— 认证与运行时（helm: secrets.jwtSecret → Secret bbw-auth；K8s 侧对应键）——
+BBW_JWT_SECRET=bbw_jwt_change_me_0123456789abcdef0123456789abcdef   # ★上线必改：≥32 字节随机串（03 篇 §2.2；空则回退开发默认密钥并打警告）
+BBW_SEED_DEMO=0                              # 演示种子数据（alice/bob 口令 demo-pass-123）：联调置 1 免 admin bootstrap；部署保持 0
+# BBW_DATA_DIR=/data                         # 文件域本地盘（容器内固定 /data 挂 bbw-data 卷，一般无需覆盖；对象存储阶段二替换）
 
 # -----------------------------------------------------------------------------
 # 4. Redis（helm: externalServices.redis.address → ConfigMap；仅缓存/队列，AOF 优先关闭）
