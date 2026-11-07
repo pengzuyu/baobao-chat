@@ -223,6 +223,10 @@ type KBSpaceRow struct {
 }
 
 type AdminService interface {
+	// ── 离职交接（PAD-07；admin:user:offboard——OQ-A06 阶段一手动触发）──
+	// OffboardUser 禁用全链（状态+踢线+令牌吊销）+ 审计；群主转让/文档归属
+	// 留存提示由端侧引导（阶段四接 HR 事件联动，登记）
+	OffboardUser(ctx context.Context, tenantID, operatorID, userID int64) error
 	// ── KB 治理（PAD-10；admin:kb:govern——v0.1 只读总览，空间停用/删除随 D07 敏感治理阶段二）──
 	ListKBSpaces(ctx context.Context, tenantID int64) ([]KBSpaceRow, error)
 	// ── Agent 治理（PAD-14；admin:agent:revoke / platform:agent:killswitch）──

@@ -618,6 +618,8 @@ func main() {
 	mux.Handle("DELETE /api/v1/admin/org/depts/{id}", adminOnly(handleDeptDelete(orgRepo)))
 	// KB 治理（PAD-10；admin:kb:govern——v0.1 只读总览）
 	mux.Handle("GET /api/v1/admin/kb/spaces", adminOnly(handleAdminKBSpaces(adminSvc)))
+	// 离职交接（PAD-07；admin:user:offboard）
+	mux.Handle("POST /api/v1/admin/users/{id}/offboard", adminOnly(handleAdminOffboard(adminSvc)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -2966,5 +2968,26 @@ func handleAdminKBSpaces(svc adminapi.AdminService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, map[string]any{"items": items})
+	}
+}
+
+// handleAdminOffboard 离职交接（PAD-07；禁用全链，后续事项端侧引导）
+func handleAdminOffboard(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		uid, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.OffboardUser(r.Context(), httpx.TenantID(r.Context()), op, uid); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
 	}
 }

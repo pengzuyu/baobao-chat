@@ -13,6 +13,7 @@ import { Button } from '../../../shared/ui/Button';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
 import { StateView, type ViewStateOrOk } from '../../../shared/ui/StateView';
 import { useConnectionStore } from '../../../shared/store/connection';
+import { offboardUser } from '../api/admin';
 import { useUserStatus, useUsers } from '../api/hooks';
 import type { AdminUser } from '../model/types';
 
@@ -47,6 +48,21 @@ export function UsersPage() {
         : connStatus === 'offline'
           ? 'offline'
           : 'ok';
+
+  /** 离职交接（PAD-07）：禁用全链 + 待办引导（群主转让/文档留存——OQ-A06 阶段一手动） */
+  const offboard = (u: AdminUser) => {
+    if (!window.confirm(
+      `离职交接 ${u.display_name}？\n将执行：禁用账号 + 全端下线 + 令牌吊销（已记审计）。\n后续请手动处理：其名下群主转让（群设置内）、文档与文件保留只读。`,
+    )) return;
+    setActionError('');
+    setActionOk('');
+    offboardUser(u.id)
+      .then(() => {
+        setActionOk(`已离职交接 ${u.display_name}：账号禁用并全端下线。待办：群主转让（如有）、文档/文件留存只读`);
+        void query.refetch();
+      })
+      .catch((err: unknown) => setActionError(err instanceof ApiError ? getErrorText(err.code) : '操作失败，请稍后重试'));
+  };
 
   const toggle = (u: AdminUser) => {
     setActionError('');
@@ -165,6 +181,14 @@ export function UsersPage() {
                       onClick={() => toggle(u)}
                     >
                       <ShieldBan size={13} /> 禁用
+                    </Button>
+                    <Button
+                      variant="danger"
+                      disabled={statusMutation.isPending}
+                      onClick={() => offboard(u)}
+                      data-testid="offboard-btn"
+                    >
+                      离职交接
                     </Button>
                   ) : (
                     <Button

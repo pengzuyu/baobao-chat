@@ -425,3 +425,10 @@ export async function fetchKBSpaces(): Promise<KBSpaceRow[]> {
   const data = await http.get<{ items: KBSpaceRow[] }>('/admin/kb/spaces');
   return data.items;
 }
+
+/* ── 离职交接（PAD-07） ── */
+
+export async function offboardUser(userId: string): Promise<void> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持离职交接');
+  await http.post(`/admin/users/${encodeURIComponent(userId)}/offboard`);
+}

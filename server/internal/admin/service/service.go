@@ -864,3 +864,19 @@ func (s *Service) ListKBSpaces(_ context.Context, _ int64) ([]adminapi.KBSpaceRo
 	}
 	return out, nil
 }
+
+/* ── 离职交接（PAD-07；禁用全链复用 SetUserStatus 副作用——踢线+令牌吊销） ── */
+
+func (s *Service) OffboardUser(ctx context.Context, tenantID, operatorID, userID int64) error {
+	if userID <= 0 || userID == operatorID {
+		return errx.New(errx.CodeBadRequest, "user_id 非法（不可交接自己）")
+	}
+	if _, err := s.SetUserStatus(ctx, tenantID, operatorID, userID, orgapi.UserStatusDisabled); err != nil {
+		return err // 既有链路含审计 users.status
+	}
+	name := ""
+	if u, err := s.same.GetUser(ctx, userID); err == nil && u != nil {
+		name = u.DisplayName
+	}
+	return s.audit(ctx, tenantID, operatorID, "users.offboard", name, map[string]any{"user_id": userID})
+}
