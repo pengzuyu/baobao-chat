@@ -45,6 +45,10 @@ import (
 	kbapi "github.com/baobaowork/server/internal/kb/api"
 	kbrepo "github.com/baobaowork/server/internal/kb/repo"
 	kbservice "github.com/baobaowork/server/internal/kb/service"
+	"github.com/baobaowork/server/internal/mail"
+	mailapi "github.com/baobaowork/server/internal/mail/api"
+	mailrepo "github.com/baobaowork/server/internal/mail/repo"
+	mailservice "github.com/baobaowork/server/internal/mail/service"
 	"github.com/baobaowork/server/internal/mcpgw"
 	"github.com/baobaowork/server/internal/message"
 	"github.com/baobaowork/server/internal/message/api"
@@ -657,6 +661,45 @@ func main() {
 	}, botRepo)
 	botapi.RegisterAdminRoutes(mux, authed, botMod.API())
 	mux.HandleFunc("POST /hook/bot/{hook_id}", botapi.HandleHookDeliver(botMod.API()))
+
+	// ── 邮件域（22 篇阶段一务实版）：内域收发 + 治理 REST ──
+	// 邮件栈=进程内直投（docker-mailserver/auth-bridge/路径②随阶段二）；
+	// 懒开户="登录即有邮箱"（user.offboarded 联动随 D02 消费方阶段二）；
+	// 跨域全闭包（D02 §4：不引 org/admin/auth 包）
+	var mailRepoInst mailrepo.Repo
+	if pgPool != nil {
+		mailRepoInst = mailrepo.NewPostgres(pgPool)
+	} else {
+		mailRepoInst = mailrepo.NewMemory()
+	}
+	mailPush := gateway.RtcPusher{Hub: hub} // mail.new 直推（瞬态不经 eventbus，rtc 同款）
+	mailMod := mail.NewModule(mailservice.Options{
+		DefaultDomain: envOr("BBW_MAIL_DOMAIN", "corp.company.internal"),
+		// 懒开户寻址：employee_no@默认域（22 §4.1 命名策略）
+		UserEmployeeNo: func(tenantID, userID int64) (string, error) {
+			u, err := orgMod.API().GetUser(context.Background(), userID)
+			if err != nil {
+				return "", err
+			}
+			return u.EmployeeNo, nil
+		},
+		// 外发敏感词（04 篇库复用，bot 同款热更闭包）
+		SensitiveWords: func() []string {
+			words, err := adminStore.EnabledSensitiveWords(context.Background(), 1)
+			if err != nil {
+				return nil
+			}
+			return words
+		},
+		// 应用专用密码（auth 域 PBKDF2 闭包；吊销即时=在线校验）
+		HashPwd:   authservice.HashPassword,
+		VerifyPwd: authservice.VerifyPassword,
+		PushMail: func(userID int64, payload any) {
+			mailPush.PushRTC([]int64{userID}, "mail.new", payload)
+		},
+	}, mailRepoInst)
+	mailapi.RegisterRoutes(mux, authed, mailMod.API())
+	mailapi.RegisterAdminRoutes(mux, adminOnly, mailMod.API())
 
 	// 全局中间件链（D02 §6 固定顺序：trace→recovery→access-log→rate-limit→…）
 	limiter := httpx.NewLimiter(50, 100)                                                  // 阶段一按 IP；三档（租户/用户/Agent）阶段二接 Redis
