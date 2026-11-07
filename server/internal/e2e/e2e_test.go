@@ -21,9 +21,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +34,13 @@ import (
 	authapi "github.com/baobaowork/server/internal/auth/api"
 	authrepo "github.com/baobaowork/server/internal/auth/repo"
 	authservice "github.com/baobaowork/server/internal/auth/service"
+	"github.com/baobaowork/server/internal/doc"
+	docrepo "github.com/baobaowork/server/internal/doc/repo"
+	docservice "github.com/baobaowork/server/internal/doc/service"
+	"github.com/baobaowork/server/internal/file"
+	filerepo "github.com/baobaowork/server/internal/file/repo"
+	fileservice "github.com/baobaowork/server/internal/file/service"
+	filestore "github.com/baobaowork/server/internal/file/store"
 	"github.com/baobaowork/server/internal/gateway"
 	messageapi "github.com/baobaowork/server/internal/message/api"
 	messagerepo "github.com/baobaowork/server/internal/message/repo"
@@ -38,7 +48,9 @@ import (
 	orgapi "github.com/baobaowork/server/internal/org/api"
 	orgrepo "github.com/baobaowork/server/internal/org/repo"
 	"github.com/baobaowork/server/internal/platform/authjwt"
+	errx "github.com/baobaowork/server/internal/platform/errors"
 	"github.com/baobaowork/server/internal/platform/eventbus"
+	"github.com/baobaowork/server/internal/platform/httpx"
 	"github.com/baobaowork/server/internal/platform/ws"
 	"github.com/baobaowork/server/internal/rtc"
 )
@@ -663,4 +675,297 @@ func TestE2EPresence(t *testing.T) {
 		return bytes.Contains(p, []byte(fmt.Sprintf(`"uid":"%d"`, s.bobID))) &&
 			bytes.Contains(p, []byte(`"status":"offline"`))
 	}, 5*time.Second)
+}
+
+// ---------------------------------------------------------------------------
+// S9/S10 REST 层（doc 生命周期 + 文件上传/票据）：harness 自挂路由（与 main.go 装配等价）
+// ---------------------------------------------------------------------------
+
+// withRest 在测试服务上追加 doc/file REST（httptest mux 直挂 handler——薄壳等价复刻，
+// 不依赖 cmd 包：uid 从登录对取，tenant 恒 1）
+func (s *testServer) withRest(t *testing.T) {
+	t.Helper()
+	docRepo := docrepo.NewMemory()
+	docSvc := doc.NewModule(docservice.Options{}, docRepo).API()
+	fileRepo := filerepo.NewMemory()
+	fileStore := filestore.NewLocal(t.TempDir()) // 测试数据目录随 t 清理
+	fileSvc := file.NewModule(fileservice.Options{
+		MaxUploadBytes: 1 << 20, TicketTTL: 2 * time.Second, // 短票据便于测过期
+		IsConvMember: func(ctx context.Context, userID, convID int64) bool {
+			m, _ := s.msgRepo.MemberOf(ctx, convID, userID)
+			return m != nil && m.Status == 1
+		},
+	}, fileRepo, fileStore).API()
+
+	mux := s.srv.Config.Handler.(*http.ServeMux)
+	uidOf := func(r *http.Request) int64 { return s.aliceID }
+	mux.HandleFunc("POST /api/v1/doc/files", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Title string `json:"title"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		dto, err := docSvc.CreateFile(r.Context(), 1, uidOf(r), req.Title)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, dto)
+	})
+	mux.HandleFunc("PUT /api/v1/doc/files/{id}/content", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		var req struct {
+			BaseVersion int64  `json:"base_version"`
+			ContentMD   string `json:"content_md"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		resp, err := docSvc.SaveContent(r.Context(), 1, uidOf(r), id, req.BaseVersion, req.ContentMD)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	})
+	mux.HandleFunc("GET /api/v1/doc/files/{id}/versions", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		resp, err := docSvc.ListVersions(r.Context(), 1, uidOf(r), id, "", 50)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	})
+	mux.HandleFunc("POST /api/v1/doc/files/{id}/versions/{v}/restore", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		v, _ := strconv.Atoi(r.PathValue("v"))
+		resp, err := docSvc.RestoreVersion(r.Context(), 1, uidOf(r), id, v)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	})
+	mux.HandleFunc("POST /api/v1/files/upload", func(w http.ResponseWriter, r *http.Request) {
+		// 极简 multipart：file part 直读（小载荷测试免临时文件转存）
+		mr, err := r.MultipartReader()
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "multipart 非法"))
+			return
+		}
+		var name, ct string
+		var body []byte
+		for {
+			p, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "part 读取失败"))
+				return
+			}
+			if p.FormName() == "file" {
+				name, ct = p.FileName(), p.Header.Get("Content-Type")
+				body, _ = io.ReadAll(p)
+			}
+		}
+		resp, err := fileSvc.Upload(r.Context(), 1, uidOf(r), name, ct, 0, bytes.NewReader(body))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	})
+	mux.HandleFunc("GET /api/v1/files/{id}/ticket", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		resp, err := fileSvc.IssueTicket(r.Context(), 1, uidOf(r), id)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	})
+	mux.HandleFunc("GET /api/v1/files/dl", func(w http.ResponseWriter, r *http.Request) {
+		target, rc, err := fileSvc.Download(r.Context(), r.URL.Query().Get("t"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		defer rc.Close()
+		w.Header().Set("Content-Type", target.ContentType)
+		_, _ = io.Copy(w, rc)
+	})
+}
+
+func TestE2EDocLifecycle(t *testing.T) {
+	s := newServer(t)
+	s.withRest(t)
+	base := s.srv.URL + "/api/v1/doc/files"
+
+	// 建 v1 → 保存 v2/v3
+	var created struct {
+		Data struct {
+			ID      string `json:"id"`
+			Version int    `json:"current_version"`
+		} `json:"data"`
+	}
+	postJSON(t, base, map[string]string{"title": "e2e 文档"}, &created)
+	if created.Data.Version != 1 {
+		t.Fatalf("初始版本=%d", created.Data.Version)
+	}
+	save := func(baseV int, content string) int {
+		var resp struct {
+			Code int `json:"code"`
+			Data struct {
+				NextVersion int `json:"next_version"`
+			} `json:"data"`
+		}
+		body := map[string]any{"base_version": baseV, "content_md": content}
+		raw := doReq(t, "PUT", fmt.Sprintf("%s/%s/content", base, created.Data.ID), body)
+		_ = json.Unmarshal(raw, &resp)
+		if resp.Code != 0 {
+			t.Fatalf("保存 base=%d code=%d", baseV, resp.Code)
+		}
+		return resp.Data.NextVersion
+	}
+	if v := save(1, "v2 内容"); v != 2 {
+		t.Fatalf("v2=%d", v)
+	}
+	if v := save(2, "v3 内容"); v != 3 {
+		t.Fatalf("v3=%d", v)
+	}
+	// 乐观锁冲突：旧基线 6004
+	var conflict struct {
+		Code int `json:"code"`
+	}
+	raw := doReq(t, "PUT", fmt.Sprintf("%s/%s/content", base, created.Data.ID), map[string]any{"base_version": 1, "content_md": "stale"})
+	_ = json.Unmarshal(raw, &conflict)
+	if conflict.Code != 6004 {
+		t.Fatalf("旧基线应 6004，got %d", conflict.Code)
+	}
+	// 时间线 3 版 + 恢复 v2 → v4（正文回写）
+	var versions struct {
+		Data struct {
+			Items []struct {
+				Version int `json:"version"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	raw = doReq(t, "GET", fmt.Sprintf("%s/%s/versions", base, created.Data.ID), nil)
+	_ = json.Unmarshal(raw, &versions)
+	if len(versions.Data.Items) != 3 {
+		t.Fatalf("版本数=%d", len(versions.Data.Items))
+	}
+	var restored struct {
+		Data struct {
+			NewVerNo int `json:"new_version_no"`
+		} `json:"data"`
+	}
+	raw = doReq(t, "POST", fmt.Sprintf("%s/%s/versions/2/restore", base, created.Data.ID), nil)
+	_ = json.Unmarshal(raw, &restored)
+	if restored.Data.NewVerNo != 4 {
+		t.Fatalf("恢复应生成 v4，got %d", restored.Data.NewVerNo)
+	}
+	// 时间线 4 版（restore 不覆盖历史）+ v2 原文仍在
+	raw = doReq(t, "GET", fmt.Sprintf("%s/%s/versions", base, created.Data.ID), nil)
+	_ = json.Unmarshal(raw, &versions)
+	if len(versions.Data.Items) != 4 {
+		t.Fatalf("恢复后版本数=%d", len(versions.Data.Items))
+	}
+}
+
+type uploadResp struct {
+	Data struct {
+		ID     string `json:"id"`
+		Dedup  bool   `json:"dedup"`
+		Width  int    `json:"width"`
+		Height int    `json:"height"`
+	} `json:"data"`
+}
+
+func TestE2EFileUploadTicketDownload(t *testing.T) {
+	s := newServer(t)
+	s.withRest(t)
+
+	// 上传（sha 去重：同内容二次上传 dedup）
+	mkUpload := func() *uploadResp {
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		fw, _ := mw.CreateFormFile("file", "e2e.txt")
+		_, _ = fw.Write([]byte("hello e2e file"))
+		_ = mw.Close()
+		req, _ := http.NewRequest("POST", s.srv.URL+"/api/v1/files/upload", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out uploadResp
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return &out
+	}
+	first := mkUpload()
+	second := mkUpload()
+	if first.Data.ID == "" {
+		t.Fatalf("上传失败: %+v", first.Data)
+	}
+	if second.Data.ID != first.Data.ID || !second.Data.Dedup {
+		t.Fatalf("去重失效: first=%s second=%s dedup=%v", first.Data.ID, second.Data.ID, second.Data.Dedup)
+	}
+	// 票据 → 下载字节一致 → 二次消费 4014
+	var ticket struct {
+		Data struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	raw := doReq(t, "GET", fmt.Sprintf("%s/api/v1/files/%s/ticket", s.srv.URL, first.Data.ID), nil)
+	_ = json.Unmarshal(raw, &ticket)
+	if ticket.Data.URL == "" {
+		t.Fatalf("票据缺失: %s", raw)
+	}
+	dl, err := http.Get(s.srv.URL + ticket.Data.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(dl.Body)
+	dl.Body.Close()
+	if string(body) != "hello e2e file" {
+		t.Fatalf("下载内容=%q", body)
+	}
+	var second4014 struct {
+		Code int `json:"code"`
+	}
+	req, _ := http.Get(s.srv.URL + ticket.Data.URL)
+	_ = json.NewDecoder(req.Body).Decode(&second4014)
+	req.Body.Close()
+	if second4014.Code != 4014 {
+		t.Fatalf("票据二次消费应 4014，got %d", second4014.Code)
+	}
+}
+
+func postJSON(t *testing.T, url string, body any, out any) {
+	t.Helper()
+	raw := doReq(t, "POST", url, body)
+	if err := json.Unmarshal(raw, out); err != nil {
+		t.Fatalf("响应解析: %v raw=%s", err, raw)
+	}
+}
+
+func doReq(t *testing.T, method, url string, body any) []byte {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rd = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, url, rd)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return b
 }
