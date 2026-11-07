@@ -26,6 +26,8 @@ import {
 import { Avatar } from '../../../shared/ui/Avatar';
 import { getErrorText } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
+import { CallCard, type CallCardBody } from '../../../shared/components/CallCard';
+import { emit } from '../../../shared/bus';
 import { digestOf } from '../store/im';
 import { systemMessageText } from '../pages/systemMessageRegistry';
 import { downloadUrl, getDownloadTicket } from '../api/files';
@@ -355,6 +357,9 @@ export function MessageBubble({
   const isMerge = message.type === 'merge_forward';
   const isImage = message.type === 'image';
   const isFile = message.type === 'file';
+  // 通话卡片（D04 §4.5 call_card：方向/状态/时长/再次呼叫；组件在 shared，回拨经 bus 转发 rtc）
+  const isCallCard = message.type === 'call_card';
+  const callBody = isCallCard && 'call_id' in message.body ? (message.body as CallCardBody) : null;
   // file/image body 窄化（D06：{file_id,...}；服务端透传）
   const fileBody = (isImage || isFile) && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
   // 编辑窗口（5min）与本人判定：编辑入口显隐（INT-IM-02；撤回态已在上方早退）
@@ -388,6 +393,14 @@ export function MessageBubble({
           ) : isFile && fileBody ? (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
               <FileCard body={fileBody} />
+            </span>
+          ) : isCallCard && callBody ? (
+            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+              <CallCard
+                body={callBody}
+                mine={mine}
+                onRecall={(video) => emit('im:invoke-call', { convId: message.convId, video })}
+              />
             </span>
           ) : (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>

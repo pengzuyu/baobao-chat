@@ -7,7 +7,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { FileText, Phone } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { LoginPage } from '../features/auth/pages/LoginPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
@@ -15,6 +15,9 @@ import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
 import { KbPage } from '../features/kb/pages/KbPage';
 import { useImStore } from '../features/im/store/im';
+import { useRtcStore } from '../features/rtc/store/rtcStore';
+import { RtcOverlay } from '../features/rtc/components/RtcOverlay';
+import { RecentCallsPage } from '../features/rtc/pages/RecentCallsPage';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
 import { AgentReportsPage } from '../features/agent/pages/AgentReportsPage';
@@ -39,12 +42,17 @@ const WS_BASE: string = import.meta.env.VITE_WS_BASE ?? 'ws://localhost:8080/ws/
 /** mock 模式（无后端联调）默认开启：REST/WS 走 features 各模块 api 层内置桩数据 */
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
 
-/** 认证门卫：无凭据强制跳 /auth（D01 §4.2） */
+/** 认证门卫：无凭据强制跳 /auth（D01 §4.2）；通过后挂全局通话浮层（D04） */
 function RequireAuth({ children }: { children: ReactNode }) {
   const token = useAuthStore((s) => s.token);
   const location = useLocation();
   if (!token) return <Navigate to="/auth" replace state={{ from: location.pathname }} />;
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <RtcOverlay />
+    </>
+  );
 }
 
 /** WS 连接生命周期与全局绑定（装配副作用集中于此） */
@@ -53,12 +61,15 @@ function useWsLifecycle(): void {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const setMyUid = useImStore((s) => s.setMyUid);
+  const setRtcUid = useRtcStore((s) => s.setMyUid);
   const queryClient = useQueryClient();
 
   // 组合层注入：IM 判定"己方消息"用（features 间禁止横向 import，D01 §12.2）
+  // rtc 同口径注入（对端解析/bus 回拨发起判定方向，D04）
   useEffect(() => {
     setMyUid(user?.uid ?? '');
-  }, [user, setMyUid]);
+    setRtcUid(user?.uid ?? '');
+  }, [user, setMyUid, setRtcUid]);
 
   useEffect(() => {
     bindWsToConnectionStore();
@@ -116,7 +127,8 @@ export function App() {
         <Route path="/im/favorites" element={<FavoritesPage />} />
         {/* 通知中心（PIM-09，D03 §3.9） */}
         <Route path="/im/notifications" element={<NotificationCenterPage />} />
-        <Route path="/rtc" element={<PlaceholderPage title="通话" designDoc="D04" icon={Phone} blurb="音视频通话、来电接听与通话历史" />} />
+        {/* 通话域（D04 阶段一务实版）：最近通话（call_card 消息流派生）+ 全局通话浮层在 RequireAuth 挂载 */}
+        <Route path="/rtc" element={<RecentCallsPage />} />
         <Route path="/doc" element={<PlaceholderPage title="文档中心" designDoc="D05/D06" icon={FileText} blurb="在线文档协同、文件传输与分享" />} />
         {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
         <Route path="/kb" element={<KbPage />} />

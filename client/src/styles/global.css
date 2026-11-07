@@ -5600,3 +5600,464 @@ body {
 .admin-word-form--top {
   flex-shrink: 0;
 }
+
+/* ═══════════════ 通话域（D04 阶段一务实版）═══════════════ */
+
+/* 通话全屏浮层（PRTC-01 overlay 形态：独立全屏遮罩，非 Tauri 独立窗） */
+.rtc-call-window {
+  position: fixed;
+  inset: 0;
+  z-index: 1200; /* 高于业务弹窗（--bbw-z-modal 500） */
+  display: flex;
+  flex-direction: column;
+  background: #14161d;
+  color: var(--bbw-gray-1);
+  animation: rtc-fade-in 0.18s ease-out;
+}
+
+@keyframes rtc-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 状态栏：呼吸点 + 状态文案 + 计时 */
+.rtc-call-window__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px;
+  font-size: var(--bbw-font-14);
+  color: var(--bbw-gray-1);
+}
+
+.rtc-call-window__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bbw-warning);
+  animation: rtc-breathe 1.6s ease-in-out infinite;
+}
+
+.rtc-call-window__dot--on {
+  background: var(--bbw-success);
+}
+
+@keyframes rtc-breathe {
+  0%, 100% { opacity: 0.4; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+.rtc-call-window__timer {
+  font-family: var(--bbw-font-mono);
+  font-size: var(--bbw-font-16);
+  color: var(--bbw-gray-1);
+}
+
+.rtc-call-window__media-warn {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 10px;
+  background: rgba(230, 162, 60, 0.18);
+  color: var(--bbw-warning);
+  font-size: var(--bbw-font-12);
+}
+
+/* 画面区 */
+.rtc-call-window__stage {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #0d0f14;
+}
+
+.rtc-call-window__remote {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.rtc-call-window__placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.rtc-call-window__peer-name {
+  font-size: var(--bbw-font-20);
+  font-weight: 600;
+}
+
+.rtc-call-window__peer-hint {
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-5);
+}
+
+.rtc-call-window__pip {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 176px;
+  height: 99px;
+  border-radius: 8px;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  object-fit: cover;
+}
+
+/* 控制条 */
+.rtc-call-window__controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: 20px 0 32px;
+}
+
+.rtc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--bbw-gray-1);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.rtc-btn:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.rtc-btn:active {
+  transform: scale(0.94);
+}
+
+.rtc-btn--off {
+  background: rgba(255, 255, 255, 0.32);
+  color: #ff6b6b;
+}
+
+.rtc-btn--hangup {
+  width: 56px;
+  height: 56px;
+  background: var(--bbw-danger);
+}
+
+.rtc-btn--hangup:hover {
+  background: #d63c41;
+}
+
+.rtc-btn__rotate {
+  transform: rotate(135deg); /* 未接通挂断=取消语义（听筒反扣） */
+}
+
+/* 来电弹窗（PRTC-03 应用内形态） */
+.rtc-incoming {
+  position: fixed;
+  top: 18vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1300;
+}
+
+.rtc-incoming__panel {
+  width: 340px;
+  padding: 22px 22px 26px;
+  border-radius: var(--bbw-radius-modal);
+  background: var(--bbw-gray-1);
+  box-shadow: 0 18px 48px rgba(31, 35, 41, 0.28);
+  display: flex;
+  flex-direction: column;
+  animation: rtc-slide-in 0.22s ease-out;
+}
+
+@keyframes rtc-slide-in {
+  from { opacity: 0; transform: translateY(-14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.rtc-incoming__title {
+  text-align: center;
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-6);
+  margin-bottom: 14px;
+}
+
+.rtc-incoming__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.rtc-incoming__name {
+  font-size: var(--bbw-font-20);
+  font-weight: 600;
+  color: var(--bbw-gray-10);
+}
+
+.rtc-incoming__type {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-6);
+}
+
+.rtc-incoming__actions {
+  display: flex;
+  justify-content: space-around;
+}
+
+.rtc-incoming__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border: none;
+  border-radius: 50%;
+  color: var(--bbw-text-on-fill);
+  cursor: pointer;
+  transition: transform 0.1s ease, filter 0.15s ease;
+}
+
+.rtc-incoming__btn:active {
+  transform: scale(0.92);
+}
+
+.rtc-incoming__btn--accept {
+  background: var(--bbw-success);
+}
+
+.rtc-incoming__btn--accept:hover {
+  filter: brightness(1.08);
+}
+
+.rtc-incoming__btn--reject {
+  background: var(--bbw-danger);
+}
+
+.rtc-incoming__btn--reject:hover {
+  filter: brightness(1.08);
+}
+
+/* 通话 toast */
+.rtc-toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1400;
+  padding: 8px 18px;
+  border-radius: 18px;
+  background: rgba(31, 35, 41, 0.86);
+  color: var(--bbw-gray-1);
+  font-size: var(--bbw-font-13);
+  animation: rtc-fade-in 0.15s ease-out;
+}
+
+/* 会话头通话下拉（INT-RTC-01） */
+.chat-header__call {
+  position: relative;
+}
+
+.chat-header__call-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 132px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--bbw-gray-1);
+  box-shadow: var(--bbw-shadow-pop);
+  display: flex;
+  flex-direction: column;
+  z-index: 110;
+}
+
+.chat-header__call-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--bbw-gray-8);
+  font-size: var(--bbw-font-13);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chat-header__call-menu button:hover {
+  background: var(--bbw-gray-2);
+}
+
+/* call_card 气泡（D04 §4.5；气泡内卡片，随 bubble--mine/peer 底色） */
+.call-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+  padding: 2px 0;
+}
+
+.call-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--bbw-primary-light);
+  color: var(--bbw-primary);
+  flex-shrink: 0;
+}
+
+.call-card__icon--missed {
+  background: var(--bbw-danger-light);
+  color: var(--bbw-danger);
+}
+
+.call-card__meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.call-card__title {
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-9);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.call-card__dir {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+}
+
+.call-card__status {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+  margin-top: 2px;
+}
+
+.call-card__status--missed {
+  color: var(--bbw-danger);
+}
+
+.call-card__recall {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: 14px;
+  background: var(--bbw-gray-1);
+  color: var(--bbw-primary);
+  font-size: var(--bbw-font-12);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s ease;
+}
+
+.call-card__recall:hover {
+  border-color: var(--bbw-primary);
+}
+
+/* /rtc 最近通话页（PRTC-06 务实版） */
+.rtc-recent-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
+.rtc-recent-page__header h2 {
+  font-size: var(--bbw-font-20);
+  color: var(--bbw-gray-10);
+  margin: 0 0 6px;
+}
+
+.rtc-recent-page__hint {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+  margin: 0 0 16px;
+  line-height: var(--bbw-line-height);
+}
+
+.rtc-recent-page__list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rtc-recent-page__row {
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: 10px;
+  background: var(--bbw-gray-1);
+}
+
+.rtc-recent-page__row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rtc-recent-page__row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rtc-recent-page__conv {
+  font-size: var(--bbw-font-14);
+  font-weight: 600;
+  color: var(--bbw-gray-10);
+}
+
+.rtc-recent-page__time {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-5);
+}
+
+.rtc-recent-page__row .call-card {
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--bbw-gray-2);
+  border-radius: 8px;
+}
+
+.rtc-recent-page__empty {
+  padding: 40px 0;
+  text-align: center;
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-6);
+}
+
+.rtc-recent-page__foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 14px;
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-5);
+}

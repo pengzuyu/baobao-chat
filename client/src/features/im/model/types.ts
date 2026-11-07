@@ -2,6 +2,8 @@
  * IM 核心类型（D03 §6.3 子集；正式版与服务端 schema 同源生成，14 篇 §8）。
  */
 
+import type { CallCardBody } from '../../../shared/components/CallCard';
+
 export type ConvType = 1 | 2 | 3; // 1 单聊 / 2 群聊 / 3 广播群
 
 export type MsgType =
@@ -38,8 +40,8 @@ export interface FileMessageBody {
   contentType?: string;
 }
 
-/** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；全集见 D03 §6.3） */
-export type MessageBody = { text: string } | FileMessageBody | SystemBody | Record<string, never>;
+/** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；call_card 为通话卡片体（D04）；全集见 D03 §6.3） */
+export type MessageBody = { text: string } | FileMessageBody | SystemBody | CallCardBody | Record<string, never>;
 
 /** 引用快照（服务端 ext.reply_digest，D03 §5.2） */
 export interface ReplyDigest {
@@ -171,7 +173,8 @@ export interface MsgUpdatedPayload {
   msg_id: string;
   conv_id: string;
   seq: number;
-  body: { text: string };
+  /** 编辑后的 body（text 编辑={text}；call_card 终态回写={call_id,...}——服务端同一通道，D04） */
+  body: MessageBody;
   edited_at: number;
   edit_version: number;
 }

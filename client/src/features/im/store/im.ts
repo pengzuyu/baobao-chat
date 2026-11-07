@@ -12,7 +12,7 @@ import { sendTextMessage, updateConvState as apiUpdateConvState } from '../api/i
 import { systemMessageText } from '../pages/systemMessageRegistry';
 // 本地持久化（写穿/outbox）——与 ../api/local 互引为运行时环（函数体引用，模块初始化无环序依赖）
 import { outboxBumpRetry, outboxEnqueue, outboxSettle, persistMessage, persistReadSeq, persistUpdatedLocal } from '../api/local';
-import type { Conversation, ConvUpdatedPushPayload, Mention, Message, MsgExt, SystemBody } from '../model/types';
+import type { Conversation, ConvUpdatedPushPayload, Mention, Message, MessageBody, MsgExt, SystemBody } from '../model/types';
 import '../events'; // 装载 bus 事件类型声明（im:unread-changed 等）
 
 interface ImState {
@@ -51,8 +51,8 @@ interface ImState {
 
   /** msg.recall 推送：原地转撤回占位（seq 不断裂，INT-IM-03） */
   applyRecall: (convId: string, msgId: string, operatorId: string) => void;
-  /** msg.updated 推送：编辑原地更新（INT-IM-02） */
-  applyUpdated: (convId: string, msgId: string, body: { text: string }, editedAt: number, editVersion: number) => void;
+  /** msg.updated 推送：编辑原地更新（INT-IM-02；body 泛化——call_card 终态回写同通道，D04） */
+  applyUpdated: (convId: string, msgId: string, body: MessageBody, editedAt: number, editVersion: number) => void;
   /** msg.reaction.new 推送：全量快照幂等合并（INT-IM-23） */
   applyReactions: (convId: string, msgId: string, reactions: Record<string, string[]>) => void;
 
@@ -305,7 +305,7 @@ export const useImStore = create<ImState>((set, get) => ({
       const list = s.messagesByConv[convId];
       if (!list) return s;
       const next = list.map((m) =>
-        m.msgId === msgId ? { ...m, body: { text: body.text }, status: 3 as const, editedAt, editVersion } : m,
+        m.msgId === msgId ? { ...m, body, status: 3 as const, editedAt, editVersion } : m,
       );
       return { messagesByConv: { ...s.messagesByConv, [convId]: next } };
     });
