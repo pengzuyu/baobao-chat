@@ -699,6 +699,10 @@ func main() {
 			return ids
 		},
 	})
+	// 共享邮箱 ACL 闭包回填（mail.shared）
+	mailACL = func(ctx context.Context, resourceType, resourceID string, userID int64) int {
+		return aclSvc.Resolve(ctx, 1, resourceType, resourceID, userID)
+	}
 	// kb 空间 ACL 闭包回填（前置声明处；kb.space 资源键=空间 ID）
 	aclResolve = func(ctx context.Context, spaceID, userID int64) int {
 		return aclSvc.Resolve(ctx, 1, "kb.space", strconv.FormatInt(spaceID, 10), userID)
@@ -829,6 +833,8 @@ func main() {
 	// 邮件栈=进程内直投（docker-mailserver/auth-bridge/路径②随阶段二）；
 	// 懒开户="登录即有邮箱"（user.offboarded 联动随 D02 消费方阶段二）；
 	// 跨域全闭包（D02 §4：不引 org/admin/auth 包）
+	// mailACL 共享邮箱资源权限（aclSvc 装配于后段；kb ACLResolve 同款回填模式）
+	mailACL := func(ctx context.Context, resourceType, resourceID string, userID int64) int { return 0 }
 	var mailRepoInst mailrepo.Repo
 	if pgPool != nil {
 		mailRepoInst = mailrepo.NewPostgres(pgPool)
@@ -859,6 +865,10 @@ func main() {
 		VerifyPwd: authservice.VerifyPassword,
 		PushMail: func(userID int64, payload any) {
 			mailPush.PushRTC([]int64{userID}, "mail.new", payload)
+		},
+		// 共享邮箱 ACL（mail.shared；前置函数变量+装配后回填——kb 同款）
+		ACLPerm: func(ctx context.Context, resourceType, resourceID string, userID int64) int {
+			return mailACL(ctx, resourceType, resourceID, userID)
 		},
 	}, mailRepoInst)
 	mailAPI = mailMod.API() // mcpgw 闭包引用回填（前置声明处）

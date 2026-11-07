@@ -91,11 +91,11 @@ func (p *Postgres) CreateMailbox(ctx context.Context, mb Mailbox) (Mailbox, erro
 	settings, _ := json.Marshal(mb.Settings)
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO mailbox (id, tenant_id, domain_id, address, type, owner_user_id,
-			quota_bytes, used_bytes, status, settings, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			govern_dept_id, quota_bytes, used_bytes, status, settings, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,0),$8,$9,$10,$11,$12)
 		RETURNING created_at`,
 		mb.ID, mb.TenantID, mb.DomainID, mb.Address, mb.Type, mb.OwnerUserID,
-		mb.QuotaBytes, mb.UsedBytes, mb.Status, settings, mb.CreatedAt).
+		mb.GovernDeptID, mb.QuotaBytes, mb.UsedBytes, mb.Status, settings, mb.CreatedAt).
 		Scan(&mb.CreatedAt); err != nil {
 		return Mailbox{}, err
 	}
@@ -193,14 +193,14 @@ func (p *Postgres) ListFolders(ctx context.Context, mailboxID int64) ([]Folder, 
 }
 
 const mailboxCols = `SELECT id, tenant_id, domain_id, address, type,
-	COALESCE(owner_user_id,0), quota_bytes, used_bytes, status,
+	COALESCE(owner_user_id,0), COALESCE(govern_dept_id,0), quota_bytes, used_bytes, status,
 	COALESCE(settings,'{}'), created_at, COALESCE(suspended_at, 'epoch')`
 
 func scanMailbox(row pgx.Row) (*Mailbox, error) {
 	var mb Mailbox
 	var settings []byte
 	if err := row.Scan(&mb.ID, &mb.TenantID, &mb.DomainID, &mb.Address, &mb.Type,
-		&mb.OwnerUserID, &mb.QuotaBytes, &mb.UsedBytes, &mb.Status,
+		&mb.OwnerUserID, &mb.GovernDeptID, &mb.QuotaBytes, &mb.UsedBytes, &mb.Status,
 		&settings, &mb.CreatedAt, &mb.SuspendedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -498,4 +498,10 @@ func (p *Postgres) RevokeAppPassword(ctx context.Context, tenantID, id, userID i
 		return ErrNotFound
 	}
 	return nil
+}
+
+// GetMailboxByID 主键查
+func (p *Postgres) GetMailboxByID(ctx context.Context, tenantID, id int64) (*Mailbox, error) {
+	return scanMailbox(p.pool.QueryRow(ctx, mailboxCols+`
+		FROM mailbox WHERE tenant_id=$1 AND id=$2`, tenantID, id))
 }

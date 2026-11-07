@@ -54,8 +54,9 @@ type Mailbox struct {
 	TenantID    int64
 	DomainID    int64
 	Address     string // employee_no@domain
-	Type        int    // 1 personal（2 shared 阶段二）
+	Type        int    // 1 personal 2 shared（治理部门挂靠）
 	OwnerUserID int64
+	GovernDeptID int64 // shared 治理部门（personal=0）
 	QuotaBytes  int64
 	UsedBytes   int64
 	Status      int // 1 active 2 suspended 3 archived
@@ -127,6 +128,8 @@ type Repo interface {
 	GetMailboxByOwner(ctx context.Context, tenantID, userID int64) (*Mailbox, error)
 	// GetMailboxByAddress 投递寻址（含停用态——service 判 9021）
 	GetMailboxByAddress(ctx context.Context, tenantID int64, address string) (*Mailbox, error)
+	// GetMailboxByID 主键查（共享邮箱访问校验）
+	GetMailboxByID(ctx context.Context, tenantID, id int64) (*Mailbox, error)
 	// CreateMailbox 开户（事务内 seed 六系统文件夹）
 	CreateMailbox(ctx context.Context, mb Mailbox) (Mailbox, error)
 	ListMailboxes(ctx context.Context, tenantID int64, status int) ([]Mailbox, error) // status 0=全部

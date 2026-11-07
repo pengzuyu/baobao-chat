@@ -51,6 +51,9 @@ type Options struct {
 	VerifyPwd func(storedHash, secret string) bool
 	// PushMail mail.new 直推（gateway 惯例：瞬态推送不经 eventbus）
 	PushMail func(userID int64, payload any)
+	// ACLPerm 共享邮箱资源权限（mail.shared，address 为资源键；0=无——
+	// 共享邮箱纯 ACL 驱动 fail-closed，无基线回落；返回 1..4 同 org/acl）
+	ACLPerm func(ctx context.Context, resourceType, resourceID string, userID int64) int
 	Now      func() time.Time
 }
 
@@ -403,6 +406,16 @@ func (s *Service) SendMessage(ctx context.Context, tenantID, userID int64, req S
 	if err != nil {
 		return nil, err
 	}
+	return s.internalSend(ctx, tenantID, userID, mb.Address, req)
+}
+
+// internalSend 发送共核（检查链以发起者本人身份执行；fromAddr 可覆写=
+// 共享邮箱代发，22 §3.4）
+func (s *Service) internalSend(ctx context.Context, tenantID, userID int64, fromAddr string, req SendReq) (*SendResp, error) {
+	mb, err := s.mustActiveMailbox(ctx, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
 	recipients := concat(req.To, req.Cc, req.Bcc)
 	if len(recipients) == 0 {
 		return nil, errx.New(errx.CodeMailRecipientInvalid, "收件人为空")
@@ -466,7 +479,7 @@ func (s *Service) SendMessage(ctx context.Context, tenantID, userID int64, req S
 	if _, err := s.repo.InsertMessage(ctx, mailrepo.Message{
 		TenantID: tenantID, MailboxID: mb.ID, FolderID: sentFolder,
 		MessageID: msgIDText, InReplyTo: req.InReplyTo,
-		FromAddr: mb.Address, ToAddrs: req.To, CcAddrs: req.Cc, BccAddrs: req.Bcc,
+		FromAddr: fromAddr, ToAddrs: req.To, CcAddrs: req.Cc, BccAddrs: req.Bcc,
 		Subject: req.Subject, Snippet: snippet, Body: req.Body,
 		HasAttachment: len(req.Attachments) > 0, Attachments: req.Attachments,
 		Flags: mailrepo.FlagSeen, Size: size, ReceivedAt: s.opts.Now(),
@@ -499,7 +512,7 @@ func (s *Service) SendMessage(ctx context.Context, tenantID, userID int64, req S
 		if _, ierr := s.repo.InsertMessage(ctx, mailrepo.Message{
 			TenantID: tenantID, MailboxID: dst.ID, FolderID: inbox,
 			MessageID: msgIDText, InReplyTo: req.InReplyTo,
-			FromAddr: mb.Address, ToAddrs: req.To, CcAddrs: req.Cc,
+			FromAddr: fromAddr, ToAddrs: req.To, CcAddrs: req.Cc,
 			Subject: req.Subject, Snippet: snippet, Body: req.Body,
 			HasAttachment: len(req.Attachments) > 0, Attachments: req.Attachments,
 			Flags: 0, Size: size, ReceivedAt: s.opts.Now(),
@@ -655,4 +668,128 @@ func concat(lists ...[]string) []string {
 		out = append(out, l...)
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// 共享邮箱（22 §3.4/§6.4：resource_acl mail 资源——ACL 链路收官消费方）
+// ---------------------------------------------------------------------------
+
+// SharedMailboxView 用户可见共享邮箱视图
+type SharedMailboxView struct {
+	ID          int64  `json:"id,string"`
+	Address     string `json:"address"`
+	Unread      int    `json:"unread"`
+	IsOwner     bool   `json:"is_owner"` // owner 可代发（22 §3.4）
+}
+
+// AdminCreateSharedMailbox 建共享邮箱（PAD-16；type=2，治理部门挂靠，
+// 资源键=address → resource_acl 授权经管理端 /admin/acl 下发）
+func (s *Service) AdminCreateSharedMailbox(ctx context.Context, tenantID int64, localPart string, governDeptID int64) (*mailrepo.Mailbox, error) {
+	localPart = strings.TrimSpace(localPart)
+	if localPart == "" || strings.ContainsAny(localPart, "@ \t") {
+		return nil, errx.New(errx.CodeBadRequest, "local_part 非法（无 @ 无空白）")
+	}
+	domain, err := s.ensureDomain(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	address := localPart + "@" + domain.Domain
+	if _, err := s.repo.GetMailboxByAddress(ctx, tenantID, address); err == nil {
+		return nil, errx.New(errx.CodeBadRequest, "地址已存在")
+	}
+	created, err := s.repo.CreateMailbox(ctx, mailrepo.Mailbox{
+		TenantID: tenantID, DomainID: domain.ID, Address: address,
+		Type: 2, GovernDeptID: governDeptID,
+		QuotaBytes: DefaultQuotaBytes, Status: 1,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+// aclPermOf 资源权限（0=无；ACLPerm 闭包缺省=全员无授权——共享邮箱纯
+// ACL 驱动，无基线回落，fail-closed）
+func (s *Service) aclPermOf(ctx context.Context, address string, userID int64) int {
+	if s.opts.ACLPerm == nil {
+		return 0
+	}
+	return s.opts.ACLPerm(ctx, "mail.shared", address, userID)
+}
+
+// SharedMailboxes 用户可见共享邮箱（ACL ≥viewer；owner 标记=4）
+func (s *Service) SharedMailboxes(ctx context.Context, tenantID, userID int64) ([]SharedMailboxView, error) {
+	boxes, err := s.repo.ListMailboxes(ctx, tenantID, 0) // 全状态再自滤 type=2
+	if err != nil {
+		return nil, err
+	}
+	out := []SharedMailboxView{}
+	for _, mb := range boxes {
+		if mb.Type != 2 || mb.Status != 1 {
+			continue
+		}
+		perm := s.aclPermOf(ctx, mb.Address, userID)
+		if perm < 1 {
+			continue
+		}
+		view := SharedMailboxView{ID: mb.ID, Address: mb.Address, IsOwner: perm == 4}
+		if folders, ferr := s.repo.ListFolders(ctx, mb.ID); ferr == nil {
+			for _, f := range folders {
+				if f.Name == "inbox" {
+					view.Unread = f.UnreadCount
+				}
+			}
+		}
+		out = append(out, view)
+	}
+	return out, nil
+}
+
+// sharedMailboxFor 共享邮箱访问校验（≥viewer；5021 语义）
+func (s *Service) sharedMailboxFor(ctx context.Context, tenantID, userID, mailboxID int64, minPerm int) (*mailrepo.Mailbox, error) {
+	mb, err := s.repo.GetMailboxByID(ctx, tenantID, mailboxID)
+	if err != nil || mb.Type != 2 {
+		return nil, errx.New(errx.CodeMailboxDisabled, "共享邮箱不存在")
+	}
+	if s.aclPermOf(ctx, mb.Address, userID) < minPerm {
+		return nil, errx.New(errx.CodePermACLDenied, "无共享邮箱权限")
+	}
+	return mb, nil
+}
+
+// ListSharedMessages 共享邮箱列表（viewer+）
+func (s *Service) ListSharedMessages(ctx context.Context, tenantID, userID, mailboxID int64,
+	folder string, cursor int64, limit int, filter string) ([]mailrepo.Message, error) {
+	mb, err := s.sharedMailboxFor(ctx, tenantID, userID, mailboxID, 1)
+	if err != nil {
+		return nil, err
+	}
+	if folder == "" {
+		folder = "inbox"
+	}
+	folderID, ferr := s.folderID(ctx, mb.ID, folder)
+	if ferr != nil {
+		return nil, errx.New(errx.CodeMailFolderError, "文件夹不存在")
+	}
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	if limit > MaxListLimit {
+		limit = MaxListLimit
+	}
+	return s.repo.ListMessages(ctx, mb.ID, folderID, cursor, limit, filter)
+}
+
+// SendAsShared 代发（owner；22 §3.4：From=共享地址，头域代发人标注——
+// 外显"XX 代部门邮箱发送"，渲染在客户端，登记）：检查链同权（§7 人与
+// Agent 不放宽）。
+func (s *Service) SendAsShared(ctx context.Context, tenantID, userID, mailboxID int64, req SendReq) (*SendResp, error) {
+	mb, err := s.sharedMailboxFor(ctx, tenantID, userID, mailboxID, 4) // owner
+	if err != nil {
+		return nil, err
+	}
+	if _, aerr := s.mustActiveMailbox(ctx, tenantID, userID); aerr != nil {
+		return nil, aerr // 发起者本人邮箱须活跃（sent 副本归本人）
+	}
+	return s.internalSend(ctx, tenantID, userID, mb.Address, req)
 }

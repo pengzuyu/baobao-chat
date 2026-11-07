@@ -5,6 +5,7 @@ package mailservice
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -493,4 +494,102 @@ func mustErr(t *testing.T, f func() error) error {
 		t.Fatal("期望错误")
 	}
 	return err
+}
+
+// 共享邮箱 ACL 全链（22 §3.4）：admin 建 → 授权（ACLPerm 桩）→ viewer
+// 可见可读不可代发 → owner 可代发（From=共享地址）→ 无权限 fail-closed
+func TestSharedMailboxACL(t *testing.T) {
+	// ACL 桩：service@ 授 alice owner、bob viewer（DefaultDomain=corp.company.internal）
+	const svcDomain = "corp.company.internal"
+	perm := map[[2]string]int{}
+	clk := &fakeClock{now: time.UnixMilli(1760000000000)}
+	repo := mailrepo.NewMemory()
+	svc := New(repo, Options{
+		DefaultDomain: svcDomain,
+		UserEmployeeNo: func(_, uid int64) (string, error) {
+			return "E10000" + func() string {
+				switch uid {
+				case alice:
+					return "1"
+				case bob:
+					return "2"
+				}
+				return "3"
+			}(), nil
+		},
+		HashPwd:  authservice.HashPassword,
+		ACLPerm: func(_ context.Context, _ /*resType*/, resID string, uid int64) int {
+			return perm[[2]string{resID, strconv.FormatInt(uid, 10)}]
+		},
+		Now: clk.Now,
+	})
+	ctx := context.Background()
+
+	// 本人邮箱就绪（alice/bob）
+	if _, err := svc.Summary(ctx, 1, alice); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Summary(ctx, 1, bob); err != nil {
+		t.Fatal(err)
+	}
+	// admin 建共享邮箱
+	shared, err := svc.AdminCreateSharedMailbox(ctx, 1, "service", 31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared.Type != 2 || shared.Address != "service@"+svcDomain {
+		t.Fatalf("共享邮箱：%+v", shared)
+	}
+	// 无授权：两人均不可见（fail-closed）
+	if l, _ := svc.SharedMailboxes(ctx, 1, alice); len(l) != 0 {
+		t.Fatal("无授权不可见")
+	}
+	// 授权
+	perm[[2]string{shared.Address, "10001"}] = 4 // alice owner
+	perm[[2]string{shared.Address, "10002"}] = 1 // bob viewer
+	// 可见列表（owner 标记）
+	l, _ := svc.SharedMailboxes(ctx, 1, alice)
+	if len(l) != 1 || !l[0].IsOwner {
+		t.Fatalf("owner 视图：%+v", l)
+	}
+	if lb, _ := svc.SharedMailboxes(ctx, 1, bob); len(lb) != 1 || lb[0].IsOwner {
+		t.Fatalf("viewer 视图：%+v", lb)
+	}
+	// owner 代发：From=共享地址，收件人看到共享地址
+	resp, err := svc.SendAsShared(ctx, 1, alice, shared.ID, SendReq{
+		To: []string{addr(bob)}, Subject: "代发通知", Body: "由部门邮箱发出"})
+	if err != nil || len(resp.Delivered) != 1 {
+		t.Fatalf("代发：%v %+v", err, resp)
+	}
+	// 代发收件落 bob 本人邮箱，From=共享地址（22 §3.4 代发外显）
+	bobInbox, _ := svc.ListMessages(ctx, 1, bob, "inbox", 0, 10, "")
+	if len(bobInbox) != 1 || bobInbox[0].FromAddr != shared.Address {
+		t.Fatalf("收件 From 应为共享地址：%+v", bobInbox)
+	}
+	// alice 本人 sent 副本也在（发起者留痕）
+	if mine, _ := svc.ListMessages(ctx, 1, alice, "sent", 0, 10, ""); len(mine) != 1 {
+		t.Fatal("代发者 sent 副本")
+	}
+	// viewer 不可代发
+	if _, err := svc.SendAsShared(ctx, 1, bob, shared.ID, SendReq{
+		To: []string{addr(alice)}, Subject: "x"}); err == nil {
+		t.Fatal("viewer 代发应拒")
+	}
+	// 无权限者读拒
+	if _, err := svc.ListSharedMessages(ctx, 1, 99999, shared.ID, "inbox", 0, 10, ""); err == nil {
+		t.Fatal("无权限读应拒")
+	}
+	// 共享邮箱收信：bob 发往 service@ → 共享 inbox+未读计入视图
+	if _, err := svc.SendMessage(ctx, 1, bob, SendReq{
+		To: []string{shared.Address}, Subject: "咨询", Body: "请教"}); err != nil {
+		t.Fatal(err)
+	}
+	sharedInbox, err := svc.ListSharedMessages(ctx, 1, bob, shared.ID, "inbox", 0, 10, "")
+	if err != nil || len(sharedInbox) != 1 {
+		t.Fatalf("viewer 读共享收件：%v %d", err, len(sharedInbox))
+	}
+	lb, _ := svc.SharedMailboxes(ctx, 1, bob)
+	if lb[0].Unread != 1 {
+		t.Fatalf("共享未读：%+v", lb)
+	}
 }

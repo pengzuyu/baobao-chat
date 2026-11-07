@@ -31,6 +31,10 @@ func RegisterRoutes(mux *http.ServeMux, authed func(http.HandlerFunc) http.Handl
 	mux.Handle("GET /api/v1/mail/app-passwords", authed(handleListAppPwd(svc)))
 	mux.Handle("POST /api/v1/mail/app-passwords", authed(handleCreateAppPwd(svc)))
 	mux.Handle("DELETE /api/v1/mail/app-passwords/{id}", authed(handleRevokeAppPwd(svc)))
+	// 共享邮箱（22 §3.4；ACL viewer 读/owner 代发）
+	mux.Handle("GET /api/v1/mail/shared", authed(handleSharedList(svc)))
+	mux.Handle("GET /api/v1/mail/shared/{mid}/messages", authed(handleSharedMessages(svc)))
+	mux.Handle("POST /api/v1/mail/shared/{mid}/messages", authed(handleSendAsShared(svc)))
 }
 
 // RegisterAdminRoutes 治理面路由（PAD-16 最小集：域/邮箱治理；
@@ -39,6 +43,7 @@ func RegisterAdminRoutes(mux *http.ServeMux, adminOnly func(http.HandlerFunc) ht
 	mux.Handle("GET /api/v1/admin/mail/domains", adminOnly(handleAdminDomains(svc)))
 	mux.Handle("GET /api/v1/admin/mail/mailboxes", adminOnly(handleAdminMailboxes(svc)))
 	mux.Handle("POST /api/v1/admin/mail/mailboxes", adminOnly(handleAdminOpenMailbox(svc)))
+	mux.Handle("POST /api/v1/admin/mail/mailboxes/shared", adminOnly(handleAdminCreateShared(svc)))
 	mux.Handle("POST /api/v1/admin/mail/mailboxes/{id}/suspend", adminOnly(handleAdminSuspend(svc)))
 	mux.Handle("POST /api/v1/admin/mail/mailboxes/{id}/resume", adminOnly(handleAdminResume(svc)))
 }
@@ -280,4 +285,57 @@ func actorOf(r *http.Request) int64 {
 func tenantOf(r *http.Request) int64 {
 	// 单租户阶段一 tenant=1（bot/file 同款；httpx.Tenant 中间件注入位随多租户）
 	return 1
+}
+
+func handleSharedList(svc *mailservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list, err := svc.SharedMailboxes(r.Context(), tenantOf(r), actorOf(r))
+		respond(w, r, list, err)
+	}
+}
+
+func handleSharedMessages(svc *mailservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		mid, err := strconv.ParseInt(r.PathValue("mid"), 10, 64)
+		if err != nil || mid <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "mailbox id 非法"))
+			return
+		}
+		q := r.URL.Query()
+		cursor, _ := strconv.ParseInt(q.Get("cursor"), 10, 64)
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		list, lerr := svc.ListSharedMessages(r.Context(), tenantOf(r), actorOf(r), mid,
+			q.Get("folder"), cursor, limit, q.Get("filter"))
+		respond(w, r, list, lerr)
+	}
+}
+
+func handleSendAsShared(svc *mailservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		mid, err := strconv.ParseInt(r.PathValue("mid"), 10, 64)
+		if err != nil || mid <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "mailbox id 非法"))
+			return
+		}
+		var req mailservice.SendReq
+		if !decode(w, r, &req) {
+			return
+		}
+		res, serr := svc.SendAsShared(r.Context(), tenantOf(r), actorOf(r), mid, req)
+		respond(w, r, res, serr)
+	}
+}
+
+func handleAdminCreateShared(svc *mailservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			LocalPart   string `json:"local_part"`
+			GovernDept  int64  `json:"govern_dept_id"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		mb, err := svc.AdminCreateSharedMailbox(r.Context(), tenantOf(r), body.LocalPart, body.GovernDept)
+		respond(w, r, mb, err)
+	}
 }

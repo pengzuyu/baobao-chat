@@ -380,3 +380,14 @@ func (m *Memory) folderIDByName(mailboxID int64, name string) (int64, error) {
 	}
 	return 0, fmt.Errorf("folder %s not found", name)
 }
+
+// GetMailboxByID 主键查
+func (m *Memory) GetMailboxByID(_ context.Context, _, id int64) (*Mailbox, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mb, ok := m.mailboxes[id]; ok {
+		out := *mb
+		return &out, nil
+	}
+	return nil, ErrNotFound
+}
