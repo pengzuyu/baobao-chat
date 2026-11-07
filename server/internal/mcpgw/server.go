@@ -144,6 +144,12 @@ func (g *Gateway) handleCall(r *http.Request, claims *authjwt.Claims, params jso
 	case "file_upload":
 		res, err := g.invokeFileUpload(r.Context(), tenant, uid, p.Arguments)
 		return res, err
+	case "mail_read":
+		res, err := g.invokeMailRead(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "mail_send":
+		res, err := g.invokeMailSend(r.Context(), tenant, uid, p.Arguments)
+		return res, err
 	default:
 		return nil, rpcErr(codeUnknownTool, "工具未接线: "+p.Name)
 	}

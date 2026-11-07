@@ -20,13 +20,15 @@ import (
 const testSecret = "test-secret-0123456789abcdef0123456789abcdef"
 
 type fixture struct {
-	gw       *Gateway
-	signer   *authjwt.Signer
-	kbArgs   []map[string]any // KBQuery 闭包收到的调用参数
-	docCalls []int64          // DocRead 闭包收到的 docID
-	imSends  []map[string]any // ImSend 闭包收到的参数
-	upLoads  []map[string]any // FileUpload 闭包收到的参数
-	audits   []AuditEntry
+	gw        *Gateway
+	signer    *authjwt.Signer
+	kbArgs    []map[string]any // KBQuery 闭包收到的调用参数
+	docCalls  []int64          // DocRead 闭包收到的 docID
+	imSends   []map[string]any // ImSend 闭包收到的参数
+	upLoads   []map[string]any // FileUpload 闭包收到的参数
+	audits    []AuditEntry
+	mailReads []map[string]any
+	mailSends []map[string]any
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -59,6 +61,23 @@ func newFixture(t *testing.T) *fixture {
 				"conv_id": convID, "bytes": len(data),
 			})
 			return map[string]any{"file_id": "91", "name": name, "size": len(data)}, nil
+		},
+		MailRead: func(_ context.Context, tenantID, uid int64, msgID int64, query, folder string, attachOnly bool, limit int) (any, error) {
+			f.mailReads = append(f.mailReads, map[string]any{
+				"tenant": tenantID, "uid": uid, "msg_id": msgID, "query": query,
+				"folder": folder, "attach_only": attachOnly, "limit": limit,
+			})
+			if msgID > 0 {
+				return map[string]any{"id": msgID, "subject": "方案定稿", "body": "正文"}, nil
+			}
+			return map[string]any{"items": []map[string]any{{"id": 31, "subject": "方案定稿", "snippet": "请审阅"}}}, nil
+		},
+		MailSend: func(_ context.Context, tenantID, uid int64, to, cc []string, subject, body, inReplyTo string) (any, error) {
+			f.mailSends = append(f.mailSends, map[string]any{
+				"tenant": tenantID, "uid": uid, "to": to, "cc": cc,
+				"subject": subject, "body": body, "in_reply_to": inReplyTo,
+			})
+			return map[string]any{"message_id": "m-1", "delivered": to, "undelivered": []any{}}, nil
 		},
 		Audit: func(_ context.Context, e AuditEntry) { f.audits = append(f.audits, e) },
 	}}
@@ -143,12 +162,13 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 	tok := f.mint(t, "7", false)
 	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`, tok)
 	tools := decode(t, rec)["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 4 {
-		t.Fatalf("供给应为 4 工具（kb_query/doc_read/im_send/file_upload）: %d 项", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("供给应为 6 工具（kb_query/doc_read/im_send/file_upload/mail_read/mail_send）: %d 项", len(tools))
 	}
 	// 风险级与 09 篇 §3.1 权威表逐项对齐（客户端 gate 按此分档）
 	want := map[string]string{
 		"kb_query": "low", "doc_read": "low", "im_send": "high", "file_upload": "medium",
+		"mail_read": "low", "mail_send": "high",
 	}
 	got := map[string]string{}
 	for _, tl := range tools {
@@ -421,5 +441,68 @@ func TestGetRejected(t *testing.T) {
 	f.gw.HandleMCP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET 应 405，得到 %d", rec.Code)
+	}
+}
+
+// mail_read/mail_send 供给（22 §4.7）：三态读取/发送链路/参数与 scope 防线
+func TestMailToolsSupply(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "7", false)
+	// ① 列表（folder 默认 inbox）
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"mail_read","arguments":{"limit":5}}}`, tok)
+	res := decode(t, rec)["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("列表应成功: %v", res)
+	}
+	// ② 检索
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"mail_read","arguments":{"query":"预算"}}}`, tok)
+	res = decode(t, rec)["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("检索应成功: %v", res)
+	}
+	// ③ 单封详情
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"mail_read","arguments":{"msg_id":31}}}`, tok)
+	res = decode(t, rec)["result"].(map[string]any)
+	if res["isError"] == true || !strings.Contains(rec.Body.String(), "正文") {
+		t.Fatalf("单封应含正文: %v", res)
+	}
+	// folder 空透传（mail 域侧默认 inbox——域兜底不重复）
+	if len(f.mailReads) != 3 || f.mailReads[0]["folder"] != "" || f.mailReads[2]["msg_id"] != int64(31) {
+		t.Fatalf("三态读取: %v", f.mailReads)
+	}
+	// ④ limit 越界
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"mail_read","arguments":{"limit":99}}}`, tok)
+	if c := errCode(t, decode(t, rec)); c != -32602 {
+		t.Fatalf("limit 越界应 -32602: %v", c)
+	}
+}
+
+func TestMailSendSupply(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "7", false)
+	// 发送成功：主体传播+检查链入域
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"mail_send","arguments":{"to":["E100002@corp.company.internal"],"subject":"评审邀请","body":"请审阅","cc":["E100003@corp.company.internal"]},"_meta":{"bbwAct":"agent:sess-m"}}}`, tok)
+	res := decode(t, rec)["result"].(map[string]any)
+	if res["isError"] == true || !strings.Contains(rec.Body.String(), "delivered") {
+		t.Fatalf("发送应成功: %v", res)
+	}
+	if len(f.mailSends) != 1 || f.mailSends[0]["uid"] != int64(7) || len(f.mailSends[0]["cc"].([]string)) != 1 {
+		t.Fatalf("发送链路: %v", f.mailSends)
+	}
+	if len(f.audits) != 1 || f.audits[0].Tool != "mail_send" || f.audits[0].Act != "agent:sess-m" {
+		t.Fatalf("审计: %+v", f.audits)
+	}
+	// to 缺失
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"mail_send","arguments":{"subject":"x","body":"y"}}}`, tok)
+	if c := errCode(t, decode(t, rec)); c != -32602 {
+		t.Fatalf("缺 to 应 -32602: %v", c)
+	}
+	// OBO 缺 mail scope → 防线二（-32002）
+	f2 := newFixture(t)
+	obo := f2.mint(t, "9", true, "im:message:send") // 无 mail:agent_tool
+	body := `{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"mail_send","arguments":{"to":["x@corp.company.internal"],"subject":"s","body":"b"},"_meta":{"bbwObo":"` + obo + `"}}}`
+	rec = post(t, f2.gw, body, "")
+	if c := errCode(t, decode(t, rec)); c != -32002 {
+		t.Fatalf("OBO 缺 scope 应 -32002: %v", c)
 	}
 }

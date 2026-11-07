@@ -56,6 +56,10 @@ type Options struct {
 	ImSend func(ctx context.Context, tenantID, uid, convID int64, msgType string, body json.RawMessage) (any, error)
 	// FileUpload 文件上传（file 域注入：b64 已解码为流；去重/限长在域服务）
 	FileUpload func(ctx context.Context, tenantID, uid int64, name, contentType string, convID int64, r io.Reader) (any, error)
+	// MailRead 邮件检索/读取（mail 域注入：本人邮箱归属=防线三；22 §4.7）
+	MailRead func(ctx context.Context, tenantID, uid int64, msgID int64, query, folder string, attachOnly bool, limit int) (any, error)
+	// MailSend 邮件外发（mail 域注入：检查链同权；高危确认在客户端管线）
+	MailSend func(ctx context.Context, tenantID, uid int64, to, cc []string, subject, body, inReplyTo string) (any, error)
 	// Audit 审计闭包（nil=仅结构化日志兜底）
 	Audit func(ctx context.Context, e AuditEntry)
 }

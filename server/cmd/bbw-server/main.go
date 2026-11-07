@@ -392,6 +392,9 @@ func main() {
 	mux.Handle("POST /api/v1/kb/query", authed(handleKBQuery(kbSvc)))
 	mux.Handle("GET /api/v1/kb/jobs", authed(handleKBJobs(kbSvc)))
 
+	// mailAPI 前置声明（mcpgw 闭包捕获引用；mail 模块装配于后段，调用在运行期完成）
+	var mailAPI *mailservice.Service
+
 	// ── MCP 网关供给层（D14 §6 裁决 2026-11-07）：公司域工具包成 MCP server
 	// 暴露，Runtime bbrt-mcp 连接期 initialize+tools/list 发现（mcp.corp.* 命名
 	// 空间），tools/call 携带 OBO 逐请求传播（三层身份：连接/主体/归因）；
@@ -424,6 +427,22 @@ func main() {
 		// file_upload：b64 已解码为流，直接交 file 域（去重/20MB 上限/软删归域）
 		FileUpload: func(ctx context.Context, tenantID, uid int64, name, contentType string, convID int64, r io.Reader) (any, error) {
 			return fileSvc.Upload(ctx, tenantID, uid, name, contentType, convID, r)
+		},
+		// 22 §4.7 Agent 邮件工具：read 三态（msg_id 单封/query 检索/folder 列表，
+		// 空透传由 mail 域默认 inbox）；send 检查链在域内=人与 Agent 同权（22 §7）
+		MailRead: func(ctx context.Context, tenantID, uid int64, msgID int64, query, folder string, attachOnly bool, limit int) (any, error) {
+			if msgID > 0 {
+				return mailAPI.GetMessage(ctx, tenantID, uid, msgID)
+			}
+			if query != "" {
+				return mailAPI.Search(ctx, tenantID, uid, query, attachOnly, limit)
+			}
+			return mailAPI.ListMessages(ctx, tenantID, uid, folder, 0, limit, "")
+		},
+		MailSend: func(ctx context.Context, tenantID, uid int64, to, cc []string, subject, body, inReplyTo string) (any, error) {
+			return mailAPI.SendMessage(ctx, tenantID, uid, mailservice.SendReq{
+				To: to, Cc: cc, Subject: subject, Body: body, InReplyTo: inReplyTo,
+			})
 		},
 		Audit: func(_ context.Context, e mcpgw.AuditEntry) {
 			log.Printf("[mcpgw] tool=%s tenant=%d subject=%d obo=%v act=%s ok=%v err=%s %dms",
@@ -786,6 +805,7 @@ func main() {
 			mailPush.PushRTC([]int64{userID}, "mail.new", payload)
 		},
 	}, mailRepoInst)
+	mailAPI = mailMod.API() // mcpgw 闭包引用回填（前置声明处）
 	mailapi.RegisterRoutes(mux, authed, mailMod.API())
 	mailapi.RegisterAdminRoutes(mux, adminOnly, mailMod.API())
 

@@ -84,6 +84,43 @@ func corpTools() []ToolDef {
 			Scope: "im:message:send",
 		},
 		{
+			// 22 篇 §4.7 mail.read：低风险全模式自动；仅本人邮箱（共享邮箱
+			// ACL 随 resource_acl 接入扩展）；列表摘要瘦身防全文灌上下文
+			Name:        "mail_read",
+			Description: "检索/读取本人邮箱邮件（22 篇 Agent 邮件工具）。msg_id 空且 query 空=按文件夹列未读优先摘要；query 非空=全文检索（主题/发件人/摘要）；msg_id 非空=单封详情（含正文）。共享邮箱随 ACL 授权扩展。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"msg_id":      map[string]any{"type": "integer", "description": "单封详情（优先生效）"},
+					"query":       map[string]any{"type": "string", "description": "检索词（≤256 字；空=列表）"},
+					"folder":      map[string]any{"type": "string", "enum": []string{"inbox", "sent", "drafts", "trash", "junk", "archive"}, "description": "列表文件夹（默认 inbox）"},
+					"attach_only": map[string]any{"type": "boolean", "description": "仅带附件"},
+					"limit":       map[string]any{"type": "integer", "description": "条数（默认 10，≤50）"},
+				},
+			},
+			Risk:  "low",
+			Scope: "mail:agent_tool",
+		},
+		{
+			// 22 篇 §4.7 mail.send：高危永不全自动（外发影响他人不可撤回，
+			// 09 篇矩阵逐次人工确认——Agent 通道不放宽敏感词/外域/限流/配额）
+			Name:        "mail_send",
+			Description: "以发起用户身份发送邮件（22 篇 Agent 邮件工具）。高风险：外发影响他人且不可撤回；内网域仅本域收件；外发检查链（敏感词/频率/配额）与人工发送同权生效。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"to":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "收件人地址集（必填）"},
+					"cc":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "抄送"},
+					"subject":     map[string]any{"type": "string", "description": "主题（≤255 字）"},
+					"body":        map[string]any{"type": "string", "description": "正文（≤1MB）"},
+					"in_reply_to": map[string]any{"type": "string", "description": "回复关联 message_id（可选）"},
+				},
+				"required": []string{"to", "subject", "body"},
+			},
+			Risk:  "high",
+			Scope: "mail:agent_tool",
+		},
+		{
 			// 09 篇 §3.2.7：外传工作区文件 → ask/auto-edit 确认（medium）；
 			// 内容经 b64 随调用上送（Runtime 读本地文件），存储/去重/票据归 file 域
 			Name:        "file_upload",
@@ -270,6 +307,73 @@ func (g *Gateway) invokeFileUpload(ctx context.Context, tenantID, uid int64, raw
 		return nil, rpcErr(codeUnknownTool, "file_upload 未装配（file 域不可用）")
 	}
 	res, err := g.opts.FileUpload(ctx, tenantID, uid, args.Filename, args.ContentType, args.ConvID, bytes.NewReader(content))
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeMailRead mail_read 执行：防线三（本人邮箱归属）在 mail 域服务
+func (g *Gateway) invokeMailRead(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		MsgID      int64  `json:"msg_id"`
+		Query      string `json:"query"`
+		Folder     string `json:"folder"`
+		AttachOnly bool   `json:"attach_only"`
+		Limit      int    `json:"limit"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if len([]rune(args.Query)) > 256 {
+		return nil, rpcErr(codeInvalidParams, "query ≤256 字")
+	}
+	if args.Limit <= 0 {
+		args.Limit = 10
+	}
+	if args.Limit > 50 {
+		return nil, rpcErr(codeInvalidParams, "limit ≤50")
+	}
+	if g.opts.MailRead == nil {
+		return nil, rpcErr(codeUnknownTool, "mail_read 未装配（mail 域不可用）")
+	}
+	res, err := g.opts.MailRead(ctx, tenantID, uid, args.MsgID, args.Query, args.Folder, args.AttachOnly, args.Limit)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeMailSend mail_send 执行：检查链（敏感词/外域/限流/配额）在
+// mail 域服务（22 §7 人与 Agent 同权）；高危确认在客户端九步管线
+func (g *Gateway) invokeMailSend(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		To        []string `json:"to"`
+		Cc        []string `json:"cc"`
+		Subject   string   `json:"subject"`
+		Body      string   `json:"body"`
+		InReplyTo string   `json:"in_reply_to"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if len(args.To) == 0 {
+		return nil, rpcErr(codeInvalidParams, "to 必填")
+	}
+	if len([]rune(args.Subject)) > 255 {
+		return nil, rpcErr(codeInvalidParams, "subject ≤255 字")
+	}
+	if len([]rune(args.Body)) > 1<<20 {
+		return nil, rpcErr(codeInvalidParams, "body ≤1MB")
+	}
+	if g.opts.MailSend == nil {
+		return nil, rpcErr(codeUnknownTool, "mail_send 未装配（mail 域不可用）")
+	}
+	res, err := g.opts.MailSend(ctx, tenantID, uid, args.To, args.Cc, args.Subject, args.Body, args.InReplyTo)
 	if err != nil {
 		return errText(err.Error()), nil
 	}
