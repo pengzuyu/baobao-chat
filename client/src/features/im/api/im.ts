@@ -6,7 +6,18 @@
 
 import { http } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
-import type { ConvType, ConvDetail, Conversation, ConversationMember, Mention, Message, MsgNewPayload, SendAck } from '../model/types';
+import type {
+  ConvType,
+  ConvDetail,
+  Conversation,
+  ConversationMember,
+  Mention,
+  Message,
+  MsgNewPayload,
+  NotificationItem,
+  NotificationKind,
+  SendAck,
+} from '../model/types';
 import { MOCK_CONVS, MOCK_MESSAGES, mockLatestSeq } from './mock';
 
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
@@ -352,6 +363,47 @@ export async function searchMessages(f: SearchFilters): Promise<Paged<SearchHit>
     `/messages/search?${qs.toString()}`,
   );
   return { items: data.items, nextCursor: data.nextCursor, hasMore: data.hasMore };
+}
+
+// ---- 通知中心（D03 §3.9 PIM-09；API-IM-14 列表/已读/未读数；WS notification.new 触发失效）----
+
+/** 通知列表参数（kind=分组 tab；unreadOnly=仅未读；cursor 翻页） */
+export interface NotificationListParams {
+  kind?: NotificationKind | 'all';
+  unreadOnly?: boolean;
+  cursor?: string;
+  limit?: number;
+}
+
+/** 通知列表（GET /notifications：id 倒序 + cursor 翻页） */
+export async function fetchNotifications(params: NotificationListParams = {}): Promise<Paged<NotificationItem>> {
+  if (USE_MOCK) {
+    await delay(300);
+    return { items: [], hasMore: false };
+  }
+  const qs = new URLSearchParams();
+  if (params.kind && params.kind !== 'all') qs.set('kind', params.kind);
+  if (params.unreadOnly) qs.set('unread_only', '1');
+  if (params.cursor) qs.set('cursor', params.cursor);
+  if (params.limit) qs.set('limit', String(params.limit));
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
+  const data = await http.get<{ items: NotificationItem[]; nextCursor?: string; hasMore: boolean }>(
+    `/notifications${suffix}`,
+  );
+  return { items: data.items, nextCursor: data.nextCursor, hasMore: data.hasMore };
+}
+
+/** 已读（POST /notifications/read：ids 单条/多条，或 all 全部；幂等） */
+export async function markNotificationsRead(p: { ids?: string[]; all?: boolean }): Promise<void> {
+  if (USE_MOCK) return;
+  await http.post(`/notifications/read`, p);
+}
+
+/** 未读数（GET /notifications/unread_count：铃铛红点数据源，端内 99+ 封顶） */
+export async function fetchUnreadNotificationCount(): Promise<number> {
+  if (USE_MOCK) return 0;
+  const data = await http.get<{ count: number }>(`/notifications/unread_count`);
+  return data.count;
 }
 
 // ---- mock 桩：ack 分配 + 幂等（同 client_msg_id 返回原 seq）----

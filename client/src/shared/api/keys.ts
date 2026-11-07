@@ -15,6 +15,16 @@ export const qk = {
     messages: (convId: string, cursor?: string | null): QueryKeyRO => ['im', 'messages', convId, cursor ?? null],
     /** 收藏列表 ['im','favorites',type]（PIM-08；前缀失效走 ['im','favorites']） */
     favorites: (type: string = 'all'): QueryKeyRO => ['im', 'favorites', type],
+    /** 通知列表 ['im','notifications','list',kind,unreadOnly]（PIM-09；前缀失效走 ['im','notifications','list']） */
+    notificationList: (kind: string = 'all', unreadOnly: boolean = false): QueryKeyRO => [
+      'im',
+      'notifications',
+      'list',
+      kind,
+      unreadOnly,
+    ],
+    /** 通知未读数（铃铛红点）['im','notifications','badge']（PIM-09；WS notification.new 触发失效） */
+    notificationBadge: ['im', 'notifications', 'badge'] as const,
   },
   auth: {
     session: ['auth', 'session'] as const,
@@ -33,4 +43,5 @@ export const wsInvalidationPrefixes: Record<string, QueryKeyRO[]> = {
   'conv.updated': [['im', 'convs']],
   'badge.updated': [], // 未读由 store 内联更新
   'presence.changed': [], // 在线点走 store
+  'notification.new': [['im', 'notifications']], // 通知中心（PIM-09）：列表 + 铃铛红点失效重拉
 };

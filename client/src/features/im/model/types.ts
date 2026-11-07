@@ -237,3 +237,34 @@ export interface MergeItem {
   origin_conv: string;
   origin_seq: number;
 }
+
+/** 通知分组（D03 §3.9 PIM-09 五分组；agent_done=Agent 完成预留） */
+export type NotificationKind = 'mention' | 'reply' | 'apply' | 'agent_done' | 'announcement';
+
+/** 通知中心列表项（API-IM-14 REST camel） */
+export interface NotificationItem {
+  id: string;
+  kind: NotificationKind;
+  convId?: string;
+  msgId?: string;
+  /** 会话内定位 seq（mention/reply 点击跳会话闪烁定位依据） */
+  seq?: number;
+  title: string;
+  digest?: string;
+  /** 同会话 10s 窗口合并计数（"×N"渲染；1=单条不显示） */
+  count: number;
+  createdAt: number;
+  /** 0/缺省=未读 */
+  readAt?: number;
+}
+
+/** notification.new 推送（D03 §5.3 snake；合并命中时 count 为合并后值，真值经 REST 回读） */
+export interface NotificationPushPayload {
+  id: string;
+  kind: NotificationKind;
+  conv_id?: string;
+  title: string;
+  digest?: string;
+  count: number;
+  ts: number;
+}

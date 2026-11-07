@@ -9,7 +9,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, Megaphone, SquarePen, Star } from 'lucide-react';
+import { ArrowDown, Bell, Megaphone, SquarePen, Star } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
@@ -18,7 +18,7 @@ import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { dayKey, formatDayDivider } from '../../../shared/utils/time';
-import { useConversationMessages, useConversations } from '../api/hooks';
+import { useConversationMessages, useConversations, useUnreadNotificationCount } from '../api/hooks';
 import {
   fetchConvDetail,
   fetchMessagesBefore,
@@ -83,6 +83,9 @@ export function ChatPage() {
   // ---- 服务端态（Query）----
   const convQuery = useConversations('all');
   const msgQuery = useConversationMessages(convId ?? null);
+  // 通知未读数（PIM-09 铃铛红点：99+ 封顶；WS notification.new 触发失效重拉）
+  const notifUnreadQuery = useUnreadNotificationCount();
+  const notifUnread = notifUnreadQuery.data ?? 0;
 
   // ---- 端内投影（feature store）----
   const convs = useImStore((s) => s.convs);
@@ -460,6 +463,14 @@ export function ChatPage() {
       }
       mentions.push({ uid: '', all: true, range: [at, at + 3] });
     }
+    // 个人 @：@面板选择的提及随发送携带（uid + 首个命中位置作 range；正式版按光标精确重算）
+    const picked = pendingMentionsRef.current;
+    pendingMentionsRef.current = [];
+    for (const p of picked) {
+      const idx = text.indexOf(`@${p.name}`);
+      if (idx < 0) continue; // 用户已删掉 @文本：视为放弃提及
+      mentions.push({ uid: p.uid, all: false, range: [idx, idx + p.name.length + 1] });
+    }
     void sendText(convId, text, replyTo?.seq, mentions.length > 0 ? mentions : undefined);
     setReplyTo(null);
   };
@@ -494,6 +505,20 @@ export function ChatPage() {
         {/* PIM-07 服务端态搜索（点击/⌘K 聚焦；本地 FTS5 态属 Tauri/Rust 侧不在此） */}
         <SearchPanel inputRef={searchInputRef} onSelect={onSearchSelect} />
         <div className="im-list-col__header-actions">
+          {/* 通知中心入口（PIM-09 D03 §3.9）：铃铛 + 未读红点数字（99+ 封顶） */}
+          <button
+            className="icon-btn bell-entry"
+            title="通知中心"
+            data-testid="notifications-entry"
+            onClick={() => navigate('/im/notifications')}
+          >
+            <Bell size={16} />
+            {notifUnread > 0 ? (
+              <span className="bell-entry__badge" data-testid="notifications-badge">
+                {notifUnread > 99 ? '99+' : notifUnread}
+              </span>
+            ) : null}
+          </button>
           <button
             className="icon-btn"
             title="我的收藏"

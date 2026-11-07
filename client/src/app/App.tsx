@@ -12,6 +12,7 @@ import { useAuthStore } from '../features/auth/store/auth';
 import { LoginPage } from '../features/auth/pages/LoginPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
 import { FavoritesPage } from '../features/im/pages/FavoritesPage';
+import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
 import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
@@ -57,9 +58,15 @@ function useWsLifecycle(): void {
     // 重连成功 → 精准失效 IM 缓存并触发重拉（正式版走 GET /sync 增量落库）
     wsClient.onResync = () => queryClient.invalidateQueries({ queryKey: ['im'] });
     wsClient.onAuthError = () => logout(); // WS 4001：强制下线（14 篇 §2.1）
+    // 通知中心（D03 §3.9 PIM-09）：notification.new → 通知域失效（列表各分组 + 铃铛红点）。
+    // 绑定在应用壳层：任何页面（含 /im/notifications 自身）收到推送都即时刷新
+    const offNotification = wsClient.on('notification.new', () => {
+      void queryClient.invalidateQueries({ queryKey: ['im', 'notifications'] });
+    });
     return () => {
       wsClient.onResync = null;
       wsClient.onAuthError = null;
+      offNotification();
     };
   }, [logout, queryClient]);
 
@@ -100,6 +107,8 @@ export function App() {
         <Route path="/im/c/:convId" element={<ChatPage />} />
         {/* 我的收藏（PIM-08，D03 §3.8） */}
         <Route path="/im/favorites" element={<FavoritesPage />} />
+        {/* 通知中心（PIM-09，D03 §3.9） */}
+        <Route path="/im/notifications" element={<NotificationCenterPage />} />
         <Route path="/rtc" element={<PlaceholderPage title="通话" designDoc="D04" icon={Phone} blurb="音视频通话、来电接听与通话历史" />} />
         <Route path="/doc" element={<PlaceholderPage title="文档中心" designDoc="D05/D06" icon={FileText} blurb="在线文档协同、文件传输与分享" />} />
         <Route path="/kb" element={<PlaceholderPage title="知识库" designDoc="D11" icon={BrainCircuit} blurb="企业知识空间检索、摄入与授权治理" />} />
