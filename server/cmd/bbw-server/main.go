@@ -669,6 +669,8 @@ func main() {
 	// ── 资源级 ACL（03 §4.4 第三层）：统一授权模型 + 管理 REST ──
 	// dept/role 展开闭包：role 接 admin RoleRepo（user_role 表）；dept 展
 	// 开随 user_dept 查询接线（org 域暂无按用户查部门——未注入=dept 层跳过，登记）
+	// mailACL 共享邮箱资源权限（aclSvc 装配于后段——声明前置+装配后回填）
+	var mailACL = func(ctx context.Context, resourceType, resourceID string, userID int64) int { return 0 }
 	var aclRepo orgacl.Repo
 	if pgPool != nil {
 		aclRepo = orgacl.NewPostgres(pgPool)
@@ -833,8 +835,6 @@ func main() {
 	// 邮件栈=进程内直投（docker-mailserver/auth-bridge/路径②随阶段二）；
 	// 懒开户="登录即有邮箱"（user.offboarded 联动随 D02 消费方阶段二）；
 	// 跨域全闭包（D02 §4：不引 org/admin/auth 包）
-	// mailACL 共享邮箱资源权限（aclSvc 装配于后段；kb ACLResolve 同款回填模式）
-	mailACL := func(ctx context.Context, resourceType, resourceID string, userID int64) int { return 0 }
 	var mailRepoInst mailrepo.Repo
 	if pgPool != nil {
 		mailRepoInst = mailrepo.NewPostgres(pgPool)
