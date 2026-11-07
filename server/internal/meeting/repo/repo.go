@@ -48,10 +48,23 @@ type Participant struct {
 	RespondedAt  time.Time
 }
 
+// Recurrence 周期系列（21 §5）
+type Recurrence struct {
+	ID           int64
+	TenantID     int64
+	Rule         string // rule jsonb 原文
+	SkipHolidays bool
+	HolidayCalID int64
+	SplitFrom    int64 // this_and_after 拆分来源系列
+	OrganizerID  int64
+	CreatedAt    time.Time
+}
+
 // Meeting 会议行
 type Meeting struct {
 	ID            int64
 	TenantID      int64
+	SeriesID      int64 // → Recurrence（单场 0）
 	MeetingNo     string
 	Title         string
 	AgendaMD      string
@@ -87,6 +100,7 @@ type CalendarEvent struct {
 
 // CreateReq 预约/即时创建入参
 type CreateReq struct {
+	SeriesID     int64 // 周期系列归属（单场 0；系列展开直传）
 	Title        string
 	AgendaMD     string
 	Type         int
@@ -125,4 +139,14 @@ type Repo interface {
 	ListEvents(ctx context.Context, tenantID, userID int64, from, to time.Time) ([]CalendarEvent, error)
 	// BusyOf 忙闲聚合（多用户时间窗）
 	BusyOf(ctx context.Context, tenantID int64, userIDs []int64, from, to time.Time) ([]BusyBlock, error)
+
+	// ── 周期系列（21 §4.2/§5）──
+	CreateRecurrence(ctx context.Context, r Recurrence) (Recurrence, error)
+	GetRecurrence(ctx context.Context, tenantID, id int64) (*Recurrence, error)
+	// ListBySeries 系列场次（start 升序）
+	ListBySeries(ctx context.Context, tenantID, seriesID int64) ([]Meeting, error)
+	// UpdateSeriesFields 系列属性（title/agenda）应用到未开始场次
+	UpdateSeriesFields(ctx context.Context, tenantID, seriesID int64, title, agenda string) error
+	// SplitSeries fromMeetingID 及其之后（start>=该场）的场次指向新系列
+	SplitSeries(ctx context.Context, tenantID, seriesID, newSeriesID, fromMeetingID int64) (int, error)
 }

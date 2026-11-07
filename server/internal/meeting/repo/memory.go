@@ -14,6 +14,7 @@ type Memory struct {
 	mu     sync.Mutex
 	seq    int64
 	byID   map[int64]*Meeting
+	recs   map[int64]*Recurrence
 	byNo   map[string]int64
 	parts  map[int64][]Participant // meetingID → 行
 	events map[int64][]CalendarEvent
@@ -22,7 +23,7 @@ type Memory struct {
 
 // NewMemory 构造
 func NewMemory() *Memory {
-	return &Memory{byID: map[int64]*Meeting{}, byNo: map[string]int64{}, parts: map[int64][]Participant{}, events: map[int64][]CalendarEvent{}}
+	return &Memory{byID: map[int64]*Meeting{}, recs: map[int64]*Recurrence{}, byNo: map[string]int64{}, parts: map[int64][]Participant{}, events: map[int64][]CalendarEvent{}}
 }
 
 var _ Repo = (*Memory)(nil)
@@ -202,4 +203,70 @@ func (m *Memory) BusyOf(_ context.Context, _ int64, userIDs []int64, from, to ti
 // noKey 会议号索引键
 func noKey(tenantID int64, no string) string {
 	return strconv.FormatInt(tenantID, 10) + "|" + no
+}
+
+func (m *Memory) CreateRecurrence(_ context.Context, r Recurrence) (Recurrence, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.seq++
+	r.ID = m.seq
+	r.CreatedAt = time.Now()
+	cp := r
+	m.recs[r.ID] = &cp
+	return r, nil
+}
+
+func (m *Memory) GetRecurrence(_ context.Context, _, id int64) (*Recurrence, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.recs[id]; ok {
+		out := *r
+		return &out, nil
+	}
+	return nil, ErrNotFound
+}
+
+func (m *Memory) ListBySeries(_ context.Context, _, seriesID int64) ([]Meeting, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Meeting{}
+	for _, mt := range m.byID {
+		if mt.SeriesID == seriesID {
+			cp := *mt
+			cp.Participants = append([]Participant{}, m.parts[mt.ID]...)
+			out = append(out, cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StartTime.Before(out[j].StartTime) })
+	return out, nil
+}
+
+func (m *Memory) UpdateSeriesFields(_ context.Context, _, seriesID int64, title, agenda string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, mt := range m.byID {
+		if mt.SeriesID == seriesID && mt.Status == StatusScheduled {
+			mt.Title, mt.AgendaMD = title, agenda
+		}
+	}
+	return nil
+}
+
+func (m *Memory) SplitSeries(_ context.Context, _, seriesID, newSeriesID, fromMeetingID int64) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	from, ok := m.byID[fromMeetingID]
+	if !ok || from.SeriesID != seriesID {
+		return 0, ErrNotFound
+	}
+	moved := 0
+	for _, mt := range m.byID {
+		if mt.SeriesID == seriesID && !mt.StartTime.Before(from.StartTime) && mt.ID != fromMeetingID {
+			mt.SeriesID = newSeriesID
+			moved++
+		}
+	}
+	from.SeriesID = newSeriesID
+	moved++
+	return moved, nil
 }

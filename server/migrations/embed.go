@@ -76,6 +76,9 @@ var meetingSQL string
 //go:embed 0020_eco_expert.sql
 var ecoExpertSQL string
 
+//go:embed 0021_meeting_recurrence.sql
+var meetingRecurrenceSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -118,4 +121,6 @@ var List = []Migration{
 	{Version: 19, Name: "0019_meeting", Probe: "", SQL: meetingSQL},
 	// 0020 同理留空：eco_expert 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D14 §5/10 篇通道阶段一）
 	{Version: 20, Name: "0020_eco_expert", Probe: "", SQL: ecoExpertSQL},
+	// 0021：meeting 扩列（ADD IF NOT EXISTS 幂等）+ meeting_recurrence 建表（21 §4.2 周期会）
+	{Version: 21, Name: "0021_meeting_recurrence", Probe: "", SQL: meetingRecurrenceSQL},
 }

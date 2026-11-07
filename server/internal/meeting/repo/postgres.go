@@ -41,11 +41,11 @@ func (p *Postgres) CreateMeeting(ctx context.Context, m Meeting, participants []
 		m.CreatedAt = time.Now()
 	}
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO meeting (id, tenant_id, meeting_no, title, agenda_md, type,
+		INSERT INTO meeting (id, tenant_id, series_id, meeting_no, title, agenda_md, type,
 			organizer_id, host_id, status, start_time, end_time, tz, conv_id, created_by, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULLIF($13,0),$14,$15)
+		VALUES ($1,$2,NULLIF($3,0),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,0),$15,$16)
 		RETURNING created_at`,
-		m.ID, m.TenantID, m.MeetingNo, m.Title, m.AgendaMD, m.Type,
+		m.ID, m.TenantID, m.SeriesID, m.MeetingNo, m.Title, m.AgendaMD, m.Type,
 		m.OrganizerID, m.HostID, m.Status, m.StartTime, m.EndTime, m.TZ, m.ConvID, m.CreatedBy, m.CreatedAt).
 		Scan(&m.CreatedAt); err != nil {
 		return Meeting{}, translateErr(err)
@@ -290,4 +290,100 @@ func (p *Postgres) BusyOf(ctx context.Context, tenantID int64, userIDs []int64, 
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+// ── 周期系列 ──
+
+func (p *Postgres) CreateRecurrence(ctx context.Context, r Recurrence) (Recurrence, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Recurrence{}, err
+	}
+	defer tx.Rollback(ctx)
+	if r.ID == 0 {
+		if r.ID, err = bbwpg.AllocID(ctx, tx, lockKeyMeeting, "meeting_recurrence"); err != nil {
+			return Recurrence{}, err
+		}
+	}
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO meeting_recurrence (id, tenant_id, rule, skip_holidays,
+			holiday_cal_id, split_from, organizer_id)
+		VALUES ($1,$2,$3,$4,NULLIF($5,0),NULLIF($6,0),$7) RETURNING created_at`,
+		r.ID, r.TenantID, r.Rule, r.SkipHolidays, r.HolidayCalID, r.SplitFrom, r.OrganizerID).
+		Scan(&r.CreatedAt); err != nil {
+		return Recurrence{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Recurrence{}, err
+	}
+	return r, nil
+}
+
+func (p *Postgres) GetRecurrence(ctx context.Context, tenantID, id int64) (*Recurrence, error) {
+	var r Recurrence
+	if err := p.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, rule, skip_holidays,
+			COALESCE(holiday_cal_id,0), COALESCE(split_from,0), organizer_id, created_at
+		FROM meeting_recurrence WHERE tenant_id=$1 AND id=$2`, tenantID, id).
+		Scan(&r.ID, &r.TenantID, &r.Rule, &r.SkipHolidays,
+			&r.HolidayCalID, &r.SplitFrom, &r.OrganizerID, &r.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (p *Postgres) ListBySeries(ctx context.Context, tenantID, seriesID int64) ([]Meeting, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT `+meetingCols+` FROM meeting
+		WHERE tenant_id=$1 AND series_id=$2 ORDER BY start_time`, tenantID, seriesID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Meeting{}
+	for rows.Next() {
+		var m Meeting
+		if err := rows.Scan(&m.ID, &m.TenantID, &m.MeetingNo, &m.Title, &m.AgendaMD, &m.Type,
+			&m.OrganizerID, &m.HostID, &m.Status, &m.StartTime, &m.EndTime, &m.TZ,
+			&m.ConvID, &m.CallSessionID, &m.CreatedBy, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		m.SeriesID = seriesID
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Participants, _ = p.ListParticipants(ctx, tenantID, out[i].ID)
+	}
+	return out, nil
+}
+
+func (p *Postgres) UpdateSeriesFields(ctx context.Context, tenantID, seriesID int64, title, agenda string) error {
+	_, err := p.pool.Exec(ctx, `
+		UPDATE meeting SET title=$1, agenda_md=$2, updated_at=now()
+		WHERE tenant_id=$3 AND series_id=$4 AND status=1`, title, agenda, tenantID, seriesID)
+	return err
+}
+
+func (p *Postgres) SplitSeries(ctx context.Context, tenantID, seriesID, newSeriesID, fromMeetingID int64) (int, error) {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE meeting SET series_id=$1, updated_at=now()
+		WHERE tenant_id=$2 AND series_id=$3 AND id IN (
+			SELECT id FROM meeting WHERE tenant_id=$2 AND series_id=$3 AND id=$4
+			UNION
+			SELECT id FROM meeting WHERE tenant_id=$2 AND series_id=$3
+			  AND start_time >= (SELECT start_time FROM meeting WHERE id=$4)
+		)`, newSeriesID, tenantID, seriesID, fromMeetingID)
+	if err != nil {
+		return 0, err
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, ErrNotFound
+	}
+	return int(tag.RowsAffected()), nil
 }

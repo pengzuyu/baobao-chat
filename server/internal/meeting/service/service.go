@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"strconv"
 	"time"
 
@@ -48,6 +49,7 @@ func New(r meetingrepo.Repo, opts Options) *Service {
 
 // CreateReq 创建入参（DTO 层转换后）
 type CreateReq struct {
+	SeriesID     int64
 	Title        string
 	AgendaMD     string
 	Instant      bool // true=即时会（start=now, 30min）
@@ -100,7 +102,7 @@ func (s *Service) Create(ctx context.Context, tenantID, organizerID int64, req C
 		})
 	}
 	created, cerr := s.repo.CreateMeeting(ctx, meetingrepo.Meeting{
-		TenantID: tenantID, MeetingNo: no, Title: req.Title, AgendaMD: req.AgendaMD,
+		TenantID: tenantID, SeriesID: req.SeriesID, MeetingNo: no, Title: req.Title, AgendaMD: req.AgendaMD,
 		Type: mtype, OrganizerID: organizerID, HostID: organizerID,
 		Status: meetingrepo.StatusScheduled, StartTime: req.StartTime, EndTime: req.EndTime,
 		TZ: req.TZ, ConvID: req.ConvID, CreatedBy: organizerID,
@@ -114,7 +116,7 @@ func (s *Service) Create(ctx context.Context, tenantID, organizerID int64, req C
 			}
 			created.MeetingNo = no2
 			created, cerr = s.repo.CreateMeeting(ctx, meetingrepo.Meeting{
-				TenantID: tenantID, MeetingNo: no2, Title: req.Title, AgendaMD: req.AgendaMD,
+				TenantID: tenantID, SeriesID: req.SeriesID, MeetingNo: no2, Title: req.Title, AgendaMD: req.AgendaMD,
 				Type: mtype, OrganizerID: organizerID, HostID: organizerID,
 				Status: meetingrepo.StatusScheduled, StartTime: req.StartTime, EndTime: req.EndTime,
 				TZ: req.TZ, ConvID: req.ConvID, CreatedBy: organizerID,
@@ -344,4 +346,117 @@ func defaultStr(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// ---------------------------------------------------------------------------
+// 周期系列（21 §4.2/§5）
+// ---------------------------------------------------------------------------
+
+// CreateRecurringReq 周期系列创建
+type CreateRecurringReq struct {
+	CreateReq              // 首场内容（StartTime/EndTime=首场时刻）
+	Rule         RecurRule `json:"rule"`
+	SkipHolidays bool      `json:"skip_holidays"`
+}
+
+// CreateRecurring 系列创建：规则校验（5023）→ 展开（首场恒含）→ 逐场
+// 建会（各场独立会议号，21 §4.2 默认）+ recurrence 行。展开量=首场
+// 起每场全员日历镜像（与单场同路径）。
+func (s *Service) CreateRecurring(ctx context.Context, tenantID, organizerID int64, req CreateRecurringReq) ([]meetingrepo.Meeting, error) {
+	tzName := defaultStr(req.TZ, "Asia/Shanghai")
+	tz, err := time.LoadLocation(tzName)
+	if err != nil {
+		return nil, errx.New(errx.CodeBadRequest, "tz 非法: "+tzName)
+	}
+	occ, err := Expand(req.StartTime, req.EndTime, req.Rule, tz)
+	if err != nil {
+		return nil, err
+	}
+	if req.Title == "" {
+		return nil, errx.New(errx.CodeBadRequest, "title 必填")
+	}
+	ruleJSON, _ := json.Marshal(req.Rule)
+	rec, err := s.repo.CreateRecurrence(ctx, meetingrepo.Recurrence{
+		TenantID: tenantID, Rule: string(ruleJSON), SkipHolidays: req.SkipHolidays,
+		OrganizerID: organizerID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]meetingrepo.Meeting, 0, len(occ))
+	for _, o := range occ {
+		m, cerr := s.Create(ctx, tenantID, organizerID, CreateReq{
+			SeriesID: rec.ID, Title: req.Title, AgendaMD: req.AgendaMD,
+			StartTime: o.Start, EndTime: o.End, TZ: req.TZ,
+			ConvID: req.ConvID, Participants: req.Participants,
+		})
+		if cerr != nil {
+			return nil, cerr
+		}
+		out = append(out, *m)
+	}
+	return out, nil
+}
+
+// SeriesList 系列场次清单（组织者/参与者）
+func (s *Service) SeriesList(ctx context.Context, tenantID, userID, seriesID int64) ([]meetingrepo.Meeting, error) {
+	rec, err := s.repo.GetRecurrence(ctx, tenantID, seriesID)
+	if err != nil {
+		return nil, errx.New(errx.CodeNotFound, "系列不存在")
+	}
+	if rec.OrganizerID != userID {
+		// 参与者可见：任一场参与即可（逐场判）
+		list, _ := s.repo.ListBySeries(ctx, tenantID, seriesID)
+		for _, m := range list {
+			if s.involved(&m, userID) {
+				return list, nil
+			}
+		}
+		return nil, errx.New(errx.CodePermACLDenied, "非系列参与者")
+	}
+	return s.repo.ListBySeries(ctx, tenantID, seriesID)
+}
+
+// SplitSeries this_and_after（21 §4.2 系列编辑三选一之二）：目标场及
+// 之后拆分为新系列（split_from 记来源）；单场编辑（this）=既有按
+// meeting_id 的 reschedule/cancel；整个系列（all）=UpdateSeriesAll。
+func (s *Service) SplitSeries(ctx context.Context, tenantID, userID, meetingID int64) (int64, error) {
+	m, err := s.mustOrganizer(ctx, tenantID, userID, meetingID)
+	if err != nil {
+		return 0, err
+	}
+	if m.SeriesID == 0 {
+		return 0, errx.New(errx.CodeBadRequest, "非周期会场")
+	}
+	rec, err := s.repo.GetRecurrence(ctx, tenantID, m.SeriesID)
+	if err != nil {
+		return 0, errx.New(errx.CodeNotFound, "系列不存在")
+	}
+	newRec, err := s.repo.CreateRecurrence(ctx, meetingrepo.Recurrence{
+		TenantID: tenantID, Rule: rec.Rule, SkipHolidays: rec.SkipHolidays,
+		HolidayCalID: rec.HolidayCalID, SplitFrom: rec.ID, OrganizerID: userID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.repo.SplitSeries(ctx, tenantID, m.SeriesID, newRec.ID, meetingID); err != nil {
+		return 0, errx.New(errx.CodeBadRequest, "拆分失败（目标场非法）")
+	}
+	return newRec.ID, nil
+}
+
+// UpdateSeriesAll 系列编辑 all：标题/议程应用到未开始场次（scheduled）；
+// 规则变更=取消剩余重建（阶段二登记）
+func (s *Service) UpdateSeriesAll(ctx context.Context, tenantID, userID, seriesID int64, title, agenda string) error {
+	rec, err := s.repo.GetRecurrence(ctx, tenantID, seriesID)
+	if err != nil {
+		return errx.New(errx.CodeNotFound, "系列不存在")
+	}
+	if rec.OrganizerID != userID {
+		return errx.New(errx.CodePermACLDenied, "仅组织者可改系列")
+	}
+	if title == "" {
+		return errx.New(errx.CodeBadRequest, "title 必填")
+	}
+	return s.repo.UpdateSeriesFields(ctx, tenantID, seriesID, title, agenda)
 }

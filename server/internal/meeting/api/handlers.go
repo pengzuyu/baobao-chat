@@ -26,6 +26,81 @@ func RegisterRoutes(mux *http.ServeMux, authed func(http.HandlerFunc) http.Handl
 	mux.Handle("POST /api/v1/meetings/{id}/end", authed(handleEnd(svc)))
 	mux.Handle("GET /api/v1/meetings/calendar", authed(handleCalendar(svc)))
 	mux.Handle("GET /api/v1/meetings/freebusy", authed(handleFreeBusy(svc)))
+	// 周期系列（21 §4.2）
+	mux.Handle("POST /api/v1/meetings/recurrence", authed(handleCreateRecurring(svc)))
+	mux.Handle("GET /api/v1/meetings/series/{sid}", authed(handleSeriesList(svc)))
+	mux.Handle("POST /api/v1/meetings/{id}/series-split", authed(handleSeriesSplit(svc)))
+	mux.Handle("POST /api/v1/meetings/series/{sid}/update-all", authed(handleSeriesUpdateAll(svc)))
+}
+
+func handleCreateRecurring(svc *meetingservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Title        string                   `json:"title"`
+			AgendaMD     string                   `json:"agenda_md"`
+			StartTimeMS  int64                    `json:"start_time"`
+			EndTimeMS    int64                    `json:"end_time"`
+			TZ           string                   `json:"tz"`
+			ConvID       int64                    `json:"conv_id"`
+			Participants []int64                  `json:"participants"`
+			SkipHolidays bool                     `json:"skip_holidays"`
+			Rule         meetingservice.RecurRule `json:"rule"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		list, err := svc.CreateRecurring(r.Context(), tenantOf(r), actorOf(r), meetingservice.CreateRecurringReq{
+			CreateReq: meetingservice.CreateReq{
+				Title: req.Title, AgendaMD: req.AgendaMD,
+				StartTime: time.UnixMilli(req.StartTimeMS), EndTime: time.UnixMilli(req.EndTimeMS),
+				TZ: req.TZ, ConvID: req.ConvID, Participants: req.Participants,
+			},
+			Rule: req.Rule, SkipHolidays: req.SkipHolidays,
+		})
+		respond(w, r, list, err)
+	}
+}
+
+func handleSeriesList(svc *meetingservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sid, err := strconv.ParseInt(r.PathValue("sid"), 10, 64)
+		if err != nil || sid <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "sid 非法"))
+			return
+		}
+		list, lerr := svc.SeriesList(r.Context(), tenantOf(r), actorOf(r), sid)
+		respond(w, r, list, lerr)
+	}
+}
+
+func handleSeriesSplit(svc *meetingservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := pathID(w, r, "id")
+		if !ok {
+			return
+		}
+		newSID, err := svc.SplitSeries(r.Context(), tenantOf(r), actorOf(r), id)
+		respond(w, r, map[string]int64{"new_series_id": newSID}, err)
+	}
+}
+
+func handleSeriesUpdateAll(svc *meetingservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sid, err := strconv.ParseInt(r.PathValue("sid"), 10, 64)
+		if err != nil || sid <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "sid 非法"))
+			return
+		}
+		var body struct {
+			Title    string `json:"title"`
+			AgendaMD string `json:"agenda_md"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		respond(w, r, map[string]bool{"ok": true},
+			svc.UpdateSeriesAll(r.Context(), tenantOf(r), actorOf(r), sid, body.Title, body.AgendaMD))
+	}
 }
 
 func handleCreate(svc *meetingservice.Service) http.HandlerFunc {
