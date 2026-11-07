@@ -329,8 +329,8 @@ func handleSendAsShared(svc *mailservice.Service) http.HandlerFunc {
 func handleAdminCreateShared(svc *mailservice.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			LocalPart   string `json:"local_part"`
-			GovernDept  int64  `json:"govern_dept_id"`
+			LocalPart  string `json:"local_part"`
+			GovernDept int64  `json:"govern_dept_id"`
 		}
 		if !decode(w, r, &body) {
 			return

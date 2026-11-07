@@ -42,7 +42,7 @@ func handleCreateRecurring(svc *meetingservice.Service) http.HandlerFunc {
 			EndTimeMS    int64                    `json:"end_time"`
 			TZ           string                   `json:"tz"`
 			ConvID       int64                    `json:"conv_id"`
-			Participants []int64                  `json:"participants"`
+			Participants []string                 `json:"participants"`
 			SkipHolidays bool                     `json:"skip_holidays"`
 			Rule         meetingservice.RecurRule `json:"rule"`
 		}
@@ -53,7 +53,7 @@ func handleCreateRecurring(svc *meetingservice.Service) http.HandlerFunc {
 			CreateReq: meetingservice.CreateReq{
 				Title: req.Title, AgendaMD: req.AgendaMD,
 				StartTime: time.UnixMilli(req.StartTimeMS), EndTime: time.UnixMilli(req.EndTimeMS),
-				TZ: req.TZ, ConvID: req.ConvID, Participants: req.Participants,
+				TZ: req.TZ, ConvID: req.ConvID, Participants: parseUIDs(req.Participants),
 			},
 			Rule: req.Rule, SkipHolidays: req.SkipHolidays,
 		})
@@ -106,14 +106,14 @@ func handleSeriesUpdateAll(svc *meetingservice.Service) http.HandlerFunc {
 func handleCreate(svc *meetingservice.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Title        string  `json:"title"`
-			AgendaMD     string  `json:"agenda_md"`
-			Instant      bool    `json:"instant"`
-			StartTimeMS  int64   `json:"start_time"` // ms（即时会可缺省）
-			EndTimeMS    int64   `json:"end_time"`
-			TZ           string  `json:"tz"`
-			ConvID       int64   `json:"conv_id"`
-			Participants []int64 `json:"participants"`
+			Title        string   `json:"title"`
+			AgendaMD     string   `json:"agenda_md"`
+			Instant      bool     `json:"instant"`
+			StartTimeMS  int64    `json:"start_time"` // ms（即时会可缺省）
+			EndTimeMS    int64    `json:"end_time"`
+			TZ           string   `json:"tz"`
+			ConvID       int64    `json:"conv_id"`
+			Participants []string `json:"participants"`
 		}
 		if !decode(w, r, &req) {
 			return
@@ -121,7 +121,7 @@ func handleCreate(svc *meetingservice.Service) http.HandlerFunc {
 		m, err := svc.Create(r.Context(), tenantOf(r), actorOf(r), meetingservice.CreateReq{
 			Title: req.Title, AgendaMD: req.AgendaMD, Instant: req.Instant,
 			StartTime: time.UnixMilli(req.StartTimeMS), EndTime: time.UnixMilli(req.EndTimeMS),
-			TZ: req.TZ, ConvID: req.ConvID, Participants: req.Participants,
+			TZ: req.TZ, ConvID: req.ConvID, Participants: parseUIDs(req.Participants),
 		})
 		respond(w, r, m, err)
 	}
@@ -324,3 +324,14 @@ func actorOf(r *http.Request) int64 {
 }
 
 func tenantOf(r *http.Request) int64 { return 1 } // 单租户阶段一
+
+// parseUIDs uid 字符串集 → int64（client uid 惯例；非法项丢弃——会话成员校验兜底）
+func parseUIDs(in []string) []int64 {
+	out := make([]int64, 0, len(in))
+	for _, s := range in {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+			out = append(out, v)
+		}
+	}
+	return out
+}

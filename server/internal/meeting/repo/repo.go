@@ -37,65 +37,65 @@ const (
 
 // Participant 参与者行
 type Participant struct {
-	ID           int64
-	TenantID     int64
-	MeetingID    int64
-	UserID       int64
-	Role         int // 1 organizer 2 host 3 participant
-	RSVP         int
-	InviteSource int
-	InvitedAt    time.Time
-	RespondedAt  time.Time
+	ID           int64     `json:"id,string"`
+	TenantID     int64     `json:"tenant_id"`
+	MeetingID    int64     `json:"meeting_id"`
+	UserID       int64     `json:"user_id,string"`
+	Role         int       `json:"role"` // 1 organizer 2 host 3 participant
+	RSVP         int       `json:"rsvp"`
+	InviteSource int       `json:"invite_source"`
+	InvitedAt    time.Time `json:"invited_at"`
+	RespondedAt  time.Time `json:"responded_at"`
 }
 
 // Recurrence 周期系列（21 §5）
 type Recurrence struct {
-	ID           int64
-	TenantID     int64
-	Rule         string // rule jsonb 原文
-	SkipHolidays bool
-	HolidayCalID int64
-	SplitFrom    int64 // this_and_after 拆分来源系列
-	OrganizerID  int64
-	CreatedAt    time.Time
+	ID           int64     `json:"id,string"`
+	TenantID     int64     `json:"tenant_id"`
+	Rule         string    `json:"rule"`
+	SkipHolidays bool      `json:"skip_holidays"`
+	HolidayCalID int64     `json:"holiday_cal_id,omitempty"`
+	SplitFrom    int64     `json:"split_from,omitempty"`
+	OrganizerID  int64     `json:"organizer_id,string"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // Meeting 会议行
 type Meeting struct {
-	ID            int64
-	TenantID      int64
-	SeriesID      int64 // → Recurrence（单场 0）
-	MeetingNo     string
-	Title         string
-	AgendaMD      string
-	Type          int
-	OrganizerID   int64
-	HostID        int64
-	Status        int
-	StartTime     time.Time
-	EndTime       time.Time
-	TZ            string
-	ConvID        int64
-	CallSessionID int64
-	CreatedBy     int64
-	CreatedAt     time.Time
-	Participants  []Participant // 详情/列表携带（repo 联查填充）
+	ID            int64         `json:"id,string"`
+	TenantID      int64         `json:"tenant_id"`
+	SeriesID      int64         `json:"series_id,string,omitempty"` // → Recurrence（单场省略）
+	MeetingNo     string        `json:"meeting_no"`
+	Title         string        `json:"title"`
+	AgendaMD      string        `json:"agenda_md"`
+	Type          int           `json:"type"`
+	OrganizerID   int64         `json:"organizer_id,string"`
+	HostID        int64         `json:"host_id,string"`
+	Status        int           `json:"status"`
+	StartTime     time.Time     `json:"start_time"`
+	EndTime       time.Time     `json:"end_time"`
+	TZ            string        `json:"tz"`
+	ConvID        int64         `json:"conv_id,string,omitempty"`
+	CallSessionID int64         `json:"-"`
+	CreatedBy     int64         `json:"created_by,string"`
+	CreatedAt     time.Time     `json:"created_at"`
+	Participants  []Participant `json:"participants,omitempty"` // 详情/列表携带（repo 联查填充）
 }
 
 // CalendarEvent 日历事件（每人一行镜像）
 type CalendarEvent struct {
-	ID         int64
-	TenantID   int64
-	UserID     int64
-	Source     int // 1 meeting
-	RefID      int64
-	Title      string
-	StartTS    time.Time
-	EndTS      time.Time
-	AllDay     bool
-	TZ         string
-	Busy       bool
-	RSVPStatus int
+	ID         int64     `json:"id,string"`
+	TenantID   int64     `json:"tenant_id"`
+	UserID     int64     `json:"user_id,string"`
+	Source     int       `json:"source"` // 1 meeting
+	RefID      int64     `json:"ref_id,string"`
+	Title      string    `json:"title"`
+	StartTS    time.Time `json:"start_ts"`
+	EndTS      time.Time `json:"end_ts"`
+	AllDay     bool      `json:"all_day"`
+	TZ         string    `json:"tz"`
+	Busy       bool      `json:"busy"`
+	RSVPStatus int       `json:"rsvp_status"`
 }
 
 // CreateReq 预约/即时创建入参
@@ -114,10 +114,10 @@ type CreateReq struct {
 
 // BusyBlock 忙闲聚合块
 type BusyBlock struct {
-	UserID int64
-	Start  time.Time
-	End    time.Time
-	Title  string
+	UserID int64     `json:"user_id"`
+	Start  time.Time `json:"start"`
+	End    time.Time `json:"end"`
+	Title  string    `json:"title"`
 }
 
 // Repo 会议域仓储

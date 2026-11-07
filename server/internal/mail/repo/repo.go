@@ -35,7 +35,7 @@ type Domain struct {
 
 // Attachment 附件引用（07 篇 file_id；file 域回链校验随阶段二）
 type Attachment struct {
-	FileID int64  `json:"file_id"`
+	FileID int64  `json:"file_id,string"`
 	Name   string `json:"name"`
 	Size   int64  `json:"size"`
 }
@@ -50,63 +50,63 @@ type Settings struct {
 
 // Mailbox 邮箱（22 §5 mailbox；shared/代发随 resource_acl 阶段二）
 type Mailbox struct {
-	ID          int64
-	TenantID    int64
-	DomainID    int64
-	Address     string // employee_no@domain
-	Type        int    // 1 personal 2 shared（治理部门挂靠）
-	OwnerUserID int64
-	GovernDeptID int64 // shared 治理部门（personal=0）
-	QuotaBytes  int64
-	UsedBytes   int64
-	Status      int // 1 active 2 suspended 3 archived
-	Settings    Settings
-	CreatedAt   time.Time
-	SuspendedAt time.Time
+	ID           int64     `json:"id,string"`
+	TenantID     int64     `json:"tenant_id"`
+	DomainID     int64     `json:"domain_id"`
+	Address      string    `json:"address"`
+	Type         int       `json:"type"` // 1 personal 2 shared
+	OwnerUserID  int64     `json:"owner_user_id,string,omitempty"`
+	GovernDeptID int64     `json:"govern_dept_id,string,omitempty"` // shared 治理部门
+	QuotaBytes   int64     `json:"quota_bytes"`
+	UsedBytes    int64     `json:"used_bytes"`
+	Status       int       `json:"status"`
+	Settings     Settings  `json:"settings"`
+	CreatedAt    time.Time `json:"created_at"`
+	SuspendedAt  time.Time `json:"suspended_at,omitempty"` // 零值省略
 }
 
 // Folder 文件夹元数据（未读计数查询源；同步游标阶段二）
 type Folder struct {
-	ID          int64
-	TenantID    int64
-	MailboxID   int64
-	Name        string // inbox/sent/drafts/trash/junk/archive
-	TotalCount  int
-	UnreadCount int
+	ID          int64  `json:"id,string"`
+	TenantID    int64  `json:"tenant_id"`
+	MailboxID   int64  `json:"mailbox_id,string"`
+	Name        string `json:"name"`
+	TotalCount  int    `json:"total_count"`
+	UnreadCount int    `json:"unread_count"`
 }
 
 // Message 邮件（22 §5 mail_message；阶段一正文直存 body）
 type Message struct {
-	ID            int64
-	TenantID      int64
-	MailboxID     int64
-	FolderID      int64
-	MessageID     string // RFC822 Message-ID（幂等键 per mailbox）
-	InReplyTo     string
-	FromAddr      string
-	ToAddrs       []string
-	CcAddrs       []string
-	BccAddrs      []string
-	Subject       string
-	Snippet       string
-	Body          string
-	HasAttachment bool
-	Attachments   []Attachment
-	Flags         int16
-	Size          int64
-	ReceivedAt    time.Time
+	ID            int64        `json:"id,string"`
+	TenantID      int64        `json:"tenant_id"`
+	MailboxID     int64        `json:"mailbox_id,string"`
+	FolderID      int64        `json:"folder_id,string"`
+	MessageID     string       `json:"message_id"` // RFC822
+	InReplyTo     string       `json:"in_reply_to,omitempty"`
+	FromAddr      string       `json:"from_addr"`
+	ToAddrs       []string     `json:"to_addrs"`
+	CcAddrs       []string     `json:"cc_addrs"`
+	BccAddrs      []string     `json:"bcc_addrs"`
+	Subject       string       `json:"subject"`
+	Snippet       string       `json:"snippet"`
+	Body          string       `json:"body,omitempty"` // 详情返回
+	HasAttachment bool         `json:"has_attachment"`
+	Attachments   []Attachment `json:"attachments"`
+	Flags         int16        `json:"flags"` // bit0 seen bit1 flagged
+	Size          int64        `json:"size"`
+	ReceivedAt    time.Time    `json:"received_at"`
 }
 
 // AppPassword 应用专用密码（22 §5；仅存 hash，吊销即时生效）
 type AppPassword struct {
-	ID         int64
-	TenantID   int64
-	UserID     int64
-	Name       string
-	Hash       string
-	CreatedAt  time.Time
-	LastUsedAt time.Time
-	RevokedAt  time.Time
+	ID         int64     `json:"id,string"`
+	TenantID   int64     `json:"tenant_id"`
+	UserID     int64     `json:"user_id,string"`
+	Name       string    `json:"name"`
+	Hash       string    `json:"-"` // 绝不下发
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  time.Time `json:"revoked_at,omitempty"`
 }
 
 // 列表过滤（GET /mail/messages 过滤器）

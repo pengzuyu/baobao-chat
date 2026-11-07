@@ -54,7 +54,7 @@ type Options struct {
 	// ACLPerm 共享邮箱资源权限（mail.shared，address 为资源键；0=无——
 	// 共享邮箱纯 ACL 驱动 fail-closed，无基线回落；返回 1..4 同 org/acl）
 	ACLPerm func(ctx context.Context, resourceType, resourceID string, userID int64) int
-	Now      func() time.Time
+	Now     func() time.Time
 }
 
 // Service 邮件域服务
@@ -676,10 +676,10 @@ func concat(lists ...[]string) []string {
 
 // SharedMailboxView 用户可见共享邮箱视图
 type SharedMailboxView struct {
-	ID          int64  `json:"id,string"`
-	Address     string `json:"address"`
-	Unread      int    `json:"unread"`
-	IsOwner     bool   `json:"is_owner"` // owner 可代发（22 §3.4）
+	ID      int64  `json:"id,string"`
+	Address string `json:"address"`
+	Unread  int    `json:"unread"`
+	IsOwner bool   `json:"is_owner"` // owner 可代发（22 §3.4）
 }
 
 // AdminCreateSharedMailbox 建共享邮箱（PAD-16；type=2，治理部门挂靠，

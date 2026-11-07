@@ -517,7 +517,7 @@ func TestSharedMailboxACL(t *testing.T) {
 				return "3"
 			}(), nil
 		},
-		HashPwd:  authservice.HashPassword,
+		HashPwd: authservice.HashPassword,
 		ACLPerm: func(_ context.Context, _ /*resType*/, resID string, uid int64) int {
 			return perm[[2]string{resID, strconv.FormatInt(uid, 10)}]
 		},
