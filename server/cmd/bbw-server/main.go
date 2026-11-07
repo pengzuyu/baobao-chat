@@ -256,6 +256,7 @@ func main() {
 	mux.Handle("GET /api/v1/files/{id}/ticket", authed(handleFileTicket(fileSvc)))
 	mux.Handle("DELETE /api/v1/files/{id}", authed(handleFileDelete(fileSvc)))
 	// 分片上传会话（07 §4.1 本地盘形态：PATCH 直传，无预签名；对象存储化阶段三换）
+	mux.Handle("GET /api/v1/files/convs/{id}", authed(handleFileConvFiles(fileSvc)))
 	mux.Handle("POST /api/v1/files/check", authed(handleFileCheck(fileSvc)))
 	mux.Handle("POST /api/v1/files/uploads", authed(handleFileUploadInit(fileSvc)))
 	mux.Handle("GET /api/v1/files/uploads/{id}", authed(handleFileUploadStatus(fileSvc)))
@@ -2234,5 +2235,27 @@ func handleFileShareRevoke(svc fileapi.FileService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, nil)
+	}
+}
+
+// handleFileConvFiles 会话文件聚合（群文件页签；成员判定在 service）
+func handleFileConvFiles(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		convID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		items, err := svc.ListByConv(r.Context(), httpx.TenantID(r.Context()), uid, convID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items})
 	}
 }

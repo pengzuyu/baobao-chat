@@ -138,6 +138,8 @@ type FileService interface {
 	Download(ctx context.Context, token string) (*DownloadTarget, io.ReadCloser, error)
 	// ListMine 我的文件（软删排除）
 	ListMine(ctx context.Context, tenantID, userID int64) ([]FileDTO, error)
+	// ListByConv 会话文件聚合（群文件页签；会话成员可见，D03 §3.6）
+	ListByConv(ctx context.Context, tenantID, userID, convID int64) ([]FileDTO, error)
 	// SoftDelete owner 软删
 	SoftDelete(ctx context.Context, tenantID, userID int64, fileID int64) error
 	// CheckSendable msg.send type=file/image 校验：存在(4005)/未删(4013)/sender 为 owner 或 source=message(2003)

@@ -221,6 +221,22 @@ func (s *Service) ListMine(ctx context.Context, tenantID, userID int64) ([]filea
 	return out, nil
 }
 
+// ListByConv 会话文件聚合（群文件页签；非成员拒 2003）
+func (s *Service) ListByConv(ctx context.Context, tenantID, userID, convID int64) ([]fileapi.FileDTO, error) {
+	if s.opts.IsConvMember == nil || !s.opts.IsConvMember(ctx, userID, convID) {
+		return nil, errx.New(errx.CodePermACLDenied, "非会话成员")
+	}
+	files, err := s.repo.ListByConv(ctx, tenantID, convID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	out := make([]fileapi.FileDTO, 0, len(files))
+	for _, f := range files {
+		out = append(out, toDTO(f))
+	}
+	return out, nil
+}
+
 // SoftDelete owner 软删（4013 语义：此后取票据/下载均拒）
 func (s *Service) SoftDelete(ctx context.Context, tenantID, userID int64, fileID int64) error {
 	f, err := s.repo.Get(ctx, fileID)
