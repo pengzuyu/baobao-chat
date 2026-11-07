@@ -709,6 +709,11 @@ impl SessionRunner {
         });
     }
 
+    /// 崩溃恢复注入（D11 §9.2：重放时间线作为续会话起点）
+    pub fn restore_history(&mut self, rounds: Vec<Round>) {
+        self.history = rounds;
+    }
+
     pub fn state(&self) -> SessionState {
         self.state
     }

@@ -158,7 +158,7 @@ fn run() -> Result<(), String> {
             Ok(None) => return Ok(()), // EOF 优雅退出
             Err(_) => continue,        // 坏行：codec 已丢弃（忽略+计数对齐 D11 §4）
         };
-        let reply = dispatch(&mgr, &memory, &sink, &env);
+        let reply = dispatch(&mgr, &memory, &sink, &store, &mut ids, &env);
         if let Some(msg) = reply {
             if let Ok(mut ack) = Envelope::wrap(1, format!("r-{}", ids.next_id()), &msg) {
                 ack.reply_to = Some(env.id.clone());
@@ -173,6 +173,8 @@ fn dispatch(
     mgr: &Arc<SessionManager>,
     memory: &Arc<MemoryEngine>,
     sink: &Arc<BrtSink>,
+    store: &Arc<Mutex<Store>>,
+    ids: &mut IdGen,
     env: &Envelope,
 ) -> Option<RuntimeToHost> {
     let msg: HostToRuntime = match serde_json::from_value(envelope_payload(env)) {
@@ -203,6 +205,7 @@ fn dispatch(
             workspace,
             mode,
             model_policy,
+            history_ref,
             ..
         } => {
             let tier = match model_policy {
@@ -220,6 +223,26 @@ fn dispatch(
                 workspace: workspace.clone(),
                 mode: format!("{mode:?}").to_lowercase(),
             });
+            // 崩溃恢复（D11 §9.2）：historyRef 指向本地事件镜像 → 先重放再启动
+            let restored = history_ref.as_ref().and_then(|_| {
+                let guard = store.lock().ok()?;
+                let rep = bbrt_session::recover(&guard, &session_id);
+                if rep.broken > 0 {
+                    send(
+                        ids,
+                        &RuntimeToHost::Error {
+                            code: 8012,
+                            message: format!(
+                                "重放检测到 {} 处事件断裂，历史为尽力恢复",
+                                rep.broken
+                            ),
+                            fatal: false,
+                            session_id: Some(session_id.clone()),
+                        },
+                    );
+                }
+                Some(rep)
+            });
             match mgr.start(
                 session_id.clone(),
                 StartParams {
@@ -227,12 +250,13 @@ fn dispatch(
                     mode: sec_mode,
                     model_policy: tier,
                     title: session_id.clone(),
+                    restored,
                 },
             ) {
-                Ok(()) => Some(RuntimeToHost::SessionReady {
+                Ok(rep) => Some(RuntimeToHost::SessionReady {
                     session_id,
-                    restored: false,
-                    replayed_events: Some(0),
+                    restored: rep.restored,
+                    replayed_events: Some(rep.replayed_events),
                     warnings: vec![],
                 }),
                 Err(e) => Some(RuntimeToHost::Error {

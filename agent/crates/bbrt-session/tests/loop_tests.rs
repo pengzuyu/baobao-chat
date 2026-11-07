@@ -491,6 +491,7 @@ fn manager_limits_three_active_sessions() {
                 mode: PermissionMode::Ask,
                 model_policy: ModelTier::Fast,
                 title: "t".into(),
+                restored: None,
             },
         )
         .unwrap();
@@ -502,7 +503,8 @@ fn manager_limits_three_active_sessions() {
                 workspace: "/w".into(),
                 mode: PermissionMode::Ask,
                 model_policy: ModelTier::Fast,
-                title: "t".into()
+                title: "t".into(),
+                restored: None
             }
         ),
         Err(ManagerError::TooManyActive)
@@ -516,6 +518,7 @@ fn manager_limits_three_active_sessions() {
             mode: PermissionMode::Ask,
             model_policy: ModelTier::Fast,
             title: "t".into(),
+            restored: None,
         },
     )
     .unwrap();

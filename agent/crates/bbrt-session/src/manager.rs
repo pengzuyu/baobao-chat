@@ -30,12 +30,22 @@ pub enum ManagerError {
     Store(String),
 }
 
+/// 启动结果摘要（session.ready 回执口径）
+#[derive(Debug, Clone, Copy)]
+pub struct RestoredSummary {
+    pub restored: bool,
+    pub replayed_events: u32,
+}
+
 /// 会话启动参数（宿主 session.start 载荷子集）
 pub struct StartParams {
     pub workspace: String,
     pub mode: PermissionMode,
     pub model_policy: ModelTier,
     pub title: String,
+    /// 崩溃恢复产物（session.start 带 historyRef 时由装配层先行 recover；
+    /// None=全新会话）
+    pub restored: Option<crate::recovery::ReplayReport>,
 }
 
 struct ManagedSession {
@@ -65,7 +75,12 @@ impl SessionManager {
     }
 
     /// session.start（D11 §3 #1/#2）：建档 + WAL 起点 + 审批路由 + session.ready
-    pub fn start(&self, session_id: String, p: StartParams) -> Result<(), ManagerError> {
+    /// 启动；Ok 携带恢复摘要（restored/replayed_events，未恢复为 false/0）
+    pub fn start(
+        &self,
+        session_id: String,
+        p: StartParams,
+    ) -> Result<RestoredSummary, ManagerError> {
         let mut guard = self.sessions.lock().unwrap();
         if guard.len() >= 3 && !guard.contains_key(&session_id) {
             return Err(ManagerError::TooManyActive);
@@ -73,6 +88,11 @@ impl SessionManager {
         let now = now_ms();
         if let Some(store) = &self.store {
             let store = store.lock().unwrap();
+            // 恢复路径：会话行已存在（首启动时落库），改插为更防唯一键冲突
+            let is_restore = p.restored.as_ref().is_some_and(|r| r.found);
+            if is_restore {
+                let _ = store.update_session(&session_id, "idle", None);
+            }
             let row = SessionRow {
                 id: session_id.clone(),
                 workspace_id: None,
@@ -88,11 +108,15 @@ impl SessionManager {
                 ended_at: None,
                 summary: None,
             };
-            store
-                .insert_session(&row)
-                .map_err(|e| ManagerError::Store(e.to_string()))?;
+            if is_restore {
+                // 状态已更新，跳过插入（行已存在）
+            } else {
+                store
+                    .insert_session(&row)
+                    .map_err(|e| ManagerError::Store(e.to_string()))?;
+            }
         }
-        let runner = SessionRunner::new(
+        let mut runner = SessionRunner::new(
             session_id.clone(),
             p.workspace.clone(),
             p.mode,
@@ -107,11 +131,23 @@ impl SessionManager {
             "session.start",
             &format!("{{\"workspace\":\"{}\"}}", p.workspace),
         );
+        let (restored, replayed) = match &p.restored {
+            Some(rep) if rep.found => (true, rep.replayed_events),
+            _ => (false, 0),
+        };
+        // 恢复注入：重放出的历史时间线交还 runner（续会话不丢上下文，D11 §9.2-2）
+        if let Some(rep) = &p.restored {
+            runner.restore_history(rep.history.clone());
+        }
         self.deps.sink.emit(SessionEvent::SessionReady {
             session_id: session_id.clone(),
-            restored: false,
-            replayed_events: 0,
+            restored,
+            replayed_events: replayed,
         });
+        let summary = RestoredSummary {
+            restored,
+            replayed_events: replayed,
+        };
         guard.insert(
             session_id,
             Arc::new(ManagedSession {
@@ -119,7 +155,7 @@ impl SessionManager {
                 state: Mutex::new(SessionState::Idle),
             }),
         );
-        Ok(())
+        Ok(summary)
     }
 
     /// user.message：取走 runner 在调用线程跑一轮（bin 侧自行 spawn 线程）
