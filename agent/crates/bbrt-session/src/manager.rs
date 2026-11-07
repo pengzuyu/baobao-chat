@@ -101,7 +101,12 @@ impl SessionManager {
                 workspace_id: None,
                 title: p.title.clone(),
                 form: "workbench".into(),
-                mode: format!("{:?}", p.mode).to_lowercase(),
+                mode: match p.mode {
+                    bbrt_sec::gate::PermissionMode::Ask => "ask",
+                    bbrt_sec::gate::PermissionMode::AutoEdit => "auto-edit",
+                    bbrt_sec::gate::PermissionMode::FullAuto => "full-auto",
+                }
+                .to_string(),
                 backend: None,
                 model_policy: format!("{:?}", p.model_policy).to_lowercase(),
                 status: "idle".into(),
