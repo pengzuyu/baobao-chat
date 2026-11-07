@@ -151,6 +151,18 @@ fn sse_line(data: &str) -> String {
     format!("data: {data}\n\n")
 }
 
+/// fanout 判定轮（FastPlanner 首个 bbw-fast 请求的响应：不分解）
+fn planner_noop() -> String {
+    format!(
+        "{}{}{}",
+        sse_line(r#"{"choices":[{"delta":{"content":"{\"complex\": false}"}}]}"#),
+        sse_line(
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#
+        ),
+        sse_line("[DONE]")
+    )
+}
+
 #[test]
 fn e2e_full_runtime_process() {
     let tmp = tempfile::tempdir().unwrap();
@@ -178,7 +190,7 @@ fn e2e_full_runtime_process() {
         ),
         sse_line("[DONE]")
     );
-    let script = Arc::new(Mutex::new(vec![round2, round1]));
+    let script = Arc::new(Mutex::new(vec![round2, round1, planner_noop()]));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     serve_mock_gateway(listener, script);
@@ -393,7 +405,7 @@ fn e2e_delegate_via_generic_cli() {
             r#"{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":60,"completion_tokens":8}}"#
         ),
     ) + &sse_line("[DONE]");
-    let script = Arc::new(Mutex::new(vec![round2, round1]));
+    let script = Arc::new(Mutex::new(vec![round2, round1, planner_noop()]));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     serve_mock_gateway(listener, script);

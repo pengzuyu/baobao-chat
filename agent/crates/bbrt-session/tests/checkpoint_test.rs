@@ -345,6 +345,7 @@ fn pre_edit_snapshot_fires_on_write_tool() {
         sink: sink.clone(),
         snapshots: Some(snaps.clone() as Arc<dyn SnapshotService>),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(
@@ -391,6 +392,7 @@ fn wal_replay_recovers_user_turn_after_fix() {
         sink: Arc::new(CollectSink(Mutex::new(vec![]))),
         snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(
@@ -449,6 +451,7 @@ fn manager_workspace_of() {
         sink,
         snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
         budget: BudgetConfig::default(),
     };
     let mgr = SessionManager::new(deps, None);

@@ -23,6 +23,7 @@ pub mod manager;
 pub mod recovery;
 pub mod skills;
 pub mod state;
+pub mod subagent;
 
 pub use checkpoint::{GitSnapshots, SnapshotOutcome, SnapshotService};
 pub use delegation::{
@@ -44,3 +45,4 @@ pub use state::{
     join_subagents, pause, permission_exhausted, permission_resolved, request_permission,
     request_review, resolve_review, resume, retry_from_error, SessionState, TransitionError,
 };
+pub use subagent::{FanoutPlanner, FastPlanner, ProbeResult, ProbeSpec};

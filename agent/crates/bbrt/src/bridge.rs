@@ -83,6 +83,39 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             },
             git_ref: git_ref.clone(),
         },
+        SessionEvent::SubagentSpawned {
+            session_id,
+            sub_id,
+            task_digest,
+            tool_subset,
+        } => RuntimeToHost::SubagentSpawn {
+            session_id: session_id.clone(),
+            sub_id: sub_id.clone(),
+            task_digest: task_digest.clone(),
+            tool_subset: tool_subset.clone(),
+        },
+        SessionEvent::SubagentProbeEvt {
+            session_id: _,
+            sub_id,
+            phase,
+            summary,
+        } => RuntimeToHost::SubagentEvent {
+            sub_id: sub_id.clone(),
+            phase: match phase.as_str() {
+                "spawn" => bbrt_protocol::SubagentPhase::Spawn,
+                "delta" => bbrt_protocol::SubagentPhase::Delta,
+                "fail" => bbrt_protocol::SubagentPhase::Fail,
+                _ => bbrt_protocol::SubagentPhase::Done,
+            },
+            summary: summary.clone(),
+        },
+        SessionEvent::SubagentJoined {
+            session_id,
+            results,
+        } => RuntimeToHost::SubagentJoin {
+            session_id: session_id.clone(),
+            results: results.clone(),
+        },
         SessionEvent::SessionReady {
             session_id,
             restored,

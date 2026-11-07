@@ -101,8 +101,12 @@ impl Summarizer for FastSummarizer<'_> {
 }
 
 /// bbw-fast 单轮调用共用壳（system+user → 流式汇总全文）；
-/// compaction 摘要与 W3 记忆提炼共用（19 篇档位别名固定 bbw-fast）
-fn chat_text(client: &dyn ChatClient, system: &str, user: &str) -> Result<String, String> {
+/// compaction 摘要、W3 记忆提炼与探查 planner 共用（19 篇档位别名固定 bbw-fast）
+pub(crate) fn chat_text(
+    client: &dyn ChatClient,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
     let req = ChatRequest {
         model: "bbw-fast".to_string(),
         messages: vec![
@@ -215,6 +219,8 @@ pub struct LoopDeps {
     pub snapshots: Option<Arc<dyn crate::checkpoint::SnapshotService>>,
     /// 技能索引（10 篇 §4.5：triggers 命中正文注入 skills 区块；tools.reload 热替换）
     pub skills: Arc<Mutex<crate::skills::SkillIndex>>,
+    /// 探查子 Agent 判定器（08 §4.5；None=未装配零行为，FastPlanner 见 subagent.rs）
+    pub fanout: Option<Arc<dyn crate::subagent::FanoutPlanner>>,
     pub budget: BudgetConfig,
 }
 
@@ -240,6 +246,50 @@ impl SessionRunner {
             "user.text",
             &format!("{{\"text\":\"{}\"}}", escape_json(user_text)),
         );
+
+        // 探查子 Agent fan-out（08 §4.5/D11 §7）：判定 complex → ≤3 并行探查 →
+        // join 摘要回填（主 Agent 基于摘要继续规划；未装配/不分解=零行为）
+        if let Some(planner) = deps.fanout.as_ref() {
+            if let Some(subs) = planner.plan(deps.model.as_ref(), user_text) {
+                self.state = crate::subagent::transition_fanout(self.state);
+                emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                    session_id: id,
+                    state: "subagent_fanout".into(),
+                    reason: "plan.fanout".into(),
+                });
+                deps.wal.append(
+                    &self.session_id,
+                    "subagent.fanout",
+                    &format!("{{\"count\":{}}}", subs.len()),
+                );
+                let results = crate::subagent::fanout_probes(
+                    &self.session_id,
+                    self.mode,
+                    deps.model.as_ref(),
+                    deps.tools.as_ref(),
+                    deps.sink.as_ref(),
+                    deps.wal.as_ref(),
+                    &subs,
+                );
+                self.state = crate::subagent::transition_join(self.state);
+                let digest = crate::subagent::join_summary(
+                    &self.session_id,
+                    &results,
+                    deps.sink.as_ref(),
+                    deps.wal.as_ref(),
+                );
+                self.history.push(Round::Tool {
+                    call_id: format!("fanout-{}", self.history.len()),
+                    name: "subagent.join".to_string(),
+                    summary: format!("## 并行探查结果\n{digest}"),
+                });
+                emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                    session_id: id,
+                    state: "running".into(),
+                    reason: "subagent.join".into(),
+                });
+            }
+        }
 
         // 记忆召回注入（D15 §2.3：按当前消息精排——条目少全量、多则 Top-K 关键词档）
         let memory_index = deps

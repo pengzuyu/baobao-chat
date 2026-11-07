@@ -119,6 +119,25 @@ pub enum SessionEvent {
         reason: String,
         git_ref: Option<String>,
     },
+    /// subagent.spawn（08 §4.5 探查子 Agent 派生）
+    SubagentSpawned {
+        session_id: String,
+        sub_id: String,
+        task_digest: String,
+        tool_subset: Vec<String>,
+    },
+    /// subagent.event（探查生命周期；phase: spawn|delta|done|fail）
+    SubagentProbeEvt {
+        session_id: String,
+        sub_id: String,
+        phase: String,
+        summary: Option<String>,
+    },
+    /// subagent.join（join 汇总；失败子任务带 fail 标注）
+    SubagentJoined {
+        session_id: String,
+        results: Vec<bbrt_protocol::SubagentResult>,
+    },
     /// session.ended
     SessionEnded { session_id: String, summary: String },
     /// D15：记忆写入/更新

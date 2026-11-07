@@ -120,6 +120,7 @@ fn skill_body_injected_on_trigger_only() {
         sink: Arc::new(CollectSink(Mutex::new(vec![]))),
         snapshots: None,
         skills: Arc::new(Mutex::new(SkillIndex::scan(&eco))),
+        fanout: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(
