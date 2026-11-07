@@ -17,6 +17,7 @@ import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
 import { ShareResolvePage } from '../features/im/pages/ShareResolvePage';
 import { KbPage } from '../features/kb/pages/KbPage';
+import { MailPage } from '../features/mail/pages/MailPage';
 import { useImStore } from '../features/im/store/im';
 import { useRtcStore } from '../features/rtc/store/rtcStore';
 import { RtcOverlay } from '../features/rtc/components/RtcOverlay';
@@ -152,6 +153,8 @@ export function App() {
         <Route path="/doc/:docId" element={<DocEditorPage />} />
         {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
         <Route path="/kb" element={<KbPage />} />
+        {/* 邮箱（22 篇 MAI-01~04：三栏/写信/设置/搜索） */}
+        <Route path="/mail" element={<MailPage />} />
         {/* Agent 工作台域（D08）：PAG-01/02/03 工作台 + PAG-11 记忆 + 日报 */}
         <Route path="/agent" element={<AgentWorkbenchPage />} />
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />

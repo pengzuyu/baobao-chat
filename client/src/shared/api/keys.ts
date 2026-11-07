@@ -26,6 +26,28 @@ export const qk = {
     /** 通知未读数（铃铛红点）['im','notifications','badge']（PIM-09；WS notification.new 触发失效） */
     notificationBadge: ['im', 'notifications', 'badge'] as const,
   },
+  mail: {
+    /** 邮箱摘要（懒开户触发点） ['mail','summary'] */
+    summary: ['mail', 'summary'] as const,
+    /** 文件夹消息列表 ['mail','messages',folder,filter,cursor]（前缀失效走 ['mail','messages']） */
+    messages: (folder: string, filter: string = '', cursor: string | null = null): QueryKeyRO => [
+      'mail', 'messages', folder, filter, cursor ?? null,
+    ],
+    /** 单封详情 ['mail','message',id] */
+    message: (id: string): QueryKeyRO => ['mail', 'message', id],
+    /** 搜索结果 ['mail','search',q,attach] */
+    search: (q: string, attachOnly: boolean): QueryKeyRO => ['mail', 'search', q, attachOnly],
+    /** 设置 ['mail','settings'] */
+    settings: ['mail', 'settings'] as const,
+    /** 应用专用密码 ['mail','appPasswords'] */
+    appPasswords: ['mail', 'appPasswords'] as const,
+    /** 可见共享邮箱 ['mail','shared'] */
+    shared: ['mail', 'shared'] as const,
+    /** 共享邮箱消息 ['mail','sharedMessages',mailboxId,folder] */
+    sharedMessages: (mailboxId: string, folder: string = 'inbox'): QueryKeyRO => [
+      'mail', 'sharedMessages', mailboxId, folder,
+    ],
+  },
   auth: {
     session: ['auth', 'session'] as const,
   },
@@ -80,4 +102,5 @@ export const wsInvalidationPrefixes: Record<string, QueryKeyRO[]> = {
   'badge.updated': [], // 未读由 store 内联更新
   'presence.changed': [], // 在线点走 store
   'notification.new': [['im', 'notifications']], // 通知中心（PIM-09）：列表 + 铃铛红点失效重拉
+  'mail.new': [['mail', 'summary'], ['mail', 'messages'], ['mail', 'shared'], ['mail', 'sharedMessages']], // 邮箱角标/列表/共享邮箱（MAI，22 §6.2）
 };
