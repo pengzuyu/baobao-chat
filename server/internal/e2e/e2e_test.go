@@ -120,6 +120,9 @@ type wsClient struct {
 	srv *testServer
 	uid int64
 	did string
+	// inbox：awaitAck 期间到达的推送帧暂存（进程内总线同步分发——事件先于 ack 到达，
+	// 若按帧丢弃会吞掉 member.joined 等扇出），until 先消费 inbox 再读 socket
+	inbox []envelope
 }
 
 func (s *testServer) dial(t *testing.T, empno string) *wsClient {
@@ -189,9 +192,27 @@ func (w *wsClient) send(typee string, payload any) string {
 func (w *wsClient) until(typee string, pred func(json.RawMessage) bool, timeout time.Duration) envelope {
 	w.t.Helper()
 	deadline := time.Now().Add(timeout)
+	for {
+		env, ok := w.nextEnvelope(deadline)
+		if !ok {
+			w.t.Fatalf("[%s] 等 %s 超时", w.did, typee)
+		}
+		w.t.Logf("[%s] 帧 type=%s", w.did, env.Type)
+		if env.Type == typee && (pred == nil || pred(env.Payload)) {
+			return env
+		}
+	}
+}
+
+// nextEnvelope inbox 优先，其次读 socket（服务端帧不掩码；控制帧跳过）；false=deadline 到
+func (w *wsClient) nextEnvelope(deadline time.Time) (envelope, bool) {
+	if len(w.inbox) > 0 {
+		env := w.inbox[0]
+		w.inbox = w.inbox[1:]
+		return env, true
+	}
 	_ = w.nc.SetReadDeadline(deadline)
 	for time.Now().Before(deadline) {
-		// 服务端帧不掩码（requireMask=false）；ping 由服务端读循环自答，此处只面对文本/控制
 		f, err := ws.ReadFrame(w.br, false)
 		if err != nil {
 			w.t.Fatalf("[%s] 读帧: %v", w.did, err)
@@ -203,37 +224,27 @@ func (w *wsClient) until(typee string, pred func(json.RawMessage) bool, timeout 
 		if err := json.Unmarshal(f.Payload, &env); err != nil {
 			w.t.Fatalf("[%s] 信封解析: %v", w.did, err)
 		}
-		if env.Type == typee && (pred == nil || pred(env.Payload)) {
-			return env
-		}
+		return env, true
 	}
-	w.t.Fatalf("[%s] 等 %s 超时", w.did, typee)
-	return envelope{}
+	return envelope{}, false
 }
 
 // awaitAck 等任意类型的成对回执（ack 字段==请求 id；ping 的回执类型是 pong）
 func (w *wsClient) awaitAck(id string) envelope {
 	w.t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
-	_ = w.nc.SetReadDeadline(deadline)
-	for time.Now().Before(deadline) {
-		f, err := ws.ReadFrame(w.br, false)
-		if err != nil {
-			w.t.Fatalf("[%s] 读帧: %v", w.did, err)
-		}
-		if f.Opcode != ws.OpText {
-			continue
-		}
-		var env envelope
-		if err := json.Unmarshal(f.Payload, &env); err != nil {
-			w.t.Fatalf("[%s] 信封解析: %v", w.did, err)
+	var held []envelope // 读到的非 ack 帧本地暂存；命中后前插回 inbox（保序）
+	defer func() { w.inbox = append(held, w.inbox...) }()
+	for {
+		env, ok := w.nextEnvelope(deadline)
+		if !ok {
+			w.t.Fatalf("[%s] 等 ack(%s) 超时", w.did, id)
 		}
 		if env.Ack == id {
 			return env
 		}
+		held = append(held, env) // 事件先于 ack 到达（总线同步分发）→ 暂存不丢
 	}
-	w.t.Fatalf("[%s] 等 ack(%s) 超时", w.did, id)
-	return envelope{}
 }
 
 func ackCode(w *wsClient, env envelope) int {
@@ -373,4 +384,143 @@ func TestE2EIMFullFlow(t *testing.T) {
 
 	_ = msgID
 	_ = bData
+}
+
+// ---------------------------------------------------------------------------
+// S5+ 群管理深度流：角色矩阵 / 禁言 3006 / 申请-审批 / 解散只读 / @提及通知
+// ---------------------------------------------------------------------------
+
+func TestE2EGroupGovernanceDeep(t *testing.T) {
+	s := newServer(t)
+	alice := s.dial(t, "alice")
+	bob := s.dial(t, "bob")
+
+	// 建群（alice owner + bob member）
+	gAckEnv := createGroupAck(t, alice, s)
+	groupID := gAckEnv
+
+	// bob 设为管理员（owner 操作）→ bob 收 member.role.changed 系统消息
+	roleID := alice.send("conv.member.role", map[string]any{
+		"conv_id": groupID, "uid": fmt.Sprintf("%d", s.bobID), "role": 2,
+	})
+	if ack := alice.awaitAck(roleID); ack.Code != 0 {
+		t.Fatalf("set admin code=%d payload=%s", ack.Code, ack.Payload)
+	}
+	bob.until("msg.new", func(p json.RawMessage) bool {
+		return bytes.Contains(p, []byte(`"kind":"member.role.changed"`))
+	}, 3*time.Second)
+
+	// alice 禁言 bob 10 分钟 → bob 发消息 → 3006
+	until10 := time.Now().Add(10 * time.Minute).UnixMilli()
+	muteID := alice.send("conv.setting", map[string]any{
+		"conv_id": groupID, "mute_member": map[string]any{"uid": fmt.Sprintf("%d", s.bobID), "until": until10},
+	})
+	if ack := alice.awaitAck(muteID); ack.Code != 0 {
+		t.Fatalf("mute code=%d payload=%s", ack.Code, ack.Payload)
+	}
+	bob.until("conv.updated", func(p json.RawMessage) bool {
+		return bytes.Contains(p, []byte(`"kind":"setting"`))
+	}, 3*time.Second)
+	bobMsgID := bob.send("msg.send", map[string]any{
+		"conv_id": groupID, "client_msg_id": "e2e-muted", "type": "text",
+		"body": map[string]string{"text": "被禁言的发言"},
+	})
+	if ack := bob.awaitAck(bobMsgID); ack.Code != 3006 {
+		t.Fatalf("muted send 应 3006，got code=%d payload=%s", ack.Code, ack.Payload)
+	}
+
+	// 解除禁言 → bob 可发
+	muteOffID := alice.send("conv.setting", map[string]any{
+		"conv_id": groupID, "mute_member": map[string]any{"uid": fmt.Sprintf("%d", s.bobID), "until": 0},
+	})
+	if ack := alice.awaitAck(muteOffID); ack.Code != 0 {
+		t.Fatalf("unmute code=%d", ack.Code)
+	}
+	okMsgID := bob.send("msg.send", map[string]any{
+		"conv_id": groupID, "client_msg_id": "e2e-unmuted", "type": "text",
+		"body": map[string]string{"text": "解除后发言"},
+	})
+	if ack := bob.awaitAck(okMsgID); ack.Code != 0 {
+		t.Fatalf("unmuted send code=%d payload=%s", ack.Code, ack.Payload)
+	}
+
+	// 入群申请：alice 设 join_mode=2（需审批）→ bob 先退群 → bob 申请 → alice 收 apply 通知 + apply.submitted 系统消息
+	jm2 := 2
+	jmID := alice.send("conv.setting", map[string]any{"conv_id": groupID, "join_mode": jm2})
+	if ack := alice.awaitAck(jmID); ack.Code != 0 {
+		t.Fatalf("join_mode code=%d payload=%s", ack.Code, ack.Payload)
+	}
+	quitID := bob.send("conv.quit", map[string]any{"conv_id": groupID})
+	if ack := bob.awaitAck(quitID); ack.Code != 0 {
+		t.Fatalf("quit code=%d payload=%s", ack.Code, ack.Payload)
+	}
+	applyID := bob.send("conv.apply", map[string]any{"conv_id": groupID, "reason": "e2e 申请入群"})
+	applyAck := bob.awaitAck(applyID)
+	if applyAck.Code != 0 {
+		t.Fatalf("apply code=%d payload=%s", applyAck.Code, applyAck.Payload)
+	}
+	var applyData struct {
+		ApplyID string `json:"apply_id"`
+	}
+	_ = json.Unmarshal(applyAck.Payload, &applyData)
+	if applyData.ApplyID == "" {
+		t.Fatalf("apply_id 缺失: %s", applyAck.Payload)
+	}
+	alice.until("notification.new", func(p json.RawMessage) bool {
+		return bytes.Contains(p, []byte(`"kind":"apply"`))
+	}, 3*time.Second)
+
+	// 审批通过 → bob 回群（member.joined join_by_apply 文案）
+	handleID := alice.send("conv.apply.handle", map[string]any{"apply_id": applyData.ApplyID, "action": "approve"})
+	if ack := alice.awaitAck(handleID); ack.Code != 0 {
+		t.Fatalf("approve code=%d payload=%s", ack.Code, ack.Payload)
+	}
+	alice.until("msg.new", func(p json.RawMessage) bool {
+		return bytes.Contains(p, []byte(`"kind":"member.joined"`)) && bytes.Contains(p, []byte(`"join_by_apply":true`))
+	}, 3*time.Second)
+
+	// bob 发 @alice 消息 → alice 收 kind=mention 通知
+	atMsgID := bob.send("msg.send", map[string]any{
+		"conv_id": groupID, "client_msg_id": "e2e-at", "type": "text",
+		"body": map[string]string{"text": fmt.Sprintf("@Alice 看这个")},
+		"mentions": []map[string]any{
+			{"uid": fmt.Sprintf("%d", s.aliceID), "range": []int{0, 6}},
+		},
+	})
+	if ack := bob.awaitAck(atMsgID); ack.Code != 0 {
+		t.Fatalf("at send code=%d payload=%s", ack.Code, ack.Payload)
+	}
+	alice.until("notification.new", func(p json.RawMessage) bool {
+		return bytes.Contains(p, []byte(`"kind":"mention"`)) && bytes.Contains(p, []byte(fmt.Sprintf(`"conv_id":"%s"`, groupID)))
+	}, 3*time.Second)
+
+	// 解散 → bob 发消息 → 3002
+	dissolveID := alice.send("conv.dissolve", map[string]any{"conv_id": groupID})
+	if ack := alice.awaitAck(dissolveID); ack.Code != 0 {
+		t.Fatalf("dissolve code=%d payload=%s", ack.Code, ack.Payload)
+	}
+	deadID := bob.send("msg.send", map[string]any{
+		"conv_id": groupID, "client_msg_id": "e2e-dead", "type": "text",
+		"body": map[string]string{"text": "已解散会话的发言"},
+	})
+	if ack := bob.awaitAck(deadID); ack.Code != 3002 {
+		t.Fatalf("dissolved send 应 3002，got code=%d payload=%s", ack.Code, ack.Payload)
+	}
+}
+
+// createGroupAck 建群并返回会话 ID（扁平 ConvDetailDTO）
+func createGroupAck(t *testing.T, w *wsClient, s *testServer) string {
+	t.Helper()
+	id := w.send("conv.create", map[string]any{
+		"type": 2, "name": "gov 群", "member_ids": []string{fmt.Sprintf("%d", s.bobID)},
+	})
+	ack := w.awaitAck(id)
+	if ack.Code != 0 {
+		t.Fatalf("conv.create code=%d payload=%s", ack.Code, ack.Payload)
+	}
+	var d struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(ack.Payload, &d)
+	return d.ID
 }

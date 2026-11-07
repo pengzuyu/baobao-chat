@@ -14,6 +14,7 @@ import (
 	"github.com/baobaowork/server/internal/platform/eventbus"
 	"github.com/baobaowork/server/internal/platform/httpx"
 	"github.com/baobaowork/server/internal/platform/ws"
+	rtcapi "github.com/baobaowork/server/internal/rtc/api"
 )
 
 // Gateway /ws/connect 接入：鉴权 → 升级 → 注册 hub → 信封路由 → 心跳 → 清理（D02 §6）
@@ -22,7 +23,21 @@ type Gateway struct {
 	msgs      messageapi.MessageService
 	verify    TokenVerifier
 	dedup     *eventbus.Dedup
-	heartbeat time.Duration // 读超时=无心跳断开窗口
+	heartbeat time.Duration     // 读超时=无心跳断开窗口
+	rtc       rtcapi.RTCService // D04 阶段一追加：rtc.* 信令路由（MountRTC 装配，可为 nil=未启用）
+}
+
+// MountRTC 挂载通话信令服务（D04 阶段一追加；main 装配后 rtc.* 路由生效，
+// rtc 服务推送经 hub.PushToUsers 扇出——进程内直调 rtc service，无需 eventbus，登记）
+func (g *Gateway) MountRTC(svc rtcapi.RTCService) { g.rtc = svc }
+
+// RtcPusher rtcapi.Pusher 的 hub 适配（信封构造在 gateway 内，rtc 域不反向依赖；
+// main 装配：rtc.NewModule(gateway.RtcPusher{Hub: hub}, …)）
+type RtcPusher struct{ Hub *Hub }
+
+// PushRTC 按用户扇出 rtc.* 推送（多端 did 过滤在客户端做，D04 阶段一登记）
+func (p RtcPusher) PushRTC(userIDs []int64, typ string, payload any) int {
+	return p.Hub.PushToUsers(userIDs, NewPush(typ, payload))
 }
 
 // TokenVerifier 与 httpx 一致的令牌校验函数
@@ -439,6 +454,66 @@ func (g *Gateway) handleEnvelope(ctx context.Context, uid int64, env *Envelope) 
 		}
 		return NewAck(env, 0, map[string]any{})
 
+	// ── rtc.* 通话信令（D04 阶段一追加；服务端纯信令：SDP/ICE 透传不落库）──
+
+	case "rtc.call.invite":
+		var p rtcapi.InvitePayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return g.handleRTC(env, func(svc rtcapi.RTCService) (any, error) { return svc.Invite(ctx, uid, p) })
+
+	case "rtc.call.cancel":
+		var p rtcapi.CallIDPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return g.handleRTC(env, func(svc rtcapi.RTCService) (any, error) {
+			return map[string]any{}, svc.Cancel(ctx, uid, p)
+		})
+
+	case "rtc.accept":
+		var p rtcapi.AcceptPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return g.handleRTC(env, func(svc rtcapi.RTCService) (any, error) {
+			return map[string]any{}, svc.Accept(ctx, uid, p)
+		})
+
+	case "rtc.reject":
+		var p rtcapi.RejectPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return g.handleRTC(env, func(svc rtcapi.RTCService) (any, error) {
+			return map[string]any{}, svc.Reject(ctx, uid, p)
+		})
+
+	case "rtc.bye":
+		var p rtcapi.CallIDPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return g.handleRTC(env, func(svc rtcapi.RTCService) (any, error) {
+			return map[string]any{}, svc.Bye(ctx, uid, p)
+		})
+
+	case "rtc.signal":
+		var p rtcapi.SignalPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return g.handleRTC(env, func(svc rtcapi.RTCService) (any, error) {
+			return map[string]any{}, svc.Signal(ctx, uid, p)
+		})
+
 	default:
 		// 未知 type：ack 9001（前向兼容由客户端忽略未注册推送承担，14 篇 §8）
 		return NewAck(env, int(errx.CodeBadRequest), errBody("未知事件类型: "+env.Type))
@@ -448,6 +523,22 @@ func (g *Gateway) handleEnvelope(ctx context.Context, uid int64, env *Envelope) 
 // parseConvIDPayload conv.quit / conv.dissolve 的 conv_id 解析（字符串透出契约）
 func parseConvIDPayload(p messageapi.ConvIDPayload) (int64, error) {
 	return strconv.ParseInt(string(p.ConvID), 10, 64)
+}
+
+// handleRTC rtc.* 路由通用壳（D04 阶段一追加）：未挂载守卫 + 统一错误码入 ack
+func (g *Gateway) handleRTC(env *Envelope, fn func(svc rtcapi.RTCService) (any, error)) *Envelope {
+	if g.rtc == nil {
+		return NewAck(env, int(errx.CodeBadRequest), errBody("rtc 服务未启用"))
+	}
+	res, err := fn(g.rtc)
+	if err != nil {
+		e := errx.From(err)
+		return NewAck(env, int(e.Code), errBody(e.Msg))
+	}
+	if res == nil {
+		res = map[string]any{}
+	}
+	return NewAck(env, 0, res)
 }
 
 func unmarshalPayload(env *Envelope, v any) error {

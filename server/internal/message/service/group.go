@@ -111,15 +111,16 @@ func (s *Service) sendSystem(ctx context.Context, convID, actorID int64, body me
 	})
 }
 
-// sendCore Send 的免校验核心（seq 分配→落库→冗余→已读→msg.created 扇出）
-func (s *Service) sendCore(ctx context.Context, convID, senderID int64, p messageapi.SendPayload) {
+// sendCore Send 的免校验核心（seq 分配→落库→冗余→已读→msg.created 扇出）。
+// 返回落库消息（失败返回 nil；call_card 落流等系统侧调用方需要回链 msg_id，D04）。
+func (s *Service) sendCore(ctx context.Context, convID, senderID int64, p messageapi.SendPayload) *messageapi.Message {
 	now := s.opts.Now()
 	lock := s.convLock(convID)
 	lock.Lock()
 	seq, err := s.repo.AllocSeq(ctx, convID)
 	if err != nil {
 		lock.Unlock()
-		return
+		return nil
 	}
 	msg := messageapi.Message{
 		ConvID: convID, Seq: seq, ClientMsgID: p.ClientMsgID, SenderID: senderID,
@@ -130,7 +131,7 @@ func (s *Service) sendCore(ctx context.Context, convID, senderID int64, p messag
 	msg.ID = nextMsgID()
 	if err := s.repo.InsertMessage(ctx, msg); err != nil {
 		lock.Unlock()
-		return
+		return nil
 	}
 	lock.Unlock()
 	_ = s.repo.TouchConversation(ctx, convID, seq, msg.TS)
@@ -139,6 +140,7 @@ func (s *Service) sendCore(ctx context.Context, convID, senderID int64, p messag
 	_ = s.bus.Publish(ctx, eventbus.TopicMsgCreated, messageapi.MsgCreatedEvent{
 		Message: msg, MemberIDs: members,
 	})
+	return &msg
 }
 
 // groupSettingDTO 群设置转 DTO（毫秒化可空时间）

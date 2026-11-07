@@ -275,6 +275,13 @@ type MessageService interface {
 	MarkNotificationsRead(ctx context.Context, userID int64, p NotificationReadPayload) error
 	// UnreadNotificationCount 未读计数（红点数据源；端内 99+ 封顶）
 	UnreadNotificationCount(ctx context.Context, userID int64) (*UnreadCountResult, error)
+
+	// ── 通话卡片（D04 阶段一：rtc 域经注入调用；通话记录=消息流，服务端不建表）──
+
+	// SendCallCard invite 时落 type=call_card 消息（sender=主叫；client_msg_id 幂等）→ 返回 msg_id 回链
+	SendCallCard(ctx context.Context, senderID, convID int64, clientMsgID string, body json.RawMessage) (int64, error)
+	// UpdateCallCard 结束时 PATCH body（status=ended{duration,reason}）→ 复用 msg.updated 扇出
+	UpdateCallCard(ctx context.Context, msgID int64, body json.RawMessage) error
 }
 
 // ── 收藏（D03 §3.8 PIM-08；API-IM-10/11）──

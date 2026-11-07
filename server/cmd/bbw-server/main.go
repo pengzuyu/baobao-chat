@@ -49,6 +49,7 @@ import (
 	"github.com/baobaowork/server/internal/platform/eventbus"
 	"github.com/baobaowork/server/internal/platform/httpx"
 	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	"github.com/baobaowork/server/internal/rtc"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -164,6 +165,29 @@ func main() {
 		return c, nil
 	}
 	gw := gateway.New(hub, bus, msgMod.API(), wsVerify, cfg.WSHeartbeat)
+
+	// ── rtc 通话域（D04 阶段一务实版）：服务端纯信令 + call_card 落流 ──
+	// 推送经 hub 扇出（进程内直调 rtc service，无需 eventbus——通话推送瞬态无落库语义，登记）；
+	// 通话记录=IM 流内 call_card 消息，服务端不建表（CallRegistry 内存态）；权限 rtc:call:start
+	// v0.1 无权限点字典缺省放行（03 篇登记后接入）。
+	rtcMod := rtc.NewModule(gateway.RtcPusher{Hub: hub}, rtcCardSink{msgs: msgMod.API()}, rtc.Options{
+		// 会话/成员校验经 message 仓闭包（跨模块不引 message 包，D02 §4 依赖规则）
+		IsConvActive: func(ctx context.Context, convID int64) bool {
+			c, err := msgRepo.GetConversation(ctx, convID)
+			return err == nil && c != nil && c.Status == messageapi.ConvActive
+		},
+		IsConvMember: func(ctx context.Context, convID, userID int64) bool {
+			m, err := msgRepo.MemberOf(ctx, convID, userID)
+			return err == nil && m != nil && m.Status == 1
+		},
+		NameOf: func(id int64) string {
+			if u, err := orgRepo.GetUser(context.Background(), id); err == nil && u != nil {
+				return u.DisplayName
+			}
+			return ""
+		},
+	})
+	gw.MountRTC(rtcMod.API())
 
 	if cfg.SeedDemoData {
 		seedDemo(orgRepo, msgRepo)
@@ -1601,4 +1625,21 @@ func handleAdminAudit(svc adminapi.AdminService) http.HandlerFunc {
 		}
 		httpx.OK(w, r, resp)
 	}
+}
+
+// ── rtc 域适配器（D04 阶段一追加）──
+
+// rtcCardSink rtc.CardSink → message 服务适配：call_card 落流/回写
+// （SendCard 参数序与 MessageService.SendCallCard 对齐；错误静默——卡片为辅链路不阻断信令）
+type rtcCardSink struct{ msgs messageapi.MessageService }
+
+// SendCard invite 时落卡（幂等键 callcard-<call_id>）→ 回链 msg_id
+func (a rtcCardSink) SendCard(ctx context.Context, senderID, convID int64, clientMsgID string, body json.RawMessage) int64 {
+	id, _ := a.msgs.SendCallCard(ctx, senderID, convID, clientMsgID, body)
+	return id
+}
+
+// FinishCard 结束时 PATCH body（status=ended{duration,reason}）→ 复用 msg.updated 扇出
+func (a rtcCardSink) FinishCard(ctx context.Context, msgID int64, body json.RawMessage) {
+	_ = a.msgs.UpdateCallCard(ctx, msgID, body)
 }
