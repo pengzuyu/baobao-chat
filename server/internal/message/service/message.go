@@ -27,6 +27,15 @@ type Options struct {
 	MaxMentions    int                   // 单条 @ 上限（默认 50）
 	Now            func() time.Time      // 时钟注入（测试用）
 	NameOf         func(id int64) string // 发送人名称解析（main 注入 org 域；缺省回落 uid 字符串）
+
+	// ── 群管理（04 篇 §1.1 基线 / §4.5）──
+	MaxGroupMembers     int           // 普通群上限（默认 500；3010）
+	MaxBroadcastMembers int           // 广播群上限（默认 5000；3010）
+	MaxMuteDuration     time.Duration // 单人禁言单次上限（默认 30 天，04 篇 §4.5.3）
+	MaxGroupName        int           // 群名上限（默认 50，D03 §5.2）
+	MaxAnnouncement     int           // 公告上限（默认 2000，D03 §5.2）
+	MaxApplyReason      int           // 申请理由上限（默认 200，D03 §5.2）
+	ApplyTTL            time.Duration // 申请待审时长（默认 7 天→status=4，D03 §3.6）
 }
 
 func (o *Options) fillDefaults() {
@@ -44,6 +53,27 @@ func (o *Options) fillDefaults() {
 	}
 	if o.MaxMentions == 0 {
 		o.MaxMentions = 50
+	}
+	if o.MaxGroupMembers == 0 {
+		o.MaxGroupMembers = 500
+	}
+	if o.MaxBroadcastMembers == 0 {
+		o.MaxBroadcastMembers = 5000
+	}
+	if o.MaxMuteDuration == 0 {
+		o.MaxMuteDuration = 30 * 24 * time.Hour
+	}
+	if o.MaxGroupName == 0 {
+		o.MaxGroupName = 50
+	}
+	if o.MaxAnnouncement == 0 {
+		o.MaxAnnouncement = 2000
+	}
+	if o.MaxApplyReason == 0 {
+		o.MaxApplyReason = 200
+	}
+	if o.ApplyTTL == 0 {
+		o.ApplyTTL = 7 * 24 * time.Hour
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -143,10 +173,28 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 	if conv.Type == messageapi.ConvBroadcast && member.Role != messageapi.MemberPublisher {
 		return nil, errx.New(errx.CodeIMBroadcastReadOnly, "广播群仅 publisher 可发言")
 	}
-	// 禁言（04 篇 §4.5.3）
+	// 禁言（04 篇 §4.5.3）：单人禁言；群聊叠加全员禁言（owner/admin 恒可发言）
 	now := s.opts.Now()
 	if member.MuteUntil.After(now) {
 		return nil, errx.New(errx.CodeIMMuted, "禁言中")
+	}
+	var groupSetting messagerepo.GroupSetting
+	if conv.Type == messageapi.ConvGroup || conv.Type == messageapi.ConvBroadcast {
+		groupSetting, _ = s.repo.GetGroupSetting(ctx, convID)
+	}
+	if conv.Type == messageapi.ConvGroup &&
+		groupSetting.MuteAllUntil.After(now) &&
+		member.Role != messageapi.MemberOwner && member.Role != messageapi.MemberAdmin {
+		return nil, errx.New(errx.CodeIMMuted, "全员禁言中")
+	}
+	// @全体策略（04 篇 §4.5.4）：1 全员 / 2 仅管理 / 3 禁用；广播群不支持 @
+	if conv.Type == messageapi.ConvGroup && hasMentionAll(p.Mentions) {
+		denied := groupSetting.MentionAllPolicy == messagerepo.MentionAllPolicyOff ||
+			(groupSetting.MentionAllPolicy == messagerepo.MentionAllPolicyAdm &&
+				member.Role != messageapi.MemberOwner && member.Role != messageapi.MemberAdmin)
+		if denied {
+			return nil, errx.New(errx.CodeIMMentionAllDenied, "@全体被群策略禁止")
+		}
 	}
 
 	// ③ 内容策略（3004/3005）
@@ -310,6 +358,7 @@ func (s *Service) ListUserConversations(ctx context.Context, userID int64) ([]me
 		}
 		dto := messageapi.ConversationDTO{
 			ID: strconv.FormatInt(c.ID, 10), Type: c.Type, Name: c.Name,
+			OwnerID:   strconv.FormatInt(c.OwnerID, 10),
 			LatestSeq: c.LatestSeq, LastMsgTS: c.LastMsgTS, MemberCount: c.MemberCount,
 			Status: c.Status,
 			My: messageapi.UserConvStateDTO{
@@ -337,6 +386,9 @@ func digestOf(m messageapi.Message) string {
 		var tb textBody
 		_ = json.Unmarshal(m.Body, &tb)
 		return truncateRunes(tb.Text, 30)
+	}
+	if m.Type == "system" {
+		return "[群通知]"
 	}
 	return "[" + m.Type + "]"
 }

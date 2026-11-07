@@ -189,8 +189,15 @@ func TestConvStatePatchAndDraftGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	convs, _ := svc.ListUserConversations(ctx, 10001)
-	if convs[0].My.Draft != draft || convs[0].LastMsgDigest != "[草稿] 写到一半的话" {
-		t.Fatalf("draft 态=%+v digest=%q", convs[0].My, convs[0].LastMsgDigest)
+	// 按 ID 取 conv1（内存版等 ts 时 map 迭代序不定，避免取 [0] 的偶发漂移）
+	var conv1 *messageapi.ConversationDTO
+	for i := range convs {
+		if convs[i].ID == "1" {
+			conv1 = &convs[i]
+		}
+	}
+	if conv1 == nil || conv1.My.Draft != draft || conv1.LastMsgDigest != "[草稿] 写到一半的话" {
+		t.Fatalf("draft 态=%+v digest=%q", conv1, conv1.LastMsgDigest)
 	}
 	// 清草稿=空串
 	empty := ""
@@ -198,8 +205,13 @@ func TestConvStatePatchAndDraftGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	convs, _ = svc.ListUserConversations(ctx, 10001)
-	if convs[0].My.Draft != "" {
-		t.Fatalf("清草稿失败: %q", convs[0].My.Draft)
+	for i := range convs {
+		if convs[i].ID == "1" {
+			conv1 = &convs[i]
+		}
+	}
+	if conv1 == nil || conv1.My.Draft != "" {
+		t.Fatalf("清草稿失败: %+v", conv1)
 	}
 }
 

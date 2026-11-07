@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/baobaowork/server/internal/message/api"
 )
@@ -18,6 +19,8 @@ type Memory struct {
 	receipts map[int64]map[int64]*Receipt       // convID → userID
 	seqs     map[int64]int64                    // convID → 已分配最大 seq（对齐 Redis INCR 语义）
 	states   map[int64]map[int64]*UserConvState // userID → convID → 态
+	settings map[int64]*GroupSetting            // convID → 群设置（群/广播群才有）
+	applies  map[int64]*Apply                   // applyID → 申请
 	nextID   int64
 }
 
@@ -31,6 +34,8 @@ func NewMemory() *Memory {
 		receipts: map[int64]map[int64]*Receipt{},
 		seqs:     map[int64]int64{},
 		states:   map[int64]map[int64]*UserConvState{},
+		settings: map[int64]*GroupSetting{},
+		applies:  map[int64]*Apply{},
 		nextID:   0, // 会话 ID 从 1 起（雪花占位）
 	}
 }
@@ -77,20 +82,31 @@ func (m *Memory) GetConversation(_ context.Context, convID int64) (*Conversation
 	return nil, messageapi.ErrNotFound
 }
 
-// AddMember 加成员（幂等：同 user 覆盖状态）
+// AddMember 加成员（幂等：同 user 覆盖状态；member_count=在群口径——
+// 「已退/被移出 → 复活」补递增，与 Remove/Quit 的递减对齐，仅覆盖在群行不重复计）
 func (m *Memory) AddMember(_ context.Context, mem Member) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, e := range m.members[mem.ConvID] {
 		if e.UserID == mem.UserID {
+			reactivated := e.Status != 1
 			e.Status = 1
 			e.Role = mem.Role
 			e.MuteUntil = mem.MuteUntil // 覆盖语义：禁言时间一并更新（漏掉导致 upsert 丢禁言）
+			e.JoinAt = time.Now()
+			if reactivated {
+				if c, ok := m.convs[mem.ConvID]; ok {
+					c.MemberCount++
+				}
+			}
 			return nil
 		}
 	}
 	if mem.Status == 0 {
 		mem.Status = 1
+	}
+	if mem.JoinAt.IsZero() {
+		mem.JoinAt = time.Now()
 	}
 	cp := mem
 	m.members[mem.ConvID] = append(m.members[mem.ConvID], &cp)
@@ -359,4 +375,198 @@ func (m *Memory) LastMessage(_ context.Context, convID int64) (*messageapi.Messa
 	}
 	cp := *list[len(list)-1]
 	return &cp, nil
+}
+
+// ── 群管理（D03 §3.5/§3.6/§4.1 INT-IM-15~19）──
+
+// findMemberLocked 定位成员指针（须持锁）
+func (m *Memory) findMemberLocked(convID, userID int64) *Member {
+	for _, e := range m.members[convID] {
+		if e.UserID == userID {
+			return e
+		}
+	}
+	return nil
+}
+
+// UpdateMemberRole 角色变更（status 非 0 时一并覆盖；行不存在返回 ErrNotFound）
+func (m *Memory) UpdateMemberRole(_ context.Context, convID, userID int64, role, status int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.findMemberLocked(convID, userID)
+	if e == nil {
+		return messageapi.ErrNotFound
+	}
+	e.Role = role
+	if status != 0 {
+		e.Status = status
+	}
+	return nil
+}
+
+// RemoveMember 移出（status=3；原在群才递减 member_count，S2 状态机）
+func (m *Memory) RemoveMember(_ context.Context, convID, userID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.findMemberLocked(convID, userID)
+	if e == nil || e.Status != 1 {
+		return nil
+	}
+	e.Status = 3
+	e.MuteUntil = time.Time{}
+	if c, ok := m.convs[convID]; ok && c.MemberCount > 0 {
+		c.MemberCount--
+	}
+	return nil
+}
+
+// QuitMember 退群（status=2）
+func (m *Memory) QuitMember(_ context.Context, convID, userID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.findMemberLocked(convID, userID)
+	if e == nil || e.Status != 1 {
+		return nil
+	}
+	e.Status = 2
+	e.MuteUntil = time.Time{}
+	if c, ok := m.convs[convID]; ok && c.MemberCount > 0 {
+		c.MemberCount--
+	}
+	return nil
+}
+
+// MuteMember 单人禁言（零值=解除）
+func (m *Memory) MuteMember(_ context.Context, convID, userID int64, until time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e := m.findMemberLocked(convID, userID); e != nil {
+		e.MuteUntil = until
+	}
+	return nil
+}
+
+// UpdateConversationMeta 群名/群主变更（空串/0 = 不变）
+func (m *Memory) UpdateConversationMeta(_ context.Context, convID int64, name string, ownerID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.convs[convID]; ok {
+		if name != "" {
+			c.Name = name
+		}
+		if ownerID != 0 {
+			c.OwnerID = ownerID
+		}
+	}
+	return nil
+}
+
+// FindSingleConv 单聊去重：同对成员且双方在群的 active 单聊（INT-IM-15）
+func (m *Memory) FindSingleConv(_ context.Context, userA, userB int64) (*Conversation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for convID, c := range m.convs {
+		if c.Type != messageapi.ConvSingle || c.Status != messageapi.ConvActive {
+			continue
+		}
+		aIn, bIn := false, false
+		for _, e := range m.members[convID] {
+			if e.Status != 1 {
+				continue
+			}
+			if e.UserID == userA {
+				aIn = true
+			}
+			if e.UserID == userB {
+				bIn = true
+			}
+		}
+		if aIn && bIn {
+			cp := *c
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+// ListMembersDetailed 成员行明细（全状态，含 role/mute_until/join_at）
+func (m *Memory) ListMembersDetailed(_ context.Context, convID int64) ([]Member, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Member{}
+	for _, e := range m.members[convID] {
+		out = append(out, *e)
+	}
+	return out, nil
+}
+
+// GetGroupSetting 群设置（无记录返回默认值）
+func (m *Memory) GetGroupSetting(_ context.Context, convID int64) (GroupSetting, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.settings[convID]; ok {
+		return *s, nil
+	}
+	return DefaultGroupSetting(convID), nil
+}
+
+// UpsertGroupSetting 整行覆盖
+func (m *Memory) UpsertGroupSetting(_ context.Context, s GroupSetting) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := s
+	m.settings[s.ConvID] = &cp
+	return nil
+}
+
+// CreateApply 入群申请（ID=0 时自增分配；JoinAt 同思路）
+func (m *Memory) CreateApply(_ context.Context, a Apply) (Apply, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a.ID == 0 {
+		m.nextID++
+		a.ID = m.nextID
+	}
+	if a.Status == 0 {
+		a.Status = ApplyPending
+	}
+	cp := a
+	m.applies[a.ID] = &cp
+	return cp, nil
+}
+
+// GetApplyByID 查申请
+func (m *Memory) GetApplyByID(_ context.Context, id int64) (*Apply, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a, ok := m.applies[id]; ok {
+		cp := *a
+		return &cp, nil
+	}
+	return nil, messageapi.ErrNotFound
+}
+
+// UpdateApplyStatus 状态机流转
+func (m *Memory) UpdateApplyStatus(_ context.Context, id int64, status int, handledBy int64, handledAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a, ok := m.applies[id]; ok {
+		a.Status = status
+		a.HandledBy = handledBy
+		a.HandledAt = handledAt
+	}
+	return nil
+}
+
+// ListAppliesByConv 按状态列申请（status=0 全部）
+func (m *Memory) ListAppliesByConv(_ context.Context, convID int64, status int) ([]Apply, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Apply{}
+	for _, a := range m.applies {
+		if a.ConvID == convID && (status == 0 || a.Status == status) {
+			out = append(out, *a)
+		}
+	}
+	return out, nil
 }

@@ -121,7 +121,10 @@ func main() {
 
 	// 消息 REST（04 篇 §6.1 摘要：会话列表 + 历史拉取；其余走 WS）
 	mux.Handle("GET /api/v1/convs", authed(handleListConvs(msgMod.API())))
+	mux.Handle("GET /api/v1/convs/{id}", authed(handleConvDetail(msgMod.API())))
+	mux.Handle("GET /api/v1/convs/{id}/members", authed(handleConvMembers(msgMod.API())))
 	mux.Handle("GET /api/v1/convs/{id}/messages", authed(handleListMessages(msgMod.API())))
+	// TODO(阶段二)：GET /api/v1/convs/{id}/receipts 群已读回执面板（API-IM-06，租户 im.read_receipt 策略联动）
 	// 会话交互 REST（D03 §5.1：编辑/撤回/转发/会话态）
 	mux.Handle("POST /api/v1/messages/{id}/recall", authed(handleRecallMessage(msgMod.API())))
 	mux.Handle("PATCH /api/v1/messages/{id}", authed(handleEditMessage(msgMod.API())))
@@ -320,6 +323,50 @@ func handleListMessages(svc messageapi.MessageService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, map[string]any{"items": msgs, "has_more": false})
+	}
+}
+
+// handleConvDetail 会话详情（API-IM-03：conversation 全字段 + group_setting + my + 成员概要）
+func handleConvDetail(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		convID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || convID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "会话 ID 非法"))
+			return
+		}
+		detail, err := svc.GetConvDetail(r.Context(), uid, convID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, detail)
+	}
+}
+
+// handleConvMembers 成员列表（API-IM-05 简版：在群成员含 role/mute_until；分页/role 过滤阶段二）
+func handleConvMembers(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		convID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || convID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "会话 ID 非法"))
+			return
+		}
+		members, err := svc.ListMembers(r.Context(), uid, convID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": members, "has_more": false})
 	}
 }
 

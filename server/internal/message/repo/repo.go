@@ -32,6 +32,7 @@ type Member struct {
 	Role      int // 1 owner 2 admin 3 member 4 publisher
 	Status    int // 1 在群 2 已退 3 被移出
 	MuteUntil time.Time
+	JoinAt    time.Time
 }
 
 // Receipt 回执游标（O(成员数) 聚合，04 篇 §5.1 message_receipt）
@@ -83,6 +84,92 @@ type Repo interface {
 	UserConvState(ctx context.Context, userID, convID int64) (UserConvState, error)
 	// SetUserConvState upsert（按字段覆盖由 service 层合并后全量写）
 	SetUserConvState(ctx context.Context, userID, convID int64, s UserConvState) error
+
+	// ── 群管理（D03 §3.5/§3.6/§4.1 INT-IM-15~19；§6.1 表）──
+
+	// UpdateMemberRole 角色变更（转让/设管/取消；status 非 0 时一并覆盖；行不存在返回 ErrNotFound）
+	UpdateMemberRole(ctx context.Context, convID, userID int64, role, status int) error
+	// RemoveMember 移出（status=3；原在群才递减 member_count——S2 状态机）
+	RemoveMember(ctx context.Context, convID, userID int64) error
+	// QuitMember 退群（status=2）
+	QuitMember(ctx context.Context, convID, userID int64) error
+	// MuteMember 单人禁言（until 零值=解除，≤30 天/次由 service 校验）
+	MuteMember(ctx context.Context, convID, userID int64, until time.Time) error
+	// UpdateConversationMeta 群名/群主变更（转让；name 空串/ownerID 0 表示该字段不变）
+	UpdateConversationMeta(ctx context.Context, convID int64, name string, ownerID int64) error
+	// FindSingleConv 单聊去重：同为活跃成员的单聊复用（INT-IM-15；无匹配返回 nil）
+	FindSingleConv(ctx context.Context, userA, userB int64) (*Conversation, error)
+	// ListMembersDetailed 成员行明细（含 role/mute_until/status/join_at，全状态；供 API-IM-05）
+	ListMembersDetailed(ctx context.Context, convID int64) ([]Member, error)
+
+	// GetGroupSetting 群设置（无记录返回默认值；群/广播群才有行）
+	GetGroupSetting(ctx context.Context, convID int64) (GroupSetting, error)
+	// UpsertGroupSetting 整行覆盖（service 合并默认值后写）
+	UpsertGroupSetting(ctx context.Context, s GroupSetting) error
+
+	// CreateApply 入群申请（ID=0 时分配；uk_apply_pending 冲突由 service 前置查重规避）
+	CreateApply(ctx context.Context, a Apply) (Apply, error)
+	// GetApplyByID 查申请（不存在返回 ErrNotFound）
+	GetApplyByID(ctx context.Context, id int64) (*Apply, error)
+	// UpdateApplyStatus 申请状态机流转（approve→2/reject→3/过期→4；合法迁移由 service 保证）
+	UpdateApplyStatus(ctx context.Context, id int64, status int, handledBy int64, handledAt time.Time) error
+	// ListAppliesByConv 按状态列申请（status=0 表示全部）
+	ListAppliesByConv(ctx context.Context, convID int64, status int) ([]Apply, error)
+}
+
+// GroupSetting 群设置（04 篇 §5.1 group_setting）
+type GroupSetting struct {
+	ConvID           int64
+	JoinMode         int // 1 直接进 2 需审批 3 仅邀请
+	InvitePolicy     int // 1 全员可邀 2 仅管理
+	MentionAllPolicy int // 1 全员 2 仅管理 3 禁用
+	MuteAllUntil     time.Time
+	HistoryVisible   bool
+	Announcement     string
+	AnnouncementTS   time.Time
+}
+
+// 群设置默认值（表列 DEFAULT 对齐，04 篇 §4.5.4）
+const (
+	JoinModeDirect      = 1
+	JoinModeApply       = 2
+	JoinModeInviteOnly  = 3
+	InvitePolicyAll     = 1
+	InvitePolicyAdmin   = 2
+	MentionAllPolicyAll = 1
+	MentionAllPolicyAdm = 2
+	MentionAllPolicyOff = 3
+)
+
+// DefaultGroupSetting 默认群设置（join_mode=直接进/invite=all/mention_all=仅管理）
+func DefaultGroupSetting(convID int64) GroupSetting {
+	return GroupSetting{
+		ConvID:           convID,
+		JoinMode:         JoinModeDirect,
+		InvitePolicy:     InvitePolicyAll,
+		MentionAllPolicy: MentionAllPolicyAdm,
+		HistoryVisible:   true,
+	}
+}
+
+// 申请状态（04 篇 §5.1 conversation_apply.status，D03 S2）
+const (
+	ApplyPending  = 1 // 待审
+	ApplyApproved = 2
+	ApplyRejected = 3
+	ApplyExpired  = 4 // 7 天未处理自动过期
+)
+
+// Apply 入群申请（04 篇 §5.1 conversation_apply）
+type Apply struct {
+	ID        int64
+	ConvID    int64
+	UserID    int64
+	Reason    string
+	Status    int // 1 待审 2 通过 3 拒绝 4 过期
+	HandledBy int64
+	HandledAt time.Time
+	CreatedAt time.Time
 }
 
 // UserConvState 置顶/免打扰/草稿（多端同步字段集，D03 API-IM-13）

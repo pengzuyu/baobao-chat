@@ -195,6 +195,7 @@ type ConversationDTO struct {
 	ID            string           `json:"id"`
 	Type          int              `json:"type"`
 	Name          string           `json:"name"`
+	OwnerID       string           `json:"ownerId,omitempty"`
 	LatestSeq     int64            `json:"latestSeq"`
 	LastMsgDigest string           `json:"lastMsgDigest,omitempty"`
 	LastMsgTS     int64            `json:"lastMsgTs,omitempty"`
@@ -229,6 +230,31 @@ type MessageService interface {
 	ListUserConversations(ctx context.Context, userID int64) ([]ConversationDTO, error)
 	// Sync 增量同步（API-IM-01：cursors convId→seq，登录/重连补投）
 	Sync(ctx context.Context, userID int64, cursors map[string]int64, limit int) (*SyncResult, error)
+
+	// ── 群管理（D03 §3.5/§3.6/§4.1 INT-IM-15~19；§5.2 conv.* 事件全集）──
+
+	// CreateConversation 建会话（单聊去重复用/建群校验/广播群 publisher）→ 系统消息+conv.updated(meta)
+	CreateConversation(ctx context.Context, userID int64, p ConvCreatePayload) (*ConvDetailDTO, error)
+	// QuitConversation 退群（owner 3016 拒绝）→ member.quit 系统消息 + conv.updated(member)
+	QuitConversation(ctx context.Context, userID, convID int64) error
+	// AddMembers 邀请入群（invite_policy/上限 3010/已在会话 3012）→ member.joined
+	AddMembers(ctx context.Context, userID int64, p MemberAddPayload) error
+	// RemoveMember 移出（矩阵校验：admin 仅 member 级）→ member.removed
+	RemoveMember(ctx context.Context, userID int64, p MemberRemovePayload) error
+	// SetMemberRole 角色（转让 owner/设管 admin/取消 member，仅 owner 可操作）→ member.role.changed/owner.transferred
+	SetMemberRole(ctx context.Context, userID int64, p MemberRolePayload) error
+	// UpdateConvSetting 群设置 patch（name/announcement/mute_all/mute_member/策略）→ 对应系统消息+conv.updated
+	UpdateConvSetting(ctx context.Context, userID int64, p ConvSettingPayload) error
+	// DissolveConversation 解散（仅 owner）→ conv.dissolved + conv.updated(status)
+	DissolveConversation(ctx context.Context, userID, convID int64) error
+	// ApplyJoin 入群申请（7 天过期；同群同人待审唯一幂等）→ apply.submitted 审批卡
+	ApplyJoin(ctx context.Context, userID int64, p ApplyPayload) (*ApplyResult, error)
+	// HandleApply 审批（approve 入群/reject；仅 owner/admin）→ member.joined(通过申请)
+	HandleApply(ctx context.Context, userID int64, p ApplyHandlePayload) error
+	// GetConvDetail 会话详情（API-IM-03：conversation+group_setting+my+成员概要）
+	GetConvDetail(ctx context.Context, userID, convID int64) (*ConvDetailDTO, error)
+	// ListMembers 成员列表（API-IM-05 简版：在群成员含 role/mute_until）
+	ListMembers(ctx context.Context, userID, convID int64) ([]MemberDTO, error)
 }
 
 // ── 增量同步（API-IM-01）──
@@ -401,4 +427,195 @@ type ConvStateEvent struct {
 	UserID  int64           `json:"user_id"`
 	State   ConvStatePatch  `json:"state"`
 	Applied ConvStateResult `json:"applied"`
+}
+
+// ── 群管理（D03 §3.5 PIM-05 / §3.6 PIM-06 / §3.12 PIM-12 / §5.2 conv.* 事件）──
+
+// 系统消息 kind 注册表（PIM-12 样式集；服务端下发占位消息，端内按模板渲染）
+const (
+	SysKindGroupCreated        = "group.created"        // {actor} 创建了群聊
+	SysKindMemberJoined        = "member.joined"        // {actor} 邀请 {target} 加入 / {target} 通过申请加入
+	SysKindMemberQuit          = "member.quit"          // {actor} 退出了群聊
+	SysKindMemberRemoved       = "member.removed"       // {target} 被 {actor} 移出群聊
+	SysKindMemberRoleChanged   = "member.role.changed"  // {target} 被 {actor} 设为/取消管理员（extra=admin/member）
+	SysKindOwnerTransferred    = "owner.transferred"    // {actor} 将群主转让给 {target}
+	SysKindMemberMuted         = "member.muted"         // {target} 被 {actor} 禁言至 {until}
+	SysKindMemberUnmuted       = "member.unmuted"       // {target} 被 {actor} 解除禁言
+	SysKindMuteAllOn           = "mute.all.on"          // 群主/管理员开启了全员禁言（至 {until}）
+	SysKindMuteAllOff          = "mute.all.off"         // 解除全员禁言
+	SysKindAnnouncementChanged = "announcement.changed" // {actor} 修改了群公告
+	SysKindConvDissolved       = "conv.dissolved"       // {actor} 解散了该群聊
+	SysKindMsgRecalled         = "msg.recalled"         // {actor} 撤回了一条消息（撤回占位沿用 msg.recall 通道）
+	SysKindApplySubmitted      = "apply.submitted"      // {actor} 申请加入群聊：{extra}（附审批卡 PIM-06）
+	SysKindBroadcastPublished  = "broadcast.published"  // {actor} 发布了新公告（仅广播群）
+)
+
+// SystemBody system 消息 body（PIM-12：参数集服务端下发，端内套中文模板）
+type SystemBody struct {
+	Kind        string `json:"kind"`
+	Actor       string `json:"actor,omitempty"`      // 操作者 uid
+	ActorName   string `json:"actor_name,omitempty"` // 操作者展示名
+	Target      string `json:"target,omitempty"`     // 目标 uid
+	TargetName  string `json:"target_name,omitempty"`
+	Group       string `json:"group,omitempty"`         // 群名
+	Extra       string `json:"extra,omitempty"`         // 申请理由 / 角色方向（admin|member）
+	Until       int64  `json:"until,omitempty"`         // 禁言截止 ms（member.muted / mute.all.on）
+	JoinByApply bool   `json:"join_by_apply,omitempty"` // member.joined：申请通过路径（无邀请者文案）
+	ApplyID     string `json:"apply_id,omitempty"`      // apply.submitted：审批卡关联
+}
+
+// GroupSettingDTO 群设置（camel，对齐客户端 GroupSetting）
+type GroupSettingDTO struct {
+	ConvID           string `json:"convId"`
+	JoinMode         int    `json:"joinMode"`               // 1 直接进 2 需审批 3 仅邀请
+	InvitePolicy     int    `json:"invitePolicy"`           // 1 全员可邀 2 仅管理
+	MentionAllPolicy int    `json:"mentionAllPolicy"`       // 1 全员 2 仅管理 3 禁用
+	MuteAllUntil     int64  `json:"muteAllUntil,omitempty"` // ms；0=未开启
+	HistoryVisible   bool   `json:"historyVisible"`
+	Announcement     string `json:"announcement,omitempty"`
+	AnnouncementTs   int64  `json:"announcementTs,omitempty"`
+}
+
+// MemberDTO 成员行（API-IM-05：uid/名称/角色/状态/禁言/入群时间）
+type MemberDTO struct {
+	UID         string `json:"uid"`
+	DisplayName string `json:"displayName"`
+	Role        int    `json:"role"`
+	Status      int    `json:"status"`
+	MuteUntil   int64  `json:"muteUntil,omitempty"` // ms
+	JoinAt      int64  `json:"joinAt"`              // ms
+}
+
+// ConvDetailDTO 会话详情（API-IM-03：conversation 全字段 + group_setting + my + 成员概要）
+type ConvDetailDTO struct {
+	ConversationDTO
+	GroupSetting *GroupSettingDTO `json:"groupSetting,omitempty"`
+	MyRole       int              `json:"myRole,omitempty"`
+	MyMuteUntil  int64            `json:"myMuteUntil,omitempty"`
+	Members      []MemberDTO      `json:"members"`
+}
+
+// ConvCreatePayload WS conv.create（D03 §5.2；member_ids ≤499，type=1 恰 1 人）
+type ConvCreatePayload struct {
+	Type         int      `json:"type"`
+	Name         string   `json:"name,omitempty"`
+	MemberIDs    []string `json:"member_ids"`
+	AvatarFileID string   `json:"avatar_file_id,omitempty"`
+}
+
+// ConvIDPayload WS conv.quit / conv.dissolve
+type ConvIDPayload struct {
+	ConvID ConvID `json:"conv_id"`
+}
+
+// MemberAddPayload WS conv.member.add（uids ≤100/次，批量预检余量）
+type MemberAddPayload struct {
+	ConvID ConvID   `json:"conv_id"`
+	UIDs   []string `json:"uids"`
+}
+
+// MemberRemovePayload WS conv.member.remove
+type MemberRemovePayload struct {
+	ConvID ConvID `json:"conv_id"`
+	UID    string `json:"uid"`
+}
+
+// MemberRolePayload WS conv.member.role（role：1 owner 转让 / 2 admin / 3 member）
+type MemberRolePayload struct {
+	ConvID ConvID `json:"conv_id"`
+	UID    string `json:"uid"`
+	Role   int    `json:"role"`
+}
+
+// MuteMemberPatch conv.setting.mute_member（until ms；0=解除；≤30 天/次）
+type MuteMemberPatch struct {
+	UID   string `json:"uid"`
+	Until int64  `json:"until"`
+}
+
+// ConvSettingPayload WS conv.setting（patch：指针区分未传/传零值，D03 §5.2）
+type ConvSettingPayload struct {
+	ConvID           ConvID           `json:"conv_id"`
+	Name             *string          `json:"name,omitempty"`
+	AvatarFileID     *string          `json:"avatar_file_id,omitempty"`
+	Announcement     *string          `json:"announcement,omitempty"`       // ≤2000
+	MuteAllUntil     *int64           `json:"mute_all_until,omitempty"`     // ms；0=解除全员禁言
+	MuteMember       *MuteMemberPatch `json:"mute_member,omitempty"`        // 单人禁言/解除
+	JoinMode         *int             `json:"join_mode,omitempty"`          // 1/2/3
+	InvitePolicy     *int             `json:"invite_policy,omitempty"`      // 1/2
+	MentionAllPolicy *int             `json:"mention_all_policy,omitempty"` // 1/2/3
+	HistoryVisible   *bool            `json:"history_visible,omitempty"`
+}
+
+// ApplyPayload WS conv.apply（reason ≤200）
+type ApplyPayload struct {
+	ConvID ConvID `json:"conv_id"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// ApplyHandlePayload WS conv.apply.handle（action：approve/reject）
+type ApplyHandlePayload struct {
+	ApplyID string `json:"apply_id"`
+	Action  string `json:"action"`
+}
+
+// ApplyResult conv.apply ack 载荷（D03 §5.2：{apply_id}）
+type ApplyResult struct {
+	ApplyID string `json:"apply_id"`
+}
+
+// MemberDelta conv.updated(kind=member/setting) 成员增量（S2 状态机快照；
+// mute_until 恒输出：0=未禁言/解除——单人禁言走 kind=setting 携带，端内按 uid==self 判输入框态）
+type MemberDelta struct {
+	UID       int64 `json:"uid"`
+	Role      int   `json:"role"`
+	Status    int   `json:"status"`
+	MuteUntil int64 `json:"mute_until"`
+}
+
+// ConvUpdatedEvent topic=conv.updated：kind=meta/member/setting/status/announcement
+// （与 ConvStateEvent 同 topic，gateway 按 payload 类型分发——D03 §5.3）
+type ConvUpdatedEvent struct {
+	Kind         string           `json:"kind"`
+	ConvID       int64            `json:"conv_id"`
+	Type         int              `json:"type"`
+	Name         string           `json:"name"`
+	OwnerID      int64            `json:"owner_id"`
+	LatestSeq    int64            `json:"latest_seq"`
+	MemberCount  int              `json:"member_count"`
+	Status       int              `json:"status"`
+	Setting      *GroupSettingDTO `json:"setting,omitempty"` // kind=setting/announcement 携带
+	OperatorID   int64            `json:"operator_id"`
+	MembersDelta []MemberDelta    `json:"members_delta,omitempty"` // kind=member
+	MemberIDs    []int64          `json:"member_ids"`              // 扇出目标（快照时点含离群者本人）
+}
+
+// MemberDeltaDTO conv.updated 推送 members_delta 项（uid 字符串透出；mute_until ms，0=解除）
+type MemberDeltaDTO struct {
+	UID       string `json:"uid"`
+	Role      int    `json:"role"`
+	Status    int    `json:"status"`
+	MuteUntil int64  `json:"mute_until"`
+}
+
+// ConvSnapshotDTO conv.updated 推送内 conv 快照（camel，端内与会话列表项合并）
+type ConvSnapshotDTO struct {
+	ID           string           `json:"id"`
+	Type         int              `json:"type"`
+	Name         string           `json:"name"`
+	OwnerID      string           `json:"ownerId,omitempty"`
+	LatestSeq    int64            `json:"latestSeq"`
+	LastMsgTs    int64            `json:"lastMsgTs,omitempty"`
+	MemberCount  int              `json:"memberCount"`
+	Status       int              `json:"status"`
+	GroupSetting *GroupSettingDTO `json:"groupSetting,omitempty"`
+}
+
+// ConvUpdatedPushPayload conv.updated 推送载荷（D03 §5.3：kind+快照+operator+members_delta）
+type ConvUpdatedPushPayload struct {
+	ConvID       string           `json:"conv_id"`
+	Kind         string           `json:"kind"` // meta/member/setting/status/announcement
+	Conv         ConvSnapshotDTO  `json:"conv"`
+	OperatorID   string           `json:"operator_id"`
+	MembersDelta []MemberDeltaDTO `json:"members_delta,omitempty"`
 }

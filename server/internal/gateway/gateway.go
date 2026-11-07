@@ -122,21 +122,47 @@ func New(hub *Hub, bus eventbus.Bus, msgs messageapi.MessageService, verify Toke
 		}))
 		return nil // 瞬时事件不入 dedup（无副作用，重复推送由客户端 TTL 合并）
 	})
-	// 会话态（置顶/免打扰/草稿）：仅推本人多端（conv.updated kind=state，D03 §10-1）
+	// 会话事件（topic=conv.updated）：按 payload 类型分发——
+	//   · ConvStateEvent：kind=state（置顶/免打扰/草稿），仅推本人多端（D03 §10-1）
+	//   · ConvUpdatedEvent：kind=meta/member/setting/status/announcement，快照+members_delta
+	//     推全成员（D03 §5.3；被移出/退群者经快照名单收到推送以强制退出会话视图）
 	bus.Subscribe(eventbus.TopicConvUpdated, func(ctx context.Context, evt eventbus.Event) error {
-		return g.dedup.Once(evt.ID, func() error {
-			e, ok := evt.Payload.(messageapi.ConvStateEvent)
-			if !ok {
-				return nil // conv.updated 其它 kind（meta/member/...）现阶段无发布方，静默
-			}
-			g.hub.PushToUsers([]int64{e.UserID}, NewPush("conv.updated", map[string]any{
-				"conv_id": strconv.FormatInt(e.ConvID, 10),
-				"kind":    "state",
-				"state":   e.State,
-				"applied": e.Applied,
-			}))
+		switch e := evt.Payload.(type) {
+		case messageapi.ConvStateEvent:
+			return g.dedup.Once(evt.ID, func() error {
+				g.hub.PushToUsers([]int64{e.UserID}, NewPush("conv.updated", map[string]any{
+					"conv_id": strconv.FormatInt(e.ConvID, 10),
+					"kind":    "state",
+					"state":   e.State,
+					"applied": e.Applied,
+				}))
+				return nil
+			})
+		case messageapi.ConvUpdatedEvent:
+			return g.dedup.Once(evt.ID, func() error {
+				push := messageapi.ConvUpdatedPushPayload{
+					ConvID:     strconv.FormatInt(e.ConvID, 10),
+					Kind:       e.Kind,
+					OperatorID: strconv.FormatInt(e.OperatorID, 10),
+					Conv: messageapi.ConvSnapshotDTO{
+						ID: strconv.FormatInt(e.ConvID, 10), Type: e.Type, Name: e.Name,
+						OwnerID: strconv.FormatInt(e.OwnerID, 10), LatestSeq: e.LatestSeq,
+						MemberCount: e.MemberCount, Status: e.Status, GroupSetting: e.Setting,
+					},
+				}
+				for _, d := range e.MembersDelta {
+					push.MembersDelta = append(push.MembersDelta, messageapi.MemberDeltaDTO{
+						UID: strconv.FormatInt(d.UID, 10), Role: d.Role, Status: d.Status,
+						MuteUntil: d.MuteUntil,
+					})
+				}
+				g.hub.PushToUsers(e.MemberIDs, NewPush("conv.updated", push))
+				return nil
+			})
+		default:
+			log.Printf("[gateway] conv.updated payload 类型异常: %T", evt.Payload)
 			return nil
-		})
+		}
 	})
 	return g
 }
@@ -278,10 +304,137 @@ func (g *Gateway) handleEnvelope(ctx context.Context, uid int64, env *Envelope) 
 		// 全量快照经 msg.reaction.new 推送（含本人端），ack 载荷为空（D03 §5.2）
 		return NewAck(env, 0, map[string]any{})
 
+	// ── 群管理 conv.*（D03 §5.2；ack：conv.create→{conv}，conv.apply→{apply_id}，其余→{}）──
+
+	case "conv.create":
+		var p messageapi.ConvCreatePayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		res, err := g.msgs.CreateConversation(ctx, uid, p)
+		if err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, res)
+
+	case "conv.quit":
+		var p messageapi.ConvIDPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		convID, err := parseConvIDPayload(p)
+		if err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		if err := g.msgs.QuitConversation(ctx, uid, convID); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, map[string]any{})
+
+	case "conv.member.add":
+		var p messageapi.MemberAddPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		if err := g.msgs.AddMembers(ctx, uid, p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, map[string]any{})
+
+	case "conv.member.remove":
+		var p messageapi.MemberRemovePayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		if err := g.msgs.RemoveMember(ctx, uid, p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, map[string]any{})
+
+	case "conv.member.role":
+		var p messageapi.MemberRolePayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		if err := g.msgs.SetMemberRole(ctx, uid, p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, map[string]any{})
+
+	case "conv.setting":
+		var p messageapi.ConvSettingPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		if err := g.msgs.UpdateConvSetting(ctx, uid, p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, map[string]any{})
+
+	case "conv.dissolve":
+		var p messageapi.ConvIDPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		convID, err := parseConvIDPayload(p)
+		if err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		if err := g.msgs.DissolveConversation(ctx, uid, convID); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, map[string]any{})
+
+	case "conv.apply":
+		var p messageapi.ApplyPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		res, err := g.msgs.ApplyJoin(ctx, uid, p)
+		if err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, res)
+
+	case "conv.apply.handle":
+		var p messageapi.ApplyHandlePayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		if err := g.msgs.HandleApply(ctx, uid, p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return NewAck(env, 0, map[string]any{})
+
 	default:
 		// 未知 type：ack 9001（前向兼容由客户端忽略未注册推送承担，14 篇 §8）
 		return NewAck(env, int(errx.CodeBadRequest), errBody("未知事件类型: "+env.Type))
 	}
+}
+
+// parseConvIDPayload conv.quit / conv.dissolve 的 conv_id 解析（字符串透出契约）
+func parseConvIDPayload(p messageapi.ConvIDPayload) (int64, error) {
+	return strconv.ParseInt(string(p.ConvID), 10, 64)
 }
 
 func unmarshalPayload(env *Envelope, v any) error {

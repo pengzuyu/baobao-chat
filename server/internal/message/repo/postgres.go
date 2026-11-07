@@ -27,6 +27,7 @@ import (
 const (
 	lockKeyConversation int64 = 9102
 	lockKeyConvMember   int64 = 9105
+	lockKeyConvApply    int64 = 9106
 )
 
 // Postgres message 域 PG 仓储
@@ -174,36 +175,46 @@ func (p *Postgres) GetConversation(ctx context.Context, convID int64) (*Conversa
 }
 
 // AddMember upsert 覆盖语义（与内存版一致：重复加人=复活并覆盖 role/mute_until）。
-// id 无库端默认值：advisory lock 串行化 + max(id)+1 行内子查询分配（雪花占位）。
-// xmax=0 判定本次为新增 INSERT（PG 无 INSERTED 语义的惯用法），新增才递增 member_count；
-// 会话不存在时 SELECT 空 → no-op 同内存版。
+// member_count 口径=在群成员数：新增行或「已退/被移出 → 复活」均递增（Remove/Quit 已递减，
+// 复活不补则计数漂移）；仅覆盖在群成员（幂等拉人）不重复递增。
+// 会话不存在时 no-op 同内存版。
 func (p *Postgres) AddMember(ctx context.Context, m Member) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
-	// advisory lock 串行化 max(id)+1（与 AllocID 同思路；此处 id 经行内子查询随 INSERT 生成）
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKeyConvMember); err != nil {
+	// 原状态探测（FOR UPDATE 防并发复活双计）：NULL=新行
+	var oldStatus *int
+	if err = tx.QueryRow(ctx,
+		`SELECT status FROM conversation_member WHERE conv_id=$1 AND user_id=$2 FOR UPDATE`,
+		m.ConvID, m.UserID).Scan(&oldStatus); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	var inserted bool
-	err = tx.QueryRow(ctx, `
-		INSERT INTO conversation_member (id, tenant_id, conv_id, user_id, role, mute_until, status)
-		SELECT (SELECT COALESCE(max(id),0)+1 FROM conversation_member),
-		       c.tenant_id, c.id, $2, COALESCE(NULLIF($3,0),3), $4, COALESCE(NULLIF($5,0),1)
-		FROM conversation c WHERE c.id = $1
-		ON CONFLICT (conv_id, user_id) DO UPDATE
-			SET status = 1, role = EXCLUDED.role, mute_until = EXCLUDED.mute_until
-		RETURNING (xmax = 0)`,
-		m.ConvID, m.UserID, m.Role, timeOrNull(m.MuteUntil), m.Status).Scan(&inserted)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows): // 会话不存在：no-op（同内存版）
-		return tx.Commit(ctx)
-	case err != nil:
-		return err
+	reactivated := oldStatus != nil && *oldStatus != 1
+	if oldStatus == nil {
+		// advisory lock 串行化 max(id)+1（与 AllocID 同思路）
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKeyConvMember); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO conversation_member (id, tenant_id, conv_id, user_id, role, mute_until, status, join_at)
+			SELECT (SELECT COALESCE(max(id),0)+1 FROM conversation_member),
+			       c.tenant_id, c.id, $2, COALESCE(NULLIF($3,0),3), $4, COALESCE(NULLIF($5,0),1), now()
+			FROM conversation c WHERE c.id = $1`,
+			m.ConvID, m.UserID, m.Role, timeOrNull(m.MuteUntil), m.Status); err != nil {
+			return err
+		}
+	} else {
+		if _, err = tx.Exec(ctx, `
+			UPDATE conversation_member
+			SET status = 1, role = COALESCE(NULLIF($3,0),role), mute_until = $4, join_at = now()
+			WHERE conv_id = $1 AND user_id = $2`,
+			m.ConvID, m.UserID, m.Role, timeOrNull(m.MuteUntil)); err != nil {
+			return err
+		}
 	}
-	if inserted { // 新成员才递增 member_count（与 upsert 同事务，原子）
+	if oldStatus == nil || reactivated { // 新增/复活才递增（幂等拉人不动计数）
 		if _, err = tx.Exec(ctx,
 			`UPDATE conversation SET member_count = member_count + 1 WHERE id=$1`, m.ConvID); err != nil {
 			return err
@@ -520,4 +531,282 @@ func (p *Postgres) SetReadSeq(ctx context.Context, convID, userID, readSeq int64
 			SET read_seq = GREATEST(message_receipt.read_seq, EXCLUDED.read_seq), updated_at = now()`,
 		convID, userID, readSeq)
 	return err
+}
+
+// ── 群管理（D03 §3.5/§3.6/§4.1 INT-IM-15~19；表见 migrations/0001/0004）──
+
+// UpdateMemberRole 角色变更（status 非 0 时一并覆盖；行不存在返回 ErrNotFound）
+func (p *Postgres) UpdateMemberRole(ctx context.Context, convID, userID int64, role, status int) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE conversation_member
+		SET role = $3,
+		    status = CASE WHEN $4 > 0 THEN $4 ELSE status END
+		WHERE conv_id = $1 AND user_id = $2`,
+		convID, userID, role, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return messageapi.ErrNotFound
+	}
+	return nil
+}
+
+// markMemberStatus 退群/移出共用：status 仅在「原在群」时迁移（S2 状态机）并递减 member_count
+func (p *Postgres) markMemberStatus(ctx context.Context, convID, userID int64, status int) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
+	tag, err := tx.Exec(ctx, `
+		UPDATE conversation_member SET status=$3, mute_until=NULL
+		WHERE conv_id=$1 AND user_id=$2 AND status=1`, convID, userID, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		if _, err = tx.Exec(ctx,
+			`UPDATE conversation SET member_count = member_count - 1
+			 WHERE id=$1 AND member_count > 0`, convID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// RemoveMember 移出（status=3）
+func (p *Postgres) RemoveMember(ctx context.Context, convID, userID int64) error {
+	return p.markMemberStatus(ctx, convID, userID, 3)
+}
+
+// QuitMember 退群（status=2）
+func (p *Postgres) QuitMember(ctx context.Context, convID, userID int64) error {
+	return p.markMemberStatus(ctx, convID, userID, 2)
+}
+
+// MuteMember 单人禁言（零值=解除）
+func (p *Postgres) MuteMember(ctx context.Context, convID, userID int64, until time.Time) error {
+	_, err := p.pool.Exec(ctx,
+		`UPDATE conversation_member SET mute_until=$3 WHERE conv_id=$1 AND user_id=$2`,
+		convID, userID, timeOrNull(until))
+	return err
+}
+
+// UpdateConversationMeta 群名/群主变更（空串/0 = 不变；转让用）
+func (p *Postgres) UpdateConversationMeta(ctx context.Context, convID int64, name string, ownerID int64) error {
+	_, err := p.pool.Exec(ctx, `
+		UPDATE conversation SET
+			name    = COALESCE(NULLIF($2, ''), name),
+			owner_id = COALESCE(NULLIF($3, 0), owner_id),
+			updated_at = now()
+		WHERE id = $1`, convID, name, ownerID)
+	return err
+}
+
+// FindSingleConv 单聊去重：双方均为在群成员的 active 单聊（INT-IM-15）
+func (p *Postgres) FindSingleConv(ctx context.Context, userA, userB int64) (*Conversation, error) {
+	c, err := scanConversation(p.pool.QueryRow(ctx, `
+		SELECT `+convCols+`
+		FROM conversation c
+		WHERE c.type = 1 AND c.status = 1
+			AND EXISTS (SELECT 1 FROM conversation_member a
+				WHERE a.conv_id = c.id AND a.user_id = $1 AND a.status = 1)
+			AND EXISTS (SELECT 1 FROM conversation_member b
+				WHERE b.conv_id = c.id AND b.user_id = $2 AND b.status = 1)
+		LIMIT 1`, userA, userB))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// ListMembersDetailed 成员行明细（全状态；join_at 毫秒化）
+func (p *Postgres) ListMembersDetailed(ctx context.Context, convID int64) ([]Member, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT user_id, role, status, mute_until,
+			(extract(epoch from join_at)*1000)::bigint
+		FROM conversation_member WHERE conv_id=$1 ORDER BY join_at, user_id`, convID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Member{}
+	for rows.Next() {
+		var (
+			m    Member
+			mute *time.Time
+		)
+		if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &mute, &m.JoinAt); err != nil {
+			return nil, err
+		}
+		m.ConvID = convID
+		if mute != nil {
+			m.MuteUntil = *mute
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// GetGroupSetting 群设置（无记录返回默认值）
+func (p *Postgres) GetGroupSetting(ctx context.Context, convID int64) (GroupSetting, error) {
+	var (
+		s       GroupSetting
+		muteAll *time.Time
+		annoTS  *time.Time
+		history bool
+		anno    *string
+	)
+	err := p.pool.QueryRow(ctx, `
+		SELECT join_mode, invite_policy, mention_all_policy, mute_all_until,
+			history_visible, announcement, announcement_ts
+		FROM group_setting WHERE conv_id=$1`, convID).
+		Scan(&s.JoinMode, &s.InvitePolicy, &s.MentionAllPolicy, &muteAll, &history, &anno, &annoTS)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DefaultGroupSetting(convID), nil
+	}
+	if err != nil {
+		return GroupSetting{}, err
+	}
+	s.ConvID = convID
+	s.HistoryVisible = history
+	if muteAll != nil {
+		s.MuteAllUntil = *muteAll
+	}
+	if annoTS != nil {
+		s.AnnouncementTS = *annoTS
+	}
+	if anno != nil {
+		s.Announcement = *anno
+	}
+	return s, nil
+}
+
+// UpsertGroupSetting 整行覆盖（service 合并默认值后写；tenant_id 取自会话行）
+func (p *Postgres) UpsertGroupSetting(ctx context.Context, s GroupSetting) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO group_setting (conv_id, tenant_id, join_mode, invite_policy, mention_all_policy,
+			mute_all_until, history_visible, announcement, announcement_ts)
+		SELECT $1, c.tenant_id, $2, $3, $4, $5, $6, $7, $8
+		FROM conversation c WHERE c.id = $1
+		ON CONFLICT (conv_id) DO UPDATE SET
+			join_mode = $2, invite_policy = $3, mention_all_policy = $4,
+			mute_all_until = $5, history_visible = $6, announcement = $7, announcement_ts = $8`,
+		s.ConvID, s.JoinMode, s.InvitePolicy, s.MentionAllPolicy,
+		timeOrNull(s.MuteAllUntil), s.HistoryVisible,
+		strOrNull(s.Announcement), timeOrNull(s.AnnouncementTS))
+	return err
+}
+
+// strOrNull TEXT 列空值编码（announcement 清空用 NULL 语义对齐内存版零值）
+func strOrNull(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// CreateApply 入群申请（ID=0 时表级分配；uk_apply_pending 冲突由 service 前置查重规避）
+func (p *Postgres) CreateApply(ctx context.Context, a Apply) (Apply, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Apply{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
+	if a.ID == 0 {
+		if a.ID, err = bbwpg.AllocID(ctx, tx, lockKeyConvApply, "conversation_apply"); err != nil {
+			return Apply{}, err
+		}
+	}
+	created := a.CreatedAt
+	if created.IsZero() {
+		created = time.Now()
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO conversation_apply (id, tenant_id, conv_id, user_id, reason, status, created_at)
+		SELECT $1, c.tenant_id, c.id, $2, $3, $4, $5
+		FROM conversation c WHERE c.id = $6`,
+		a.ID, a.UserID, a.Reason, a.Status, created, a.ConvID); err != nil {
+		return Apply{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Apply{}, err
+	}
+	a.CreatedAt = created
+	return a, nil
+}
+
+// GetApplyByID 查申请（不存在返回 ErrNotFound）
+func (p *Postgres) GetApplyByID(ctx context.Context, id int64) (*Apply, error) {
+	var (
+		a         Apply
+		handledBy *int64
+		handledAt *time.Time
+	)
+	err := p.pool.QueryRow(ctx, `
+		SELECT id, conv_id, user_id, COALESCE(reason,''), status, handled_by, handled_at, created_at
+		FROM conversation_apply WHERE id=$1`, id).
+		Scan(&a.ID, &a.ConvID, &a.UserID, &a.Reason, &a.Status, &handledBy, &handledAt, &a.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, messageapi.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if handledBy != nil {
+		a.HandledBy = *handledBy
+	}
+	if handledAt != nil {
+		a.HandledAt = *handledAt
+	}
+	return &a, nil
+}
+
+// UpdateApplyStatus 状态机流转（approve→2/reject→3/过期→4）
+func (p *Postgres) UpdateApplyStatus(ctx context.Context, id int64, status int, handledBy int64, handledAt time.Time) error {
+	_, err := p.pool.Exec(ctx, `
+		UPDATE conversation_apply
+		SET status=$2, handled_by=$3, handled_at=$4
+		WHERE id=$1`, id, status, i64OrNull(handledBy), timeOrNull(handledAt))
+	return err
+}
+
+// ListAppliesByConv 按状态列申请（status=0 全部；待审懒过期由 service 承担）
+func (p *Postgres) ListAppliesByConv(ctx context.Context, convID int64, status int) ([]Apply, error) {
+	q := `SELECT id, conv_id, user_id, COALESCE(reason,''), status, handled_by, handled_at, created_at
+		FROM conversation_apply WHERE conv_id=$1`
+	args := []any{convID}
+	if status != 0 {
+		args = append(args, status)
+		q += ` AND status=$` + strconv.Itoa(len(args))
+	}
+	q += ` ORDER BY created_at DESC LIMIT 100`
+	rows, err := p.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Apply{}
+	for rows.Next() {
+		var (
+			a         Apply
+			handledBy *int64
+			handledAt *time.Time
+		)
+		if err := rows.Scan(&a.ID, &a.ConvID, &a.UserID, &a.Reason, &a.Status, &handledBy, &handledAt, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		if handledBy != nil {
+			a.HandledBy = *handledBy
+		}
+		if handledAt != nil {
+			a.HandledAt = *handledAt
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

@@ -161,3 +161,111 @@ func TestRouteMsgRead(t *testing.T) {
 		t.Fatalf("回退后生效游标应仍为 2: %+v", res2)
 	}
 }
+
+// conv.* 群管理路由集成（D03 §5.2/§5.3）：conv.create ack{conv}、系统消息 msg.new
+// 扇出、conv.updated 按 kind 推送（meta/member/announcement）、conv.quit ack{}。
+func TestRouteConvLifecycle(t *testing.T) {
+	g, hub, _ := newTestGateway(t)
+	ctx := context.Background()
+	alice := NewClient(10001, "a")
+	bob := NewClient(10002, "b")
+	hub.Register(alice)
+	hub.Register(bob)
+
+	// 建群（拉 bob）：ack 载荷 {conv}
+	reply := g.handleEnvelope(ctx, 10001, mustDecode(t,
+		`{"v":1,"id":"c-g1","type":"conv.create","payload":{"type":2,"name":"网关群","member_ids":["10002"]}}`))
+	if reply == nil || reply.Code != 0 {
+		t.Fatalf("conv.create ack 失败: %+v", reply)
+	}
+	var created messageapi.ConvDetailDTO
+	if err := json.Unmarshal(reply.Payload, &created); err != nil || created.ID == "" {
+		t.Fatalf("conv.create ack payload 不符: %s", reply.Payload)
+	}
+	if created.MyRole != messageapi.MemberOwner || created.MemberCount != 2 {
+		t.Fatalf("建群详情不符: %+v", created)
+	}
+
+	// bob 端推送：msg.new(group.created system) + conv.updated(kind=meta)
+	drain := func(c *Client) []string {
+		var kinds []string
+		for {
+			select {
+			case b := <-c.Outbox():
+				env := mustDecode(t, string(b))
+				if env.Type == "msg.new" {
+					var p messageapi.MsgNewPayload
+					_ = json.Unmarshal(env.Payload, &p)
+					if p.Type == "system" {
+						kinds = append(kinds, "system")
+					}
+				}
+				if env.Type == "conv.updated" {
+					var p messageapi.ConvUpdatedPushPayload
+					_ = json.Unmarshal(env.Payload, &p)
+					kinds = append(kinds, p.Kind)
+				}
+			default:
+				return kinds
+			}
+		}
+	}
+	bobKinds := drain(bob)
+	hasMeta, hasSys := false, false
+	for _, k := range bobKinds {
+		if k == "meta" {
+			hasMeta = true
+		}
+		if k == "system" {
+			hasSys = true
+		}
+	}
+	if !hasMeta || !hasSys {
+		t.Fatalf("bob 应收到 group.created 系统消息与 conv.updated(meta): %v", bobKinds)
+	}
+	if aliceKinds := drain(alice); len(aliceKinds) == 0 {
+		t.Fatalf("alice 也应收到建群推送")
+	}
+
+	// alice 设公告 → 双端 conv.updated(kind=announcement)
+	setting := `{"v":1,"id":"c-s1","type":"conv.setting","payload":{"conv_id":` + created.ID + `,"announcement":"全员注意"}}`
+	if r := g.handleEnvelope(ctx, 10001, mustDecode(t, setting)); r == nil || r.Code != 0 {
+		t.Fatalf("conv.setting ack 失败: %+v", r)
+	}
+	found := false
+	for _, k := range drain(bob) {
+		if k == "announcement" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("bob 应收到 conv.updated(announcement)")
+	}
+	drain(alice)
+
+	// bob 退群 → ack {}；alice 收 conv.updated(kind=member) 且 members_delta 含 status=2
+	quit := `{"v":1,"id":"c-q1","type":"conv.quit","payload":{"conv_id":` + created.ID + `}}`
+	r := g.handleEnvelope(ctx, 10002, mustDecode(t, quit))
+	if r == nil || r.Code != 0 || string(r.Payload) != "{}" {
+		t.Fatalf("conv.quit ack 应为 {}: %+v %s", r, r.Payload)
+	}
+	memberDelta := false
+	for _, k := range drain(alice) {
+		if k == "member" {
+			memberDelta = true
+		}
+	}
+	if !memberDelta {
+		t.Fatalf("alice 应收到 conv.updated(member)")
+	}
+	if quitKinds := drain(bob); len(quitKinds) == 0 { // 退群者经快照名单也收到推送（强制退出会话视图）
+		t.Fatalf("退群者 bob 也应收到 conv.updated 推送")
+	}
+
+	// 群主退群 → 3016
+	r2 := g.handleEnvelope(ctx, 10001, mustDecode(t,
+		`{"v":1,"id":"c-q2","type":"conv.quit","payload":{"conv_id":`+created.ID+`}}`))
+	if r2 == nil || r2.Code != int(errx.CodeIMOwnerCannotQuit) {
+		t.Fatalf("群主退群应 3016: %+v", r2)
+	}
+}
