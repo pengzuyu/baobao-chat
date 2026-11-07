@@ -27,7 +27,11 @@ type Options struct {
 	MaxLoginFails int           // 口令错误锁定阈值（默认 5）
 	LockTTL       time.Duration // 锁定时长（默认 10min）
 	DefaultTenant int64         // 登录未带 tenant_id 时的默认租户（阶段一单租户开发态；多租户阶段二改门户域名映射，D12 §2.1）
-	Now           func() time.Time
+	// ScopesOf RBAC 权限聚合（03 篇 §4：user_role ⋈ role.permissions 并集；main 以
+	// admin 域 roleStore 装配注入——auth 不反向依赖 admin 包，D02 §4）。nil 时退回
+	// users 行内 Scopes（内存种子/最小装配）；聚合失败同样退回不阻断登录（登记）。
+	ScopesOf func(ctx context.Context, tenantID, userID int64) ([]string, error)
+	Now      func() time.Time
 }
 
 func (o *Options) fillDefaults() {
@@ -132,16 +136,44 @@ func (s *Service) Login(ctx context.Context, req authapi.LoginReq) (*authapi.Tok
 	if err != nil {
 		return nil, errx.From(err)
 	}
-	return s.issuePair(u, dev.ID, req.DID)
+	return s.issuePair(ctx, u, dev.ID, req.DID)
+}
+
+// effectiveScopes 用户有效权限点 = users 行内 Scopes ∪ RBAC 角色聚合（03 篇 §4）。
+// 登录/续签/OBO 子集校验统一经此口径——角色授权后无需重登录即随下次签发生效。
+func (s *Service) effectiveScopes(ctx context.Context, u *orgapi.User) []string {
+	if s.opts.ScopesOf == nil {
+		return u.Scopes
+	}
+	extra, err := s.opts.ScopesOf(ctx, u.TenantID, u.ID)
+	if err != nil || len(extra) == 0 {
+		return u.Scopes // 聚合失败不阻断登录，退回行内值（登记）
+	}
+	seen := make(map[string]struct{}, len(u.Scopes)+len(extra))
+	out := make([]string, 0, len(u.Scopes)+len(extra))
+	for _, p := range u.Scopes {
+		if _, dup := seen[p]; !dup {
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+	}
+	for _, p := range extra {
+		if _, dup := seen[p]; !dup {
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // issuePair 签发 access + refresh；refresh 只存哈希，rotated_from 首签为 nil
-func (s *Service) issuePair(u *orgapi.User, deviceID int64, did string) (*authapi.TokenPair, error) {
+func (s *Service) issuePair(ctx context.Context, u *orgapi.User, deviceID int64, did string) (*authapi.TokenPair, error) {
 	now := s.opts.Now()
+	scopes := s.effectiveScopes(ctx, u)
 	access, err := s.signer.Sign(authjwt.Claims{
 		Subject:   strconv.FormatInt(u.ID, 10),
 		TenantID:  u.TenantID,
-		Scope:     u.Scopes,
+		Scope:     scopes,
 		DeviceID:  did,
 		JWTID:     authjwt.NewJTI(),
 		IssuedAt:  now.Unix(),
@@ -157,12 +189,12 @@ func (s *Service) issuePair(u *orgapi.User, deviceID int64, did string) (*authap
 	}); err != nil {
 		return nil, errx.From(err)
 	}
-	return &authapi.TokenPair{AccessToken: access, RefreshToken: raw, ExpiresIn: int64(s.opts.AccessTTL / time.Second), ExpiresAt: now.Add(s.opts.AccessTTL).UnixMilli(), User: toLoginUser(u)}, nil
+	return &authapi.TokenPair{AccessToken: access, RefreshToken: raw, ExpiresIn: int64(s.opts.AccessTTL / time.Second), ExpiresAt: now.Add(s.opts.AccessTTL).UnixMilli(), User: toLoginUser(u, scopes)}, nil
 }
 
-// toLoginUser org 用户 → 登录返回体（uid 字符串化）
-func toLoginUser(u *orgapi.User) *authapi.LoginUser {
-	return &authapi.LoginUser{UID: strconv.FormatInt(u.ID, 10), Name: u.DisplayName, Perms: u.Scopes}
+// toLoginUser org 用户 → 登录返回体（uid 字符串化；perms=有效权限点口径）
+func toLoginUser(u *orgapi.User, scopes []string) *authapi.LoginUser {
+	return &authapi.LoginUser{UID: strconv.FormatInt(u.ID, 10), Name: u.DisplayName, Perms: scopes}
 }
 
 // Refresh 一次性轮换：旧值换新值；旧值再现=疑似被盗 → 全设备下线（03 篇 §2.2）
@@ -204,10 +236,11 @@ func (s *Service) Refresh(ctx context.Context, req authapi.RefreshReq) (*authapi
 		return nil, errx.From(err)
 	}
 	oldID := rt.ID
+	scopes := s.effectiveScopes(ctx, u)
 	access, err := s.signer.Sign(authjwt.Claims{
 		Subject:   strconv.FormatInt(u.ID, 10),
 		TenantID:  u.TenantID,
-		Scope:     u.Scopes,
+		Scope:     scopes,
 		DeviceID:  req.DID,
 		JWTID:     authjwt.NewJTI(),
 		IssuedAt:  now.Unix(),
@@ -224,7 +257,7 @@ func (s *Service) Refresh(ctx context.Context, req authapi.RefreshReq) (*authapi
 	}); err != nil {
 		return nil, errx.From(err)
 	}
-	return &authapi.TokenPair{AccessToken: access, RefreshToken: raw, ExpiresIn: int64(s.opts.AccessTTL / time.Second), ExpiresAt: now.Add(s.opts.AccessTTL).UnixMilli(), User: toLoginUser(u)}, nil
+	return &authapi.TokenPair{AccessToken: access, RefreshToken: raw, ExpiresIn: int64(s.opts.AccessTTL / time.Second), ExpiresAt: now.Add(s.opts.AccessTTL).UnixMilli(), User: toLoginUser(u, scopes)}, nil
 }
 
 // Logout 吊销 refresh（all=true 全端下线）
@@ -251,8 +284,9 @@ func (s *Service) IssueOBO(ctx context.Context, actorUserID int64, req authapi.O
 	if u.Status != orgapi.UserStatusActive {
 		return "", errx.New(errx.CodeUserDisabled, "用户已禁用")
 	}
-	owned := make(map[string]struct{}, len(u.Scopes))
-	for _, sc := range u.Scopes {
+	eff := s.effectiveScopes(ctx, u) // OBO 子集校验同用有效权限点口径（角色授权同样生效）
+	owned := make(map[string]struct{}, len(eff))
+	for _, sc := range eff {
 		owned[sc] = struct{}{}
 	}
 	for _, sc := range req.Scope {

@@ -294,6 +294,52 @@ func (s *roleStore) ListUserRoles(_ context.Context, tenantID int64, userID int6
 	return out, nil
 }
 
+func (s *roleStore) GetUserRole(_ context.Context, tenantID, grantID int64) (UserRole, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	g, ok := s.grants[grantID]
+	if !ok || g.TenantID != tenantID {
+		return UserRole{}, ErrRoleGone
+	}
+	return g, nil
+}
+
+func (s *roleStore) UserIDsOfRole(_ context.Context, tenantID, roleID int64) ([]int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []int64{}
+	for _, g := range s.grants {
+		if g.TenantID == tenantID && g.RoleID == roleID {
+			out = append(out, g.UserID)
+		}
+	}
+	return out, nil
+}
+
+func (s *roleStore) PermissionPointsOf(_ context.Context, tenantID int64, userID int64) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, g := range s.grants {
+		if g.TenantID != tenantID || g.UserID != userID {
+			continue
+		}
+		r, ok := s.roles[g.RoleID]
+		if !ok || r.TenantID != tenantID {
+			continue
+		}
+		for _, p := range r.Permissions {
+			if _, dup := seen[p]; !dup {
+				seen[p] = struct{}{}
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // ── NoticeRepo 内存实现 ──
 
 type noticeStore struct {

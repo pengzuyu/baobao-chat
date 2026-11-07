@@ -144,8 +144,22 @@ func main() {
 	}
 
 	// ── 模块装配（D02 §3：构造注入，禁止全局单例） ──
+	// 角色仓储（RBAC 阶段二）前置装配：auth 登录链路的权限聚合（ScopesOf）与
+	// admin 守卫共用同一 roleStore——登录/续签 perms、IsAdmin/requirePerm、
+	// me/permissions 全部同源（03 篇 §4 有效权限点口径）。
+	var roleStore adminrepo.RoleRepo
+	if pgPool != nil {
+		roleStore = adminrepo.NewPostgresRoles(pgPool)
+	} else {
+		roleStore = adminrepo.NewMemoryRoles()
+	}
+	seedBuiltinRoles(roleStore)
+	scopesOf := func(ctx context.Context, tenantID, userID int64) ([]string, error) {
+		return roleStore.PermissionPointsOf(ctx, tenantID, userID)
+	}
 	orgMod := org.NewModule(orgRepo)
-	authMod := auth.NewModule(orgMod.API(), signer, cfg, tokenRepo, deviceRepo, attemptRepo)
+	authMod := auth.NewModule(orgMod.API(), signer, cfg, tokenRepo, deviceRepo, attemptRepo,
+		func(o *authservice.Options) { o.ScopesOf = scopesOf })
 
 	// 文件域（D06 阶段一+阶段二 server 侧）：本地磁盘存储 + 一次性票据下载 +
 	// 分片上传会话（check 秒传/uploads/PATCH 分片/complete）+ 分享外链；
@@ -543,9 +557,13 @@ func main() {
 		OnlineNow:      func() int64 { return int64(hub.OnlineCount()) },
 		KickUser:       hub.KickUser,
 		RevokeSessions: func(ctx context.Context, userID int64) error { return authAPI.Logout(ctx, userID, "", true) },
+		ScopesOf:       scopesOf,
 		AdminAccounts:  adminAccounts,
-		UsageRows:      usageRows,
-		UsageMode:      usageMode,
+		NotifyUser: func(tenantID, userID int64, event string, payload map[string]any) {
+			hub.PushToUser(userID, gateway.NewPush(event, payload)) // perm.changed 单播（14 篇 §3.2）
+		},
+		UsageRows: usageRows,
+		UsageMode: usageMode,
 	}
 	if msgStats != nil { // 可选接口断言失败（理论不发生）时对应指标降级为 0
 		adminOpts.ConvsActiveSince = msgStats.CountActiveConvsSince
@@ -557,14 +575,7 @@ func main() {
 	if fileStats != nil {
 		adminOpts.FileBytes = fileStats.SumStorageBytes
 	}
-	// 角色仓储（PAD-08）：PG/内存双模；内置角色种子幂等灌入（阶段二换正式 RBAC 装配）
-	var roleStore adminrepo.RoleRepo
-	if pgPool != nil {
-		roleStore = adminrepo.NewPostgresRoles(pgPool)
-	} else {
-		roleStore = adminrepo.NewMemoryRoles()
-	}
-	seedBuiltinRoles(roleStore)
+	// 角色仓储已随 auth 装配段前置（scopesOf 同源）；此处仅注入 admin 侧聚合口径
 	// 公告仓储 + 广播闭包（PAD-15：org 活跃用户 → message 域全员通知 kind=announcement）
 	var noticeStore adminrepo.NoticeRepo
 	if pgPool != nil {
@@ -645,61 +656,91 @@ func main() {
 	}
 	adminMod := admin.NewModule(orgAdmin, orgMod.API(), adminStore, roleStore, noticeStore, adminOpts)
 	adminSvc := adminMod.API()
-	// 管理路由守卫：auth → tenant → 管理员判定（v0.1 scope/白名单；403 用既有 2003，D10 无新码）
-	adminOnly := func(h http.HandlerFunc) http.Handler {
-		return httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			uid, err := uidFrom(r)
-			if err != nil {
-				httpx.Fail(w, r, err)
-				return
-			}
-			if !adminSvc.IsAdmin(r.Context(), httpx.TenantID(r.Context()), uid) {
-				httpx.Fail(w, r, errx.New(errx.CodePermACLDenied, "需要管理员权限"))
-				return
-			}
-			h(w, r)
-		}), httpx.Auth(authAPI.Verify), httpx.Tenant)
+	// 管理路由守卫（RBAC 阶段二）：auth → tenant → per-route 权限点判定。
+	// 查库口径（有效权限点 = users 行内 ∪ role/user_role 聚合，03 篇 §4）——
+	// 撤权即时生效；缺权限点 2001 CodePermPointDenied（2xxx→403）。
+	// 白名单/裸码 "admin" 视为管理域全集（应急通道，HasPerm 内判定）。
+	adminGuard := func(pass func(ctx context.Context, uid int64) bool, denyMsg string) func(http.HandlerFunc) http.Handler {
+		return func(h http.HandlerFunc) http.Handler {
+			return httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				uid, err := uidFrom(r)
+				if err != nil {
+					httpx.Fail(w, r, err)
+					return
+				}
+				if !pass(r.Context(), uid) {
+					httpx.Fail(w, r, errx.New(errx.CodePermPointDenied, denyMsg))
+					return
+				}
+				h(w, r)
+			}), httpx.Auth(authAPI.Verify), httpx.Tenant)
+		}
 	}
-	mux.Handle("GET /api/v1/admin/dashboard", adminOnly(handleAdminDashboard(adminSvc)))
-	mux.Handle("GET /api/v1/admin/users", adminOnly(handleAdminUsers(adminSvc)))
-	mux.Handle("PATCH /api/v1/admin/users/{id}", adminOnly(handleAdminUserPatch(adminSvc)))
-	mux.Handle("POST /api/v1/admin/users/{id}/disable", adminOnly(handleAdminUserStatus(adminSvc, orgapi.UserStatusDisabled)))
-	mux.Handle("POST /api/v1/admin/users/{id}/enable", adminOnly(handleAdminUserStatus(adminSvc, orgapi.UserStatusActive)))
-	mux.Handle("GET /api/v1/admin/policies/agent", adminOnly(handleAdminAgentPolicy(adminSvc)))
-	mux.Handle("GET /api/v1/admin/policies/sensitive-words", adminOnly(handleAdminListWords(adminSvc)))
-	mux.Handle("POST /api/v1/admin/policies/sensitive-words", adminOnly(handleAdminAddWord(adminSvc)))
-	mux.Handle("DELETE /api/v1/admin/policies/sensitive-words/{id}", adminOnly(handleAdminDeleteWord(adminSvc)))
-	mux.Handle("GET /api/v1/admin/usage/summary", adminOnly(handleAdminUsage(adminSvc)))
-	mux.Handle("GET /api/v1/admin/audit", adminOnly(handleAdminAudit(adminSvc)))
-	// 角色与授权（PAD-08 角色编辑器；admin:role:manage 随权限字典收口）
-	mux.Handle("GET /api/v1/admin/roles", adminOnly(handleAdminListRoles(adminSvc)))
-	mux.Handle("POST /api/v1/admin/roles", adminOnly(handleAdminCreateRole(adminSvc)))
-	mux.Handle("PATCH /api/v1/admin/roles/{id}", adminOnly(handleAdminUpdateRole(adminSvc)))
-	mux.Handle("DELETE /api/v1/admin/roles/{id}", adminOnly(handleAdminDeleteRole(adminSvc)))
-	mux.Handle("GET /api/v1/admin/users/{id}/grants", adminOnly(handleAdminListGrants(adminSvc)))
-	mux.Handle("POST /api/v1/admin/users/{id}/grants", adminOnly(handleAdminGrantRole(adminSvc)))
-	mux.Handle("DELETE /api/v1/admin/grants/{gid}", adminOnly(handleAdminRevokeRole(adminSvc)))
-	// 平台公告（PAD-15；admin:notice:publish 随权限字典收口）
-	mux.Handle("GET /api/v1/admin/notices", adminOnly(handleAdminListNotices(adminSvc)))
-	mux.Handle("POST /api/v1/admin/notices", adminOnly(handleAdminPublishNotice(adminSvc)))
-	// 批量导入（PAD-06；admin:user:manage）
-	mux.Handle("POST /api/v1/admin/users/import", adminOnly(handleAdminImportUsers(adminSvc)))
-	// Agent 治理（PAD-14；admin:agent:revoke / platform:agent:killswitch）
-	mux.Handle("GET /api/v1/admin/agent/users", adminOnly(handleAdminAgentUsers(adminSvc)))
-	mux.Handle("POST /api/v1/admin/agent/revoke", adminOnly(handleAdminAgentRevoke(adminSvc)))
-	mux.Handle("GET /api/v1/admin/agent/killswitch", adminOnly(handleAdminAgentKillswitch(adminSvc, false)))
-	mux.Handle("PUT /api/v1/admin/agent/killswitch", adminOnly(handleAdminAgentKillswitch(adminSvc, true)))
-	// 组织树（PAD-04；admin:org:manage——orgRepo 直接实现 DeptTreeReaderWriter）
-	deptTree := func(h http.HandlerFunc) http.Handler { return adminOnly(h) }
-	_ = deptTree
-	mux.Handle("GET /api/v1/admin/org/tree", adminOnly(handleDeptTree(orgRepo)))
-	mux.Handle("POST /api/v1/admin/org/depts", adminOnly(handleDeptCreate(orgRepo)))
-	mux.Handle("PATCH /api/v1/admin/org/depts/{id}", adminOnly(handleDeptRename(orgRepo)))
-	mux.Handle("DELETE /api/v1/admin/org/depts/{id}", adminOnly(handleDeptDelete(orgRepo)))
-	// KB 治理（PAD-10；admin:kb:govern——v0.1 只读总览）
-	mux.Handle("GET /api/v1/admin/kb/spaces", adminOnly(handleAdminKBSpaces(adminSvc)))
-	// 离职交接（PAD-07；admin:user:offboard）
-	mux.Handle("POST /api/v1/admin/users/{id}/offboard", adminOnly(handleAdminOffboard(adminSvc)))
+	// requirePerm 单权限点守卫工厂（映射 D10 §1.3 / 12 篇 §6.1）
+	requirePerm := func(code string) func(http.HandlerFunc) http.Handler {
+		return adminGuard(func(ctx context.Context, uid int64) bool {
+			return adminSvc.HasPerm(ctx, httpx.TenantID(ctx), uid, code)
+		}, "缺少权限点 "+code)
+	}
+	// requireAnyAdmin 任一 admin:*/platform:* 权限点（导航入口同款语义，12 篇 §3.2）
+	requireAnyAdmin := adminGuard(func(ctx context.Context, uid int64) bool {
+		return adminSvc.IsAdmin(ctx, httpx.TenantID(ctx), uid)
+	}, "需要管理员权限")
+	// 权限点字典（PAD-08 权限树数据源；admin:role:manage）
+	mux.Handle("GET /api/v1/admin/perm-points", requirePerm("admin:role:manage")(handleAdminPermPoints()))
+	// 当前用户权限摘要（03 篇 §7；perm.changed 后端侧重拉源；登录用户即可）
+	mux.Handle("GET /api/v1/me/permissions", authed(func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		perms, err := adminSvc.MyPermPoints(r.Context(), httpx.TenantID(r.Context()), uid)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"perms": perms})
+	}))
+	mux.Handle("GET /api/v1/admin/dashboard", requireAnyAdmin(handleAdminDashboard(adminSvc)))
+	mux.Handle("GET /api/v1/admin/users", requirePerm("admin:user:manage")(handleAdminUsers(adminSvc)))
+	mux.Handle("PATCH /api/v1/admin/users/{id}", requirePerm("admin:user:manage")(handleAdminUserPatch(adminSvc)))
+	mux.Handle("POST /api/v1/admin/users/{id}/disable", requirePerm("admin:user:manage")(handleAdminUserStatus(adminSvc, orgapi.UserStatusDisabled)))
+	mux.Handle("POST /api/v1/admin/users/{id}/enable", requirePerm("admin:user:manage")(handleAdminUserStatus(adminSvc, orgapi.UserStatusActive)))
+	mux.Handle("GET /api/v1/admin/policies/agent", requirePerm("admin:policy:manage")(handleAdminAgentPolicy(adminSvc)))
+	mux.Handle("GET /api/v1/admin/policies/sensitive-words", requirePerm("admin:policy:manage")(handleAdminListWords(adminSvc)))
+	mux.Handle("POST /api/v1/admin/policies/sensitive-words", requirePerm("admin:policy:manage")(handleAdminAddWord(adminSvc)))
+	mux.Handle("DELETE /api/v1/admin/policies/sensitive-words/{id}", requirePerm("admin:policy:manage")(handleAdminDeleteWord(adminSvc)))
+	mux.Handle("GET /api/v1/admin/usage/summary", requirePerm("admin:usage:read")(handleAdminUsage(adminSvc)))
+	mux.Handle("GET /api/v1/admin/audit", requirePerm("admin:audit:read")(handleAdminAudit(adminSvc)))
+	// 角色与授权（PAD-08 角色编辑器）
+	mux.Handle("GET /api/v1/admin/roles", requirePerm("admin:role:manage")(handleAdminListRoles(adminSvc)))
+	mux.Handle("POST /api/v1/admin/roles", requirePerm("admin:role:manage")(handleAdminCreateRole(adminSvc)))
+	mux.Handle("PATCH /api/v1/admin/roles/{id}", requirePerm("admin:role:manage")(handleAdminUpdateRole(adminSvc)))
+	mux.Handle("DELETE /api/v1/admin/roles/{id}", requirePerm("admin:role:manage")(handleAdminDeleteRole(adminSvc)))
+	mux.Handle("GET /api/v1/admin/users/{id}/grants", requirePerm("admin:role:assign")(handleAdminListGrants(adminSvc)))
+	mux.Handle("POST /api/v1/admin/users/{id}/grants", requirePerm("admin:role:assign")(handleAdminGrantRole(adminSvc)))
+	mux.Handle("DELETE /api/v1/admin/grants/{gid}", requirePerm("admin:role:assign")(handleAdminRevokeRole(adminSvc)))
+	// 平台公告（PAD-15）
+	mux.Handle("GET /api/v1/admin/notices", requirePerm("admin:notice:publish")(handleAdminListNotices(adminSvc)))
+	mux.Handle("POST /api/v1/admin/notices", requirePerm("admin:notice:publish")(handleAdminPublishNotice(adminSvc)))
+	// 批量导入（PAD-06）
+	mux.Handle("POST /api/v1/admin/users/import", requirePerm("admin:user:manage")(handleAdminImportUsers(adminSvc)))
+	// Agent 治理（PAD-14）。killswitch 收紧为 platform:agent:killswitch 随平台运营
+	// 角色落地（D12 阶段二）——阶段一单租户无平台运营，暂 requireAnyAdmin，登记。
+	mux.Handle("GET /api/v1/admin/agent/users", requirePerm("admin:agent:revoke")(handleAdminAgentUsers(adminSvc)))
+	mux.Handle("POST /api/v1/admin/agent/revoke", requirePerm("admin:agent:revoke")(handleAdminAgentRevoke(adminSvc)))
+	mux.Handle("GET /api/v1/admin/agent/killswitch", requireAnyAdmin(handleAdminAgentKillswitch(adminSvc, false)))
+	mux.Handle("PUT /api/v1/admin/agent/killswitch", requireAnyAdmin(handleAdminAgentKillswitch(adminSvc, true)))
+	// 组织树（PAD-04；orgRepo 直接实现 DeptTreeReaderWriter）
+	mux.Handle("GET /api/v1/admin/org/tree", requirePerm("admin:org:manage")(handleDeptTree(orgRepo)))
+	mux.Handle("POST /api/v1/admin/org/depts", requirePerm("admin:org:manage")(handleDeptCreate(orgRepo)))
+	mux.Handle("PATCH /api/v1/admin/org/depts/{id}", requirePerm("admin:org:manage")(handleDeptRename(orgRepo)))
+	mux.Handle("DELETE /api/v1/admin/org/depts/{id}", requirePerm("admin:org:manage")(handleDeptDelete(orgRepo)))
+	// KB 治理（PAD-10；v0.1 只读总览）
+	mux.Handle("GET /api/v1/admin/kb/spaces", requirePerm("admin:kb:govern")(handleAdminKBSpaces(adminSvc)))
+	// 离职交接（PAD-07）
+	mux.Handle("POST /api/v1/admin/users/{id}/offboard", requirePerm("admin:user:offboard")(handleAdminOffboard(adminSvc)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -747,9 +788,9 @@ func main() {
 	aclResolve = func(ctx context.Context, spaceID, userID int64) int {
 		return aclSvc.Resolve(ctx, 1, "kb.space", strconv.FormatInt(spaceID, 10), userID)
 	}
-	mux.Handle("GET /api/v1/admin/acl", adminOnly(handleACLList(aclSvc)))
-	mux.Handle("POST /api/v1/admin/acl", adminOnly(handleACLGrant(aclSvc)))
-	mux.Handle("DELETE /api/v1/admin/acl/{id}", adminOnly(handleACLRevoke(aclSvc)))
+	mux.Handle("GET /api/v1/admin/acl", requireAnyAdmin(handleACLList(aclSvc)))
+	mux.Handle("POST /api/v1/admin/acl", requireAnyAdmin(handleACLGrant(aclSvc)))
+	mux.Handle("DELETE /api/v1/admin/acl/{id}", requireAnyAdmin(handleACLRevoke(aclSvc)))
 
 	// ── 生态域首建（D14 §5/10 篇通道阶段一）：专家定义包分发 ──
 	// 公司库（adminOnly 发布）/个人库（用户自建 usr.{uid}. 前缀归属）；
@@ -763,7 +804,7 @@ func main() {
 	ecoMod := eco.NewModule(ecoRepoInst)
 	ecoapi.RegisterUserRoutes(mux, authed, ecoMod.API())
 	ecoapi.RegisterPublicRoutes(mux, ecoMod.API())
-	ecoapi.RegisterAdminRoutes(mux, adminOnly, ecoMod.API())
+	ecoapi.RegisterAdminRoutes(mux, requirePerm("admin:app:publish"), ecoMod.API())
 
 	// ── 会议域（21 篇阶段一务实版）：预约/日历/RSVP/忙闲 ──
 	// 媒体/信令复用 rtc（入会=join 模式群通话，call_id=meeting_no 约定）；
@@ -911,7 +952,7 @@ func main() {
 	}, mailRepoInst)
 	mailAPI = mailMod.API() // mcpgw 闭包引用回填（前置声明处）
 	mailapi.RegisterRoutes(mux, authed, mailMod.API())
-	mailapi.RegisterAdminRoutes(mux, adminOnly, mailMod.API())
+	mailapi.RegisterAdminRoutes(mux, requirePerm("admin:mail:govern"), mailMod.API())
 
 	// 全局中间件链（D02 §6 固定顺序：trace→recovery→access-log→rate-limit→…）
 	limiter := httpx.NewLimiter(50, 100)                                                  // 阶段一按 IP；三档（租户/用户/Agent）阶段二接 Redis
@@ -2724,9 +2765,23 @@ func handleFileTransfers(svc fileapi.FileService) http.HandlerFunc {
 // seedBuiltinRoles 内置角色（is_builtin：名称/描述锁定，仅可改权限点）
 func seedBuiltinRoles(store adminrepo.RoleRepo) {
 	ctx := context.Background()
+	// 权限集来源：D12 §2.5 内置角色定义（六角色中 member 随新用户默认授权链路
+	// 阶段二落地暂不种子、platform_ops 因 role.tenant_id NOT NULL 的 0001 DDL
+	// 偏差登记延后；"管理员"补齐 admin:* 全集——裸码 "admin" 保留兼容已部署旧种子行）。
 	builtin := []adminrepo.Role{
-		{Name: "管理员", Description: "全部管理权限（内置）", IsBuiltin: true,
-			Permissions: []string{"admin", "admin:user:manage", "admin:role:manage", "admin:policy:manage", "admin:kb:govern", "admin:audit:read", "admin:usage:read"}},
+		{Name: "管理员", Description: "租户管理域全集（内置；不含 platform:*）", IsBuiltin: true,
+			Permissions: []string{"admin",
+				"admin:org:manage", "admin:user:manage", "admin:user:offboard",
+				"admin:role:manage", "admin:role:assign", "admin:app:publish",
+				"admin:policy:manage", "admin:audit:read", "admin:audit:export",
+				"admin:usage:read", "admin:kb:govern", "admin:agent:revoke",
+				"admin:notice:publish", "admin:meeting:policy", "admin:mail:govern"}},
+		{Name: "部门管理员", Description: "部门用户/群/知识库管理（内置；⚠ 数据范围收敛随 D12 组织树阶段二——当前授权即全租户生效，谨慎授予）", IsBuiltin: true,
+			Permissions: []string{"im:group:manage", "im:group:create_broadcast", "rtc:meeting:schedule",
+				"kb:space:create", "kb:space:admin", "kb:doc:sensitive",
+				"admin:org:manage", "admin:user:manage", "admin:usage:read", "admin:kb:govern"}},
+		{Name: "审计合规员", Description: "只读审计与导出（内置）", IsBuiltin: true,
+			Permissions: []string{"admin:audit:read", "admin:audit:export", "doc:audit:read"}},
 		{Name: "应用管理员", Description: "应用/技能/bot 管理（内置）", IsBuiltin: true,
 			Permissions: []string{"admin:app:publish", "bot:manage"}},
 	}
@@ -2744,6 +2799,13 @@ type roleReq struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Permissions []string `json:"permissions"`
+}
+
+// handleAdminPermPoints 权限点字典下发（API-ADM-02；内嵌权威清单 perms.go）
+func handleAdminPermPoints() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		httpx.OK(w, r, adminapi.PermPoints())
+	}
 }
 
 func handleAdminListRoles(svc adminapi.AdminService) http.HandlerFunc {

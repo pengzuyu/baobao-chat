@@ -386,12 +386,24 @@ func (p *PostgresRoles) InsertUserRole(ctx context.Context, ur UserRole) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// 显式查重：0001 的 uk_user_role 含 scope_dept_id（NULL）——PG 唯一约束对
+	// NULL 不生效，INSERT 冲突不触发 23505（真实联调抓出）。DDL 收紧
+	// （NULLS NOT DISTINCT 重建 UK）随 D12 数据范围迁移一并做，登记。
+	var exists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM user_role WHERE tenant_id=$1 AND user_id=$2 AND role_id=$3)`,
+		ur.TenantID, ur.UserID, ur.RoleID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return ErrDupGrant
+	}
 	var id int64
 	// scope 阶段一恒 1（全租户；部门范围授权随 D12 组织树阶段二，登记）
 	if id, err = bbwpg.AllocID(ctx, tx, 9123, "user_role"); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO user_role (id, tenant_id, user_id, role_id, scope_type, created_at)
 		VALUES ($1,$2,$3,$4,1, now())`,
 		id, ur.TenantID, ur.UserID, ur.RoleID); err != nil {
@@ -430,6 +442,61 @@ func (p *PostgresRoles) ListUserRoles(ctx context.Context, tenantID int64, userI
 			return nil, err
 		}
 		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// GetUserRole 按授权主键查单条（收回时定位受影响用户）
+func (p *PostgresRoles) GetUserRole(ctx context.Context, tenantID, grantID int64) (UserRole, error) {
+	var g UserRole
+	err := p.pool.QueryRow(ctx, `
+		SELECT ur.id, ur.tenant_id, ur.user_id, ur.role_id FROM user_role ur
+		WHERE ur.tenant_id=$1 AND ur.id=$2`, tenantID, grantID).
+		Scan(&g.ID, &g.TenantID, &g.UserID, &g.RoleID)
+	if err != nil {
+		return UserRole{}, ErrRoleGone
+	}
+	return g, nil
+}
+
+// UserIDsOfRole 角色全部持有者（角色权限点变更时推送 perm.changed 用）
+func (p *PostgresRoles) UserIDsOfRole(ctx context.Context, tenantID, roleID int64) ([]int64, error) {
+	rows, err := p.pool.Query(ctx,
+		`SELECT user_id FROM user_role WHERE tenant_id=$1 AND role_id=$2`, tenantID, roleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var uid int64
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		out = append(out, uid)
+	}
+	return out, rows.Err()
+}
+
+// PermissionPointsOf 用户有效权限点（user_role ⋈ role.permissions 去重并集；
+// 03 篇 §4 登录 perms 拼装与守卫判定共用）
+func (p *PostgresRoles) PermissionPointsOf(ctx context.Context, tenantID int64, userID int64) ([]string, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT DISTINCT je.perm FROM user_role ur
+		JOIN role r ON r.id = ur.role_id AND r.tenant_id = ur.tenant_id,
+		jsonb_array_elements_text(r.permissions) AS je(perm)
+		WHERE ur.tenant_id=$1 AND ur.user_id=$2 ORDER BY je.perm`, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var perm string
+		if err := rows.Scan(&perm); err != nil {
+			return nil, err
+		}
+		out = append(out, perm)
 	}
 	return out, rows.Err()
 }

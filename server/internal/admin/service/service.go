@@ -40,10 +40,17 @@ type Options struct {
 	// RevokeSessions 吊销该用户全部 refresh token（禁用后阻止静默续期；auth 域 Logout(all)）
 	RevokeSessions func(ctx context.Context, userID int64) error
 
-	// ── 管理员判定 v0.1 ──
-	// AdminAccounts empno 白名单（BBW_ADMIN_ACCOUNTS，逗号分隔）：scope 判定的兜底——
-	// PG 模式 users.scopes 不落库（RBAC 表阶段二），白名单是生产可用的唯一通道，登记。
+	// ── 管理员判定（RBAC 阶段二起主口径=权限点）──
+	// ScopesOf RBAC 权限聚合闭包（main 注入 roleStore.PermissionPointsOf；nil=退回
+	// users 行内 Scopes）。IsAdmin/PermPointsOf/守卫判定统一经此口径。
+	ScopesOf func(ctx context.Context, tenantID, userID int64) ([]string, error)
+	// AdminAccounts empno 白名单（BBW_ADMIN_ACCOUNTS，逗号分隔）：应急通道——
+	// 角色链路装配异常/冷启动救砖用；日常管理员走「管理员」内置角色授权（bootstrap 自动挂）。
 	AdminAccounts []string
+
+	// NotifyUser 用户级 WS 单播闭包（main 注入 gateway hub；nil=不推送——单测/降级）。
+	// 授权/收回/角色权限变更后发 perm.changed，端侧重拉权限摘要即时收窄导航（03 篇 §4）。
+	NotifyUser func(tenantID, userID int64, event string, payload map[string]any)
 
 	// BroadcastNotice 公告广播闭包（PAD-15；main 注入=message 域 BroadcastNotice
 	// + org 活跃用户清单；nil=仅存档不广播——联调形态）
@@ -96,29 +103,85 @@ func New(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo
 
 var _ adminapi.AdminService = (*Service)(nil)
 
-// ── 管理员判定 v0.1 ──
+// ── 管理员判定（RBAC 阶段二）──
 
-// IsAdmin 口径（登记）：用户 scopes 含 "admin" 或任一 "admin:*" 前缀权限点，
-// 或 empno 命中 BBW_ADMIN_ACCOUNTS 白名单。正式 03 篇 RBAC 矩阵阶段二接入。
-func (s *Service) IsAdmin(_ context.Context, tenantID, userID int64) bool {
-	u, err := s.same.GetUser(context.Background(), userID)
-	if err != nil || u == nil {
-		return false
+// effectiveScopesOf 用户有效权限点 = users 行内 Scopes ∪ 角色聚合（03 篇 §4）。
+// ScopesOf 未装配/查询失败时退回行内值（登录链路同口径，authservice.effectiveScopes）。
+func (s *Service) effectiveScopesOf(ctx context.Context, u *orgapi.User) []string {
+	if s.opts.ScopesOf == nil {
+		return u.Scopes
 	}
-	if u.TenantID != tenantID {
-		return false
+	extra, err := s.opts.ScopesOf(ctx, u.TenantID, u.ID)
+	if err != nil || len(extra) == 0 {
+		return u.Scopes
 	}
-	for _, sc := range u.Scopes {
-		if sc == "admin" || strings.HasPrefix(sc, "admin:") {
-			return true
+	seen := make(map[string]struct{}, len(u.Scopes)+len(extra))
+	out := make([]string, 0, len(u.Scopes)+len(extra))
+	for _, p := range append(append([]string{}, u.Scopes...), extra...) {
+		if _, dup := seen[p]; !dup {
+			seen[p] = struct{}{}
+			out = append(out, p)
 		}
 	}
+	return out
+}
+
+// isWhitelisted 应急白名单命中（BBW_ADMIN_ACCOUNTS）——视为管理域全集
+func (s *Service) isWhitelisted(u *orgapi.User) bool {
 	for _, emp := range s.opts.AdminAccounts {
 		if emp != "" && emp == u.EmployeeNo {
 			return true
 		}
 	}
 	return false
+}
+
+// HasPerm 权限点判定（守卫与页面显隐同源）：有效权限点集合精确含 code；
+// 持 "admin"（内存种子裸码）或命中应急白名单视为管理域全集命中。
+func (s *Service) HasPerm(ctx context.Context, tenantID, userID int64, code string) bool {
+	u, err := s.same.GetUser(ctx, userID)
+	if err != nil || u == nil || u.TenantID != tenantID {
+		return false
+	}
+	if s.isWhitelisted(u) {
+		return true
+	}
+	for _, p := range s.effectiveScopesOf(ctx, u) {
+		if p == code || p == "admin" {
+			return true
+		}
+	}
+	return false
+}
+
+// IsAdmin 口径 v0.2（03 篇 §4）：有效权限点（行内 ∪ 角色聚合）含任一
+// "admin"/"admin:*"/"platform:*"，或 empno 命中 BBW_ADMIN_ACCOUNTS 应急白名单。
+func (s *Service) IsAdmin(ctx context.Context, tenantID, userID int64) bool {
+	u, err := s.same.GetUser(ctx, userID)
+	if err != nil || u == nil {
+		return false
+	}
+	if u.TenantID != tenantID {
+		return false
+	}
+	for _, sc := range s.effectiveScopesOf(ctx, u) {
+		if sc == "admin" || strings.HasPrefix(sc, "admin:") || strings.HasPrefix(sc, "platform:") {
+			return true
+		}
+	}
+	return s.isWhitelisted(u)
+}
+
+// MyPermPoints 当前用户权限摘要（GET /me/permissions；有效权限点口径）
+func (s *Service) MyPermPoints(ctx context.Context, tenantID, userID int64) ([]string, error) {
+	u, err := s.same.GetUser(ctx, userID)
+	if err != nil || u == nil {
+		return nil, errx.New(errx.CodeNotFound, "用户不存在")
+	}
+	if u.TenantID != tenantID {
+		return nil, errx.New(errx.CodeNotFound, "用户不存在")
+	}
+	return s.effectiveScopesOf(ctx, u), nil
 }
 
 // ── 仪表盘 ──
@@ -196,7 +259,9 @@ func (s *Service) ListUsers(ctx context.Context, tenantID int64, keyword string,
 	}
 	page := &adminapi.UserPage{Items: make([]adminapi.AdminUser, 0, len(users)), HasMore: hasMore}
 	for _, u := range users {
-		page.Items = append(page.Items, toAdminUser(u))
+		au := toAdminUser(u)
+		au.Scopes = s.effectiveScopesOf(ctx, &u) // RBAC 聚合口径（管理端不再恒空）
+		page.Items = append(page.Items, au)
 		if page.NextCursor == "" || u.ID > 0 {
 			page.NextCursor = strconv.FormatInt(u.ID, 10)
 		}
@@ -535,8 +600,12 @@ func (s *Service) validateRole(name string, permissions []string) error {
 		return errx.New(errx.CodeBadRequest, "权限点 ≤200 项")
 	}
 	for _, p := range permissions {
-		if p == "" || len(p) > 64 || !strings.Contains(p, ":") {
-			return errx.New(errx.CodeBadRequest, "权限点格式非法（形如 im:message:send）: "+p)
+		// RBAC 阶段二起收口权威字典（D12 §2.4）：字典外权限点拒绝保存
+		if !adminapi.KnownPermPoint(p) {
+			return errx.New(errx.CodeBadRequest, "权限点不在字典内（先在 D12 §2.4 登记）: "+p)
+		}
+		if strings.HasPrefix(p, "platform:") {
+			return errx.New(errx.CodeBadRequest, "自定义角色不得含 platform:* 权限点（D12 §2.5）")
 		}
 	}
 	return nil
@@ -579,7 +648,21 @@ func (s *Service) UpdateRole(ctx context.Context, tenantID, operatorID, roleID i
 		}
 		return s.internal("角色更新失败")
 	}
+	// 权限点变更 → 全部持有者收 perm.changed（03 篇 §4 实时生效；14 篇 §3.2 事件）
+	if holders, err := s.roles.UserIDsOfRole(ctx, tenantID, roleID); err == nil {
+		for _, uid := range holders {
+			s.notifyPermChanged(tenantID, uid)
+		}
+	}
 	return s.audit(ctx, tenantID, operatorID, "role.update", name, map[string]any{"permissions": len(permissions)})
+}
+
+// notifyPermChanged 向单用户推 perm.changed（NotifyUser 未装配=静默跳过）
+func (s *Service) notifyPermChanged(tenantID, userID int64) {
+	if s.opts.NotifyUser == nil {
+		return
+	}
+	s.opts.NotifyUser(tenantID, userID, "perm.changed", map[string]any{"user_id": userID})
 }
 
 func (s *Service) DeleteRole(ctx context.Context, tenantID, operatorID, roleID int64) error {
@@ -602,7 +685,22 @@ func (s *Service) GrantRole(ctx context.Context, tenantID, operatorID, userID, r
 	if s.roles == nil {
 		return s.internal("角色管理未装配")
 	}
-	// 用户存在性经 org 闭包校验属阶段二（v0.1 信任管理员输入，登记）
+	// 存在性校验（RBAC 阶段二补齐——防孤儿授权行：user_role 无 FK）
+	if u, err := s.same.GetUser(ctx, userID); err != nil || u == nil || u.TenantID != tenantID {
+		return errx.New(errx.CodeBadRequest, "用户不存在")
+	}
+	if roles, err := s.roles.ListRoles(ctx, tenantID); err == nil {
+		found := false
+		for _, r := range roles {
+			if r.ID == roleID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errx.New(errx.CodeBadRequest, "角色不存在")
+		}
+	}
 	if err := s.roles.InsertUserRole(ctx, adminrepo.UserRole{
 		TenantID: tenantID, UserID: userID, RoleID: roleID,
 	}); err != nil {
@@ -611,6 +709,7 @@ func (s *Service) GrantRole(ctx context.Context, tenantID, operatorID, userID, r
 		}
 		return s.internal("授权失败")
 	}
+	s.notifyPermChanged(tenantID, userID)
 	return s.audit(ctx, tenantID, operatorID, "role.grant", "", map[string]any{"user_id": userID, "role_id": roleID})
 }
 
@@ -618,10 +717,15 @@ func (s *Service) RevokeRole(ctx context.Context, tenantID, operatorID, grantID 
 	if s.roles == nil {
 		return s.internal("角色管理未装配")
 	}
+	g, err := s.roles.GetUserRole(ctx, tenantID, grantID) // 先定位受影响用户（删除后不可查）
+	if err != nil {
+		return errx.New(errx.CodeBadRequest, "授权记录不存在")
+	}
 	if err := s.roles.DeleteUserRole(ctx, tenantID, grantID); err != nil {
 		return errx.New(errx.CodeBadRequest, "授权记录不存在")
 	}
-	return s.audit(ctx, tenantID, operatorID, "role.revoke", "", map[string]any{"grant_id": grantID})
+	s.notifyPermChanged(tenantID, g.UserID)
+	return s.audit(ctx, tenantID, operatorID, "role.revoke", "", map[string]any{"grant_id": grantID, "user_id": g.UserID})
 }
 
 func (s *Service) ListUserGrants(ctx context.Context, tenantID, userID int64) ([]adminapi.GrantDTO, error) {

@@ -114,6 +114,13 @@ type RoleRepo interface {
 	DeleteUserRole(ctx context.Context, tenantID, id int64) error
 	// ListUserRoles 按用户（授权管理入口）；联查 role.name/users.display_name
 	ListUserRoles(ctx context.Context, tenantID int64, userID int64) ([]UserRole, error)
+	// GetUserRole 按授权主键查单条（收回时定位受影响用户——perm.changed 推送用）
+	GetUserRole(ctx context.Context, tenantID, grantID int64) (UserRole, error)
+	// UserIDsOfRole 角色全部持有者（角色权限点变更时推送 perm.changed 用）
+	UserIDsOfRole(ctx context.Context, tenantID, roleID int64) ([]int64, error)
+	// PermissionPointsOf 用户有效权限点 = 全部授权角色 permissions 去重并集
+	// （03 篇 §4；登录 perms 拼装与守卫判定共用，RBAC 阶段二）
+	PermissionPointsOf(ctx context.Context, tenantID int64, userID int64) ([]string, error)
 }
 
 // 角色域 sentinel

@@ -139,3 +139,88 @@ func TestPGAdminSmoke(t *testing.T) {
 		}
 	}
 }
+
+// TestPGRolePermPoints RBAC 阶段二 PG 路径：role/user_role 落库 + 权限点聚合并集
+func TestPGRolePermPoints(t *testing.T) {
+	dsn := os.Getenv("BBW_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("BBW_PG_TEST_DSN 未设置，跳过 PG 集成测试")
+	}
+	ctx := context.Background()
+	pool, err := bbwpg.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("建池: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := bbwpg.Migrate(ctx, pool); err != nil {
+		t.Fatalf("迁移: %v", err)
+	}
+	roles := NewPostgresRoles(pool)
+
+	uid := int64(920000000) + time.Now().UnixNano()%1_000_000
+	r1, err := roles.InsertRole(ctx, Role{TenantID: 1,
+		Name: "pg-test-hr-" + time.Now().Format("150405.000000000"),
+		Permissions: []string{"admin:user:manage", "im:message:send"}})
+	if err != nil {
+		t.Fatalf("InsertRole: %v", err)
+	}
+	r2, err := roles.InsertRole(ctx, Role{TenantID: 1,
+		Name: "pg-test-audit-" + time.Now().Format("150405.000000000"),
+		Permissions: []string{"admin:audit:read"}})
+	if err != nil {
+		t.Fatalf("InsertRole 2: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM user_role WHERE user_id=$1`, uid)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM role WHERE id IN ($1,$2)`, r1.ID, r2.ID)
+	})
+
+	if err := roles.InsertUserRole(ctx, UserRole{TenantID: 1, UserID: uid, RoleID: r1.ID}); err != nil {
+		t.Fatalf("InsertUserRole: %v", err)
+	}
+	if err := roles.InsertUserRole(ctx, UserRole{TenantID: 1, UserID: uid, RoleID: r2.ID}); err != nil {
+		t.Fatalf("InsertUserRole 2: %v", err)
+	}
+	if err := roles.InsertUserRole(ctx, UserRole{TenantID: 1, UserID: uid, RoleID: r1.ID}); err != ErrDupGrant {
+		t.Fatalf("重复授权应 ErrDupGrant: %v", err)
+	}
+
+	pts, err := roles.PermissionPointsOf(ctx, 1, uid)
+	if err != nil {
+		t.Fatalf("PermissionPointsOf: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range pts {
+		got[p] = true
+	}
+	for _, want := range []string{"admin:user:manage", "admin:audit:read", "im:message:send"} {
+		if !got[want] {
+			t.Fatalf("聚合缺 %q: %v", want, pts)
+		}
+	}
+
+	// GetUserRole / UserIDsOfRole（推送定位路径）
+	grants, err := roles.ListUserRoles(ctx, 1, uid)
+	if err != nil || len(grants) != 2 {
+		t.Fatalf("ListUserRoles: %v %d", err, len(grants))
+	}
+	g1, err := roles.GetUserRole(ctx, 1, grants[0].ID)
+	if err != nil || g1.UserID != uid {
+		t.Fatalf("GetUserRole: %v %+v", err, g1)
+	}
+	ids, err := roles.UserIDsOfRole(ctx, 1, r1.ID)
+	if err != nil || len(ids) != 1 || ids[0] != uid {
+		t.Fatalf("UserIDsOfRole: %v %v", err, ids)
+	}
+
+	// 收回后聚合即时收敛
+	if err := roles.DeleteUserRole(ctx, 1, grants[0].ID); err != nil {
+		t.Fatalf("DeleteUserRole: %v", err)
+	}
+	pts2, _ := roles.PermissionPointsOf(ctx, 1, uid)
+	for _, p := range pts2 {
+		if p == "admin:user:manage" && grants[0].RoleID == r1.ID {
+			t.Fatalf("收回后不应再含该角色权限点: %v", pts2)
+		}
+	}
+}

@@ -20,11 +20,19 @@ import (
 // effectCounter 写副作用记录（断言禁用即踢线/吊销语义）
 type effectCounter struct {
 	aliceID, bobID int64
+	notified map[int64]string // perm.changed 单播记录（NotifyUser 闭包写入）
 	kicked         []int64
 	revoked        []int64
 }
 
 func (c *effectCounter) kick(uid int64) int { c.kicked = append(c.kicked, uid); return 1 }
+
+func (c *effectCounter) notify(_ int64, uid int64, event string, _ map[string]any) {
+	if c.notified == nil {
+		c.notified = map[int64]string{}
+	}
+	c.notified[uid] = event
+}
 func (c *effectCounter) revoke(_ context.Context, uid int64) error {
 	c.revoked = append(c.revoked, uid)
 	return nil
@@ -48,6 +56,7 @@ func newFixture(adminAccounts []string) (*Service, *orgrepo.Memory, adminrepo.Re
 	roles := adminrepo.NewMemoryRoles()
 	_, _ = roles.InsertRole(ctx, adminrepo.Role{TenantID: 1, Name: "管理员", IsBuiltin: true, Permissions: []string{"admin"}})
 	svc := New(orgRepo, orgRepo, store, roles, adminrepo.NewMemoryNotices(), Options{
+		ScopesOf: roles.PermissionPointsOf, // RBAC 阶段二：与 main 装配同口径（角色聚合）
 		CreateUser: func(ctx context.Context, u orgapi.User) (orgapi.User, error) {
 			return orgRepo.CreateUser(ctx, u)
 		},
@@ -68,6 +77,7 @@ func newFixture(adminAccounts []string) (*Service, *orgrepo.Memory, adminrepo.Re
 		KickUser:       fx.kick,
 		RevokeSessions: fx.revoke,
 		AdminAccounts:  adminAccounts,
+		NotifyUser:     fx.notify,
 	})
 	return svc, orgRepo, store, fx
 }
@@ -261,9 +271,10 @@ func TestAgentPolicySnapshot(t *testing.T) {
 }
 
 func TestRoleEditorCRUDAndGrants(t *testing.T) {
-	svc, _, _, _ := newFixture([]string{"alice"})
+	svc, _, _, fx := newFixture([]string{"alice"})
 	ctx := context.Background()
 	aliceID := int64(10001)
+	_ = fx // 授权目标用夹具真实用户（GrantRole 存在性校验，RBAC 阶段二）
 
 	// 创建（权限点格式校验）
 	bad, err := svc.CreateRole(ctx, 1, aliceID, "开发", "", []string{"非法点"})
@@ -283,13 +294,13 @@ func TestRoleEditorCRUDAndGrants(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	// 授权/重复授权/列表
-	if err := svc.GrantRole(ctx, 1, aliceID, 20001, r1.ID); err != nil {
+	if err := svc.GrantRole(ctx, 1, aliceID, fx.bobID, r1.ID); err != nil {
 		t.Fatalf("grant: %v", err)
 	}
-	if err := svc.GrantRole(ctx, 1, aliceID, 20001, r1.ID); err == nil {
+	if err := svc.GrantRole(ctx, 1, aliceID, fx.bobID, r1.ID); err == nil {
 		t.Fatal("重复授权应拒")
 	}
-	grants, err := svc.ListUserGrants(ctx, 1, 20001)
+	grants, err := svc.ListUserGrants(ctx, 1, fx.bobID)
 	if err != nil || len(grants) != 1 {
 		t.Fatalf("grants: %v %+v", err, grants)
 	}
@@ -447,5 +458,89 @@ func TestOffboardUser(t *testing.T) {
 	bob, _ := orgRepo.GetUserByLogin(ctx, 1, "bob")
 	if bob == nil || bob.Status != orgapi.UserStatusDisabled {
 		t.Fatalf("bob 应被禁用: %+v", bob)
+	}
+}
+
+// TestRBACPermAggregation RBAC 阶段二：角色授权→权限聚合→IsAdmin/HasPerm/推送（03 篇 §4）
+func TestRBACPermAggregation(t *testing.T) {
+	svc, orgRepo, _, fx := newFixture(nil)
+	ctx := context.Background()
+
+	// bob（无行内 admin 权限）建「HR 专员」角色：仅用户生命周期
+	hr, err := svc.CreateRole(ctx, 1, fx.aliceID, "HR 专员", "", []string{"admin:user:manage"})
+	if err != nil {
+		t.Fatalf("create hr: %v", err)
+	}
+	// 字典外权限点拒绝（D12 §2.4 收口）
+	if _, err := svc.CreateRole(ctx, 1, fx.aliceID, "坏角色", "", []string{"admin:not:a:point"}); err == nil {
+		t.Fatal("字典外权限点应拒")
+	}
+	if _, err := svc.CreateRole(ctx, 1, fx.aliceID, "越权角色", "", []string{"platform:tenant:manage"}); err == nil {
+		t.Fatal("自定义角色含 platform:* 应拒")
+	}
+
+	// 授权前：bob 非管理员、无 admin:user:manage
+	if svc.IsAdmin(ctx, 1, fx.bobID) {
+		t.Fatal("授权前 bob 不应为管理员")
+	}
+	if svc.HasPerm(ctx, 1, fx.bobID, "admin:user:manage") {
+		t.Fatal("授权前 bob 不应持有 admin:user:manage")
+	}
+
+	// 授权 → 聚合生效 + perm.changed 单播（fixture NotifyUser 记录到 fx.notified）
+	if err := svc.GrantRole(ctx, 1, fx.aliceID, fx.bobID, hr.ID); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	if fx.notified[fx.bobID] != "perm.changed" {
+		t.Fatalf("授权应推 perm.changed 给 bob: %v", fx.notified)
+	}
+	if !svc.HasPerm(ctx, 1, fx.bobID, "admin:user:manage") {
+		t.Fatal("授权后 bob 应持有 admin:user:manage（角色聚合）")
+	}
+	if !svc.IsAdmin(ctx, 1, fx.bobID) {
+		t.Fatal("授权后 bob 应为管理员（admin:* 聚合命中）")
+	}
+	if svc.HasPerm(ctx, 1, fx.bobID, "admin:role:manage") {
+		t.Fatal("HR 专员不应溢出到未授予的权限点")
+	}
+
+	// MyPermPoints = 行内 ∪ 角色聚合
+	perms, err := svc.MyPermPoints(ctx, 1, fx.bobID)
+	if err != nil {
+		t.Fatalf("my perms: %v", err)
+	}
+	joined := map[string]bool{}
+	for _, p := range perms {
+		joined[p] = true
+	}
+	if !joined["im:message:send"] || !joined["admin:user:manage"] {
+		t.Fatalf("聚合应含行内+角色: %v", perms)
+	}
+
+	// 收回 → 即时失效 + 推送
+	grants, _ := svc.ListUserGrants(ctx, 1, fx.bobID)
+	if len(grants) != 1 {
+		t.Fatalf("grants: %+v", grants)
+	}
+	if err := svc.RevokeRole(ctx, 1, fx.aliceID, grants[0].ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if svc.HasPerm(ctx, 1, fx.bobID, "admin:user:manage") || svc.IsAdmin(ctx, 1, fx.bobID) {
+		t.Fatal("收回后 bob 应立即失去权限（查库口径）")
+	}
+
+	// 角色权限点变更 → 持有者收推送（UpdateRole 路径）
+	_ = orgRepo // 夹具用户与角色共存
+	perm2, _ := svc.CreateRole(ctx, 1, fx.aliceID, "临时角色", "", []string{"admin:audit:read"})
+	_ = svc.GrantRole(ctx, 1, fx.aliceID, fx.bobID, perm2.ID)
+	delete(fx.notified, fx.bobID)
+	if err := svc.UpdateRole(ctx, 1, fx.aliceID, perm2.ID, "临时角色", "", []string{"admin:usage:read"}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if fx.notified[fx.bobID] != "perm.changed" {
+		t.Fatalf("角色变更应推 perm.changed 给持有者: %v", fx.notified)
+	}
+	if !svc.HasPerm(ctx, 1, fx.bobID, "admin:usage:read") || svc.HasPerm(ctx, 1, fx.bobID, "admin:audit:read") {
+		t.Fatal("角色变更后权限应随新权限集")
 	}
 }

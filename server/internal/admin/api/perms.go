@@ -1,0 +1,140 @@
+// perms.go —— 权限点字典（RBAC 阶段二）。
+// 权威清单：D12 §2.4（53 项）+ 12 篇 §6.3 补充 admin:notice:publish + 21/22 篇
+// meeting/mail 域 5 项，共 59 项。服务端内嵌（D02 §10），经
+// GET /api/v1/admin/perm-points 下发；前端不硬编码（D10 PAD-08）。
+// 新增权限点必须先在 D12 §2.4 与 03 篇 §4.1 登记（14 篇同款规则）。
+package adminapi
+
+// PermPoint 权限点条目
+type PermPoint struct {
+	Code   string `json:"code"`
+	Domain string `json:"domain"`
+	Desc   string `json:"desc"`
+}
+
+// PermGroup 按域分组（PAD-08 权限点树第一层）
+type PermGroup struct {
+	Domain string      `json:"domain"`
+	Label  string      `json:"label"`
+	Points []PermPoint `json:"points"`
+}
+
+// PermPointsDoc 字典文档（GET /admin/perm-points 响应体）
+type PermPointsDoc struct {
+	Version int         `json:"version"` // 字典版本（点集变更时 +1）
+	Total   int         `json:"total"`
+	Groups  []PermGroup `json:"groups"`
+}
+
+// permDictionary 权威字典（域顺序同 03 篇 §4.1）
+var permDictionary = []PermGroup{
+	{"im", "即时通讯", []PermPoint{
+		{"im:message:send", "im", "发消息"},
+		{"im:group:create", "im", "建群"},
+		{"im:group:manage", "im", "群管理（改名/成员/解散）"},
+		{"im:message:recall_any", "im", "撤回他人消息"},
+		{"im:group:create_broadcast", "im", "创建全员/部门广播群"},
+		{"im:broadcast:publish", "im", "广播群发帖（publisher）"},
+	}},
+	{"rtc", "音视频", []PermPoint{
+		{"rtc:call:start", "rtc", "发起通话"},
+		{"rtc:meeting:schedule", "rtc", "预约会议"},
+		{"rtc:record:start", "rtc", "开启录制（阶段四预留）"},
+	}},
+	{"doc", "文档", []PermPoint{
+		{"doc:file:create", "doc", "新建文档"},
+		{"doc:file:edit", "doc", "编辑文档"},
+		{"doc:file:view", "doc", "查看文档（OBO 词表）"},
+		{"doc:share:create", "doc", "创建分享"},
+		{"doc:share:manage_any", "doc", "管理他人分享"},
+		{"doc:template:use", "doc", "使用模板"},
+		{"doc:template:manage", "doc", "管理模板"},
+		{"doc:file:restore", "doc", "还原文档"},
+		{"doc:version:restore", "doc", "回退版本"},
+		{"doc:trash:purge", "doc", "清空回收站"},
+		{"doc:file:lock", "doc", "锁定文档"},
+		{"doc:audit:read", "doc", "文档审计查看"},
+	}},
+	{"file", "文件", []PermPoint{
+		{"file:upload", "file", "上传文件"},
+		{"file:share:create", "file", "创建文件分享"},
+		{"file:manage_all", "file", "管理全域文件"},
+	}},
+	{"kb", "知识库", []PermPoint{
+		{"kb:space:create", "kb", "创建空间"},
+		{"kb:space:admin", "kb", "空间管理"},
+		{"kb:doc:contribute", "kb", "投稿文档"},
+		{"kb:query:use", "kb", "检索使用"},
+		{"kb:doc:delete", "kb", "删除文档"},
+		{"kb:doc:sensitive", "kb", "敏感标记"},
+		{"kb:space:audit:read", "kb", "空间审计查看"},
+		{"kb:crawl:manage", "kb", "采集源管理（阶段四预留）"},
+	}},
+	{"agent", "智能体", []PermPoint{
+		{"agent:session:use", "agent", "使用 Agent 会话"},
+		{"agent:tool:run_command", "agent", "执行命令工具"},
+		{"agent:mode:full_auto", "agent", "全自动模式"},
+		{"agent:app:install", "agent", "安装生态应用"},
+		{"agent:delegate:use", "agent", "使用本地委派（D17）"},
+	}},
+	{"meeting", "会议", []PermPoint{
+		{"meeting:minutes:manage", "meeting", "管理会议纪要（21 篇）"},
+	}},
+	{"mail", "邮件", []PermPoint{
+		{"mail:use", "mail", "使用邮箱（22 篇）"},
+		{"mail:agent_tool", "mail", "Agent 邮件工具（默认关，22 篇）"},
+	}},
+	{"admin", "租户管理", []PermPoint{
+		{"admin:org:manage", "admin", "组织树维护"},
+		{"admin:user:manage", "admin", "用户生命周期（新建/禁用/导入）"},
+		{"admin:user:offboard", "admin", "离职交接执行"},
+		{"admin:role:manage", "admin", "角色 CRUD/编辑器"},
+		{"admin:role:assign", "admin", "成员授权/收回"},
+		{"admin:app:publish", "admin", "应用发布/下架"},
+		{"admin:policy:manage", "admin", "安全/合规策略"},
+		{"admin:audit:read", "admin", "审计检索"},
+		{"admin:audit:export", "admin", "审计导出"},
+		{"admin:usage:read", "admin", "用量与配额查看"},
+		{"admin:kb:govern", "admin", "知识库治理"},
+		{"admin:agent:revoke", "admin", "吊销 Agent 会话"},
+		{"admin:notice:publish", "admin", "租户公告发布（12 篇 §6.3）"},
+		{"admin:meeting:policy", "admin", "会议策略（21 篇）"},
+		{"admin:mail:govern", "admin", "邮件域治理（22 篇）"},
+	}},
+	{"bot", "机器人", []PermPoint{
+		{"bot:manage", "bot", "机器人管理（20 篇；默认应用管理员）"},
+		{"bot:install", "bot", "拉机器人入会话（20 篇；群主默认）"},
+	}},
+	{"platform", "平台运营", []PermPoint{
+		{"platform:tenant:manage", "platform", "租户生命周期"},
+		{"platform:quota:manage", "platform", "套餐配额"},
+		{"platform:monitor:read", "platform", "平台监控"},
+		{"platform:agent:killswitch", "platform", "Agent 全局总闸"},
+	}},
+}
+
+var (
+	permIndex    map[string]struct{}
+	permDocTotal int
+)
+
+func init() {
+	permIndex = map[string]struct{}{}
+	for _, g := range permDictionary {
+		for _, p := range g.Points {
+			permIndex[p.Code] = struct{}{}
+		}
+		permDocTotal += len(g.Points)
+	}
+}
+
+// PermPoints 字典文档（只读快照；version 随字典内容演进手动 +1）
+func PermPoints() PermPointsDoc {
+	return PermPointsDoc{Version: 1, Total: permDocTotal, Groups: permDictionary}
+}
+
+// KnownPermPoint 权限点是否在权威字典内（角色保存校验用）
+func KnownPermPoint(code string) bool {
+	_, ok := permIndex[code]
+	return ok
+}

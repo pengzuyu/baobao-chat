@@ -1,8 +1,10 @@
-// Package adminapi 管理域对外接口与 DTO（D10 阶段一务实版；D02 §3：跨模块只 import 本包）。
-// 阶段一取舍登记（docs/detail/D10 §1 vs 务实范围）：
-//   - 不做：二次验证票据/双人审批/异步任务（导入导出/交接）/角色 CRUD/部门树管理；
-//   - 权限判定 v0.1：scope 含 "admin"/"admin:*" 或 empno 命中 BBW_ADMIN_ACCOUNTS 白名单
-//     （正式 RBAC 权限点矩阵随阶段二 role/user_role 落地）。
+// Package adminapi 管理域对外接口与 DTO（D10；D02 §3：跨模块只 import 本包）。
+// 阶段取舍登记（docs/detail/D10 §1 vs 务实范围）：
+//   - RBAC 阶段二已接（权限点判定闭环）：登录/续签 perms = 行内 ∪ role/user_role 聚合；
+//     per-route 守卫 requirePerm（2001）；权限点字典内嵌（perms.go，D12 §2.4）经
+//     GET /admin/perm-points 下发；授权/收回/角色变更推 perm.changed；
+//   - 仍不做：二次验证票据/双人审批（9008/9009 路径）、导入导出/交接异步任务、
+//     user_role 部门数据范围（scope 阶段一恒 1，随 D12 组织树阶段二）。
 package adminapi
 
 import (
@@ -248,8 +250,12 @@ type AdminService interface {
 	GrantRole(ctx context.Context, tenantID, operatorID, userID, roleID int64) error
 	RevokeRole(ctx context.Context, tenantID, operatorID, grantID int64) error
 	ListUserGrants(ctx context.Context, tenantID, userID int64) ([]GrantDTO, error)
-	// IsAdmin 管理员判定 v0.1（scope admin:* / empno 白名单）
+	// IsAdmin 管理员判定 v0.2（有效权限点 admin:*/platform:* / 应急白名单；03 篇 §4）
 	IsAdmin(ctx context.Context, tenantID, userID int64) bool
+	// HasPerm 权限点判定（per-route 守卫：requirePerm 工厂消费；2001 拒绝前置）
+	HasPerm(ctx context.Context, tenantID, userID int64, code string) bool
+	// MyPermPoints 当前用户权限摘要（GET /me/permissions；perm.changed 后端侧重拉源）
+	MyPermPoints(ctx context.Context, tenantID, userID int64) ([]string, error)
 	// Dashboard 仪表盘聚合
 	Dashboard(ctx context.Context, tenantID int64) (*Dashboard, error)
 	// ListUsers 用户列表
