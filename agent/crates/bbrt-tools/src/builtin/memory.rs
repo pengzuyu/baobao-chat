@@ -108,3 +108,31 @@ pub fn memory_save_def() -> ToolDef {
         category: bbrt_sec::gate::ActionCategory::FileEdit,
     }
 }
+
+/// coding.delegate 薄门面（D11 §2.4 coding.rs：定义 inputSchema/风险级，执行由 session
+/// 循环的委派专用路径承接——本 crate 的 execute 不会收到该调用；schema 即模型可发现面）
+pub fn coding_delegate_def() -> ToolDef {
+    ToolDef {
+        name: "coding.delegate".into(),
+        description: "把编码任务委派给本地编码智能体（Claude Code/zcode/通用 CLI）：\
+                      产出任务简报→用户确认→子进程执行→diff 审查。\
+                      适合大范围重构/测试修复等可独立交付的编码工作；\
+                      简读文件仍用 read_file/search_files 更高效"
+            .into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "任务目标（一句话，具体可验收）"},
+                "constraints": {"type": "array", "items": {"type": "string"},
+                                 "description": "约束（如 不改公共 API）"},
+                "acceptance": {"type": "array", "items": {"type": "string"},
+                                "description": "验收标准（命令/行为描述）"},
+                "forbidden": {"type": "array", "items": {"type": "string"},
+                               "description": "禁止事项（注入子进程环境；如 git push）"}
+            },
+            "required": ["task"]
+        }),
+        risk: RiskLevel::High,
+        category: bbrt_sec::gate::ActionCategory::Delegate,
+    }
+}

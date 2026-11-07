@@ -940,3 +940,24 @@ fn write_file_例外可写目录放行() {
     ));
     assert_eq!(fs::read_to_string(target).unwrap(), "ok");
 }
+
+// coding.delegate 薄门面（D11 §2.4）：注册可发现；执行由 session 委派路径承接不走本管线
+#[test]
+fn coding_delegate_facade_registered_and_high_risk() {
+    let reg = bbrt_tools::registry::ToolRegistry::builtin();
+    let spec = reg
+        .specs()
+        .into_iter()
+        .find(|s| s.name == "coding.delegate")
+        .expect("coding.delegate 应注册（模型可发现）");
+    assert!(spec.description.contains("委派"));
+    assert_eq!(
+        reg.risk("coding.delegate"),
+        Some(bbrt_tools::RiskLevel::High)
+    );
+    // 门面类别走 Delegate（A2 行 9：三档确认——由 session 简报确认路径承担）
+    assert!(matches!(
+        reg.get("coding.delegate").unwrap().category,
+        bbrt_sec::gate::ActionCategory::Delegate
+    ));
+}
