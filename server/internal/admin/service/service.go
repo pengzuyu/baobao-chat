@@ -62,13 +62,18 @@ type Service struct {
 	users orgapi.UserAdminReader // org 域（列表/计数/状态）+ UserReader（名称/判定）
 	same  orgapi.UserReader
 	store adminrepo.Repo
+	roles adminrepo.RoleRepo // 角色管理（PAD-08；nil=未装配）
 	opts  Options
 }
 
-// New 构造（依赖注入，D02 §3；users=管理写通道，reader=读取通道——org 模块同一 Service 实现）
-func New(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo.Repo, opts Options) *Service {
+// internal 统一内部错误（角色/授权链路）
+func (s *Service) internal(msg string) error { return errx.New(errx.CodeInternal, msg) }
+
+// New 构造（依赖注入，D02 §3；users=管理写通道，reader=读取通道——org 模块同一
+// Service 实现；roles 可为 nil=阶段一未装配形态）
+func New(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo.Repo, roles adminrepo.RoleRepo, opts Options) *Service {
 	opts.fillDefaults()
-	return &Service{users: users, same: reader, store: store, opts: opts}
+	return &Service{users: users, same: reader, store: store, roles: roles, opts: opts}
 }
 
 var _ adminapi.AdminService = (*Service)(nil)
@@ -477,4 +482,144 @@ func toAdminUser(u orgapi.User) adminapi.AdminUser {
 		ID: strconv.FormatInt(u.ID, 10), EmployeeNo: u.EmployeeNo,
 		DisplayName: u.DisplayName, Email: u.Email, Status: u.Status, Scopes: u.Scopes,
 	}
+}
+
+/* ── 角色与授权（PAD-08；权限点字典 v0.1 前端静态维护，服务端只校验格式） ── */
+
+const maxRoleName = 50
+
+func (s *Service) ListRoles(ctx context.Context, tenantID int64) ([]adminapi.RoleDTO, error) {
+	if s.roles == nil {
+		return []adminapi.RoleDTO{}, nil
+	}
+	roles, err := s.roles.ListRoles(ctx, tenantID)
+	if err != nil {
+		return nil, s.internal("角色列表读取失败")
+	}
+	counts, _ := s.roles.CountRoleUsers(ctx, tenantID)
+	out := make([]adminapi.RoleDTO, 0, len(roles))
+	for _, r := range roles {
+		out = append(out, adminapi.RoleDTO{
+			ID: r.ID, Name: r.Name, Description: r.Description,
+			Permissions: r.Permissions, IsBuiltin: r.IsBuiltin,
+			UserCount: counts[r.ID], CreatedAt: r.CreatedAt.UnixMilli(),
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) validateRole(name string, permissions []string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > maxRoleName {
+		return errx.New(errx.CodeBadRequest, "角色名必填（≤50 字）")
+	}
+	if len(permissions) > 200 {
+		return errx.New(errx.CodeBadRequest, "权限点 ≤200 项")
+	}
+	for _, p := range permissions {
+		if p == "" || len(p) > 64 || !strings.Contains(p, ":") {
+			return errx.New(errx.CodeBadRequest, "权限点格式非法（形如 im:message:send）: "+p)
+		}
+	}
+	return nil
+}
+
+func (s *Service) CreateRole(ctx context.Context, tenantID, operatorID int64, name, description string, permissions []string) (*adminapi.RoleDTO, error) {
+	if s.roles == nil {
+		return nil, s.internal("角色管理未装配")
+	}
+	if err := s.validateRole(name, permissions); err != nil {
+		return nil, err
+	}
+	r, err := s.roles.InsertRole(ctx, adminrepo.Role{
+		TenantID: tenantID, Name: strings.TrimSpace(name),
+		Description: strings.TrimSpace(description), Permissions: permissions,
+	})
+	if err != nil {
+		if err == adminrepo.ErrDupRole {
+			return nil, errx.New(errx.CodeBadRequest, "同名角色已存在")
+		}
+		return nil, s.internal("角色创建失败")
+	}
+	_ = s.audit(ctx, tenantID, operatorID, "role.create", r.Name, map[string]any{"permissions": len(permissions)})
+	return &adminapi.RoleDTO{
+		ID: r.ID, Name: r.Name, Description: r.Description,
+		Permissions: r.Permissions, CreatedAt: r.CreatedAt.UnixMilli(),
+	}, nil
+}
+
+func (s *Service) UpdateRole(ctx context.Context, tenantID, operatorID, roleID int64, name, description string, permissions []string) error {
+	if s.roles == nil {
+		return s.internal("角色管理未装配")
+	}
+	if err := s.validateRole(name, permissions); err != nil {
+		return err
+	}
+	if err := s.roles.UpdateRole(ctx, tenantID, roleID, strings.TrimSpace(name), strings.TrimSpace(description), permissions); err != nil {
+		if err == adminrepo.ErrRoleGone {
+			return errx.New(errx.CodeBadRequest, "角色不存在")
+		}
+		return s.internal("角色更新失败")
+	}
+	return s.audit(ctx, tenantID, operatorID, "role.update", name, map[string]any{"permissions": len(permissions)})
+}
+
+func (s *Service) DeleteRole(ctx context.Context, tenantID, operatorID, roleID int64) error {
+	if s.roles == nil {
+		return s.internal("角色管理未装配")
+	}
+	if err := s.roles.DeleteRole(ctx, tenantID, roleID); err != nil {
+		switch err {
+		case adminrepo.ErrBuiltinRole:
+			return errx.New(errx.CodeBadRequest, "内置角色不可删除")
+		case adminrepo.ErrRoleGone:
+			return errx.New(errx.CodeBadRequest, "角色不存在")
+		}
+		return s.internal("角色删除失败")
+	}
+	return s.audit(ctx, tenantID, operatorID, "role.delete", "", map[string]any{"role_id": roleID})
+}
+
+func (s *Service) GrantRole(ctx context.Context, tenantID, operatorID, userID, roleID int64) error {
+	if s.roles == nil {
+		return s.internal("角色管理未装配")
+	}
+	// 用户存在性经 org 闭包校验属阶段二（v0.1 信任管理员输入，登记）
+	if err := s.roles.InsertUserRole(ctx, adminrepo.UserRole{
+		TenantID: tenantID, UserID: userID, RoleID: roleID,
+	}); err != nil {
+		if err == adminrepo.ErrDupGrant {
+			return errx.New(errx.CodeBadRequest, "该用户已拥有此角色")
+		}
+		return s.internal("授权失败")
+	}
+	return s.audit(ctx, tenantID, operatorID, "role.grant", "", map[string]any{"user_id": userID, "role_id": roleID})
+}
+
+func (s *Service) RevokeRole(ctx context.Context, tenantID, operatorID, grantID int64) error {
+	if s.roles == nil {
+		return s.internal("角色管理未装配")
+	}
+	if err := s.roles.DeleteUserRole(ctx, tenantID, grantID); err != nil {
+		return errx.New(errx.CodeBadRequest, "授权记录不存在")
+	}
+	return s.audit(ctx, tenantID, operatorID, "role.revoke", "", map[string]any{"grant_id": grantID})
+}
+
+func (s *Service) ListUserGrants(ctx context.Context, tenantID, userID int64) ([]adminapi.GrantDTO, error) {
+	if s.roles == nil {
+		return []adminapi.GrantDTO{}, nil
+	}
+	grants, err := s.roles.ListUserRoles(ctx, tenantID, userID)
+	if err != nil {
+		return nil, s.internal("授权列表读取失败")
+	}
+	out := make([]adminapi.GrantDTO, 0, len(grants))
+	for _, g := range grants {
+		out = append(out, adminapi.GrantDTO{
+			ID: g.ID, UserID: g.UserID, RoleID: g.RoleID,
+			RoleName: g.RoleName, CreatedAt: g.CreatedAt.UnixMilli(),
+		})
+	}
+	return out, nil
 }

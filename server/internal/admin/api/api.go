@@ -147,7 +147,35 @@ type AuditPage struct {
 }
 
 // AdminService 管理域服务接口（main 路由壳消费）
+// RoleDTO 角色行（PAD-08 角色编辑器）
+type RoleDTO struct {
+	ID          int64    `json:"id,string"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Permissions []string `json:"permissions"`
+	IsBuiltin   bool     `json:"is_builtin"`
+	UserCount   int64    `json:"user_count"` // 授权人数
+	CreatedAt   int64    `json:"created_at"` // ms
+}
+
+// GrantDTO 授权行（用户视角）
+type GrantDTO struct {
+	ID        int64  `json:"id,string"`
+	UserID    int64  `json:"user_id,string"`
+	RoleID    int64  `json:"role_id,string"`
+	RoleName  string `json:"role_name"`
+	CreatedAt int64  `json:"created_at"` // ms
+}
+
 type AdminService interface {
+	// ── 角色与授权（PAD-08；admin:role:manage）──
+	ListRoles(ctx context.Context, tenantID int64) ([]RoleDTO, error)
+	CreateRole(ctx context.Context, tenantID, operatorID int64, name, description string, permissions []string) (*RoleDTO, error)
+	UpdateRole(ctx context.Context, tenantID, operatorID, roleID int64, name, description string, permissions []string) error
+	DeleteRole(ctx context.Context, tenantID, operatorID, roleID int64) error
+	GrantRole(ctx context.Context, tenantID, operatorID, userID, roleID int64) error
+	RevokeRole(ctx context.Context, tenantID, operatorID, grantID int64) error
+	ListUserGrants(ctx context.Context, tenantID, userID int64) ([]GrantDTO, error)
 	// IsAdmin 管理员判定 v0.1（scope admin:* / empno 白名单）
 	IsAdmin(ctx context.Context, tenantID, userID int64) bool
 	// Dashboard 仪表盘聚合

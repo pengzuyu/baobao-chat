@@ -157,3 +157,139 @@ func limitOrDefault(limit int) int {
 	}
 	return limit
 }
+
+// ── RoleRepo 内存实现 ──
+
+type roleStore struct {
+	mu      sync.RWMutex
+	nextID  int64
+	roles   map[int64]Role
+	grants  map[int64]UserRole // user_role 主键 → 行
+	roleIdx map[int64]int64    // role_id → 授权计数（CountRoleUsers 用遍历替代亦可）
+}
+
+// NewMemoryRoles 角色内存仓储（内置角色种子由 main 装配灌入）
+func NewMemoryRoles() RoleRepo {
+	return &roleStore{nextID: 400, roles: map[int64]Role{}, grants: map[int64]UserRole{}}
+}
+
+func (s *roleStore) InsertRole(_ context.Context, r Role) (Role, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.roles {
+		if e.TenantID == r.TenantID && e.Name == r.Name {
+			return Role{}, ErrDupRole
+		}
+	}
+	s.nextID++
+	r.ID = s.nextID
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = time.Now()
+	}
+	s.roles[r.ID] = r
+	return r, nil
+}
+
+func (s *roleStore) UpdateRole(_ context.Context, tenantID, id int64, name, description string, permissions []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.roles[id]
+	if !ok || r.TenantID != tenantID {
+		return ErrRoleGone
+	}
+	if !r.IsBuiltin { // 内置角色仅可改权限点（名称/描述锁定）
+		r.Name = name
+		r.Description = description
+	}
+	r.Permissions = permissions
+	s.roles[id] = r
+	return nil
+}
+
+func (s *roleStore) DeleteRole(_ context.Context, tenantID, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.roles[id]
+	if !ok || r.TenantID != tenantID {
+		return ErrRoleGone
+	}
+	if r.IsBuiltin {
+		return ErrBuiltinRole
+	}
+	delete(s.roles, id)
+	for gid, g := range s.grants {
+		if g.RoleID == id {
+			delete(s.grants, gid)
+		}
+	}
+	return nil
+}
+
+func (s *roleStore) ListRoles(_ context.Context, tenantID int64) ([]Role, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []Role{}
+	for _, r := range s.roles {
+		if r.TenantID == tenantID {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (s *roleStore) CountRoleUsers(_ context.Context, tenantID int64) (map[int64]int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := map[int64]int64{}
+	for _, g := range s.grants {
+		if g.TenantID == tenantID {
+			m[g.RoleID]++
+		}
+	}
+	return m, nil
+}
+
+func (s *roleStore) InsertUserRole(_ context.Context, ur UserRole) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, g := range s.grants {
+		if g.TenantID == ur.TenantID && g.UserID == ur.UserID && g.RoleID == ur.RoleID {
+			return ErrDupGrant
+		}
+	}
+	s.nextID++
+	ur.ID = s.nextID
+	if ur.CreatedAt.IsZero() {
+		ur.CreatedAt = time.Now()
+	}
+	s.grants[ur.ID] = ur
+	return nil
+}
+
+func (s *roleStore) DeleteUserRole(_ context.Context, tenantID, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.grants[id]
+	if !ok || g.TenantID != tenantID {
+		return ErrRoleGone
+	}
+	delete(s.grants, id)
+	return nil
+}
+
+func (s *roleStore) ListUserRoles(_ context.Context, tenantID int64, userID int64) ([]UserRole, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []UserRole{}
+	for _, g := range s.grants {
+		if g.TenantID == tenantID && g.UserID == userID {
+			if r, ok := s.roles[g.RoleID]; ok {
+				g.RoleName = r.Name
+			}
+			out = append(out, g)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}

@@ -9,7 +9,7 @@
  * 正常入口不可达——直敲 /admin URL 时供六态走查）。
  */
 
-import { http } from '../../../shared/api/http';
+import { ApiError, http } from '../../../shared/api/http';
 import type {
   AdminDashboard,
   AdminUser,
@@ -188,3 +188,94 @@ export async function fetchAudit(params: { cursor?: string; limit?: number } = {
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/* ── 角色与授权（PAD-08 角色编辑器；D06 后追加） ── */
+
+/** 角色行（GET /admin/roles） */
+export interface AdminRole {
+  id: string;
+  name: string;
+  description?: string;
+  permissions: string[];
+  is_builtin: boolean;
+  user_count: number;
+  created_at: number;
+}
+
+/** 授权行（GET /admin/users/{id}/grants） */
+export interface AdminGrant {
+  id: string;
+  user_id: string;
+  role_id: string;
+  role_name: string;
+  created_at: number;
+}
+
+export async function fetchRoles(): Promise<AdminRole[]> {
+  if (USE_MOCK) return MOCK_ROLES;
+  const data = await http.get<{ items: AdminRole[] }>('/admin/roles');
+  return data.items;
+}
+
+export async function createRole(req: { name: string; description?: string; permissions: string[] }): Promise<AdminRole> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持角色管理');
+  return http.post<AdminRole>('/admin/roles', req);
+}
+
+export async function updateRole(
+  roleId: string,
+  req: { name: string; description?: string; permissions: string[] },
+): Promise<void> {
+  if (USE_MOCK) return;
+  await http.patch(`/admin/roles/${encodeURIComponent(roleId)}`, req);
+}
+
+export async function deleteRole(roleId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await http.delete(`/admin/roles/${encodeURIComponent(roleId)}`);
+}
+
+export async function fetchUserGrants(userId: string): Promise<AdminGrant[]> {
+  if (USE_MOCK) return [];
+  const data = await http.get<{ items: AdminGrant[] }>(`/admin/users/${encodeURIComponent(userId)}/grants`);
+  return data.items;
+}
+
+export async function grantRole(userId: string, roleId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await http.post(`/admin/users/${encodeURIComponent(userId)}/grants`, { role_id: Number(roleId) });
+}
+
+export async function revokeRole(grantId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await http.delete(`/admin/grants/${encodeURIComponent(grantId)}`);
+}
+
+/** mock 数据（阶段一形态：展示骨架） */
+const MOCK_ROLES: AdminRole[] = [
+  {
+    id: '1', name: '管理员', description: '全部管理权限（内置）', is_builtin: true,
+    permissions: ['admin', 'admin:user:manage', 'admin:policy:manage', 'admin:audit:read'],
+    user_count: 1, created_at: Date.now() - 86400_000 * 30,
+  },
+  {
+    id: '2', name: '应用管理员', description: '应用/技能/bot 管理（内置）', is_builtin: true,
+    permissions: ['admin:app:publish', 'bot:manage'],
+    user_count: 0, created_at: Date.now() - 86400_000 * 30,
+  },
+  {
+    id: '3', name: '开发者', description: '自定义示例', is_builtin: false,
+    permissions: ['im:message:send', 'agent:session:use'],
+    user_count: 3, created_at: Date.now() - 86400_000 * 7,
+  },
+];
+
+/** 常用权限点分组（v0.1 前端静态字典；正式 53 项字典随 D12 权限点字典接口下发，登记） */
+export const PERMISSION_GROUPS: Array<{ group: string; items: string[] }> = [
+  { group: 'IM', items: ['im:message:send', 'im:message:recall', 'im:conv:manage'] },
+  { group: 'Agent', items: ['agent:session:use', 'agent:delegate:use', 'agent:tool:run_command'] },
+  { group: '知识库/文档', items: ['kb:query:use', 'doc:file:view', 'doc:file:edit'] },
+  { group: '文件/通话', items: ['file:upload', 'rtc:call:start'] },
+  { group: '机器人', items: ['bot:manage', 'bot:install'] },
+  { group: '管理', items: ['admin', 'admin:user:manage', 'admin:role:manage', 'admin:policy:manage', 'admin:kb:govern', 'admin:audit:read', 'admin:usage:read', 'admin:app:publish'] },
+];

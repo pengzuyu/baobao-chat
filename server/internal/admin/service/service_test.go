@@ -43,7 +43,9 @@ func newFixture(adminAccounts []string) (*Service, *orgrepo.Memory, adminrepo.Re
 	})
 	store := adminrepo.NewMemory()
 	fx := &effectCounter{aliceID: alice.ID, bobID: bob.ID}
-	svc := New(orgRepo, orgRepo, store, Options{
+	roles := adminrepo.NewMemoryRoles()
+	_, _ = roles.InsertRole(ctx, adminrepo.Role{TenantID: 1, Name: "管理员", IsBuiltin: true, Permissions: []string{"admin"}})
+	svc := New(orgRepo, orgRepo, store, roles, Options{
 		UsersTotal:       func(context.Context, int64) (int64, error) { return 2, nil },
 		OnlineNow:        func() int64 { return 2 },
 		ConvsActiveSince: func(context.Context, int64, time.Time) (int64, error) { return 1, nil },
@@ -250,5 +252,77 @@ func TestAgentPolicySnapshot(t *testing.T) {
 	}
 	if p.Source != "default" || p.Policy["tool_mode"] != "allowlist" {
 		t.Fatalf("默认快照不符: %+v", p)
+	}
+}
+
+func TestRoleEditorCRUDAndGrants(t *testing.T) {
+	svc, _, _, _ := newFixture([]string{"alice"})
+	ctx := context.Background()
+	aliceID := int64(10001)
+
+	// 创建（权限点格式校验）
+	bad, err := svc.CreateRole(ctx, 1, aliceID, "开发", "", []string{"非法点"})
+	if err == nil || bad != nil {
+		t.Fatal("非法权限点应拒")
+	}
+	r1, err := svc.CreateRole(ctx, 1, aliceID, "开发者", "自定义", []string{"im:message:send", "kb:query:use"})
+	if err != nil || r1.ID == 0 {
+		t.Fatalf("create: %v", err)
+	}
+	// 同名冲突
+	if _, err := svc.CreateRole(ctx, 1, aliceID, "开发者", "", nil); err == nil {
+		t.Fatal("同名应拒")
+	}
+	// 更新
+	if err := svc.UpdateRole(ctx, 1, aliceID, r1.ID, "开发者2", "", []string{"im:message:send"}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	// 授权/重复授权/列表
+	if err := svc.GrantRole(ctx, 1, aliceID, 20001, r1.ID); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	if err := svc.GrantRole(ctx, 1, aliceID, 20001, r1.ID); err == nil {
+		t.Fatal("重复授权应拒")
+	}
+	grants, err := svc.ListUserGrants(ctx, 1, 20001)
+	if err != nil || len(grants) != 1 {
+		t.Fatalf("grants: %v %+v", err, grants)
+	}
+	// 角色列表含授权计数 + 内置种子
+	roles, err := svc.ListRoles(ctx, 1)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var mine *adminapi.RoleDTO
+	builtin := 0
+	for i := range roles {
+		if roles[i].ID == r1.ID {
+			mine = &roles[i]
+		}
+		if roles[i].IsBuiltin {
+			builtin++
+		}
+	}
+	if mine == nil || mine.UserCount != 1 || mine.Name != "开发者2" {
+		t.Fatalf("角色行: %+v", mine)
+	}
+	if builtin == 0 {
+		t.Fatal("内置角色种子缺失（测试夹具需灌）")
+	}
+	// 收回 + 删除（级联）
+	if err := svc.RevokeRole(ctx, 1, aliceID, grants[0].ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if err := svc.DeleteRole(ctx, 1, aliceID, r1.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	// 内置角色不可删
+	for _, r := range roles {
+		if r.IsBuiltin {
+			if err := svc.DeleteRole(ctx, 1, aliceID, r.ID); err == nil {
+				t.Fatal("内置角色应拒删")
+			}
+			break
+		}
 	}
 }

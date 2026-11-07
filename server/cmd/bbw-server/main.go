@@ -471,7 +471,15 @@ func main() {
 	if fileStats != nil {
 		adminOpts.FileBytes = fileStats.SumStorageBytes
 	}
-	adminMod := admin.NewModule(orgAdmin, orgMod.API(), adminStore, adminOpts)
+	// 角色仓储（PAD-08）：PG/内存双模；内置角色种子幂等灌入（阶段二换正式 RBAC 装配）
+	var roleStore adminrepo.RoleRepo
+	if pgPool != nil {
+		roleStore = adminrepo.NewPostgresRoles(pgPool)
+	} else {
+		roleStore = adminrepo.NewMemoryRoles()
+	}
+	seedBuiltinRoles(roleStore)
+	adminMod := admin.NewModule(orgAdmin, orgMod.API(), adminStore, roleStore, adminOpts)
 	adminSvc := adminMod.API()
 	// 管理路由守卫：auth → tenant → 管理员判定（v0.1 scope/白名单；403 用既有 2003，D10 无新码）
 	adminOnly := func(h http.HandlerFunc) http.Handler {
@@ -499,6 +507,14 @@ func main() {
 	mux.Handle("DELETE /api/v1/admin/policies/sensitive-words/{id}", adminOnly(handleAdminDeleteWord(adminSvc)))
 	mux.Handle("GET /api/v1/admin/usage/summary", adminOnly(handleAdminUsage(adminSvc)))
 	mux.Handle("GET /api/v1/admin/audit", adminOnly(handleAdminAudit(adminSvc)))
+	// 角色与授权（PAD-08 角色编辑器；admin:role:manage 随权限字典收口）
+	mux.Handle("GET /api/v1/admin/roles", adminOnly(handleAdminListRoles(adminSvc)))
+	mux.Handle("POST /api/v1/admin/roles", adminOnly(handleAdminCreateRole(adminSvc)))
+	mux.Handle("PATCH /api/v1/admin/roles/{id}", adminOnly(handleAdminUpdateRole(adminSvc)))
+	mux.Handle("DELETE /api/v1/admin/roles/{id}", adminOnly(handleAdminDeleteRole(adminSvc)))
+	mux.Handle("GET /api/v1/admin/users/{id}/grants", adminOnly(handleAdminListGrants(adminSvc)))
+	mux.Handle("POST /api/v1/admin/users/{id}/grants", adminOnly(handleAdminGrantRole(adminSvc)))
+	mux.Handle("DELETE /api/v1/admin/grants/{gid}", adminOnly(handleAdminRevokeRole(adminSvc)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -2280,5 +2296,170 @@ func handleFileTransfers(svc fileapi.FileService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, map[string]any{"items": items})
+	}
+}
+
+// seedBuiltinRoles 内置角色（is_builtin：名称/描述锁定，仅可改权限点）
+func seedBuiltinRoles(store adminrepo.RoleRepo) {
+	ctx := context.Background()
+	builtin := []adminrepo.Role{
+		{Name: "管理员", Description: "全部管理权限（内置）", IsBuiltin: true,
+			Permissions: []string{"admin", "admin:user:manage", "admin:role:manage", "admin:policy:manage", "admin:kb:govern", "admin:audit:read", "admin:usage:read"}},
+		{Name: "应用管理员", Description: "应用/技能/bot 管理（内置）", IsBuiltin: true,
+			Permissions: []string{"admin:app:publish", "bot:manage"}},
+	}
+	for _, r := range builtin {
+		r.TenantID = 1
+		if _, err := store.InsertRole(ctx, r); err == nil {
+			log.Printf("[admin] 内置角色就绪：%s（%d 权限点）", r.Name, len(r.Permissions))
+		} // 已存在（幂等重启）静默跳过
+	}
+}
+
+// ── 角色 REST 壳（PAD-08） ──
+
+type roleReq struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Permissions []string `json:"permissions"`
+}
+
+func handleAdminListRoles(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := svc.ListRoles(r.Context(), httpx.TenantID(r.Context()))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items})
+	}
+}
+
+func handleAdminCreateRole(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req roleReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		role, err := svc.CreateRole(r.Context(), httpx.TenantID(r.Context()), op, req.Name, req.Description, req.Permissions)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, role)
+	}
+}
+
+func handleAdminUpdateRole(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		id, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req roleReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.UpdateRole(r.Context(), httpx.TenantID(r.Context()), op, id, req.Name, req.Description, req.Permissions); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+func handleAdminDeleteRole(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		id, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.DeleteRole(r.Context(), httpx.TenantID(r.Context()), op, id); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+func handleAdminListGrants(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		items, err := svc.ListUserGrants(r.Context(), httpx.TenantID(r.Context()), uid)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items})
+	}
+}
+
+func handleAdminGrantRole(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		uid, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			RoleID int64 `json:"role_id"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.GrantRole(r.Context(), httpx.TenantID(r.Context()), op, uid, req.RoleID); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+func handleAdminRevokeRole(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		gid, err := pathID(r, "gid")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.RevokeRole(r.Context(), httpx.TenantID(r.Context()), op, gid); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
 	}
 }

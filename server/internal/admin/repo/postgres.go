@@ -5,6 +5,7 @@ package adminrepo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -259,4 +260,182 @@ func nullTime(t time.Time) any {
 		return nil
 	}
 	return t
+}
+
+// ── RoleRepo PG 实现（0001 role/user_role 表） ──
+
+// PostgresRoles 角色 PG 仓储（advisory lock 9122/9123）
+type PostgresRoles struct{ pool *pgxpool.Pool }
+
+var _ RoleRepo = (*PostgresRoles)(nil)
+
+// NewPostgresRoles 构造
+func NewPostgresRoles(pool *pgxpool.Pool) RoleRepo { return &PostgresRoles{pool: pool} }
+
+func (p *PostgresRoles) InsertRole(ctx context.Context, r Role) (Role, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Role{}, err
+	}
+	defer tx.Rollback(ctx)
+	if r.ID == 0 {
+		if r.ID, err = bbwpg.AllocID(ctx, tx, 9122, "role"); err != nil {
+			return Role{}, err
+		}
+	}
+	perms, _ := json.Marshal(r.Permissions)
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO role (id, tenant_id, name, description, permissions, is_builtin, created_at)
+		VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,COALESCE($7, now()))
+		RETURNING created_at`,
+		r.ID, r.TenantID, r.Name, r.Description, perms, r.IsBuiltin, r.CreatedAt).
+		Scan(&r.CreatedAt); err != nil {
+		if isDupPGErr(err) {
+			return Role{}, ErrDupRole
+		}
+		return Role{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Role{}, err
+	}
+	return r, nil
+}
+
+func (p *PostgresRoles) UpdateRole(ctx context.Context, tenantID, id int64, name, description string, permissions []string) error {
+	perms, _ := json.Marshal(permissions)
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE role SET
+			name = CASE WHEN is_builtin THEN name ELSE $3 END,
+			description = CASE WHEN is_builtin THEN description ELSE NULLIF($4,'') END,
+			permissions = $5
+		WHERE tenant_id=$1 AND id=$2`, tenantID, id, name, description, perms)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRoleGone
+	}
+	return nil
+}
+
+func (p *PostgresRoles) DeleteRole(ctx context.Context, tenantID, id int64) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var builtin bool
+	if err := tx.QueryRow(ctx, `SELECT is_builtin FROM role WHERE tenant_id=$1 AND id=$2`,
+		tenantID, id).Scan(&builtin); err != nil {
+		return ErrRoleGone
+	}
+	if builtin {
+		return ErrBuiltinRole
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM user_role WHERE tenant_id=$1 AND role_id=$2`, tenantID, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM role WHERE tenant_id=$1 AND id=$2`, tenantID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (p *PostgresRoles) ListRoles(ctx context.Context, tenantID int64) ([]Role, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, tenant_id, name, COALESCE(description,''), permissions, is_builtin, created_at
+		FROM role WHERE tenant_id=$1 ORDER BY id`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Role{}
+	for rows.Next() {
+		var r Role
+		var perms []byte
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Description, &perms, &r.IsBuiltin, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(perms, &r.Permissions)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (p *PostgresRoles) CountRoleUsers(ctx context.Context, tenantID int64) (map[int64]int64, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT role_id, COUNT(*) FROM user_role WHERE tenant_id=$1 GROUP BY role_id`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[int64]int64{}
+	for rows.Next() {
+		var rid, n int64
+		if err := rows.Scan(&rid, &n); err != nil {
+			return nil, err
+		}
+		m[rid] = n
+	}
+	return m, rows.Err()
+}
+
+func (p *PostgresRoles) InsertUserRole(ctx context.Context, ur UserRole) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var id int64
+	// scope 阶段一恒 1（全租户；部门范围授权随 D12 组织树阶段二，登记）
+	if id, err = bbwpg.AllocID(ctx, tx, 9123, "user_role"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_role (id, tenant_id, user_id, role_id, scope_type, created_at)
+		VALUES ($1,$2,$3,$4,1, now())`,
+		id, ur.TenantID, ur.UserID, ur.RoleID); err != nil {
+		if isDupPGErr(err) {
+			return ErrDupGrant
+		}
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (p *PostgresRoles) DeleteUserRole(ctx context.Context, tenantID, id int64) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM user_role WHERE tenant_id=$1 AND id=$2`, tenantID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRoleGone
+	}
+	return nil
+}
+
+func (p *PostgresRoles) ListUserRoles(ctx context.Context, tenantID int64, userID int64) ([]UserRole, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT ur.id, ur.tenant_id, ur.user_id, ur.role_id, COALESCE(r.name,''), ur.created_at
+		FROM user_role ur LEFT JOIN role r ON r.id = ur.role_id AND r.tenant_id = ur.tenant_id
+		WHERE ur.tenant_id=$1 AND ur.user_id=$2 ORDER BY ur.id`, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserRole{}
+	for rows.Next() {
+		var g UserRole
+		if err := rows.Scan(&g.ID, &g.TenantID, &g.UserID, &g.RoleID, &g.RoleName, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// isDupPGErr 23505 判定（与敏感词口径一致，独立命名避免冲突）
+func isDupPGErr(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

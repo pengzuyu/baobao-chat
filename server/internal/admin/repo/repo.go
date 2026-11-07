@@ -71,3 +71,55 @@ type UsageReader interface {
 	// UsageRows 近 days 日（含今日）逐 (date,tier,scene) 行
 	UsageRows(ctx context.Context, tenantID int64, days int) ([]adminapi.UsageRow, error)
 }
+
+// ── 角色与授权（0001 role/user_role 表；PAD-08 角色编辑器） ──
+
+// Role 角色行（permissions=权限点数组；is_builtin 内置不可删改）
+type Role struct {
+	ID          int64
+	TenantID    int64
+	Name        string
+	Description string
+	Permissions []string
+	IsBuiltin   bool
+	CreatedAt   time.Time
+}
+
+// UserRole 授权行（scope 阶段一恒全租户 1——部门范围授权随 D12 组织树阶段二，登记）
+type UserRole struct {
+	ID        int64
+	TenantID  int64
+	UserID    int64
+	RoleID    int64
+	RoleName  string // 联查冗余（列表展示）
+	UserName  string // 联查冗余
+	CreatedAt time.Time
+}
+
+// RoleRepo 角色管理仓储（admin 域独立接口，同 ShareRepo/TransferRepo 惯例）
+type RoleRepo interface {
+	// InsertRole UK(tenant,name) 冲突返回 ErrDupRole
+	InsertRole(ctx context.Context, r Role) (Role, error)
+	// UpdateRole 名称/描述/权限点（is_builtin 角色仅可改 permissions）
+	UpdateRole(ctx context.Context, tenantID, id int64, name, description string, permissions []string) error
+	// DeleteRole is_builtin 拒绝（ErrBuiltinRole）；级联清 user_role 由调用方先行
+	DeleteRole(ctx context.Context, tenantID, id int64) error
+	// ListRoles 全量（角色量小不分页）
+	ListRoles(ctx context.Context, tenantID int64) ([]Role, error)
+	// CountRoleUsers 各角色授权人数（map[roleID]count）
+	CountRoleUsers(ctx context.Context, tenantID int64) (map[int64]int64, error)
+	// InsertUserRole UK 冲突返回 ErrDupGrant
+	InsertUserRole(ctx context.Context, ur UserRole) error
+	// DeleteUserRole 收回授权
+	DeleteUserRole(ctx context.Context, tenantID, id int64) error
+	// ListUserRoles 按用户（授权管理入口）；联查 role.name/users.display_name
+	ListUserRoles(ctx context.Context, tenantID int64, userID int64) ([]UserRole, error)
+}
+
+// 角色域 sentinel
+var (
+	ErrDupRole     = errors.New("adminrepo: duplicate role name")
+	ErrBuiltinRole = errors.New("adminrepo: builtin role")
+	ErrDupGrant    = errors.New("adminrepo: duplicate grant")
+	ErrRoleGone    = errors.New("adminrepo: role not found")
+)
