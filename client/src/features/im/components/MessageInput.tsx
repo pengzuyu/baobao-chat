@@ -36,6 +36,8 @@ interface MessageInputProps {
   mentionCandidates: Array<{ uid: string; name: string }>;
   /** @选择后回填（写入 mentions range 由父层随发送携带） */
   onMentionPicked?: (uid: string, name: string) => void;
+  /** 附件选择（D06：file input → 父层 FileSendPreview 预览弹层） */
+  onPickFile?: (file: File) => void;
 }
 
 export function MessageInput({
@@ -52,6 +54,7 @@ export function MessageInput({
   onEditSubmit,
   mentionCandidates,
   onMentionPicked,
+  onPickFile,
 }: MessageInputProps) {
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -59,6 +62,7 @@ export function MessageInput({
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingAt = useRef(0);
 
   // 编辑态：原文本转入输入框（离开编辑态不动草稿）
@@ -221,9 +225,28 @@ export function MessageInput({
         <button className="tool-btn" title="提及 @（输入 @ 也触发）" type="button" onClick={() => insertText('@')}>
           <AtSign size={17} />
         </button>
-        <button className="tool-btn" title="附件" type="button">
+        <button
+          className="tool-btn"
+          title="发送文件/图片"
+          type="button"
+          data-testid="attach-btn"
+          onClick={() => fileInputRef.current?.click()}
+        >
           <Paperclip size={17} />
         </button>
+        {/* 附件选择（D06）：选中后进 FileSendPreview 预览弹层；value 置空允许重选同一文件 */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="attach-input"
+          data-testid="attach-input"
+          accept="*/*"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) onPickFile?.(f);
+          }}
+        />
         <button className="tool-btn" title="语音" type="button">
           <Mic size={17} />
         </button>

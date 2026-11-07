@@ -452,6 +452,7 @@ ack payload 概览：msg.send→`{seq, msg_id, ts}`（幂等重试返回原 seq�
 | msg.receipt | `conv_id` · `uid`（对端/群成员） · `delivered_seq` · `read_seq`（客户端按游标刷新 ✓/✓✓/已读 N/M） |
 | msg.reaction.new | `msg_id` · `conv_id` · `seq` · `reactions`（全量快照 `{emoji:[uid…]}`，端侧幂等合并） |
 | conv.updated | `conv_id` · `kind`(meta/member/setting/status/announcement/state) · `conv`(变更后快照) · `operator_id` · `members_delta[{uid,role,status}]`(kind=member) · `state{pinned,mute,draft}`(kind=state，仅推本人多端) |
+| notification.new | `id` · `kind`(mention/reply/apply/agent_done/announcement) · `conv_id` · `title` · `digest` · `count`(同会话 10s 窗口合并后计数) · `ts`（PIM-09：推给目标 user；端内失效 `['im','notifications']` 后 REST 回读真值） |
 | badge.updated | `total_unread` · `items[{conv_id, unread_badge, mention_flag}]`（写扩散群冗余；广播群实时差值由本端以 latest_seq−read_seq 计算） |
 | presence.changed | `uid` · `status`(online/away/dnd/invisible) · `last_active_ts`（单聊头部/成员列表在线点渲染） |
 

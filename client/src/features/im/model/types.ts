@@ -24,8 +24,22 @@ export interface Mention {
   range: [number, number];
 }
 
-/** 消息体（骨架阶段覆盖 text 与附件占位；system 为 PIM-12 参数集；全集见 D03 §6.3） */
-export type MessageBody = { text: string } | { fileId: string; name?: string } | SystemBody | Record<string, never>;
+/**
+ * 文件/图片消息体（D06 阶段一：上传两步流——先 POST /files/upload 得 file_id 随 body 携带；
+ * width/height 仅图片，服务端 image.DecodeConfig 解析后回传）
+ */
+export interface FileMessageBody {
+  file_id: string;
+  name?: string;
+  size?: number;
+  ext?: string;
+  width?: number;
+  height?: number;
+  contentType?: string;
+}
+
+/** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；全集见 D03 §6.3） */
+export type MessageBody = { text: string } | FileMessageBody | SystemBody | Record<string, never>;
 
 /** 引用快照（服务端 ext.reply_digest，D03 §5.2） */
 export interface ReplyDigest {

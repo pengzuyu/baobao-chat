@@ -88,13 +88,13 @@ export const MOCK_MESSAGES: Record<string, Message[]> = {
   ],
   'c-8002': [
     msg({ convId: 'c-8002', seq: 10, senderId: 'u-3003', senderName: '赵设计', type: 'text', body: { text: '气泡最大宽 L 档 640，XL 720，气泡尾巴 4px 圆角' }, ts: now - 3 * HOUR }),
-    msg({ convId: 'c-8002', seq: 11, senderId: 'u-3003', senderName: '赵设计', type: 'image', body: { fileId: 'f-1', name: '断点示意.png' }, ts: now - 2.5 * HOUR }),
+    msg({ convId: 'c-8002', seq: 11, senderId: 'u-3003', senderName: '赵设计', type: 'image', body: { file_id: 'f-1', name: '断点示意.png', size: 48210, ext: 'png' }, ts: now - 2.5 * HOUR }),
     msg({ convId: 'c-8002', seq: 12, senderId: MY_UID, senderName: '我', type: 'text', body: { text: '三栏布局已经按 D01 落了' }, ts: now - 32 * 60_000 }),
   ],
   'c-8003': [
     msg({ convId: 'c-8003', seq: 38, senderId: 'u-4004', senderName: 'PM 阿云', type: 'text', body: { text: '阶段一范围：应用壳、认证、IM 三栏骨架' }, ts: now - 5 * HOUR }),
     msg({ convId: 'c-8003', seq: 39, senderId: 'u-4004', senderName: 'PM 阿云', type: 'system', body: {}, ts: now - 4 * HOUR }),
-    msg({ convId: 'c-8003', seq: 40, senderId: 'u-4004', senderName: 'PM 阿云', type: 'file', body: { fileId: 'f-9', name: '阶段一排期.xlsx' }, ts: now - 3 * HOUR }),
+    msg({ convId: 'c-8003', seq: 40, senderId: 'u-4004', senderName: 'PM 阿云', type: 'file', body: { file_id: 'f-9', name: '阶段一排期.xlsx', size: 25600, ext: 'xlsx' }, ts: now - 3 * HOUR }),
   ],
   'c-8004': [
     msg({ convId: 'c-8004', seq: 87, senderId: 'u-9001', senderName: '行政', type: 'text', body: { text: '系统将于周六 02:00 例行维护' }, ts: now - 74 * HOUR }),

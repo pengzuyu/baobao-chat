@@ -4300,3 +4300,237 @@ body {
   word-break: break-word;
   overflow-y: auto;
 }
+
+/* ═══════════════ 文件与图片（D06 阶段一务实版） ═══════════════ */
+
+/* 附件选择 input（隐藏，按钮触发 click） */
+.attach-input {
+  display: none;
+}
+
+/* 文件卡片：下载按钮（⤓ 票据下载） */
+.file-card__download {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--bbw-radius-control, 6px);
+  background: transparent;
+  color: var(--bbw-gray-6);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.file-card__download:hover {
+  background: var(--bbw-gray-2);
+  color: var(--bbw-primary);
+}
+
+/* 图片气泡：CSS 渲染原图（服务端缩略不做，登记）；限宽防撑破消息流 */
+.msg-image {
+  display: block;
+  max-width: 240px;
+  max-height: 320px;
+  border-radius: var(--bbw-radius-bubble, 12px);
+  cursor: zoom-in;
+  object-fit: contain;
+}
+.msg-image--loading {
+  width: 180px;
+  height: 130px;
+  background: var(--bbw-gray-2);
+  animation: bbw-shimmer 1.4s ease-in-out infinite;
+}
+.msg-image--loading .skeleton-block {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.msg-image--error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--bbw-space-2, 8px) var(--bbw-space-3, 12px);
+  font-size: var(--bbw-font-12, 12px);
+  color: var(--bbw-danger, #e5484d);
+  background: var(--bbw-gray-1, #f5f6f7);
+  border-radius: var(--bbw-radius-bubble, 12px);
+}
+.msg-image__retry {
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+/* 图片灯箱（PFL-02 阶段一：原图放大查看；缩放/旋转/画廊条阶段二，登记） */
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--bbw-space-2, 8px);
+  cursor: zoom-out;
+}
+.image-lightbox__img {
+  max-width: 92vw;
+  max-height: 88vh;
+  object-fit: contain;
+  border-radius: 4px;
+}
+.image-lightbox__caption {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: var(--bbw-font-12, 12px);
+}
+
+/* 发送前预览弹层（PFL-03 阶段一：单文件 + 进度条 + 失败重试） */
+.file-send-preview {
+  width: 420px;
+  max-width: 90vw;
+  background: var(--bbw-bg-card, #fff);
+  border-radius: var(--bbw-radius-card, 12px);
+  padding: var(--bbw-space-4, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--bbw-space-3, 12px);
+}
+.file-send-preview__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 500;
+}
+.file-send-preview__close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--bbw-gray-6);
+  display: flex;
+  padding: 2px;
+}
+.file-send-preview__close:hover {
+  color: var(--bbw-gray-9);
+}
+.file-send-preview__body {
+  display: flex;
+  gap: var(--bbw-space-3, 12px);
+  align-items: center;
+  background: var(--bbw-gray-1, #f5f6f7);
+  border-radius: var(--bbw-radius-control, 8px);
+  padding: var(--bbw-space-3, 12px);
+}
+.file-send-preview__thumb {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: var(--bbw-radius-control, 8px);
+  flex-shrink: 0;
+}
+.file-send-preview__file-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--bbw-radius-control, 8px);
+  background: var(--bbw-primary-light, #e8f1ff);
+  color: var(--bbw-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.file-send-preview__meta {
+  min-width: 0;
+  flex: 1;
+}
+.file-send-preview__name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--bbw-font-13, 13px);
+  color: var(--bbw-gray-9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-send-preview__size {
+  margin-top: 4px;
+  font-size: var(--bbw-font-12, 12px);
+  color: var(--bbw-gray-6);
+}
+.file-send-preview__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-2, 8px);
+}
+.file-send-preview__progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bbw-gray-2, #e8eaed);
+  overflow: hidden;
+}
+.file-send-preview__progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--bbw-primary);
+  transition: width 0.15s ease-out;
+}
+.file-send-preview__progress-text {
+  font-size: var(--bbw-font-12, 12px);
+  color: var(--bbw-gray-6);
+  white-space: nowrap;
+}
+.file-send-preview__error {
+  padding: 6px 10px;
+  border-radius: var(--bbw-radius-control, 6px);
+  background: rgba(229, 72, 77, 0.08);
+  color: var(--bbw-danger, #e5484d);
+  font-size: var(--bbw-font-12, 12px);
+}
+.file-send-preview__foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--bbw-space-2, 8px);
+}
+.file-send-preview__hint {
+  font-size: var(--bbw-font-12, 12px);
+  color: var(--bbw-gray-5);
+}
+.file-send-preview__actions {
+  display: flex;
+  gap: var(--bbw-space-2, 8px);
+}
+.file-send-preview__btn {
+  border: 1px solid var(--bbw-gray-3, #d0d3d6);
+  background: transparent;
+  color: var(--bbw-gray-8);
+  border-radius: var(--bbw-radius-control, 6px);
+  padding: 5px 14px;
+  font-size: var(--bbw-font-13, 13px);
+  cursor: pointer;
+}
+.file-send-preview__btn:hover:not(:disabled) {
+  background: var(--bbw-gray-1, #f5f6f7);
+}
+.file-send-preview__btn--primary {
+  border-color: var(--bbw-primary);
+  background: var(--bbw-primary);
+  color: #fff;
+}
+.file-send-preview__btn--primary:hover:not(:disabled) {
+  opacity: 0.9;
+  background: var(--bbw-primary);
+}
+.file-send-preview__btn--primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

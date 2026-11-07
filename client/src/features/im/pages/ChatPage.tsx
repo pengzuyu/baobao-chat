@@ -47,6 +47,7 @@ import { ChatHeader } from '../components/ChatHeader';
 import { ConversationList } from '../components/ConversationList';
 import { ConvInfoSidebar } from '../components/ConvInfoSidebar';
 import { CreateConvModal } from '../components/CreateConvModal';
+import { FileSendPreview } from '../components/FileSendPreview';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MessageInput } from '../components/MessageInput';
 import { ForwardModal } from '../components/ForwardModal';
@@ -71,6 +72,8 @@ export function ChatPage() {
   const [editing, setEditing] = useState<Message | null>(null);
   const [forwardIds, setForwardIds] = useState<string[] | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  /** 附件发送（D06 阶段一）：file input → 预览弹层 → upload+msg.send */
+  const [pickedFile, setPickedFile] = useState<File | null>(null);
   /** @全体被策略拦截的提示条（3014，3s 自动消失） */
   const [mentionAllBlocked, setMentionAllBlocked] = useState(false);
   /** 收藏结果提示条（INT-IM-06 摘要 toast：已收藏/失败原因，3s 自动消失） */
@@ -712,6 +715,7 @@ export function ChatPage() {
           onEditSubmit={doEditSubmit}
           mentionCandidates={mentionCandidates}
           onMentionPicked={(uid, name) => pendingMentionsRef.current.push({ uid, name })}
+          onPickFile={setPickedFile}
         />
       ) : null}
     </section>
@@ -774,6 +778,9 @@ export function ChatPage() {
             navigate(`/im/c/${convId2}`);
           }}
         />
+      ) : null}
+      {pickedFile && convId ? (
+        <FileSendPreview convId={convId} file={pickedFile} onClose={() => setPickedFile(null)} />
       ) : null}
     </div>
   );

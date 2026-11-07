@@ -86,6 +86,30 @@ export async function sendTextMessage(
   });
 }
 
+/**
+ * 发送文件/图片消息（WS msg.send，D06 阶段一：先 POST /files/upload 得 file_id 再发消息）。
+ * 服务端校验 body.file_id（存在/owner 或 source=message/未删），回执与 msg.new 不变。
+ */
+export async function sendFileMessage(
+  convId: string,
+  clientMsgId: string,
+  type: 'image' | 'file',
+  body: { file_id: string; name?: string; size?: number; ext?: string; width?: number; height?: number; contentType?: string },
+  replyToSeq?: number,
+): Promise<SendAck> {
+  if (USE_MOCK) {
+    await delay(300);
+    return mockSendAck(convId, clientMsgId);
+  }
+  return wsClient.request<SendAck>('msg.send', {
+    conv_id: convId,
+    client_msg_id: clientMsgId,
+    type,
+    body,
+    ...(replyToSeq && replyToSeq > 0 ? { reply_to_seq: replyToSeq } : {}),
+  });
+}
+
 /** msg.new 推送 → 端内 Message（snake→camel） */
 export function mapMsgNew(payload: MsgNewPayload, senderName?: string): Message {
   return {

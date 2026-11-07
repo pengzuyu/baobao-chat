@@ -109,6 +109,16 @@ export function setTokenProvider(provider: () => string | null): void {
   tokenProvider = provider;
 }
 
+/** 当前 access token 读取（fetch 封装外的请求——如 XHR 文件上传——注入 Authorization 用，D06） */
+export function authToken(): string | null {
+  return tokenProvider();
+}
+
+/** API origin（票据等相对 URL 拼绝对地址用；API_BASE 形如 http://host/api/v1） */
+export function apiOrigin(): string {
+  return new URL(API_BASE, window.location.href).origin;
+}
+
 /** 401/1003 统一处理钩子：auth 层注册（触发登出或静默刷新） */
 let unauthorizedHandler: ((err: ApiError) => void) | null = null;
 export function setUnauthorizedHandler(handler: (err: ApiError) => void): void {

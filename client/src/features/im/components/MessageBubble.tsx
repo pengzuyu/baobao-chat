@@ -9,13 +9,28 @@
  * - 本地态尾标：sending 灰钟 → sent ✓ → 对方已读 ✓✓（msg.receipt，04 篇 §4.2）；failed 红叹号（点击重试，INT-IM-01a）
  */
 
-import { AlertCircle, Check, CheckCheck, Clock3, FileText, ListOrdered, RotateCcw, SmilePlus, Star } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  ArrowDownToLine,
+  Check,
+  CheckCheck,
+  Clock3,
+  FileText,
+  Image as ImageIcon,
+  ListOrdered,
+  RotateCcw,
+  SmilePlus,
+  Star,
+} from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { getErrorText } from '../../../shared/api/http';
+import { formatBytes } from '../../../shared/utils/format';
 import { digestOf } from '../store/im';
 import { systemMessageText } from '../pages/systemMessageRegistry';
+import { downloadUrl, getDownloadTicket } from '../api/files';
 import { ApplyCard } from './ApplyCard';
-import type { MemberRole, Mention, Message, SystemBody } from '../model/types';
+import type { FileMessageBody, MemberRole, Mention, Message, SystemBody } from '../model/types';
 
 /** 快捷回应候选（与飞书同款常用集，选择器全集在 MsgActions） */
 export const QUICK_EMOJIS = ['👍', '❤️', '😂', '🎉', '🙏'] as const;
@@ -158,6 +173,138 @@ function MergeForwardCard({ message }: { message: Message }) {
   );
 }
 
+/** 文件卡片（D06 阶段一真实化）：名/大小人性化(B/KB/MB)/ext 图标 + ⤓ 票据下载 */
+function FileCard({ body }: { body: FileMessageBody }) {
+  const [downloading, setDownloading] = useState(false);
+  const doDownload = () => {
+    if (downloading) return;
+    setDownloading(true);
+    // 票据 120s 一次性：取票即开（window.open 新窗直下；4014 由服务端 envelope 返回）
+    void getDownloadTicket(body.file_id)
+      .then((t) => {
+        window.open(downloadUrl(t.url), '_blank');
+      })
+      .catch(() => undefined)
+      .finally(() => setDownloading(false));
+  };
+  return (
+    <div className="file-card" data-testid="file-card">
+      <div className="file-card__icon">
+        <FileText size={20} />
+      </div>
+      <div className="file-card__meta">
+        <div className="file-card__name" title={body.name}>
+          {body.name ?? '未命名文件'}
+        </div>
+        <div className="file-card__hint">
+          {body.size !== undefined ? formatBytes(body.size) : '—'}
+          {body.ext ? ` · ${body.ext.toUpperCase()}` : ''}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="file-card__download"
+        data-testid="file-card-download"
+        title="下载"
+        onClick={(e) => {
+          e.stopPropagation();
+          doDownload();
+        }}
+      >
+        <ArrowDownToLine size={15} />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * 图片气泡（D06 阶段一）：取一次性票据 → fetch blob → objectURL 渲染（票据一次性不可直接作 src 复用）；
+ * 点击灯箱放大查看（三级预览只做原图+灯箱，服务端缩略不做——端内 CSS 渲染原图，登记）；
+ * 4014/加载失败红态可重试。
+ */
+function ImageCard({ body }: { body: FileMessageBody }) {
+  const [objUrl, setObjUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [zoom, setZoom] = useState(false);
+  const urlRef = useRef<string | null>(null);
+
+  const load = useCallback(async (fileId: string) => {
+    setFailed(false);
+    try {
+      const t = await getDownloadTicket(fileId);
+      const resp = await fetch(downloadUrl(t.url));
+      if (!resp.ok) throw new Error(`status ${resp.status}`);
+      const blob = await resp.blob();
+      const u = URL.createObjectURL(blob);
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      urlRef.current = u;
+      setObjUrl(u);
+    } catch {
+      setFailed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load(body.file_id);
+    return () => {
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
+    };
+  }, [load, body.file_id]);
+
+  // 灯箱 Esc 关闭
+  useEffect(() => {
+    if (!zoom) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setZoom(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoom]);
+
+  if (failed) {
+    return (
+      <div className="msg-image msg-image--error" data-testid="msg-image-error">
+        <ImageIcon size={16} />
+        <span>图片加载失败（票据可能已失效）</span>
+        <button type="button" className="msg-image__retry" onClick={() => void load(body.file_id)}>
+          重试
+        </button>
+      </div>
+    );
+  }
+  if (!objUrl) {
+    return (
+      <div className="msg-image msg-image--loading" data-testid="msg-image-loading" title={body.name}>
+        <span className="skeleton-block" />
+      </div>
+    );
+  }
+  return (
+    <>
+      <img
+        className="msg-image"
+        data-testid="msg-image"
+        src={objUrl}
+        alt={body.name ?? '图片'}
+        title={body.name}
+        onClick={(e) => {
+          e.stopPropagation();
+          setZoom(true);
+        }}
+      />
+      {zoom ? (
+        <div className="image-lightbox" data-testid="image-lightbox" onClick={() => setZoom(false)}>
+          <img className="image-lightbox__img" src={objUrl} alt={body.name ?? '图片'} />
+          <div className="image-lightbox__caption">
+            {body.name} {body.width && body.height ? `${body.width}×${body.height}` : ''}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 export function MessageBubble({
   message,
   mine,
@@ -206,6 +353,10 @@ export function MessageBubble({
 
   const isText = message.type === 'text';
   const isMerge = message.type === 'merge_forward';
+  const isImage = message.type === 'image';
+  const isFile = message.type === 'file';
+  // file/image body 窄化（D06：{file_id,...}；服务端透传）
+  const fileBody = (isImage || isFile) && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
   // 编辑窗口（5min）与本人判定：编辑入口显隐（INT-IM-02；撤回态已在上方早退）
   const editable = mine && isText && Date.now() - message.ts < 5 * 60 * 1000;
   const recallable = mine && Date.now() - message.ts < 24 * 60 * 60 * 1000;
@@ -229,6 +380,14 @@ export function MessageBubble({
           ) : isMerge ? (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
               <MergeForwardCard message={message} />
+            </span>
+          ) : isImage && fileBody ? (
+            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+              <ImageCard body={fileBody} />
+            </span>
+          ) : isFile && fileBody ? (
+            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+              <FileCard body={fileBody} />
             </span>
           ) : (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
