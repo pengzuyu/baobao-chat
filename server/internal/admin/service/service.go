@@ -55,6 +55,8 @@ type Options struct {
 	CreateUser func(ctx context.Context, u orgapi.User) (orgapi.User, error)
 	// AgentUsage Agent 计量聚合闭包（PAD-14；main 注入 aigw Meter Snapshot 按用户聚合；nil=空列表）
 	AgentUsage func(tenantID int64) []AgentUsageRow
+	// KBSpaces KB 空间总览闭包（PAD-10；main 注入 kb repo 全量空间+文档数；nil=空列表）
+	KBSpaces func() []KBSpaceClosure
 
 	// Now 时钟注入（测试用）
 	Now func() time.Time
@@ -833,4 +835,32 @@ func (s *Service) AgentKillOn() bool {
 	s.agentKillMu.Lock()
 	defer s.agentKillMu.Unlock()
 	return s.agentKill
+}
+
+/* ── KB 治理总览（PAD-10；v0.1 只读——空间停用/删除随 D07 敏感治理阶段二登记） ── */
+
+// KBSpaceClosure 闭包输入（main 从 kb repo 全量组装；D02 §4 admin 不引 kb 包）
+type KBSpaceClosure struct {
+	ID, OwnerID, DocCount, Quota, Used int64
+	Type, Name                         string
+}
+
+func (s *Service) ListKBSpaces(_ context.Context, _ int64) ([]adminapi.KBSpaceRow, error) {
+	if s.opts.KBSpaces == nil {
+		return []adminapi.KBSpaceRow{}, nil
+	}
+	rows := s.opts.KBSpaces()
+	out := make([]adminapi.KBSpaceRow, 0, len(rows))
+	for _, r := range rows {
+		owner := ""
+		if u, err := s.same.GetUser(context.Background(), r.OwnerID); err == nil && u != nil {
+			owner = u.DisplayName
+		}
+		out = append(out, adminapi.KBSpaceRow{
+			ID: r.ID, Type: r.Type, Name: r.Name,
+			OwnerID: r.OwnerID, OwnerName: owner,
+			DocCount: r.DocCount, QuotaBytes: r.Quota, UsedBytes: r.Used,
+		})
+	}
+	return out, nil
 }

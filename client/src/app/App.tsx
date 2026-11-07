@@ -32,6 +32,7 @@ import { NoticesPage } from '../features/admin/pages/NoticesPage';
 import { ImportPage } from '../features/admin/pages/ImportPage';
 import { AgentGovernancePage } from '../features/admin/pages/AgentGovernancePage';
 import { OrgTreePage } from '../features/admin/pages/OrgTreePage';
+import { KbGovernancePage } from '../features/admin/pages/KbGovernancePage';
 import { PoliciesPage } from '../features/admin/pages/PoliciesPage';
 import { UsagePage } from '../features/admin/pages/UsagePage';
 import { AuditPage } from '../features/admin/pages/AuditPage';
@@ -166,6 +167,7 @@ export function App() {
           <Route path="notices" element={<NoticesPage />} />
           <Route path="agent" element={<AgentGovernancePage />} />
           <Route path="org" element={<OrgTreePage />} />
+          <Route path="kb" element={<KbGovernancePage />} />
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="usage" element={<UsagePage />} />
           <Route path="audit" element={<AuditPage />} />

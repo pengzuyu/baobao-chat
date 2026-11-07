@@ -401,3 +401,27 @@ export async function deleteDept(id: string): Promise<void> {
   if (USE_MOCK) return;
   await http.delete(`/admin/org/depts/${encodeURIComponent(id)}`);
 }
+
+/* ── KB 治理（PAD-10） ── */
+
+export interface KBSpaceRow {
+  id: string;
+  type: 'personal' | 'dept' | 'company';
+  name: string;
+  owner_id: string;
+  owner_name: string;
+  doc_count: number;
+  quota_bytes: number;
+  used_bytes: number;
+}
+
+export async function fetchKBSpaces(): Promise<KBSpaceRow[]> {
+  if (USE_MOCK) {
+    return [
+      { id: '1', type: 'company', name: '公司知识库', owner_id: '10001', owner_name: 'Alice', doc_count: 12, quota_bytes: 10 << 30, used_bytes: 387 << 20 },
+      { id: '2', type: 'personal', name: 'Alice 的空间', owner_id: '10001', owner_name: 'Alice', doc_count: 3, quota_bytes: 1 << 30, used_bytes: 21 << 20 },
+    ];
+  }
+  const data = await http.get<{ items: KBSpaceRow[] }>('/admin/kb/spaces');
+  return data.items;
+}

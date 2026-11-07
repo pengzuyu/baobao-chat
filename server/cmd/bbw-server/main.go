@@ -493,6 +493,26 @@ func main() {
 		noticeStore = adminrepo.NewMemoryNotices()
 	}
 	adminOpts.HashPassword = authservice.HashPassword
+	// KB 空间总览（PAD-10）：kb repo 全量空间（绕过用户可见性）+ 逐空间文档计数
+	adminOpts.KBSpaces = func() []adminservice.KBSpaceClosure {
+		spaces, err := kbRepo.ListSpaces(context.Background(), 1)
+		if err != nil {
+			return nil
+		}
+		out := make([]adminservice.KBSpaceClosure, 0, len(spaces))
+		for _, sp := range spaces {
+			docs, derr := kbRepo.ListDocsBySpace(context.Background(), 1, sp.ID)
+			n := int64(0)
+			if derr == nil {
+				n = int64(len(docs))
+			}
+			out = append(out, adminservice.KBSpaceClosure{
+				ID: sp.ID, OwnerID: sp.OwnerID, DocCount: n,
+				Quota: sp.QuotaBytes, Used: sp.UsedBytes, Type: sp.SpaceType, Name: sp.Name,
+			})
+		}
+		return out
+	}
 	// Agent 计量聚合（PAD-14）：aigw Meter Snapshot 按（tenant,user）聚合 chat/delegate/expert 场景
 	adminOpts.AgentUsage = func(tenantID int64) []adminservice.AgentUsageRow {
 		type acc struct {
@@ -596,6 +616,8 @@ func main() {
 	mux.Handle("POST /api/v1/admin/org/depts", adminOnly(handleDeptCreate(orgRepo)))
 	mux.Handle("PATCH /api/v1/admin/org/depts/{id}", adminOnly(handleDeptRename(orgRepo)))
 	mux.Handle("DELETE /api/v1/admin/org/depts/{id}", adminOnly(handleDeptDelete(orgRepo)))
+	// KB 治理（PAD-10；admin:kb:govern——v0.1 只读总览）
+	mux.Handle("GET /api/v1/admin/kb/spaces", adminOnly(handleAdminKBSpaces(adminSvc)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -2933,4 +2955,16 @@ func mentionUIDsOf(ms []messageapi.Mention) []string {
 		out = append(out, m.UID)
 	}
 	return out
+}
+
+// handleAdminKBSpaces KB 空间总览（PAD-10）
+func handleAdminKBSpaces(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := svc.ListKBSpaces(r.Context(), httpx.TenantID(r.Context()))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items})
+	}
 }

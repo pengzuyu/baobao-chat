@@ -210,7 +210,21 @@ type AgentUserRow struct {
 	LastHour int64  `json:"last_hour"` // 最近开票小时（ms）
 }
 
+// KBSpaceRow KB 治理总览行（PAD-10；全量空间视角——绕过用户可见性）
+type KBSpaceRow struct {
+	ID         int64  `json:"id,string"`
+	Type       string `json:"type"` // personal|dept|company
+	Name       string `json:"name"`
+	OwnerID    int64  `json:"owner_id,string"`
+	OwnerName  string `json:"owner_name"`
+	DocCount   int64  `json:"doc_count"`
+	QuotaBytes int64  `json:"quota_bytes"`
+	UsedBytes  int64  `json:"used_bytes"`
+}
+
 type AdminService interface {
+	// ── KB 治理（PAD-10；admin:kb:govern——v0.1 只读总览，空间停用/删除随 D07 敏感治理阶段二）──
+	ListKBSpaces(ctx context.Context, tenantID int64) ([]KBSpaceRow, error)
 	// ── Agent 治理（PAD-14；admin:agent:revoke / platform:agent:killswitch）──
 	ListAgentUsers(ctx context.Context, tenantID int64) ([]AgentUserRow, error)
 	// RevokeAgentAccess 吊销该用户 Agent 通道（OBO/refresh 全失效+踢线）
