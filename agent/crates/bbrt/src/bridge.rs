@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use bbrt_protocol::{
-    Blocked, CompactionPhase, Envelope, GrantScope, ModelPolicy, ModelSwitchReason, Preview,
-    RiskLevel, RuntimeToHost, SessionState, StreamChannel, Usage,
+    Blocked, CheckpointReason, CompactionPhase, Envelope, GrantScope, ModelPolicy,
+    ModelSwitchReason, Preview, RiskLevel, RuntimeToHost, SessionState, StreamChannel, Usage,
 };
 use bbrt_session::events::SessionEvent;
 use bbrt_session::SessionSink;
@@ -64,6 +64,25 @@ fn risk(s: &str) -> RiskLevel {
 /// SessionEvent → RuntimeToHost（未映射的事件返回 None 静默）
 pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
     Some(match evt {
+        SessionEvent::CheckpointCreated {
+            session_id,
+            checkpoint_id,
+            files_changed,
+            reason,
+            git_ref,
+        } => RuntimeToHost::CheckpointCreated {
+            session_id: session_id.clone(),
+            checkpoint_id: checkpoint_id.clone(),
+            files_changed: files_changed.clone(),
+            reason: match reason.as_str() {
+                "pre-edit" => CheckpointReason::PreEdit,
+                "pre-command" => CheckpointReason::PreCommand,
+                "delegate" => CheckpointReason::Delegate,
+                "pre-restore" => CheckpointReason::PreRestore,
+                _ => CheckpointReason::Manual,
+            },
+            git_ref: git_ref.clone(),
+        },
         SessionEvent::SessionReady {
             session_id,
             restored,

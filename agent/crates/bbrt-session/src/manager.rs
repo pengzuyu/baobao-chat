@@ -52,6 +52,8 @@ struct ManagedSession {
     /// turn 线程取走执行、结束归还（None=进行中）
     runner: Mutex<Option<SessionRunner>>,
     state: Mutex<SessionState>,
+    /// 工作区路径（手动检查点/恢复时 bin 解析 workspace 用；runner 可能被 turn 线程取走故单独存）
+    workspace: String,
 }
 
 /// SessionManager：装配件（模型/工具/记忆/WAL/sink）+ 会话表 + 审批路由
@@ -165,9 +167,19 @@ impl SessionManager {
             Arc::new(ManagedSession {
                 runner: Mutex::new(Some(runner)),
                 state: Mutex::new(SessionState::Idle),
+                workspace: p.workspace.clone(),
             }),
         );
         Ok(summary)
+    }
+
+    /// 会话工作区（bin 手动检查点/恢复解析 workspace 用）
+    pub fn workspace_of(&self, session_id: &str) -> Option<String> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|s| s.workspace.clone())
     }
 
     /// user.message：取走 runner 在调用线程跑一轮（bin 侧自行 spawn 线程）

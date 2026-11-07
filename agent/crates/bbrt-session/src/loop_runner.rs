@@ -211,6 +211,8 @@ pub struct LoopDeps {
     pub memory: Option<Arc<MemoryEngine>>,
     pub wal: Arc<dyn EventLog>,
     pub sink: Arc<dyn SessionSink>,
+    /// 检查点服务（None=未装配 → pre-edit/委派快照跳过；08 §4.4）
+    pub snapshots: Option<Arc<dyn crate::checkpoint::SnapshotService>>,
     pub budget: BudgetConfig,
 }
 
@@ -228,6 +230,13 @@ impl SessionRunner {
             &self.session_id,
             "turn.start",
             &format!("{{\"text_len\":{}}}", user_text.len()),
+        );
+        // 崩溃恢复契约（§9.2 时间线重建）：用户原文独立落 WAL——
+        // turn.start 仅记长度，恢复重放依赖 user.text 找回轮次内容
+        deps.wal.append(
+            &self.session_id,
+            "user.text",
+            &format!("{{\"text\":\"{}\"}}", escape_json(user_text)),
         );
 
         // 记忆召回注入（D15 §2.3：按当前消息精排——条目少全量、多则 Top-K 关键词档）
@@ -416,6 +425,22 @@ impl SessionRunner {
                 usage_in: usage.0,
                 usage_out: usage.1,
             });
+            // 崩溃恢复契约：一轮模型输出完成（recovery 以 assistant.done
+            // 配对 user.text 落 assistant 轮，摘要级重建即可续会话）
+            deps.wal.append(
+                &self.session_id,
+                "assistant.done",
+                &format!(
+                    "{{\"finish\":\"{}\",\"usage_in\":{},\"usage_out\":{}}}",
+                    match finish {
+                        FinishReason::Stop => "stop",
+                        FinishReason::ToolCalls => "tool_calls",
+                        FinishReason::Length => "length",
+                    },
+                    usage.0,
+                    usage.1
+                ),
+            );
             self.history.push(Round::Assistant {
                 content: text.clone(),
                 tool_calls: tool_calls
@@ -463,6 +488,11 @@ impl SessionRunner {
                     "tool.call",
                     &format!("{{\"call_id\":\"{}\",\"tool\":\"{}\"}}", tc.id, tc.name),
                 );
+
+                // 修改类工具前置快照（08 §4.4：stash 式 pre-edit；5min 窗口去重在服务内）
+                if is_modifying(&tc.name) {
+                    self.snapshot_before_edit(deps);
+                }
 
                 let outcome = self.run_tool(deps, &call, &masked, risk);
                 // W2② 连续错误教训（D15 §2.2：同工具同错 ≥2 次 → 自动记 feedback）
@@ -576,6 +606,16 @@ impl SessionRunner {
         } else {
             state::complete_round(self.state).unwrap_or(SessionState::Idle)
         };
+        // 崩溃恢复契约：turn 边界（recovery 以 turn.end 关闭 in_turn 窗口——
+        // 未闭合的残留 pending_user 同样兜底入历史，用户输入不丢）
+        deps.wal.append(
+            &self.session_id,
+            "turn.end",
+            &format!(
+                "{{\"steps\":{},\"paused\":{}}}",
+                report.steps, report.paused
+            ),
+        );
         emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
             session_id: id,
             state: if report.paused {
@@ -669,6 +709,12 @@ impl SessionRunner {
                 };
             }
         };
+        // 委派前置快照（08 §4.4 reason=delegate；子进程改动可回滚锚点，17 篇）
+        if let Some(svc) = deps.snapshots.as_ref() {
+            if let Ok(out) = svc.create(&self.session_id, &self.workspace, "delegate") {
+                emit_checkpoint(deps, &self.session_id, &out);
+            }
+        }
         deps.wal.append(
             &self.session_id,
             "delegate.launch",
@@ -1095,6 +1141,47 @@ fn parse_brief(call: &ToolInvocation, workspace: &str) -> bbrt_protocol::TaskBri
     }
 }
 
+/// 修改类工具名单（pre-edit 快照判定；只读/网络类不入）
+fn is_modifying(tool: &str) -> bool {
+    matches!(
+        tool,
+        "write_file" | "edit_file" | "run_command" | "git_commit" | "git_push"
+    )
+}
+
+impl SessionRunner {
+    /// pre-edit 检查点（失败不阻塞工具执行——审计缺段由 checkpoint.created 缺失体现）
+    fn snapshot_before_edit(&self, deps: &LoopDeps) {
+        let Some(svc) = deps.snapshots.as_ref() else {
+            return;
+        };
+        match svc.pre_edit(&self.session_id, &self.workspace) {
+            Ok(Some(out)) => emit_checkpoint(deps, &self.session_id, &out),
+            Ok(None) => {}
+            Err(_) => {}
+        }
+    }
+}
+
+/// 检查点落账：WAL + checkpoint.created 事件（pre-edit/manual/delegate/pre-restore 共用）
+fn emit_checkpoint(deps: &LoopDeps, session_id: &str, out: &crate::checkpoint::SnapshotOutcome) {
+    deps.wal.append(
+        session_id,
+        "checkpoint.created",
+        &format!(
+            "{{\"id\":\"{}\",\"reason\":\"{}\"}}",
+            out.checkpoint_id, out.reason
+        ),
+    );
+    emit(deps, session_id, |id| SessionEvent::CheckpointCreated {
+        session_id: id,
+        checkpoint_id: out.checkpoint_id.clone(),
+        files_changed: out.files_changed.clone(),
+        reason: out.reason.clone(),
+        git_ref: out.git_ref.clone(),
+    });
+}
+
 /// WAL/事件内嵌 JSON 字符串转义（避免手拼破坏 JSON 结构）
 fn escape_json(s: &str) -> String {
     serde_json::to_string(s)
@@ -1148,7 +1235,10 @@ fn distill_memories(deps: &LoopDeps, session_id: &str, history: &[Round]) -> usi
         Err(_) => return 0, // 提炼是增益路径：模型不可用/空回复 → 放弃
     };
     let mut saved = 0usize;
-    for item in parse_distill_items(&raw).into_iter().take(DISTILL_MAX_ITEMS) {
+    for item in parse_distill_items(&raw)
+        .into_iter()
+        .take(DISTILL_MAX_ITEMS)
+    {
         let input = bbrt_memory::SaveInput {
             title: item.title,
             body: item.body,

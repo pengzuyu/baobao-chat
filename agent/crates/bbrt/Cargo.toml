@@ -22,6 +22,8 @@ bbrt-hostapi = { workspace = true }
 bbrt-session = { workspace = true }
 bbrt-tools = { workspace = true }
 bbrt-delegate = { workspace = true }
+# MCP client（D11 §2.10）：装配期连接 BBW_RT_MCP_SERVERS 并注入工具注册表
+bbrt-mcp = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

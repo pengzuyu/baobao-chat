@@ -22,6 +22,7 @@ dependencies = [
  "bbrt-context",
  "bbrt-delegate",
  "bbrt-hostapi",
+ "bbrt-mcp",
  "bbrt-memory",
  "bbrt-protocol",
  "bbrt-sec",
@@ -64,6 +65,16 @@ dependencies = [
 
 [[package]]
 name = "bbrt-hostapi"
+version = "0.1.0"
+dependencies = [
+ "bbrt-protocol",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "bbrt-mcp"
 version = "0.1.0"
 dependencies = [
  "bbrt-protocol",
@@ -133,6 +144,7 @@ version = "0.1.0"
 dependencies = [
  "bbrt-aigw",
  "bbrt-context",
+ "bbrt-mcp",
  "bbrt-memory",
  "bbrt-protocol",
  "bbrt-sec",

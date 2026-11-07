@@ -46,6 +46,11 @@ pub struct ToolsConfig {
     pub untrusted: bool,
     /// violation 出口；None = PipelineExecutor 内建 MemoryViolationSink
     pub violation_sink: Option<Arc<dyn ViolationSink>>,
+    /// MCP client（D11 §2.10/D14 §6.1）：Some 时连接期发现的 mcp.{server}.{tool}
+    /// 注入注册表、execute 经它转发（主体 OBO 由 client 的 tokens 闭包逐请求注入）
+    pub mcp: Option<Arc<bbrt_mcp::McpClient>>,
+    /// MCP 来源过滤（租户策略 mcp.{server}.* 通配禁用；10 篇 §4.6）
+    pub mcp_policy: bbrt_mcp::PolicyFilter,
 }
 
 impl ToolsConfig {
@@ -66,6 +71,8 @@ impl ToolsConfig {
             whitelist_prefixes: Vec::new(),
             untrusted: false,
             violation_sink: None,
+            mcp: None,
+            mcp_policy: bbrt_mcp::PolicyFilter::default(),
         }
     }
 
@@ -108,6 +115,8 @@ impl Default for ToolsConfig {
             whitelist_prefixes: Vec::new(),
             untrusted: false,
             violation_sink: None,
+            mcp: None,
+            mcp_policy: bbrt_mcp::PolicyFilter::default(),
         }
     }
 }

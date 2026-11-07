@@ -78,6 +78,32 @@ impl Store {
             .map_err(StoreError::from)?;
         Ok(row)
     }
+
+    /// 按 id 取检查点（checkpoint.restore 解析归属会话用）。
+    pub fn get_checkpoint(&self, id: &str) -> Result<Option<CheckpointRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, git_ref, untracked, files_changed, reason,
+                    last_event_seq, created_at
+             FROM agent_checkpoint
+             WHERE id = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![id], from_row)
+            .optional()
+            .map_err(StoreError::from)?;
+        Ok(row)
+    }
+
+    /// 会话检查点数（快照 ref 编号 cp-{n} 用）。
+    pub fn count_checkpoints(&self, session_id: &str) -> Result<i64, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_checkpoint WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::from)
+    }
 }
 
 #[cfg(test)]

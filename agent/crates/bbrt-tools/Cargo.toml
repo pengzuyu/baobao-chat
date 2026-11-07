@@ -19,6 +19,8 @@ bbrt-store = { workspace = true }
 # 实现 bbrt_session::ToolExecutor（依赖倒置契约）。workspace.dependencies 实际未登记
 # bbrt-session（与任务说明不符），受"不动 agent/Cargo.toml"约束改用 path 依赖。
 bbrt-session = { path = "../bbrt-session" }
+# MCP client（D11 §2.10）：mcp.{server}.{tool} 动态发现与网关工具执行转发
+bbrt-mcp = { workspace = true }
 
 # 测试专用（workspace 未登记，按惯例在 crate 内写具体版本；参见 bbrt-sec）
 [dev-dependencies]

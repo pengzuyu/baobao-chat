@@ -281,7 +281,9 @@ fn seed_many(store: &KnowledgeStore, clock: &FixedClock, n: usize) {
             &format!("2026-11-06T10:{:02}:{:02}+08:00", i / 60 % 60, i % 60),
             "2026-11-06",
         );
-        store.save(&input(&format!("填充条目 {i}"), "普通钩子行")).unwrap();
+        store
+            .save(&input(&format!("填充条目 {i}"), "普通钩子行"))
+            .unwrap();
     }
     clock.set("2026-11-06T11:00:00+08:00", "2026-11-06");
     store
@@ -296,7 +298,10 @@ fn recall_for_full_when_entries_below_threshold() {
         .save(&input("端口 8090 约定", "开发服务固定走 8090。"))
         .unwrap();
     // 条目少 → 与全量 recall 完全一致（v0.1 行为保留）
-    assert_eq!(store.recall_for("随便问点啥").unwrap(), store.recall().unwrap());
+    assert_eq!(
+        store.recall_for("随便问点啥").unwrap(),
+        store.recall().unwrap()
+    );
 }
 
 #[test]

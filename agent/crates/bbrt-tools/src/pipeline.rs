@@ -46,6 +46,8 @@ pub struct PipelineExecutor {
     rules: DangerRuleSet,
     /// 执行环境（builtin 共享）
     env: ExecEnv,
+    /// MCP client（D11 §2.10：mcp.* 工具执行转发；None=未装配）
+    mcp: Option<Arc<bbrt_mcp::McpClient>>,
 }
 
 impl PipelineExecutor {
@@ -68,12 +70,40 @@ impl PipelineExecutor {
             journal_hook: config.journal_hook.clone(),
             sink,
         };
+        // MCP 来源注入（D14 §6.1 连接期发现）：风险级沿用 server 清单声明
+        // （缺失默认 Medium）；动作类别按风险粗映射——Low→ReadOnly（矩阵放行）、
+        // Medium→NetworkEgress（远程调用语义，ask/确认档）、High→CorpWrite
+        // （公司域写全模式确认；09 §3.1 治理属性权威源不变）
+        let mut registry = ToolRegistry::builtin();
+        if let Some(client) = &config.mcp {
+            for t in client.list_tools(&config.mcp_policy) {
+                registry.register(crate::registry::ToolDef {
+                    name: t.full_name.clone(),
+                    description: t.description.clone(),
+                    input_schema: t.input_schema.clone(),
+                    risk: match t.risk {
+                        bbrt_protocol::RiskLevel::Low => crate::registry::RiskLevel::Low,
+                        bbrt_protocol::RiskLevel::Medium => crate::registry::RiskLevel::Medium,
+                        bbrt_protocol::RiskLevel::High => crate::registry::RiskLevel::High,
+                    },
+                    category: match t.risk {
+                        bbrt_protocol::RiskLevel::Low => bbrt_sec::gate::ActionCategory::ReadOnly,
+                        bbrt_protocol::RiskLevel::Medium => {
+                            bbrt_sec::gate::ActionCategory::NetworkEgress
+                        }
+                        bbrt_protocol::RiskLevel::High => bbrt_sec::gate::ActionCategory::CorpWrite,
+                    },
+                });
+            }
+        }
+        let mcp = config.mcp.clone();
         Self {
-            registry: ToolRegistry::builtin(),
+            registry,
             config,
             grants: Arc::new(GrantStore::new()),
             rules: DangerRuleSet::builtin(),
             env,
+            mcp,
         }
     }
 
@@ -205,6 +235,26 @@ impl ToolExecutor for PipelineExecutor {
             "git_push" => builtin::git::git_push(&self.env, &args),
             "http_fetch" => builtin::http::fetch(&self.env, &args),
             "memory_save" => builtin::memory::save(&self.env, &args, &call.session_id),
+            // mcp.{server}.{tool}（D11 §2.10 dispatch_by_source：网关/外部 MCP 工具；
+            // OBO 由 McpClient 令牌闭包逐请求注入；断连/未注册 → 8002 标灰语义）
+            _ if call.name.starts_with("mcp.") => match &self.mcp {
+                Some(client) => match client.call(&call.name, args) {
+                    Ok(out) => Ok(ExecOutput {
+                        summary: out.text,
+                        truncated: false,
+                        exit_code: Some(i32::from(out.is_error)),
+                        duration_ms: 0,
+                    }),
+                    Err(e) => Err(ToolBlock {
+                        code: CODE_NO_PERMISSION_POINT,
+                        message: format!("MCP 调用失败（{e}）"),
+                    }),
+                },
+                None => Err(ToolBlock {
+                    code: CODE_NO_PERMISSION_POINT,
+                    message: "MCP 未装配（8002）".into(),
+                }),
+            },
             _ => Err(ToolBlock {
                 code: CODE_NO_PERMISSION_POINT,
                 message: format!("工具 {} 未注册（8002）", call.name),

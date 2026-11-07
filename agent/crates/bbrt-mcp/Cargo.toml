@@ -1,0 +1,14 @@
+[package]
+name = "bbrt-mcp"
+version.workspace = true
+edition.workspace = true
+
+# MCP client（D11 §2.10 / D14 §6）：公司域 MCP 网关与外部 server 的
+# 连接管理、工具发现（list_tools → mcp.{server}.{tool}）与受控调用。
+# 不依赖 session——连接生命周期与宿主进程一致，非会话级。
+
+[dependencies]
+bbrt-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

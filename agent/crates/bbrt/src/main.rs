@@ -25,6 +25,7 @@ use bbrt_hostapi::{IdGen, RuntimeHandler, StdioTransport};
 use bbrt_memory::MemoryEngine;
 use bbrt_protocol::{Envelope, HostToRuntime, RuntimeToHost};
 use bbrt_session::events::ModelTier;
+use bbrt_session::SnapshotService;
 use bbrt_session::{LoopDeps, SessionManager, StartParams};
 use bbrt_store::Store;
 
@@ -94,14 +95,36 @@ fn run() -> Result<(), String> {
     // 启动回补漏日日报（D15 §3.2 触发 2；产物经 report.daily 事件补报宿主）
     let backfilled = memory.startup_backfill().unwrap_or_default();
 
+    // OBO 动态令牌：宿主 obo.token 写缓存，过期回退静态 BBW_RT_TOKEN（D11 §10.1）
+    let obo = Arc::new(std::sync::Mutex::new(bbrt_hostapi::OboCache::default()));
+    // MCP client（D11 §2.10 / D14 §6）：BBW_RT_MCP_SERVERS="name=cmd;name2=cmd --flag"
+    // （stdio 本地 server v0.1；远程 HTTP 网关接入后扩展）。主体令牌逐请求现取
+    // OboCache（D14 §6.2 三层身份）；单 server 连接失败降级不阻塞
+    let mcp_configs = parse_mcp_servers(&std::env::var("BBW_RT_MCP_SERVERS").unwrap_or_default());
+    let obo_for_mcp = Arc::clone(&obo);
+    let mcp_tokens: bbrt_mcp::TokenProvider = Arc::new(move || {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        obo_for_mcp
+            .lock()
+            .ok()
+            .and_then(|c| c.get(now).map(str::to_string))
+    });
+    let (mcp_client, mcp_results) = bbrt_mcp::McpClient::connect(&mcp_configs, mcp_tokens);
+    for (name, r) in &mcp_results {
+        if let Err(e) = r {
+            eprintln!("[bbrt] MCP server '{name}' 连接降级: {e}");
+        }
+    }
     let tools = Arc::new(bbrt_tools::PipelineExecutor::new(bbrt_tools::ToolsConfig {
         workspace: PathBuf::from("."),
         launcher: None, // detect() 探测（Seatbelt/Baseline + 降级徽标）
         memory: Some(memory.clone()),
+        mcp: (!mcp_configs.is_empty()).then(|| Arc::new(mcp_client)),
         ..Default::default()
     }));
-    // OBO 动态令牌：宿主 obo.token 写缓存，过期回退静态 BBW_RT_TOKEN（D11 §10.1）
-    let obo = Arc::new(std::sync::Mutex::new(bbrt_hostapi::OboCache::default()));
     let obo_for_model = Arc::clone(&obo);
     let static_token = token.clone();
     let model = Arc::new(AigwClient::new(&gateway, move || {
@@ -128,6 +151,7 @@ fn run() -> Result<(), String> {
         memory: Some(memory.clone()),
         wal: store.clone(),
         sink: sink.clone(),
+        snapshots: Some(Arc::new(bbrt_session::GitSnapshots::new(store.clone()))),
         budget: Default::default(),
     };
     let mgr = Arc::new(SessionManager::new(deps, Some(store.clone())));
@@ -443,8 +467,101 @@ fn dispatch(
                 .ok();
             None
         }
-        _ => None, // 其余 REQ（checkpoint/obo/...）阶段二；NTF 误投忽略
+        // 手动检查点（PAG-06；回执即 checkpoint.created）
+        HostToRuntime::CheckpointCreate { session_id, reason } => {
+            let reason = if reason.is_empty() {
+                "manual".into()
+            } else {
+                reason
+            };
+            let Some(ws) = mgr.workspace_of(&session_id) else {
+                return Some(RuntimeToHost::Error {
+                    code: 8001,
+                    message: format!("会话不存在: {session_id}"),
+                    fatal: false,
+                    session_id: Some(session_id),
+                });
+            };
+            let svc = bbrt_session::GitSnapshots::new(store.clone());
+            match svc.create(&session_id, &ws, &reason) {
+                Ok(out) => {
+                    // 回执即 checkpoint.created（REQ 成对 reply_to）；不再经 sink 双发
+                    Some(RuntimeToHost::CheckpointCreated {
+                        checkpoint_id: out.checkpoint_id,
+                        session_id,
+                        files_changed: out.files_changed,
+                        reason: match out.reason.as_str() {
+                            "pre-edit" => bbrt_protocol::CheckpointReason::PreEdit,
+                            "pre-command" => bbrt_protocol::CheckpointReason::PreCommand,
+                            "delegate" => bbrt_protocol::CheckpointReason::Delegate,
+                            "pre-restore" => bbrt_protocol::CheckpointReason::PreRestore,
+                            _ => bbrt_protocol::CheckpointReason::Manual,
+                        },
+                        git_ref: out.git_ref,
+                    })
+                }
+                Err(e) => Some(RuntimeToHost::Error {
+                    code: 8001,
+                    message: format!("检查点创建失败: {e}"),
+                    fatal: false,
+                    session_id: Some(session_id),
+                }),
+            }
+        }
+        // 恢复检查点（先解析归属会话→工作区；自动建 pre-restore 保护快照）
+        HostToRuntime::CheckpointRestore { checkpoint_id } => {
+            let sid = store
+                .lock()
+                .ok()
+                .and_then(|g| g.get_checkpoint(&checkpoint_id).ok().flatten())
+                .map(|r| r.session_id);
+            let Some(sid) = sid else {
+                return Some(RuntimeToHost::CheckpointRestored {
+                    ok: false,
+                    new_checkpoint_id: None,
+                    error: Some("检查点不存在".into()),
+                });
+            };
+            let ws = mgr.workspace_of(&sid).unwrap_or_default();
+            let svc = bbrt_session::GitSnapshots::new(store.clone());
+            match svc.restore(&sid, &ws, &checkpoint_id) {
+                Ok(new_cp) => Some(RuntimeToHost::CheckpointRestored {
+                    ok: true,
+                    new_checkpoint_id: Some(new_cp),
+                    error: None,
+                }),
+                Err(e) => Some(RuntimeToHost::CheckpointRestored {
+                    ok: false,
+                    new_checkpoint_id: None,
+                    error: Some(e),
+                }),
+            }
+        }
+        _ => None, // 其余 REQ 阶段二；NTF 误投忽略
     }
+}
+
+/// BBW_RT_MCP_SERVERS="name=cmd;name2=cmd --flag"（stdio 本地 MCP server v0.1）
+fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
+    raw.split(';')
+        .filter_map(|seg| {
+            let seg = seg.trim();
+            if seg.is_empty() {
+                return None;
+            }
+            let (name, cmd) = seg.split_once('=')?;
+            let mut parts = cmd.split_whitespace();
+            let command = parts.next()?.to_string();
+            Some(bbrt_mcp::McpServerConfig {
+                name: name.trim().to_string(),
+                transport: bbrt_mcp::TransportConfig::Stdio {
+                    command,
+                    args: parts.map(str::to_string).collect(),
+                    env: vec![],
+                },
+            })
+        })
+        .collect()
 }
 
 /// RFC3339 → 毫秒（无 chrono：手解 YYYY-MM-DDTHH:MM:SS[.fff](Z|+08:00) 简化形）

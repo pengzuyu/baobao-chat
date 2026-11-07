@@ -1,5 +1,5 @@
 //! bbrt-protocol 集成测试：
-//! 1) 全消息类型 serde roundtrip（HostToRuntime 17 变体 + RuntimeToHost 23 变体）；
+//! 1) 全消息类型 serde roundtrip（HostToRuntime 17 变体 + RuntimeToHost 24 变体）；
 //! 2) JSON 字符串 → 枚举 → JSON 的黄金样本断言（字段名/可选性/枚举值逐项对齐 D11 §4）；
 //! 3) 信封 wrap/unwrap 与 codec 行式读写。
 
@@ -197,6 +197,11 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             reason: CheckpointReason::PreEdit,
             git_ref: Some("refs/bbw-agent/sess-1/cp-1".into()),
         },
+        RuntimeToHost::CheckpointRestored {
+            ok: true,
+            new_checkpoint_id: Some("cp-2".into()),
+            error: None,
+        },
         RuntimeToHost::CompactionEvent {
             session_id: "sess-1".into(),
             phase: CompactionPhase::Done,
@@ -355,8 +360,8 @@ fn roundtrip_all_runtime_to_host() {
     let all = all_runtime_to_host();
     assert_eq!(
         all.len(),
-        29,
-        "D11 §4 RT→宿主 21 类型 + D15 追加 6 类型 + 双向 ping/pong"
+        30,
+        "D11 §4 RT→宿主 21 类型 + D15 追加 6 类型 + checkpoint.restored + 双向 ping/pong"
     );
     for msg in &all {
         roundtrip(msg);

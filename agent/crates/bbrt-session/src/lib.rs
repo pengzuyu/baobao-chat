@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod checkpoint;
 pub mod delegation;
 pub mod events;
 pub mod executor;
@@ -22,6 +23,7 @@ pub mod manager;
 pub mod recovery;
 pub mod state;
 
+pub use checkpoint::{GitSnapshots, SnapshotOutcome, SnapshotService};
 pub use delegation::{
     DelegateChannel, DelegateEvt, DelegateFinal, DelegateLaunchReq, DelegateLauncher,
     DelegateStream,

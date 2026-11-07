@@ -876,6 +876,7 @@ fn tool_executor_trait对象可装配loopdeps() {
         memory: None,
         wal: Arc::new(bbrt_session::NoopEventLog),
         sink: Arc::new(bbrt_session::NullSink),
+        snapshots: None,
         budget: Default::default(),
     };
     let _ = &deps;
@@ -960,4 +961,29 @@ fn coding_delegate_facade_registered_and_high_risk() {
         reg.get("coding.delegate").unwrap().category,
         bbrt_sec::gate::ActionCategory::Delegate
     ));
+}
+
+/// MCP 工具分派（D11 §2.10 dispatch_by_source）：装配空 client → 发现 0 工具、
+/// mcp.* 执行走 McpClient 转发分支（未连接 server → 8002 标灰语义）。
+#[test]
+fn mcp_dispatch_degrades_to_8002() {
+    let (client, _) = bbrt_mcp::McpClient::connect(&[], bbrt_mcp::no_token());
+    let ex = PipelineExecutor::new(ToolsConfig {
+        mcp: Some(std::sync::Arc::new(client)),
+        ..ToolsConfig::new(std::path::Path::new("."))
+    });
+    assert!(
+        !ex.registry().names().iter().any(|n| n.starts_with("mcp.")),
+        "空连接表不应注册 mcp 工具"
+    );
+    let c = ToolInvocation {
+        call_id: "c1".into(),
+        name: "mcp.fake.echo".into(),
+        args_json: "{}".into(),
+        session_id: "s".into(),
+    };
+    match ex.execute(bbrt_sec::gate::PermissionMode::Ask, &c) {
+        ToolOutcome::Blocked { code, .. } => assert_eq!(code, 8002),
+        other => panic!("未连接 server 的 mcp 调用应 8002 拒绝: {other:?}"),
+    }
 }

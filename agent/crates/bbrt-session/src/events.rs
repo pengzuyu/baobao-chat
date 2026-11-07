@@ -110,6 +110,15 @@ pub enum SessionEvent {
         to: ModelTier,
         reason: String,
     },
+    /// checkpoint.created（08 §4.4 修改前快照/手动/委派/恢复保护）
+    CheckpointCreated {
+        session_id: String,
+        checkpoint_id: String,
+        files_changed: Vec<bbrt_protocol::FileChange>,
+        /// pre-edit | pre-command | manual | delegate | pre-restore
+        reason: String,
+        git_ref: Option<String>,
+    },
     /// session.ended
     SessionEnded { session_id: String, summary: String },
     /// D15：记忆写入/更新

@@ -158,6 +158,7 @@ fn deps<M: bbrt_aigw::ChatClient + 'static>(
         memory,
         wal: Arc::new(NoopEventLog),
         sink,
+        snapshots: None,
         budget: BudgetConfig::default(),
     }
 }
@@ -457,6 +458,7 @@ fn wal_records_monotonic_events() {
         memory: None,
         wal: log.clone(),
         sink,
+        snapshots: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(
@@ -548,6 +550,7 @@ fn compaction_triggers_on_long_history() {
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
+        snapshots: None,
         budget: cfg,
     };
     let mut runner = SessionRunner::new(
@@ -792,6 +795,7 @@ fn delegate_turn_setup() -> (Arc<CollectSink>, LoopDeps) {
             memory: None,
             wal: Arc::new(NoopEventLog),
             sink,
+            snapshots: None,
             budget: BudgetConfig::default(),
         },
     )
@@ -896,6 +900,7 @@ fn delegate_without_launcher_blocked_8030() {
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
+        snapshots: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(
@@ -945,10 +950,7 @@ impl ChatClient for ScriptedModel {
     > {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(first) = req.messages.first() {
-            self.seen_system
-                .lock()
-                .unwrap()
-                .push(first.content.clone());
+            self.seen_system.lock().unwrap().push(first.content.clone());
         }
         let text = self
             .replies
@@ -992,8 +994,9 @@ fn w2_lesson_after_repeated_tool_failures() {
     // 同工具同错连续 ≥2 次 → feedback 教训自动落盘（带 Why/How to apply）
     let list = mem.knowledge().list();
     assert!(
-        list.iter().any(|e| e.mtype == bbrt_memory::MemoryType::Feedback
-            && e.title.contains("run_command")),
+        list.iter().any(
+            |e| e.mtype == bbrt_memory::MemoryType::Feedback && e.title.contains("run_command")
+        ),
         "应产出 run_command 教训条目，实际: {list:?}"
     );
     let body = list
@@ -1003,9 +1006,9 @@ fn w2_lesson_after_repeated_tool_failures() {
         .unwrap();
     assert!(body.contains("**Why:**") && body.contains("**How to apply:**"));
     // 协议事件外发
-    assert!(events_of(sink.as_ref())
-        .iter()
-        .any(|e| matches!(e, SessionEvent::MemorySaved { memory_type, .. } if memory_type == "feedback")));
+    assert!(events_of(sink.as_ref()).iter().any(
+        |e| matches!(e, SessionEvent::MemorySaved { memory_type, .. } if memory_type == "feedback")
+    ));
 }
 
 #[test]
@@ -1037,9 +1040,9 @@ fn w3_distills_memories_on_session_end() {
         list.iter().any(|e| e.title == "用户偏好先方案"),
         "W3 应落盘提炼条目，实际: {list:?}"
     );
-    assert!(events_of(sink.as_ref())
-        .iter()
-        .any(|e| matches!(e, SessionEvent::MemorySaved { title, .. } if title == "用户偏好先方案")));
+    assert!(events_of(sink.as_ref()).iter().any(
+        |e| matches!(e, SessionEvent::MemorySaved { title, .. } if title == "用户偏好先方案")
+    ));
     // SessionEnded 正常外发（提炼不阻塞收口）
     assert!(events_of(sink.as_ref())
         .iter()
@@ -1096,7 +1099,11 @@ fn w3_skipped_when_no_assistant_reply() {
         ModelTier::Strong,
     );
     runner.end(&d, ""); // 未发生任何对话
-    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "空会话不应调模型提炼");
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        0,
+        "空会话不应调模型提炼"
+    );
 }
 
 #[test]

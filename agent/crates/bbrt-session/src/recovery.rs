@@ -95,7 +95,12 @@ pub fn recover(store: &Store, session_id: &str) -> ReplayReport {
                 report.final_state = SessionState::Running;
             }
             "user.text" => {
-                pending_user = Some(ev.payload.clone());
+                // payload: {"text":"..."}（loop_runner 写入契约）；解析失败退回裸 payload
+                let text = serde_json::from_str::<serde_json::Value>(&ev.payload)
+                    .ok()
+                    .and_then(|v| v.get("text").and_then(|x| x.as_str()).map(str::to_string))
+                    .unwrap_or_else(|| ev.payload.clone());
+                pending_user = Some(text);
             }
             "assistant.done" => {
                 // 一轮模型输出完成（含纯文本轮）：入 assistant 轮（摘要级）

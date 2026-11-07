@@ -89,6 +89,8 @@ pub enum CheckpointReason {
     PreCommand,
     Manual,
     Delegate,
+    /// 恢复前保护快照（DDL CHECK 五值之一；随 checkpoint.restore 接线补齐协议枚举）
+    PreRestore,
 }
 
 /// 工具热重载原因（tools.reload：app/skill/policy）
@@ -408,7 +410,7 @@ pub enum HostToRuntime {
         reason: String,
     },
 
-    /// 恢复检查点（REQ→回执{ok,newSnapshotId}；回执消息类型 D11 未命名，见 README TODO）
+    /// 恢复检查点（REQ→checkpoint.restored {ok,newCheckpointId}；恢复前自动建 pre-restore 保护快照）
     #[serde(rename = "checkpoint.restore", rename_all = "camelCase")]
     CheckpointRestore { checkpoint_id: String },
 
@@ -611,6 +613,16 @@ pub enum RuntimeToHost {
         reason: CheckpointReason,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         git_ref: Option<String>,
+    },
+
+    /// 检查点恢复回执（checkpoint.restore REQ；newCheckpointId=自动创建的 pre-restore 保护快照）
+    #[serde(rename = "checkpoint.restored", rename_all = "camelCase")]
+    CheckpointRestored {
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_checkpoint_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
 
     /// 上下文压缩通知（UNT；phase=start 时 freed/kept 为空）
