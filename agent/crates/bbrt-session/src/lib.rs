@@ -26,6 +26,7 @@ pub mod recovery;
 pub mod skills;
 pub mod state;
 pub mod subagent;
+pub mod team;
 
 pub use checkpoint::{GitSnapshots, SnapshotOutcome, SnapshotService};
 pub use delegation::{
@@ -52,3 +53,7 @@ pub use state::{
     request_review, resolve_review, resume, retry_from_error, SessionState, TransitionError,
 };
 pub use subagent::{FanoutPlanner, FastPlanner, ProbeResult, ProbeSpec};
+pub use team::{
+    run_team, validate_graph, NodeResult, TeamError, TeamGraph, TeamMember, TeamResult,
+    TEAM_MAX_MEMBERS, TEAM_MAX_TOTAL_STEPS,
+};
