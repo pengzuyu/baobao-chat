@@ -4,6 +4,7 @@ package botrepo
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 )
@@ -141,4 +142,39 @@ func (s *store) RotateWebhookSecret(_ context.Context, tenantID, webhookID int64
 	w.RotatedAt = time.Now()
 	s.hooks[webhookID] = w
 	return nil
+}
+
+// ListWebhooks 按方向列（direction 空=全部；id 升序稳定）
+func (m *store) ListWebhooks(_ context.Context, tenantID int64, direction string) ([]Webhook, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := make([]int64, 0, len(m.hooks))
+	for id := range m.hooks {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	out := []Webhook{}
+	for _, id := range ids {
+		w := m.hooks[id]
+		if w.TenantID != tenantID {
+			continue
+		}
+		if direction != "" && w.Direction != direction {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out, nil
+}
+
+// UpdateWebhookStatus 订阅停启用
+func (m *store) UpdateWebhookStatus(_ context.Context, _, webhookID int64, status int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if w, ok := m.hooks[webhookID]; ok {
+		w.Status = status
+		m.hooks[webhookID] = w
+		return nil
+	}
+	return ErrNotFound
 }

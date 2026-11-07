@@ -626,13 +626,18 @@ func main() {
 	mux.Handle("POST /api/v1/admin/acl", adminOnly(handleACLGrant(aclSvc)))
 	mux.Handle("DELETE /api/v1/admin/acl/{id}", adminOnly(handleACLRevoke(aclSvc)))
 
-	// ── 机器人域（20 篇阶段一务实版）：Incoming Webhook + 管理 REST ──
+	// ── 机器人域（20 篇阶段一+二：Incoming + Outgoing）──
+	workerCtx, workerStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer workerStop()
 	// bot=特殊 user(type=2 永不登录)；跨域全闭包（D02 §4：不引 org/message/admin 包）
 	var botRepo botrepo.Repo
+	var botDeliveries botrepo.DeliveryRepo
 	if pgPool != nil {
 		botRepo = botrepo.NewPostgres(pgPool)
+		botDeliveries = botrepo.NewPostgresDeliveries(pgPool)
 	} else {
 		botRepo = botrepo.NewMemory()
+		botDeliveries = botrepo.NewMemoryDeliveries()
 	}
 	botMod := bot.NewModule(botservice.Options{
 		// user(type=bot)：employee_no 走 bot- 前缀独立段（20 篇 §3.2，不占员工编号段）
@@ -685,9 +690,28 @@ func main() {
 			}
 			return words
 		},
-	}, botRepo)
+	}, botRepo, botDeliveries)
 	botapi.RegisterAdminRoutes(mux, authed, botMod.API())
 	mux.HandleFunc("POST /hook/bot/{hook_id}", botapi.HandleHookDeliver(botMod.API()))
+	// Outgoing 事件订阅投递（20 §4.3 阶段二）：msg.created 消费 + 投递 worker
+	if out := botMod.Outgoing(); out != nil {
+		botapi.RegisterOutgoingRoutes(mux, authed, out)
+		bus.Subscribe(eventbus.TopicMsgCreated, func(_ context.Context, evt eventbus.Event) error {
+			e, ok := evt.Payload.(messageapi.MsgCreatedEvent)
+			if !ok {
+				return nil // payload 类型异常静默（gateway 同款容错）
+			}
+			out.OnMsgCreated(botservice.MsgCreatedLight{
+				TenantID: 1, // 单租户阶段一（Message 无 tenant 冗余字段；多租户随 03 篇全面启用）
+				MsgID:    e.Message.ID, ConvID: e.Message.ConvID,
+				SenderID: e.Message.SenderID, SenderName: e.Message.SenderName,
+				MsgType: e.Message.Type, Body: e.Message.Body,
+				Mentions: mentionUIDsOf(e.Message.Mentions),
+			})
+			return nil
+		})
+		go out.Run(workerCtx)
+	}
 
 	// ── 邮件域（22 篇阶段一务实版）：内域收发 + 治理 REST ──
 	// 邮件栈=进程内直投（docker-mailserver/auth-bridge/路径②随阶段二）；
@@ -2900,4 +2924,13 @@ func handleACLRevoke(svc *orgacl.Service) http.HandlerFunc {
 		}
 		httpx.OK(w, r, map[string]bool{"ok": true})
 	}
+}
+
+// mentionUIDsOf mentions → uid 字符串集（bot Outgoing @bot 判定口径）
+func mentionUIDsOf(ms []messageapi.Mention) []string {
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, m.UID)
+	}
+	return out
 }

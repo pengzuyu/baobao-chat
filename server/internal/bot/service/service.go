@@ -525,5 +525,10 @@ func toWebhookDTO(w *botrepo.Webhook) *botapi.WebhookDTO {
 	if !w.RotatedAt.IsZero() {
 		dto.RotatedAt = w.RotatedAt.UnixMilli()
 	}
+	if w.OutTargets != nil { // out 方向摘要（20 §4.3）
+		dto.CallbackURL = w.CallbackURL
+		dto.OutMode = w.OutTargets.Mode
+		dto.Keywords = w.OutTargets.Keywords
+	}
 	return dto
 }

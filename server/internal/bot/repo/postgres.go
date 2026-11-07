@@ -109,9 +109,10 @@ func (p *Postgres) UpdateBotStatus(ctx context.Context, tenantID, botID int64, s
 	return nil
 }
 
-const webhookCols = `id, tenant_id, bot_id, direction, hook_id, secret,
+const webhookCols = `id, tenant_id, bot_id, direction, hook_id, COALESCE(callback_url,''), secret,
 	COALESCE(prev_secret,''), COALESCE(prev_expires_at, to_timestamp(0)),
 	COALESCE(default_conv_id,0), COALESCE(targets,'[]'::jsonb), COALESCE(ip_allowlist,'[]'::jsonb),
+	COALESCE(out_targets,'null'::jsonb),
 	COALESCE(rate_limit,30), status, COALESCE(rotated_at, to_timestamp(0)), created_at`
 
 // direction 列为 SMALLINT（1 in 2 out），仓储侧与 string 形态互转
@@ -131,12 +132,12 @@ func dirToDB(s string) int16 {
 
 func scanWebhook(row pgx.Row) (*Webhook, error) {
 	var (
-		w              Webhook
-		dirDB          int16
-		targets, allow []byte
+		w                     Webhook
+		dirDB                 int16
+		targets, allow, outTg []byte
 	)
-	if err := row.Scan(&w.ID, &w.TenantID, &w.BotID, &dirDB, &w.HookID, &w.Secret,
-		&w.PrevSecret, &w.PrevExpiresAt, &w.DefaultConvID, &targets, &allow,
+	if err := row.Scan(&w.ID, &w.TenantID, &w.BotID, &dirDB, &w.HookID, &w.CallbackURL, &w.Secret,
+		&w.PrevSecret, &w.PrevExpiresAt, &w.DefaultConvID, &targets, &allow, &outTg,
 		&w.RateLimit, &w.Status, &w.RotatedAt, &w.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -146,6 +147,12 @@ func scanWebhook(row pgx.Row) (*Webhook, error) {
 	}
 	if len(allow) > 0 {
 		_ = json.Unmarshal(allow, &w.IPAllowlist)
+	}
+	if string(outTg) != "null" && len(outTg) > 0 {
+		var cfg OutTargetCfg
+		if json.Unmarshal(outTg, &cfg) == nil {
+			w.OutTargets = &cfg
+		}
 	}
 	return &w, nil
 }
@@ -166,14 +173,18 @@ func (p *Postgres) CreateWebhook(ctx context.Context, w Webhook) (Webhook, error
 		w.CreatedAt = time.Now()
 	}
 	targets, _ := json.Marshal(w.Targets)
+	outTg := []byte("null")
+	if w.OutTargets != nil {
+		outTg, _ = json.Marshal(w.OutTargets)
+	}
 	allow, _ := json.Marshal(w.IPAllowlist)
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO bot_webhook (id, tenant_id, bot_id, direction, hook_id, secret,
-			default_conv_id, targets, ip_allowlist, rate_limit, status, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,0),$8,$9,$10,$11,$12)
+		INSERT INTO bot_webhook (id, tenant_id, bot_id, direction, hook_id, callback_url, secret,
+			default_conv_id, targets, ip_allowlist, out_targets, rate_limit, status, created_at)
+		VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,NULLIF($8,0),$9,$10,$11,$12,$13,$14)
 		RETURNING created_at`,
-		w.ID, w.TenantID, w.BotID, dirToDB(w.Direction), w.HookID, w.Secret,
-		w.DefaultConvID, targets, allow, w.RateLimit, w.Status, w.CreatedAt).
+		w.ID, w.TenantID, w.BotID, dirToDB(w.Direction), w.HookID, w.CallbackURL, w.Secret,
+		w.DefaultConvID, targets, allow, outTg, w.RateLimit, w.Status, w.CreatedAt).
 		Scan(&w.CreatedAt); err != nil {
 		return Webhook{}, err
 	}
@@ -199,6 +210,40 @@ func (p *Postgres) RotateWebhookSecret(ctx context.Context, tenantID, webhookID 
 			rotated_at=now(), updated_at=now()
 		WHERE tenant_id=$4 AND id=$5`,
 		newSecret, prevSecret, prevExpiresAt, tenantID, webhookID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListWebhooks 按方向列（direction 空=全部）
+func (p *Postgres) ListWebhooks(ctx context.Context, tenantID int64, direction string) ([]Webhook, error) {
+	rows, err := p.pool.Query(ctx, `SELECT `+webhookCols+` FROM bot_webhook
+		WHERE tenant_id=$1 AND ($2='' OR direction=$3) ORDER BY id`,
+		tenantID, direction, dirToDB(direction))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Webhook{}
+	for rows.Next() {
+		w, err := scanWebhook(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *w)
+	}
+	return out, rows.Err()
+}
+
+// UpdateWebhookStatus 订阅停启用
+func (p *Postgres) UpdateWebhookStatus(ctx context.Context, tenantID, webhookID int64, status int) error {
+	tag, err := p.pool.Exec(ctx,
+		`UPDATE bot_webhook SET status=$1, updated_at=now() WHERE tenant_id=$2 AND id=$3`,
+		status, tenantID, webhookID)
 	if err != nil {
 		return err
 	}

@@ -20,6 +20,8 @@ package botapi
 import (
 	"context"
 	"encoding/json"
+
+	botrepo "github.com/baobaowork/server/internal/bot/repo"
 )
 
 // 状态（bot 主档与 webhook 共用口径：1 启用 2 停用）
@@ -52,7 +54,10 @@ type WebhookDTO struct {
 	Direction     string   `json:"direction"` // in（out 阶段二）
 	HookID        string   `json:"hook_id,omitempty"`
 	DefaultConvID int64    `json:"default_conv_id,string,omitempty"`
-	Targets       []int64  `json:"targets,omitempty"` // 授权会话集（in 方向）
+	Targets       []int64  `json:"targets,omitempty"`      // 授权会话集（in 方向）
+	CallbackURL   string   `json:"callback_url,omitempty"` // out 方向回调（20 §4.3）
+	OutMode       string   `json:"out_mode,omitempty"`     // all|keyword|at_bot（out 方向）
+	Keywords      []string `json:"keywords,omitempty"`     // keyword 模式过滤词
 	IPAllowlist   []string `json:"ip_allowlist,omitempty"`
 	RateLimit     int      `json:"rate_limit"` // msg/min（默认 30，10–120）
 	Status        int      `json:"status"`
@@ -119,4 +124,40 @@ type BotService interface {
 
 	// Deliver Incoming 投递核心（验签→限流→授权→安检→发送；20 篇 §4.2）
 	Deliver(ctx context.Context, hookID, ts, sig string, raw []byte, clientIP string) (DeliverResult, error)
+}
+
+// OutTargetCfg out 方向订阅配置（20 §4.3；out_targets jsonb 同构）
+type OutTargetCfg struct {
+	EventTypes []string `json:"event_types"`
+	Mode       string   `json:"mode"`               // all | keyword | at_bot
+	Keywords   []string `json:"keywords,omitempty"` // keyword 模式过滤词
+	ConvIDs    []int64  `json:"conv_ids"`           // 源范围授权集
+}
+
+// CreateOutgoingReq POST /bots/{id}/webhooks/outgoing
+type CreateOutgoingReq struct {
+	CallbackURL string       `json:"callback_url"`
+	Targets     OutTargetCfg `json:"targets"`
+}
+
+// DeliveryDTO 投递记录（BOT-01 投递页）
+type DeliveryDTO struct {
+	ID           int64  `json:"id,string"`
+	BotID        int64  `json:"bot_id,string"`
+	WebhookID    int64  `json:"webhook_id,string"`
+	EventID      string `json:"event_id"`
+	EventType    string `json:"event_type"`
+	TargetURL    string `json:"target_url"`
+	Attempt      int    `json:"attempt"`
+	Status       int    `json:"status"` // 1 pending 2 sent 3 dead
+	ResponseCode int    `json:"response_code,omitempty"`
+	ErrorBrief   string `json:"error_brief,omitempty"`
+	CreatedAt    int64  `json:"created_at"` // ms
+}
+
+// OutgoingService Outgoing 管理面窄接口（handlers 依赖倒置；实现=botservice.Outgoing）
+type OutgoingService interface {
+	CreateOutgoingWebhook(ctx context.Context, tenantID, botID int64, callbackURL string, cfg OutTargetCfg) (*WebhookDTO, *SecretReveal, error)
+	ListDeliveries(ctx context.Context, tenantID int64, f botrepo.DeliveryFilter) ([]botrepo.Delivery, error)
+	ReplayDead(ctx context.Context, tenantID, id int64) error
 }

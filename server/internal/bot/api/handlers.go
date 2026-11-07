@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	botrepo "github.com/baobaowork/server/internal/bot/repo"
 	errx "github.com/baobaowork/server/internal/platform/errors"
 	"github.com/baobaowork/server/internal/platform/httpx"
 )
@@ -28,6 +29,74 @@ func RegisterAdminRoutes(mux *http.ServeMux, authed func(http.HandlerFunc) http.
 	mux.Handle("POST /api/v1/bots/webhooks/{wid}/rotate", authed(handleRotate(svc)))
 	mux.Handle("POST /api/v1/convs/{id}/bots/{bot_id}", authed(handleInstall(svc)))
 	mux.Handle("DELETE /api/v1/convs/{id}/bots/{bot_id}", authed(handleUninstall(svc)))
+}
+
+// RegisterOutgoingRoutes Outgoing 管理面路由（20 §4.3 阶段二：订阅创建/
+// 投递记录/死信重放；authed 同 in 管理面口径）
+func RegisterOutgoingRoutes(mux *http.ServeMux, authed func(http.HandlerFunc) http.Handler, out OutgoingService) {
+	if out == nil {
+		return // 未装配投递仓：零端点（阶段一兼容）
+	}
+	mux.Handle("POST /api/v1/bots/{id}/webhooks/outgoing", authed(handleCreateOutgoing(out)))
+	mux.Handle("GET /api/v1/bots/{id}/deliveries", authed(handleListDeliveries(out)))
+	mux.Handle("POST /api/v1/bots/deliveries/{did}/replay", authed(handleReplayDelivery(out)))
+}
+
+func handleCreateOutgoing(out OutgoingService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		botID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "id 非法"))
+			return
+		}
+		var req CreateOutgoingReq
+		if derr := decode(r, &req); derr != nil {
+			httpx.Fail(w, r, derr)
+			return
+		}
+		dto, reveal, err := out.CreateOutgoingWebhook(r.Context(), tenantOf(r), botID, req.CallbackURL, req.Targets)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"webhook": dto, "secret": reveal})
+	}
+}
+
+func handleListDeliveries(out OutgoingService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		botID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "id 非法"))
+			return
+		}
+		q := r.URL.Query()
+		status, _ := strconv.Atoi(q.Get("status"))
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		list, err := out.ListDeliveries(r.Context(), tenantOf(r), botrepo.DeliveryFilter{
+			BotID: botID, Status: status, Limit: limit,
+		})
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, list)
+	}
+}
+
+func handleReplayDelivery(out OutgoingService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		did, err := pathID(r, "did")
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "id 非法"))
+			return
+		}
+		if err := out.ReplayDead(r.Context(), tenantOf(r), did); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]bool{"ok": true})
+	}
 }
 
 // HandleHookDeliver Incoming 端点（POST /hook/bot/{hook_id}——外部系统视角 20 篇 §6.1）
