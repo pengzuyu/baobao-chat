@@ -18,6 +18,7 @@ pub mod events;
 pub mod executor;
 pub mod loop_runner;
 pub mod manager;
+pub mod recovery;
 pub mod state;
 
 pub use events::{ModelTier, NullSink, SessionEvent, SessionSink, StreamChannel};
@@ -27,6 +28,7 @@ pub use loop_runner::{
     TurnReport, MAX_CONSECUTIVE_FAILURES, MAX_STEPS, PERMISSION_TIMEOUT,
 };
 pub use manager::{ManagerError, SessionManager, StartParams};
+pub use recovery::{recover, InFlightTool, ReplayReport};
 pub use state::{
     accept_user_message, begin, begin_delegation, begin_fanout, complete_delegation,
     complete_round, end, fail_delegation, fail_initialization, fail_unrecoverable, initialized,

@@ -1,0 +1,209 @@
+//! 崩溃恢复（D11 §9.2 重放协议）：
+//! 事件镜像（agent_event）顺序重放 → 重建状态终态与上下文时间线；
+//! 未决工具调用视为失败回填；未决 permission.request 全部作废。
+//!
+//! 口径：WAL 双写里的 SQLite 侧是唯一重放源（JSONL 侧仅人读镜像，
+//! D11 开放问题 6 已登记单写收敛方向）。
+
+use bbrt_context::Round;
+use bbrt_store::Store;
+
+use crate::events::SessionEvent;
+use crate::state::{self, SessionState};
+
+/// 重放产物
+#[derive(Debug)]
+pub struct ReplayReport {
+    /// 会话不存在时 None
+    pub found: bool,
+    /// 重放事件条数（seq 连续性校验通过的事件）
+    pub replayed_events: u32,
+    /// seq 断裂/缺失行数（>0 视为损坏 → 8012 语义，调用方降级只读快照）
+    pub broken: u32,
+    /// 重建出的会话终态
+    pub final_state: SessionState,
+    /// 重建出的历史轮次（user/assistant/tool；工具事件仅以摘要重建）
+    pub history: Vec<Round>,
+    /// 未决工具调用（执行中断定失败，回填理由后由调用方入 history）
+    pub in_flight_tools: Vec<InFlightTool>,
+    /// 恢复期作废的未决审批 id
+    pub void_permissions: Vec<String>,
+}
+
+impl Default for ReplayReport {
+    fn default() -> Self {
+        Self {
+            found: false,
+            replayed_events: 0,
+            broken: 0,
+            final_state: SessionState::Idle,
+            history: vec![],
+            in_flight_tools: vec![],
+            void_permissions: vec![],
+        }
+    }
+}
+
+/// 执行中的工具调用（重放时遇 tool.call 后无配对 tool.result）
+#[derive(Debug, Clone)]
+pub struct InFlightTool {
+    pub call_id: String,
+    pub name: String,
+}
+
+/// 重放协议（D11 §9.2）：
+/// 1) 完整性校验（seq 从 1 连续递增；断裂计数）
+/// 2) 状态机重放（turn.start→running、stop/idle、permission.request→waiting、…）
+/// 3) 上下文时间线重建（user.message 原文 / stream.done 的 usage / tool 摘要）
+/// 4) 未决处理（in-flight 工具→失败回填；permission.request 无 response→作废）
+pub fn recover(store: &Store, session_id: &str) -> ReplayReport {
+    let mut report = ReplayReport::default();
+    let Some(_row) = store.get_session(session_id).unwrap_or(None) else {
+        return report;
+    };
+    report.found = true;
+    report.final_state = SessionState::Idle;
+
+    let events = store
+        .events_after(session_id, 0, 10_000)
+        .unwrap_or_default();
+    // 惰性历史：user.message 记原文；tool.call/tool.result 记摘要；assistant 以
+    // stream.done 落 presence（原文在 JSONL 镜像，摘要级重建即可续会话）
+    let mut open_tools: Vec<InFlightTool> = vec![];
+    let mut last_seq = 0i64;
+    let mut in_turn = false;
+    let mut pending_user: Option<String> = None;
+    let mut pending_permission: Option<String> = None;
+
+    for ev in events {
+        // ① seq 连续性
+        if ev.seq != last_seq + 1 {
+            report.broken += 1;
+            last_seq = ev.seq; // 断裂后继续重放（计数上报，不中断）
+            continue;
+        }
+        last_seq = ev.seq;
+        report.replayed_events += 1;
+
+        // ②③ 状态与时间线（按 loop_runner 的 WAL 写入点对应）
+        match ev.type_.as_str() {
+            "session.start" => {
+                report.final_state = SessionState::Idle;
+            }
+            "turn.start" => {
+                in_turn = true;
+                report.final_state = SessionState::Running;
+            }
+            "user.text" => {
+                pending_user = Some(ev.payload.clone());
+            }
+            "assistant.done" => {
+                // 一轮模型输出完成（含纯文本轮）：入 assistant 轮（摘要级）
+                if in_turn {
+                    if let Some(text) = pending_user.take() {
+                        report.history.push(Round::User { content: text });
+                    }
+                    report.history.push(Round::Assistant {
+                        content: String::new(),
+                        tool_calls: vec![],
+                    });
+                }
+            }
+            "tool.call" => {
+                // payload: {"call_id":"..","tool":".."}
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev.payload) {
+                    open_tools.push(InFlightTool {
+                        call_id: v
+                            .get("call_id")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: v
+                            .get("tool")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                    });
+                }
+                report.final_state = SessionState::Running;
+            }
+            "tool.result" => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev.payload) {
+                    let call_id = v
+                        .get("call_id")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let idx = open_tools.iter().position(|t| t.call_id == call_id);
+                    if let Some(i) = idx {
+                        let tool = open_tools.remove(i);
+                        report.history.push(Round::Tool {
+                            call_id: tool.call_id,
+                            name: tool.name,
+                            summary: v
+                                .get("summary")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        });
+                    }
+                }
+            }
+            "permission.request" => {
+                report.final_state = SessionState::WaitingPermission;
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev.payload) {
+                    pending_permission = Some(
+                        v.get("request_id")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                    );
+                }
+            }
+            "permission.resolved" => {
+                pending_permission = None;
+                report.final_state = SessionState::Running;
+            }
+            "turn.end" => {
+                in_turn = false;
+                if let Some(text) = pending_user.take() {
+                    report.history.push(Round::User { content: text });
+                }
+                report.final_state = SessionState::Idle;
+            }
+            "session.ended" => {
+                report.final_state = SessionState::Ended;
+            }
+            _ => {}
+        }
+    }
+
+    // ④ 未决处理
+    report.in_flight_tools = open_tools;
+    if let Some(pid) = pending_permission {
+        report.void_permissions.push(pid);
+    }
+    // 中断的 turn：残留 pending_user 一并入历史（用户输入不丢）
+    if in_turn {
+        if let Some(text) = pending_user.take() {
+            report.history.push(Round::User { content: text });
+        }
+        if matches!(
+            report.final_state,
+            SessionState::Running | SessionState::WaitingPermission
+        ) {
+            report.final_state =
+                state::pause(SessionState::Running).unwrap_or(SessionState::Paused);
+        }
+    }
+    report
+}
+
+/// 恢复后的 SessionReady 事件构造（bin 装配：session.start 带 historyRef 时）
+pub fn ready_event(session_id: &str, report: &ReplayReport) -> SessionEvent {
+    SessionEvent::SessionReady {
+        session_id: session_id.to_string(),
+        restored: report.found,
+        replayed_events: report.replayed_events,
+    }
+}

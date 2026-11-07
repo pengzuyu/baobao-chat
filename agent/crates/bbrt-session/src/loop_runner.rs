@@ -70,6 +70,8 @@ impl EventLog for std::sync::Mutex<Store> {
 /// 快模型摘要器（compaction 用；08 §4.6 降档语义的正面应用）
 struct FastSummarizer<'a> {
     client: &'a dyn ChatClient,
+    /// 档位别名（预留：AigwClient 按别名路由，请求体 model 已固定 bbw-fast）
+    #[allow(dead_code)]
     model: String,
 }
 impl Summarizer for FastSummarizer<'_> {
@@ -612,6 +614,11 @@ impl SessionRunner {
                         }
                         self.state =
                             state::permission_resolved(self.state).unwrap_or(SessionState::Running);
+                        deps.wal.append(
+                            &self.session_id,
+                            "permission.resolved",
+                            &format!("{{\"request_id\":\"{request_id}\",\"decision\":\"allow\"}}"),
+                        );
                         Some(exec_call)
                     }
                     Ok(resp) if resp.request_id == request_id => {
@@ -625,6 +632,11 @@ impl SessionRunner {
                         });
                         self.state =
                             state::permission_resolved(self.state).unwrap_or(SessionState::Running);
+                        deps.wal.append(
+                            &self.session_id,
+                            "permission.resolved",
+                            &format!("{{\"request_id\":\"{request_id}\",\"decision\":\"deny\"}}"),
+                        );
                         None
                     }
                     Ok(_) => None, // 迟到的其它回执：按超时处理
@@ -639,6 +651,13 @@ impl SessionRunner {
                         });
                         self.state =
                             state::permission_resolved(self.state).unwrap_or(SessionState::Running);
+                        deps.wal.append(
+                            &self.session_id,
+                            "permission.resolved",
+                            &format!(
+                                "{{\"request_id\":\"{request_id}\",\"decision\":\"timeout\"}}"
+                            ),
+                        );
                         None
                     }
                     Err(RecvTimeoutError::Disconnected) => None,
