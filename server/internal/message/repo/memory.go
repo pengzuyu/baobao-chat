@@ -13,19 +13,21 @@ import (
 
 // Memory 内存实现：阶段一跑通全链路；并发安全（单锁足够，量级见 04 篇 §1.1 基线）
 type Memory struct {
-	mu        sync.Mutex
-	convs     map[int64]*Conversation
-	members   map[int64][]*Member                // convID → members
-	msgs      map[int64][]*messageapi.Message    // convID → 按 seq 有序
-	dupIndex  map[int64]map[string]int64         // convID → clientMsgID → msgID
-	receipts  map[int64]map[int64]*Receipt       // convID → userID
-	seqs      map[int64]int64                    // convID → 已分配最大 seq（对齐 Redis INCR 语义）
-	states    map[int64]map[int64]*UserConvState // userID → convID → 态
-	settings  map[int64]*GroupSetting            // convID → 群设置（群/广播群才有）
-	applies   map[int64]*Apply                   // applyID → 申请
-	favorites map[int64]map[int64]*Favorite      // userID → msgID → 收藏行（PIM-08）
-	nextID    int64
-	favNextID int64 // 收藏行 ID 自增（与 nextID 分段：表级分配语义对齐 PG AllocID）
+	mu          sync.Mutex
+	convs       map[int64]*Conversation
+	members     map[int64][]*Member                // convID → members
+	msgs        map[int64][]*messageapi.Message    // convID → 按 seq 有序
+	dupIndex    map[int64]map[string]int64         // convID → clientMsgID → msgID
+	receipts    map[int64]map[int64]*Receipt       // convID → userID
+	seqs        map[int64]int64                    // convID → 已分配最大 seq（对齐 Redis INCR 语义）
+	states      map[int64]map[int64]*UserConvState // userID → convID → 态
+	settings    map[int64]*GroupSetting            // convID → 群设置（群/广播群才有）
+	applies     map[int64]*Apply                   // applyID → 申请
+	favorites   map[int64]map[int64]*Favorite      // userID → msgID → 收藏行（PIM-08）
+	notif       map[int64][]*Notification          // userID → 通知行（PIM-09，追加序=id 升序）
+	nextID      int64
+	favNextID   int64 // 收藏行 ID 自增（与 nextID 分段：表级分配语义对齐 PG AllocID）
+	notifNextID int64 // 通知行 ID 自增（同上：表级分配语义对齐 PG advisory lock 9108）
 }
 
 // NewMemory 构造
@@ -41,6 +43,7 @@ func NewMemory() *Memory {
 		settings:  map[int64]*GroupSetting{},
 		applies:   map[int64]*Apply{},
 		favorites: map[int64]map[int64]*Favorite{},
+		notif:     map[int64][]*Notification{},
 		nextID:    0, // 会话 ID 从 1 起（雪花占位）
 	}
 }
@@ -761,4 +764,106 @@ func (m *Memory) ExistsFavorite(_ context.Context, userID, msgID int64) (bool, e
 	defer m.mu.Unlock()
 	_, ok := m.favorites[userID][msgID]
 	return ok, nil
+}
+
+// ── 通知（D03 §3.9 PIM-09；user_notification，迁移 0007）──
+
+// InsertNotification 新增通知行（ID 自增占位；雪花阶段二同 message_favorite）
+func (m *Memory) InsertNotification(_ context.Context, n Notification) (Notification, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notifNextID++
+	n.ID = m.notifNextID
+	cp := n
+	m.notif[n.UserID] = append(m.notif[n.UserID], &cp)
+	return cp, nil
+}
+
+// InsertMergedNotification 聚合写入：倒序找同 (user,kind,conv) 未读行且
+// n.CreatedAt-行.CreatedAt < window → count+1、digest 覆盖（D03 §3.9 10s 窗口合并"×N"）
+func (m *Memory) InsertMergedNotification(_ context.Context, n Notification, window time.Duration) (Notification, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rows := m.notif[n.UserID]
+	for i := len(rows) - 1; i >= 0; i-- {
+		r := rows[i]
+		if r.Kind != n.Kind || r.ConvID != n.ConvID || !r.ReadAt.IsZero() {
+			continue
+		}
+		if n.CreatedAt.Sub(r.CreatedAt) >= window {
+			break // 追加序=时间序：遇到更早行即可停（窗口外无候选）
+		}
+		r.Count++
+		r.Digest = n.Digest // digest 展示最新内容；"×N"由 count 列承载
+		return *r, true, nil
+	}
+	m.notifNextID++
+	n.ID = m.notifNextID
+	cp := n
+	m.notif[n.UserID] = append(m.notif[n.UserID], &cp)
+	return cp, false, nil
+}
+
+// ListNotifications 用户通知列表（id 倒序 + cursor 翻页；kind/unread 过滤）
+func (m *Memory) ListNotifications(_ context.Context, f NotificationFilter) ([]Notification, error) {
+	if f.Limit <= 0 || f.Limit > 100 {
+		f.Limit = 20
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Notification{}
+	for i := len(m.notif[f.UserID]) - 1; i >= 0; i-- { // id 倒序（追加序反转）
+		n := m.notif[f.UserID][i]
+		if f.Kind != "" && n.Kind != f.Kind {
+			continue
+		}
+		if f.UnreadOnly && !n.ReadAt.IsZero() {
+			continue
+		}
+		if f.Cursor > 0 && n.ID >= f.Cursor {
+			continue
+		}
+		out = append(out, *n)
+		if len(out) >= f.Limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// MarkNotificationsRead 已读（all/ids 二选一；仅本人行；幂等跳过已读行；返回更新行数）
+func (m *Memory) MarkNotificationsRead(_ context.Context, userID int64, ids []int64, all bool, readAt time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	idset := map[int64]struct{}{}
+	for _, id := range ids {
+		idset[id] = struct{}{}
+	}
+	var n int64
+	for _, r := range m.notif[userID] {
+		if !r.ReadAt.IsZero() {
+			continue // 只进不退：已读行跳过
+		}
+		if !all {
+			if _, ok := idset[r.ID]; !ok {
+				continue
+			}
+		}
+		r.ReadAt = readAt
+		n++
+	}
+	return n, nil
+}
+
+// CountUnreadNotifications 未读计数（红点数据源；99+ 封顶在端内）
+func (m *Memory) CountUnreadNotifications(_ context.Context, userID int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	for _, r := range m.notif[userID] {
+		if r.ReadAt.IsZero() {
+			n++
+		}
+	}
+	return n, nil
 }

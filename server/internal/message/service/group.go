@@ -728,6 +728,9 @@ func (s *Service) UpdateConvSetting(ctx context.Context, userID int64, p message
 	}
 	if annoChanged {
 		s.publishConvUpdated(ctx, conv, "announcement", userID, nil, members, groupSettingDTO(convID, gs))
+		// 通知中心（PIM-09 系统公告分组）：全体在群成员 kind=announcement（操作者除外）。
+		// 取舍登记：与 announcement.changed 系统消息同点直调（notify.go 包注释）
+		s.notifyAnnouncement(ctx, conv, userID, gs.Announcement)
 	}
 	return nil
 }
@@ -808,6 +811,9 @@ func (s *Service) ApplyJoin(ctx context.Context, userID int64, p messageapi.Appl
 		Kind: messageapi.SysKindApplySubmitted, Group: conv.Name,
 		Extra: p.Reason, ApplyID: strconv.FormatInt(apply.ID, 10),
 	})
+	// 通知中心双通道（INT-IM-16）：审批通知推 owner/admin（PIM-09 入群审批分组）。
+	// 取舍登记：无 conv.apply 专属 topic——service 内直调通知生成器（notify.go 包注释）
+	s.notifyApply(ctx, conv, userID, p.Reason)
 	return &messageapi.ApplyResult{ApplyID: strconv.FormatInt(apply.ID, 10)}, nil
 }
 

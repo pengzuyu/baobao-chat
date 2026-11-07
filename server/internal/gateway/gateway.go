@@ -122,6 +122,19 @@ func New(hub *Hub, bus eventbus.Bus, msgs messageapi.MessageService, verify Toke
 		}))
 		return nil // 瞬时事件不入 dedup（无副作用，重复推送由客户端 TTL 合并）
 	})
+	// 通知中心（D03 §3.9 PIM-09）：通知生成器 → 推 notification.new 给目标 user
+	//（payload {id,kind,conv_id,title,digest,count,ts}；客户端红点/列表失效后经 REST 回读真值）
+	bus.Subscribe(eventbus.TopicNotification, func(ctx context.Context, evt eventbus.Event) error {
+		return g.dedup.Once(evt.ID, func() error {
+			e, ok := evt.Payload.(messageapi.NotificationEvent)
+			if !ok {
+				log.Printf("[gateway] notification.new payload 类型异常: %T", evt.Payload)
+				return nil
+			}
+			g.hub.PushToUsers([]int64{e.UserID}, NewPush("notification.new", e.Push))
+			return nil
+		})
+	})
 	// 会话事件（topic=conv.updated）：按 payload 类型分发——
 	//   · ConvStateEvent：kind=state（置顶/免打扰/草稿），仅推本人多端（D03 §10-1）
 	//   · ConvUpdatedEvent：kind=meta/member/setting/status/announcement，快照+members_delta

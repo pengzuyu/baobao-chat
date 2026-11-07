@@ -266,6 +266,15 @@ type MessageService interface {
 	ListFavorites(ctx context.Context, userID int64, msgType string, cursor int64, limit int) (*FavoriteListResult, error)
 	// SearchMessages 服务端态搜索（API-IM-12：keyword+过滤器 AND；仅本人可见会话）
 	SearchMessages(ctx context.Context, userID int64, p SearchParams) (*SearchResult, error)
+
+	// ── 通知中心（D03 §3.9 PIM-09；API-IM-14 列表/已读/未读数）──
+
+	// ListNotifications 通知列表（分组 kind 过滤 + unread_only + cursor 翻页；仅本人）
+	ListNotifications(ctx context.Context, userID int64, kind string, unreadOnly bool, cursor int64, limit int) (*NotificationListResult, error)
+	// MarkNotificationsRead 已读（ids 单条/多条；all 全部；仅本人行，幂等）
+	MarkNotificationsRead(ctx context.Context, userID int64, p NotificationReadPayload) error
+	// UnreadNotificationCount 未读计数（红点数据源；端内 99+ 封顶）
+	UnreadNotificationCount(ctx context.Context, userID int64) (*UnreadCountResult, error)
 }
 
 // ── 收藏（D03 §3.8 PIM-08；API-IM-10/11）──
@@ -697,4 +706,65 @@ type ConvUpdatedPushPayload struct {
 	Conv         ConvSnapshotDTO  `json:"conv"`
 	OperatorID   string           `json:"operator_id"`
 	MembersDelta []MemberDeltaDTO `json:"members_delta,omitempty"`
+}
+
+// ── 通知中心（D03 §3.9 PIM-09；§4.1 INT-IM-22）──
+
+// 通知 kind 注册表（五分组：@我/回复我/入群审批/Agent 完成/系统公告）
+const (
+	NotifyKindMention      = "mention"      // msg.new mentions 命中（含 all 全员）
+	NotifyKindReply        = "reply"        // reply_to_seq 指向本人消息
+	NotifyKindApply        = "apply"        // conv.apply 推 owner/admin（PIM-06 审批卡）
+	NotifyKindAgentDone    = "agent_done"   // agent 域完成事件（服务端无事件源，建表预留，登记不做）
+	NotifyKindAnnouncement = "announcement" // notice.broadcast / 群公告变更
+)
+
+// NotificationItem 通知中心列表项（REST camel，对齐客户端 NotificationItem）
+type NotificationItem struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	ConvID    string `json:"convId,omitempty"`
+	MsgID     string `json:"msgId,omitempty"`
+	Seq       int64  `json:"seq,omitempty"`
+	Title     string `json:"title"`
+	Digest    string `json:"digest,omitempty"`
+	Count     int    `json:"count"` // 10s 窗口合并计数（"×N"渲染依据）
+	CreatedAt int64  `json:"createdAt"`
+	ReadAt    int64  `json:"readAt,omitempty"` // 0=未读
+}
+
+// NotificationListResult GET /notifications 响应（cursor=通知 id）
+type NotificationListResult struct {
+	Items      []NotificationItem `json:"items"`
+	NextCursor string             `json:"nextCursor,omitempty"`
+	HasMore    bool               `json:"hasMore"`
+}
+
+// NotificationReadPayload POST /notifications/read（ids 单条/多条；all 全部）
+type NotificationReadPayload struct {
+	IDs []string `json:"ids,omitempty"`
+	All bool     `json:"all,omitempty"`
+}
+
+// UnreadCountResult GET /notifications/unread_count 响应（红点数据源；99+ 封顶在端内）
+type UnreadCountResult struct {
+	Count int64 `json:"count"`
+}
+
+// NotificationPushPayload notification.new 推送（snake，14 篇 §3.2；
+// 合并命中时 count 为合并后计数——端内仅做列表/红点失效，真值经 REST 回读）
+type NotificationPushPayload struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	ConvID string `json:"conv_id,omitempty"`
+	Title  string `json:"title"`
+	Digest string `json:"digest,omitempty"`
+	Count  int    `json:"count"`
+	TS     int64  `json:"ts"`
+}
+
+// NotificationEvent topic=notification.new 事件负载（通知生成器 → gateway 推给该 user）
+type NotificationEvent struct {
+	UserID int64
+	Push   NotificationPushPayload
 }

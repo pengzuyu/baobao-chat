@@ -40,6 +40,9 @@ type Options struct {
 	// ── 搜索与收藏（D03 §3.7 PIM-07 / §3.8 PIM-08）──
 	MaxFavorites         int // 收藏上限/人（默认 1000，超限 3022，04 篇 §9-2）
 	MaxSearchKeywordRuns int // 搜索词上限（默认 64 字，API-IM-12）
+
+	// ── 通知中心（D03 §3.9 PIM-09）──
+	NotifyMergeWindow time.Duration // 同 (user,kind,conv) 聚合窗口（默认 10s，"×N"合并）
 }
 
 func (o *Options) fillDefaults() {
@@ -85,6 +88,9 @@ func (o *Options) fillDefaults() {
 	if o.MaxSearchKeywordRuns == 0 {
 		o.MaxSearchKeywordRuns = 64
 	}
+	if o.NotifyMergeWindow == 0 {
+		o.NotifyMergeWindow = 10 * time.Second
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -95,6 +101,9 @@ type Service struct {
 	repo messagerepo.Repo
 	bus  eventbus.Bus
 	opts Options
+
+	// notifyDedup 通知生成的事件幂等去重（至少一次投递下防重复落行，D03 PIM-09）
+	notifyDedup *eventbus.Dedup
 
 	// convLocks 会话级发送锁：alloc+insert 原子化，保证 msgs 按 seq 有序落库
 	// （生产环境由 Redis 单点分配保证，等价不变量：会话内 seq 全序——04 篇 §7.2）
@@ -118,7 +127,16 @@ func New(opts Options, r messagerepo.Repo, bus eventbus.Bus) *Service {
 			}
 		}
 	}
-	return &Service{repo: r, bus: bus, opts: opts}
+	s := &Service{
+		repo: r, bus: bus, opts: opts,
+		notifyDedup: eventbus.NewDedup(notifyDedupCap),
+	}
+	// 通知中心事件源接线①（D03 §3.9 PIM-09）：msg.created → @我/回复我；
+	// ②③（conv.apply / 公告）走 service 内直调（取舍见 notify.go 包注释）
+	if bus != nil {
+		s.subscribeNotification(bus)
+	}
+	return s
 }
 
 var _ messageapi.MessageService = (*Service)(nil)

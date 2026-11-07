@@ -34,6 +34,9 @@ var msgFavoriteSQL string
 //go:embed 0006_sensitive_word.sql
 var sensitiveWordSQL string
 
+//go:embed 0007_user_notification.sql
+var userNotificationSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -48,4 +51,6 @@ var List = []Migration{
 	{Version: 5, Name: "0005_message_favorite", Probe: "", SQL: msgFavoriteSQL},
 	// 0006 同理留空：sensitive_word 仅本迁移创建；幂等由 IF NOT EXISTS 兜底
 	{Version: 6, Name: "0006_sensitive_word", Probe: "", SQL: sensitiveWordSQL},
+	// 0007 同理留空：user_notification 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D03 PIM-09）
+	{Version: 7, Name: "0007_user_notification", Probe: "", SQL: userNotificationSQL},
 }

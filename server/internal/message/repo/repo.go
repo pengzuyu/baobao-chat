@@ -126,6 +126,9 @@ type Repo interface {
 
 	// ── 收藏（D03 §3.8 PIM-08；§6.1 message_favorite）──
 	FavoriteStore
+
+	// ── 通知（D03 §3.9 PIM-09 通知中心；§6.1 user_notification，迁移 0007）──
+	NotificationStore
 }
 
 // FavoriteStore 收藏存储（UK(user_id,msg_id) 幂等；上限 1000 由 service 应用层校验→3022）。
@@ -151,6 +154,52 @@ type Favorite struct {
 	MsgID     int64
 	ConvID    int64
 	CreatedAt time.Time
+}
+
+// ── 通知（D03 §3.9 PIM-09；§6.1 user_notification，迁移 0007）──
+
+// Notification 用户通知行（点击路由表依据 kind+conv_id+seq）
+type Notification struct {
+	ID        int64
+	TenantID  int64
+	UserID    int64
+	Kind      string // mention|reply|apply|agent_done|announcement
+	ConvID    int64  // 可空（agent_done 预留场景 0）
+	MsgID     int64  // 可空（apply/announcement 关联系统消息，尽力携带）
+	Seq       int64  // 可空（mention/reply 定位闪烁依据）
+	Title     string
+	Digest    string
+	Count     int // 同 (user,kind,conv) 10s 窗口合并计数（首条=1，"×N"渲染依据）
+	CreatedAt time.Time
+	ReadAt    time.Time // 零值=未读
+}
+
+// NotificationFilter 列表过滤（分组 tab → kind；红点 unread；cursor=id 倒序翻页）
+type NotificationFilter struct {
+	UserID     int64
+	Kind       string // 空=全部
+	UnreadOnly bool
+	Cursor     int64 // 上一页最后一条 id；0=首页
+	Limit      int   // ≤0 或 >100 取 20
+}
+
+// NotificationStore 通知存储。
+// 聚合窗口判定在 repo 内完成（InsertMergedNotification）：同 (user_id,kind,conv_id)
+// 未读行且 CreatedAt 距其 created_at < window → 原行 count+1、digest 覆盖最新内容；
+// 时钟由调用方经 n.CreatedAt 注入（Options.Now 可测）。
+// 勿扰/mute 用户照常落库——「勿扰时段只入中心不发系统通知」是客户端投递策略（INT-IM-22），登记。
+type NotificationStore interface {
+	// InsertNotification 新增通知行（ID=0 时分配）
+	InsertNotification(ctx context.Context, n Notification) (Notification, error)
+	// InsertMergedNotification 聚合写入：命中窗口内可合并行 → 原行 count+1、digest 覆盖
+	// （返回更新后行 + merged=true）；未命中 → 等价 Insert（merged=false）
+	InsertMergedNotification(ctx context.Context, n Notification, window time.Duration) (Notification, bool, error)
+	// ListNotifications 用户通知列表（id 倒序 + cursor 翻页；kind/unread 过滤）
+	ListNotifications(ctx context.Context, f NotificationFilter) ([]Notification, error)
+	// MarkNotificationsRead 已读：all=true 全部，否则按 ids（均限本人行；幂等：已读行跳过）
+	MarkNotificationsRead(ctx context.Context, userID int64, ids []int64, all bool, readAt time.Time) (int64, error)
+	// CountUnreadNotifications 未读计数（红点数据源）
+	CountUnreadNotifications(ctx context.Context, userID int64) (int64, error)
 }
 
 // SearchFilter 服务端态搜索过滤器（D03 API-IM-12：AND 组合；零值=不限）

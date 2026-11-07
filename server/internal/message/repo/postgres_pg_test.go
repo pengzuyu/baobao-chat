@@ -47,6 +47,7 @@ func TestPGSmoke(t *testing.T) {
 
 	sfx := strconv.FormatInt(time.Now().UnixNano(), 10)
 	t.Cleanup(func() { // 清理本轮及历史遗留的冒烟数据
+		_, _ = pool.Exec(ctx, `DELETE FROM user_notification WHERE user_id IN (SELECT id FROM users WHERE employee_no LIKE 'pgsmoke-%')`)
 		_, _ = pool.Exec(ctx, `DELETE FROM message_favorite WHERE user_id IN (SELECT id FROM users WHERE employee_no LIKE 'pgsmoke-%')`)
 		_, _ = pool.Exec(ctx, `DELETE FROM message WHERE conv_id IN (SELECT id FROM conversation WHERE name LIKE 'pgsmoke-%')`)
 		_, _ = pool.Exec(ctx, `DELETE FROM message_receipt WHERE conv_id IN (SELECT id FROM conversation WHERE name LIKE 'pgsmoke-%')`)
@@ -307,6 +308,68 @@ func TestPGSmoke(t *testing.T) {
 	}
 	if err := mr.RemoveFavorite(ctx, u1.ID, msg.ID); err != nil { // 重复取消 no-op
 		t.Fatalf("RemoveFavorite(重复应 no-op): %v", err)
+	}
+
+	// ── 通知（PIM-09：聚合窗口合并/倒序翻页/已读/计数/越权过滤）──
+	base := time.Now()
+	n1, merged, err := mr.InsertMergedNotification(ctx, Notification{
+		UserID: u1.ID, Kind: messageapi.NotifyKindMention, ConvID: conv.ID, MsgID: msg.ID, Seq: seq1,
+		Title: "SmokeA 在「pgsmoke」中@了你", Digest: "第一条", Count: 1, CreatedAt: base,
+	}, 10*time.Second)
+	if err != nil || merged || n1.ID == 0 {
+		t.Fatalf("InsertMergedNotification#1: %v %+v merged=%v", err, n1, merged)
+	}
+	n2, merged, err := mr.InsertMergedNotification(ctx, Notification{
+		UserID: u1.ID, Kind: messageapi.NotifyKindMention, ConvID: conv.ID, MsgID: msg.ID, Seq: seq1,
+		Title: "SmokeA 在「pgsmoke」中@了你", Digest: "第二条", Count: 1, CreatedAt: base.Add(2 * time.Second),
+	}, 10*time.Second)
+	if err != nil || !merged || n2.ID != n1.ID || n2.Count != 2 || n2.Digest != "第二条" {
+		t.Fatalf("InsertMergedNotification(10s 窗口应合并 count+1): %v %+v merged=%v", err, n2, merged)
+	}
+	n3, merged, err := mr.InsertMergedNotification(ctx, Notification{
+		UserID: u1.ID, Kind: messageapi.NotifyKindReply, ConvID: conv.ID, MsgID: msg.ID, Seq: seq1,
+		Title: "SmokeA 回复了你", Digest: "跨 kind", Count: 1, CreatedAt: base.Add(3 * time.Second),
+	}, 10*time.Second)
+	if err != nil || merged || n3.ID == n1.ID {
+		t.Fatalf("InsertMergedNotification(跨 kind 不合并): %v %+v merged=%v", err, n3, merged)
+	}
+	list, err := mr.ListNotifications(ctx, NotificationFilter{UserID: u1.ID})
+	if err != nil || len(list) != 2 || list[0].ID != n3.ID || list[1].Count != 2 {
+		t.Fatalf("ListNotifications(id 倒序+合并计数): %v %+v", err, list)
+	}
+	onlyMention, err := mr.ListNotifications(ctx, NotificationFilter{UserID: u1.ID, Kind: messageapi.NotifyKindMention})
+	if err != nil || len(onlyMention) != 1 || onlyMention[0].ID != n1.ID {
+		t.Fatalf("ListNotifications(kind 过滤): %v %+v", err, onlyMention)
+	}
+	if cnt, err := mr.CountUnreadNotifications(ctx, u1.ID); err != nil || cnt != 2 {
+		t.Fatalf("CountUnreadNotifications: %v %d", err, cnt)
+	}
+	if cnt, err := mr.CountUnreadNotifications(ctx, u2.ID); err != nil || cnt != 0 { // 越权：他人恒 0
+		t.Fatalf("CountUnreadNotifications(他人): %v %d", err, cnt)
+	}
+	if n, err := mr.MarkNotificationsRead(ctx, u1.ID, []int64{n1.ID}, false, base.Add(time.Second)); err != nil || n != 1 {
+		t.Fatalf("MarkNotificationsRead(ids): %v %d", err, n)
+	}
+	if n, err := mr.MarkNotificationsRead(ctx, u1.ID, []int64{n1.ID}, false, base.Add(time.Second)); err != nil || n != 0 {
+		t.Fatalf("MarkNotificationsRead(已读行应跳过): %v %d", err, n)
+	}
+	unread, err := mr.ListNotifications(ctx, NotificationFilter{UserID: u1.ID, UnreadOnly: true})
+	if err != nil || len(unread) != 1 || unread[0].ID != n3.ID {
+		t.Fatalf("ListNotifications(unread_only): %v %+v", err, unread)
+	}
+	if n, err := mr.MarkNotificationsRead(ctx, u1.ID, nil, true, base.Add(2*time.Second)); err != nil || n != 1 {
+		t.Fatalf("MarkNotificationsRead(all): %v %d", err, n)
+	}
+	if cnt, _ := mr.CountUnreadNotifications(ctx, u1.ID); cnt != 0 {
+		t.Fatalf("全部已读后应清零: %d", cnt)
+	}
+	// 已读行不参与合并：窗口内再次触发 → 新行
+	n4, merged, err := mr.InsertMergedNotification(ctx, Notification{
+		UserID: u1.ID, Kind: messageapi.NotifyKindMention, ConvID: conv.ID, MsgID: msg.ID, Seq: seq1,
+		Title: "t", Digest: "已读后", Count: 1, CreatedAt: base.Add(4 * time.Second),
+	}, 10*time.Second)
+	if err != nil || merged || n4.ID == n1.ID {
+		t.Fatalf("InsertMergedNotification(已读行不合并): %v %+v merged=%v", err, n4, merged)
 	}
 
 	if err := mr.DissolveConversation(ctx, conv.ID); err != nil {

@@ -138,6 +138,10 @@ func main() {
 	mux.Handle("GET /api/v1/favorites", authed(handleListFavorites(msgMod.API())))
 	// 全局搜索（D03 §3.7 PIM-07 服务端态；API-IM-12——本地 FTS5 属 Tauri/Rust 侧，不在本路由）
 	mux.Handle("GET /api/v1/messages/search", authed(handleSearchMessages(msgMod.API())))
+	// 通知中心（D03 §3.9 PIM-09：列表/已读/未读数；推送走 WS notification.new）
+	mux.Handle("GET /api/v1/notifications", authed(handleListNotifications(msgMod.API())))
+	mux.Handle("POST /api/v1/notifications/read", authed(handleNotificationsRead(msgMod.API())))
+	mux.Handle("GET /api/v1/notifications/unread_count", authed(handleUnreadNotificationCount(msgMod.API())))
 
 	// AI 网关（docs/19 §6：OpenAI 兼容入口；独立鉴权链——JWT/OBO/开发令牌，不走 /api/v1 authed）
 	aigwMod := aigw.NewModule(pgPool, func(token string) (*authjwt.Claims, error) {
@@ -611,6 +615,66 @@ func handleSearchMessages(svc messageapi.MessageService) http.HandlerFunc {
 			Keyword: q.Get("keyword"), FromUID: fromUID, ConvID: convID, Type: q.Get("type"),
 			FromTS: fromTS, ToTS: toTS, Cursor: cursor, Limit: limit,
 		})
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// ── 通知中心 REST 壳（D03 §3.9 PIM-09）──
+
+// handleListNotifications 通知列表（API-IM-14：kind 分组 + unread_only + cursor 翻页）
+func handleListNotifications(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		q := r.URL.Query()
+		cursor, _ := strconv.ParseInt(q.Get("cursor"), 10, 64)
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		res, err := svc.ListNotifications(r.Context(), uid, q.Get("kind"), q.Get("unread_only") == "1" || q.Get("unread_only") == "true", cursor, limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleNotificationsRead 已读（POST：{ids?:[], all?:bool}——ids 单条/多条，all 全部）
+func handleNotificationsRead(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req messageapi.NotificationReadPayload
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.MarkNotificationsRead(r.Context(), uid, req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{})
+	}
+}
+
+// handleUnreadNotificationCount 未读计数（红点数据源；端内 99+ 封顶）
+func handleUnreadNotificationCount(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.UnreadNotificationCount(r.Context(), uid)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return

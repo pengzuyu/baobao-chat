@@ -20,6 +20,7 @@ const (
 	TopicMsgReaction     = "msg.reaction"        // message → gateway(推 msg.reaction.new 全量快照，D03 INT-IM-23)
 	TopicMsgTyping       = "msg.typing"          // message → gateway(瞬时推其他成员，不落库，D03 INT-IM-11)
 	TopicConvUpdated     = "conv.updated"        // message → gateway/audit
+	TopicNotification    = "notification.new"    // message(通知生成器) → gateway(推 notification.new 给目标 user，客户端红点/列表失效，D03 §3.9 PIM-09)
 	TopicFileScanDone    = "file.scan.completed" // file → gateway/message
 	TopicDocVersion      = "doc.version.created" // doc → gateway/kb
 	TopicKBDocReady      = "kb.doc.ready"        // kb → gateway

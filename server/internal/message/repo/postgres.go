@@ -30,6 +30,7 @@ const (
 	lockKeyConvMember   int64 = 9105
 	lockKeyConvApply    int64 = 9106
 	lockKeyMsgFavorite  int64 = 9107
+	lockKeyUserNotif    int64 = 9108 // user_notification（D03 PIM-09）
 )
 
 // Postgres message 域 PG 仓储
@@ -999,4 +1000,193 @@ func (p *Postgres) ExistsFavorite(ctx context.Context, userID, msgID int64) (boo
 		`SELECT EXISTS(SELECT 1 FROM message_favorite WHERE user_id=$1 AND msg_id=$2)`,
 		userID, msgID).Scan(&exists)
 	return exists, err
+}
+
+// ── 通知（D03 §3.9 PIM-09；user_notification，迁移 0007）──
+
+// scanNotifCols 通知行统一列清单（与 scanNotif 对齐）
+const notifCols = `id, tenant_id, user_id, kind, conv_id, msg_id, seq, title, digest, count, created_at, read_at`
+
+// scanNotif 行扫描（可空列用指针承接）
+func scanNotif(row pgx.Row) (*Notification, error) {
+	var (
+		n                  Notification
+		convID, msgID, seq *int64
+		readAt             *time.Time
+	)
+	if err := row.Scan(&n.ID, &n.TenantID, &n.UserID, &n.Kind, &convID, &msgID, &seq,
+		&n.Title, &n.Digest, &n.Count, &n.CreatedAt, &readAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, messageapi.ErrNotFound
+		}
+		return nil, err
+	}
+	if convID != nil {
+		n.ConvID = *convID
+	}
+	if msgID != nil {
+		n.MsgID = *msgID
+	}
+	if seq != nil {
+		n.Seq = *seq
+	}
+	if readAt != nil {
+		n.ReadAt = *readAt
+	}
+	return &n, nil
+}
+
+// notifTenantExpr tenant_id 取值表达式：优先随会话行（RLS 写入检查同收藏），
+// 无会话行（agent_done 预留等）回落池会话级 app.tenant 设置
+func notifTenantExpr() string {
+	return `COALESCE((SELECT c.tenant_id FROM conversation c WHERE c.id = $2),
+		current_setting('app.tenant', true)::BIGINT)`
+}
+
+// InsertNotification 新增通知行（ID advisory lock 9108 + max+1 分配）
+func (p *Postgres) InsertNotification(ctx context.Context, n Notification) (Notification, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Notification{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
+	if n.ID, err = bbwpg.AllocID(ctx, tx, lockKeyUserNotif, "user_notification"); err != nil {
+		return Notification{}, err
+	}
+	tenantExpr := notifTenantExpr()
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO user_notification
+			(id, tenant_id, user_id, kind, conv_id, msg_id, seq, title, digest, count, created_at, read_at)
+		VALUES ($1, `+tenantExpr+`, $3, $4, NULLIF($5::bigint,0), NULLIF($6::bigint,0), NULLIF($7::bigint,0),
+			$8, $9, $10, $11, NULL)`,
+		n.ID, n.ConvID, n.UserID, n.Kind, n.ConvID, n.MsgID, n.Seq,
+		n.Title, n.Digest, n.Count, n.CreatedAt); err != nil {
+		return Notification{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Notification{}, err
+	}
+	return n, nil
+}
+
+// InsertMergedNotification 聚合写入（D03 §3.9 同 (user,kind,conv) 10s 窗口合并"×N"）：
+// FOR UPDATE 锁候选行防并发双开新行；窗口以 n.CreatedAt（服务端注入时钟）为基准。
+func (p *Postgres) InsertMergedNotification(ctx context.Context, n Notification, window time.Duration) (Notification, bool, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Notification{}, false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
+	cutoff := n.CreatedAt.Add(-window)
+	var mergeID int64
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM user_notification
+		WHERE user_id=$1 AND kind=$2 AND conv_id=$3 AND read_at IS NULL AND created_at > $4
+		ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+		n.UserID, n.Kind, n.ConvID, cutoff).Scan(&mergeID)
+	if err == nil {
+		// 命中窗口内行：count+1、digest 覆盖最新内容（"×N"由 count 列承载）
+		if _, err = tx.Exec(ctx,
+			`UPDATE user_notification SET count = count + 1, digest = $2 WHERE id = $1`,
+			mergeID, n.Digest); err != nil {
+			return Notification{}, false, err
+		}
+		row := tx.QueryRow(ctx, `SELECT `+notifCols+` FROM user_notification WHERE id=$1`, mergeID)
+		merged, serr := scanNotif(row)
+		if serr != nil {
+			return Notification{}, false, serr
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return Notification{}, false, err
+		}
+		return *merged, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Notification{}, false, err
+	}
+	// 未命中：新行（同 InsertNotification 路径，事务内完成）
+	if n.ID, err = bbwpg.AllocID(ctx, tx, lockKeyUserNotif, "user_notification"); err != nil {
+		return Notification{}, false, err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO user_notification
+			(id, tenant_id, user_id, kind, conv_id, msg_id, seq, title, digest, count, created_at, read_at)
+		VALUES ($1, `+notifTenantExpr()+`, $3, $4, NULLIF($5::bigint,0), NULLIF($6::bigint,0), NULLIF($7::bigint,0),
+			$8, $9, $10, $11, NULL)`,
+		n.ID, n.ConvID, n.UserID, n.Kind, n.ConvID, n.MsgID, n.Seq,
+		n.Title, n.Digest, n.Count, n.CreatedAt); err != nil {
+		return Notification{}, false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Notification{}, false, err
+	}
+	return n, false, nil
+}
+
+// ListNotifications 用户通知列表（id 倒序 + cursor 翻页；kind/unread 过滤）
+func (p *Postgres) ListNotifications(ctx context.Context, f NotificationFilter) ([]Notification, error) {
+	if f.Limit <= 0 || f.Limit > 100 {
+		f.Limit = 20
+	}
+	q := `SELECT ` + notifCols + ` FROM user_notification WHERE user_id = $1`
+	args := []any{f.UserID}
+	if f.Kind != "" {
+		args = append(args, f.Kind)
+		q += ` AND kind = $` + strconv.Itoa(len(args))
+	}
+	if f.UnreadOnly {
+		q += ` AND read_at IS NULL`
+	}
+	if f.Cursor > 0 {
+		args = append(args, f.Cursor)
+		q += ` AND id < $` + strconv.Itoa(len(args))
+	}
+	args = append(args, f.Limit)
+	q += ` ORDER BY id DESC LIMIT $` + strconv.Itoa(len(args))
+
+	rows, err := p.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Notification{}
+	for rows.Next() {
+		n, err := scanNotif(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *n)
+	}
+	return out, rows.Err()
+}
+
+// MarkNotificationsRead 已读（all/ids 二选一；仅本人行；幂等跳过已读行；返回更新行数）
+func (p *Postgres) MarkNotificationsRead(ctx context.Context, userID int64, ids []int64, all bool, readAt time.Time) (int64, error) {
+	var tag pgconn.CommandTag
+	var err error
+	if all {
+		tag, err = p.pool.Exec(ctx,
+			`UPDATE user_notification SET read_at=$1 WHERE user_id=$2 AND read_at IS NULL`,
+			readAt, userID)
+	} else {
+		if len(ids) == 0 {
+			return 0, nil
+		}
+		tag, err = p.pool.Exec(ctx,
+			`UPDATE user_notification SET read_at=$1 WHERE user_id=$2 AND read_at IS NULL AND id = ANY($3)`,
+			readAt, userID, ids)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// CountUnreadNotifications 未读计数（红点数据源；99+ 封顶在端内）
+func (p *Postgres) CountUnreadNotifications(ctx context.Context, userID int64) (int64, error) {
+	var n int64
+	err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM user_notification WHERE user_id=$1 AND read_at IS NULL`, userID).
+		Scan(&n)
+	return n, err
 }
