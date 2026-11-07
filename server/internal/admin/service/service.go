@@ -47,6 +47,11 @@ type Options struct {
 	// BroadcastNotice 公告广播闭包（PAD-15；main 注入=message 域 BroadcastNotice
 	// + org 活跃用户清单；nil=仅存档不广播——联调形态）
 	BroadcastNotice func(ctx context.Context, tenantID int64, title, digest string) int
+	// HashPassword 初始口令哈希闭包（PAD-06；main 注入 authservice.HashPassword；
+	// nil=无口令哈希（测试/联调——导入用户将无法口令登录））
+	HashPassword func(password string) (string, error)
+	// CreateUser 建用户闭包（PAD-06；main 注入 orgRepo.CreateUser——admin 域不引 org repo）
+	CreateUser func(ctx context.Context, u orgapi.User) (orgapi.User, error)
 
 	// Now 时钟注入（测试用）
 	Now func() time.Time
@@ -690,4 +695,66 @@ func firstLine(s string, max int) string {
 		return string(r[:max]) + "…"
 	}
 	return s
+}
+
+/* ── 批量导入（PAD-06；v0.1 同步 ≤100 行/次；admin_task 异步化+初始口令首登改密阶段二登记） ── */
+
+const maxImportRows = 100
+
+func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int64, rows []adminapi.ImportUserRow) (*adminapi.ImportResult, error) {
+	if len(rows) == 0 {
+		return nil, errx.New(errx.CodeBadRequest, "导入行为空")
+	}
+	if len(rows) > maxImportRows {
+		return nil, errx.New(errx.CodeBadRequest, "单次 ≤100 行（更大批量走异步任务，阶段二）")
+	}
+	res := &adminapi.ImportResult{Rows: make([]adminapi.ImportRow, 0, len(rows))}
+	seen := map[string]bool{}
+	for i, r := range rows {
+		row := adminapi.ImportRow{Row: i + 1, Empno: strings.TrimSpace(r.Empno), Name: strings.TrimSpace(r.Name)}
+		switch {
+		case row.Empno == "" || len(row.Empno) > 32:
+			row.Reason = "工号非法（非空 ≤32）"
+		case row.Name == "" || len([]rune(row.Name)) > 50:
+			row.Reason = "姓名非法（非空 ≤50 字）"
+		case seen[row.Empno]:
+			row.Reason = "工号与本批次重复"
+		default:
+			seen[row.Empno] = true
+			// 既有用户查重（UserReader——org 域读取通道）
+			if u, err := s.same.GetUserByLogin(ctx, tenantID, row.Empno); err == nil && u != nil {
+				row.Reason = "工号已存在"
+				break
+			}
+			if s.opts.CreateUser == nil {
+				row.Reason = "用户创建通道未装配"
+				break
+			}
+			// 初始口令 = 工号 + 固定盐后缀（首登强制改密阶段二接 03 篇 §5；HashPassword 闭包注入）
+			hash := ""
+			if s.opts.HashPassword != nil {
+				if h, herr := s.opts.HashPassword(row.Empno + "!BBW"); herr == nil {
+					hash = h
+				}
+			}
+			if _, cerr := s.opts.CreateUser(ctx, orgapi.User{
+				TenantID: tenantID, Type: orgapi.UserTypeHuman, EmployeeNo: row.Empno,
+				DisplayName: row.Name, Email: strings.TrimSpace(r.Email),
+				PasswordHash: hash, Status: orgapi.UserStatusActive,
+				Scopes: []string{"im:message:send"}, // 新用户基础权限（角色化随 RBAC 收口）
+			}); cerr != nil {
+				row.Reason = "创建失败：" + cerr.Error()
+			} else {
+				row.OK = true
+			}
+		}
+		if row.OK {
+			res.Created++
+		} else {
+			res.Failed++
+		}
+		res.Rows = append(res.Rows, row)
+	}
+	_ = s.audit(ctx, tenantID, operatorID, "users.import", "", map[string]any{"created": res.Created, "failed": res.Failed})
+	return res, nil
 }

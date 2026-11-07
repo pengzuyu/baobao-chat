@@ -177,7 +177,32 @@ type NoticeDTO struct {
 	CreatedAt int64  `json:"created_at"` // ms
 }
 
+// ImportUserRow 导入输入行（empno,name,email；初始口令=工号+!BBW，首登改密阶段二接 03 篇）
+type ImportUserRow struct {
+	Empno string `json:"empno"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// ImportRow 导入行结果（PAD-06）
+type ImportRow struct {
+	Row    int    `json:"row"` // 1 起行号（不含表头）
+	Empno  string `json:"empno"`
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"` // 失败原因（工号已存在/格式非法）
+}
+
+// ImportResult 批量导入结果
+type ImportResult struct {
+	Created int         `json:"created"`
+	Failed  int         `json:"failed"`
+	Rows    []ImportRow `json:"rows"`
+}
+
 type AdminService interface {
+	// ── 批量导入（PAD-06；v0.1 同步 ≤100 行/次，admin_task 异步化阶段二登记）──
+	BatchImportUsers(ctx context.Context, tenantID, operatorID int64, rows []ImportUserRow) (*ImportResult, error)
 	// ── 平台公告（PAD-15；admin:notice:publish）──
 	PublishNotice(ctx context.Context, tenantID, operatorID int64, title, content string) (*NoticeDTO, error)
 	ListNotices(ctx context.Context, tenantID int64, cursor int64, limit int) ([]NoticeDTO, bool, error)

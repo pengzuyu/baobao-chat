@@ -7441,3 +7441,13 @@ body {
 .admin-notice__reach { font-size: 12px; color: var(--bbw-text-3, #8f9aae); background: var(--bbw-gray-2, #f5f6f7); padding: 1px 8px; border-radius: 10px; }
 .admin-notice__content { white-space: pre-wrap; font: inherit; margin: 6px 0; color: var(--bbw-text-2, #5f6a7a); }
 .admin-notice__ts { font-size: 12px; color: var(--bbw-text-3, #8f9aae); }
+
+/* ── 批量导入（D10 PAD-06） ── */
+
+.admin-import__input { font-family: var(--font-mono, monospace); font-size: 12px; }
+.admin-import__meta { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--bbw-text-2, #5f6a7a); margin-bottom: 10px; }
+.admin-import__bad { color: #c6622d; }
+.admin-import__summary { margin: 8px 0 12px; }
+.admin-import__summary strong { color: var(--bbw-primary, #3370ff); }
+.admin-import__fail { color: #c6622d; font-size: 12px; }
+.admin-import__hint { font-size: 12px; color: var(--bbw-text-3, #8f9aae); }

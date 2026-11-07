@@ -5,6 +5,7 @@ package adminservice
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -47,6 +48,9 @@ func newFixture(adminAccounts []string) (*Service, *orgrepo.Memory, adminrepo.Re
 	roles := adminrepo.NewMemoryRoles()
 	_, _ = roles.InsertRole(ctx, adminrepo.Role{TenantID: 1, Name: "管理员", IsBuiltin: true, Permissions: []string{"admin"}})
 	svc := New(orgRepo, orgRepo, store, roles, adminrepo.NewMemoryNotices(), Options{
+		CreateUser: func(ctx context.Context, u orgapi.User) (orgapi.User, error) {
+			return orgRepo.CreateUser(ctx, u)
+		},
 		UsersTotal:       func(context.Context, int64) (int64, error) { return 2, nil },
 		OnlineNow:        func() int64 { return 2 },
 		ConvsActiveSince: func(context.Context, int64, time.Time) (int64, error) { return 1, nil },
@@ -360,5 +364,37 @@ func TestPublishNotice(t *testing.T) {
 	items, more, err := svc.ListNotices(ctx, 1, 0, 10)
 	if err != nil || more || len(items) != 1 || items[0].Title != "停机维护公告" {
 		t.Fatalf("list: %v %+v", err, items)
+	}
+}
+
+func TestBatchImportUsers(t *testing.T) {
+	svc, orgRepo, _, _ := newFixture([]string{"alice"})
+	ctx := context.Background()
+	// alice 已存在（fixture 种子）——同名工号应失败
+	res, err := svc.BatchImportUsers(ctx, 1, 10001, []adminapi.ImportUserRow{
+		{Empno: "alice", Name: "重名"},                 // 已存在
+		{Empno: "", Name: "无工号"},                     // 格式
+		{Empno: "u1", Name: "张三", Email: "z@x.io"},   // OK
+		{Empno: "u1", Name: "重复"},                    // 批内重复
+		{Empno: "u2", Name: strings.Repeat("超", 51)}, // 姓名超长
+		{Empno: "u3", Name: "李四"},                    // OK
+	})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if res.Created != 2 || res.Failed != 4 || len(res.Rows) != 6 {
+		t.Fatalf("结果: %+v", res)
+	}
+	// 创建可登录（工号命中）
+	if u, err := orgRepo.GetUserByLogin(ctx, 1, "u1"); err != nil || u == nil || u.DisplayName != "张三" {
+		t.Fatalf("u1: %v %+v", err, u)
+	}
+	// 超量拒绝
+	big := make([]adminapi.ImportUserRow, 101)
+	for i := range big {
+		big[i] = adminapi.ImportUserRow{Empno: fmt.Sprintf("b%d", i), Name: "x"}
+	}
+	if _, err := svc.BatchImportUsers(ctx, 1, 10001, big); err == nil {
+		t.Fatal("超 100 行应拒")
 	}
 }

@@ -29,6 +29,7 @@ import { DashboardPage } from '../features/admin/pages/DashboardPage';
 import { UsersPage } from '../features/admin/pages/UsersPage';
 import { RolesPage } from '../features/admin/pages/RolesPage';
 import { NoticesPage } from '../features/admin/pages/NoticesPage';
+import { ImportPage } from '../features/admin/pages/ImportPage';
 import { PoliciesPage } from '../features/admin/pages/PoliciesPage';
 import { UsagePage } from '../features/admin/pages/UsagePage';
 import { AuditPage } from '../features/admin/pages/AuditPage';
@@ -158,6 +159,7 @@ export function App() {
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<DashboardPage />} />
           <Route path="users" element={<UsersPage />} />
+          <Route path="users/import" element={<ImportPage />} />
           <Route path="roles" element={<RolesPage />} />
           <Route path="notices" element={<NoticesPage />} />
           <Route path="policies" element={<PoliciesPage />} />

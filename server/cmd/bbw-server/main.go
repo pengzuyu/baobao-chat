@@ -486,6 +486,10 @@ func main() {
 	} else {
 		noticeStore = adminrepo.NewMemoryNotices()
 	}
+	adminOpts.HashPassword = authservice.HashPassword
+	adminOpts.CreateUser = func(ctx context.Context, u orgapi.User) (orgapi.User, error) {
+		return orgRepo.CreateUser(ctx, u)
+	}
 	adminOpts.BroadcastNotice = func(ctx context.Context, tenantID int64, title, digest string) int {
 		users, _, err := orgAdmin.ListUsers(ctx, orgapi.UserListFilter{TenantID: tenantID, Status: orgapi.UserStatusActive, Limit: 5000})
 		if err != nil {
@@ -537,6 +541,8 @@ func main() {
 	// 平台公告（PAD-15；admin:notice:publish 随权限字典收口）
 	mux.Handle("GET /api/v1/admin/notices", adminOnly(handleAdminListNotices(adminSvc)))
 	mux.Handle("POST /api/v1/admin/notices", adminOnly(handleAdminPublishNotice(adminSvc)))
+	// 批量导入（PAD-06；admin:user:manage）
+	mux.Handle("POST /api/v1/admin/users/import", adminOnly(handleAdminImportUsers(adminSvc)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -2523,5 +2529,29 @@ func handleAdminListNotices(svc adminapi.AdminService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, map[string]any{"items": items, "has_more": more})
+	}
+}
+
+// handleAdminImportUsers 批量导入（PAD-06；v0.1 同步 ≤100 行/次）
+func handleAdminImportUsers(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Rows []adminapi.ImportUserRow `json:"rows"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.BatchImportUsers(r.Context(), httpx.TenantID(r.Context()), op, req.Rows)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
 	}
 }

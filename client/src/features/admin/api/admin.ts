@@ -310,3 +310,30 @@ export async function publishNotice(title: string, content: string): Promise<Adm
   if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持发布公告');
   return http.post<AdminNotice>('/admin/notices', { title, content });
 }
+
+/* ── 批量导入（PAD-06） ── */
+
+export interface ImportRowResult {
+  row: number;
+  empno: string;
+  name: string;
+  ok: boolean;
+  reason?: string;
+}
+
+export interface ImportResult {
+  created: number;
+  failed: number;
+  rows: ImportRowResult[];
+}
+
+export interface ImportInputRow {
+  empno: string;
+  name: string;
+  email?: string;
+}
+
+export async function batchImportUsers(rows: ImportInputRow[]): Promise<ImportResult> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持批量导入');
+  return http.post<ImportResult>('/admin/users/import', { rows });
+}
