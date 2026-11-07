@@ -17,6 +17,7 @@
 pub mod call;
 pub mod conn;
 pub mod discovery;
+pub mod http;
 pub mod policy;
 pub mod transport;
 
@@ -27,7 +28,7 @@ pub use call::{call_tool, McpCallResult, TokenProvider};
 pub use conn::McpConnection;
 pub use discovery::ToolEntry;
 pub use policy::PolicyFilter;
-pub use transport::{McpServerConfig, TransportConfig};
+pub use transport::{HttpTransport, McpServerConfig, StdioTransport, Transport, TransportConfig};
 
 /// MCP client 错误（调用方映射协议错误码：未注册/断连标灰 → 8002；
 /// 连接失败 → 8047 语义位，暂由调用方文案承载）
@@ -57,12 +58,13 @@ pub struct McpClient {
 
 impl McpClient {
     /// 连接全部配置的 server（单条失败不阻塞其余——降级语义 D11 §2.10：
-    /// 断连 server 的工具标灰，不拖垮其它来源）；返回 (client, 各 server 结果)
+    /// 断连 server 的工具标灰，不拖垮其它来源）；返回 (client, 各 server 结果)。
+    /// tokens 同时供 Http 传输（Authorization 头）与 call 层（_meta.bbwObo）逐请求取用
     pub fn connect(configs: &[McpServerConfig], tokens: TokenProvider) -> (Self, ConnectResults) {
         let mut conns = HashMap::new();
         let mut results = vec![];
         for cfg in configs {
-            match McpConnection::connect(cfg) {
+            match McpConnection::connect(cfg, tokens.clone()) {
                 Ok(c) => {
                     conns.insert(cfg.name.clone(), c);
                     results.push((cfg.name.clone(), Ok(())));

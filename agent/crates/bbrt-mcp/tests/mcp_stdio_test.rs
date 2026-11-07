@@ -118,13 +118,13 @@ fn connect_failures_degrade() {
     assert!(matches!(results[0].1, Err(McpError::Connect(_))));
     assert!(client.list_tools(&PolicyFilter::default()).is_empty());
 
-    // HTTP 传输 v0.1 未实现 → Unsupported
+    // HTTP 传输：闭端口 → Connect 错误（HTTP 传输已实现，见 mcp_http_test）
     let http = McpServerConfig {
         name: "gw".into(),
         transport: TransportConfig::Http {
-            base_url: "http://127.0.0.1:8090/mcp".into(),
+            base_url: "http://127.0.0.1:1/mcp".into(), // 端口 1 无监听
         },
     };
     let (_, results) = McpClient::connect(&[http], no_token());
-    assert!(matches!(results[0].1, Err(McpError::Unsupported(_))));
+    assert!(matches!(results[0].1, Err(McpError::Connect(_))));
 }

@@ -1,17 +1,21 @@
 //! 连接管理：initialize 握手（协议版本协商·宽容收下 server 版本）、
-//! initialized 通知、工具发现入口。
+//! initialized 通知、工具发现入口。传输经 [`Transport`] trait 双形态：
+//! stdio 子进程 / 远程 HTTP 网关（Http 传输持 TokenProvider 逐请求注入 Bearer）。
 
 use std::time::Duration;
 
+use crate::call::TokenProvider;
 use crate::discovery::ToolEntry;
-use crate::transport::{McpServerConfig, StdioTransport};
+use crate::transport::{
+    HttpTransport, McpServerConfig, StdioTransport, Transport, TransportConfig,
+};
 use crate::McpError;
 
 /// 单 server 连接（握手后复用；非 Clone——经 McpClient 的 Mutex 表共享；
 /// 请求需要 &mut，由持锁方保证串行）
 pub struct McpConnection {
     server: String,
-    transport: StdioTransport,
+    transport: Box<dyn Transport>,
     /// server 回报的协议版本（宽容：客户端按 2024-11-05 请求，收下其回报）
     protocol_version: String,
     server_name: String,
@@ -21,9 +25,13 @@ pub struct McpConnection {
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl McpConnection {
-    /// spawn + initialize 握手 + initialized 通知
-    pub fn connect(cfg: &McpServerConfig) -> Result<Self, McpError> {
-        let mut transport = StdioTransport::spawn(&cfg.transport)?;
+    /// 构建传输 + initialize 握手 + initialized 通知
+    /// （tokens：Http 传输注入 Authorization；stdio 传输身份走 params._meta）
+    pub fn connect(cfg: &McpServerConfig, tokens: TokenProvider) -> Result<Self, McpError> {
+        let mut transport: Box<dyn Transport> = match &cfg.transport {
+            TransportConfig::Stdio { .. } => Box::new(StdioTransport::spawn(&cfg.transport)?),
+            TransportConfig::Http { base_url } => Box::new(HttpTransport::new(base_url, tokens)?),
+        };
         let result = transport.request(
             "initialize",
             serde_json::json!({

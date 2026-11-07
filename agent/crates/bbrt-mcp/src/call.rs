@@ -1,8 +1,10 @@
 //! 受控调用：tools/call + 主体身份（OBO）逐请求注入（D14 §6.2）。
 //!
-//! stdio 传输无 HTTP 头可放——身份进 JSON-RPC params._meta：
-//! `{"bbwObo": "...", "bbwAct": "..."}`；远程 HTTP 网关接入后改
-//! Authorization/X-BBW-* 头（传输层差异，调用方无感）。
+//! 身份双通道（服务端任收其一，mcpgw server.go 同口径）：
+//! - stdio 传输无 HTTP 头可放——身份进 JSON-RPC params._meta：
+//!   `{"bbwObo": "...", "bbwAct": "..."}`；
+//! - HTTP 传输由 [`crate::transport::HttpTransport`] 额外注入
+//!   `Authorization: Bearer`（_meta 仍随行——同报文双保险）。
 
 use std::sync::Arc;
 
