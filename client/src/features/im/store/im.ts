@@ -95,6 +95,16 @@ interface ImState {
   /** 跨页待定位（PIM-07/PIM-08 点击跳转）：ChatPage 消费后滚动锚点 + 闪烁 2s */
   pendingLocate: { convId: string; seq: number } | null;
   setPendingLocate: (target: { convId: string; seq: number } | null) => void;
+
+  /** 多选模式（INT-IM-14/PIM-10）：isActive + 选中 msgId 集。
+   * 选择集独立于消息流渲染窗口（滚动/上翻加载不丢选择）；切换会话由 ChatPage 主动退出 */
+  multiSelect: { isActive: boolean; selectedIds: Set<string> };
+  /** 进入多选（右键/悬浮菜单「多选」）；initialMsgId=触发消息直接预选（飞书同款） */
+  enterMultiSelect: (initialMsgId?: string) => void;
+  /** 退出多选并清空选择（Esc/点空白/取消按钮） */
+  exitMultiSelect: () => void;
+  /** 勾选/取消单条（幂等切换） */
+  toggleMultiSelectItem: (msgId: string) => void;
 }
 
 // ---- msg.read 上报节流（1s trailing，D03 INT-IM-12）----
@@ -126,9 +136,12 @@ function nextLocalSeq(): number {
   return localSeq;
 }
 
-/** 会话内消息排序：seq 升序（负序的本端消息天然置底） */
+/** 会话内消息排序：服务端 seq 升序；本端未决消息（负临时序）稳定置底
+ * （D03 INT-IM-01"临时负序置底"——负数在纯升序下会排到最顶，须以 MAX_SAFE 键压底，
+ *  Array.sort 稳定性保证多个 sending 按插入顺序排列） */
 function sortMessages(list: Message[]): Message[] {
-  return [...list].sort((a, b) => a.seq - b.seq);
+  const key = (m: Message) => (m.seq > 0 ? m.seq : Number.MAX_SAFE_INTEGER);
+  return [...list].sort((a, b) => key(a) - key(b));
 }
 
 /** 更新会话的 lastMsg 摘要（列表即时反馈） */
@@ -257,9 +270,10 @@ export const useImStore = create<ImState>((set, get) => ({
       if (hitIdx >= 0) {
         const next = [...list];
         next[hitIdx] = { ...next[hitIdx], localState: 'sent', seq: msg.seq, msgId: msg.msgId, ts: msg.ts };
-        // 服务端真值到达即自愈：清 outbox 行 + 落本地库（settle 的 ack 写幂等兜底）
+        // 服务端真值到达即自愈：清 outbox 行 + 落本地库（settle 的 ack 写幂等兜底）；
+        // 回填真 seq 后重排（乐观负序占位可能落在错误槽位）
         void outboxSettle(msg.clientMsgId, true, next[hitIdx]);
-        return { messagesByConv: { ...s.messagesByConv, [msg.convId]: next } };
+        return { messagesByConv: { ...s.messagesByConv, [msg.convId]: sortMessages(next) } };
       }
       const convs = s.convs.map((c) => {
         if (c.id !== msg.convId) return c;
@@ -495,6 +509,24 @@ export const useImStore = create<ImState>((set, get) => ({
 
   pendingLocate: null,
   setPendingLocate: (target) => set({ pendingLocate: target }),
+
+  multiSelect: { isActive: false, selectedIds: new Set<string>() },
+  enterMultiSelect: (initialMsgId) =>
+    set({
+      multiSelect: {
+        isActive: true,
+        selectedIds: initialMsgId ? new Set([initialMsgId]) : new Set<string>(),
+      },
+    }),
+  exitMultiSelect: () => set({ multiSelect: { isActive: false, selectedIds: new Set<string>() } }),
+  toggleMultiSelectItem: (msgId) =>
+    set((s) => {
+      if (!s.multiSelect.isActive) return s;
+      const next = new Set(s.multiSelect.selectedIds);
+      if (next.has(msgId)) next.delete(msgId);
+      else next.add(msgId);
+      return { multiSelect: { isActive: true, selectedIds: next } };
+    }),
 }));
 
 /** 统一收尾：ack → sent（回填 seq/msgId/ts）；异常 → 自动重试≤3 后 failed（红叹号+重试入口） */
@@ -514,8 +546,11 @@ async function settle(
     set((s) => ({
       messagesByConv: {
         ...s.messagesByConv,
-        [convId]: (s.messagesByConv[convId] ?? []).map((m) =>
-          m.clientMsgId === clientMsgId ? { ...m, localState: 'sent' as const, seq: ack.seq, msgId: ack.msgId, ts: ack.ts } : m,
+        // 回填真 seq 后重排（乐观负序占位槽位可能偏移，D03 INT-IM-01 置底不变量）
+        [convId]: sortMessages(
+          (s.messagesByConv[convId] ?? []).map((m) =>
+            m.clientMsgId === clientMsgId ? { ...m, localState: 'sent' as const, seq: ack.seq, msgId: ack.msgId, ts: ack.ts } : m,
+          ),
         ),
       },
     }));

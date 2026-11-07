@@ -6837,3 +6837,423 @@ body {
 .chat-header__presence--busy {
   background: var(--bbw-warning, #d59020);
 }
+
+/* ─────────────── 消息多选与批量操作（PIM-10 / INT-IM-14，D03 §3.10） ─────────────── */
+
+/* 多选模式行：气泡内容收敛为只读（行点击切换勾选），隐藏悬浮操作条 */
+.msg-row--selecting {
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.msg-row--selecting:hover {
+  background: var(--bbw-gray-2);
+}
+
+.msg-row--selecting .msg-row__bubble-wrap {
+  pointer-events: none; /* 图片灯箱/文件下载等内层交互让位给勾选 */
+}
+
+.msg-row--selecting .msg-actions {
+  display: none;
+}
+
+.msg-row--selected {
+  background: var(--bbw-primary-light);
+}
+
+/* 复选框浮层（气泡左侧） */
+.msg-check {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 7px;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.5px solid var(--bbw-gray-5);
+  background: var(--bbw-bg-card, #fff);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+}
+
+.msg-row--mine .msg-check {
+  /* 己方行 row-reverse：复选框仍保持视觉左侧 */
+  order: 10;
+  margin-right: 0;
+}
+
+.msg-check--on {
+  border-color: var(--bbw-primary);
+  background: var(--bbw-primary);
+}
+
+/* 批量条：替换会话头（同高 52px 吸顶） */
+.multi-select-bar {
+  position: sticky;
+  top: 0;
+  z-index: var(--bbw-z-sticky);
+  flex-shrink: 0;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-3);
+  padding: 0 var(--bbw-space-4);
+  border-bottom: 1px solid var(--bbw-gray-3);
+  background: var(--bbw-primary-light);
+}
+
+.multi-select-bar__count {
+  font-size: var(--bbw-font-13);
+  font-weight: 600;
+  color: var(--bbw-gray-10);
+  white-space: nowrap;
+}
+
+.multi-select-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-1);
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.multi-select-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--bbw-gray-8);
+  font-size: var(--bbw-font-13);
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.multi-select-bar__btn:hover:not(:disabled) {
+  background: var(--bbw-gray-2);
+}
+
+.multi-select-bar__btn:disabled {
+  color: var(--bbw-gray-4);
+  cursor: not-allowed;
+}
+
+.multi-select-bar__cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--bbw-gray-6);
+  font-size: var(--bbw-font-13);
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.multi-select-bar__cancel:hover {
+  background: var(--bbw-gray-2);
+  color: var(--bbw-gray-9);
+}
+
+/* ─────────────── 转发弹窗完整版（PIM-10b，D03 §3.10） ─────────────── */
+
+.forward-modal__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-control);
+  padding: 5px 8px;
+  color: var(--bbw-gray-5);
+}
+
+.forward-modal__search input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: var(--bbw-font-13);
+  flex: 1;
+  color: var(--bbw-text-1);
+}
+
+.forward-modal__chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.forward-modal__chip {
+  border: 1px solid var(--bbw-gray-3);
+  background: var(--bbw-gray-1);
+  color: var(--bbw-gray-8);
+  border-radius: 999px;
+  font-size: var(--bbw-font-12);
+  padding: 3px 10px;
+  cursor: pointer;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forward-modal__chip--active,
+.forward-modal__chip:hover {
+  border-color: var(--bbw-primary);
+  color: var(--bbw-primary);
+  background: var(--bbw-primary-light);
+}
+
+.forward-modal__empty {
+  padding: var(--bbw-space-4);
+  text-align: center;
+  color: var(--bbw-gray-5);
+  font-size: var(--bbw-font-13);
+}
+
+.forward-modal__mode {
+  display: flex;
+  gap: var(--bbw-space-4);
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-8);
+}
+
+.forward-modal__radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.forward-modal__note-wrap {
+  position: relative;
+}
+
+.forward-modal__note-meta {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  font-size: 10px;
+  color: var(--bbw-gray-5);
+}
+
+.forward-modal__error {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-danger, #e54545);
+}
+
+/* ─────────────── 合并转发详情抽屉（PIM-11，D03 §3.11，Drawer 400 右侧） ─────────────── */
+
+.merge-drawer__mask {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--bbw-z-drawer) - 1);
+  background: var(--bbw-mask);
+}
+
+.merge-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 400px;
+  max-width: 92vw;
+  z-index: var(--bbw-z-drawer);
+  background: var(--bbw-bg-card, #fff);
+  box-shadow: var(--bbw-shadow-pop);
+  display: flex;
+  flex-direction: column;
+}
+
+.merge-drawer__head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--bbw-space-3) var(--bbw-space-4);
+  border-bottom: 1px solid var(--bbw-gray-3);
+}
+
+.merge-drawer__title {
+  font-size: var(--bbw-font-14);
+  font-weight: 600;
+  color: var(--bbw-gray-10);
+}
+
+.merge-drawer__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--bbw-space-2) var(--bbw-space-3);
+}
+
+.merge-drawer__entry {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--bbw-space-1);
+}
+
+.merge-drawer__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--bbw-gray-5);
+}
+
+.merge-drawer__item:hover {
+  background: var(--bbw-gray-2);
+}
+
+.merge-drawer__sender {
+  flex-shrink: 0;
+  font-size: var(--bbw-font-13);
+  font-weight: 500;
+  color: var(--bbw-gray-8);
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-drawer__digest {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-drawer__snap {
+  margin: 0 10px 6px 30px;
+  padding: var(--bbw-space-2);
+  border-left: 3px solid var(--bbw-gray-3);
+  border-radius: 4px;
+  background: var(--bbw-gray-1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.merge-drawer__snap--loading {
+  flex-direction: row;
+  align-items: center;
+  color: var(--bbw-gray-5);
+  font-size: var(--bbw-font-12);
+}
+
+.merge-drawer__snap--loading .skeleton-block {
+  width: 70px;
+  height: 10px;
+}
+
+.merge-drawer__snap--error {
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  color: var(--bbw-gray-4);
+  font-size: var(--bbw-font-12);
+  font-style: normal;
+}
+
+.merge-drawer__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: transparent;
+  color: var(--bbw-primary);
+  font-size: var(--bbw-font-12);
+  cursor: pointer;
+  padding: 0;
+}
+
+.merge-drawer__snap-msg {
+  display: flex;
+  gap: 6px;
+  font-size: var(--bbw-font-12);
+  line-height: 1.5;
+}
+
+.merge-drawer__snap-sender {
+  flex-shrink: 0;
+  color: var(--bbw-gray-6);
+}
+
+.merge-drawer__snap-text {
+  color: var(--bbw-gray-6);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.merge-drawer__snap-msg--target .merge-drawer__snap-sender,
+.merge-drawer__snap-msg--target .merge-drawer__snap-text {
+  color: var(--bbw-gray-10);
+  font-weight: 500;
+}
+
+.merge-drawer__snap-msg--target {
+  padding: 3px 6px;
+  background: var(--bbw-primary-light);
+  border-radius: 4px;
+}
+
+.merge-drawer__foot {
+  flex-shrink: 0;
+  padding: var(--bbw-space-2) var(--bbw-space-4);
+  border-top: 1px solid var(--bbw-gray-3);
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-5);
+}
+
+/* 合并转发卡片增强（msg-merge 子条目 digest 预览，PIM-10/PIM-11） */
+.msg-merge {
+  cursor: pointer;
+}
+
+.msg-merge:hover {
+  background: var(--bbw-gray-2);
+  border-radius: 6px;
+}
+
+.msg-merge__item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--bbw-font-12);
+  line-height: 1.5;
+}
+
+.msg-merge__sender {
+  flex-shrink: 0;
+  color: var(--bbw-gray-7);
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-merge__digest {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--bbw-gray-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

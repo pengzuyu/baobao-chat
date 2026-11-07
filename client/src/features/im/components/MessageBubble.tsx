@@ -14,15 +14,20 @@ import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowDownToLine,
+  Bot,
   Check,
   CheckCheck,
   Clock3,
   FileText,
   Image as ImageIcon,
+  ListChecks,
   ListOrdered,
+  Mic,
+  Phone,
   RotateCcw,
   SmilePlus,
   Star,
+  Video,
 } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { getErrorText } from '../../../shared/api/http';
@@ -33,10 +38,42 @@ import { digestOf } from '../store/im';
 import { systemMessageText } from '../pages/systemMessageRegistry';
 import { downloadUrl, getDownloadTicket } from '../api/files';
 import { ApplyCard } from './ApplyCard';
-import type { DocCardBody, FileMessageBody, MemberRole, Mention, Message, SystemBody } from '../model/types';
+import type {
+  DocCardBody,
+  FileMessageBody,
+  MemberRole,
+  Mention,
+  Message,
+  MergeForwardBody,
+  SystemBody,
+} from '../model/types';
 
 /** 快捷回应候选（与飞书同款常用集，选择器全集在 MsgActions） */
 export const QUICK_EMOJIS = ['👍', '❤️', '😂', '🎉', '🙏'] as const;
+
+/** 消息类型→列表图标（PIM-11 抽屉子条目 / 合并转发卡片 digest 前缀共用） */
+export function mergeTypeIcon(type: string) {
+  switch (type) {
+    case 'image':
+      return <ImageIcon size={13} />;
+    case 'file':
+      return <FileText size={13} />;
+    case 'audio_clip':
+      return <Mic size={13} />;
+    case 'video':
+      return <Video size={13} />;
+    case 'doc_card':
+      return <FileText size={13} />;
+    case 'agent_card':
+      return <Bot size={13} />;
+    case 'merge_forward':
+      return <ListOrdered size={13} />;
+    case 'call_card':
+      return <Phone size={13} />;
+    default:
+      return null; // text：无类型图标，直接展示文本 digest
+  }
+}
 
 export interface BubbleActions {
   onReply: (m: Message) => void;
@@ -47,6 +84,10 @@ export interface BubbleActions {
   onLocate: (seq: number) => void;
   /** 收藏（PIM-08 INT-IM-06：悬浮操作条「收藏」；幂等，撤回消息亦可收藏） */
   onFavorite: (m: Message) => void;
+  /** 进入多选（INT-IM-14/PIM-10：悬浮操作条「多选」） */
+  onMultiSelect: (m: Message) => void;
+  /** 打开合并转发详情抽屉（PIM-11：merge_forward 气泡点击） */
+  onOpenMergeDetail: (m: Message) => void;
 }
 
 interface MessageBubbleProps {
@@ -63,6 +104,10 @@ interface MessageBubbleProps {
   myRole?: MemberRole;
   applyHandled?: 'approved' | 'rejected';
   onApplyHandled?: (applyId: string, result: 'approved' | 'rejected') => void;
+  /** 多选模式态（INT-IM-14）：active=复选框浮层 + 行点击切换；selected=勾选样式 */
+  multiSelect?: { active: boolean; selected: boolean };
+  /** 多选勾选/取消（active 时行点击与复选框共用） */
+  onSelectToggle?: (m: Message) => void;
 }
 
 /** 本地态/服务端态尾标（✓✓=对方已读，单聊回执） */
@@ -162,16 +207,40 @@ function ReactionBar({ message, myUid, onReact }: { message: Message; myUid: str
   );
 }
 
-/** 合并转发卡片（PIM-11 抽屉后续接入，先卡片摘要） */
-function MergeForwardCard({ message }: { message: Message }) {
-  const b = message.body as { title?: string; count?: number };
+/** 合并转发卡片（PIM-10/PIM-11，D03 §3.2）：标题+count+前 3 条 digest 预览，点击 → PIM-11 抽屉 */
+function MergeForwardCard({ message, onOpen }: { message: Message; onOpen?: (m: Message) => void }) {
+  const b = 'items' in message.body ? (message.body as MergeForwardBody) : {};
+  const items = b.items ?? [];
+  const preview = items.slice(0, 3);
   return (
-    <div className="msg-merge">
+    <div
+      className="msg-merge"
+      data-testid="merge-forward-card"
+      role="button"
+      tabIndex={0}
+      title="点击查看合并转发详情"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen?.(message);
+      }}
+      onKeyDown={(e) => e.key === 'Enter' && onOpen?.(message)}
+    >
       <div className="msg-merge__title">
         <ListOrdered size={14} />
-        {b.title ?? '聊天记录'}
+        {b.title ?? '聊天记录'} · {b.count ?? items.length} 条消息
       </div>
-      <div className="msg-merge__hint">共 {b.count ?? 0} 条消息</div>
+      {preview.map((it, i) => (
+        <div className="msg-merge__item" key={i}>
+          <span className="msg-merge__sender">{it.sender_name || it.sender_id}</span>
+          <span className="msg-merge__digest">
+            {mergeTypeIcon(it.type)}
+            {it.digest}
+          </span>
+        </div>
+      ))}
+      <div className="msg-merge__hint">
+        {items.length > 3 ? `共 ${items.length} 条，` : ''}点击查看详情
+      </div>
     </div>
   );
 }
@@ -347,6 +416,8 @@ export function MessageBubble({
   myRole,
   applyHandled,
   onApplyHandled,
+  multiSelect,
+  onSelectToggle,
 }: MessageBubbleProps) {
   // 系统消息/撤回占位：居中弱化，不参与回执/右键（PIM-12）
   if (message.type === 'system') {
@@ -403,8 +474,34 @@ export function MessageBubble({
   /** 回应切换：add/remove 由调用方按 ext.reactions 现态判定（全量快照回收保证一致） */
   const doReact = (emoji: string) => actions?.onReact(message, emoji);
 
+  // 多选模式（INT-IM-14）：整行可点切换勾选；气泡内容经 CSS pointer-events:none 收敛交互
+  const selecting = multiSelect?.active === true;
+  const selected = multiSelect?.selected === true;
+  const doToggle = () => onSelectToggle?.(message);
+
   return (
-    <div className={`msg-row${mine ? ' msg-row--mine' : ''}`} data-seq={message.seq}>
+    <div
+      className={`msg-row${mine ? ' msg-row--mine' : ''}${selecting ? ' msg-row--selecting' : ''}${selected ? ' msg-row--selected' : ''}`}
+      data-seq={message.seq}
+      data-testid="msg-row"
+      onClick={selecting ? doToggle : undefined}
+    >
+      {/* 多选复选框浮层（system/撤回占位已在上方早退，不参与多选） */}
+      {selecting ? (
+        <button
+          type="button"
+          className={`msg-check${selected ? ' msg-check--on' : ''}`}
+          data-testid="msg-check"
+          aria-pressed={selected}
+          title={selected ? '取消选择' : '选择'}
+          onClick={(e) => {
+            e.stopPropagation();
+            doToggle();
+          }}
+        >
+          {selected ? <Check size={12} /> : null}
+        </button>
+      ) : null}
       <Avatar name={message.senderName} size={32} />
       <div className="msg-row__body">
         {mine ? null : <span className="msg-row__sender">{message.senderName}</span>}
@@ -417,7 +514,7 @@ export function MessageBubble({
             </span>
           ) : isMerge ? (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
-              <MergeForwardCard message={message} />
+              <MergeForwardCard message={message} onOpen={actions?.onOpenMergeDetail} />
             </span>
           ) : isImage && fileBody ? (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
@@ -500,6 +597,20 @@ export function MessageBubble({
               ) : null}
               <button type="button" className="msg-actions__btn" title="转发" onClick={() => actions.onForward(message)}>
                 转发
+              </button>
+              {/* 多选入口（INT-IM-14/PIM-10：进入批量条模式，触发消息预选） */}
+              <button
+                type="button"
+                className="msg-actions__btn"
+                data-testid="msg-multiselect-btn"
+                title="多选"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  actions.onMultiSelect(message);
+                }}
+              >
+                <ListChecks size={14} />
+                多选
               </button>
             </div>
           ) : null}

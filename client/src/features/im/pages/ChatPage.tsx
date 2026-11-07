@@ -51,6 +51,8 @@ import { FileSendPreview } from '../components/FileSendPreview';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MessageInput } from '../components/MessageInput';
 import { ForwardModal } from '../components/ForwardModal';
+import { MultiSelectBar } from '../components/MultiSelectBar';
+import { MergeForwardDrawer } from '../components/MergeForwardDrawer';
 import { SearchPanel } from '../components/SearchPanel';
 
 /** 消息流 forbidden 判定：被移出(3001)/会话不存在(3019)/群解散(3002)（D03 PIM-02 六态） */
@@ -71,6 +73,10 @@ export function ChatPage() {
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [forwardIds, setForwardIds] = useState<string[] | null>(null);
+  /** 转发弹窗默认方式（批量条「合并转发」入口预置 merge；PIM-10b radio 可改） */
+  const [forwardMode, setForwardMode] = useState<'merge' | 'one_by_one'>('one_by_one');
+  /** PIM-11 合并转发详情抽屉：点击 merge_forward 气泡打开 */
+  const [mergeDrawerMsg, setMergeDrawerMsg] = useState<Message | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   /** 附件发送（D06 阶段一）：file input → 预览弹层 → upload+msg.send */
   const [pickedFile, setPickedFile] = useState<File | null>(null);
@@ -78,6 +84,8 @@ export function ChatPage() {
   const [mentionAllBlocked, setMentionAllBlocked] = useState(false);
   /** 收藏结果提示条（INT-IM-06 摘要 toast：已收藏/失败原因，3s 自动消失） */
   const [favToast, setFavToast] = useState<{ text: string; ok: boolean } | null>(null);
+  /** 批量转发结果提示（INT-IM-05：成功 N 条/失败明细；点击跳目标会话，3.5s 自动消失） */
+  const [fwdToast, setFwdToast] = useState<{ text: string; ok: boolean; targetConvId?: string } | null>(null);
   /** 编辑中随 @ 面板选择的提及（随发送携带；正式版按 range 精确重算） */
   const pendingMentionsRef = useRef<Array<{ uid: string; name: string }>>([]);
   /** PIM-07 全局搜索框（⌘K 聚焦目标） */
@@ -107,6 +115,11 @@ export function ChatPage() {
   const applyTyping = useImStore((s) => s.applyTyping);
   const togglePin = useImStore((s) => s.togglePin);
   const toggleMute = useImStore((s) => s.toggleMute);
+  // 多选模式（INT-IM-14/PIM-10）：选择集在 store（滚动/上翻不丢选择）
+  const multiSelect = useImStore((s) => s.multiSelect);
+  const enterMultiSelect = useImStore((s) => s.enterMultiSelect);
+  const exitMultiSelect = useImStore((s) => s.exitMultiSelect);
+  const toggleMultiSelectItem = useImStore((s) => s.toggleMultiSelectItem);
   // 撤回/编辑/回应在事件回调内经 getState 调用（免闭包依赖，下同）
 
   // Query 成功 → 写入端内投影
@@ -131,13 +144,14 @@ export function ChatPage() {
   }, [convId, msgQuery.data, replaceMessages]);
   useEffect(() => {
     setActiveConv(convId ?? null);
-    // 切换会话清交互态（引用/编辑不跨会话残留）
+    // 切换会话清交互态（引用/编辑/多选不跨会话残留）
     setReplyTo(null);
     setEditing(null);
+    if (useImStore.getState().multiSelect.isActive) exitMultiSelect();
     // 离开 /im（卸载）必须清 activeConvId：否则在其它页面收消息被误判
     // "当前会话可见"而不计未读（appendIncoming/markRead 的可见性判定依据）
     return () => setActiveConv(null);
-  }, [convId, setActiveConv]);
+  }, [convId, setActiveConv, exitMultiSelect]);
 
   // 已读时机①：进入会话且消息加载完成 → 上报至最新 seq（INT-IM-12）
   const markRead = useImStore((s) => s.markRead);
@@ -416,6 +430,88 @@ export function ChatPage() {
   });
   const showTyping = !!typingUid && Date.now() - typingUid.at < TYPING_TTL_MS;
 
+  // ---- 多选模式（INT-IM-14/PIM-10）----
+  const msActive = multiSelect.isActive;
+  /** 当前会话内选中消息（按 seq 升序；sending/failed 本地消息无 msgId 不参与批量） */
+  const selectedMsgs = useMemo(
+    () =>
+      msActive
+        ? messages
+            .filter((m) => m.msgId && multiSelect.selectedIds.has(m.msgId))
+            .sort((a, b) => a.seq - b.seq)
+        : [],
+    [msActive, messages, multiSelect.selectedIds],
+  );
+  /** 复制可用：选中全为 text（INT-IM-14） */
+  const copyEnabled = msActive && selectedMsgs.length > 0 && selectedMsgs.every((m) => m.type === 'text');
+
+  // Esc 退出多选（转发弹窗/详情抽屉打开时让位给各自的 Esc 关闭）
+  useEffect(() => {
+    if (!msActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (forwardIds || mergeDrawerMsg) return;
+      exitMultiSelect();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [msActive, forwardIds, mergeDrawerMsg, exitMultiSelect]);
+
+  /** 批量收藏（INT-IM-06：逐条 favorite，失败逐条回报；幂等由服务端 UK 兜底） */
+  const doBatchFavorite = useCallback(() => {
+    const targets = selectedMsgs;
+    if (targets.length === 0) return;
+    let ok = 0;
+    let failText = '';
+    let dup = 0;
+    void (async () => {
+      for (const m of targets) {
+        try {
+          const r = await favoriteMessage(m.msgId);
+          useImStore.getState().applyFavorite(m.msgId, true);
+          ok++;
+          if (r.duplicate) dup++;
+        } catch (err) {
+          const code = err instanceof ApiError ? err.code : 0;
+          failText = code > 0 ? getErrorText(code) : '收藏失败，请重试';
+        }
+      }
+      void queryClient.invalidateQueries({ queryKey: ['im', 'favorites'] });
+      const failed = targets.length - ok;
+      setFavToast({
+        text:
+          failed > 0
+            ? `已收藏 ${ok}/${targets.length} 条，${failed} 条失败：${failText}`
+            : `已收藏 ${ok} 条${dup > 0 ? `（${dup} 条已在收藏中）` : ''}，可在收藏页查看`,
+        ok: failed === 0,
+      });
+      setTimeout(() => setFavToast(null), 3500);
+    })();
+  }, [selectedMsgs, queryClient]);
+
+  /** 批量复制（仅全 text）：拼接选中文本写剪贴板 */
+  const doBatchCopy = useCallback(() => {
+    if (!copyEnabled) return;
+    const text = selectedMsgs
+      .map((m) => ('text' in m.body ? m.body.text : ''))
+      .filter(Boolean)
+      .join('\n');
+    void navigator.clipboard?.writeText(text).catch(() => undefined);
+    setFavToast({ text: `已复制 ${selectedMsgs.length} 条文本`, ok: true });
+    setTimeout(() => setFavToast(null), 3000);
+  }, [copyEnabled, selectedMsgs]);
+
+  /** 打开转发弹窗（批量条「转发」=默认逐条；「合并转发」=默认合并） */
+  const openForward = useCallback(
+    (mode: 'merge' | 'one_by_one') => {
+      const ids = selectedMsgs.map((m) => m.msgId);
+      if (ids.length === 0) return;
+      setForwardMode(mode);
+      setForwardIds(ids);
+    },
+    [selectedMsgs],
+  );
+
   // ---- 气泡操作集（INT-IM-25 条件显隐在 Bubble 内判定）----
   const bubbleActions: BubbleActions = {
     onReply: (m) => {
@@ -431,12 +527,19 @@ export function ChatPage() {
         .then(() => useImStore.getState().applyRecall(m.convId, m.msgId, myUid))
         .catch(() => undefined);
     },
-    onForward: (m) => setForwardIds([m.msgId]),
+    onForward: (m) => {
+      setForwardMode('one_by_one');
+      setForwardIds([m.msgId]);
+    },
     onReact: (m, emoji) => {
       const has = m.ext?.reactions?.[emoji]?.includes(myUid);
       void setReaction(m.msgId, emoji, has ? 'remove' : 'add').catch(() => undefined);
     },
     onLocate: locateSeq,
+    // 进入多选（INT-IM-14）：触发消息预选
+    onMultiSelect: (m) => enterMultiSelect(m.msgId),
+    // 合并转发详情抽屉（PIM-11）
+    onOpenMergeDetail: (m) => setMergeDrawerMsg(m),
     // 收藏（PIM-08 INT-IM-06）：幂等；摘要 toast 含查看入口；超限 3022 → 错误文案
     onFavorite: (m) => {
       void favoriteMessage(m.msgId)
@@ -586,7 +689,15 @@ export function ChatPage() {
   );
 
   const messageStream = (
-    <div className="message-stream" ref={streamRef} onScroll={onStreamScroll}>
+    <div
+      className="message-stream"
+      ref={streamRef}
+      onScroll={onStreamScroll}
+      onClick={(e) => {
+        // 多选模式点空白退出（INT-IM-14；气泡行自身 stopPropagation 之外的空白区）
+        if (msActive && e.target === e.currentTarget) exitMultiSelect();
+      }}
+    >
       {hasOlder && messages.length > 0 ? (
         <button type="button" className="load-older-hint" onClick={loadOlder}>
           上滑或点击加载更早消息
@@ -610,6 +721,13 @@ export function ChatPage() {
             actions={m.type === 'system' ? undefined : bubbleActions}
             myUid={myUid}
             myRole={myRole}
+            /* 多选：仅已落服务端消息参与（sending/failed 无 msgId，批量操作不可达） */
+            multiSelect={
+              msActive && m.type !== 'system' && m.status !== 2 && m.msgId
+                ? { active: true, selected: multiSelect.selectedIds.has(m.msgId) }
+                : undefined
+            }
+            onSelectToggle={(mm) => toggleMultiSelectItem(mm.msgId)}
             applyHandled={
               m.type === 'system' && 'kind' in m.body && m.body.kind === 'apply.submitted' && 'apply_id' in m.body && m.body.apply_id
                 ? useImStore.getState().handledApplies[m.body.apply_id]
@@ -627,7 +745,18 @@ export function ChatPage() {
 
   const streamNode = (
     <section className="im-content-col">
-      {activeConv ? (
+      {msActive ? (
+        /* 多选批量条替换会话头（PIM-10a，D03 §3.10） */
+        <MultiSelectBar
+          count={selectedMsgs.length}
+          copyEnabled={copyEnabled}
+          onForward={() => openForward('one_by_one')}
+          onMergeForward={() => openForward('merge')}
+          onFavorite={doBatchFavorite}
+          onCopy={doBatchCopy}
+          onCancel={exitMultiSelect}
+        />
+      ) : activeConv ? (
         <ChatHeader
           conv={activeConv}
           typing={showTyping ? '对方正在输入…' : undefined}
@@ -677,6 +806,25 @@ export function ChatPage() {
         </button>
       ) : null}
 
+      {/* 批量转发结果提示（INT-IM-05：成功/失败明细；点击跳目标会话查看） */}
+      {fwdToast ? (
+        <button
+          type="button"
+          className={`ann-banner${fwdToast.ok ? '' : ' ann-banner--warn'}`}
+          data-testid="fwd-toast"
+          onClick={() => {
+            if (fwdToast.targetConvId) {
+              setFwdToast(null);
+              navigate(`/im/c/${fwdToast.targetConvId}`);
+            }
+          }}
+          title={fwdToast.targetConvId ? '查看目标会话' : undefined}
+        >
+          {fwdToast.text}
+          {fwdToast.ok && fwdToast.targetConvId ? <span className="ann-banner__more">查看</span> : null}
+        </button>
+      ) : null}
+
       {streamState === 'none' ? (
         <StateView state="empty" emptyText="从左侧选择一个会话开始聊天" />
       ) : streamState === 'ok' ? (
@@ -717,9 +865,10 @@ export function ChatPage() {
       {convId ? (
         <MessageInput
           convId={convId}
-          /* 禁用三态：广播群非 publisher / 单人禁言 / 全员禁言（非 owner/admin），D03 §3.3 */
-          disabled={inputDisabled}
-          disabledHint={inputDisabledHint}
+          /* 禁用三态：广播群非 publisher / 单人禁言 / 全员禁言（非 owner/admin），D03 §3.3；
+           * 多选模式同样禁用（避免与批量操作抢 Esc/焦点，飞书同款） */
+          disabled={inputDisabled || msActive}
+          disabledHint={msActive ? '多选模式中，退出后可继续输入' : inputDisabledHint}
           draft={drafts[convId] ?? ''}
           onDraftChange={(text) => setDraft(convId, text)}
           onSend={doSend}
@@ -780,9 +929,26 @@ export function ChatPage() {
         <ForwardModal
           convs={convs}
           msgIds={forwardIds}
+          defaultMode={forwardMode}
           onClose={() => setForwardIds(null)}
-          onDone={() => setForwardIds(null)}
+          onDone={(res) => {
+            // INT-IM-05：成功 toast（含跳目标会话入口）；有成功即退出多选（选择已完成使命）
+            setForwardIds(null);
+            if (res.sent > 0) exitMultiSelect();
+            setFwdToast({
+              text:
+                res.failed > 0
+                  ? `已转发 ${res.sent} 条，${res.failed} 条失败（已撤回/无权限的消息不可转发）`
+                  : `已转发 ${res.sent} 条消息`,
+              ok: res.failed === 0,
+              targetConvId: res.targetConvId,
+            });
+            setTimeout(() => setFwdToast(null), 3500);
+          }}
         />
+      ) : null}
+      {mergeDrawerMsg ? (
+        <MergeForwardDrawer message={mergeDrawerMsg} onClose={() => setMergeDrawerMsg(null)} />
       ) : null}
       {createOpen ? (
         <CreateConvModal

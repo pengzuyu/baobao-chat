@@ -167,21 +167,32 @@ export async function updateConvState(
   await http.patch(`/convs/${encodeURIComponent(convId)}/state`, patch);
 }
 
-/** 转发（API-IM-09：逐条/合并） */
+/** 转发（API-IM-09：逐条/合并）——失败明细逐条回报（msgId→错误码），端内 toast 汇总 */
+export interface ForwardResult {
+  sentCount: number;
+  failed: Array<{ msgId: string; code: number }>;
+}
+
 export async function forwardMessages(
   targetConvId: string,
   msgIds: string[],
   mode: 'merge' | 'one_by_one',
   note?: string,
-): Promise<{ sentCount: number }> {
-  if (USE_MOCK) return { sentCount: msgIds.length };
-  const data = await http.post<{ sentCount: number }>('/messages/forward', {
-    target_conv_id: targetConvId,
-    msg_ids: msgIds,
-    mode,
-    note,
-  });
-  return { sentCount: data.sentCount };
+): Promise<ForwardResult> {
+  if (USE_MOCK) return { sentCount: msgIds.length, failed: [] };
+  const data = await http.post<{ sentCount: number; failed?: Array<{ msg_id: string; code?: number }> }>(
+    '/messages/forward',
+    {
+      target_conv_id: targetConvId,
+      msg_ids: msgIds,
+      mode,
+      note,
+    },
+  );
+  return {
+    sentCount: data.sentCount,
+    failed: (data.failed ?? []).map((f) => ({ msgId: f.msg_id, code: f.code ?? 0 })),
+  };
 }
 
 /** 历史上翻（API-IM-04 before 区间；分页加载更早消息） */
@@ -189,6 +200,21 @@ export async function fetchMessagesBefore(convId: string, before: number, limit 
   if (USE_MOCK) return [];
   const data = await http.get<{ items: Message[] }>(
     `/convs/${encodeURIComponent(convId)}/messages?before=${before}&limit=${limit}`,
+  );
+  return [...data.items].sort((a, b) => a.seq - b.seq);
+}
+
+/**
+ * 合并转发子条目原文快照（PIM-11，D03 §3.11）：按 origin_conv+origin_seq 拉该条全文及上下文。
+ * 服务端 ListMessages 语义为 `seq > after AND seq < before` 升序取前 N（memory/PG 一致），
+ * 故取「目标条 + 前 2 条」窗口须用 after={seq-3}&limit=3&order=seq——
+ * 若按 before={seq} 会把目标条本身排除且取到会话最旧 N 条，与设计意图（around 快照）不符。
+ * 无权限/已退群/会话不存在 → ApiError(3001/3019/3002)，由抽屉按条置灰"原消息不可见"。
+ */
+export async function fetchOriginSnapshot(convId: string, seq: number, limit = 3): Promise<Message[]> {
+  if (USE_MOCK) return [];
+  const data = await http.get<{ items: Message[] }>(
+    `/convs/${encodeURIComponent(convId)}/messages?after=${seq - limit}&limit=${limit}&order=seq`,
   );
   return [...data.items].sort((a, b) => a.seq - b.seq);
 }

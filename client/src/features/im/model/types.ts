@@ -50,6 +50,14 @@ export interface DocCardBody {
   version?: number;
 }
 
+/** 合并转发消息体（PIM-10/PIM-11，D03 §3.2）：服务端 merge 落库 shape
+ * {title,count,items[{sender_id,sender_name,type,digest,origin_conv,origin_seq}]} */
+export interface MergeForwardBody {
+  title?: string;
+  count?: number;
+  items?: MergeItem[];
+}
+
 /** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；call_card 为通话卡片体（D04）；doc_card 为文档卡片体（D05）；全集见 D03 §6.3） */
 export type MessageBody =
   | { text: string }
@@ -57,6 +65,7 @@ export type MessageBody =
   | SystemBody
   | CallCardBody
   | DocCardBody
+  | MergeForwardBody
   | Record<string, never>;
 
 /** 引用快照（服务端 ext.reply_digest，D03 §5.2） */
