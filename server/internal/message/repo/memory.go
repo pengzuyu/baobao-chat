@@ -867,3 +867,45 @@ func (m *Memory) CountUnreadNotifications(_ context.Context, userID int64) (int6
 	}
 	return n, nil
 }
+
+// ── 管理端统计（D10 仪表盘跨域闭包；可选接口见 repo.go StatsReader）──
+
+var _ StatsReader = (*Memory)(nil)
+
+// CountActiveConvsSince 活跃会话数（status=active 且 last_msg_ts ≥ since）。
+// 口径登记：「会话数(今日)」= 今日有消息往来的会话（v0.1 无独立活跃打点，以最后消息时间代理）。
+func (m *Memory) CountActiveConvsSince(_ context.Context, tenantID int64, since time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	sinceMS := since.UnixMilli()
+	for _, c := range m.convs {
+		if tenantID != 0 && c.TenantID != tenantID {
+			continue
+		}
+		if c.Status == 1 && c.LastMsgTS > 0 && c.LastMsgTS >= sinceMS {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// CountMsgsSince 消息数（ts ≥ since，含已撤回/编辑——发送口径）。
+// Message 行不带 TenantID：租户过滤经所属会话（阶段一单租户，内存模式恒命中）。
+func (m *Memory) CountMsgsSince(_ context.Context, tenantID int64, since time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	sinceMS := since.UnixMilli()
+	for convID, list := range m.msgs {
+		if c, ok := m.convs[convID]; ok && tenantID != 0 && c.TenantID != tenantID {
+			continue
+		}
+		for _, msg := range list {
+			if msg.TS >= sinceMS {
+				n++
+			}
+		}
+	}
+	return n, nil
+}

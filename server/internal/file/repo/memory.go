@@ -134,3 +134,20 @@ func sortByCreatedDesc(list []File) {
 		return ai.After(aj)
 	})
 }
+
+// ── 管理端统计（D10 仪表盘跨域闭包；可选接口见 repo.go FileStatsReader）──
+
+var _ FileStatsReader = (*Memory)(nil)
+
+// SumStorageBytes 文件存储量（未软删行 size 求和；软删回收站占用阶段二清理任务口径）
+func (m *Memory) SumStorageBytes(_ context.Context, tenantID int64) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var n int64
+	for _, f := range m.rows {
+		if (tenantID == 0 || f.TenantID == tenantID) && !f.Deleted() {
+			n += f.Size
+		}
+	}
+	return n, nil
+}

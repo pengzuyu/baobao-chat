@@ -428,3 +428,20 @@ func cutTopK(hits []ChunkHit, topK int) {
 		hits = hits[:topK]
 	}
 }
+
+// ── 管理端统计（D10 仪表盘跨域闭包；可选接口见 repo.go DocStatsReader）──
+
+var _ DocStatsReader = (*Memory)(nil)
+
+// CountDocs KB 文档总数（全部空间，含 failed——治理口径按摄入尝试计数）
+func (m *Memory) CountDocs(_ context.Context, tenantID int64) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var n int64
+	for _, d := range m.docs {
+		if tenantID == 0 || d.TenantID == tenantID {
+			n++
+		}
+	}
+	return n, nil
+}

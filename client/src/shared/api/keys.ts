@@ -41,6 +41,20 @@ export const qk = {
     /** jobs 简版 ['kb','jobs',spaceId,status] */
     jobs: (spaceId: string, status: string = 'all'): QueryKeyRO => ['kb', 'jobs', spaceId, status],
   },
+  admin: {
+    /** 仪表盘 ['admin','dashboard']（60s 轮询刷新；PAD-02） */
+    dashboard: ['admin', 'dashboard'] as const,
+    /** 用户列表 ['admin','users',keyword,status,cursor]（状态变更后前缀 ['admin','users'] 失效） */
+    users: (keyword: string = '', status: number = 0, cursor: string = ''): QueryKeyRO => ['admin', 'users', keyword, status, cursor],
+    /** Agent 策略快照 ['admin','policy','agent'] */
+    agentPolicy: ['admin', 'policy', 'agent'] as const,
+    /** 敏感词列表 ['admin','words',cursor]（增删后前缀 ['admin','words'] 失效） */
+    words: (cursor: string = ''): QueryKeyRO => ['admin', 'words', cursor],
+    /** 用量汇总 ['admin','usage',days] */
+    usage: (days: number = 7): QueryKeyRO => ['admin', 'usage', days],
+    /** 审计时间线 ['admin','audit',cursor]（管理写操作后前缀 ['admin','audit'] 失效） */
+    audit: (cursor: string = ''): QueryKeyRO => ['admin', 'audit', cursor],
+  },
 } as const;
 
 /**

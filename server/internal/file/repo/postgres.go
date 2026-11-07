@@ -186,3 +186,16 @@ func i64OrNull(v int64) any {
 	}
 	return v
 }
+
+// ── 管理端统计（D10 仪表盘跨域闭包；可选接口见 repo.go FileStatsReader）──
+
+var _ FileStatsReader = (*Postgres)(nil)
+
+// SumStorageBytes 文件存储量（未软删行 size 求和；软删回收站占用阶段二清理任务口径）
+func (p *Postgres) SumStorageBytes(ctx context.Context, tenantID int64) (int64, error) {
+	var n int64
+	err := p.pool.QueryRow(ctx,
+		`SELECT COALESCE(sum(size),0) FROM file WHERE tenant_id=$1 AND deleted_at IS NULL`,
+		tenantID).Scan(&n)
+	return n, err
+}

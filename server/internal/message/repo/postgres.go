@@ -1190,3 +1190,25 @@ func (p *Postgres) CountUnreadNotifications(ctx context.Context, userID int64) (
 		Scan(&n)
 	return n, err
 }
+
+// ── 管理端统计（D10 仪表盘跨域闭包；可选接口见 repo.go StatsReader）──
+
+var _ StatsReader = (*Postgres)(nil)
+
+// CountActiveConvsSince 活跃会话数（status=active 且 last_msg_ts ≥ since；"会话数(今日)"口径）
+func (p *Postgres) CountActiveConvsSince(ctx context.Context, tenantID int64, since time.Time) (int64, error) {
+	var n int64
+	err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM conversation WHERE tenant_id=$1 AND status=1 AND last_msg_ts >= $2`,
+		tenantID, since).Scan(&n)
+	return n, err
+}
+
+// CountMsgsSince 消息数（ts ≥ since，含已撤回/编辑——发送口径）
+func (p *Postgres) CountMsgsSince(ctx context.Context, tenantID int64, since time.Time) (int64, error) {
+	var n int64
+	err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM message WHERE tenant_id=$1 AND ts >= $2`,
+		tenantID, since).Scan(&n)
+	return n, err
+}

@@ -281,3 +281,12 @@ type UserConvState struct {
 //   type Postgres struct{ pool *pgxpool.Pool }  // 实现 Repo 接口
 //   seq 分配改 Redis INCR t:{tid}:conv:{cid}:seq；服务重启以分区 max(seq)+1 对齐（04 篇 §4.1）
 //   message 落库走按月分区表；跨域引用（file_id 等）只按 ID 不建外键（D02 §7）
+
+// StatsReader 管理端统计可选接口（D10 仪表盘：跨域聚合经 main 装配闭包注入 admin 域，
+// 不进 Repo 主接口——避免各实现被迫补桩；Memory/Postgres 均实现）。
+type StatsReader interface {
+	// CountActiveConvsSince 活跃会话数（status=active 且 last_msg_ts ≥ since）
+	CountActiveConvsSince(ctx context.Context, tenantID int64, since time.Time) (int64, error)
+	// CountMsgsSince 消息数（ts ≥ since，含已撤回/编辑——发送口径）
+	CountMsgsSince(ctx context.Context, tenantID int64, since time.Time) (int64, error)
+}

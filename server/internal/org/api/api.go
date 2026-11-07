@@ -52,3 +52,33 @@ type UserReader interface {
 	GetUserByLogin(ctx context.Context, tenantID int64, username string) (*User, error)
 	GetUser(ctx context.Context, id int64) (*User, error)
 }
+
+// UserListFilter 管理端用户列表过滤（D10 阶段一务实版）：
+// keyword 匹配工号/姓名/邮箱（模糊，大小写不敏感）；status 0=全部 1=启用 2=禁用；
+// cursor=上一页末条 id（id 升序翻页），0=首页；limit≤0 或 >100 取 20。
+type UserListFilter struct {
+	TenantID int64
+	Keyword  string
+	Status   int
+	Cursor   int64
+	Limit    int
+}
+
+// LimitOrDefault limit 归一（缺省/越界取 20，上限 100）
+func (f UserListFilter) LimitOrDefault() int {
+	if f.Limit <= 0 || f.Limit > 100 {
+		return 20
+	}
+	return f.Limit
+}
+
+// UserAdminReader 管理端用户管理最小接口（D10 阶段一务实版；admin 域经本接口
+// 消费 org 域——依赖规则 D02 §4：跨模块只 import api 包）。
+type UserAdminReader interface {
+	// ListUsers 用户列表（keyword/status/cursor；返回当页行 + has_more）
+	ListUsers(ctx context.Context, f UserListFilter) ([]User, bool, error)
+	// CountUsers 用户总数
+	CountUsers(ctx context.Context, tenantID int64) (int64, error)
+	// SetUserStatus 启用/禁用（UserStatus*）；不存在返回 ErrUserNotFound
+	SetUserStatus(ctx context.Context, id int64, status int) error
+}

@@ -691,3 +691,15 @@ func strOrNull(v string) any {
 	}
 	return v
 }
+
+// ── 管理端统计（D10 仪表盘跨域闭包；可选接口见 repo.go DocStatsReader）──
+
+var _ DocStatsReader = (*Postgres)(nil)
+
+// CountDocs KB 文档总数（全部空间，含 failed——治理口径按摄入尝试计数）
+func (p *Postgres) CountDocs(ctx context.Context, tenantID int64) (int64, error) {
+	var n int64
+	err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM kb_doc WHERE tenant_id=$1`, tenantID).Scan(&n)
+	return n, err
+}

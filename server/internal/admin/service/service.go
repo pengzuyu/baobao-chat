@@ -1,0 +1,480 @@
+// Package adminservice 管理域业务逻辑（D10 阶段一务实版）。
+// 范围：仪表盘聚合 / 用户禁用启用（踢线+吊销）/ agent 策略只读 / 敏感词 CRUD（热更）/
+// AI 用量汇总 / 审计时间线。取舍登记（不做项）见 api.go 包注释。
+//
+// 跨域聚合（D02 §4 依赖规则：不横向 import 业务包）——全部经 Options 闭包注入：
+//
+//	users/online/sessions/msgs/kb/files/usage 各域计数 + hub 踢线 + auth 吊销。
+package adminservice
+
+import (
+	"context"
+	"encoding/json"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/baobaowork/server/internal/admin/api"
+	"github.com/baobaowork/server/internal/admin/repo"
+	"github.com/baobaowork/server/internal/org/api"
+	errx "github.com/baobaowork/server/internal/platform/errors"
+)
+
+// Options 装配项（main 注入；跨域闭包 + 管理员白名单）
+type Options struct {
+	// ── 跨域统计闭包（缺省=该指标报 0，页面卡显示「—」由端侧处理）──
+	UsersTotal       func(ctx context.Context, tenantID int64) (int64, error)                         // org 用户总数
+	OnlineNow        func() int64                                                                     // hub 连接数（非去重用户）
+	ConvsActiveSince func(ctx context.Context, tenantID int64, since time.Time) (int64, error)        // message 活跃会话
+	MsgsSince        func(ctx context.Context, tenantID int64, since time.Time) (int64, error)        // message 消息数
+	KBDocs           func(ctx context.Context, tenantID int64) (int64, error)                         // kb 文档数
+	FileBytes        func(ctx context.Context, tenantID int64) (int64, error)                         // file 存储量
+	UsageRows        func(ctx context.Context, tenantID int64, days int) ([]adminapi.UsageRow, error) // 用量原始行（pg=ai_usage_hourly / memory=Meter）
+	UsageMode        string                                                                           // "pg" | "memory"（UsageSummary.mode 透出）
+
+	// ── 写路径副作用闭包 ──
+	// KickUser 禁用即踢线：hub 按 uid 断开全部 WS 连接；返回断开连接数（审计留痕）
+	KickUser func(userID int64) int
+	// RevokeSessions 吊销该用户全部 refresh token（禁用后阻止静默续期；auth 域 Logout(all)）
+	RevokeSessions func(ctx context.Context, userID int64) error
+
+	// ── 管理员判定 v0.1 ──
+	// AdminAccounts empno 白名单（BBW_ADMIN_ACCOUNTS，逗号分隔）：scope 判定的兜底——
+	// PG 模式 users.scopes 不落库（RBAC 表阶段二），白名单是生产可用的唯一通道，登记。
+	AdminAccounts []string
+
+	// Now 时钟注入（测试用）
+	Now func() time.Time
+}
+
+func (o *Options) fillDefaults() {
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.UsageMode == "" {
+		o.UsageMode = "memory"
+	}
+}
+
+// Service 实现 adminapi.AdminService
+type Service struct {
+	users orgapi.UserAdminReader // org 域（列表/计数/状态）+ UserReader（名称/判定）
+	same  orgapi.UserReader
+	store adminrepo.Repo
+	opts  Options
+}
+
+// New 构造（依赖注入，D02 §3；users=管理写通道，reader=读取通道——org 模块同一 Service 实现）
+func New(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo.Repo, opts Options) *Service {
+	opts.fillDefaults()
+	return &Service{users: users, same: reader, store: store, opts: opts}
+}
+
+var _ adminapi.AdminService = (*Service)(nil)
+
+// ── 管理员判定 v0.1 ──
+
+// IsAdmin 口径（登记）：用户 scopes 含 "admin" 或任一 "admin:*" 前缀权限点，
+// 或 empno 命中 BBW_ADMIN_ACCOUNTS 白名单。正式 03 篇 RBAC 矩阵阶段二接入。
+func (s *Service) IsAdmin(_ context.Context, tenantID, userID int64) bool {
+	u, err := s.same.GetUser(context.Background(), userID)
+	if err != nil || u == nil {
+		return false
+	}
+	if u.TenantID != tenantID {
+		return false
+	}
+	for _, sc := range u.Scopes {
+		if sc == "admin" || strings.HasPrefix(sc, "admin:") {
+			return true
+		}
+	}
+	for _, emp := range s.opts.AdminAccounts {
+		if emp != "" && emp == u.EmployeeNo {
+			return true
+		}
+	}
+	return false
+}
+
+// ── 仪表盘 ──
+
+// Dashboard 六指标聚合 + 近 7 日 AI tokens 趋势（指标源缺失时该指标为 0——
+// 阶段一各闭包恒装配；「—」化由端侧处理，PAD-02 degraded 语义）
+func (s *Service) Dashboard(ctx context.Context, tenantID int64) (*adminapi.Dashboard, error) {
+	now := s.opts.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	// 各域计数相互独立：单源失败不影响整盘（P2 降级语义），错误吞掉记 0
+	safe := func(f func() int64) int64 {
+		if f == nil {
+			return 0
+		}
+		return f()
+	}
+	var usersTotal, sessions, msgs, kbDocs, fileBytes int64
+	if s.opts.UsersTotal != nil {
+		usersTotal, _ = s.opts.UsersTotal(ctx, tenantID)
+	}
+	if s.opts.ConvsActiveSince != nil {
+		sessions, _ = s.opts.ConvsActiveSince(ctx, tenantID, todayStart)
+	}
+	if s.opts.MsgsSince != nil {
+		msgs, _ = s.opts.MsgsSince(ctx, tenantID, todayStart)
+	}
+	if s.opts.KBDocs != nil {
+		kbDocs, _ = s.opts.KBDocs(ctx, tenantID)
+	}
+	if s.opts.FileBytes != nil {
+		fileBytes, _ = s.opts.FileBytes(ctx, tenantID)
+	}
+
+	// 今日 AI + 趋势共用一次用量拉取（近 7 日）
+	aiToday := adminapi.AITodayStat{}
+	trend := []adminapi.TrendPoint{}
+	if s.opts.UsageRows != nil {
+		if rows, err := s.opts.UsageRows(ctx, tenantID, 7); err == nil {
+			agg := aggregateDaily(rows)
+			today := now.UTC().Format("2006-01-02")
+			for _, date := range sortedDates(agg) {
+				d := agg[date]
+				trend = append(trend, adminapi.TrendPoint{Date: date, TotalTokens: d.tokens})
+				if date == today {
+					aiToday.Requests = d.requests
+					aiToday.TotalTokens = d.tokens
+				}
+			}
+		}
+	}
+	return &adminapi.Dashboard{
+		AsOf:             now.UTC().Format(time.RFC3339),
+		UsersTotal:       usersTotal,
+		OnlineNow:        safe(func() int64 { return int64(s.opts.OnlineNow()) }),
+		SessionsToday:    sessions,
+		MsgsToday:        msgs,
+		AIToday:          aiToday,
+		KBDocs:           kbDocs,
+		FileStorageBytes: fileBytes,
+		AITokensTrend:    trend,
+	}, nil
+}
+
+// ── 用户管理 ──
+
+// ListUsers 用户列表（org 域透传）
+func (s *Service) ListUsers(ctx context.Context, tenantID int64, keyword string, status, cursor int64, limit int) (*adminapi.UserPage, error) {
+	users, hasMore, err := s.users.ListUsers(ctx, orgapi.UserListFilter{
+		TenantID: tenantID, Keyword: strings.TrimSpace(keyword), Status: int(status),
+		Cursor: cursor, Limit: limit,
+	})
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	page := &adminapi.UserPage{Items: make([]adminapi.AdminUser, 0, len(users)), HasMore: hasMore}
+	for _, u := range users {
+		page.Items = append(page.Items, toAdminUser(u))
+		if page.NextCursor == "" || u.ID > 0 {
+			page.NextCursor = strconv.FormatInt(u.ID, 10)
+		}
+	}
+	if !hasMore {
+		page.NextCursor = ""
+	}
+	return page, nil
+}
+
+// SetUserStatus 启用/禁用：状态落库 →（禁用）踢线+吊销 refresh → 审计。
+// 幂等：重复置同态直接返回现值（不重复审计，不产生副作用）。
+func (s *Service) SetUserStatus(ctx context.Context, tenantID, operatorID, targetUserID int64, status int) (*adminapi.AdminUser, error) {
+	if status != orgapi.UserStatusActive && status != orgapi.UserStatusDisabled {
+		return nil, errx.New(errx.CodeBadRequest, "status 仅支持 1(启用)/2(禁用)")
+	}
+	if targetUserID == operatorID {
+		return nil, errx.New(errx.CodeBadRequest, "不能禁用自己") // 防自锁（矩阵 §4.1 防自我提权同源）
+	}
+	u, err := s.same.GetUser(ctx, targetUserID)
+	if err != nil || u == nil {
+		return nil, errx.New(errx.CodeNotFound, "用户不存在")
+	}
+	already := u.Status == status
+	if !already {
+		if err := s.users.SetUserStatus(ctx, targetUserID, status); err != nil {
+			return nil, errx.From(err)
+		}
+	}
+
+	action := "user.enable"
+	detail := map[string]any{"user_id": targetUserID, "employee_no": u.EmployeeNo, "status": status}
+	if status == orgapi.UserStatusDisabled {
+		action = "user.disable"
+		kicked := 0
+		if !already {
+			if s.opts.KickUser != nil {
+				kicked = s.opts.KickUser(targetUserID) // 禁用即踢线（hub 按 uid 断连）
+			}
+			if s.opts.RevokeSessions != nil {
+				_ = s.opts.RevokeSessions(ctx, targetUserID) // 吊销 refresh（best-effort，失败不阻断）
+			}
+		}
+		detail["kicked_conns"] = kicked
+	}
+	if !already { // 幂等：仅真实变更记审计
+		_ = s.audit(ctx, tenantID, operatorID, action, "user:"+strconv.FormatInt(targetUserID, 10), detail)
+	}
+
+	after := *u
+	after.Status = status
+	out := toAdminUser(after)
+	return &out, nil
+}
+
+// ── Agent 策略（只读快照）──
+
+// defaultAgentPolicy v0.1 默认工具策略（09 篇 §5.2 语义的字段名对齐；
+// agent_tool_policy 表随 Agent 域阶段二落地，届时本快照切读表）
+func defaultAgentPolicy() map[string]any {
+	return map[string]any{
+		"version":                    1,
+		"tool_mode":                  "allowlist",
+		"builtin_tools":              map[string]bool{"fs_read": true, "fs_write": true, "shell_exec": false, "http_fetch": false},
+		"app_namespace_tools":        map[string]bool{},
+		"risk_override":              map[string]any{},
+		"audit_report_level":         "metadata",
+		"full_auto_admission":        false,
+		"permanent_memory_high_risk": false,
+	}
+}
+
+// AgentPolicy agent 工具策略只读快照（内存/PG 未建表均为默认；表存在则读）
+func (s *Service) AgentPolicy(_ context.Context, _ int64) (*adminapi.AgentPolicySnapshot, error) {
+	return &adminapi.AgentPolicySnapshot{
+		Version:   1,
+		UpdatedAt: s.opts.Now().UTC().Format(time.RFC3339),
+		Source:    "default",
+		Policy:    defaultAgentPolicy(),
+	}, nil
+}
+
+// ── 敏感词（CRUD + 热更）──
+
+// ListSensitiveWords 分页 + 全量计数
+func (s *Service) ListSensitiveWords(ctx context.Context, tenantID int64, cursor, limit int64) (*adminapi.WordPage, error) {
+	words, hasMore, err := s.store.ListSensitiveWords(ctx, tenantID, cursor, int(limit))
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	total, _ := s.store.CountSensitiveWords(ctx, tenantID)
+	page := &adminapi.WordPage{Items: make([]adminapi.SensitiveWord, 0, len(words)), Total: total, HasMore: hasMore}
+	for _, w := range words {
+		page.Items = append(page.Items, adminapi.SensitiveWord{
+			ID: strconv.FormatInt(w.ID, 10), Word: w.Word, Mode: w.Mode,
+			Category: w.Category, Enabled: w.Enabled,
+			CreatedAt: w.CreatedAt.UTC().Format(time.RFC3339),
+		})
+		page.NextCursor = strconv.FormatInt(w.ID, 10)
+	}
+	if !hasMore || len(words) == 0 {
+		page.NextCursor = ""
+	}
+	return page, nil
+}
+
+// AddSensitiveWord 新增（mode=1 拦截；写后 message 域即时生效——repo 缓存已失效）+ 审计
+func (s *Service) AddSensitiveWord(ctx context.Context, tenantID, operatorID int64, word, category string) (*adminapi.SensitiveWord, error) {
+	word = strings.TrimSpace(word)
+	if word == "" {
+		return nil, errx.New(errx.CodeBadRequest, "敏感词不能为空")
+	}
+	if len([]rune(word)) > 64 {
+		return nil, errx.New(errx.CodeBadRequest, "敏感词过长（≤64 字）")
+	}
+	w, err := s.store.InsertSensitiveWord(ctx, adminrepo.SensitiveWord{
+		TenantID: tenantID, Word: word, Mode: 1, Category: strings.TrimSpace(category),
+		Enabled: true, CreatedBy: operatorID, CreatedAt: s.opts.Now(),
+	})
+	if err != nil {
+		if err == adminrepo.ErrDupWord {
+			return nil, errx.New(errx.CodeBadRequest, "该敏感词已存在")
+		}
+		return nil, errx.From(err)
+	}
+	_ = s.audit(ctx, tenantID, operatorID, "policy.sensitive_word.add",
+		"sensitive_word:"+strconv.FormatInt(w.ID, 10),
+		map[string]any{"word": word, "mode": 1, "category": category})
+	return &adminapi.SensitiveWord{
+		ID: strconv.FormatInt(w.ID, 10), Word: w.Word, Mode: w.Mode, Category: w.Category,
+		Enabled: w.Enabled, CreatedAt: w.CreatedAt.UTC().Format(time.RFC3339),
+	}, nil
+}
+
+// DeleteSensitiveWord 删除 + 审计
+func (s *Service) DeleteSensitiveWord(ctx context.Context, tenantID, operatorID, id int64) error {
+	if err := s.store.DeleteSensitiveWord(ctx, tenantID, id); err != nil {
+		if err == adminrepo.ErrWordNotFound {
+			return errx.New(errx.CodeNotFound, "敏感词不存在")
+		}
+		return errx.From(err)
+	}
+	_ = s.audit(ctx, tenantID, operatorID, "policy.sensitive_word.delete",
+		"sensitive_word:"+strconv.FormatInt(id, 10), map[string]any{"word_id": id})
+	return nil
+}
+
+// ── 用量 ──
+
+// UsageSummary 近 N 日（默认 7，上限 30）日粒度 + tier/scene 汇总
+func (s *Service) UsageSummary(ctx context.Context, tenantID int64, days int) (*adminapi.UsageSummary, error) {
+	if days <= 0 {
+		days = 7
+	}
+	if days > 30 {
+		days = 30
+	}
+	if s.opts.UsageRows == nil {
+		return &adminapi.UsageSummary{
+			AsOf: s.opts.Now().UTC().Format(time.RFC3339), Days: days, Mode: s.opts.UsageMode,
+			Daily: []adminapi.UsageDaily{}, ByTier: []adminapi.UsageByDim{}, ByScene: []adminapi.UsageByDim{},
+		}, nil
+	}
+	rows, err := s.opts.UsageRows(ctx, tenantID, days)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	agg := aggregateDaily(rows)
+	tierAgg, sceneAgg := map[string]*adminapi.UsageByDim{}, map[string]*adminapi.UsageByDim{}
+	for _, r := range rows {
+		t := tierAgg[r.Tier]
+		if t == nil {
+			t = &adminapi.UsageByDim{Key: r.Tier}
+			tierAgg[r.Tier] = t
+		}
+		t.Requests += r.Requests
+		t.TotalTokens += r.TotalTokens
+		c := sceneAgg[r.Scene]
+		if c == nil {
+			c = &adminapi.UsageByDim{Key: r.Scene}
+			sceneAgg[r.Scene] = c
+		}
+		c.Requests += r.Requests
+		c.TotalTokens += r.TotalTokens
+	}
+	daily := make([]adminapi.UsageDaily, 0, len(agg))
+	total := adminapi.UsageDaily{}
+	for _, date := range sortedDates(agg) {
+		d := agg[date]
+		daily = append(daily, adminapi.UsageDaily{
+			Date: date, Requests: d.requests,
+			PromptTokens: d.prompt, CompletionTokens: d.completion, TotalTokens: d.tokens,
+		})
+		total.Requests += d.requests
+		total.PromptTokens += d.prompt
+		total.CompletionTokens += d.completion
+		total.TotalTokens += d.tokens
+	}
+	return &adminapi.UsageSummary{
+		AsOf:    s.opts.Now().UTC().Format(time.RFC3339),
+		Days:    days,
+		Mode:    s.opts.UsageMode,
+		Daily:   daily,
+		ByTier:  sortByKeyDesc(tierAgg),
+		ByScene: sortByKeyDesc(sceneAgg),
+		Total:   total,
+	}, nil
+}
+
+// ── 审计 ──
+
+// ListAudit 时间线（操作人名称解析 best-effort）
+func (s *Service) ListAudit(ctx context.Context, tenantID int64, cursor, limit int64) (*adminapi.AuditPage, error) {
+	actions, hasMore, err := s.store.ListAudit(ctx, tenantID, cursor, int(limit))
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	page := &adminapi.AuditPage{Items: make([]adminapi.AuditItem, 0, len(actions)), HasMore: hasMore}
+	for _, a := range actions {
+		item := adminapi.AuditItem{
+			ID: strconv.FormatInt(a.ID, 10), OperatorID: strconv.FormatInt(a.OperatorID, 10),
+			Action: a.Action, Target: a.Target, CreatedAt: a.CreatedAt.UTC().Format(time.RFC3339),
+			OperatorName: strconv.FormatInt(a.OperatorID, 10),
+		}
+		if u, err := s.same.GetUser(ctx, a.OperatorID); err == nil && u != nil {
+			item.OperatorName = u.DisplayName
+		}
+		if len(a.Detail) > 0 {
+			var d map[string]any
+			if json.Unmarshal(a.Detail, &d) == nil {
+				item.Detail = d
+			}
+		}
+		page.Items = append(page.Items, item)
+		page.NextCursor = strconv.FormatInt(a.ID, 10)
+	}
+	if !hasMore || len(actions) == 0 {
+		page.NextCursor = ""
+	}
+	return page, nil
+}
+
+// audit 追加审计行（best-effort：审计失败不阻断业务操作，错误由调用方记日志）
+func (s *Service) audit(ctx context.Context, tenantID, operatorID int64, action, target string, detail map[string]any) error {
+	raw, _ := json.Marshal(detail)
+	_, err := s.store.InsertAudit(ctx, adminrepo.AuditAction{
+		TenantID: tenantID, OperatorID: operatorID, Action: action, Target: target,
+		Detail: raw, CreatedAt: s.opts.Now(),
+	})
+	return err
+}
+
+// ── 聚合小工具 ──
+
+type dailyAgg struct {
+	requests   int64
+	prompt     int64
+	completion int64
+	tokens     int64
+}
+
+// aggregateDaily 按日聚合（date "2006-01-02" → 汇总行；缺失日不补点——端侧简表直接渲染）
+func aggregateDaily(rows []adminapi.UsageRow) map[string]*dailyAgg {
+	agg := map[string]*dailyAgg{}
+	for _, r := range rows {
+		d, ok := agg[r.Date]
+		if !ok {
+			d = &dailyAgg{}
+			agg[r.Date] = d
+		}
+		d.requests += r.Requests
+		d.prompt += r.PromptTokens
+		d.completion += r.CompletionTokens
+		d.tokens += r.TotalTokens
+	}
+	return agg
+}
+
+// sortedDates 日期键升序
+func sortedDates(agg map[string]*dailyAgg) []string {
+	dates := make([]string, 0, len(agg))
+	for k := range agg {
+		dates = append(dates, k)
+	}
+	sort.Strings(dates)
+	return dates
+}
+
+func sortByKeyDesc(m map[string]*adminapi.UsageByDim) []adminapi.UsageByDim {
+	out := make([]adminapi.UsageByDim, 0, len(m))
+	for _, v := range m {
+		out = append(out, *v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TotalTokens > out[j].TotalTokens })
+	return out
+}
+
+// toAdminUser org 用户 → 管理端行（ID 字符串化）
+func toAdminUser(u orgapi.User) adminapi.AdminUser {
+	return adminapi.AdminUser{
+		ID: strconv.FormatInt(u.ID, 10), EmployeeNo: u.EmployeeNo,
+		DisplayName: u.DisplayName, Email: u.Email, Status: u.Status, Scopes: u.Scopes,
+	}
+}

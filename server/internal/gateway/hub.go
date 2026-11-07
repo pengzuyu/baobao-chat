@@ -162,3 +162,23 @@ func (h *Hub) OnlineUsers() []int64 {
 	}
 	return ids
 }
+
+// KickUser 按 uid 断开其全部连接（D10 管理域禁用即踢线；12 篇 §4.6 force.logout 语义）。
+// 关闭仅触发各连接 writeLoop 发送 close 帧后退出，Unregister 仍由 ServeWS defer 完成；
+// 返回被断开的连接数（0=该用户本就无在线连接）。
+func (h *Hub) KickUser(userID int64) int {
+	h.mu.RLock()
+	set := h.byUser[userID]
+	targets := make([]*Client, 0, len(set))
+	for c := range set {
+		targets = append(targets, c)
+	}
+	h.mu.RUnlock()
+
+	n := 0
+	for _, c := range targets {
+		c.Close()
+		n++
+	}
+	return n
+}

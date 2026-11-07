@@ -166,3 +166,9 @@ type Repo interface {
 	// 命中任意 token 即候选，得分为出现次数），仅参与 status=ready 的文档
 	SearchKeyword(ctx context.Context, tenantID int64, spaceIDs []int64, tokens []string, topK int) ([]ChunkHit, error)
 }
+
+// DocStatsReader 管理端统计可选接口（D10 仪表盘跨域闭包；不进 Repo 主接口）
+type DocStatsReader interface {
+	// CountDocs KB 文档总数（全部空间，含 failed——治理口径按摄入尝试计数）
+	CountDocs(ctx context.Context, tenantID int64) (int64, error)
+}

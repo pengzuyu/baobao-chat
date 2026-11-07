@@ -19,3 +19,6 @@ func NewModule(r orgrepo.Repo) *Module {
 
 // API 对外只读接口（auth 依赖此实现登录）
 func (m *Module) API() orgapi.UserReader { return m.svc }
+
+// AdminAPI 管理端用户管理接口（D10 admin 域消费；依赖规则 D02 §4 只经 api 包）
+func (m *Module) AdminAPI() orgapi.UserAdminReader { return m.svc }

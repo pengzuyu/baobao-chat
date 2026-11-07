@@ -70,3 +70,9 @@ type Repo interface {
 	// ListByConv 会话文件聚合（未软删，created_at 倒序；群文件页签预留）
 	ListByConv(ctx context.Context, tenantID, convID int64) ([]File, error)
 }
+
+// FileStatsReader 管理端统计可选接口（D10 仪表盘跨域闭包；不进 Repo 主接口）
+type FileStatsReader interface {
+	// SumStorageBytes 文件存储量（未软删行 size 求和）
+	SumStorageBytes(ctx context.Context, tenantID int64) (int64, error)
+}

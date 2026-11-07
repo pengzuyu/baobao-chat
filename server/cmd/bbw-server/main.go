@@ -17,6 +17,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/baobaowork/server/internal/admin"
+	adminapi "github.com/baobaowork/server/internal/admin/api"
+	adminrepo "github.com/baobaowork/server/internal/admin/repo"
+	adminservice "github.com/baobaowork/server/internal/admin/service"
 	"github.com/baobaowork/server/internal/aigw"
 	"github.com/baobaowork/server/internal/auth"
 	"github.com/baobaowork/server/internal/auth/api"
@@ -112,6 +116,15 @@ func main() {
 	}, fileRepo, fileStore)
 	fileSvc := fileMod.API()
 
+	// 管理域仓储先行（D10 阶段一务实版）：敏感词库热更闭包需在 message 装配前就绪
+	// （词库权威源属 admin 域，message 域 3005 校验经闭包实时读，D02 §4 跨域不引包）
+	var adminStore adminrepo.Repo
+	if pgPool != nil {
+		adminStore = adminrepo.NewPostgres(pgPool)
+	} else {
+		adminStore = adminrepo.NewMemory()
+	}
+
 	msgMod := message.NewModule(msgRepo, bus, messageservice.Options{
 		// 发送人名称解析：闭包经 org 仓查询（跨模块不引 org 包，D02 §4 依赖规则）
 		NameOf: func(id int64) string {
@@ -123,10 +136,34 @@ func main() {
 		// 文件消息校验/回填（D06 阶段一：msg.send type=file/image 的 body.file_id）
 		FileCheck:    fileSvc.CheckSendable,
 		FileMarkSent: fileSvc.MarkSent,
+		// 敏感词热更源（D10 策略页增删即时生效 3005；阶段一单租户 tenant=1）
+		SensitiveWordSource: func() []string {
+			words, err := adminStore.EnabledSensitiveWords(context.Background(), 1)
+			if err != nil {
+				return nil // 读失败放行（词库不可用不应阻断全量消息，fail-open 登记阶段二收紧）
+			}
+			return words
+		},
 	})
 
 	hub := gateway.NewHub()
-	gw := gateway.New(hub, bus, msgMod.API(), authMod.API().Verify, cfg.WSHeartbeat)
+	// WS 鉴权链追加用户态校验（D10 禁用即踢线的承接环）：JWT 通过但用户已禁用 → 拒绝，
+	// 客户端重连风暴收敛为持续 offline（refresh 已吊销，静默刷新失败登出兜底）
+	wsVerify := func(ctx context.Context, token string) (*authjwt.Claims, error) {
+		c, err := authMod.API().Verify(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		uid, perr := strconv.ParseInt(c.Subject, 10, 64)
+		if perr != nil {
+			return nil, perr
+		}
+		if u, uerr := orgRepo.GetUser(ctx, uid); uerr == nil && u.Status != orgapi.UserStatusActive {
+			return nil, errx.New(errx.CodeUserDisabled, "用户已禁用")
+		}
+		return c, nil
+	}
+	gw := gateway.New(hub, bus, msgMod.API(), wsVerify, cfg.WSHeartbeat)
 
 	if cfg.SeedDemoData {
 		seedDemo(orgRepo, msgRepo)
@@ -258,6 +295,93 @@ func main() {
 	mux.Handle("POST /api/v1/kb/docs/{id}/reingest", authed(handleKBReingest(kbSvc)))
 	mux.Handle("POST /api/v1/kb/query", authed(handleKBQuery(kbSvc)))
 	mux.Handle("GET /api/v1/kb/jobs", authed(handleKBJobs(kbSvc)))
+
+	// ── 管理域（D10 阶段一务实版）──
+	// 跨域聚合闭包注入（D02 §4：admin 域不横向依赖业务包）：
+	//   org 计数/列表/状态 · hub 在线与踢线 · message 今日会话/消息 · kb 文档 · file 存储 ·
+	//   AI 用量（PG=ai_usage_hourly 聚合 / 内存=aigw Meter snapshot）· auth 吊销
+	orgAdmin := orgMod.AdminAPI()
+	msgStats, _ := msgRepo.(messagerepo.StatsReader)    // Memory/Postgres 均实现（可选接口）
+	kbStats, _ := kbRepo.(kbrepo.DocStatsReader)        // 同上
+	fileStats, _ := fileRepo.(filerepo.FileStatsReader) // 同上
+	usageMode := "memory"
+	usageRows := func(_ context.Context, tenantID int64, days int) ([]adminapi.UsageRow, error) {
+		cutoff := time.Now().UTC().AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
+		rows := []adminapi.UsageRow{}
+		for dim, row := range aigwMod.Meter.Snapshot() { // 内存模式：进程内计量快照（无历史日，登记）
+			if dim.Tenant != tenantID || row.UpdatedHour.Before(cutoff) {
+				continue
+			}
+			rows = append(rows, adminapi.UsageRow{
+				Date: row.UpdatedHour.UTC().Format("2006-01-02"), Tier: dim.Tier, Scene: dim.Scene,
+				Requests: row.Requests, PromptTokens: row.Prompt,
+				CompletionTokens: row.Completion, TotalTokens: row.Prompt + row.Completion,
+			})
+		}
+		return rows, nil
+	}
+	if pgPool != nil {
+		if ur, ok := adminStore.(adminrepo.UsageReader); ok {
+			usageRows, usageMode = ur.UsageRows, "pg"
+		}
+	}
+	// 管理员白名单（BBW_ADMIN_ACCOUNTS，empno 逗号分隔）：PG 模式 scopes 不落库时的判定兜底
+	adminAccounts := []string{}
+	for _, s := range strings.Split(envOr("BBW_ADMIN_ACCOUNTS", ""), ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			adminAccounts = append(adminAccounts, s)
+		}
+	}
+	if len(adminAccounts) > 0 {
+		log.Printf("admin 白名单（BBW_ADMIN_ACCOUNTS）：%v", adminAccounts)
+	}
+	adminOpts := adminservice.Options{
+		UsersTotal:     orgAdmin.CountUsers,
+		OnlineNow:      func() int64 { return int64(hub.OnlineCount()) },
+		KickUser:       hub.KickUser,
+		RevokeSessions: func(ctx context.Context, userID int64) error { return authAPI.Logout(ctx, userID, "", true) },
+		AdminAccounts:  adminAccounts,
+		UsageRows:      usageRows,
+		UsageMode:      usageMode,
+	}
+	if msgStats != nil { // 可选接口断言失败（理论不发生）时对应指标降级为 0
+		adminOpts.ConvsActiveSince = msgStats.CountActiveConvsSince
+		adminOpts.MsgsSince = msgStats.CountMsgsSince
+	}
+	if kbStats != nil {
+		adminOpts.KBDocs = kbStats.CountDocs
+	}
+	if fileStats != nil {
+		adminOpts.FileBytes = fileStats.SumStorageBytes
+	}
+	adminMod := admin.NewModule(orgAdmin, orgMod.API(), adminStore, adminOpts)
+	adminSvc := adminMod.API()
+	// 管理路由守卫：auth → tenant → 管理员判定（v0.1 scope/白名单；403 用既有 2003，D10 无新码）
+	adminOnly := func(h http.HandlerFunc) http.Handler {
+		return httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			uid, err := uidFrom(r)
+			if err != nil {
+				httpx.Fail(w, r, err)
+				return
+			}
+			if !adminSvc.IsAdmin(r.Context(), httpx.TenantID(r.Context()), uid) {
+				httpx.Fail(w, r, errx.New(errx.CodePermACLDenied, "需要管理员权限"))
+				return
+			}
+			h(w, r)
+		}), httpx.Auth(authAPI.Verify), httpx.Tenant)
+	}
+	mux.Handle("GET /api/v1/admin/dashboard", adminOnly(handleAdminDashboard(adminSvc)))
+	mux.Handle("GET /api/v1/admin/users", adminOnly(handleAdminUsers(adminSvc)))
+	mux.Handle("PATCH /api/v1/admin/users/{id}", adminOnly(handleAdminUserPatch(adminSvc)))
+	mux.Handle("POST /api/v1/admin/users/{id}/disable", adminOnly(handleAdminUserStatus(adminSvc, orgapi.UserStatusDisabled)))
+	mux.Handle("POST /api/v1/admin/users/{id}/enable", adminOnly(handleAdminUserStatus(adminSvc, orgapi.UserStatusActive)))
+	mux.Handle("GET /api/v1/admin/policies/agent", adminOnly(handleAdminAgentPolicy(adminSvc)))
+	mux.Handle("GET /api/v1/admin/policies/sensitive-words", adminOnly(handleAdminListWords(adminSvc)))
+	mux.Handle("POST /api/v1/admin/policies/sensitive-words", adminOnly(handleAdminAddWord(adminSvc)))
+	mux.Handle("DELETE /api/v1/admin/policies/sensitive-words/{id}", adminOnly(handleAdminDeleteWord(adminSvc)))
+	mux.Handle("GET /api/v1/admin/usage/summary", adminOnly(handleAdminUsage(adminSvc)))
+	mux.Handle("GET /api/v1/admin/audit", adminOnly(handleAdminAudit(adminSvc)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -1260,7 +1384,9 @@ func seedDemo(orgRepo orgrepo.Repo, msgRepo messagerepo.Repo) {
 	users := []orgapi.User{
 		{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "alice", DisplayName: "Alice",
 			Email: "alice@bbw.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
-			Scopes: []string{"im:message:send", "agent:session:use"}},
+			// admin 权限点 v0.1：seed 即授权（阶段二换 role/user_role 表装配；PG 模式
+			// scopes 不落库，管理判定走 BBW_ADMIN_ACCOUNTS=alice 白名单，登记）
+			Scopes: []string{"im:message:send", "agent:session:use", "admin", "admin:user:manage", "admin:policy:manage", "admin:audit:read", "admin:usage:read"}},
 		{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "bob", DisplayName: "Bob",
 			Email: "bob@bbw.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
 			Scopes: []string{"im:message:send"}},
@@ -1285,4 +1411,194 @@ func seedDemo(orgRepo orgrepo.Repo, msgRepo messagerepo.Repo) {
 		}
 	}
 	log.Printf("demo 数据就绪：alice/bob（口令 demo-pass-123，租户 1），会话 %d", conv.ID)
+}
+
+// ── 管理域 REST 壳（D10 阶段一务实版：薄壳 → adminSvc → 统一响应包）──
+
+// handleAdminDashboard 仪表盘聚合（API-ADM-01 务实版：六指标 + AI tokens 趋势）
+func handleAdminDashboard(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp, err := svc.Dashboard(r.Context(), httpx.TenantID(r.Context()))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleAdminUsers 用户列表（API-ADM-06 务实版：?keyword&status&cursor&limit）
+func handleAdminUsers(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		status, _ := strconv.ParseInt(q.Get("status"), 10, 64)
+		cursor, _ := strconv.ParseInt(q.Get("cursor"), 10, 64)
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		resp, err := svc.ListUsers(r.Context(), httpx.TenantID(r.Context()),
+			q.Get("keyword"), status, cursor, limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// adminActor 管理写请求的操作人（uid）
+func adminActor(r *http.Request) (int64, error) { return uidFrom(r) }
+
+// handleAdminUserPatch 用户资料/状态（API-ADM-06 PATCH 务实版：v0.1 仅 status 字段）
+func handleAdminUserPatch(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		operatorID, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		targetID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Status int `json:"status"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if req.Status == 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "status 必填（1 启用 / 2 禁用）"))
+			return
+		}
+		resp, err := svc.SetUserStatus(r.Context(), httpx.TenantID(r.Context()), operatorID, targetID, req.Status)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleAdminUserStatus 禁用/启用语义端点（API-ADM-08 务实版：disable|enable 路由共用）
+func handleAdminUserStatus(svc adminapi.AdminService, status int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		operatorID, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		targetID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		resp, err := svc.SetUserStatus(r.Context(), httpx.TenantID(r.Context()), operatorID, targetID, status)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleAdminAgentPolicy Agent 工具策略只读快照（API-ADM-14 务实版）
+func handleAdminAgentPolicy(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp, err := svc.AgentPolicy(r.Context(), httpx.TenantID(r.Context()))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleAdminListWords 敏感词分页列表（?cursor&limit；响应含 total 全量计数）
+func handleAdminListWords(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		cursor, _ := strconv.ParseInt(q.Get("cursor"), 10, 64)
+		limit, _ := strconv.ParseInt(q.Get("limit"), 10, 64)
+		resp, err := svc.ListSensitiveWords(r.Context(), httpx.TenantID(r.Context()), cursor, limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleAdminAddWord 新增敏感词（mode=1 拦截；写后 message 域即时生效）
+func handleAdminAddWord(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		operatorID, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Word     string `json:"word"`
+			Category string `json:"category"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		resp, err := svc.AddSensitiveWord(r.Context(), httpx.TenantID(r.Context()), operatorID, req.Word, req.Category)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleAdminDeleteWord 删除敏感词
+func handleAdminDeleteWord(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		operatorID, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		id, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.DeleteSensitiveWord(r.Context(), httpx.TenantID(r.Context()), operatorID, id); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+// handleAdminUsage AI 用量汇总（API-ADM-21 务实版：?days=7，按日/按 tier/按 scene）
+func handleAdminUsage(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+		resp, err := svc.UsageSummary(r.Context(), httpx.TenantID(r.Context()), days)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleAdminAudit 审计时间线（API-ADM-18 务实版：?cursor&limit，id 倒序）
+func handleAdminAudit(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		cursor, _ := strconv.ParseInt(q.Get("cursor"), 10, 64)
+		limit, _ := strconv.ParseInt(q.Get("limit"), 10, 64)
+		resp, err := svc.ListAudit(r.Context(), httpx.TenantID(r.Context()), cursor, limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
 }

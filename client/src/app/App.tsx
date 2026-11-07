@@ -7,7 +7,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { FileText, Phone, Settings2 } from 'lucide-react';
+import { FileText, Phone } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { LoginPage } from '../features/auth/pages/LoginPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
@@ -18,6 +18,12 @@ import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
 import { AgentReportsPage } from '../features/agent/pages/AgentReportsPage';
+import { AdminLayout } from '../features/admin/pages/AdminLayout';
+import { DashboardPage } from '../features/admin/pages/DashboardPage';
+import { UsersPage } from '../features/admin/pages/UsersPage';
+import { PoliciesPage } from '../features/admin/pages/PoliciesPage';
+import { UsagePage } from '../features/admin/pages/UsagePage';
+import { AuditPage } from '../features/admin/pages/AuditPage';
 import { wsClient } from '../shared/api/ws';
 import { bindWsToConnectionStore, useConnectionStore } from '../shared/store/connection';
 import { MainLayout } from './MainLayout';
@@ -119,7 +125,15 @@ export function App() {
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />
         <Route path="/agent/memory" element={<AgentMemoryPage />} />
         <Route path="/agent/reports" element={<AgentReportsPage />} />
-        <Route path="/admin/*" element={<PlaceholderPage title="管理后台" designDoc="D10" icon={Settings2} blurb="租户、组织、策略与审计管理" />} />
+        {/* 管理后台（D10 阶段一务实版）：仪表盘/用户/策略/用量/审计五页；
+            一级"管理"入口按 me.perms admin:* 显隐（MainLayout），服务端守卫 2003 兜底 */}
+        <Route path="/admin" element={<AdminLayout />}>
+          <Route index element={<DashboardPage />} />
+          <Route path="users" element={<UsersPage />} />
+          <Route path="policies" element={<PoliciesPage />} />
+          <Route path="usage" element={<UsagePage />} />
+          <Route path="audit" element={<AuditPage />} />
+        </Route>
         {/* 设置页族（D01 §4.2）：通用/通知/传输/Agent/关于；通用页主题切换真实生效 */}
         <Route path="/settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="/settings/general" replace />} />

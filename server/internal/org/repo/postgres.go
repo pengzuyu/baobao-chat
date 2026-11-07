@@ -91,3 +91,59 @@ func (p *Postgres) GetUserByLogin(ctx context.Context, tenantID int64, username 
 	}
 	return u, nil
 }
+
+// listUsersSQL 管理端列表查询（keyword ILIKE 工号/姓名/邮箱 + status + cursor 翻页）
+const listUsersSQL = `
+	SELECT ` + userCols + ` FROM users
+	WHERE tenant_id=$1 AND ($2 = '' OR employee_no ILIKE '%'||$2||'%'
+		OR display_name ILIKE '%'||$2||'%' OR COALESCE(email,'') ILIKE '%'||$2||'%')
+	AND ($3 = 0 OR status = $3) AND id > $4
+	ORDER BY id ASC LIMIT $5`
+
+// ListUsers 用户列表（D10 阶段一：keyword/status/cursor；RLS app.tenant 兜底双保险）
+func (p *Postgres) ListUsers(ctx context.Context, f orgapi.UserListFilter) ([]orgapi.User, bool, error) {
+	rows, err := p.pool.Query(ctx, listUsersSQL,
+		f.TenantID, f.Keyword, f.Status, f.Cursor, f.LimitOrDefault()+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	limit := f.LimitOrDefault()
+	out := make([]orgapi.User, 0, limit)
+	hasMore := false
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(out) >= limit { // 取 limit+1 探测还有下一页，多出的一条丢弃
+			hasMore = true
+			break
+		}
+		out = append(out, *u)
+	}
+	return out, hasMore, rows.Err()
+}
+
+// CountUsers 用户总数
+func (p *Postgres) CountUsers(ctx context.Context, tenantID int64) (int64, error) {
+	var n int64
+	if err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE tenant_id=$1`, tenantID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// SetUserStatus 状态变更（启用/禁用；updated_at 一并刷新）
+func (p *Postgres) SetUserStatus(ctx context.Context, id int64, status int) error {
+	tag, err := p.pool.Exec(ctx,
+		`UPDATE users SET status=$2, updated_at=now() WHERE id=$1`, id, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return orgapi.ErrUserNotFound
+	}
+	return nil
+}

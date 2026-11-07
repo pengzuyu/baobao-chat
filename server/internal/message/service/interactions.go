@@ -22,7 +22,11 @@ func (s *Service) validateText(text string) error {
 	if len([]rune(text)) > s.opts.MaxTextRunes {
 		return errx.New(errx.CodeIMContentTooLong, "消息内容超过长度限制")
 	}
-	for _, w := range s.opts.SensitiveWords {
+	words := s.opts.SensitiveWords
+	if s.opts.SensitiveWordSource != nil { // D10 词库热更：管理域增删即时生效
+		words = s.opts.SensitiveWordSource()
+	}
+	for _, w := range words {
 		if w != "" && strings.Contains(text, w) {
 			return errx.New(errx.CodeIMSensitiveBlocked, "包含违禁词")
 		}

@@ -16,8 +16,11 @@ import { Empty } from './Empty';
 
 export type ViewState = 'loading' | 'empty' | 'error' | 'offline' | 'forbidden' | 'degraded';
 
+/** 六态 + 'ok'（正常内容态：直接渲染 children，不经 state-view 包裹层） */
+export type ViewStateOrOk = ViewState | 'ok';
+
 interface StateViewProps {
-  state: ViewState;
+  state: ViewStateOrOk;
   /** loading 骨架形态（SkeletonList / SkeletonStream / SkeletonBlock…） */
   skeleton?: ReactNode;
   /** loading 防闪烁延迟，默认 300ms */
@@ -70,6 +73,9 @@ export function StateView({
   children,
 }: StateViewProps) {
   const showSkeleton = useDelayed(state === 'loading', loadingDelayMs);
+
+  // ok：正常内容态——直接透传 children（不套居中容器，表格/卡片网格按自身布局渲染）
+  if (state === 'ok') return <>{children}</>;
 
   if (state === 'loading') {
     return <div className="state-view">{showSkeleton ? skeleton : null}</div>;

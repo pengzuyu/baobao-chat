@@ -3,7 +3,9 @@ package orgrepo
 
 import (
 	"context"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/baobaowork/server/internal/org/api"
@@ -19,6 +21,15 @@ type Repo interface {
 	CreateUser(ctx context.Context, u orgapi.User) (orgapi.User, error)
 	GetUser(ctx context.Context, id int64) (*orgapi.User, error)
 	GetUserByLogin(ctx context.Context, tenantID int64, username string) (*orgapi.User, error)
+
+	// ── 管理端扩展（D10 阶段一务实版）──
+	// ListUsers 用户列表（keyword 工号/姓名/邮箱模糊 + status + id 升序 cursor 翻页）；
+	// 返回当页行 + has_more（多取一行探测）
+	ListUsers(ctx context.Context, f orgapi.UserListFilter) ([]orgapi.User, bool, error)
+	// CountUsers 用户总数（仪表盘指标）
+	CountUsers(ctx context.Context, tenantID int64) (int64, error)
+	// SetUserStatus 启用/禁用（orgapi.UserStatus*）；行不存在返回 ErrUserNotFound
+	SetUserStatus(ctx context.Context, id int64, status int) error
 }
 
 // Memory 内存实现（阶段一：无 PG 依赖跑通全链路）
@@ -79,4 +90,68 @@ func (m *Memory) GetUserByLogin(_ context.Context, tenantID int64, username stri
 		}
 	}
 	return nil, orgapi.ErrUserNotFound
+}
+
+// ListUsers 用户列表：keyword 子串匹配（大小写不敏感，对齐 PG ILIKE）+ status 过滤 + id 升序翻页
+func (m *Memory) ListUsers(_ context.Context, f orgapi.UserListFilter) ([]orgapi.User, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := make([]int64, 0, len(m.byID))
+	for id := range m.byID {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	kw := strings.ToLower(f.Keyword)
+	limit := f.LimitOrDefault()
+	out := make([]orgapi.User, 0, limit)
+	hasMore := false
+	for _, id := range ids {
+		u := m.byID[id]
+		if f.TenantID != 0 && u.TenantID != f.TenantID {
+			continue
+		}
+		if f.Cursor > 0 && id <= f.Cursor {
+			continue
+		}
+		if f.Status != 0 && u.Status != f.Status {
+			continue
+		}
+		if kw != "" && !strings.Contains(strings.ToLower(u.EmployeeNo), kw) &&
+			!strings.Contains(strings.ToLower(u.DisplayName), kw) &&
+			!strings.Contains(strings.ToLower(u.Email), kw) {
+			continue
+		}
+		if len(out) >= limit { // 命中数已满仍继续标志位（无需真取下一行）
+			hasMore = true
+			break
+		}
+		cp := *u
+		out = append(out, cp)
+	}
+	return out, hasMore, nil
+}
+
+// CountUsers 用户总数
+func (m *Memory) CountUsers(_ context.Context, tenantID int64) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var n int64
+	for _, u := range m.byID {
+		if tenantID == 0 || u.TenantID == tenantID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// SetUserStatus 状态变更（启用/禁用）
+func (m *Memory) SetUserStatus(_ context.Context, id int64, status int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.byID[id]
+	if !ok {
+		return orgapi.ErrUserNotFound
+	}
+	u.Status = status
+	return nil
 }

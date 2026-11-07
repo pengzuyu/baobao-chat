@@ -29,6 +29,11 @@ type Options struct {
 	Now            func() time.Time      // 时钟注入（测试用）
 	NameOf         func(id int64) string // 发送人名称解析（main 注入 org 域；缺省回落 uid 字符串）
 
+	// SensitiveWordSource 敏感词动态源（D10 管理域词库热更）：非 nil 时优先于
+	// SensitiveWords 静态切片——admin 策略页增删词即时生效（3005 拦截），无需重启；
+	// 阶段一单租户（闭包内固定 tenant），多租户随阶段二 policy.updated 事件化改造。
+	SensitiveWordSource func() []string
+
 	// ── 群管理（04 篇 §1.1 基线 / §4.5）──
 	MaxGroupMembers     int           // 普通群上限（默认 500；3010）
 	MaxBroadcastMembers int           // 广播群上限（默认 5000；3010）
