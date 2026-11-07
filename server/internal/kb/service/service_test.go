@@ -444,3 +444,77 @@ func extOf(name string) string {
 	}
 	return ""
 }
+
+// ACL 接入（03 §4.4 → D07 阶段二）：ACL 显式授权超集——dept 空间授
+// viewer 后部门成员可读；company 空间授 editor 后非 owner 可写；
+// 无授权回落 v0.1 基线（既有用例零破坏）
+func TestACLExplicitGrantWidens(t *testing.T) {
+	rule := map[int64]map[int64]int{} // spaceID → uid → perm（测试桩）
+	svc := newTestService(t, Options{
+		Embedder: fakeTopical(map[string]int{"令牌": 0}),
+		ACLPerm: func(_ context.Context, spaceID, userID int64) int {
+			return rule[spaceID][userID]
+		},
+	})
+	ctx := context.Background()
+	// alice（治理者）建 dept 空间并摄入
+	dept, err := svc.CreateSpace(ctx, tenantID, alice, kbrepo.SpaceDept, "研发部知识库")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, dept.ID), 0, "规范", "text", "令牌安全规范", 0); err != nil {
+		t.Fatal(err)
+	}
+	// 基线：bob（非治理者）不可见 dept 空间
+	bSpaces, _ := svc.ListSpaces(ctx, tenantID, bob)
+	for _, sp := range bSpaces {
+		if sp.ID == dept.ID {
+			t.Fatal("基线下 bob 不应见 dept 空间")
+		}
+	}
+	// ACL：授 bob viewer → 可见+可检索
+	deptID := mustInt(t, dept.ID)
+	setACL(rule, deptID, bob, 1)
+	bSpaces, _ = svc.ListSpaces(ctx, tenantID, bob)
+	hit := false
+	for _, sp := range bSpaces {
+		if sp.ID == dept.ID {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Fatal("ACL viewer 后 bob 应见 dept 空间")
+	}
+	resp, err := svc.Query(ctx, tenantID, bob, []string{dept.ID}, "令牌", 10)
+	if err != nil || len(resp.Items) == 0 {
+		t.Fatalf("ACL viewer 检索：%v %+v", err, resp)
+	}
+	// viewer 不可写（7003 语义）
+	if _, werr := svc.IngestDoc(ctx, tenantID, bob, mustInt(t, dept.ID), 0, "x", "text", "令牌 y", 0); werr == nil {
+		t.Fatal("viewer 不可写")
+	}
+	// ACL：升 editor → bob 可写
+	setACL(rule, deptID, bob, 3)
+	if _, werr := svc.IngestDoc(ctx, tenantID, bob, mustInt(t, dept.ID), 0, "补充", "text", "令牌补充说明", 0); werr != nil {
+		t.Fatalf("editor 应可写：%v", werr)
+	}
+	// owner（4）全权
+	setACL(rule, deptID, bob, 4)
+	if _, werr := svc.IngestDoc(ctx, tenantID, bob, mustInt(t, dept.ID), 0, "再补", "text", "令牌再补", 0); werr != nil {
+		t.Fatal(err)
+	}
+	// ACL 不影响他人基线（uid 1003 无授权仍不可见）
+	cSpaces, _ := svc.ListSpaces(ctx, tenantID, 1003)
+	for _, sp := range cSpaces {
+		if sp.ID == dept.ID {
+			t.Fatal("无授权者不应见")
+		}
+	}
+}
+
+func setACL(rule map[int64]map[int64]int, spaceID, uid int64, perm int) {
+	if rule[spaceID] == nil {
+		rule[spaceID] = map[int64]int{}
+	}
+	rule[spaceID][uid] = perm
+}

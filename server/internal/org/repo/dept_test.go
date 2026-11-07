@@ -56,3 +56,29 @@ func TestDeptTreeLifecycle(t *testing.T) {
 		t.Fatal("删空后应无树")
 	}
 }
+
+// user_dept 最小读写：挂载幂等/首挂 primary/按用户列
+func TestUserDeptAttachAndList(t *testing.T) {
+	m := NewMemory()
+	ctx := context.Background()
+	if err := m.AttachUser(ctx, 1, 1001, 31, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AttachUser(ctx, 1, 1001, 32, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AttachUser(ctx, 1, 1001, 32, true); err != nil {
+		t.Fatal(err) // 幂等
+	}
+	rows, err := m.ListUserDepts(ctx, 1, 1001)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("两部门：%v %d", err, len(rows))
+	}
+	if rows[0].IsPrimary || !rows[1].IsPrimary {
+		t.Fatalf("primary 应为 32：%+v", rows)
+	}
+	empty, _ := m.ListUserDepts(ctx, 1, 9999)
+	if len(empty) != 0 {
+		t.Fatal("无挂载=空集")
+	}
+}

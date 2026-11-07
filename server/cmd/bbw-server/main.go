@@ -336,7 +336,10 @@ func main() {
 		}
 		log.Println("kb 嵌入链路：直调网关 Router mock 供应商（未配 BBW_AIGW_DEV_TOKEN，1024 维确定性向量）")
 	}
+	// ACL 查询闭包（aclSvc 装配于后段——前置函数变量+运行期回填，mailAPI 同款）
+	aclResolve := func(ctx context.Context, spaceID, userID int64) int { return 0 }
 	kbMod := kb.NewModule(kbservice.Options{
+		ACLPerm:  aclResolve,
 		Embedder: kbEmbed,
 		// 文件来源摄入：经 file 域票据通道取内容（IssueTicket 校验 owner/成员 →
 		// Download 一次性票据回放流；跨模块不引 file 包，D02 §4 依赖规则）
@@ -673,6 +676,17 @@ func main() {
 		aclRepo = orgacl.NewMemory()
 	}
 	aclSvc := orgacl.New(aclRepo, orgacl.ResolveOptions{
+		DeptIDsOf: func(tenantID, userID int64) []int64 {
+			rows, err := orgRepo.ListUserDepts(context.Background(), tenantID, userID)
+			if err != nil {
+				return nil
+			}
+			ids := make([]int64, 0, len(rows))
+			for _, r := range rows {
+				ids = append(ids, r.DeptID)
+			}
+			return ids
+		},
 		RoleIDsOf: func(tenantID, userID int64) []int64 {
 			grants, err := roleStore.ListUserRoles(context.Background(), tenantID, userID)
 			if err != nil {
@@ -685,6 +699,10 @@ func main() {
 			return ids
 		},
 	})
+	// kb 空间 ACL 闭包回填（前置声明处；kb.space 资源键=空间 ID）
+	aclResolve = func(ctx context.Context, spaceID, userID int64) int {
+		return aclSvc.Resolve(ctx, 1, "kb.space", strconv.FormatInt(spaceID, 10), userID)
+	}
 	mux.Handle("GET /api/v1/admin/acl", adminOnly(handleACLList(aclSvc)))
 	mux.Handle("POST /api/v1/admin/acl", adminOnly(handleACLGrant(aclSvc)))
 	mux.Handle("DELETE /api/v1/admin/acl/{id}", adminOnly(handleACLRevoke(aclSvc)))

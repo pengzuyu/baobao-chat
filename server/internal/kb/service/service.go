@@ -48,6 +48,11 @@ type Options struct {
 	Now                func() time.Time
 	Embedder           EmbedFn
 	OpenFile           FileOpener
+	// ACLPerm 资源级 ACL 查询（03 §4.4；kb.space 资源键——nil 或返回 0=
+	// 无显式授权，回落 v0.1 三级空间基线；ACL 命中=显式授权超集：可放宽
+	// 如 dept 空间授部门 viewer）。返回值：0 none / 1 viewer / 2
+	// commenter / 3 editor / 4 owner（org/acl Perm 语义，闭包传 int 解耦）
+	ACLPerm func(ctx context.Context, spaceID, userID int64) int
 }
 
 func (o *Options) fillDefaults() {
@@ -107,7 +112,7 @@ func (s *Service) ListSpaces(ctx context.Context, tenantID, userID int64) ([]kba
 	}
 	out := make([]kbapi.SpaceDTO, 0, len(all))
 	for _, sp := range all {
-		if !s.canRead(sp, userID) {
+		if !s.canRead(ctx, sp, userID) {
 			continue
 		}
 		docs, err := s.repo.ListDocsBySpace(ctx, tenantID, sp.ID)
@@ -590,7 +595,7 @@ func (s *Service) Query(ctx context.Context, tenantID, userID int64, spaceIDs []
 	}
 	visible := make([]kbrepo.Space, 0, len(all))
 	for _, sp := range all {
-		if s.canRead(sp, userID) {
+		if s.canRead(ctx, sp, userID) {
 			visible = append(visible, sp)
 		}
 	}
@@ -912,22 +917,31 @@ func defaultTitle(content string) string {
 
 // ── 权限（v0.1：personal 只本人 + company 全员可读；dept 仅治理者，部门树阶段二）──
 
-// canRead 读权限（检索/浏览/详情）
-func (s *Service) canRead(sp kbrepo.Space, userID int64) bool {
+// canRead 读权限（检索/浏览/详情）：ACL 显式授权（≥viewer）优先——
+// 可放宽基线（如 dept 空间授部门 viewer，11 §2.1）；无授权回落
+// v0.1 基线（personal 本人/company 全员/dept 治理者）
+func (s *Service) canRead(ctx context.Context, sp kbrepo.Space, userID int64) bool {
+	if s.opts.ACLPerm != nil && s.opts.ACLPerm(ctx, sp.ID, userID) >= 1 { // viewer
+		return true
+	}
 	switch sp.SpaceType {
 	case kbrepo.SpacePersonal:
 		return sp.OwnerID == userID
 	case kbrepo.SpaceCompany:
 		return true // 全员 reader（11 §2.1）
 	case kbrepo.SpaceDept:
-		return sp.OwnerID == userID // 部门树授权阶段二，登记
+		return sp.OwnerID == userID
 	}
 	return false
 }
 
-// canWrite 写权限（摄入/建目录/重摄入）：personal/dept=治理者；company=全员
-// （D07"写入收敛到贡献者"接 resource_acl 阶段二，登记）
-func (s *Service) canWrite(sp kbrepo.Space, userID int64) bool {
+// canWrite 写权限（摄入/建目录/重摄入）：ACL ≥editor 优先（D07"写入
+// 收敛到贡献者"=公司空间显式授权 editor 者可写，收紧基线）；无授权回落
+// v0.1 基线（personal/dept=治理者；company=全员）
+func (s *Service) canWrite(ctx context.Context, sp kbrepo.Space, userID int64) bool {
+	if s.opts.ACLPerm != nil && s.opts.ACLPerm(ctx, sp.ID, userID) >= 3 { // editor
+		return true
+	}
 	if sp.SpaceType == kbrepo.SpaceCompany {
 		return true
 	}
@@ -943,9 +957,9 @@ func (s *Service) getSpaceFor(ctx context.Context, userID, spaceID int64, requir
 	if sp.Status != "active" {
 		return nil, errx.New(errx.CodeKBSpaceArchived, "空间已归档停用")
 	}
-	allowed := s.canRead(*sp, userID)
+	allowed := s.canRead(ctx, *sp, userID)
 	if requireWrite {
-		allowed = s.canWrite(*sp, userID)
+		allowed = s.canWrite(ctx, *sp, userID)
 	}
 	if !allowed {
 		return nil, errx.New(errx.CodeKBQueryDenied, "无该空间的访问权限")

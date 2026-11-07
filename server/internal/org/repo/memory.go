@@ -31,6 +31,20 @@ type Repo interface {
 	CountUsers(ctx context.Context, tenantID int64) (int64, error)
 	// SetUserStatus 启用/禁用（orgapi.UserStatus*）；行不存在返回 ErrUserNotFound
 	SetUserStatus(ctx context.Context, id int64, status int) error
+
+	// ── user_dept 最小读写（03 §5；写侧管理面随 PAD-07 交接阶段二——
+	// 本组方法供 ACL dept 展开/resource_acl 判定链接线）──
+	// AttachUser 挂部门（is_primary 首挂自动置真；重复挂=幂等 no-op）
+	AttachUser(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error
+	// ListUserDepts 用户部门集（含 primary 标记；无挂载=空集）
+	ListUserDepts(ctx context.Context, tenantID, userID int64) ([]UserDeptRow, error)
+}
+
+// UserDeptRow user_dept 行
+type UserDeptRow struct {
+	UserID    int64
+	DeptID    int64
+	IsPrimary bool
 }
 
 // Memory 内存实现（阶段一：无 PG 依赖跑通全链路）
@@ -43,12 +57,22 @@ type Memory struct {
 	deptMu  sync.RWMutex
 	depts   map[int64]deptRow // dept 主键 → 行（含成员计数占位）
 	deptSeq int64
+
+	udMu      sync.RWMutex
+	userDept  map[udKey]bool  // (userID,deptID) → isPrimary 由另一 map 承载
+	udPrimary map[int64]int64 // userID → primary deptID
+}
+
+type udKey struct {
+	UserID int64
+	DeptID int64
 }
 
 // NewMemory 构造
 func NewMemory() *Memory {
 	return &Memory{
-		depts: map[int64]deptRow{}, byID: map[int64]*orgapi.User{}, byLogin: map[string]int64{}, nextID: 10000}
+		depts: map[int64]deptRow{}, byID: map[int64]*orgapi.User{}, byLogin: map[string]int64{}, nextID: 10000,
+		userDept: map[udKey]bool{}, udPrimary: map[int64]int64{}}
 }
 
 func loginKey(tenantID int64, username string) string {
@@ -266,4 +290,33 @@ func (m *Memory) DeleteDept(_ context.Context, tenantID, deptID int64) error {
 
 func toNode(d orgapi.Dept) orgapi.DeptNode {
 	return orgapi.DeptNode{ID: d.ID, ParentID: d.ParentID, Name: d.Name, Sort: d.Sort, Path: d.Path}
+}
+
+// AttachUser 挂部门（幂等；首挂自动 primary）
+func (m *Memory) AttachUser(_ context.Context, _, userID, deptID int64, isPrimary bool) error {
+	m.udMu.Lock()
+	defer m.udMu.Unlock()
+	m.userDept[udKey{userID, deptID}] = true
+	if isPrimary {
+		m.udPrimary[userID] = deptID
+	} else if _, ok := m.udPrimary[userID]; !ok {
+		m.udPrimary[userID] = deptID // 首挂兜底
+	}
+	return nil
+}
+
+// ListUserDepts 用户部门集
+func (m *Memory) ListUserDepts(_ context.Context, _, userID int64) ([]UserDeptRow, error) {
+	m.udMu.RLock()
+	defer m.udMu.RUnlock()
+	out := []UserDeptRow{}
+	for k := range m.userDept {
+		if k.UserID == userID {
+			out = append(out, UserDeptRow{
+				UserID: userID, DeptID: k.DeptID, IsPrimary: m.udPrimary[userID] == k.DeptID,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DeptID < out[j].DeptID })
+	return out, nil
 }

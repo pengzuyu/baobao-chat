@@ -271,3 +271,32 @@ func (p *Postgres) DeleteDept(ctx context.Context, tenantID, deptID int64) error
 	}
 	return tx.Commit(ctx)
 }
+
+// AttachUser 挂部门（UK 幂等；首挂自动 primary）
+func (p *Postgres) AttachUser(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO user_dept (user_id, dept_id, is_primary)
+		VALUES ($1,$2,$3)
+		ON CONFLICT (user_id, dept_id) DO NOTHING`,
+		userID, deptID, isPrimary)
+	return err
+}
+
+// ListUserDepts 用户部门集
+func (p *Postgres) ListUserDepts(ctx context.Context, tenantID, userID int64) ([]UserDeptRow, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT user_id, dept_id, is_primary FROM user_dept WHERE user_id=$1 ORDER BY dept_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserDeptRow{}
+	for rows.Next() {
+		var r UserDeptRow
+		if err := rows.Scan(&r.UserID, &r.DeptID, &r.IsPrimary); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
