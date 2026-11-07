@@ -9,7 +9,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, Search, SquarePen } from 'lucide-react';
+import { ArrowDown, Megaphone, Search, SquarePen } from 'lucide-react';
 import { ApiError } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
@@ -19,10 +19,12 @@ import { useConnectionStore } from '../../../shared/store/connection';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { dayKey, formatDayDivider } from '../../../shared/utils/time';
 import { useConversationMessages, useConversations } from '../api/hooks';
-import { fetchMessagesBefore, mapMsgNew, editMessage, recallMessage, setReaction } from '../api/im';
+import { fetchConvDetail, fetchMessagesBefore, mapMsgNew, editMessage, recallMessage, setReaction } from '../api/im';
 import { hydrateConv, hydrateLocal, hookSyncOnReconnect, resendOutbox, runSync } from '../api/local';
 import type {
   ConvStatePushPayload,
+  ConvUpdatedPushPayload,
+  Mention,
   Message,
   MsgNewPayload,
   MsgReactionNewPayload,
@@ -30,10 +32,12 @@ import type {
   MsgUpdatedPayload,
   TypingPushPayload,
 } from '../model/types';
+import { formatMuteUntil } from './systemMessageRegistry';
 import { TYPING_TTL_MS, useImStore } from '../store/im';
 import { ChatHeader } from '../components/ChatHeader';
 import { ConversationList } from '../components/ConversationList';
 import { ConvInfoSidebar } from '../components/ConvInfoSidebar';
+import { CreateConvModal } from '../components/CreateConvModal';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MessageInput } from '../components/MessageInput';
 import { ForwardModal } from '../components/ForwardModal';
@@ -49,11 +53,16 @@ export function ChatPage() {
   const queryClient = useQueryClient();
   const bp = useBreakpoint();
   const [detailOpen, setDetailOpen] = useState(false);
+  /** 详情栏初始 tab（公告横幅入口直达公告 tab） */
+  const [detailTab, setDetailTab] = useState<'info' | 'announcement'>('info');
 
-  // ---- 交互态（引用/编辑/转发）----
+  // ---- 交互态（引用/编辑/转发/建会话）----
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [forwardIds, setForwardIds] = useState<string[] | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  /** @全体被策略拦截的提示条（3014，3s 自动消失） */
+  const [mentionAllBlocked, setMentionAllBlocked] = useState(false);
   /** 编辑中随 @ 面板选择的提及（随发送携带；正式版按 range 精确重算） */
   const pendingMentionsRef = useRef<Array<{ uid: string; name: string }>>([]);
 
@@ -150,15 +159,21 @@ export function ChatPage() {
       wsClient.on<TypingPushPayload>('msg.typing', (p) => {
         if (p.user_id !== useImStore.getState().myUid) applyTyping(p.conv_id, p.user_id);
       }),
-      // 会话态多端同步（kind=state 仅推本人多端，D03 §10-1；与本地 my 合并保游标字段）
-      wsClient.on<ConvStatePushPayload>('conv.updated', (p) => {
-        if (p.kind !== 'state') return;
-        const store = useImStore.getState();
-        store.setConvs(
-          store.convs.map((c) =>
-            c.id === p.conv_id && c.my ? { ...c, my: { ...c.my, ...p.applied } } : c,
-          ),
-        );
+      // 会话事件分发（D03 §5.3）：kind=state 仅本人多端；meta/member/setting/status/announcement 全端
+      wsClient.on<ConvStatePushPayload | ConvUpdatedPushPayload>('conv.updated', (p) => {
+        if (p.kind === 'state') {
+          const state = p as ConvStatePushPayload;
+          const store = useImStore.getState();
+          store.setConvs(
+            store.convs.map((c) =>
+              c.id === state.conv_id && c.my ? { ...c, my: { ...c.my, ...state.applied } } : c,
+            ),
+          );
+          return;
+        }
+        // 群管理事件：快照/members_delta 合并（成员数、角色、公告、解散置灰）
+        useImStore.getState().applyConvUpdated(p as ConvUpdatedPushPayload);
+        void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
       }),
       wsClient.on('badge.updated', () => void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] })),
     ];
@@ -183,6 +198,44 @@ export function ChatPage() {
 
   const activeConv = convs.find((c) => c.id === convId) ?? null;
   const messages = convId ? (messagesByConv[convId] ?? []) : [];
+
+  // ---- 群详情拉取（PIM-05 数据源 + 输入框禁用判定依据：group_setting/myRole/myMuteUntil）----
+  useEffect(() => {
+    if (!convId || !activeConv || activeConv.type === 1) return;
+    void fetchConvDetail(convId)
+      .then((d) => {
+        useImStore.getState().mergeConvDetail(convId, {
+          ownerId: d.ownerId,
+          memberCount: d.memberCount,
+          groupSetting: d.groupSetting,
+          myRole: d.myRole,
+          myMuteUntil: d.myMuteUntil || undefined,
+        });
+      })
+      .catch(() => undefined); // 3001/3019：已被移出——六态已有兜底
+  }, [convId, activeConv?.type, activeConv?.memberCount, activeConv?.status, activeConv?.groupSetting?.announcementTs]);
+
+  // 我的角色/禁言派生（成员事件与详情合并共同维护）
+  const myRole = activeConv?.myRole;
+  const myMutedUntil = activeConv?.myMuteUntil ?? 0;
+  const muteAllUntil = activeConv?.groupSetting?.muteAllUntil ?? 0;
+  const isMgr = myRole === 1 || myRole === 2;
+  const nowMs = Date.now();
+  const inputDisabled =
+    (activeConv?.type === 3 && myRole !== 4) ||
+    myMutedUntil > nowMs ||
+    (muteAllUntil > nowMs && !isMgr);
+  const inputDisabledHint =
+    myMutedUntil > nowMs
+      ? `已被禁言至 ${formatMuteUntil(myMutedUntil)}`
+      : muteAllUntil > nowMs && !isMgr
+        ? `全员禁言中（至 ${formatMuteUntil(muteAllUntil)}）`
+        : '该会话仅发布者可发言';
+
+  // @全体权限（04 篇 §4.5.4）：1 全员 / 2 仅管理 / 3 禁用；广播群不支持 @
+  const mentionAllPolicy = activeConv?.groupSetting?.mentionAllPolicy ?? 2;
+  const allowMentionAll =
+    activeConv?.type === 2 && (mentionAllPolicy === 1 || (mentionAllPolicy === 2 && isMgr));
 
   const streamState: ViewState | 'ok' | 'none' = !convId
     ? 'none'
@@ -316,7 +369,18 @@ export function ChatPage() {
 
   const doSend = (text: string) => {
     if (!convId) return;
-    void sendText(convId, text, replyTo?.seq);
+    // @全体：文本包含「@全体」即携带 all mention（服务端按 mention_all_policy 校验 3014）
+    const mentions: Mention[] = [];
+    const at = text.indexOf('@全体');
+    if (at >= 0) {
+      if (!allowMentionAll) {
+        setMentionAllBlocked(true);
+        setTimeout(() => setMentionAllBlocked(false), 3000);
+        return;
+      }
+      mentions.push({ uid: '', all: true, range: [at, at + 3] });
+    }
+    void sendText(convId, text, replyTo?.seq, mentions.length > 0 ? mentions : undefined);
     setReplyTo(null);
   };
   const doEditSubmit = (text: string) => {
@@ -328,14 +392,16 @@ export function ChatPage() {
       .catch(() => undefined);
   };
 
-  // @提及候选：已加载消息去重发送者（正式版走 API-IM-05 成员表）
+  // @提及候选：已加载消息去重发送者（正式版走 API-IM-05 成员表）+「@全体」受策略显隐
   const mentionCandidates = useMemo(() => {
     const seen = new Map<string, string>();
     for (const m of messages) {
-      if (m.senderId !== myUid && !seen.has(m.senderId)) seen.set(m.senderId, m.senderName);
+      if (m.senderId !== myUid && m.senderId && !seen.has(m.senderId)) seen.set(m.senderId, m.senderName);
     }
-    return [...seen].map(([uid, name]) => ({ uid, name }));
-  }, [messages, myUid]);
+    const list = [...seen].map(([uid, name]) => ({ uid, name }));
+    if (allowMentionAll) list.unshift({ uid: '__all__', name: '全体' });
+    return list;
+  }, [messages, myUid, allowMentionAll]);
 
   // ---- 布局（断点）----
   // S 档：列表⇄内容两级导航；M/L 档：列表栏收窄由 CSS media query 处理
@@ -351,7 +417,12 @@ export function ChatPage() {
           <input placeholder="搜索（⌘K）" disabled />
           <kbd>⌘K</kbd>
         </div>
-        <button className="icon-btn" title="新建会话（单聊/建群）">
+        <button
+          className="icon-btn"
+          title="新建会话（单聊/建群）"
+          onClick={() => setCreateOpen(true)}
+          data-testid="create-conv-btn"
+        >
           <SquarePen size={16} />
         </button>
       </div>
@@ -410,6 +481,16 @@ export function ChatPage() {
             peerReadSeq={(convId && peerReadSeq[convId]) || 0}
             actions={m.type === 'system' ? undefined : bubbleActions}
             myUid={myUid}
+            myRole={myRole}
+            applyHandled={
+              m.type === 'system' && 'kind' in m.body && m.body.kind === 'apply.submitted' && 'apply_id' in m.body && m.body.apply_id
+                ? useImStore.getState().handledApplies[m.body.apply_id]
+                : undefined
+            }
+            onApplyHandled={(applyId, result) => {
+              useImStore.getState().markApplyHandled(applyId, result);
+              void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
+            }}
           />
         </Fragment>
       ))}
@@ -425,6 +506,32 @@ export function ChatPage() {
           onBack={bp === 'S' ? () => navigate('/im') : undefined}
           onToggleDetail={() => setDetailOpen((v) => !v)}
         />
+      ) : null}
+
+      {/* 公告横幅（INT-IM-18：更新即时红点+摘要，全文在详情栏公告 tab） */}
+      {activeConv?.groupSetting?.announcement && activeConv.status === 1 ? (
+        <button
+          type="button"
+          className="ann-banner"
+          data-testid="ann-banner"
+          onClick={() => {
+            setDetailOpen(true);
+            setDetailTab('announcement');
+          }}
+          title="点击查看全文"
+        >
+          <Megaphone size={14} />
+          <span className="ann-banner__dot" aria-hidden />
+          <span className="ann-banner__text">{activeConv.groupSetting.announcement}</span>
+          <span className="ann-banner__more">查看全文</span>
+        </button>
+      ) : null}
+
+      {/* @全体被策略拦截提示（3014，INT-IM-24） */}
+      {mentionAllBlocked ? (
+        <div className="ann-banner ann-banner--warn" data-testid="mention-all-blocked">
+          当前群策略不允许你使用 @全体
+        </div>
       ) : null}
 
       {streamState === 'none' ? (
@@ -467,8 +574,9 @@ export function ChatPage() {
       {convId ? (
         <MessageInput
           convId={convId}
-          /* 广播群只读：普通成员不可发言（publisher 判定 TODO，PIM-04） */
-          disabled={activeConv?.type === 3}
+          /* 禁用三态：广播群非 publisher / 单人禁言 / 全员禁言（非 owner/admin），D03 §3.3 */
+          disabled={inputDisabled}
+          disabledHint={inputDisabledHint}
           draft={drafts[convId] ?? ''}
           onDraftChange={(text) => setDraft(convId, text)}
           onSend={doSend}
@@ -487,13 +595,33 @@ export function ChatPage() {
   const detailNode = detailOpen && activeConv ? (
     bp === 'XL' ? (
       <aside className="im-detail-col">
-        <ConvInfoSidebar conv={activeConv} onClose={() => setDetailOpen(false)} />
+        <ConvInfoSidebar
+          conv={activeConv}
+          myUid={myUid}
+          initialTab={detailTab}
+          onClose={() => setDetailOpen(false)}
+          onLeft={() => {
+            setDetailOpen(false);
+            navigate('/im');
+            void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
+          }}
+        />
       </aside>
     ) : (
       <>
         <div className="im-detail-mask" onClick={() => setDetailOpen(false)} />
         <aside className="im-detail-col im-detail-col--overlay">
-          <ConvInfoSidebar conv={activeConv} onClose={() => setDetailOpen(false)} />
+          <ConvInfoSidebar
+            conv={activeConv}
+            myUid={myUid}
+            initialTab={detailTab}
+            onClose={() => setDetailOpen(false)}
+            onLeft={() => {
+              setDetailOpen(false);
+              navigate('/im');
+              void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
+            }}
+          />
         </aside>
       </>
     )
@@ -510,6 +638,16 @@ export function ChatPage() {
           msgIds={forwardIds}
           onClose={() => setForwardIds(null)}
           onDone={() => setForwardIds(null)}
+        />
+      ) : null}
+      {createOpen ? (
+        <CreateConvModal
+          onClose={() => setCreateOpen(false)}
+          onCreated={(convId2) => {
+            setCreateOpen(false);
+            void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
+            navigate(`/im/c/${convId2}`);
+          }}
         />
       ) : null}
     </div>

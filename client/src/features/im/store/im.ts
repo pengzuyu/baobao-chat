@@ -9,9 +9,10 @@ import { create } from 'zustand';
 import { emit } from '../../../shared/bus';
 import { wsClient } from '../../../shared/api/ws';
 import { sendTextMessage, updateConvState as apiUpdateConvState } from '../api/im';
+import { systemMessageText } from '../pages/systemMessageRegistry';
 // 本地持久化（写穿/outbox）——与 ../api/local 互引为运行时环（函数体引用，模块初始化无环序依赖）
 import { outboxBumpRetry, outboxEnqueue, outboxSettle, persistMessage, persistReadSeq, persistUpdatedLocal } from '../api/local';
-import type { Conversation, Message, MsgExt } from '../model/types';
+import type { Conversation, ConvUpdatedPushPayload, Mention, Message, MsgExt, SystemBody } from '../model/types';
 import '../events'; // 装载 bus 事件类型声明（im:unread-changed 等）
 
 interface ImState {
@@ -59,12 +60,22 @@ interface ImState {
   typing: Record<string, { uid: string; at: number } | undefined>;
   applyTyping: (convId: string, uid: string) => void;
 
+  /** conv.updated 推送入 store（D03 §5.3：kind=meta/member/setting/status/announcement 分发） */
+  applyConvUpdated: (payload: ConvUpdatedPushPayload) => void;
+
+  /** 审批卡终态：applyId → 'approved' | 'rejected'（PIM-06 卡内按钮结果回显） */
+  handledApplies: Record<string, 'approved' | 'rejected'>;
+  markApplyHandled: (applyId: string, result: 'approved' | 'rejected') => void;
+
+  /** 会话详情合并（PIM-05 打开侧栏时拉取；含 group_setting/myRole/myMuteUntil） */
+  mergeConvDetail: (convId: string, patch: Partial<Conversation>) => void;
+
   /** 会话态（置顶/免打扰）：乐观更新 + PATCH（INT-IM-07） */
   togglePin: (convId: string) => void;
   toggleMute: (convId: string) => void;
 
-  /** 发送文本（乐观更新；replyToSeq 携带引用） */
-  sendText: (convId: string, text: string, replyToSeq?: number) => Promise<void>;
+  /** 发送文本（乐观更新；replyToSeq 携带引用；mentions 含 @全体） */
+  sendText: (convId: string, text: string, replyToSeq?: number, mentions?: Mention[]) => Promise<void>;
   /** 失败重试：复用原 client_msg_id（幂等回原 seq，INT-IM-01a） */
   retrySend: (convId: string, clientMsgId: string) => Promise<void>;
   /** 本地恢复：outbox 行重建端内 sending 消息（hydrateLocal 用） */
@@ -125,8 +136,21 @@ export const useImStore = create<ImState>((set, get) => ({
 
   convs: [],
   setConvs: (convs) => {
-    set({ convs });
-    broadcastUnread(convs);
+    const s = get();
+    // 列表接口不含群设置（API-IM-02 无该字段）——保留端内已合并的
+    // groupSetting/myRole/myMuteUntil（详情/conv.updated 推送写入），防刷新丢失
+    const merged = convs.map((c) => {
+      const prev = s.convs.find((p) => p.id === c.id);
+      if (!prev) return c;
+      return {
+        ...c,
+        groupSetting: c.groupSetting ?? prev.groupSetting,
+        myRole: c.myRole ?? prev.myRole,
+        myMuteUntil: c.myMuteUntil ?? prev.myMuteUntil,
+      };
+    });
+    set({ convs: merged });
+    broadcastUnread(merged);
   },
 
   activeConvId: null,
@@ -299,6 +323,58 @@ export const useImStore = create<ImState>((set, get) => ({
   typing: {},
   applyTyping: (convId, uid) => set((s) => ({ typing: { ...s.typing, [convId]: { uid, at: Date.now() } } })),
 
+  applyConvUpdated: (payload) =>
+    set((s) => {
+      const snap = payload.conv;
+      let touched = false;
+      const convs = s.convs.map((c) => {
+        if (c.id !== payload.conv_id) return c;
+        touched = true;
+        let next: Conversation = { ...c };
+        // 快照字段合并（各 kind 均携带变更后 conv 快照）
+        if (snap) {
+          next = {
+            ...next,
+            name: snap.name,
+            type: snap.type,
+            ownerId: snap.ownerId,
+            memberCount: snap.memberCount,
+            status: snap.status,
+            latestSeq: Math.max(next.latestSeq, snap.latestSeq),
+            groupSetting: snap.groupSetting ?? next.groupSetting,
+          };
+        }
+        // kind=member：members_delta 合并——我的角色/禁言随 delta 更新；离群成员数已由快照纠正
+        if (payload.members_delta && s.myUid) {
+          for (const d of payload.members_delta) {
+            if (d.uid === s.myUid) {
+              next = { ...next, myRole: d.role, myMuteUntil: d.mute_until > 0 ? d.mute_until : undefined };
+            }
+          }
+        }
+        // kind=setting：全员禁言即时反馈（输入框禁用条依据）
+        if (payload.kind === 'setting' && snap?.groupSetting) {
+          next = { ...next, groupSetting: snap.groupSetting };
+        }
+        // kind=status：解散置灰只读（D03 INT-IM-19）
+        if (payload.kind === 'status' && snap) {
+          next = { ...next, status: snap.status };
+        }
+        return next;
+      });
+      if (!touched) return s;
+      return { convs };
+    }),
+
+  handledApplies: {},
+  markApplyHandled: (applyId, result) =>
+    set((s) => ({ handledApplies: { ...s.handledApplies, [applyId]: result } })),
+
+  mergeConvDetail: (convId, patch) =>
+    set((s) => ({
+      convs: s.convs.map((c) => (c.id === convId ? { ...c, ...patch } : c)),
+    })),
+
   togglePin: (convId) => {
     const cur = get().convs.find((c) => c.id === convId);
     const next = !cur?.my?.pinned;
@@ -317,7 +393,7 @@ export const useImStore = create<ImState>((set, get) => ({
     void apiUpdateConvState(convId, { mute: next }).catch(() => undefined);
   },
 
-  sendText: async (convId, text, replyToSeq) => {
+  sendText: async (convId, text, replyToSeq, mentions) => {
     const { myUid } = get();
     const clientMsgId = crypto.randomUUID(); // 发送幂等键（14 篇 §4.1）
     // 乐观更新：先上屏 sending（灰钟），临时负序置底
@@ -331,6 +407,7 @@ export const useImStore = create<ImState>((set, get) => ({
       type: 'text',
       body: { text },
       replyToSeq,
+      mentions,
       status: 1,
       ts: Date.now(),
       localState: 'sending',
@@ -341,7 +418,7 @@ export const useImStore = create<ImState>((set, get) => ({
     }));
     // outbox 入队（弱网重发源，跨刷新存活，D03 §1.2）
     void outboxEnqueue(clientMsgId, convId, text);
-    await settle(set, get, convId, clientMsgId, replyToSeq);
+    await settle(set, get, convId, clientMsgId, replyToSeq, mentions);
   },
 
   retrySend: async (convId, clientMsgId) => {
@@ -397,12 +474,13 @@ async function settle(
   convId: string,
   clientMsgId: string,
   replyToSeq?: number,
+  mentions?: Mention[],
   attempt = 0,
 ): Promise<void> {
   const pending = (get().messagesByConv[convId] ?? []).find((m) => m.clientMsgId === clientMsgId);
   const text = pending && 'text' in pending.body ? pending.body.text : '';
   try {
-    const ack = await sendTextMessage(convId, clientMsgId, text, replyToSeq);
+    const ack = await sendTextMessage(convId, clientMsgId, text, replyToSeq, mentions);
     set((s) => ({
       messagesByConv: {
         ...s.messagesByConv,
@@ -423,7 +501,7 @@ async function settle(
     const retries = await outboxBumpRetry(clientMsgId).catch(() => attempt + 1);
     if (retries <= 3) {
       const backoff = Math.min(1000 * 2 ** (retries - 1), 8000);
-      setTimeout(() => void settle(set, get, convId, clientMsgId, replyToSeq, retries), backoff);
+      setTimeout(() => void settle(set, get, convId, clientMsgId, replyToSeq, mentions, retries), backoff);
       return;
     }
     set((s) => ({
@@ -460,6 +538,7 @@ export function digestOf(msg: Message): string {
     case 'call_card':
       return '[通话]';
     case 'system':
-      return '系统消息';
+      // PIM-12：系统消息摘要直接取模板文案（如"张三 邀请 李四 加入群聊"）
+      return 'kind' in msg.body && msg.body.kind ? systemMessageText(msg.body as SystemBody) : '群通知';
   }
 }

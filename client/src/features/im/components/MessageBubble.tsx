@@ -13,7 +13,9 @@ import { AlertCircle, Check, CheckCheck, Clock3, FileText, ListOrdered, RotateCc
 import { Avatar } from '../../../shared/ui/Avatar';
 import { getErrorText } from '../../../shared/api/http';
 import { digestOf } from '../store/im';
-import type { Mention, Message } from '../model/types';
+import { systemMessageText } from '../pages/systemMessageRegistry';
+import { ApplyCard } from './ApplyCard';
+import type { MemberRole, Mention, Message, SystemBody } from '../model/types';
 
 /** 快捷回应候选（与飞书同款常用集，选择器全集在 MsgActions） */
 export const QUICK_EMOJIS = ['👍', '❤️', '😂', '🎉', '🙏'] as const;
@@ -37,6 +39,10 @@ interface MessageBubbleProps {
   actions?: BubbleActions;
   /** 当前用户（回应是否已含本人的判定） */
   myUid: string;
+  /** 系统消息上下文：审批卡（PIM-06）角色与终态回显 */
+  myRole?: MemberRole;
+  applyHandled?: 'approved' | 'rejected';
+  onApplyHandled?: (applyId: string, result: 'approved' | 'rejected') => void;
 }
 
 /** 本地态/服务端态尾标（✓✓=对方已读，单聊回执） */
@@ -150,10 +156,40 @@ function MergeForwardCard({ message }: { message: Message }) {
   );
 }
 
-export function MessageBubble({ message, mine, onRetry, peerReadSeq = 0, actions, myUid }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  mine,
+  onRetry,
+  peerReadSeq = 0,
+  actions,
+  myUid,
+  myRole,
+  applyHandled,
+  onApplyHandled,
+}: MessageBubbleProps) {
   // 系统消息/撤回占位：居中弱化，不参与回执/右键（PIM-12）
   if (message.type === 'system') {
-    const text = 'text' in message.body ? message.body.text : '系统消息';
+    // 服务端下发的占位消息：按 body.kind 套注册表模板（systemMessageRegistry）
+    if ('kind' in message.body && message.body.kind) {
+      const body = message.body as SystemBody;
+      if (body.kind === 'apply.submitted' && body.apply_id && onApplyHandled) {
+        // 审批卡（PIM-06）：owner/admin 可见按钮，member 只读
+        return (
+          <div className="msg-system msg-system--card">
+            <ApplyCard
+              body={body}
+              submittedAt={message.ts}
+              myRole={myRole}
+              handled={applyHandled}
+              onHandled={onApplyHandled}
+            />
+          </div>
+        );
+      }
+      return <div className="msg-system">{systemMessageText(body)}</div>;
+    }
+    // 撤回占位等本地生成的 system 形态（body={text}）
+    const text = 'text' in message.body ? message.body.text : '群通知';
     return <div className="msg-system">{text}</div>;
   }
   // 历史拉取路径的已撤回消息（服务端真值 status=2，type 仍为原文案类型）：

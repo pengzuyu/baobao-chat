@@ -3432,3 +3432,313 @@ body {
     max-width: 120px;
   }
 }
+
+/* ── 群管理（PIM-05 四 tab / PIM-06 审批卡 / 公告横幅 / 建会话弹窗）── */
+
+.gm-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--gray-3, #e2e2e2);
+}
+.gm-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--gray-5, #666);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.gm-tab--active {
+  color: var(--primary, #3370ff);
+  border-bottom-color: var(--primary, #3370ff);
+  font-weight: 600;
+}
+.gm-tab-body {
+  padding: 12px;
+  overflow-y: auto;
+  flex: 1;
+}
+.gm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gm-field__label {
+  font-size: 12px;
+  color: var(--gray-5, #666);
+}
+.gm-field__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.gm-select {
+  padding: 6px 8px;
+  border: 1px solid var(--gray-3, #dcdfe6);
+  border-radius: 6px;
+  background: var(--bg-2, #fff);
+  font-size: 12px;
+  min-width: 140px;
+}
+.gm-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--gray-3, #dcdfe6);
+  border-radius: 6px;
+  font-size: 13px;
+  resize: vertical;
+}
+.gm-op {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--gray-3, #ebeef5);
+  border-radius: 8px;
+  background: var(--gray-1, #f7f8fa);
+}
+.gm-op__label {
+  font-size: 12px;
+  color: var(--gray-5, #666);
+}
+.gm-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--danger, #d9393a);
+}
+.gm-error {
+  margin: 4px 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--danger-bg, #fdecec);
+  color: var(--danger, #d9393a);
+  font-size: 12px;
+}
+.gm-members {
+  display: flex;
+  flex-direction: column;
+}
+.gm-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--gray-2, #f0f0f0);
+}
+.gm-member__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.gm-member__name {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.gm-member__uid {
+  font-size: 11px;
+  color: var(--gray-5, #999);
+}
+.gm-member__role {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--gray-2, #eee);
+  color: var(--gray-5, #666);
+}
+.gm-member__role--1 {
+  background: var(--primary-bg, #e8f0ff);
+  color: var(--primary, #3370ff);
+}
+.gm-member__role--2 {
+  background: #fff3e0;
+  color: #b26a00;
+}
+.gm-member__muted-tag {
+  font-size: 10px;
+  color: var(--danger, #d9393a);
+}
+.gm-member__ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.gm-op-btn {
+  border: 1px solid var(--gray-3, #dcdfe6);
+  background: var(--bg-2, #fff);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 3px 6px;
+  cursor: pointer;
+  color: var(--gray-6, #333);
+}
+.gm-op-btn--danger {
+  color: var(--danger, #d9393a);
+  border-color: var(--danger, #f2b8b5);
+}
+.gm-op-btn:hover:not(:disabled) {
+  border-color: var(--primary, #3370ff);
+  color: var(--primary, #3370ff);
+}
+.gm-op-btn--danger:hover:not(:disabled) {
+  border-color: var(--danger, #d9393a);
+  color: var(--danger, #d9393a);
+}
+.gm-announcement {
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--gray-1, #f7f8fa);
+}
+.gm-announcement__body {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.gm-announcement__ts {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--gray-5, #999);
+}
+.gm-empty {
+  padding: 16px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--gray-5, #999);
+}
+
+/* PIM-06 审批卡（消息流内居中容器 msg-system--card 内渲染） */
+.apply-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(480px, 84%);
+  margin: 4px auto;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-3, #e2e2e2);
+  border-radius: 10px;
+  background: var(--bg-2, #fff);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.apply-card__main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.apply-card__title {
+  font-size: 13px;
+}
+.apply-card__reason {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--gray-5, #666);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apply-card__error {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--danger, #d9393a);
+}
+.apply-card__actions {
+  display: flex;
+  gap: 6px;
+}
+.apply-card__btn {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.apply-card__btn--approve {
+  background: var(--primary, #3370ff);
+  color: #fff;
+}
+.apply-card__btn--reject {
+  background: var(--bg-2, #fff);
+  border-color: var(--gray-3, #dcdfe6);
+  color: var(--gray-6, #333);
+}
+.apply-card__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.apply-card__state {
+  font-size: 12px;
+  color: var(--gray-5, #999);
+}
+
+/* 公告横幅（D03 §3.3：消息流顶部吸顶；--warn 为 3014 提示条复用样式） */
+.ann-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 14px;
+  border: none;
+  border-bottom: 1px solid var(--gray-2, #f0f0f0);
+  background: var(--primary-bg, #eef3ff);
+  color: var(--gray-6, #333);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  box-sizing: border-box;
+}
+.ann-banner__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger, #d9393a);
+  flex: none;
+}
+.ann-banner__text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ann-banner__more {
+  color: var(--primary, #3370ff);
+  flex: none;
+}
+.ann-banner--warn {
+  background: var(--danger-bg, #fdecec);
+  color: var(--danger, #d9393a);
+  cursor: default;
+}
+
+/* 建会话弹窗（INT-IM-15 最简版：复用 forward-modal 骨架） */
+.gm-create__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.gm-create__types {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--gray-3, #e2e2e2);
+}
+.gm-create__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

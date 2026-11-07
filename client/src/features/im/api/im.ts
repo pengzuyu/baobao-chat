@@ -6,7 +6,7 @@
 
 import { http } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
-import type { Conversation, Message, MsgNewPayload, SendAck } from '../model/types';
+import type { ConvDetail, Conversation, ConversationMember, Mention, Message, MsgNewPayload, SendAck } from '../model/types';
 import { MOCK_CONVS, MOCK_MESSAGES, mockLatestSeq } from './mock';
 
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
@@ -52,8 +52,15 @@ export async function fetchMessages(convId: string): Promise<Paged<Message>> {
  * 发送文本消息（WS msg.send，D03 §5.2）。
  * 幂等：重试复用同一 client_msg_id，服务端返回原 seq（14 篇 §5.3）。
  * reply_to_seq：引用回复（快照由服务端按源消息冗余入 ext）。
+ * mentions：@提及（含 @全体 all=true，服务端按 mention_all_policy 校验 3014）。
  */
-export async function sendTextMessage(convId: string, clientMsgId: string, text: string, replyToSeq?: number): Promise<SendAck> {
+export async function sendTextMessage(
+  convId: string,
+  clientMsgId: string,
+  text: string,
+  replyToSeq?: number,
+  mentions?: Mention[],
+): Promise<SendAck> {
   if (USE_MOCK) {
     await delay(600);
     return mockSendAck(convId, clientMsgId);
@@ -64,6 +71,7 @@ export async function sendTextMessage(convId: string, clientMsgId: string, text:
     type: 'text',
     body: { text },
     ...(replyToSeq && replyToSeq > 0 ? { reply_to_seq: replyToSeq } : {}),
+    ...(mentions && mentions.length > 0 ? { mentions } : {}),
   });
 }
 
@@ -148,6 +156,118 @@ export async function fetchMessagesBefore(convId: string, before: number, limit 
     `/convs/${encodeURIComponent(convId)}/messages?before=${before}&limit=${limit}`,
   );
   return [...data.items].sort((a, b) => a.seq - b.seq);
+}
+
+// ---- 群管理（D03 §5.2 conv.* 全集 + API-IM-03/05；WS 事件 snake 入参）----
+
+/** 建会话（conv.create：单聊去重复用/建群；ack {conv}） */
+export async function convCreate(p: {
+  type: 1 | 2 | 3;
+  name?: string;
+  memberIds: string[];
+}): Promise<ConvDetail> {
+  if (USE_MOCK) {
+    await delay(400);
+    return {
+      id: `mock-conv-${Date.now()}`,
+      type: p.type,
+      name: p.name || '新会话',
+      latestSeq: 0,
+      memberCount: p.memberIds.length + 1,
+      status: 1,
+      members: [],
+    };
+  }
+  return wsClient.request<ConvDetail>('conv.create', {
+    type: p.type,
+    ...(p.name ? { name: p.name } : {}),
+    member_ids: p.memberIds,
+  });
+}
+
+/** 退群（conv.quit；owner 服务端拒 3016） */
+export async function convQuit(convId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await wsClient.request('conv.quit', { conv_id: convId });
+}
+
+/** 邀请入群（conv.member.add；invite_policy 校验/3012/3010） */
+export async function memberAdd(convId: string, uids: string[]): Promise<void> {
+  if (USE_MOCK) return;
+  await wsClient.request('conv.member.add', { conv_id: convId, uids });
+}
+
+/** 移出成员（conv.member.remove；矩阵校验） */
+export async function memberRemove(convId: string, uid: string): Promise<void> {
+  if (USE_MOCK) return;
+  await wsClient.request('conv.member.remove', { conv_id: convId, uid });
+}
+
+/** 角色变更（conv.member.role：1 转让 / 2 设管 / 3 取消，仅 owner） */
+export async function memberRole(convId: string, uid: string, role: 1 | 2 | 3): Promise<void> {
+  if (USE_MOCK) return;
+  await wsClient.request('conv.member.role', { conv_id: convId, uid, role });
+}
+
+/** 群设置 patch（conv.setting；按字段覆盖，未传字段不动） */
+export async function convSetting(
+  convId: string,
+  patch: {
+    name?: string;
+    announcement?: string;
+    mute_all_until?: number;
+    mute_member?: { uid: string; until: number };
+    join_mode?: 1 | 2 | 3;
+    invite_policy?: 1 | 2;
+    mention_all_policy?: 1 | 2 | 3;
+    history_visible?: boolean;
+  },
+): Promise<void> {
+  if (USE_MOCK) return;
+  await wsClient.request('conv.setting', { conv_id: convId, ...patch });
+}
+
+/** 解散（conv.dissolve；仅 owner，危险确认后调用） */
+export async function convDissolve(convId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await wsClient.request('conv.dissolve', { conv_id: convId });
+}
+
+/** 入群申请（conv.apply；ack {apply_id}；7 天过期服务端懒判） */
+export async function applyJoin(convId: string, reason: string): Promise<{ apply_id: string }> {
+  if (USE_MOCK) return { apply_id: `mock-apply-${Date.now()}` };
+  return wsClient.request<{ apply_id: string }>('conv.apply', { conv_id: convId, reason });
+}
+
+/** 审批（conv.apply.handle：approve/reject；仅 owner/admin） */
+export async function handleApply(applyId: string, action: 'approve' | 'reject'): Promise<void> {
+  if (USE_MOCK) return;
+  await wsClient.request('conv.apply.handle', { apply_id: applyId, action });
+}
+
+/** 会话详情（API-IM-03：conversation 全字段 + group_setting + my + 成员概要） */
+export async function fetchConvDetail(convId: string): Promise<ConvDetail> {
+  if (USE_MOCK) {
+    await delay(200);
+    return {
+      id: convId,
+      type: 2,
+      name: 'Mock 群',
+      latestSeq: 0,
+      memberCount: 2,
+      status: 1,
+      groupSetting: { joinMode: 1, invitePolicy: 1, mentionAllPolicy: 2, historyVisible: true },
+      members: [],
+    };
+  }
+  return http.get<ConvDetail>(`/convs/${encodeURIComponent(convId)}`);
+}
+
+/** 成员列表（API-IM-05 简版：在群成员含 role/mute_until） */
+export async function fetchConvMembers(convId: string): Promise<ConversationMember[]> {
+  if (USE_MOCK) return [];
+  const data = await http.get<{ items: ConversationMember[] }>(`/convs/${encodeURIComponent(convId)}/members`);
+  return data.items;
 }
 
 // ---- mock 桩：ack 分配 + 幂等（同 client_msg_id 返回原 seq）----

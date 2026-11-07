@@ -24,8 +24,8 @@ export interface Mention {
   range: [number, number];
 }
 
-/** 消息体（骨架阶段覆盖 text 与附件占位；全集见 D03 §6.3） */
-export type MessageBody = { text: string } | { fileId: string; name?: string } | Record<string, never>;
+/** 消息体（骨架阶段覆盖 text 与附件占位；system 为 PIM-12 参数集；全集见 D03 §6.3） */
+export type MessageBody = { text: string } | { fileId: string; name?: string } | SystemBody | Record<string, never>;
 
 /** 引用快照（服务端 ext.reply_digest，D03 §5.2） */
 export interface ReplyDigest {
@@ -73,6 +73,31 @@ export interface UserConvState {
   mentionUnread: boolean;
 }
 
+/** 我的成员角色：1 owner / 2 admin / 3 member / 4 publisher（04 篇 §4.5.1） */
+export type MemberRole = 1 | 2 | 3 | 4;
+
+/** 群设置（group_setting；04 篇 §4.5） */
+export interface GroupSetting {
+  convId?: string;
+  joinMode: 1 | 2 | 3; // 1 直接进 2 需审批 3 仅邀请
+  invitePolicy: 1 | 2; // 1 全员可邀 2 仅管理
+  mentionAllPolicy: 1 | 2 | 3; // 1 全员 2 仅管理 3 禁用
+  muteAllUntil?: number; // ms；0/缺省=未开启
+  historyVisible: boolean;
+  announcement?: string;
+  announcementTs?: number;
+}
+
+/** 会话成员行（API-IM-05） */
+export interface ConversationMember {
+  uid: string;
+  displayName: string;
+  role: MemberRole;
+  status: 1 | 2 | 3; // 1 在群 2 已退 3 被移出（S2 状态机）
+  muteUntil?: number; // ms
+  joinAt: number;
+}
+
 export interface Conversation {
   id: string;
   type: ConvType;
@@ -86,6 +111,12 @@ export interface Conversation {
   memberCount: number;
   status: 1 | 2; // 1 active / 2 dissolved
   my?: UserConvState;
+  /** 群设置快照（详情/conv.updated 推送合并，PIM-05） */
+  groupSetting?: GroupSetting;
+  /** 我的角色（详情/成员事件维护；权限显隐依据） */
+  myRole?: MemberRole;
+  /** 我被单人禁言至（ms；输入框禁用条，D03 §3.3） */
+  myMuteUntil?: number;
 }
 
 /** msg.send 的 ack payload（幂等重试返回原 seq，D03 §5.2） */
@@ -151,6 +182,50 @@ export interface ConvStatePushPayload {
   kind: 'state';
   state: { pinned?: boolean; mute?: boolean; draft?: string };
   applied: { pinned: boolean; mute: boolean; draft: string };
+}
+
+/** 系统消息 body（PIM-12：服务端下发参数集，端内按 kind 套中文模板） */
+export interface SystemBody {
+  kind: string;
+  actor?: string;
+  actor_name?: string;
+  target?: string;
+  target_name?: string;
+  group?: string;
+  extra?: string; // 申请理由 / 角色方向（admin|member）
+  until?: number; // 禁言截止 ms
+  join_by_apply?: boolean; // member.joined 申请通过路径
+  apply_id?: string; // apply.submitted 审批卡关联
+}
+
+/** conv.updated 推送内 conv 快照（meta/member/setting/status/announcement 各 kind 携带） */
+export interface ConvSnapshot {
+  id: string;
+  type: ConvType;
+  name: string;
+  ownerId?: string;
+  latestSeq: number;
+  lastMsgTs?: number;
+  memberCount: number;
+  status: 1 | 2;
+  groupSetting?: GroupSetting;
+}
+
+/** conv.updated 推送（D03 §5.3；kind=member/setting 携带 members_delta；mute_until ms，0=解除） */
+export interface ConvUpdatedPushPayload {
+  conv_id: string;
+  kind: 'meta' | 'member' | 'setting' | 'status' | 'announcement' | 'state';
+  conv?: ConvSnapshot;
+  operator_id?: string;
+  members_delta?: Array<{ uid: string; role: MemberRole; status: 1 | 2 | 3; mute_until: number }>;
+}
+
+/** 会话详情（API-IM-03：conversation 全字段 + group_setting + my + 成员概要） */
+export interface ConvDetail extends Conversation {
+  groupSetting?: GroupSetting;
+  myRole?: MemberRole;
+  myMuteUntil?: number;
+  members: ConversationMember[];
 }
 
 /** 合并转发子条目（merge_forward body.items） */
