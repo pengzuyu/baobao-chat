@@ -7,9 +7,11 @@
 import { useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { FileText } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { LoginPage } from '../features/auth/pages/LoginPage';
+import { DocCenterPage } from '../features/doc/pages/DocCenterPage';
+import { DocEditorPage } from '../features/doc/pages/DocEditorPage';
+import { DocTrashPage } from '../features/doc/pages/DocTrashPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
 import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
@@ -30,7 +32,6 @@ import { AuditPage } from '../features/admin/pages/AuditPage';
 import { wsClient } from '../shared/api/ws';
 import { bindWsToConnectionStore, useConnectionStore } from '../shared/store/connection';
 import { MainLayout } from './MainLayout';
-import { PlaceholderPage } from './PlaceholderPage';
 import { SettingsLayout } from '../features/settings/pages/SettingsLayout';
 import { GeneralSettingsPage } from '../features/settings/pages/GeneralSettingsPage';
 import { NotificationSettingsPage } from '../features/settings/pages/NotificationSettingsPage';
@@ -129,7 +130,10 @@ export function App() {
         <Route path="/im/notifications" element={<NotificationCenterPage />} />
         {/* 通话域（D04 阶段一务实版）：最近通话（call_card 消息流派生）+ 全局通话浮层在 RequireAuth 挂载 */}
         <Route path="/rtc" element={<RecentCallsPage />} />
-        <Route path="/doc" element={<PlaceholderPage title="文档中心" designDoc="D05/D06" icon={FileText} blurb="在线文档协同、文件传输与分享" />} />
+        {/* 文档中心（D05 阶段一务实版）：列表/编辑器（markdown+乐观锁+版本时间线）/回收站 */}
+        <Route path="/doc" element={<DocCenterPage />} />
+        <Route path="/doc/trash" element={<DocTrashPage />} />
+        <Route path="/doc/:docId" element={<DocEditorPage />} />
         {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
         <Route path="/kb" element={<KbPage />} />
         {/* Agent 工作台域（D08）：PAG-01/02/03 工作台 + PAG-11 记忆 + 日报 */}

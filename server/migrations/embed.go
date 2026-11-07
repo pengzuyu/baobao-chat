@@ -46,6 +46,9 @@ var kbSQL string
 //go:embed 0010_admin_audit.sql
 var adminAuditSQL string
 
+//go:embed 0011_doc.sql
+var docSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -68,4 +71,6 @@ var List = []Migration{
 	{Version: 9, Name: "0009_kb", Probe: "", SQL: kbSQL},
 	// 0010 同理留空：admin_audit_action 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D10 阶段一务实版）
 	{Version: 10, Name: "0010_admin_audit", Probe: "", SQL: adminAuditSQL},
+	// 0011 同理留空：doc_file/doc_version 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D05 阶段一务实版）
+	{Version: 11, Name: "0011_doc", Probe: "", SQL: docSQL},
 }

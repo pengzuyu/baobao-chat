@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowDownToLine,
@@ -32,7 +33,7 @@ import { digestOf } from '../store/im';
 import { systemMessageText } from '../pages/systemMessageRegistry';
 import { downloadUrl, getDownloadTicket } from '../api/files';
 import { ApplyCard } from './ApplyCard';
-import type { FileMessageBody, MemberRole, Mention, Message, SystemBody } from '../model/types';
+import type { DocCardBody, FileMessageBody, MemberRole, Mention, Message, SystemBody } from '../model/types';
 
 /** 快捷回应候选（与飞书同款常用集，选择器全集在 MsgActions） */
 export const QUICK_EMOJIS = ['👍', '❤️', '😂', '🎉', '🙏'] as const;
@@ -172,6 +173,35 @@ function MergeForwardCard({ message }: { message: Message }) {
       </div>
       <div className="msg-merge__hint">共 {b.count ?? 0} 条消息</div>
     </div>
+  );
+}
+
+/** 文档卡片（D05 阶段一简版）：doc_card 消息体渲染——图标/标题/版本徽标 + 点击进 /doc/:id
+ * （在线编辑状态点/协作头像/摘要预览阶段二，06 §4.8 全量口径） */
+function DocCard({ body }: { body: DocCardBody }) {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      className="doc-card"
+      data-testid="doc-card"
+      title="打开文档"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigate(`/doc/${body.doc_id}`);
+      }}
+    >
+      <div className="doc-card__icon">
+        <FileText size={20} />
+      </div>
+      <div className="doc-card__meta">
+        <div className="doc-card__name">{body.title ?? '文档'}</div>
+        <div className="doc-card__hint">
+          markdown 文档
+          {body.version !== undefined ? ` · v${body.version}` : ''} · 点击打开
+        </div>
+      </div>
+    </button>
   );
 }
 
@@ -360,6 +390,9 @@ export function MessageBubble({
   // 通话卡片（D04 §4.5 call_card：方向/状态/时长/再次呼叫；组件在 shared，回拨经 bus 转发 rtc）
   const isCallCard = message.type === 'call_card';
   const callBody = isCallCard && 'call_id' in message.body ? (message.body as CallCardBody) : null;
+  // 文档卡片（D05 §4.8 doc_card 简版：标题+版本，点击 → /doc/:id）
+  const isDocCard = message.type === 'doc_card';
+  const docBody = isDocCard && 'doc_id' in message.body ? (message.body as DocCardBody) : null;
   // file/image body 窄化（D06：{file_id,...}；服务端透传）
   const fileBody = (isImage || isFile) && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
   // 编辑窗口（5min）与本人判定：编辑入口显隐（INT-IM-02；撤回态已在上方早退）
@@ -401,6 +434,10 @@ export function MessageBubble({
                 mine={mine}
                 onRecall={(video) => emit('im:invoke-call', { convId: message.convId, video })}
               />
+            </span>
+          ) : isDocCard && docBody ? (
+            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+              <DocCard body={docBody} />
             </span>
           ) : (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>

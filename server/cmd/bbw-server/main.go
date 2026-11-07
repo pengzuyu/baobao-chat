@@ -26,6 +26,10 @@ import (
 	"github.com/baobaowork/server/internal/auth/api"
 	"github.com/baobaowork/server/internal/auth/repo"
 	"github.com/baobaowork/server/internal/auth/service"
+	"github.com/baobaowork/server/internal/doc"
+	docapi "github.com/baobaowork/server/internal/doc/api"
+	docrepo "github.com/baobaowork/server/internal/doc/repo"
+	docservice "github.com/baobaowork/server/internal/doc/service"
 	"github.com/baobaowork/server/internal/file"
 	fileapi "github.com/baobaowork/server/internal/file/api"
 	filerepo "github.com/baobaowork/server/internal/file/repo"
@@ -308,6 +312,31 @@ func main() {
 	}, kbRepo)
 	kbSvc := kbMod.API()
 
+	// 文档中心域（D05 阶段一务实版）：纯 markdown 原生文档（无 WOPI/OnlyOffice），
+	// doc_file/doc_version 两表；v0.1 全 owner 私有（scope 恒 personal，ACL 阶段二）
+	var docRepo docrepo.Repo
+	if pgPool != nil {
+		docRepo = docrepo.NewPostgres(pgPool)
+	} else {
+		docRepo = docrepo.NewMemory()
+	}
+	docMod := doc.NewModule(docservice.Options{}, docRepo)
+	docSvc := docMod.API()
+
+	// 文档中心 REST（D05 §5.1 阶段一务实版 11 项；WOPI session/preview/import/
+	// permissions/templates/move/audit/彻底删除阶段二，登记见 docs 裁剪表）
+	mux.Handle("GET /api/v1/doc/files", authed(handleDocListFiles(docSvc)))
+	mux.Handle("POST /api/v1/doc/files", authed(handleDocCreateFile(docSvc)))
+	mux.Handle("GET /api/v1/doc/files/{id}", authed(handleDocGetFile(docSvc)))
+	mux.Handle("PATCH /api/v1/doc/files/{id}", authed(handleDocRenameFile(docSvc)))
+	mux.Handle("DELETE /api/v1/doc/files/{id}", authed(handleDocTrashFile(docSvc)))
+	mux.Handle("PUT /api/v1/doc/files/{id}/content", authed(handleDocSaveContent(docSvc)))
+	mux.Handle("GET /api/v1/doc/files/{id}/versions", authed(handleDocListVersions(docSvc)))
+	mux.Handle("POST /api/v1/doc/files/{id}/versions/{v}/restore", authed(handleDocRestoreVersion(docSvc)))
+	mux.Handle("GET /api/v1/doc/trash", authed(handleDocListTrash(docSvc)))
+	mux.Handle("POST /api/v1/doc/trash/{id}/restore", authed(handleDocRestoreFromTrash(docSvc)))
+	mux.Handle("POST /api/v1/doc/files/{id}/share", authed(handleDocShare(docSvc)))
+
 	// 知识库 REST（D07 §5.1 阶段一务实版 10 项；摄入同步返回，jobs 为 docs 简版）
 	mux.Handle("GET /api/v1/kb/spaces", authed(handleKBListSpaces(kbSvc)))
 	mux.Handle("POST /api/v1/kb/spaces", authed(handleKBCreateSpace(kbSvc)))
@@ -409,6 +438,8 @@ func main() {
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
+
+	// ── 机器人域（20 篇阶段一务实版）：Incoming Webhook + 管理 REST ──
 
 	// 全局中间件链（D02 §6 固定顺序：trace→recovery→access-log→rate-limit→…）
 	limiter := httpx.NewLimiter(50, 100)                                                  // 阶段一按 IP；三档（租户/用户/Agent）阶段二接 Redis
@@ -1642,4 +1673,283 @@ func (a rtcCardSink) SendCard(ctx context.Context, senderID, convID int64, clien
 // FinishCard 结束时 PATCH body（status=ended{duration,reason}）→ 复用 msg.updated 扇出
 func (a rtcCardSink) FinishCard(ctx context.Context, msgID int64, body json.RawMessage) {
 	_ = a.msgs.UpdateCallCard(ctx, msgID, body)
+}
+
+// ── 文档中心 REST 壳（D05 阶段一务实版：薄壳 → docSvc → 统一响应包）──
+
+// docActor 文档域请求方（tenant + uid；v0.1 全 owner 私有）
+func docActor(r *http.Request) (int64, int64, error) {
+	uid, err := uidFrom(r)
+	if err != nil {
+		return 0, 0, err
+	}
+	return httpx.TenantID(r.Context()), uid, nil
+}
+
+// docIDFrom 路径文档 ID 解析
+func docIDFrom(r *http.Request) (int64, error) { return pathID(r, "id") }
+
+// handleDocListFiles 列表+名称模糊（API-DOC-03 务实版：owner 私有视图；
+// ?q= 模糊 ?cursor= 键集翻页 "<ms>-<id>" ?limit=）
+func handleDocListFiles(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		q := r.URL.Query()
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		resp, err := svc.ListFiles(r.Context(), tenant, uid, q.Get("q"), q.Get("cursor"), limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleDocCreateFile 新建 markdown 文档（API-DOC-01 务实版：{title}，建 v1 空白文档；
+// type/template_id/folder_id 不收——纯 markdown+无模板库，阶段二）
+func handleDocCreateFile(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Title string `json:"title"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		doc, err := svc.CreateFile(r.Context(), tenant, uid, req.Title)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, doc)
+	}
+}
+
+// handleDocGetFile 元数据+当前正文（API-DOC-04 务实版；v0.1 无 perm/presence 摘要）
+func handleDocGetFile(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := docIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		doc, err := svc.GetFile(r.Context(), tenant, uid, docID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, doc)
+	}
+}
+
+// handleDocRenameFile 重命名（API-DOC-05 务实版：{title}；6015 同名）
+func handleDocRenameFile(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := docIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Title string `json:"title"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		doc, err := svc.RenameFile(r.Context(), tenant, uid, docID, req.Title)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, doc)
+	}
+}
+
+// handleDocTrashFile 移入回收站（API-DOC-07 务实版：purge_at=+30d 保留期）
+func handleDocTrashFile(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := docIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		doc, err := svc.TrashFile(r.Context(), tenant, uid, docID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, doc)
+	}
+}
+
+// handleDocSaveContent 乐观锁保存正文（PUT content {content_md, base_version}；
+// 基线落后 → 6004 版本冲突；成功 manual 快照 version+1 + 冗余正文回写）
+func handleDocSaveContent(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := docIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			ContentMD   string `json:"content_md"`
+			BaseVersion int64  `json:"base_version"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		resp, err := svc.SaveContent(r.Context(), tenant, uid, docID, req.BaseVersion, req.ContentMD)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleDocListVersions 版本时间线（API-DOC-21 务实版：cursor 倒序；v0.1 无大小/备注）
+func handleDocListVersions(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := docIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		q := r.URL.Query()
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		resp, err := svc.ListVersions(r.Context(), tenant, uid, docID, q.Get("cursor"), limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleDocRestoreVersion 恢复目标版本（API-DOC-22 务实版：version+1 snapshot=restore，
+// 正文回写；6013 目标不存在）
+func handleDocRestoreVersion(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := docIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		version, err := strconv.Atoi(r.PathValue("v"))
+		if err != nil || version <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "目标版本号非法"))
+			return
+		}
+		resp, err := svc.RestoreVersion(r.Context(), tenant, uid, docID, version)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleDocListTrash 回收站列表（API-DOC-27 务实版：owner 私有 + 过期行过滤）
+func handleDocListTrash(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		q := r.URL.Query()
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		resp, err := svc.ListTrash(r.Context(), tenant, uid, q.Get("cursor"), limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleDocRestoreFromTrash 回收站恢复（API-DOC-28 务实版：同名冲突加" (恢复)"后缀）
+func handleDocRestoreFromTrash(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := docIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		resp, err := svc.RestoreFromTrash(r.Context(), tenant, uid, docID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleDocShare 分享占位（API-DOC-12 务实版：share_id+7d+假 URL；
+// 外链解析页/doc_share 落库阶段二，登记）
+func handleDocShare(svc docapi.DocService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := docActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := docIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		resp, err := svc.Share(r.Context(), tenant, uid, docID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
 }

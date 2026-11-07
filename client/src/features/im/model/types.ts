@@ -40,8 +40,24 @@ export interface FileMessageBody {
   contentType?: string;
 }
 
-/** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；call_card 为通话卡片体（D04）；全集见 D03 §6.3） */
-export type MessageBody = { text: string } | FileMessageBody | SystemBody | CallCardBody | Record<string, never>;
+/**
+ * 文档卡片消息体（D05 阶段一：doc_card 简版——doc_id+标题+版本号快照；
+ * 在线编辑状态/协作头像/摘要预览阶段二，06 §4.8）
+ */
+export interface DocCardBody {
+  doc_id: string;
+  title?: string;
+  version?: number;
+}
+
+/** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；call_card 为通话卡片体（D04）；doc_card 为文档卡片体（D05）；全集见 D03 §6.3） */
+export type MessageBody =
+  | { text: string }
+  | FileMessageBody
+  | SystemBody
+  | CallCardBody
+  | DocCardBody
+  | Record<string, never>;
 
 /** 引用快照（服务端 ext.reply_digest，D03 §5.2） */
 export interface ReplyDigest {

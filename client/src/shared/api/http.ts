@@ -81,7 +81,12 @@ const ERROR_TEXT: Record<number, string> = {
   5005: '通话建立失败，请重试',
   // 6xxx 文档
   6001: '你没有该文档的编辑权限',
+  6004: '版本冲突：文档已被其他窗口修改，请基于最新版本重试或强制覆盖',
   6005: '文档不存在或已移入回收站',
+  6007: '文档超过大小上限',
+  6011: '回收站条目不存在或已过期',
+  6013: '目标版本不存在',
+  6015: '同名文档已存在',
   // 7xxx 知识库
   7001: '知识库空间不存在',
   7002: '你没有检索权限',
@@ -179,6 +184,7 @@ export const http = {
   get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
   post: <T>(path: string, body?: unknown, idempotencyKey?: string) =>
     request<T>(path, { method: 'POST', body, idempotencyKey }),
+  put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
