@@ -291,3 +291,108 @@ func TestListMessages(t *testing.T) {
 		t.Fatalf("会话不存在: %v", err)
 	}
 }
+
+// ── 文件消息（D06 阶段一）──
+
+// filePayload file/image 消息构造（body.file_id 字符串口径，与客户端一致）
+func filePayload(conv int64, cmid, typ, fileID string, extra map[string]any) messageapi.SendPayload {
+	body := map[string]any{"file_id": fileID, "name": "a.png", "size": 3}
+	for k, v := range extra {
+		body[k] = v
+	}
+	raw, _ := json.Marshal(body)
+	return messageapi.SendPayload{
+		ConvID:      messageapi.ConvID(strconv.FormatInt(conv, 10)),
+		ClientMsgID: cmid, Type: typ, Body: raw,
+	}
+}
+
+// TestSendFileMessageValidation msg.send type=file/image 的 body.file_id 校验路径：
+// 注入闭包拒 4005/2003；file_id 非法 9001；成功后 FileMarkSent 回填（尽力而为）
+func TestSendFileMessageValidation(t *testing.T) {
+	// 文件表桩：88=alice 的 source=upload 文件；99=source=message（转发复用路径）
+	ownerOf := map[int64]int64{88: 10001, 99: 0}
+	sourceOf := map[int64]string{88: "upload", 99: "message"}
+	var marked []int64
+	opts := Options{
+		FileCheck: func(ctx context.Context, senderID int64, fileID int64) error {
+			src, ok := sourceOf[fileID]
+			if !ok {
+				return errx.New(errx.CodeFileNotFound, "文件不存在")
+			}
+			if src != "message" && ownerOf[fileID] != senderID {
+				return errx.New(errx.CodePermACLDenied, "仅 owner 可发送该文件")
+			}
+			return nil
+		},
+		FileMarkSent: func(ctx context.Context, fileID int64, convID int64) error {
+			marked = append(marked, fileID)
+			return nil
+		},
+	}
+	svc, _, _ := seedFixture(t, opts)
+	ctx := context.Background()
+
+	// owner 发送 image：成功 + MarkSent 回填 conv
+	res, err := svc.Send(ctx, 10001, filePayload(1, "f-1", "image", "88", nil))
+	if err != nil {
+		t.Fatalf("owner 发送 image: %v", err)
+	}
+	if res.Seq == 0 {
+		t.Fatalf("应有服务端 seq: %+v", res)
+	}
+	if len(marked) != 1 || marked[0] != 88 {
+		t.Fatalf("MarkSent 应回填: %v", marked)
+	}
+	// bob 发送他人 source=upload 文件 → 2003
+	if _, err := svc.Send(ctx, 10002, filePayload(1, "f-2", "file", "88", nil)); errx.From(err).Code != errx.CodePermACLDenied {
+		t.Fatalf("非 owner 发送应拒 2003: %v", err)
+	}
+	// 不存在 → 4005
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "f-3", "file", "404", nil)); errx.From(err).Code != errx.CodeFileNotFound {
+		t.Fatalf("不存在应拒 4005: %v", err)
+	}
+	// source=message：bob 转发复用成功
+	if _, err := svc.Send(ctx, 10002, filePayload(1, "f-4", "file", "99", nil)); err != nil {
+		t.Fatalf("转发复用应放行: %v", err)
+	}
+	// body 缺 file_id → 9001
+	bad := messageapi.SendPayload{ConvID: "1", ClientMsgID: "f-5", Type: "file", Body: json.RawMessage(`{"name":"x"}`)}
+	if _, err := svc.Send(ctx, 10001, bad); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("缺 file_id 应拒 9001: %v", err)
+	}
+	// file_id 数字形态兼容（旧端/测试）
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "f-6", "file", "99", nil)); err != nil {
+		t.Fatalf("字符串 file_id 应可发: %v", err)
+	}
+	// body 透传：msg.new 原样携带宽高等元数据
+	bodyExtra := map[string]any{"width": 7, "height": 5}
+	_, err = svc.Send(ctx, 10001, filePayload(1, "f-7", "image", "88", bodyExtra))
+	if err != nil {
+		t.Fatalf("携带宽高发送: %v", err)
+	}
+	msgs, _ := svc.ListMessages(ctx, 1, 0, 0, 100)
+	found := false
+	for _, m := range msgs {
+		if m.ClientMsgID == "f-7" {
+			found = true
+			var b map[string]any
+			_ = json.Unmarshal(m.Body, &b)
+			if b["file_id"] != "88" || b["width"].(float64) != 7 {
+				t.Fatalf("body 透传不符: %s", m.Body)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("f-7 应已落库")
+	}
+}
+
+// TestSendFileCheckNil FileCheck 未注入（text-only 部署）：跳过校验直接发送成功
+func TestSendFileCheckNil(t *testing.T) {
+	svc, _, _ := seedFixture(t, Options{})
+	ctx := context.Background()
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "fn-1", "file", "88", nil)); err != nil {
+		t.Fatalf("未注入校验应放行: %v", err)
+	}
+}

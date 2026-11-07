@@ -37,6 +37,9 @@ var sensitiveWordSQL string
 //go:embed 0007_user_notification.sql
 var userNotificationSQL string
 
+//go:embed 0008_file.sql
+var fileSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -53,4 +56,6 @@ var List = []Migration{
 	{Version: 6, Name: "0006_sensitive_word", Probe: "", SQL: sensitiveWordSQL},
 	// 0007 同理留空：user_notification 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D03 PIM-09）
 	{Version: 7, Name: "0007_user_notification", Probe: "", SQL: userNotificationSQL},
+	// 0008 同理留空：file 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D06 阶段一务实版）
+	{Version: 8, Name: "0008_file", Probe: "", SQL: fileSQL},
 }

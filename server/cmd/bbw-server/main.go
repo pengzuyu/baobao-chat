@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +22,11 @@ import (
 	"github.com/baobaowork/server/internal/auth/api"
 	"github.com/baobaowork/server/internal/auth/repo"
 	"github.com/baobaowork/server/internal/auth/service"
+	"github.com/baobaowork/server/internal/file"
+	fileapi "github.com/baobaowork/server/internal/file/api"
+	filerepo "github.com/baobaowork/server/internal/file/repo"
+	fileservice "github.com/baobaowork/server/internal/file/service"
+	filestore "github.com/baobaowork/server/internal/file/store"
 	"github.com/baobaowork/server/internal/gateway"
 	"github.com/baobaowork/server/internal/message"
 	"github.com/baobaowork/server/internal/message/api"
@@ -83,6 +89,25 @@ func main() {
 	orgMod := org.NewModule(orgRepo)
 	authMod := auth.NewModule(orgMod.API(), signer, cfg, tokenRepo, deviceRepo, attemptRepo)
 
+	// 文件域（D06 阶段一务实版）：本地磁盘存储 + 短期一次性票据下载；
+	// 会话成员判定经闭包查 message 仓（跨模块不引 message 包，D02 §4 依赖规则）
+	fileStore := filestore.NewLocal(envOr("BBW_DATA_DIR", "./data"))
+	var fileRepo filerepo.Repo
+	if pgPool != nil {
+		fileRepo = filerepo.NewPostgres(pgPool)
+	} else {
+		fileRepo = filerepo.NewMemory()
+	}
+	fileMod := file.NewModule(fileservice.Options{
+		MaxUploadBytes: 20 << 20, // 单文件 20MB（v0.1 无分片：客户端单请求 multipart 直传，登记）
+		TicketTTL:      120 * time.Second,
+		IsConvMember: func(ctx context.Context, userID, convID int64) bool {
+			m, err := msgRepo.MemberOf(ctx, convID, userID)
+			return err == nil && m != nil && m.Status == 1
+		},
+	}, fileRepo, fileStore)
+	fileSvc := fileMod.API()
+
 	msgMod := message.NewModule(msgRepo, bus, messageservice.Options{
 		// 发送人名称解析：闭包经 org 仓查询（跨模块不引 org 包，D02 §4 依赖规则）
 		NameOf: func(id int64) string {
@@ -91,6 +116,9 @@ func main() {
 			}
 			return ""
 		},
+		// 文件消息校验/回填（D06 阶段一：msg.send type=file/image 的 body.file_id）
+		FileCheck:    fileSvc.CheckSendable,
+		FileMarkSent: fileSvc.MarkSent,
 	})
 
 	hub := gateway.NewHub()
@@ -142,6 +170,15 @@ func main() {
 	mux.Handle("GET /api/v1/notifications", authed(handleListNotifications(msgMod.API())))
 	mux.Handle("POST /api/v1/notifications/read", authed(handleNotificationsRead(msgMod.API())))
 	mux.Handle("GET /api/v1/notifications/unread_count", authed(handleUnreadNotificationCount(msgMod.API())))
+
+	// 文件 REST（D06 阶段一务实版：multipart 直传/一次性票据下载/我的文件/软删；
+	// check/uploads/complete 分片会话与 shares 外链阶段二，登记）
+	mux.Handle("POST /api/v1/files/upload", authed(handleFileUpload(fileSvc)))
+	mux.Handle("GET /api/v1/files/me", authed(handleMyFiles(fileSvc)))
+	mux.Handle("GET /api/v1/files/{id}/ticket", authed(handleFileTicket(fileSvc)))
+	mux.Handle("DELETE /api/v1/files/{id}", authed(handleFileDelete(fileSvc)))
+	// dl 不挂鉴权中间件——票据即凭证（120s 一次性；4014 失效/复用）
+	mux.HandleFunc("GET /api/v1/files/dl", handleFileDownload(fileSvc))
 
 	// AI 网关（docs/19 §6：OpenAI 兼容入口；独立鉴权链——JWT/OBO/开发令牌，不走 /api/v1 authed）
 	aigwMod := aigw.NewModule(pgPool, func(token string) (*authjwt.Claims, error) {
@@ -680,6 +717,171 @@ func handleUnreadNotificationCount(svc messageapi.MessageService) http.HandlerFu
 			return
 		}
 		httpx.OK(w, r, res)
+	}
+}
+
+// ── 文件 REST 壳（D06 阶段一务实版）──
+
+// handleFileUpload multipart 直传：file + 可选 conv_id（单请求 ≤20MB，无分片）
+func handleFileUpload(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		tenant := httpx.TenantID(r.Context())
+		// MaxBytesReader 前置兜底（正文超限快速失败；service 内流式判定为权威 4009）
+		r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+		mr, err := r.MultipartReader()
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "multipart 请求非法"))
+			return
+		}
+		// multipart part 只能在遍历期间读取（NextPart 会耗尽上一 part）：
+		// file part 先转存 OS 临时文件，遍历结束后再流式交给 service
+		var (
+			tmpFile     *os.File
+			fileName    string
+			contentType string
+			convID      int64
+			gotFile     bool
+		)
+		cleanup := func() {
+			if tmpFile != nil {
+				tmpFile.Close()
+				os.Remove(tmpFile.Name())
+			}
+		}
+		defer cleanup()
+		for {
+			part, perr := mr.NextPart()
+			if perr == io.EOF {
+				break
+			}
+			if perr != nil {
+				httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "multipart 解析失败"))
+				return
+			}
+			switch part.FormName() {
+			case "file":
+				if !gotFile { // 多文件只取首个（D06 §3.3 多文件逐张成消息由端侧拆分）
+					tmp, terr := os.CreateTemp("", "bbw-upload-*")
+					if terr != nil {
+						httpx.Fail(w, r, errx.New(errx.CodeInternal, "临时文件创建失败"))
+						return
+					}
+					if _, cerr := io.Copy(tmp, part); cerr != nil { // 32MB 上限由 MaxBytesReader 兜底
+						tmp.Close()
+						os.Remove(tmp.Name())
+						httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "file 字段读取失败"))
+						return
+					}
+					tmpFile, fileName, contentType, gotFile = tmp, part.FileName(), part.Header.Get("Content-Type"), true
+				}
+			case "conv_id":
+				b, _ := io.ReadAll(io.LimitReader(part, 64))
+				convID, _ = strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+			default: // 未知字段忽略（向前兼容）
+			}
+		}
+		if !gotFile || tmpFile == nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "缺少 file 字段"))
+			return
+		}
+		if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeInternal, "临时文件读取失败"))
+			return
+		}
+		res, err := svc.Upload(r.Context(), tenant, uid, fileName, contentType, convID, tmpFile)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleMyFiles 我的文件列表（软删排除；v0.1 全量不分页）
+func handleMyFiles(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		items, err := svc.ListMine(r.Context(), httpx.TenantID(r.Context()), uid)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items, "has_more": false})
+	}
+}
+
+// handleFileTicket 取下载票据（owner 或 conv 成员；一次性 120s）
+func handleFileTicket(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		fileID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || fileID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "文件 ID 非法"))
+			return
+		}
+		res, err := svc.IssueTicket(r.Context(), httpx.TenantID(r.Context()), uid, fileID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleFileDelete owner 软删
+func handleFileDelete(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		fileID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || fileID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "文件 ID 非法"))
+			return
+		}
+		if err := svc.SoftDelete(r.Context(), httpx.TenantID(r.Context()), uid, fileID); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+// handleFileDownload 票据下载：校验 → 流式回文件（Content-Type/Disposition；票据即凭证无鉴权）
+func handleFileDownload(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("t")
+		if token == "" {
+			httpx.Fail(w, r, errx.New(errx.CodeFileTicketInvalid, "缺少下载票据"))
+			return
+		}
+		target, rc, err := svc.Download(r.Context(), token)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		defer rc.Close()
+		w.Header().Set("Content-Type", target.ContentType)
+		w.Header().Set("Content-Length", strconv.FormatInt(target.Size, 10))
+		w.Header().Set("Content-Disposition",
+			mime.FormatMediaType("attachment", map[string]string{"filename": target.Name}))
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, rc)
 	}
 }
 

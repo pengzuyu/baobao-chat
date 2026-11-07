@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +44,14 @@ type Options struct {
 
 	// ── 通知中心（D03 §3.9 PIM-09）──
 	NotifyMergeWindow time.Duration // 同 (user,kind,conv) 聚合窗口（默认 10s，"×N"合并）
+
+	// ── 文件消息（D06 阶段一）──
+	// msg.send type=file/image 时校验 body.file_id：存在(4005)/未删(4013)/
+	// sender 为 owner 或 source=message(2003)。main 注入 file 域闭包（D02 §4 跨域不引包）；
+	// nil=未装配文件域时跳过校验（text-only 部署可裁剪）
+	FileCheck func(ctx context.Context, senderID int64, fileID int64) error
+	// 发送成功后回填 file.source='message'+conv_id（尽力而为：失败不影响消息）
+	FileMarkSent func(ctx context.Context, fileID int64, convID int64) error
 }
 
 func (o *Options) fillDefaults() {
@@ -146,6 +155,37 @@ type textBody struct {
 	Text string `json:"text"`
 }
 
+// flexID file_id 兼容型：客户端传字符串（ID 口径），旧端/测试可能传数字——两者都收
+type flexID int64
+
+func (f *flexID) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if len(s) >= 2 && s[0] == '"' {
+		var str string
+		if err := json.Unmarshal(b, &str); err != nil {
+			return err
+		}
+		n, err := strconv.ParseInt(str, 10, 64)
+		if err != nil {
+			return err
+		}
+		*f = flexID(n)
+		return nil
+	}
+	var n int64
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*f = flexID(n)
+	return nil
+}
+
+// fileBody file/image 消息 body 约定 {"file_id": "...", name/size/ext/width/height 透传}
+// （D06 阶段一：校验仅用 file_id，其余字段服务端不重校验、msg.new 原样透传）
+type fileBody struct {
+	FileID flexID `json:"file_id"`
+}
+
 func (s *Service) convLock(convID int64) *sync.Mutex {
 	v, _ := s.convLocks.LoadOrStore(convID, &sync.Mutex{})
 	return v.(*sync.Mutex)
@@ -237,6 +277,23 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 			return nil, err
 		}
 	}
+	// ③b 文件消息校验（D06：file/image 携 body.file_id → file 域校验存在/owner/未删）
+	fileID := int64(0)
+	if p.Type == "file" || p.Type == "image" {
+		var fb fileBody
+		if len(p.Body) == 0 {
+			return nil, errx.New(errx.CodeBadRequest, "file/image 消息 body 应含 file_id")
+		}
+		if err := json.Unmarshal(p.Body, &fb); err != nil || fb.FileID <= 0 {
+			return nil, errx.New(errx.CodeBadRequest, "file_id 非法")
+		}
+		fileID = int64(fb.FileID)
+		if s.opts.FileCheck != nil {
+			if err := s.opts.FileCheck(ctx, senderID, fileID); err != nil {
+				return nil, err
+			}
+		}
+	}
 	// ③b mentions 上限 + 引用目标校验/快照（D03 §5.2：reply_digest 服务端冗余入 ext）
 	if len(p.Mentions) > s.opts.MaxMentions {
 		return nil, errx.New(errx.CodeBadRequest, "mentions 超上限")
@@ -297,6 +354,10 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 	_ = s.bus.Publish(ctx, eventbus.TopicMsgCreated, messageapi.MsgCreatedEvent{
 		Message: msg, MemberIDs: members,
 	})
+	// ⑧ 文件消息回填（D06：source='message'+conv_id；尽力而为，失败不影响已落库消息）
+	if fileID > 0 && s.opts.FileMarkSent != nil {
+		_ = s.opts.FileMarkSent(ctx, fileID, convID)
+	}
 	return &messageapi.SendResult{MsgID: msg.ID, Seq: msg.Seq, TS: msg.TS}, nil
 }
 
