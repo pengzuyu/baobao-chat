@@ -221,6 +221,9 @@ pub struct LoopDeps {
     pub skills: Arc<Mutex<crate::skills::SkillIndex>>,
     /// 探查子 Agent 判定器（08 §4.5；None=未装配零行为，FastPlanner 见 subagent.rs）
     pub fanout: Option<Arc<dyn crate::subagent::FanoutPlanner>>,
+    /// 专家会诊源（D14 §3.3 选角；None=未装配零行为，FastCaster 见 team.rs）。
+    /// 判定优先于探查——专家=重执行体，探查=信息收集优化
+    pub experts: Option<Arc<dyn crate::team::ExpertSource>>,
     pub budget: BudgetConfig,
 }
 
@@ -246,6 +249,46 @@ impl SessionRunner {
             "user.text",
             &format!("{{\"text\":\"{}\"}}", escape_json(user_text)),
         );
+
+        // 专家会诊（D14 §3：选角命中 → run_team 并行 Activation → 摘要回填；
+        // 优先于探查——多专家并行产出结论后主 Agent 综合规划。状态复用
+        // #9/#10（"并行子任务执行中"同语义；TeamRun 并发 ≤1 由本顺序天然保证）
+        if let Some(source) = deps.experts.as_ref() {
+            if let Some(graph) = source.cast(deps.model.as_ref(), user_text) {
+                self.state = crate::subagent::transition_fanout(self.state);
+                emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                    session_id: id,
+                    state: "subagent_fanout".into(),
+                    reason: "team.cast".into(),
+                });
+                if let Ok(team) = crate::team::run_team(
+                    &crate::expert::ExpertCtx {
+                        model: deps.model.as_ref(),
+                        tools: deps.tools.as_ref(),
+                        mode: self.mode,
+                    },
+                    &self.session_id,
+                    &graph,
+                    deps.sink.as_ref(),
+                    deps.wal.as_ref(),
+                ) {
+                    self.state = crate::subagent::transition_join(self.state);
+                    self.history.push(Round::Tool {
+                        call_id: format!("team-{}", team.run_id),
+                        name: "team.join".to_string(),
+                        summary: format!("## 专家会诊结果\n{}", team.summary),
+                    });
+                    emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                        session_id: id,
+                        state: "running".into(),
+                        reason: "team.join".into(),
+                    });
+                } else {
+                    // 图校验拒绝（选角器已前置校验，此处兜底）→ 回 running 走主循环
+                    self.state = crate::subagent::transition_join(self.state);
+                }
+            }
+        }
 
         // 探查子 Agent fan-out（08 §4.5/D11 §7）：判定 complex → ≤3 并行探查 →
         // join 摘要回填（主 Agent 基于摘要继续规划；未装配/不分解=零行为）

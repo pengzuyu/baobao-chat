@@ -161,6 +161,7 @@ fn deps<M: bbrt_aigw::ChatClient + 'static>(
         snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
+        experts: None,
         budget: BudgetConfig::default(),
     }
 }
@@ -463,6 +464,7 @@ fn wal_records_monotonic_events() {
         snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
+        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(
@@ -557,6 +559,7 @@ fn compaction_triggers_on_long_history() {
         snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
+        experts: None,
         budget: cfg,
     };
     let mut runner = SessionRunner::new(
@@ -804,6 +807,7 @@ fn delegate_turn_setup() -> (Arc<CollectSink>, LoopDeps) {
             snapshots: None,
             skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
             fanout: None,
+            experts: None,
             budget: BudgetConfig::default(),
         },
     )
@@ -911,6 +915,7 @@ fn delegate_without_launcher_blocked_8030() {
         snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
+        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(

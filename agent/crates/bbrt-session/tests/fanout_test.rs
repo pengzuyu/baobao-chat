@@ -212,6 +212,7 @@ fn deps_for(
         snapshots: None,
         skills: Arc::new(Mutex::new(SkillIndex::default())),
         fanout: Some(planner),
+        experts: None,
         budget: BudgetConfig::default(),
     }
 }

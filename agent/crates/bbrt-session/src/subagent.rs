@@ -90,7 +90,7 @@ impl FanoutPlanner for FastPlanner {
 }
 
 /// 剥 markdown 代码围栏（```json ... ``` → 内容；两侧空白一并清）
-fn strip_fence(s: &str) -> &str {
+pub(crate) fn strip_fence(s: &str) -> &str {
     let t = s.trim();
     let body = t
         .strip_prefix("```")

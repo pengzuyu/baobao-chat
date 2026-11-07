@@ -244,3 +244,368 @@ fn team_invalid_graph_no_activation() {
     assert!(sink.0.lock().unwrap().is_empty());
     assert_eq!(validate_graph(&graph), Err(TeamError::TotalStepsExceeded));
 }
+
+// ---------------------------------------------------------------------------
+// 选角引擎（ExpertIndex/FastCaster）与 loop 接线
+// ---------------------------------------------------------------------------
+
+use bbrt_context::BudgetConfig;
+use bbrt_session::events::ModelTier;
+use bbrt_session::expert::AssembledExpert;
+use bbrt_session::loop_runner::LoopDeps;
+use bbrt_session::team::{ExpertIndex, ExpertSource, FastCaster};
+use bbrt_session::SessionRunner;
+
+/// 固定输出模型（选角剧本）
+struct CasterModel(&'static str);
+impl ChatClient for CasterModel {
+    fn chat(
+        &self,
+        _req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = vec![
+            Ok(StreamEvent::TextDelta {
+                text: self.0.into(),
+            }),
+            Ok(StreamEvent::Done {
+                finish: FinishReason::Stop,
+                usage: Usage {
+                    prompt_tokens: 4,
+                    completion_tokens: 2,
+                },
+            }),
+        ];
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+fn yaml_for(id: &str, display: &str) -> String {
+    format!(
+        "id: {id}\ntype: local\nversion: 1.0.0\ndisplay: {display}\npersona: |\n  {display}视角。\nconstraints:\n  max_steps: 20\nsource: company\n"
+    )
+}
+
+fn scan_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, body) in files {
+        std::fs::write(dir.path().join(name), body).unwrap();
+    }
+    dir
+}
+
+fn fixture_assembler(m: &bbrt_session::ExpertManifest) -> AssembledExpert {
+    let registry = AllowTools.tool_specs();
+    let mut a = assemble(
+        m,
+        &registry,
+        &SkillIndex::default(),
+        &AssemblePolicy::default(),
+    );
+    a.system_prompt = m.persona.clone();
+    a
+}
+
+/// ExpertIndex：合法/非法混合扫描（失败跳过不阻塞）+ 按 id 取
+#[test]
+fn expert_index_scan() {
+    let dir = scan_dir(&[
+        ("a.yaml", &yaml_for("corp.sec", "安全专家")),
+        ("b.yaml", &yaml_for("corp.perf", "性能专家")),
+        ("broken.yaml", "id: 坏的\n缺必填: true\n"),
+        ("c.txt", "非 yaml 扩展"),
+    ]);
+    let idx = ExpertIndex::scan(dir.path());
+    assert_eq!(idx.manifests.len(), 2, "坏文件跳过、非 yaml 忽略");
+    assert!(idx.get("corp.sec").is_some());
+    assert!(idx.get("不存在").is_none());
+    // 目录缺失=空索引
+    assert!(ExpertIndex::scan(std::path::Path::new("/nonexistent"))
+        .manifests
+        .is_empty());
+}
+
+/// FastCaster：合法 JSON 组队（label 缺省=display；重复去重）
+#[test]
+fn fast_caster_casts() {
+    let dir = scan_dir(&[
+        ("a.yaml", &yaml_for("corp.sec", "安全专家")),
+        ("b.yaml", &yaml_for("corp.perf", "性能专家")),
+    ]);
+    let idx = ExpertIndex::scan(dir.path());
+    let caster = FastCaster {
+        index: idx,
+        assemble_for: fixture_assembler,
+    };
+    let model = CasterModel(
+        "{\"team\": true, \"cast\": [{\"id\": \"corp.sec\"}, {\"id\": \"corp.perf\", \"label\": \"性能\"}, {\"id\": \"corp.sec\"}]}",
+    );
+    let graph = caster.cast(&model, "多维度评审这个 PR").unwrap();
+    assert_eq!(graph.members.len(), 2, "重复选角去重");
+    assert_eq!(graph.members[0].label, "安全专家", "label 缺省=display");
+    assert_eq!(graph.members[1].label, "性能");
+    assert_eq!(graph.task, "多维度评审这个 PR");
+}
+
+/// FastCaster 降级矩阵：team=false / 垃圾输出 / 幻觉 id / 空库 / 超步图
+#[test]
+fn fast_caster_degrades() {
+    let dir = scan_dir(&[
+        ("a.yaml", &yaml_for("corp.sec", "安全专家")),
+        ("b.yaml", &yaml_for("corp.perf", "性能专家")),
+    ]);
+    let caster = || FastCaster {
+        index: ExpertIndex::scan(dir.path()),
+        assemble_for: fixture_assembler,
+    };
+    // team=false
+    let m = CasterModel("{\"team\": false, \"cast\": []}");
+    assert!(caster().cast(&m, "单一问题").is_none());
+    // 围栏 JSON 仍可解析（strip_fence）
+    let m = CasterModel("```json\n{\"team\": true, \"cast\": [{\"id\": \"corp.sec\"}]}\n```");
+    assert!(caster().cast(&m, "评审").is_some());
+    // 垃圾输出
+    let m = CasterModel("我觉得需要三个专家一起看");
+    assert!(caster().cast(&m, "评审").is_none());
+    // 幻觉 id（清单外专家）→ None
+    let m = CasterModel("{\"team\": true, \"cast\": [{\"id\": \"corp.hallucinated\"}]}");
+    assert!(caster().cast(&m, "评审").is_none());
+    // 空库 → None（不消耗模型判定）
+    let empty = FastCaster {
+        index: ExpertIndex::default(),
+        assemble_for: fixture_assembler,
+    };
+    assert!(empty.cast(&CasterModel("{\"team\": true}"), "x").is_none());
+    // 超 4 人截断（快模型超发）→ ≤4
+    let dir5 = scan_dir(&[
+        ("a.yaml", &yaml_for("corp.a", "A")),
+        ("b.yaml", &yaml_for("corp.b", "B")),
+        ("c.yaml", &yaml_for("corp.c", "C")),
+        ("d.yaml", &yaml_for("corp.d", "D")),
+        ("e.yaml", &yaml_for("corp.e", "E")),
+    ]);
+    let cast5 = format!(
+        "{{\"team\": true, \"cast\": [{}]}}",
+        ["corp.a", "corp.b", "corp.c", "corp.d", "corp.e"]
+            .iter()
+            .map(|id| format!("{{\"id\": \"{id}\"}}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let m = CasterModel(Box::leak(cast5.into_boxed_str()));
+    let graph = FastCaster {
+        index: ExpertIndex::scan(dir5.path()),
+        assemble_for: fixture_assembler,
+    }
+    .cast(&m, "大会诊")
+    .unwrap();
+    assert_eq!(graph.members.len(), 4, "≤4 硬顶截断");
+}
+
+/// 固定返回双专家图的假 ExpertSource（loop 接线测试：剧本专家直接文本收尾）
+struct FixedTeam;
+impl ExpertSource for FixedTeam {
+    fn cast(&self, _model: &dyn ChatClient, user_text: &str) -> Option<TeamGraph> {
+        let mk = |id: &str, display: &str, label: &str| {
+            let m = parse_manifest(&yaml_for(id, display)).unwrap();
+            let mut a = fixture_assembler(&m);
+            a.max_steps = 5;
+            TeamMember {
+                label: label.into(),
+                expert: Arc::new(a),
+            }
+        };
+        Some(TeamGraph {
+            task: user_text.to_string(),
+            members: vec![
+                mk("corp.sec", "安全人设：查注入。", "安全"),
+                mk("corp.perf", "性能人设：查热点。", "性能"),
+            ],
+        })
+    }
+}
+
+/// loop 接线全链：选角命中 → run_team（专家并行文本收尾）→ 摘要回填
+/// history（team.join）→ 主循环继续；StateChanged team.cast/team.join
+#[test]
+fn loop_expert_consult_wiring() {
+    // 主循环模型：非专家窗口（system 无 persona 标记）→ 文本收尾；
+    // 专家窗口（含"人设"）→ 各自文本收尾
+    struct LoopModel;
+    impl ChatClient for LoopModel {
+        fn chat(
+            &self,
+            req: &ChatRequest,
+        ) -> Result<
+            Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+            bbrt_aigw::AigwError,
+        > {
+            let m0 = req
+                .messages
+                .first()
+                .map(|m| m.content.clone())
+                .unwrap_or_default();
+            let text = if m0.contains("人设") {
+                format!(
+                    "{}结论。",
+                    if m0.contains("安全") {
+                        "安全"
+                    } else {
+                        "性能"
+                    }
+                )
+            } else {
+                "综合两方结论，开始处理。".to_string()
+            };
+            let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = vec![
+                Ok(StreamEvent::TextDelta { text }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 6,
+                        completion_tokens: 3,
+                    },
+                }),
+            ];
+            Ok(Box::new(events.into_iter()))
+        }
+    }
+
+    let sink = Arc::new(CollectSink(Mutex::new(vec![])));
+    let log = SharedLog::default();
+    let model = Arc::new(LoopModel);
+    let tools = Arc::new(AllowTools);
+    let deps = LoopDeps {
+        model: model.clone(),
+        tools: tools.clone(),
+        delegator: None,
+        memory: None,
+        wal: Arc::new(log.clone()),
+        sink: sink.clone(),
+        snapshots: None,
+        skills: Arc::new(Mutex::new(SkillIndex::default())),
+        fanout: None,
+        experts: Some(Arc::new(FixedTeam)),
+        budget: BudgetConfig::default(),
+    };
+    let mut runner = SessionRunner::new(
+        "s-team-loop".into(),
+        "/ws".into(),
+        PermissionMode::AutoEdit,
+        ModelTier::Strong,
+    );
+    runner.run_turn("多维度评审 PR#7", &deps);
+
+    // 状态序列：team.cast 进 fanout 态 → team.join 回 running
+    let evs = sink.0.lock().unwrap().clone();
+    let states: Vec<(String, String)> = evs
+        .iter()
+        .filter_map(|e| match e {
+            SessionEvent::StateChanged { state, reason, .. } => {
+                Some((state.clone(), reason.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        states
+            .iter()
+            .any(|(s, r)| s == "subagent_fanout" && r == "team.cast"),
+        "{states:?}"
+    );
+    assert!(
+        states
+            .iter()
+            .any(|(s, r)| s == "running" && r == "team.join"),
+        "{states:?}"
+    );
+    // WAL：team.start/joined + 2×expert
+    let entries = log.0.lock().unwrap().clone();
+    let types: Vec<&str> = entries.iter().map(|(_, t, _)| t.as_str()).collect();
+    assert!(types.contains(&"team.start") && types.contains(&"team.joined"));
+    assert_eq!(types.iter().filter(|t| **t == "expert.activate").count(), 2);
+    // 摘要回填：主循环模型看到 team.join 结论（第二轮 user 上下文含会诊结果）
+    // ——以 history 轮次断言（turn 完成后摘要仍在 runner 历史，经 WAL join 佐证）
+    let joined = entries
+        .iter()
+        .find(|(_, t, _)| *t == "team.joined")
+        .unwrap();
+    assert!(joined.2.contains("\"ok\":2"));
+}
+
+/// 校验拒绝兜底路径：假源返回超步图 → run_team Err → 回 running 不 panic
+#[test]
+fn loop_expert_invalid_graph_fallback() {
+    struct HeavyTeam;
+    impl ExpertSource for HeavyTeam {
+        fn cast(&self, _m: &dyn ChatClient, _t: &str) -> Option<TeamGraph> {
+            let mk = |id: &str| {
+                let m = parse_manifest(&format!(
+                    "id: {id}\ntype: local\nversion: 1.0.0\ndisplay: D\npersona: |\n  人设\nconstraints:\n  max_steps: 100\nsource: company\n"
+                ))
+                .unwrap();
+                TeamMember {
+                    label: id.into(),
+                    expert: Arc::new(fixture_assembler(&m)),
+                }
+            };
+            Some(TeamGraph {
+                task: "t".into(),
+                members: vec![mk("corp.a"), mk("corp.b")], // 2×100=200 > 120
+            })
+        }
+    }
+    struct Plain;
+    impl ChatClient for Plain {
+        fn chat(
+            &self,
+            _req: &ChatRequest,
+        ) -> Result<
+            Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+            bbrt_aigw::AigwError,
+        > {
+            Ok(Box::new(
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        text: "继续处理。".into(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish: FinishReason::Stop,
+                        usage: Usage {
+                            prompt_tokens: 4,
+                            completion_tokens: 2,
+                        },
+                    }),
+                ]
+                .into_iter(),
+            ))
+        }
+    }
+    let sink = Arc::new(CollectSink(Mutex::new(vec![])));
+    let log = SharedLog::default();
+    let deps = LoopDeps {
+        model: Arc::new(Plain),
+        tools: Arc::new(AllowTools),
+        delegator: None,
+        memory: None,
+        wal: Arc::new(log.clone()),
+        sink,
+        snapshots: None,
+        skills: Arc::new(Mutex::new(SkillIndex::default())),
+        fanout: None,
+        experts: Some(Arc::new(HeavyTeam)),
+        budget: BudgetConfig::default(),
+    };
+    let mut runner = SessionRunner::new(
+        "s-team-bad".into(),
+        "/ws".into(),
+        PermissionMode::AutoEdit,
+        ModelTier::Strong,
+    );
+    runner.run_turn("任务", &deps); // 不 panic 即兜底成立
+    let entries = log.0.lock().unwrap().clone();
+    // team.start 未写（校验先于 WAL）
+    assert!(!entries.iter().any(|(_, t, _)| *t == "team.start"));
+}

@@ -121,6 +121,7 @@ fn skill_body_injected_on_trigger_only() {
         snapshots: None,
         skills: Arc::new(Mutex::new(SkillIndex::scan(&eco))),
         fanout: None,
+        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(

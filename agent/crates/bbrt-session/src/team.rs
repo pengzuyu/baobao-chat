@@ -22,8 +22,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use bbrt_aigw::ChatClient;
+
 use crate::events::SessionSink;
-use crate::expert::{run_expert, AssembledExpert, ExpertCtx, ExpertResult};
+use crate::expert::{
+    parse_manifest, run_expert, AssembledExpert, ExpertCtx, ExpertManifest, ExpertResult,
+};
 use crate::loop_runner::EventLog;
 use crate::subagent::truncate_chars;
 
@@ -219,6 +223,152 @@ fn team_summary(nodes: &[NodeResult]) -> String {
         ));
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// 选角引擎（§3.3 自动构图·依赖倒置）+ 专家库索引
+// ---------------------------------------------------------------------------
+
+/// 专家执行源（依赖倒置：loop_runner 只依赖本 trait；bin 装配 FastCaster，
+/// 测试注入假件。None=不组队回主循环——组队是优化不是依赖，降级语义同探查）
+pub trait ExpertSource: Send + Sync {
+    /// 选角并装配（返回可执行 TeamGraph；成员已过装配过滤）
+    fn cast(&self, model: &dyn ChatClient, user_text: &str) -> Option<TeamGraph>;
+}
+
+/// 专家库索引：扫描 `eco/experts/*.yaml`（一文件一 manifest；解析失败
+/// 静默跳过不阻塞其余——降级语义同技能装载；tools.reload 联动由 bin 侧重扫）
+#[derive(Debug, Clone, Default)]
+pub struct ExpertIndex {
+    pub manifests: Vec<ExpertManifest>,
+}
+
+impl ExpertIndex {
+    /// 扫描专家库目录（缺失/空目录=空索引；yaml/yml 双扩展）
+    pub fn scan(dir: &std::path::Path) -> Self {
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => return Self::default(),
+        };
+        let mut manifests: Vec<ExpertManifest> = rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| matches!(p.extension().and_then(|x| x.to_str()), Some("yaml" | "yml")))
+            .filter_map(|p| {
+                let text = std::fs::read_to_string(&p).ok()?;
+                parse_manifest(&text).ok()
+            })
+            .collect();
+        manifests.sort_by(|a, b| a.id.cmp(&b.id)); // 确定性：选角清单顺序稳定
+        Self { manifests }
+    }
+
+    /// 按 id 取 manifest
+    pub fn get(&self, id: &str) -> Option<&ExpertManifest> {
+        self.manifests.iter().find(|m| m.id == id)
+    }
+
+    /// 选角清单文本（id + display + persona 摘要——快模型视角）
+    fn roster(&self) -> String {
+        self.manifests
+            .iter()
+            .map(|m| {
+                format!(
+                    "- {}：{}｜{}",
+                    m.id,
+                    m.display,
+                    truncate_chars(m.persona.trim(), 60)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// 快模型选角器（§3.3：任务关键词 × manifest 能力声明匹配；输出 JSON
+/// {team, cast:[{id,label}]}——解析失败/围栏噪声/幻觉 id/超 4 人一律降级
+/// 不组队）。装配闭包由 bin 注入（registry/skills/policy 绑定侧）。
+pub struct FastCaster<F>
+where
+    F: Fn(&ExpertManifest) -> AssembledExpert + Send + Sync,
+{
+    pub index: ExpertIndex,
+    /// manifest → 装配产物（assemble() 的绑定封装，含 dropped 标灰信息）
+    pub assemble_for: F,
+}
+
+const CASTER_SYSTEM: &str = "判定任务是否需要组建专家团队。可用专家清单：\nROSTER\n\
+    输出纯 JSON（无围栏无解释）：\n\
+    {\"team\": true|false, \"cast\": [{\"id\": \"专家id\", \"label\": \"角色位\"}]}\n\
+    判定 team：任务可按多专家视角并行分解（评审/多维度分析/多领域排查），\
+    且清单中有匹配专家（最多 4 个）；单一问题/清单不匹配 team=false。";
+
+impl<F> ExpertSource for FastCaster<F>
+where
+    F: Fn(&ExpertManifest) -> AssembledExpert + Send + Sync,
+{
+    fn cast(&self, model: &dyn ChatClient, user_text: &str) -> Option<TeamGraph> {
+        if self.manifests_empty() {
+            return None;
+        }
+        let system = CASTER_SYSTEM.replacen("ROSTER", &self.roster_text(), 1);
+        let out = crate::loop_runner::chat_text(model, &system, user_text).ok()?;
+        let v: serde_json::Value =
+            serde_json::from_str(crate::subagent::strip_fence(&out).trim()).ok()?;
+        if !v.get("team")?.as_bool()? {
+            return None;
+        }
+        let mut members: Vec<TeamMember> = vec![];
+        let mut seen = std::collections::HashSet::new();
+        let mut steps_budget = 0usize;
+        for c in v.get("cast")?.as_array()? {
+            let id = c.get("id")?.as_str()?;
+            // 幻觉 id 防线：只认清单内专家（声明式——不在库=不存在）
+            let m = self.index.get(id)?;
+            if !seen.insert(id.to_string()) {
+                continue; // 重复选角去重
+            }
+            // 双预算截断（§3.2 ≤4 人 + §8-5 Σ≤120）：快模型超发时先到先得
+            if members.len() == TEAM_MAX_MEMBERS
+                || steps_budget + m.constraints.max_steps > TEAM_MAX_TOTAL_STEPS
+            {
+                break;
+            }
+            steps_budget += m.constraints.max_steps;
+            let label = c
+                .get("label")
+                .and_then(|l| l.as_str())
+                .filter(|l| !l.trim().is_empty())
+                .unwrap_or(&m.display)
+                .to_string();
+            members.push(TeamMember {
+                label,
+                expert: std::sync::Arc::new((self.assemble_for)(m)),
+            });
+        }
+        if members.is_empty() {
+            return None;
+        }
+        // 图级校验（Σsteps ≤120 等）不通过=不组队（降级，不阻断主循环）
+        let graph = TeamGraph {
+            task: user_text.to_string(),
+            members,
+        };
+        validate_graph(&graph).ok()?;
+        Some(graph)
+    }
+}
+
+impl<F> FastCaster<F>
+where
+    F: Fn(&ExpertManifest) -> AssembledExpert + Send + Sync,
+{
+    fn manifests_empty(&self) -> bool {
+        self.index.manifests.is_empty()
+    }
+    fn roster_text(&self) -> String {
+        self.index.roster()
+    }
 }
 
 #[cfg(test)]

@@ -159,6 +159,7 @@ fn run() -> Result<(), String> {
         snapshots: Some(Arc::new(bbrt_session::GitSnapshots::new(store.clone()))),
         skills: skills_index.clone(),
         fanout: Some(Arc::new(bbrt_session::FastPlanner)),
+        experts: None,
         budget: Default::default(),
     };
     let mgr = Arc::new(SessionManager::new(deps, Some(store.clone())));
