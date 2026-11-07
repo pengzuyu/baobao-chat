@@ -19,12 +19,14 @@
 // 治理解耦：风险级经 tools/list annotations["x-bbw-risk"] 声明（客户端默认"中"），
 // OBO scope 最小化在本层验签后校验（防线二），客户端九步管线 gate/审批照常执行。
 //
-// 试点范围（OQ-B26 裁决）：kb_query（doc_read 随 D05 文档中心域落地后补入；
-// im_send/file_upload 治理属性已登记，供给接入随域需求排期）。
+// 工具范围（OQ-B26 试点 kb_query+doc_read 已落；im_send/file_upload 治理属性
+// 登记于 09 篇 §3.1，供给随本层补齐——Runtime 零改动即自动发现）。
 package mcpgw
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 
 	"github.com/baobaowork/server/internal/platform/authjwt"
 )
@@ -50,6 +52,10 @@ type Options struct {
 	KBQuery func(ctx context.Context, tenantID, uid int64, spaceIDs []string, keyword string, topK int) (any, error)
 	// DocRead 在线文档读取（doc 域注入：owner 私有校验在域服务=防线三）
 	DocRead func(ctx context.Context, tenantID, uid, docID int64) (any, error)
+	// ImSend 消息发送（message 域注入：成员资格/敏感词/频率校验在域服务）
+	ImSend func(ctx context.Context, tenantID, uid, convID int64, msgType string, body json.RawMessage) (any, error)
+	// FileUpload 文件上传（file 域注入：b64 已解码为流；去重/限长在域服务）
+	FileUpload func(ctx context.Context, tenantID, uid int64, name, contentType string, convID int64, r io.Reader) (any, error)
 	// Audit 审计闭包（nil=仅结构化日志兜底）
 	Audit func(ctx context.Context, e AuditEntry)
 }

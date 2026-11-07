@@ -5,7 +5,9 @@ package mcpgw
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +24,8 @@ type fixture struct {
 	signer   *authjwt.Signer
 	kbArgs   []map[string]any // KBQuery 闭包收到的调用参数
 	docCalls []int64          // DocRead 闭包收到的 docID
+	imSends  []map[string]any // ImSend 闭包收到的参数
+	upLoads  []map[string]any // FileUpload 闭包收到的参数
 	audits   []AuditEntry
 }
 
@@ -41,6 +45,20 @@ func newFixture(t *testing.T) *fixture {
 		DocRead: func(_ context.Context, tenantID, uid, docID int64) (any, error) {
 			f.docCalls = append(f.docCalls, docID)
 			return map[string]any{"id": "12", "title": "周报", "content_md": "# 周", "owner_id": "7"}, nil
+		},
+		ImSend: func(_ context.Context, tenantID, uid, convID int64, msgType string, body json.RawMessage) (any, error) {
+			f.imSends = append(f.imSends, map[string]any{
+				"tenant": tenantID, "uid": uid, "conv_id": convID, "msg_type": msgType, "body": string(body),
+			})
+			return map[string]any{"msg_id": 801, "seq": 42}, nil
+		},
+		FileUpload: func(_ context.Context, tenantID, uid int64, name, contentType string, convID int64, r io.Reader) (any, error) {
+			data, _ := io.ReadAll(r)
+			f.upLoads = append(f.upLoads, map[string]any{
+				"tenant": tenantID, "uid": uid, "name": name, "content_type": contentType,
+				"conv_id": convID, "bytes": len(data),
+			})
+			return map[string]any{"file_id": "91", "name": name, "size": len(data)}, nil
 		},
 		Audit: func(_ context.Context, e AuditEntry) { f.audits = append(f.audits, e) },
 	}}
@@ -125,31 +143,22 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 	tok := f.mint(t, "7", false)
 	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`, tok)
 	tools := decode(t, rec)["result"].(map[string]any)["tools"].([]any)
-	if len(tools) < 2 {
-		t.Fatalf("试点应含 kb_query+doc_read（OQ-B26）: %d 项", len(tools))
+	if len(tools) != 4 {
+		t.Fatalf("供给应为 4 工具（kb_query/doc_read/im_send/file_upload）: %d 项", len(tools))
 	}
-	byName := map[string]map[string]any{}
+	// 风险级与 09 篇 §3.1 权威表逐项对齐（客户端 gate 按此分档）
+	want := map[string]string{
+		"kb_query": "low", "doc_read": "low", "im_send": "high", "file_upload": "medium",
+	}
+	got := map[string]string{}
 	for _, tl := range tools {
 		m := tl.(map[string]any)
-		byName[m["name"].(string)] = m
+		got[m["name"].(string)] = m["annotations"].(map[string]any)["x-bbw-risk"].(string)
 	}
-	kb := byName["kb_query"]
-	if kb == nil {
-		t.Fatal("缺少 kb_query")
-	}
-	if kb["annotations"].(map[string]any)["x-bbw-risk"] != "low" {
-		t.Fatalf("kb_query 风险级应为 low（09 篇 §3.1）: %v", kb["annotations"])
-	}
-	schema := kb["inputSchema"].(map[string]any)
-	if req, _ := schema["required"].([]any); len(req) != 1 || req[0] != "keyword" {
-		t.Fatalf("inputSchema.required 应为 [keyword]: %v", schema["required"])
-	}
-	dr := byName["doc_read"]
-	if dr == nil {
-		t.Fatal("缺少 doc_read")
-	}
-	if dr["annotations"].(map[string]any)["x-bbw-risk"] != "low" {
-		t.Fatalf("doc_read 风险级应为 low: %v", dr["annotations"])
+	for name, risk := range want {
+		if got[name] != risk {
+			t.Fatalf("%s 风险级应为 %s，得到 %v（全集: %v）", name, risk, got[name], got)
+		}
 	}
 }
 
@@ -269,7 +278,87 @@ func TestCallUnknownTool(t *testing.T) {
 	tok := f.mint(t, "7", false)
 	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"doc_write","arguments":{}}}`, tok)
 	if code := errCode(t, decode(t, rec)); code != codeUnknownTool {
-		t.Fatalf("未知工具应 -32003（doc_write 高危，供给排期另定），得到 %v", code)
+		t.Fatalf("未知工具应 -32003（doc_write 高危，供给随 D05 协作升级另定），得到 %v", code)
+	}
+}
+
+func TestCallImSendTextAndCard(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "7", false)
+	// text 形态
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"text","text":"部署完成"},"_meta":{"bbwAct":"agent:s1"}}}`, tok)
+	res := decode(t, rec)["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("应成功: %v", res)
+	}
+	if len(f.imSends) != 1 || f.imSends[0]["uid"] != int64(7) || f.imSends[0]["conv_id"] != int64(5) ||
+		f.imSends[0]["msg_type"] != "text" || !strings.Contains(f.imSends[0]["body"].(string), "部署完成") {
+		t.Fatalf("ImSend 参数: %+v", f.imSends)
+	}
+	// agent_card 形态：card 原样透传
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"agent_card","card":{"kind":"task_done","title":"构建完成"}}}}`, tok)
+	if decode(t, rec)["result"].(map[string]any)["isError"] == true {
+		t.Fatal("agent_card 应成功")
+	}
+	if !strings.Contains(f.imSends[1]["body"].(string), "task_done") {
+		t.Fatalf("card 应原样透传: %+v", f.imSends[1])
+	}
+	// 参数校验：枚举外 msg_type / text 缺失 / conv_id 缺失
+	for _, args := range []string{
+		`{"conv_id":5,"msg_type":"markdown"}`,
+		`{"conv_id":5,"msg_type":"text"}`,
+		`{"msg_type":"text","text":"x"}`,
+	} {
+		body := `{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"im_send","arguments":` + args + `}}`
+		if code := errCode(t, decode(t, post(t, f.gw, body, tok))); code != codeInvalidParams {
+			t.Fatalf("im_send 参数 %s 应 -32602", args)
+		}
+	}
+	// OBO 缺 im:message:send → 防线二拒绝（高风险工具 scope 强制）
+	obo := f.mint(t, "9", true, "kb:query:use")
+	body := `{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"text","text":"x"},"_meta":{"bbwObo":"` + obo + `"}}}`
+	if code := errCode(t, decode(t, post(t, f.gw, body, ""))); code != codeScopeDenied {
+		t.Fatal("OBO 缺 im:message:send 应 -32002")
+	}
+}
+
+func TestCallFileUploadHappyAndValidation(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "7", false)
+	b64 := base64.StdEncoding.EncodeToString([]byte("hello-bytes-123"))
+	body := `{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"file_upload","arguments":{"filename":"报告.txt","content_b64":"` + b64 + `","content_type":"text/plain","conv_id":5}}}`
+	rec := post(t, f.gw, body, tok)
+	res := decode(t, rec)["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("应成功: %v", res)
+	}
+	if len(f.upLoads) != 1 || f.upLoads[0]["bytes"] != len("hello-bytes-123") || f.upLoads[0]["conv_id"] != int64(5) {
+		t.Fatalf("FileUpload 参数: %+v", f.upLoads)
+	}
+	// b64 非法 / filename 缺失 / content 空
+	for _, args := range []string{
+		`{"filename":"a.txt","content_b64":"!!非法!!"}`,
+		`{"content_b64":"` + b64 + `"}`,
+		`{"filename":"a.txt","content_b64":""}`,
+	} {
+		b := `{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"file_upload","arguments":` + args + `}}`
+		if code := errCode(t, decode(t, post(t, f.gw, b, tok))); code != codeInvalidParams {
+			t.Fatalf("file_upload 参数 %s 应 -32602", args)
+		}
+	}
+	// OBO 缺 file:upload → 拒绝
+	obo := f.mint(t, "9", true, "im:message:send")
+	b := `{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"file_upload","arguments":{"filename":"a.txt","content_b64":"` + b64 + `"},"_meta":{"bbwObo":"` + obo + `"}}}`
+	if code := errCode(t, decode(t, post(t, f.gw, b, ""))); code != codeScopeDenied {
+		t.Fatal("OBO 缺 file:upload 应 -32002")
+	}
+	// 域业务失败（如超 20MB）→ isError 结果
+	f.gw.opts.FileUpload = func(context.Context, int64, int64, string, string, int64, io.Reader) (any, error) {
+		return nil, context.DeadlineExceeded
+	}
+	rec = post(t, f.gw, body, tok)
+	if decode(t, rec)["result"].(map[string]any)["isError"] != true {
+		t.Fatal("域失败应 isError=true")
 	}
 }
 

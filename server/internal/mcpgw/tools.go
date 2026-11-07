@@ -3,7 +3,9 @@
 package mcpgw
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 )
@@ -62,6 +64,42 @@ func corpTools() []ToolDef {
 			},
 			Risk:  "low",
 			Scope: "doc:file:view",
+		},
+		{
+			// 09 篇 §3.2.6：外发不可撤回影响他人 → 全模式确认（永不全自动）——
+			// 门控在客户端九步管线（high→CorpWrite），服务端只做成员资格校验（域服务 3001）
+			Name:        "im_send",
+			Description: "以发起用户身份发送消息到会话（text 或 agent_card）。高风险：外发影响他人且不可撤回；广播群目标会醒目提示。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"conv_id":  map[string]any{"type": "integer", "description": "目标会话 ID（必填）"},
+					"msg_type": map[string]any{"type": "string", "enum": []string{"text", "agent_card"}, "description": "消息类型"},
+					"text":     map[string]any{"type": "string", "description": "msg_type=text 时的正文（≤5000 字）"},
+					"card":     map[string]any{"type": "object", "description": "msg_type=agent_card 时的卡片体（08 篇）"},
+				},
+				"required": []string{"conv_id", "msg_type"},
+			},
+			Risk:  "high",
+			Scope: "im:message:send",
+		},
+		{
+			// 09 篇 §3.2.7：外传工作区文件 → ask/auto-edit 确认（medium）；
+			// 内容经 b64 随调用上送（Runtime 读本地文件），存储/去重/票据归 file 域
+			Name:        "file_upload",
+			Description: "上传文件到云盘或会话（以发起用户身份持有）。返回 file_id 与下载票据句柄；单文件 ≤20MB。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"filename":     map[string]any{"type": "string", "description": "文件名（必填，含扩展名）"},
+					"content_b64":  map[string]any{"type": "string", "description": "文件内容 base64（必填；b64 后体积计入请求上限）"},
+					"content_type": map[string]any{"type": "string", "description": "MIME 类型（缺省按扩展名推断）"},
+					"conv_id":      map[string]any{"type": "integer", "description": "关联会话（0/缺省=仅云盘）"},
+				},
+				"required": []string{"filename", "content_b64"},
+			},
+			Risk:  "medium",
+			Scope: "file:upload",
 		},
 	}
 }
@@ -162,6 +200,80 @@ func okText(res any) (map[string]any, *rpcError) {
 		"content": []map[string]any{{"type": "text", "text": string(b)}},
 		"isError": false,
 	}, nil
+}
+
+// invokeImSend im_send 执行：成员资格/敏感词/频率校验在 message 域服务（防线三）
+func (g *Gateway) invokeImSend(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		ConvID  int64           `json:"conv_id"`
+		MsgType string          `json:"msg_type"`
+		Text    string          `json:"text"`
+		Card    json.RawMessage `json:"card"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.ConvID <= 0 {
+		return nil, rpcErr(codeInvalidParams, "conv_id 必填")
+	}
+	var body json.RawMessage
+	switch args.MsgType {
+	case "text":
+		if args.Text == "" {
+			return nil, rpcErr(codeInvalidParams, "msg_type=text 需 text")
+		}
+		body, _ = json.Marshal(map[string]string{"text": args.Text})
+	case "agent_card":
+		if len(args.Card) == 0 {
+			return nil, rpcErr(codeInvalidParams, "msg_type=agent_card 需 card")
+		}
+		body = args.Card
+	default:
+		return nil, rpcErr(codeInvalidParams, "msg_type ∈ text|agent_card")
+	}
+	if g.opts.ImSend == nil {
+		return nil, rpcErr(codeUnknownTool, "im_send 未装配（message 域不可用）")
+	}
+	res, err := g.opts.ImSend(ctx, tenantID, uid, args.ConvID, args.MsgType, body)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeFileUpload file_upload 执行：b64 解码后交 file 域（去重/限长/票据=防线三）
+func (g *Gateway) invokeFileUpload(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		Filename    string `json:"filename"`
+		ContentB64  string `json:"content_b64"`
+		ContentType string `json:"content_type"`
+		ConvID      int64  `json:"conv_id"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.Filename == "" || len([]rune(args.Filename)) > 255 {
+		return nil, rpcErr(codeInvalidParams, "filename 必填（≤255 字）")
+	}
+	content, derr := base64.StdEncoding.DecodeString(args.ContentB64)
+	if derr != nil {
+		return nil, rpcErr(codeInvalidParams, "content_b64 非法 base64: "+derr.Error())
+	}
+	if len(content) == 0 {
+		return nil, rpcErr(codeInvalidParams, "content_b64 为空")
+	}
+	if g.opts.FileUpload == nil {
+		return nil, rpcErr(codeUnknownTool, "file_upload 未装配（file 域不可用）")
+	}
+	res, err := g.opts.FileUpload(ctx, tenantID, uid, args.Filename, args.ContentType, args.ConvID, bytes.NewReader(content))
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
 }
 
 // errText 业务失败统一 content 形态

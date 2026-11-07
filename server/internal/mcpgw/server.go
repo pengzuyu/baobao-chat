@@ -38,8 +38,10 @@ func (g *Gateway) HandleMCP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// 32MB：file_upload 的 content_b64 通道（20MB 文件 b64 后 ~27MB 文本）；
+	// 其余工具 params 远小于此，不构成放大面（网关级限流在外层 httpx.RateLimit）
 	var frame jsonrpcFrame
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&frame); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&frame); err != nil {
 		http.Error(w, "parse error", http.StatusBadRequest)
 		return
 	}
@@ -135,6 +137,12 @@ func (g *Gateway) handleCall(r *http.Request, claims *authjwt.Claims, params jso
 		return res, err
 	case "doc_read":
 		res, err := g.invokeDocRead(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "im_send":
+		res, err := g.invokeImSend(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "file_upload":
+		res, err := g.invokeFileUpload(r.Context(), tenant, uid, p.Arguments)
 		return res, err
 	default:
 		return nil, rpcErr(codeUnknownTool, "工具未接线: "+p.Name)

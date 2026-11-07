@@ -357,8 +357,8 @@ func main() {
 	// ── MCP 网关供给层（D14 §6 裁决 2026-11-07）：公司域工具包成 MCP server
 	// 暴露，Runtime bbrt-mcp 连接期 initialize+tools/list 发现（mcp.corp.* 命名
 	// 空间），tools/call 携带 OBO 逐请求传播（三层身份：连接/主体/归因）；
-	// 试点 kb_query+doc_read（OQ-B26）。独立鉴权链（Bearer=用户 JWT/OBO，
-	// 同 aigw 口径），不走 /api/v1 authed ──
+	// kb_query+doc_read（OQ-B26 试点）+ im_send/file_upload（09 篇 §3.1 全量）。
+	// 独立鉴权链（Bearer=用户 JWT/OBO，同 aigw 口径），不走 /api/v1 authed ──
 	mcpgwMod := mcpgw.NewModule(mcpgw.Options{
 		Verify: func(_ context.Context, token string) (*authjwt.Claims, error) {
 			return authAPI.Verify(context.Background(), token)
@@ -369,6 +369,23 @@ func main() {
 		},
 		DocRead: func(ctx context.Context, tenantID, uid, docID int64) (any, error) {
 			return docSvc.GetFile(ctx, tenantID, uid, docID)
+		},
+		// im_send：以发起用户身份走消息主干（成员/敏感词/频率校验在 message 域；
+		// 幂等键 mcp- 前缀与 bot-/REST 客户端段隔离）
+		ImSend: func(ctx context.Context, tenantID, uid, convID int64, msgType string, body json.RawMessage) (any, error) {
+			res, err := msgMod.API().Send(ctx, uid, messageapi.SendPayload{
+				ConvID:      messageapi.ConvID(strconv.FormatInt(convID, 10)),
+				ClientMsgID: "mcp-" + strconv.FormatInt(time.Now().UnixNano(), 36),
+				Type:        msgType, Body: body,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"msg_id": res.MsgID, "seq": res.Seq, "ts": res.TS}, nil
+		},
+		// file_upload：b64 已解码为流，直接交 file 域（去重/20MB 上限/软删归域）
+		FileUpload: func(ctx context.Context, tenantID, uid int64, name, contentType string, convID int64, r io.Reader) (any, error) {
+			return fileSvc.Upload(ctx, tenantID, uid, name, contentType, convID, r)
 		},
 		Audit: func(_ context.Context, e mcpgw.AuditEntry) {
 			log.Printf("[mcpgw] tool=%s tenant=%d subject=%d obo=%v act=%s ok=%v err=%s %dms",
