@@ -4,6 +4,7 @@
 //! - state.rs      纯函数状态机（D11 §3 全 20 条迁移）
 //! - events.rs     会话对外事件（SessionSink；D11 §4 会话子集 + D15 记忆/日报）
 //! - executor.rs   工具执行契约（依赖倒置：session 定义、bbrt-tools 实现）
+//! - expert.rs     专家装配器（D14：manifest 解析+装配过滤+受限子会话）
 //! - loop_runner.rs 核心循环（08 §4.1 可执行化：组装→流式→工具轮→审批）
 //! - manager.rs    多会话管理（≤3 活跃、存储生命周期、审批路由）
 //!
@@ -18,6 +19,7 @@ pub mod checkpoint;
 pub mod delegation;
 pub mod events;
 pub mod executor;
+pub mod expert;
 pub mod loop_runner;
 pub mod manager;
 pub mod recovery;
@@ -32,6 +34,10 @@ pub use delegation::{
 };
 pub use events::{ModelTier, NullSink, SessionEvent, SessionSink, StreamChannel};
 pub use executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview};
+pub use expert::{
+    assemble, parse_manifest, AssemblePolicy, AssembledExpert, Dropped, ExpertConstraints,
+    ExpertCtx, ExpertError, ExpertManifest, ExpertResult, ManifestTools,
+};
 pub use loop_runner::{
     EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, SessionRunner,
     TurnReport, MAX_CONSECUTIVE_FAILURES, MAX_STEPS, PERMISSION_TIMEOUT,

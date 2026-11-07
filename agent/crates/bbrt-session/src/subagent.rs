@@ -323,7 +323,7 @@ pub fn transition_join(state: SessionState) -> SessionState {
 // ---------------------------------------------------------------------------
 
 /// 摘要 token 上限截断（按 CJK≈4:1 保守起步，char boundary 对齐）
-fn clamp_summary(text: &str) -> String {
+pub(crate) fn clamp_summary(text: &str) -> String {
     if estimate_tokens(text) <= PROBE_SUMMARY_TOKENS {
         return text.to_string();
     }
@@ -340,7 +340,7 @@ fn clamp_summary(text: &str) -> String {
     format!("{}…[truncated]", &text[..end])
 }
 
-fn truncate_chars(s: &str, n: usize) -> String {
+pub(crate) fn truncate_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
@@ -356,7 +356,7 @@ fn last_text(history: &[Round]) -> String {
 }
 
 /// 流收集（单轮：文本 + 工具调用 + finish）
-fn drain(
+pub(crate) fn drain(
     stream: Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
 ) -> (String, Vec<ToolCallMsg>, FinishReason) {
     let mut text = String::new();
@@ -384,10 +384,15 @@ fn drain(
 
 /// 探查消息组装（独立窗口：system 角色 + 任务指令，无主历史）
 fn probe_messages(history: &[Round], task: &str) -> Vec<ChatMessage> {
+    messages_with(PROBE_SYSTEM, history, task)
+}
+
+/// 通用独立窗口组装（探查/专家子会话共用：任意 system + 任务指令，无主历史）
+pub(crate) fn messages_with(system: &str, history: &[Round], task: &str) -> Vec<ChatMessage> {
     let mut msgs = vec![
         ChatMessage {
             role: "system".into(),
-            content: PROBE_SYSTEM.to_string(),
+            content: system.to_string(),
             tool_calls: vec![],
             tool_call_id: None,
         },
