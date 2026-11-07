@@ -439,3 +439,65 @@ func isDupPGErr(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
+
+// ── NoticeRepo PG 实现（迁移 0015） ──
+
+// PostgresNotices 公告 PG 仓储（advisory lock 9124）
+type PostgresNotices struct{ pool *pgxpool.Pool }
+
+var _ NoticeRepo = (*PostgresNotices)(nil)
+
+// NewPostgresNotices 构造
+func NewPostgresNotices(pool *pgxpool.Pool) NoticeRepo { return &PostgresNotices{pool: pool} }
+
+func (p *PostgresNotices) InsertNotice(ctx context.Context, n Notice) (Notice, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Notice{}, err
+	}
+	defer tx.Rollback(ctx)
+	if n.ID == 0 {
+		if n.ID, err = bbwpg.AllocID(ctx, tx, 9124, "admin_notice"); err != nil {
+			return Notice{}, err
+		}
+	}
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO admin_notice (id, tenant_id, title, content, created_by, reach, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7, now()))
+		RETURNING created_at`,
+		n.ID, n.TenantID, n.Title, n.Content, n.CreatedBy, n.Reach, n.CreatedAt).
+		Scan(&n.CreatedAt); err != nil {
+		return Notice{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Notice{}, err
+	}
+	return n, nil
+}
+
+func (p *PostgresNotices) ListNotices(ctx context.Context, tenantID int64, cursor int64, limit int) ([]Notice, bool, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, tenant_id, title, content, created_by, reach, created_at
+		FROM admin_notice WHERE tenant_id=$1 AND ($2=0 OR id < $2)
+		ORDER BY id DESC LIMIT $3+1`, tenantID, cursor, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	out := []Notice{}
+	for rows.Next() {
+		var n Notice
+		if err := rows.Scan(&n.ID, &n.TenantID, &n.Title, &n.Content, &n.CreatedBy, &n.Reach, &n.CreatedAt); err != nil {
+			return nil, false, err
+		}
+		out = append(out, n)
+	}
+	more := len(out) > limit
+	if more {
+		out = out[:limit]
+	}
+	return out, more, rows.Err()
+}

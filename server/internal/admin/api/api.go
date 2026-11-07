@@ -167,7 +167,20 @@ type GrantDTO struct {
 	CreatedAt int64  `json:"created_at"` // ms
 }
 
+// NoticeDTO 公告行（PAD-15）
+type NoticeDTO struct {
+	ID        int64  `json:"id,string"`
+	Title     string `json:"title"`
+	Content   string `json:"content"`
+	CreatedBy int64  `json:"created_by,string"`
+	Reach     int    `json:"reach"`      // 广播落行数（全员触达快照）
+	CreatedAt int64  `json:"created_at"` // ms
+}
+
 type AdminService interface {
+	// ── 平台公告（PAD-15；admin:notice:publish）──
+	PublishNotice(ctx context.Context, tenantID, operatorID int64, title, content string) (*NoticeDTO, error)
+	ListNotices(ctx context.Context, tenantID int64, cursor int64, limit int) ([]NoticeDTO, bool, error)
 	// ── 角色与授权（PAD-08；admin:role:manage）──
 	ListRoles(ctx context.Context, tenantID int64) ([]RoleDTO, error)
 	CreateRole(ctx context.Context, tenantID, operatorID int64, name, description string, permissions []string) (*RoleDTO, error)

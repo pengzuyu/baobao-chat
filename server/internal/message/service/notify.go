@@ -265,3 +265,18 @@ func (s *Service) UnreadNotificationCount(ctx context.Context, userID int64) (*m
 	}
 	return &messageapi.UnreadCountResult{Count: n}, nil
 }
+
+// BroadcastNotice 平台公告广播（PAD-15 公告发布；admin 域经闭包注入）：
+// 逐用户落通知（kind=announcement 系统公告分组）+ notification.new 推送；
+// conv/msg 关联为 0（纯平台通知，非会话派生——点击路由到公告详情，端内处理）
+func (s *Service) BroadcastNotice(ctx context.Context, _ int64, title, digest string, userIDs []int64) int {
+	n := 0
+	for _, uid := range userIDs {
+		if uid <= 0 {
+			continue
+		}
+		s.notifyEmitRaw(ctx, uid, messageapi.NotifyKindAnnouncement, 0, 0, 0, title, digest)
+		n++
+	}
+	return n
+}

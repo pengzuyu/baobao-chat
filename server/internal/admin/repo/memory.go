@@ -293,3 +293,52 @@ func (s *roleStore) ListUserRoles(_ context.Context, tenantID int64, userID int6
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
+
+// ── NoticeRepo 内存实现 ──
+
+type noticeStore struct {
+	mu     sync.RWMutex
+	nextID int64
+	rows   map[int64]Notice
+}
+
+// NewMemoryNotices 公告内存仓储
+func NewMemoryNotices() NoticeRepo {
+	return &noticeStore{nextID: 500, rows: map[int64]Notice{}}
+}
+
+func (s *noticeStore) InsertNotice(_ context.Context, n Notice) (Notice, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID++
+	n.ID = s.nextID
+	if n.CreatedAt.IsZero() {
+		n.CreatedAt = time.Now()
+	}
+	s.rows[n.ID] = n
+	return n, nil
+}
+
+func (s *noticeStore) ListNotices(_ context.Context, tenantID int64, cursor int64, limit int) ([]Notice, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []Notice{}
+	for _, n := range s.rows {
+		if n.TenantID != tenantID {
+			continue
+		}
+		if cursor > 0 && n.ID >= cursor {
+			continue
+		}
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+	if limit <= 0 {
+		limit = 20
+	}
+	more := len(out) > limit
+	if more {
+		out = out[:limit]
+	}
+	return out, more, nil
+}

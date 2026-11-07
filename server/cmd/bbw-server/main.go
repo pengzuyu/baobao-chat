@@ -479,7 +479,26 @@ func main() {
 		roleStore = adminrepo.NewMemoryRoles()
 	}
 	seedBuiltinRoles(roleStore)
-	adminMod := admin.NewModule(orgAdmin, orgMod.API(), adminStore, roleStore, adminOpts)
+	// 公告仓储 + 广播闭包（PAD-15：org 活跃用户 → message 域全员通知 kind=announcement）
+	var noticeStore adminrepo.NoticeRepo
+	if pgPool != nil {
+		noticeStore = adminrepo.NewPostgresNotices(pgPool)
+	} else {
+		noticeStore = adminrepo.NewMemoryNotices()
+	}
+	adminOpts.BroadcastNotice = func(ctx context.Context, tenantID int64, title, digest string) int {
+		users, _, err := orgAdmin.ListUsers(ctx, orgapi.UserListFilter{TenantID: tenantID, Status: orgapi.UserStatusActive, Limit: 5000})
+		if err != nil {
+			log.Printf("[admin] 公告广播取用户失败: %v", err)
+			return 0
+		}
+		ids := make([]int64, 0, len(users))
+		for _, u := range users {
+			ids = append(ids, u.ID)
+		}
+		return msgMod.API().BroadcastNotice(ctx, tenantID, title, digest, ids)
+	}
+	adminMod := admin.NewModule(orgAdmin, orgMod.API(), adminStore, roleStore, noticeStore, adminOpts)
 	adminSvc := adminMod.API()
 	// 管理路由守卫：auth → tenant → 管理员判定（v0.1 scope/白名单；403 用既有 2003，D10 无新码）
 	adminOnly := func(h http.HandlerFunc) http.Handler {
@@ -515,6 +534,9 @@ func main() {
 	mux.Handle("GET /api/v1/admin/users/{id}/grants", adminOnly(handleAdminListGrants(adminSvc)))
 	mux.Handle("POST /api/v1/admin/users/{id}/grants", adminOnly(handleAdminGrantRole(adminSvc)))
 	mux.Handle("DELETE /api/v1/admin/grants/{gid}", adminOnly(handleAdminRevokeRole(adminSvc)))
+	// 平台公告（PAD-15；admin:notice:publish 随权限字典收口）
+	mux.Handle("GET /api/v1/admin/notices", adminOnly(handleAdminListNotices(adminSvc)))
+	mux.Handle("POST /api/v1/admin/notices", adminOnly(handleAdminPublishNotice(adminSvc)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -2461,5 +2483,45 @@ func handleAdminRevokeRole(svc adminapi.AdminService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, nil)
+	}
+}
+
+// ── 公告 REST 壳（PAD-15） ──
+
+func handleAdminPublishNotice(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Title   string `json:"title"`
+			Content string `json:"content"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		notice, err := svc.PublishNotice(r.Context(), httpx.TenantID(r.Context()), op, req.Title, req.Content)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, notice)
+	}
+}
+
+func handleAdminListNotices(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		cursor, _ := strconv.ParseInt(q.Get("cursor"), 10, 64)
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		items, more, err := svc.ListNotices(r.Context(), httpx.TenantID(r.Context()), cursor, limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items, "has_more": more})
 	}
 }

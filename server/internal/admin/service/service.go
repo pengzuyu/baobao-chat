@@ -44,6 +44,10 @@ type Options struct {
 	// PG 模式 users.scopes 不落库（RBAC 表阶段二），白名单是生产可用的唯一通道，登记。
 	AdminAccounts []string
 
+	// BroadcastNotice 公告广播闭包（PAD-15；main 注入=message 域 BroadcastNotice
+	// + org 活跃用户清单；nil=仅存档不广播——联调形态）
+	BroadcastNotice func(ctx context.Context, tenantID int64, title, digest string) int
+
 	// Now 时钟注入（测试用）
 	Now func() time.Time
 }
@@ -59,11 +63,12 @@ func (o *Options) fillDefaults() {
 
 // Service 实现 adminapi.AdminService
 type Service struct {
-	users orgapi.UserAdminReader // org 域（列表/计数/状态）+ UserReader（名称/判定）
-	same  orgapi.UserReader
-	store adminrepo.Repo
-	roles adminrepo.RoleRepo // 角色管理（PAD-08；nil=未装配）
-	opts  Options
+	users   orgapi.UserAdminReader // org 域（列表/计数/状态）+ UserReader（名称/判定）
+	same    orgapi.UserReader
+	store   adminrepo.Repo
+	roles   adminrepo.RoleRepo   // 角色管理（PAD-08；nil=未装配）
+	notices adminrepo.NoticeRepo // 平台公告（PAD-15；nil=未装配）
+	opts    Options
 }
 
 // internal 统一内部错误（角色/授权链路）
@@ -71,9 +76,9 @@ func (s *Service) internal(msg string) error { return errx.New(errx.CodeInternal
 
 // New 构造（依赖注入，D02 §3；users=管理写通道，reader=读取通道——org 模块同一
 // Service 实现；roles 可为 nil=阶段一未装配形态）
-func New(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo.Repo, roles adminrepo.RoleRepo, opts Options) *Service {
+func New(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo.Repo, roles adminrepo.RoleRepo, notices adminrepo.NoticeRepo, opts Options) *Service {
 	opts.fillDefaults()
-	return &Service{users: users, same: reader, store: store, roles: roles, opts: opts}
+	return &Service{users: users, same: reader, store: store, roles: roles, notices: notices, opts: opts}
 }
 
 var _ adminapi.AdminService = (*Service)(nil)
@@ -622,4 +627,67 @@ func (s *Service) ListUserGrants(ctx context.Context, tenantID, userID int64) ([
 		})
 	}
 	return out, nil
+}
+
+/* ── 平台公告（PAD-15；发布=存档+全员通知广播 kind=announcement） ── */
+
+func (s *Service) PublishNotice(ctx context.Context, tenantID, operatorID int64, title, content string) (*adminapi.NoticeDTO, error) {
+	if s.notices == nil {
+		return nil, s.internal("公告未装配")
+	}
+	title = strings.TrimSpace(title)
+	content = strings.TrimSpace(content)
+	if title == "" || len([]rune(title)) > 100 {
+		return nil, errx.New(errx.CodeBadRequest, "标题必填（≤100 字）")
+	}
+	if content == "" || len([]rune(content)) > 4000 {
+		return nil, errx.New(errx.CodeBadRequest, "正文必填（≤4000 字）")
+	}
+	// 全员触达：org 闭包取活跃用户 → message 域广播（kind=announcement 通知中心"系统公告"分组）
+	reach := 0
+	if s.opts.BroadcastNotice != nil {
+		reach = s.opts.BroadcastNotice(ctx, tenantID, title, firstLine(content, 80))
+	}
+	n, err := s.notices.InsertNotice(ctx, adminrepo.Notice{
+		TenantID: tenantID, Title: title, Content: content,
+		CreatedBy: operatorID, Reach: reach,
+	})
+	if err != nil {
+		return nil, s.internal("公告存档失败")
+	}
+	_ = s.audit(ctx, tenantID, operatorID, "notice.publish", title, map[string]any{"reach": reach})
+	return &adminapi.NoticeDTO{
+		ID: n.ID, Title: n.Title, Content: n.Content,
+		CreatedBy: n.CreatedBy, Reach: n.Reach, CreatedAt: n.CreatedAt.UnixMilli(),
+	}, nil
+}
+
+func (s *Service) ListNotices(ctx context.Context, tenantID int64, cursor int64, limit int) ([]adminapi.NoticeDTO, bool, error) {
+	if s.notices == nil {
+		return []adminapi.NoticeDTO{}, false, nil
+	}
+	rows, more, err := s.notices.ListNotices(ctx, tenantID, cursor, limit)
+	if err != nil {
+		return nil, false, s.internal("公告列表读取失败")
+	}
+	out := make([]adminapi.NoticeDTO, 0, len(rows))
+	for _, n := range rows {
+		out = append(out, adminapi.NoticeDTO{
+			ID: n.ID, Title: n.Title, Content: n.Content,
+			CreatedBy: n.CreatedBy, Reach: n.Reach, CreatedAt: n.CreatedAt.UnixMilli(),
+		})
+	}
+	return out, more, nil
+}
+
+// firstLine 正文首行截断（通知 digest；rune 安全）
+func firstLine(s string, max int) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	r := []rune(s)
+	if len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
 }

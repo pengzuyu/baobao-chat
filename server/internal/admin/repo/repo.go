@@ -123,3 +123,26 @@ var (
 	ErrDupGrant    = errors.New("adminrepo: duplicate grant")
 	ErrRoleGone    = errors.New("adminrepo: role not found")
 )
+
+// ── 平台公告（PAD-15；迁移 0015） ──
+
+// Notice 公告行
+type Notice struct {
+	ID        int64
+	TenantID  int64
+	Title     string
+	Content   string
+	CreatedBy int64
+	Reach     int // 广播落行数快照
+	CreatedAt time.Time
+}
+
+// NoticeRepo 公告仓储
+type NoticeRepo interface {
+	InsertNotice(ctx context.Context, n Notice) (Notice, error)
+	// ListNotices id 倒序 + cursor 翻页（v0.1 公告量小）
+	ListNotices(ctx context.Context, tenantID int64, cursor int64, limit int) ([]Notice, bool, error)
+}
+
+// ErrNoticeNone 公告不存在 sentinel
+var ErrNoticeNone = errors.New("adminrepo: notice not found")

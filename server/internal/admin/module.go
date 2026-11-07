@@ -15,8 +15,8 @@ type Module struct {
 }
 
 // NewModule 装配（users/reader=org 域两接口；跨域统计与副作用闭包见 service.Options）
-func NewModule(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo.Repo, roles adminrepo.RoleRepo, opts adminservice.Options) *Module {
-	return &Module{svc: adminservice.New(users, reader, store, roles, opts), store: store}
+func NewModule(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo.Repo, roles adminrepo.RoleRepo, notices adminrepo.NoticeRepo, opts adminservice.Options) *Module {
+	return &Module{svc: adminservice.New(users, reader, store, roles, notices, opts), store: store}
 }
 
 // API 对外服务接口（main 路由壳消费）

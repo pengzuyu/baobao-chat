@@ -6,6 +6,7 @@ package adminservice
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func newFixture(adminAccounts []string) (*Service, *orgrepo.Memory, adminrepo.Re
 	fx := &effectCounter{aliceID: alice.ID, bobID: bob.ID}
 	roles := adminrepo.NewMemoryRoles()
 	_, _ = roles.InsertRole(ctx, adminrepo.Role{TenantID: 1, Name: "管理员", IsBuiltin: true, Permissions: []string{"admin"}})
-	svc := New(orgRepo, orgRepo, store, roles, Options{
+	svc := New(orgRepo, orgRepo, store, roles, adminrepo.NewMemoryNotices(), Options{
 		UsersTotal:       func(context.Context, int64) (int64, error) { return 2, nil },
 		OnlineNow:        func() int64 { return 2 },
 		ConvsActiveSince: func(context.Context, int64, time.Time) (int64, error) { return 1, nil },
@@ -324,5 +325,40 @@ func TestRoleEditorCRUDAndGrants(t *testing.T) {
 			}
 			break
 		}
+	}
+}
+
+func TestPublishNotice(t *testing.T) {
+	svc, orgRepo, store, _ := newFixture([]string{"alice"})
+	ctx := context.Background()
+	// 广播闭包观测（重建 service 注入闭包——opts 为值语义）
+	var gotTitle, gotDigest string
+	withBC := New(orgRepo, orgRepo, store, adminrepo.NewMemoryRoles(), adminrepo.NewMemoryNotices(), Options{
+		BroadcastNotice: func(_ context.Context, _ int64, title, digest string) int {
+			gotTitle, gotDigest = title, digest
+			return 2
+		},
+	})
+	svc = withBC
+	// 校验
+	if _, err := svc.PublishNotice(ctx, 1, 10001, "", "正文"); err == nil {
+		t.Fatal("空标题应拒")
+	}
+	if _, err := svc.PublishNotice(ctx, 1, 10001, strings.Repeat("长", 101), "正文"); err == nil {
+		t.Fatal("超长标题应拒")
+	}
+	n, err := svc.PublishNotice(ctx, 1, 10001, "停机维护公告", "今晚 22:00-24:00 停机\n影响：全部服务")
+	if err != nil || n.ID == 0 {
+		t.Fatalf("publish: %v", err)
+	}
+	if n.Reach != 2 {
+		t.Fatalf("触达快照: %+v", n)
+	}
+	if gotTitle != "停机维护公告" || gotDigest != "今晚 22:00-24:00 停机" {
+		t.Fatalf("广播参数: %q %q", gotTitle, gotDigest)
+	}
+	items, more, err := svc.ListNotices(ctx, 1, 0, 10)
+	if err != nil || more || len(items) != 1 || items[0].Title != "停机维护公告" {
+		t.Fatalf("list: %v %+v", err, items)
 	}
 }

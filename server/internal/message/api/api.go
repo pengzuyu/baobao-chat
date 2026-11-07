@@ -282,6 +282,9 @@ type MessageService interface {
 	SendCallCard(ctx context.Context, senderID, convID int64, clientMsgID string, body json.RawMessage) (int64, error)
 	// UpdateCallCard 结束时 PATCH body（status=ended{duration,reason}）→ 复用 msg.updated 扇出
 	UpdateCallCard(ctx context.Context, msgID int64, body json.RawMessage) error
+	// BroadcastNotice 平台公告广播（PAD-15；admin 域经 main 闭包调用——
+	// kind=announcement 系统公告分组，通知中心全员可见；返回成功落行数）
+	BroadcastNotice(ctx context.Context, tenantID int64, title, digest string, userIDs []int64) int
 }
 
 // ── 收藏（D03 §3.8 PIM-08；API-IM-10/11）──

@@ -279,3 +279,34 @@ export const PERMISSION_GROUPS: Array<{ group: string; items: string[] }> = [
   { group: '机器人', items: ['bot:manage', 'bot:install'] },
   { group: '管理', items: ['admin', 'admin:user:manage', 'admin:role:manage', 'admin:policy:manage', 'admin:kb:govern', 'admin:audit:read', 'admin:usage:read', 'admin:app:publish'] },
 ];
+
+/* ── 平台公告（PAD-15） ── */
+
+export interface AdminNotice {
+  id: string;
+  title: string;
+  content: string;
+  created_by: string;
+  reach: number;
+  created_at: number;
+}
+
+export async function fetchNotices(params: { cursor?: string; limit?: number } = {}): Promise<{ items: AdminNotice[]; has_more: boolean }> {
+  if (USE_MOCK) {
+    return {
+      items: [
+        { id: '1', title: '停机维护公告', content: '今晚 22:00-24:00 停机升级', created_by: '10001', reach: 2, created_at: Date.now() - 3600_000 },
+      ],
+      has_more: false,
+    };
+  }
+  const q = new URLSearchParams();
+  if (params.cursor) q.set('cursor', params.cursor);
+  if (params.limit) q.set('limit', String(params.limit));
+  return http.get(`/admin/notices${q.size > 0 ? `?${q}` : ''}`);
+}
+
+export async function publishNotice(title: string, content: string): Promise<AdminNotice> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持发布公告');
+  return http.post<AdminNotice>('/admin/notices', { title, content });
+}
