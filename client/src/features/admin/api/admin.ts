@@ -369,3 +369,35 @@ export async function agentKillswitch(on?: boolean): Promise<boolean> {
   const data = await http.put<{ on: boolean }>('/admin/agent/killswitch', { on });
   return data.on;
 }
+
+/* ── 组织树（PAD-04） ── */
+
+export interface DeptNode {
+  id: string;
+  parent_id?: string;
+  name: string;
+  sort: number;
+  path: string;
+  children?: DeptNode[];
+}
+
+export async function fetchDeptTree(): Promise<DeptNode[]> {
+  if (USE_MOCK) return [{ id: '1', name: '总公司', sort: 0, path: '/1/', children: [{ id: '2', parent_id: '1', name: '研发部', sort: 0, path: '/1/2/' }] }];
+  const data = await http.get<{ items: DeptNode[] }>('/admin/org/tree');
+  return data.items;
+}
+
+export async function createDept(parentId: string, name: string, sort = 0): Promise<DeptNode> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持组织管理');
+  return http.post<DeptNode>('/admin/org/depts', { parent_id: Number(parentId || 0), name, sort });
+}
+
+export async function renameDept(id: string, name: string): Promise<void> {
+  if (USE_MOCK) return;
+  await http.patch(`/admin/org/depts/${encodeURIComponent(id)}`, { name });
+}
+
+export async function deleteDept(id: string): Promise<void> {
+  if (USE_MOCK) return;
+  await http.delete(`/admin/org/depts/${encodeURIComponent(id)}`);
+}

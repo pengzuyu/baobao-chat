@@ -7451,3 +7451,15 @@ body {
 .admin-import__summary strong { color: var(--bbw-primary, #3370ff); }
 .admin-import__fail { color: #c6622d; font-size: 12px; }
 .admin-import__hint { font-size: 12px; color: var(--bbw-text-3, #8f9aae); }
+
+/* ── 组织树（D10 PAD-04） ── */
+
+.org-node { margin-bottom: 2px; }
+.org-node__row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 8px; }
+.org-node__row:hover { background: var(--bbw-gray-2, #f5f6f7); }
+.org-node__icon { color: var(--bbw-primary, #3370ff); flex-shrink: 0; }
+.org-node__name { font-size: 13px; cursor: default; }
+.org-node__ops { margin-left: auto; display: none; gap: 4px; }
+.org-node__row:hover .org-node__ops { display: flex; }
+.org-node__add, .org-node__edit { display: flex; gap: 6px; align-items: center; padding: 4px 6px; }
+.org-node__add .bbw-input, .org-node__edit .bbw-input { width: 160px; }

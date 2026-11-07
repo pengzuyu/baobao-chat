@@ -82,3 +82,34 @@ type UserAdminReader interface {
 	// SetUserStatus 启用/禁用（UserStatus*）；不存在返回 ErrUserNotFound
 	SetUserStatus(ctx context.Context, id int64, status int) error
 }
+
+// ── 组织树（D10 PAD-04 / D12 §3；物化路径 /1/7/23/ 前缀匹配"本部门及以下"） ──
+
+// DeptNode 树节点（ListTree 返回；children 递归）
+type DeptNode struct {
+	ID       int64      `json:"id,string"`
+	ParentID int64      `json:"parent_id,string,omitempty"` // 0=根
+	Name     string     `json:"name"`
+	Sort     int        `json:"sort"`
+	Path     string     `json:"path"` // 物化路径（治理面板展示）
+	Children []DeptNode `json:"children,omitempty"`
+}
+
+// DeptTreeReaderWriter 组织树管理（admin 域经闭包消费；org repo 实现）
+type DeptTreeReaderWriter interface {
+	// CreateDept 建子部门（parentID=0 为根）；name ≤50 字；物化路径服务端维护
+	CreateDept(ctx context.Context, tenantID, parentID int64, name string, sort int) (*DeptNode, error)
+	// ListTree 全量树（部门量小；端内自组层级）
+	ListTree(ctx context.Context, tenantID int64) ([]DeptNode, error)
+	// RenameDept 改名（≤50 字）
+	RenameDept(ctx context.Context, tenantID, deptID int64, name string) error
+	// DeleteDept 删除（有子部门或挂人拒——先清后删，D12 §3 生命周期）
+	DeleteDept(ctx context.Context, tenantID, deptID int64) error
+}
+
+// ErrDeptNotFound / ErrDeptNotEmpty / ErrDeptName 部门域 sentinel
+var (
+	ErrDeptNotFound = errors.New("orgapi: dept not found")
+	ErrDeptNotEmpty = errors.New("orgapi: dept not empty")
+	ErrDeptName     = errors.New("orgapi: dept name illegal")
+)

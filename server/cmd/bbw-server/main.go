@@ -584,6 +584,13 @@ func main() {
 	mux.Handle("POST /api/v1/admin/agent/revoke", adminOnly(handleAdminAgentRevoke(adminSvc)))
 	mux.Handle("GET /api/v1/admin/agent/killswitch", adminOnly(handleAdminAgentKillswitch(adminSvc, false)))
 	mux.Handle("PUT /api/v1/admin/agent/killswitch", adminOnly(handleAdminAgentKillswitch(adminSvc, true)))
+	// 组织树（PAD-04；admin:org:manage——orgRepo 直接实现 DeptTreeReaderWriter）
+	deptTree := func(h http.HandlerFunc) http.Handler { return adminOnly(h) }
+	_ = deptTree
+	mux.Handle("GET /api/v1/admin/org/tree", adminOnly(handleDeptTree(orgRepo)))
+	mux.Handle("POST /api/v1/admin/org/depts", adminOnly(handleDeptCreate(orgRepo)))
+	mux.Handle("PATCH /api/v1/admin/org/depts/{id}", adminOnly(handleDeptRename(orgRepo)))
+	mux.Handle("DELETE /api/v1/admin/org/depts/{id}", adminOnly(handleDeptDelete(orgRepo)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -2663,4 +2670,87 @@ func handleAdminAgentKillswitch(svc adminapi.AdminService, isWrite bool) http.Ha
 		}
 		httpx.OK(w, r, map[string]any{"on": on})
 	}
+}
+
+// ── 组织树 REST 壳（PAD-04；orgRepo 即 DeptTreeReaderWriter） ──
+
+func handleDeptTree(tree orgapi.DeptTreeReaderWriter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nodes, err := tree.ListTree(r.Context(), httpx.TenantID(r.Context()))
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeInternal, "组织树读取失败"))
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": nodes})
+	}
+}
+
+func handleDeptCreate(tree orgapi.DeptTreeReaderWriter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ParentID int64  `json:"parent_id"`
+			Name     string `json:"name"`
+			Sort     int    `json:"sort"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		node, err := tree.CreateDept(r.Context(), httpx.TenantID(r.Context()), req.ParentID, req.Name, req.Sort)
+		if err != nil {
+			httpx.Fail(w, r, orgDeptErr(err))
+			return
+		}
+		httpx.OK(w, r, node)
+	}
+}
+
+func handleDeptRename(tree orgapi.DeptTreeReaderWriter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := tree.RenameDept(r.Context(), httpx.TenantID(r.Context()), id, req.Name); err != nil {
+			httpx.Fail(w, r, orgDeptErr(err))
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+func handleDeptDelete(tree orgapi.DeptTreeReaderWriter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := tree.DeleteDept(r.Context(), httpx.TenantID(r.Context()), id); err != nil {
+			httpx.Fail(w, r, orgDeptErr(err))
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+// orgDeptErr org 域 sentinel → errx 映射
+func orgDeptErr(err error) error {
+	switch err {
+	case orgapi.ErrDeptName:
+		return errx.New(errx.CodeBadRequest, "部门名必填（≤50 字）")
+	case orgapi.ErrDeptNotFound:
+		return errx.New(errx.CodeBadRequest, "部门不存在")
+	case orgapi.ErrDeptNotEmpty:
+		return errx.New(errx.CodeBadRequest, "部门下有子部门或成员，不可删除")
+	}
+	return err
 }
