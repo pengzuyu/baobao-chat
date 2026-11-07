@@ -13,6 +13,8 @@ export const qk = {
     conv: (convId: string): QueryKeyRO => ['im', 'conv', convId],
     /** 消息流 ['im','messages',convId,cursor] */
     messages: (convId: string, cursor?: string | null): QueryKeyRO => ['im', 'messages', convId, cursor ?? null],
+    /** 收藏列表 ['im','favorites',type]（PIM-08；前缀失效走 ['im','favorites']） */
+    favorites: (type: string = 'all'): QueryKeyRO => ['im', 'favorites', type],
   },
   auth: {
     session: ['auth', 'session'] as const,

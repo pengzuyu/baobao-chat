@@ -9,7 +9,7 @@
  * - 本地态尾标：sending 灰钟 → sent ✓ → 对方已读 ✓✓（msg.receipt，04 篇 §4.2）；failed 红叹号（点击重试，INT-IM-01a）
  */
 
-import { AlertCircle, Check, CheckCheck, Clock3, FileText, ListOrdered, RotateCcw, SmilePlus } from 'lucide-react';
+import { AlertCircle, Check, CheckCheck, Clock3, FileText, ListOrdered, RotateCcw, SmilePlus, Star } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { getErrorText } from '../../../shared/api/http';
 import { digestOf } from '../store/im';
@@ -27,6 +27,8 @@ export interface BubbleActions {
   onForward: (m: Message) => void;
   onReact: (m: Message, emoji: string) => void;
   onLocate: (seq: number) => void;
+  /** 收藏（PIM-08 INT-IM-06：悬浮操作条「收藏」；幂等，撤回消息亦可收藏） */
+  onFavorite: (m: Message) => void;
 }
 
 interface MessageBubbleProps {
@@ -263,6 +265,19 @@ export function MessageBubble({
               </button>
               <button type="button" className="msg-actions__btn" title="回复" onClick={() => actions.onReply(message)}>
                 回复
+              </button>
+              <button
+                type="button"
+                className="msg-actions__btn"
+                title="收藏"
+                data-testid="msg-favorite-btn"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  actions.onFavorite(message);
+                }}
+              >
+                <Star size={14} />
+                收藏
               </button>
               {editable ? (
                 <button type="button" className="msg-actions__btn" title="编辑" onClick={() => actions.onEdit(message)}>

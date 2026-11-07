@@ -9,8 +9,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, Megaphone, Search, SquarePen } from 'lucide-react';
-import { ApiError } from '../../../shared/api/http';
+import { ArrowDown, Megaphone, SquarePen, Star } from 'lucide-react';
+import { ApiError, getErrorText } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { Button } from '../../../shared/ui/Button';
@@ -19,7 +19,16 @@ import { useConnectionStore } from '../../../shared/store/connection';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { dayKey, formatDayDivider } from '../../../shared/utils/time';
 import { useConversationMessages, useConversations } from '../api/hooks';
-import { fetchConvDetail, fetchMessagesBefore, mapMsgNew, editMessage, recallMessage, setReaction } from '../api/im';
+import {
+  fetchConvDetail,
+  fetchMessagesBefore,
+  mapMsgNew,
+  editMessage,
+  favoriteMessage,
+  recallMessage,
+  setReaction,
+  type SearchHit,
+} from '../api/im';
 import { hydrateConv, hydrateLocal, hookSyncOnReconnect, resendOutbox, runSync } from '../api/local';
 import type {
   ConvStatePushPayload,
@@ -41,6 +50,7 @@ import { CreateConvModal } from '../components/CreateConvModal';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MessageInput } from '../components/MessageInput';
 import { ForwardModal } from '../components/ForwardModal';
+import { SearchPanel } from '../components/SearchPanel';
 
 /** 消息流 forbidden 判定：被移出(3001)/会话不存在(3019)/群解散(3002)（D03 PIM-02 六态） */
 function isForbiddenError(err: unknown): boolean {
@@ -63,8 +73,12 @@ export function ChatPage() {
   const [createOpen, setCreateOpen] = useState(false);
   /** @全体被策略拦截的提示条（3014，3s 自动消失） */
   const [mentionAllBlocked, setMentionAllBlocked] = useState(false);
+  /** 收藏结果提示条（INT-IM-06 摘要 toast：已收藏/失败原因，3s 自动消失） */
+  const [favToast, setFavToast] = useState<{ text: string; ok: boolean } | null>(null);
   /** 编辑中随 @ 面板选择的提及（随发送携带；正式版按 range 精确重算） */
   const pendingMentionsRef = useRef<Array<{ uid: string; name: string }>>([]);
+  /** PIM-07 全局搜索框（⌘K 聚焦目标） */
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // ---- 服务端态（Query）----
   const convQuery = useConversations('all');
@@ -328,6 +342,44 @@ export function ChatPage() {
     setTimeout(() => el.classList.remove('msg-row--flash'), 2000);
   }, []);
 
+  // ⌘K/Ctrl+K 聚焦全局搜索框（PIM-07，D03 §3.7；输入框聚焦时忽略）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // 跨页定位消费（PIM-07 搜索/PIM-08 收藏点击跳转）：行已在流内 → 闪烁定位；
+  // 目标不在已加载窗口 → 拉目标之前 40 条（含目标）补洞后由本 effect 复跑定位
+  const pendingLocate = useImStore((s) => s.pendingLocate);
+  const setPendingLocate = useImStore((s) => s.setPendingLocate);
+  useEffect(() => {
+    if (!convId || !pendingLocate || pendingLocate.convId !== convId) return;
+    const msgs = useImStore.getState().messagesByConv[convId] ?? [];
+    if (msgs.some((m) => m.seq === pendingLocate.seq)) {
+      requestAnimationFrame(() => locateSeq(pendingLocate.seq));
+      setPendingLocate(null);
+      return;
+    }
+    // 未加载到窗口：补洞目标之前 40 条（prepend 触发 store 更新 → 本 effect 复跑）
+    let cancelled = false;
+    void fetchMessagesBefore(convId, pendingLocate.seq + 1, 40)
+      .then((items) => {
+        if (cancelled) return;
+        if (items.length > 0) useImStore.getState().prependMessages(convId, items);
+        setPendingLocate(null); // 空结果：目标不可达（已删/无权），放弃定位
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [convId, pendingLocate, messagesByConv, locateSeq, setPendingLocate]);
+
   // 未读分隔线锚点：进入会话时 my.readSeq（INT-IM-08 简版）
   const unreadAnchorSeq = useMemo(() => {
     if (!convId || !activeConv) return null;
@@ -365,7 +417,35 @@ export function ChatPage() {
       void setReaction(m.msgId, emoji, has ? 'remove' : 'add').catch(() => undefined);
     },
     onLocate: locateSeq,
+    // 收藏（PIM-08 INT-IM-06）：幂等；摘要 toast 含查看入口；超限 3022 → 错误文案
+    onFavorite: (m) => {
+      void favoriteMessage(m.msgId)
+        .then((r) => {
+          useImStore.getState().applyFavorite(m.msgId, true);
+          // 前缀失效全部 type 筛选下的收藏缓存（['im','favorites',type]）
+          void queryClient.invalidateQueries({ queryKey: ['im', 'favorites'] });
+          setFavToast({
+            text: r.duplicate ? '已在收藏中' : '已收藏，可在收藏页查看',
+            ok: true,
+          });
+        })
+        .catch((err: unknown) => {
+          const code = err instanceof ApiError ? err.code : 0;
+          setFavToast({ text: code > 0 ? getErrorText(code) : '收藏失败，请重试', ok: false });
+        });
+      setTimeout(() => setFavToast(null), 3000);
+    },
   };
+
+  // 搜索结果点击（PIM-07）：跳会话 + 定位闪烁（同会话也走 pendingLocate 统一路径）
+  const onSearchSelect = useCallback(
+    (hit: SearchHit) => {
+      if (hit.msg.status === 2) return; // 撤回占位不可定位
+      useImStore.getState().setPendingLocate({ convId: hit.msg.convId, seq: hit.msg.seq });
+      navigate(`/im/c/${hit.msg.convId}`);
+    },
+    [navigate],
+  );
 
   const doSend = (text: string) => {
     if (!convId) return;
@@ -411,20 +491,26 @@ export function ChatPage() {
   const convListNode = (
     <section className="im-list-col" style={bp === 'S' ? { width: '100%', borderRight: 'none' } : undefined}>
       <div className="im-list-col__header">
-        {/* TODO(PIM-07)：搜索框点击进入全局搜索态（Cmd+K） */}
-        <div className="bbw-input bbw-input--search">
-          <Search size={14} aria-hidden />
-          <input placeholder="搜索（⌘K）" disabled />
-          <kbd>⌘K</kbd>
+        {/* PIM-07 服务端态搜索（点击/⌘K 聚焦；本地 FTS5 态属 Tauri/Rust 侧不在此） */}
+        <SearchPanel inputRef={searchInputRef} onSelect={onSearchSelect} />
+        <div className="im-list-col__header-actions">
+          <button
+            className="icon-btn"
+            title="我的收藏"
+            data-testid="favorites-entry"
+            onClick={() => navigate('/im/favorites')}
+          >
+            <Star size={16} />
+          </button>
+          <button
+            className="icon-btn"
+            title="新建会话（单聊/建群）"
+            onClick={() => setCreateOpen(true)}
+            data-testid="create-conv-btn"
+          >
+            <SquarePen size={16} />
+          </button>
         </div>
-        <button
-          className="icon-btn"
-          title="新建会话（单聊/建群）"
-          onClick={() => setCreateOpen(true)}
-          data-testid="create-conv-btn"
-        >
-          <SquarePen size={16} />
-        </button>
       </div>
       {listState === 'ok' ? (
         <ConversationList
@@ -532,6 +618,20 @@ export function ChatPage() {
         <div className="ann-banner ann-banner--warn" data-testid="mention-all-blocked">
           当前群策略不允许你使用 @全体
         </div>
+      ) : null}
+
+      {/* 收藏结果提示（PIM-08 INT-IM-06：摘要 toast；失败携带 3022 等错误文案） */}
+      {favToast ? (
+        <button
+          type="button"
+          className={`ann-banner${favToast.ok ? '' : ' ann-banner--warn'}`}
+          data-testid="fav-toast"
+          onClick={() => navigate('/im/favorites')}
+          title="查看收藏"
+        >
+          {favToast.text}
+          {favToast.ok ? <span className="ann-banner__more">去收藏页</span> : null}
+        </button>
       ) : null}
 
       {streamState === 'none' ? (

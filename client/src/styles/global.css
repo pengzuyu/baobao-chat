@@ -3742,3 +3742,293 @@ body {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* ══════════════ PIM-07 全局搜索（服务端态简版，D03 §3.7） ══════════════ */
+
+/* 列表头动作区（收藏入口 + 新建） */
+.im-list-col__header-actions {
+  display: flex;
+  gap: var(--bbw-space-1);
+  flex-shrink: 0;
+}
+
+/* 搜索面板：输入框 + 绝对定位下拉结果 */
+.search-panel {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-panel__dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  background: var(--bbw-bg-card, #fff);
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-card);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  max-height: 420px;
+  overflow-y: auto;
+  padding: var(--bbw-space-1);
+}
+
+/* 六态提示（empty/offline/error 黄条） */
+.search-panel__hint {
+  padding: var(--bbw-space-3);
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+  text-align: center;
+}
+
+.search-panel__hint--warn {
+  color: var(--bbw-warn, #b26a00);
+  background: var(--bbw-warn-light, #fff7e6);
+  border-radius: 6px;
+}
+
+/* loading shimmer×5（服务端态查询中） */
+.search-panel__shimmer {
+  padding: var(--bbw-space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--bbw-space-2);
+}
+
+.search-panel__shimmer-row {
+  height: 44px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--bbw-gray-2) 25%, var(--bbw-gray-3) 50%, var(--bbw-gray-2) 75%);
+  background-size: 200% 100%;
+  animation: bbw-shimmer 1.2s infinite;
+}
+
+@keyframes bbw-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* 结果条目：命中片段高亮 + 会话名/发送人/日期 */
+.search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: var(--bbw-space-2) var(--bbw-space-3);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.search-hit:hover {
+  background: var(--bbw-gray-2);
+}
+
+.search-hit__snippet {
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-8);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.search-hit__mark {
+  background: transparent;
+  color: var(--bbw-primary, #3370ff);
+  font-weight: 600;
+}
+
+.search-hit__meta {
+  display: flex;
+  gap: var(--bbw-space-2);
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+  align-items: center;
+}
+
+.search-hit__conv {
+  color: var(--bbw-gray-7);
+  font-weight: 500;
+}
+
+/* ══════════════ PIM-08 我的收藏（D03 §3.8 /im/favorites） ══════════════ */
+
+.fav-page {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bbw-gray-1);
+}
+
+.fav-page__header {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-3);
+  padding: var(--bbw-space-3) var(--bbw-space-4);
+  border-bottom: 1px solid var(--bbw-gray-3);
+  background: var(--bbw-bg-card, #fff);
+  flex-wrap: wrap;
+}
+
+.fav-page__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--bbw-font-16);
+  font-weight: 600;
+  color: var(--bbw-gray-8);
+  margin: 0;
+}
+
+.fav-page__filters {
+  display: flex;
+  gap: var(--bbw-space-1);
+  flex-wrap: wrap;
+}
+
+.fav-filter {
+  border: none;
+  background: transparent;
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.fav-filter:hover {
+  background: var(--bbw-gray-2);
+}
+
+.fav-filter--active {
+  background: var(--bbw-primary-light);
+  color: var(--bbw-primary, #3370ff);
+  font-weight: 500;
+}
+
+.fav-page__body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: var(--bbw-space-4);
+}
+
+/* 卡片平铺：XL 3 列 / L·M 2 列 / S 1 列（D03 §7 断点矩阵） */
+.fav-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--bbw-space-3);
+}
+
+@media (max-width: 1279px) {
+  .fav-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1023px) {
+  .fav-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fav-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-card);
+  background: var(--bbw-bg-card, #fff);
+  overflow: hidden;
+}
+
+.fav-card__main {
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: var(--bbw-space-3);
+  cursor: pointer;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--bbw-space-2);
+}
+
+.fav-card__main:hover {
+  background: var(--bbw-gray-1);
+}
+
+.fav-card__text {
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-8);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fav-card__text--muted {
+  color: var(--bbw-gray-6);
+  font-style: italic;
+}
+
+.fav-card__text--typed {
+  color: var(--bbw-gray-6);
+}
+
+.fav-card__meta {
+  display: flex;
+  gap: var(--bbw-space-2);
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+}
+
+.fav-card__conv {
+  color: var(--bbw-primary, #3370ff);
+  font-weight: 500;
+}
+
+.fav-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--bbw-space-2) var(--bbw-space-3);
+  border-top: 1px solid var(--bbw-gray-3);
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-5);
+}
+
+.fav-card__unfav {
+  border: none;
+  background: transparent;
+  color: var(--bbw-gray-6);
+  font-size: var(--bbw-font-12);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.fav-card__unfav:hover {
+  background: var(--bbw-gray-2);
+  color: var(--bbw-danger, #d54941);
+}
+
+.fav-card__unfav:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

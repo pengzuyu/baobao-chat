@@ -5,7 +5,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { qk } from '../../../shared/api/keys';
-import { fetchConvs, fetchMessages } from './im';
+import { fetchConvs, fetchFavorites, fetchMessages } from './im';
 
 export function useConversations(filter: string = 'all') {
   return useQuery({
@@ -19,5 +19,13 @@ export function useConversationMessages(convId: string | null) {
     queryKey: qk.im.messages(convId ?? 'none'),
     queryFn: () => fetchMessages(convId as string),
     enabled: !!convId,
+  });
+}
+
+/** 收藏列表（PIM-08 D03 §3.8：type 过滤；失效走 ['im','favorites'] 前缀） */
+export function useFavorites(type: string = 'all') {
+  return useQuery({
+    queryKey: qk.im.favorites(type),
+    queryFn: () => fetchFavorites(type === 'all' ? {} : { type }),
   });
 }

@@ -82,6 +82,15 @@ interface ImState {
   enqueueOutbox: (clientMsgId: string, convId: string, text: string) => void;
   /** 本地恢复后的重放（重连/启动 resendOutbox 用） */
   replayOutbox: (clientMsgId: string, convId: string, text: string) => Promise<void>;
+
+  /** 收藏标记（msgId → true，PIM-08）：气泡/收藏页操作即时回显；
+   * 收藏列表主缓存在 Query（['im','favorites']），此处仅端内标记投影 */
+  favoriteIds: Record<string, boolean>;
+  applyFavorite: (msgId: string, on: boolean) => void;
+
+  /** 跨页待定位（PIM-07/PIM-08 点击跳转）：ChatPage 消费后滚动锚点 + 闪烁 2s */
+  pendingLocate: { convId: string; seq: number } | null;
+  setPendingLocate: (target: { convId: string; seq: number } | null) => void;
 }
 
 // ---- msg.read 上报节流（1s trailing，D03 INT-IM-12）----
@@ -465,6 +474,13 @@ export const useImStore = create<ImState>((set, get) => ({
     void myUid;
     await settle(set, get, convId, clientMsgId);
   },
+
+  favoriteIds: {},
+  applyFavorite: (msgId, on) =>
+    set((s) => ({ favoriteIds: { ...s.favoriteIds, [msgId]: on } })),
+
+  pendingLocate: null,
+  setPendingLocate: (target) => set({ pendingLocate: target }),
 }));
 
 /** 统一收尾：ack → sent（回填 seq/msgId/ts）；异常 → 自动重试≤3 后 failed（红叹号+重试入口） */

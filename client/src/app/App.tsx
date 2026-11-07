@@ -11,6 +11,7 @@ import { FileText, Phone, Settings2, BrainCircuit } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { LoginPage } from '../features/auth/pages/LoginPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
+import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
@@ -97,6 +98,8 @@ export function App() {
         {/* IM：默认落点；子路由切换不销毁 WSS 连接与未读状态（D01 §4.2） */}
         <Route path="/im" element={<ChatPage />} />
         <Route path="/im/c/:convId" element={<ChatPage />} />
+        {/* 我的收藏（PIM-08，D03 §3.8） */}
+        <Route path="/im/favorites" element={<FavoritesPage />} />
         <Route path="/rtc" element={<PlaceholderPage title="通话" designDoc="D04" icon={Phone} blurb="音视频通话、来电接听与通话历史" />} />
         <Route path="/doc" element={<PlaceholderPage title="文档中心" designDoc="D05/D06" icon={FileText} blurb="在线文档协同、文件传输与分享" />} />
         <Route path="/kb" element={<PlaceholderPage title="知识库" designDoc="D11" icon={BrainCircuit} blurb="企业知识空间检索、摄入与授权治理" />} />

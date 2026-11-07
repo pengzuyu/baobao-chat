@@ -6,7 +6,7 @@
 
 import { http } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
-import type { ConvDetail, Conversation, ConversationMember, Mention, Message, MsgNewPayload, SendAck } from '../model/types';
+import type { ConvType, ConvDetail, Conversation, ConversationMember, Mention, Message, MsgNewPayload, SendAck } from '../model/types';
 import { MOCK_CONVS, MOCK_MESSAGES, mockLatestSeq } from './mock';
 
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
@@ -268,6 +268,90 @@ export async function fetchConvMembers(convId: string): Promise<ConversationMemb
   if (USE_MOCK) return [];
   const data = await http.get<{ items: ConversationMember[] }>(`/convs/${encodeURIComponent(convId)}/members`);
   return data.items;
+}
+
+// ---- 收藏与搜索（D03 §3.7 PIM-07 服务端态 / §3.8 PIM-08；API-IM-10/11/12）----
+
+/** 收藏列表项（API-IM-11：msg 实时快照——已撤回时 status=2 端内渲染占位） */
+export interface FavoriteItem {
+  id: string;
+  msg: Message;
+  conv: { id: string; name: string; type: ConvType };
+  createdAt: number;
+}
+
+/** 搜索结果项（API-IM-12：msg + conv/sender 名 + 服务端高亮区间；端内另做 substring 高亮兜底） */
+export interface SearchHit {
+  msg: Message;
+  convName: string;
+  senderName: string;
+  highlight?: Array<{ start: number; end: number }>;
+}
+
+/** 搜索过滤器（AND 组合；零值/缺省=不限，D03 §3.7 过滤器矩阵） */
+export interface SearchFilters {
+  keyword: string;
+  fromUid?: string;
+  convId?: string;
+  type?: string;
+  fromTs?: number;
+  toTs?: number;
+  cursor?: string;
+  limit?: number;
+}
+
+/** 收藏（API-IM-10 POST：幂等 UK；上限 1000→3022；撤回消息可收藏） */
+export async function favoriteMessage(msgId: string): Promise<{ favoriteId: string; createdAt: number; duplicate?: boolean }> {
+  if (USE_MOCK) {
+    await delay(200);
+    return { favoriteId: `mock-fav-${Date.now()}`, createdAt: Date.now() };
+  }
+  return http.post<{ favoriteId: string; createdAt: number; duplicate?: boolean }>(
+    `/messages/${encodeURIComponent(msgId)}/favorite`,
+    {},
+  );
+}
+
+/** 取消收藏（API-IM-10 DELETE：幂等 no-op） */
+export async function unfavoriteMessage(msgId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await http.delete(`/messages/${encodeURIComponent(msgId)}/favorite`);
+}
+
+/** 收藏列表（API-IM-11：created_at 倒序 + type 过滤 + cursor 翻页） */
+export async function fetchFavorites(params: { type?: string; cursor?: string; limit?: number } = {}): Promise<Paged<FavoriteItem>> {
+  if (USE_MOCK) {
+    await delay(300);
+    return { items: [], hasMore: false };
+  }
+  const qs = new URLSearchParams();
+  if (params.type) qs.set('type', params.type);
+  if (params.cursor) qs.set('cursor', params.cursor);
+  if (params.limit) qs.set('limit', String(params.limit));
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
+  const data = await http.get<{ items: FavoriteItem[]; nextCursor?: string; hasMore: boolean }>(`/favorites${suffix}`);
+  return { items: data.items, nextCursor: data.nextCursor, hasMore: data.hasMore };
+}
+
+/** 服务端态搜索（API-IM-12：keyword 必填非空白 ≤64 字；仅本人可见会话）。
+ * 本地 FTS5 态（Tauri/Rust 侧）不在本封装——两态编排见 D03 §3.7/INT-IM-21 */
+export async function searchMessages(f: SearchFilters): Promise<Paged<SearchHit>> {
+  if (USE_MOCK) {
+    await delay(300);
+    return { items: [], hasMore: false };
+  }
+  const qs = new URLSearchParams({ keyword: f.keyword });
+  if (f.fromUid) qs.set('from_uid', f.fromUid);
+  if (f.convId) qs.set('conv_id', f.convId);
+  if (f.type) qs.set('type', f.type);
+  if (f.fromTs) qs.set('from_ts', String(f.fromTs));
+  if (f.toTs) qs.set('to_ts', String(f.toTs));
+  if (f.cursor) qs.set('cursor', f.cursor);
+  if (f.limit) qs.set('limit', String(f.limit));
+  const data = await http.get<{ items: SearchHit[]; nextCursor?: string; hasMore: boolean }>(
+    `/messages/search?${qs.toString()}`,
+  );
+  return { items: data.items, nextCursor: data.nextCursor, hasMore: data.hasMore };
 }
 
 // ---- mock 桩：ack 分配 + 幂等（同 client_msg_id 返回原 seq）----
