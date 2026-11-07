@@ -26,6 +26,10 @@ import (
 	"github.com/baobaowork/server/internal/auth/api"
 	"github.com/baobaowork/server/internal/auth/repo"
 	"github.com/baobaowork/server/internal/auth/service"
+	"github.com/baobaowork/server/internal/bot"
+	botapi "github.com/baobaowork/server/internal/bot/api"
+	botrepo "github.com/baobaowork/server/internal/bot/repo"
+	botservice "github.com/baobaowork/server/internal/bot/service"
 	"github.com/baobaowork/server/internal/doc"
 	docapi "github.com/baobaowork/server/internal/doc/api"
 	docrepo "github.com/baobaowork/server/internal/doc/repo"
@@ -464,6 +468,67 @@ func main() {
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
 
 	// ── 机器人域（20 篇阶段一务实版）：Incoming Webhook + 管理 REST ──
+	// bot=特殊 user(type=2 永不登录)；跨域全闭包（D02 §4：不引 org/message/admin 包）
+	var botRepo botrepo.Repo
+	if pgPool != nil {
+		botRepo = botrepo.NewPostgres(pgPool)
+	} else {
+		botRepo = botrepo.NewMemory()
+	}
+	botMod := bot.NewModule(botservice.Options{
+		// user(type=bot)：employee_no 走 bot- 前缀独立段（20 篇 §3.2，不占员工编号段）
+		CreateUser: func(ctx context.Context, tenantID int64, name string) (int64, error) {
+			u, err := orgRepo.CreateUser(ctx, orgapi.User{
+				TenantID: tenantID, Type: orgapi.UserTypeBot,
+				EmployeeNo:  "bot-" + strconv.FormatInt(time.Now().UnixNano(), 36),
+				DisplayName: name, Status: orgapi.UserStatusActive,
+			})
+			if err != nil {
+				return 0, err
+			}
+			return u.ID, nil
+		},
+		// 会话成员判定/安装（message 仓闭包；role=5 为 bot 成员，20 篇 §5）
+		MemberRole: func(ctx context.Context, convID, userID int64) int {
+			m, err := msgRepo.MemberOf(ctx, convID, userID)
+			if err != nil || m == nil || m.Status != 1 {
+				return 0
+			}
+			return m.Role
+		},
+		AddMember: func(ctx context.Context, convID, userID int64, role int) error {
+			return msgRepo.AddMember(ctx, messagerepo.Member{ConvID: convID, UserID: userID, Role: role})
+		},
+		RemoveMember: func(ctx context.Context, convID, userID int64) error {
+			return msgRepo.RemoveMember(ctx, convID, userID)
+		},
+		// 以 bot 身份走消息主干（seq/扇出/同步复用 message 服务；幂等键 bot- 前缀）
+		SendMsg: func(ctx context.Context, senderID, convID int64, msgType string, body json.RawMessage, mentionUIDs []string) (int64, int64, error) {
+			mentions := make([]messageapi.Mention, 0, len(mentionUIDs))
+			for _, uid := range mentionUIDs {
+				mentions = append(mentions, messageapi.Mention{UID: uid})
+			}
+			res, err := msgMod.API().Send(ctx, senderID, messageapi.SendPayload{
+				ConvID:      messageapi.ConvID(strconv.FormatInt(convID, 10)),
+				ClientMsgID: "bot-" + strconv.FormatInt(time.Now().UnixNano(), 36),
+				Type:        msgType, Body: body, Mentions: mentions,
+			})
+			if err != nil {
+				return 0, 0, err
+			}
+			return res.MsgID, res.Seq, nil
+		},
+		// 敏感词与人类消息同库同路径（20 篇 §7.2）
+		SensitiveWords: func() []string {
+			words, err := adminStore.EnabledSensitiveWords(context.Background(), 1)
+			if err != nil {
+				return nil
+			}
+			return words
+		},
+	}, botRepo)
+	botapi.RegisterAdminRoutes(mux, authed, botMod.API())
+	mux.HandleFunc("POST /hook/bot/{hook_id}", botapi.HandleHookDeliver(botMod.API()))
 
 	// 全局中间件链（D02 §6 固定顺序：trace→recovery→access-log→rate-limit→…）
 	limiter := httpx.NewLimiter(50, 100)                                                  // 阶段一按 IP；三档（租户/用户/Agent）阶段二接 Redis
