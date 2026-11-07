@@ -1,0 +1,36 @@
+# BaobaoWork Gitee Go 流水线（与根 Makefile verify 门同源；16 篇 §8 CI）
+# 触发：main 分支 push / PR；四栈串行门禁（Go → 前端 → Rust → 部署交付物）
+version: '1.0'
+stages:
+  - name: 服务端
+    tasks:
+      - task: go-gate
+        script:
+          - cd server
+          - go build ./...
+          - go vet ./...
+          - test -z "$(gofmt -l .)" || { echo 'gofmt 未格式化:'; gofmt -l .; exit 1; }
+          - go test ./...
+  - name: 前端
+    tasks:
+      - task: client-gate
+        script:
+          - cd client
+          - npm ci --no-audit --no-fund
+          - npx tsc -b --noEmit
+          - npm run build
+  - name: Agent-Runtime
+    tasks:
+      - task: agent-gate
+        script:
+          - cd agent
+          - cargo test --workspace
+          - cargo clippy --workspace --all-targets -- --deny warnings
+          - cargo fmt --all --check
+  - name: 部署交付物
+    tasks:
+      - task: deploy-gate
+        script:
+          - cd deploy/compose
+          - cp .env.tpl .env.ci 2>/dev/null || true
+          - docker compose --env-file ${COMPOSE_ENV:-.env.ci} config --quiet

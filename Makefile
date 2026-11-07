@@ -175,3 +175,43 @@ clean: ## 清理构建产物（不动数据卷）
 	@if [ -d agent ]; then cd agent && cargo clean 2>/dev/null || true; fi
 	@if [ -d server ]; then cd server && go clean 2>/dev/null || true; fi
 	@echo "✔ 清理完成（compose 数据卷未动：make dev-clean 可清数据）"
+
+# ---------------------------------------------------------------------------
+# 一键验证门（CI 同源；本地/流水线同一入口）
+# ---------------------------------------------------------------------------
+.PHONY: verify
+verify: verify-server verify-client verify-agent verify-deploy ## 四栈硬门禁：编译+测试+静态检查+格式（CI 同源）
+
+.PHONY: verify-server
+verify-server: ## 服务端硬门禁：build + vet + gofmt -l 须空 + go test ./...
+	@cd server && go build ./... && go vet ./... \
+	  && [ -z "$$(gofmt -l .)" ] || { echo "❌ gofmt 未格式化文件："; gofmt -l .; exit 1; } \
+	  && go test ./...
+
+.PHONY: verify-server-pg
+verify-server-pg: ## 服务端 PG 集成门禁（需 BBW_PG_TEST_DSN 或本机 bbw 容器）
+	@cd server && if [ -z "$$BBW_PG_TEST_DSN" ]; then \
+	  BBW_PG_TEST_DSN='postgres://bbw:bbw_change_me@127.0.0.1:5432/bbw?sslmode=disable' \
+	  go test -tags pg ./internal/...; else go test -tags pg ./internal/...; fi
+
+.PHONY: verify-client
+verify-client: ## 前端硬门禁：tsc --noEmit + vite build
+	@cd client && npm run build --silent >/dev/null && npx tsc -b --noEmit
+
+.PHONY: verify-agent
+verify-agent: ## Agent 硬门禁：test --workspace + clippy -D warnings + fmt --check
+	@cd agent && if command -v cargo >/dev/null; then \
+	  cargo test --workspace && cargo clippy --workspace --all-targets -- --deny warnings \
+	  && cargo fmt --all --check; else echo "[make] cargo 不在 PATH（export PATH=\$$HOME/.cargo/bin:\$$PATH）"; exit 1; fi
+
+.PHONY: verify-deploy
+verify-deploy: ## 部署交付物校验：compose config（helm 若可用则 template）
+	@$(COMPOSE) config --quiet && echo "compose ✓" \
+	  && if command -v helm >/dev/null; then \
+	    helm template $(HELM_DIR) >/dev/null && echo "helm ✓"; else echo "helm 未安装，跳过（compose 已过）"; fi
+
+.PHONY: verify-quick
+verify-quick: ## 快速门禁（跳过测试）：四栈 build/typecheck/clippy
+	@cd server && go build ./... && go vet ./... && echo "server ✓"
+	@cd client && npx tsc -b --noEmit && echo "client ✓"
+	@cd agent && if command -v cargo >/dev/null; then cargo check --workspace && cargo clippy --workspace -- -D warnings && echo "agent ✓"; fi
