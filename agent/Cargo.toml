@@ -22,6 +22,7 @@ bbrt-aigw = { path = "crates/bbrt-aigw" }
 bbrt-hostapi = { path = "crates/bbrt-hostapi" }
 bbrt-tools = { path = "crates/bbrt-tools" }
 bbrt-session = { path = "crates/bbrt-session" }
+bbrt-delegate = { path = "crates/bbrt-delegate" }
 
 # Runtime 二进制随客户端分发、有 <80MB 空闲内存预算（08 §1.2）：发布构建开全程序 LTO
 [profile.release]

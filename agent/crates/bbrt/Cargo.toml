@@ -21,6 +21,7 @@ bbrt-aigw = { workspace = true }
 bbrt-hostapi = { workspace = true }
 bbrt-session = { workspace = true }
 bbrt-tools = { workspace = true }
+bbrt-delegate = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

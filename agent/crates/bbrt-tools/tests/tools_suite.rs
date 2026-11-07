@@ -872,6 +872,7 @@ fn tool_executor_trait对象可装配loopdeps() {
     let deps = LoopDeps {
         model: Arc::new(NopModel),
         tools: executor,
+        delegator: None,
         memory: None,
         wal: Arc::new(bbrt_session::NoopEventLog),
         sink: Arc::new(bbrt_session::NullSink),

@@ -270,6 +270,68 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
                 memory_saved: *memory_saved,
             },
         },
+        SessionEvent::DelegateBrief {
+            delegate_task_id,
+            backend_suggestion,
+            ..
+        } => {
+            let delegate_task_id = delegate_task_id.clone();
+            // 简报原文在 WAL/上下文；协议侧发待确认信号（编辑稿经 delegate.launch 下发）
+            RuntimeToHost::DelegateEvent {
+                delegate_task_id,
+                kind: bbrt_protocol::DelegateEventKind::Meta,
+                payload: serde_json::json!({ "brief_pending": true, "backend_suggestion": backend_suggestion }),
+            }
+        }
+        SessionEvent::DelegateEvt {
+            delegate_task_id,
+            kind,
+            payload,
+            ..
+        } => {
+            let delegate_task_id = delegate_task_id.clone();
+            let k = match kind.as_str() {
+                "delta" => bbrt_protocol::DelegateEventKind::Output,
+                "tool_use" => bbrt_protocol::DelegateEventKind::ToolUse,
+                "tool_result" => bbrt_protocol::DelegateEventKind::ToolResult,
+                "warning" => bbrt_protocol::DelegateEventKind::Warning,
+                _ => bbrt_protocol::DelegateEventKind::Meta,
+            };
+            RuntimeToHost::DelegateEvent {
+                delegate_task_id,
+                kind: k,
+                payload: serde_json::from_str(payload.as_str())
+                    .unwrap_or_else(|_| serde_json::Value::String(payload.clone())),
+            }
+        }
+        SessionEvent::DelegateEnd {
+            delegate_task_id,
+            exit_code,
+            summary,
+            ..
+        } => {
+            let delegate_task_id = delegate_task_id.clone();
+            RuntimeToHost::DelegateEnd {
+                delegate_task_id,
+                exit_code: *exit_code,
+                summary: summary.clone(),
+                changed_files: vec![],
+                checkpoint_id: None,
+                child_session_ref: None,
+            }
+        }
+        SessionEvent::DelegateReviewResolved {
+            delegate_task_id,
+            decision,
+            ..
+        } => {
+            let delegate_task_id = delegate_task_id.clone();
+            RuntimeToHost::DelegateEvent {
+                delegate_task_id,
+                kind: bbrt_protocol::DelegateEventKind::Meta,
+                payload: serde_json::json!({ "review": decision }),
+            }
+        }
         SessionEvent::Error {
             session_id,
             code,

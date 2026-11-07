@@ -13,6 +13,7 @@
 //! - BBW_RT_TOKEN      网关令牌（v0.1 静态；OBO 通道阶段二接 hostapi::OboCache）
 
 mod bridge;
+mod delegate_bridge;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -108,6 +109,8 @@ fn run() -> Result<(), String> {
     let deps = LoopDeps {
         model,
         tools,
+        delegator: Some(delegate_bridge::bin_delegate_launcher()
+            as Arc<dyn bbrt_session::delegation::DelegateLauncher>),
         memory: Some(memory.clone()),
         wal: store.clone(),
         sink: sink.clone(),
@@ -354,6 +357,34 @@ fn dispatch(
         HostToRuntime::ReportList { .. } => Some(RuntimeToHost::ReportListResult {
             items: vec![], // v0.1：日报经 report.daily 事件流补报；历史检索阶段二接 reports 目录扫描
         }),
+        HostToRuntime::DelegateLaunch {
+            backend,
+            task_brief,
+            ..
+        } => {
+            mgr.respond_delegate(bbrt_session::loop_runner::DelegateHostMsg::Launch {
+                backend,
+                brief: Some(task_brief),
+            })
+            .ok();
+            None // 委派事件流（delegate.event/end）即回显
+        }
+        HostToRuntime::DelegateInput { text, .. } => {
+            mgr.respond_delegate(bbrt_session::loop_runner::DelegateHostMsg::Input { text })
+                .ok();
+            None
+        }
+        HostToRuntime::DelegateCancel { graceful, .. } => {
+            mgr.respond_delegate(bbrt_session::loop_runner::DelegateHostMsg::Cancel { graceful })
+                .ok();
+            None
+        }
+        HostToRuntime::DelegateReview { decision, .. } => {
+            let accept = matches!(decision, bbrt_protocol::ReviewDecision::Accept);
+            mgr.respond_delegate(bbrt_session::loop_runner::DelegateHostMsg::Review { accept })
+                .ok();
+            None
+        }
         _ => None, // 其余 REQ（checkpoint/obo/...）阶段二；NTF 误投忽略
     }
 }

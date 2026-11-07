@@ -20,6 +20,7 @@ version = "0.1.0"
 dependencies = [
  "bbrt-aigw",
  "bbrt-context",
+ "bbrt-delegate",
  "bbrt-hostapi",
  "bbrt-memory",
  "bbrt-protocol",

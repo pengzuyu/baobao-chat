@@ -146,6 +146,9 @@ fn static_category(tool: &str) -> Option<ActionCategory> {
         // 只读（A2 行 1）
         "read_file" | "list_dir" | "search_files" | "glob" | "git_status" | "git_diff"
         | "kb_query" | "doc_read" => Some(ActionCategory::ReadOnly),
+        // 记忆工具：仅写本机记忆目录（D15 §2.2 W1：风险级低，全档放行，
+        // 归入只读档即"三档自动"语义；密钥特征拒写由 bbrt-memory 落盘侧兜底）
+        "memory_save" | "memory.save" => Some(ActionCategory::ReadOnly),
         // 文件编辑（A2 行 2）
         "write_file" | "edit_file" | "git_commit" => Some(ActionCategory::FileEdit),
         // 网络出站（A2 行 6）
@@ -650,6 +653,22 @@ mod tests {
     }
 
     // ---- A2 行 9/10：委派与子 Agent ----
+
+    #[test]
+    fn memory_save_auto_allowed_in_all_modes() {
+        // D15 §2.2 W1：记忆工具全档放行（只写本机记忆目录；密钥拒写在 memory 落盘侧）
+        let f = Fixture::new();
+        for mode in MODES {
+            assert!(matches!(
+                permission_gate(
+                    mode,
+                    &call("memory_save", &json!({"title":"端口"})),
+                    &f.ctx()
+                ),
+                Decision::Allow { .. }
+            ));
+        }
+    }
 
     #[test]
     fn row9_delegate_confirm_row10_subagent_allow() {

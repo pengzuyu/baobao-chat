@@ -137,6 +137,33 @@ pub enum SessionEvent {
         files_changed: u32,
         memory_saved: u32,
     },
+    /// delegate.brief：简报待确认（等宿主 delegate.launch）
+    DelegateBrief {
+        session_id: String,
+        delegate_task_id: String,
+        backend_suggestion: String,
+    },
+    /// delegate.event：归一化委派事件
+    DelegateEvt {
+        session_id: String,
+        delegate_task_id: String,
+        kind: String, // meta|delta|tool_use|tool_result|warning|exit
+        payload: String,
+    },
+    /// delegate.end：子进程退出（触发审查卡）
+    DelegateEnd {
+        session_id: String,
+        delegate_task_id: String,
+        exit_code: i32,
+        summary: String,
+    },
+    /// 审查结论镜像（accept/reject/timeout）
+    DelegateReviewResolved {
+        session_id: String,
+        delegate_task_id: String,
+        decision: String,
+    },
+
     /// error（协议级错误镜像；fatal=true 会话终止）
     Error {
         session_id: String,

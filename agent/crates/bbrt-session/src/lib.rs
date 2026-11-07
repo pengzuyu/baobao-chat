@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod delegation;
 pub mod events;
 pub mod executor;
 pub mod loop_runner;
@@ -21,6 +22,10 @@ pub mod manager;
 pub mod recovery;
 pub mod state;
 
+pub use delegation::{
+    DelegateChannel, DelegateEvt, DelegateFinal, DelegateLaunchReq, DelegateLauncher,
+    DelegateStream,
+};
 pub use events::{ModelTier, NullSink, SessionEvent, SessionSink, StreamChannel};
 pub use executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview};
 pub use loop_runner::{

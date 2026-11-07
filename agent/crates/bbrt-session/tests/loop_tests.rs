@@ -153,6 +153,7 @@ fn deps<M: bbrt_aigw::ChatClient + 'static>(
 ) -> LoopDeps {
     LoopDeps {
         model,
+        delegator: None,
         tools,
         memory,
         wal: Arc::new(NoopEventLog),
@@ -452,6 +453,7 @@ fn wal_records_monotonic_events() {
     let d = LoopDeps {
         model,
         tools,
+        delegator: None,
         memory: None,
         wal: log.clone(),
         sink,
@@ -542,6 +544,7 @@ fn compaction_triggers_on_long_history() {
     let d = LoopDeps {
         model,
         tools,
+        delegator: None,
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
@@ -648,4 +651,267 @@ impl ChatClient for AlwaysToolOk {
         ];
         Ok(Box::new(events.into_iter()))
     }
+}
+
+// ---- 委派编排（D11 §3 #11-13）：假启动器走全流程 ----
+
+use bbrt_session::delegation::{
+    DelegateChannel, DelegateEvt, DelegateFinal, DelegateLaunchReq, DelegateLauncher,
+    DelegateStream,
+};
+use bbrt_session::loop_runner::DelegateHostMsg;
+
+struct ScriptedStream {
+    events: std::sync::Mutex<std::collections::VecDeque<DelegateEvt>>,
+    cancelled: std::sync::Mutex<bool>,
+}
+impl DelegateStream for ScriptedStream {
+    fn next(&mut self) -> Option<DelegateEvt> {
+        self.events.lock().unwrap().pop_front()
+    }
+    fn cancel(&mut self, graceful: bool) {
+        *self.cancelled.lock().unwrap() = graceful;
+    }
+    fn finalize(&mut self) -> DelegateFinal {
+        DelegateFinal {
+            summary: "委派摘要：改了 2 个文件".into(),
+            changed_files: vec!["a.rs".into()],
+            session_ref: Some("sess-x".into()),
+            exit_code: Some(0),
+        }
+    }
+}
+
+struct FakeDelegator;
+impl DelegateLauncher for FakeDelegator {
+    fn backends(&self) -> Vec<String> {
+        vec!["fake".into()]
+    }
+    fn launch(&self, _req: &DelegateLaunchReq) -> Result<Box<dyn DelegateStream>, String> {
+        Ok(Box::new(ScriptedStream {
+            events: std::sync::Mutex::new(
+                [
+                    DelegateEvt::Meta {
+                        text: "init".into(),
+                        session_ref: Some("sess-x".into()),
+                    },
+                    DelegateEvt::Delta {
+                        channel: DelegateChannel::Text,
+                        text: "正在改文件".into(),
+                    },
+                    DelegateEvt::ToolUse {
+                        call_id: "t1".into(),
+                        tool: "Edit".into(),
+                        args: serde_json::json!({}),
+                        risk: "medium",
+                    },
+                    DelegateEvt::ToolResult {
+                        call_id: "t1".into(),
+                        ok: true,
+                        summary: "ok".into(),
+                    },
+                    DelegateEvt::Exit {
+                        exit_code: Some(0),
+                        signal: None,
+                    },
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            cancelled: std::sync::Mutex::new(false),
+        }))
+    }
+}
+
+/// 委派工具模型（第一轮 tool_calls=coding.delegate，第二轮收尾）
+struct DelegateToolModel {
+    calls: AtomicUsize,
+}
+impl ChatClient for DelegateToolModel {
+    fn chat(
+        &self,
+        _req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if n == 0 {
+            vec![
+                Ok(StreamEvent::ToolCallBegin {
+                    index: 0,
+                    id: "call-d1".into(),
+                    name: "coding.delegate".into(),
+                }),
+                Ok(StreamEvent::ToolCallDelta {
+                    index: 0,
+                    args_delta: r#"{"task":"修复构建","forbidden":["git push"]}"#.into(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::ToolCalls,
+                    usage: Usage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                    },
+                }),
+            ]
+        } else {
+            vec![
+                Ok(StreamEvent::TextDelta {
+                    text: "委派结果已确认。".into(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 20,
+                        completion_tokens: 6,
+                    },
+                }),
+            ]
+        };
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+fn delegate_turn_setup() -> (Arc<CollectSink>, LoopDeps) {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(DelegateToolModel {
+        calls: AtomicUsize::new(0),
+    });
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    (
+        sink.clone(),
+        LoopDeps {
+            model,
+            tools,
+            delegator: Some(Arc::new(FakeDelegator)),
+            memory: None,
+            wal: Arc::new(NoopEventLog),
+            sink,
+            budget: BudgetConfig::default(),
+        },
+    )
+}
+
+#[test]
+fn delegate_flow_accept_review() {
+    let (sink, d) = delegate_turn_setup();
+    let mut runner = SessionRunner::new(
+        "s-d1".into(),
+        "/ws".into(),
+        PermissionMode::AutoEdit,
+        ModelTier::Strong,
+    );
+    runner.permission_timeout = Duration::from_millis(800);
+    let dtx = runner.delegate_sender();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(60));
+        let _ = dtx.send(DelegateHostMsg::Launch {
+            backend: "fake".into(),
+            brief: None,
+        });
+        std::thread::sleep(Duration::from_millis(120));
+        let _ = dtx.send(DelegateHostMsg::Review { accept: true });
+    });
+    let report = runner.run_turn("委派修一下构建", &d);
+    assert!(!report.paused);
+    let evs = events_of(sink.as_ref());
+    // 状态链：delegating → waiting_review → running（含 brief/事件/end/review 镜像）
+    let states: Vec<String> = evs
+        .iter()
+        .filter_map(|e| match e {
+            SessionEvent::StateChanged { state, .. } => Some(state.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        states.contains(&"delegating".into()),
+        "应有 delegating 态: {states:?}"
+    );
+    assert!(
+        states.contains(&"waiting_review".into()),
+        "应有 waiting_review: {states:?}"
+    );
+    assert!(evs
+        .iter()
+        .any(|e| matches!(e, SessionEvent::DelegateBrief { .. })));
+    assert!(evs
+        .iter()
+        .any(|e| matches!(e, SessionEvent::DelegateEvt { kind, .. } if kind == "delta")));
+    assert!(evs
+        .iter()
+        .any(|e| matches!(e, SessionEvent::DelegateEnd { exit_code: 0, .. })));
+    assert!(evs.iter().any(|e| matches!(e, SessionEvent::DelegateReviewResolved { decision, .. } if decision == "accept")));
+    // 收尾轮看到委派摘要
+    assert!(events_of(sink.as_ref()).iter().any(
+        |e| matches!(e, SessionEvent::StreamDelta { delta, .. } if delta.contains("委派结果已确认"))
+    ));
+}
+
+#[test]
+fn delegate_flow_reject_review() {
+    let (sink, d) = delegate_turn_setup();
+    let mut runner = SessionRunner::new(
+        "s-d2".into(),
+        "/ws".into(),
+        PermissionMode::AutoEdit,
+        ModelTier::Strong,
+    );
+    runner.permission_timeout = Duration::from_millis(800);
+    let dtx = runner.delegate_sender();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(60));
+        let _ = dtx.send(DelegateHostMsg::Launch {
+            backend: "fake".into(),
+            brief: None,
+        });
+        std::thread::sleep(Duration::from_millis(120));
+        let _ = dtx.send(DelegateHostMsg::Review { accept: false });
+    });
+    let _ = runner.run_turn("再委派一次", &d);
+    assert!(events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::DelegateReviewResolved { decision, .. } if decision == "reject")));
+}
+
+#[test]
+fn delegate_without_launcher_blocked_8030() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(DelegateToolModel {
+        calls: AtomicUsize::new(0),
+    });
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let d = LoopDeps {
+        model,
+        tools,
+        delegator: None,
+        memory: None,
+        wal: Arc::new(NoopEventLog),
+        sink: sink.clone(),
+        budget: BudgetConfig::default(),
+    };
+    let mut runner = SessionRunner::new(
+        "s-d3".into(),
+        "/ws".into(),
+        PermissionMode::AutoEdit,
+        ModelTier::Strong,
+    );
+    runner.permission_timeout = Duration::from_millis(200);
+    let _ = runner.run_turn("委派", &d);
+    assert!(events_of(sink.as_ref()).iter().any(|e| matches!(
+        e,
+        SessionEvent::ToolResult {
+            ok: false,
+            blocked_code: Some(8030),
+            ..
+        }
+    )));
 }

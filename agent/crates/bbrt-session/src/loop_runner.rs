@@ -12,6 +12,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::delegation::{DelegateEvt, DelegateLaunchReq, DelegateLauncher};
 use bbrt_aigw::{ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent, ToolCallMsg};
 use bbrt_context::{
     assemble, budget_report, compact, AssembleParts, BudgetConfig, CompactionOutcome, Round,
@@ -46,6 +47,25 @@ pub struct PermissionResponse {
 pub enum PermissionDecision {
     Allow,
     Deny,
+}
+
+/// 宿主→循环的委派指令（delegate.launch/input/cancel/review 的 session 侧形态）
+#[derive(Debug, Clone)]
+pub enum DelegateHostMsg {
+    Launch {
+        backend: String,
+        /// 用户编辑后的简报（None=用模型产出原稿）
+        brief: Option<bbrt_protocol::TaskBrief>,
+    },
+    Input {
+        text: String,
+    },
+    Cancel {
+        graceful: bool,
+    },
+    Review {
+        accept: bool,
+    },
 }
 
 /// WAL 出口抽象（Store 实现；测试可注入 Noop）
@@ -126,6 +146,9 @@ pub struct SessionRunner {
     pub interrupted: Arc<AtomicBool>,
     permission_tx: Sender<PermissionResponse>,
     permission_rx: Receiver<PermissionResponse>,
+    /// 委派宿主指令通道（launch/input/cancel/review；与审批通道分离）
+    delegate_tx: Sender<DelegateHostMsg>,
+    delegate_rx: Receiver<DelegateHostMsg>,
     /// 审批超时（测试注入）
     pub permission_timeout: Duration,
 }
@@ -149,6 +172,7 @@ impl SessionRunner {
         model_policy: ModelTier,
     ) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (dtx, drx) = std::sync::mpsc::channel();
         Self {
             session_id,
             workspace,
@@ -161,6 +185,8 @@ impl SessionRunner {
             interrupted: Arc::new(AtomicBool::new(false)),
             permission_tx: tx,
             permission_rx: rx,
+            delegate_tx: dtx,
+            delegate_rx: drx,
             permission_timeout: PERMISSION_TIMEOUT,
         }
     }
@@ -170,6 +196,8 @@ impl SessionRunner {
 pub struct LoopDeps {
     pub model: Arc<dyn ChatClient>,
     pub tools: Arc<dyn ToolExecutor>,
+    /// 委派启动器（None=未装配 → coding.delegate 返回 8030）
+    pub delegator: Option<Arc<dyn DelegateLauncher>>,
     pub memory: Option<Arc<MemoryEngine>>,
     pub wal: Arc<dyn EventLog>,
     pub sink: Arc<dyn SessionSink>,
@@ -547,6 +575,223 @@ impl SessionRunner {
         report
     }
 
+    /// 委派全流程：简报确认 → 宿主 launch → 事件流 → 审查 → 回填摘要
+    fn run_delegate(
+        &mut self,
+        deps: &LoopDeps,
+        call: &ToolInvocation,
+        masked: &str,
+        _risk: &str,
+    ) -> ToolOutcome {
+        let Some(delegator) = deps.delegator.clone() else {
+            return ToolOutcome::Blocked {
+                code: 8030,
+                summary: "未装配委派后端（registry 为空）".into(),
+            };
+        };
+        let task_id = format!("dt-{}", call.call_id);
+        let backends = delegator.backends();
+        let suggestion = backends.first().cloned().unwrap_or_default();
+
+        // 状态 → delegating + 简报待确认（D11 #11：确认后才 launch）
+        self.state = state::begin_delegation(self.state).unwrap_or(SessionState::Delegating);
+        emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+            session_id: id,
+            state: "delegating".into(),
+            reason: "delegate.brief".into(),
+        });
+        emit(deps, &self.session_id, |id| SessionEvent::DelegateBrief {
+            session_id: id,
+            delegate_task_id: task_id.clone(),
+            backend_suggestion: suggestion.clone(),
+        });
+        deps.wal.append(
+            &self.session_id,
+            "delegate.brief",
+            &format!("{{\"task_id\":\"{task_id}\"}}"),
+        );
+
+        // 等宿主 delegate.launch（复用审批超时 120s；超时/取消=放弃该工具调用）
+        let (backend, brief_override) = match self.delegate_rx.recv_timeout(self.permission_timeout)
+        {
+            Ok(DelegateHostMsg::Launch { backend, brief }) => (backend, brief),
+            Ok(_) | Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {
+                self.state =
+                    state::complete_delegation(self.state).unwrap_or(SessionState::Running);
+                return ToolOutcome::Blocked {
+                    code: 8030,
+                    summary: "委派未被确认或超时".into(),
+                };
+            }
+        };
+        let brief = brief_override.unwrap_or_else(|| parse_brief(call, &self.workspace));
+        let req = DelegateLaunchReq {
+            delegate_task_id: task_id.clone(),
+            backend: if backend.is_empty() {
+                suggestion
+            } else {
+                backend
+            },
+            brief,
+            mode: self.mode,
+        };
+        let mut stream = match delegator.launch(&req) {
+            Ok(s) => s,
+            Err(e) => {
+                emit(deps, &self.session_id, |id| SessionEvent::Error {
+                    session_id: id,
+                    code: 8035,
+                    message: format!("委派启动失败: {e}"),
+                    fatal: false,
+                });
+                self.state =
+                    state::complete_delegation(self.state).unwrap_or(SessionState::Running);
+                return ToolOutcome::Blocked {
+                    code: 8035,
+                    summary: e,
+                };
+            }
+        };
+        deps.wal.append(
+            &self.session_id,
+            "delegate.launch",
+            &format!(
+                "{{\"task_id\":\"{task_id}\",\"backend\":\"{}\"}}",
+                req.backend
+            ),
+        );
+        if let Some(m) = deps.memory.as_ref() {
+            let _ = m.record(&ActivityEvent::DelegateLaunched {
+                session: self.session_id.clone(),
+                backend: req.backend.clone(),
+            });
+        }
+
+        // 事件流：归一化事件外发；Input/Cancel 即时处理；interrupt 优雅取消
+        loop {
+            if self.interrupted.load(Ordering::Relaxed) {
+                stream.cancel(true);
+            }
+            while let Ok(msg) = self.delegate_rx.try_recv() {
+                match msg {
+                    DelegateHostMsg::Input { text } => {
+                        emit(deps, &self.session_id, |id| SessionEvent::DelegateEvt {
+                            session_id: id,
+                            delegate_task_id: task_id.clone(),
+                            kind: "input".into(),
+                            payload: text,
+                        });
+                    }
+                    DelegateHostMsg::Cancel { graceful } => stream.cancel(graceful),
+                    _ => {}
+                }
+            }
+            let Some(evt) = stream.next() else { break };
+            let (kind, payload) = match evt {
+                DelegateEvt::Meta { text, .. } => ("meta", text),
+                DelegateEvt::Delta { channel, text } => (
+                    "delta",
+                    match channel {
+                        crate::delegation::DelegateChannel::Text => format!(
+                            "{{\"channel\":\"text\",\"text\":\"{}\"}}",
+                            escape_json(&text)
+                        ),
+                        crate::delegation::DelegateChannel::Reasoning => format!(
+                            "{{\"channel\":\"reasoning\",\"text\":\"{}\"}}",
+                            escape_json(&text)
+                        ),
+                    },
+                ),
+                DelegateEvt::ToolUse { call_id, tool, .. } => (
+                    "tool_use",
+                    format!("{{\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
+                ),
+                DelegateEvt::ToolResult { call_id, ok, .. } => (
+                    "tool_result",
+                    format!("{{\"call_id\":\"{call_id}\",\"ok\":{ok}}}"),
+                ),
+                DelegateEvt::Warning { text } => ("warning", text),
+                DelegateEvt::Exit { .. } => ("exit", String::new()),
+            };
+            emit(deps, &self.session_id, |id| SessionEvent::DelegateEvt {
+                session_id: id,
+                delegate_task_id: task_id.clone(),
+                kind: kind.to_string(),
+                payload,
+            });
+        }
+
+        // finalize + delegate.end（异常退出 8033）
+        let final_rep = stream.finalize();
+        let exit_code = final_rep.exit_code.unwrap_or(-1);
+        emit(deps, &self.session_id, |id| SessionEvent::DelegateEnd {
+            session_id: id,
+            delegate_task_id: task_id.clone(),
+            exit_code,
+            summary: final_rep.summary.clone(),
+        });
+        deps.wal.append(
+            &self.session_id,
+            "delegate.end",
+            &format!("{{\"task_id\":\"{task_id}\",\"exit\":{exit_code}}}"),
+        );
+        if let Some(m) = deps.memory.as_ref() {
+            let _ = m.record(&ActivityEvent::DelegateEnded {
+                session: self.session_id.clone(),
+                backend: req.backend.clone(),
+                exit_code,
+            });
+        }
+        if exit_code != 0 {
+            self.state = state::fail_delegation(self.state).unwrap_or(SessionState::Running);
+            return ToolOutcome::Blocked {
+                code: 8033,
+                summary: format!("委派异常退出（exit={exit_code}）"),
+            };
+        }
+
+        // 审查（D11 #14-15：waiting_review；v0.1 对齐审批 120s 窗口，超时=拒绝，登记）
+        self.state = state::request_review(self.state).unwrap_or(SessionState::WaitingReview);
+        emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+            session_id: id,
+            state: "waiting_review".into(),
+            reason: "delegate.review".into(),
+        });
+        let accepted = loop {
+            if self.interrupted.load(Ordering::Relaxed) {
+                break false;
+            }
+            match self.delegate_rx.recv_timeout(self.permission_timeout) {
+                Ok(DelegateHostMsg::Review { accept }) => break accept,
+                Ok(DelegateHostMsg::Cancel { .. }) => break false,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        };
+        emit(deps, &self.session_id, |id| {
+            SessionEvent::DelegateReviewResolved {
+                session_id: id,
+                delegate_task_id: task_id.clone(),
+                decision: if accepted { "accept" } else { "reject" }.into(),
+            }
+        });
+        self.state = state::resolve_review(self.state).unwrap_or(SessionState::Running);
+        let _ = masked;
+        if accepted {
+            ToolOutcome::Ok {
+                summary: format!("[委派完成] {}", final_rep.summary),
+                truncated: false,
+                exit_code: Some(exit_code),
+                duration_ms: 0,
+            }
+        } else {
+            ToolOutcome::Blocked {
+                code: 8002,
+                summary: "用户拒绝委派结果".into(),
+            }
+        }
+    }
+
     /// 单个工具调用全流程：门控 →（审批 → 记忆）→ 执行
     fn run_tool(
         &mut self,
@@ -555,6 +800,10 @@ impl SessionRunner {
         masked: &str,
         risk: &str,
     ) -> ToolOutcome {
+        // 委派编码（D11 §3 #11-13）：专用路径——delegating 态 + 宿主确认 + 事件流 + 审查
+        if call.name == "coding.delegate" || call.name == "coding_delegate" {
+            return self.run_delegate(deps, call, masked, risk);
+        }
         match deps.tools.check(self.mode, call) {
             CheckOutcome::Allow { source } => {
                 let _ = source;
@@ -720,6 +969,11 @@ impl SessionRunner {
     pub fn permission_sender(&self) -> Sender<PermissionResponse> {
         self.permission_tx.clone()
     }
+
+    /// 委派指令通道（宿主 launch/input/cancel/review 注入）
+    pub fn delegate_sender(&self) -> Sender<DelegateHostMsg> {
+        self.delegate_tx.clone()
+    }
 }
 
 /// 系统提示（08 篇行为规格的最小内化；技能注入阶段二）
@@ -782,6 +1036,44 @@ fn risk_of(tool: &str) -> &'static str {
         "write_file" | "edit_file" | "git_status" | "git_diff" => "medium",
         _ => "high",
     }
+}
+
+/// 从 coding.delegate 的 args 构造简报（workspace 归一会话工作区）
+fn parse_brief(call: &ToolInvocation, workspace: &str) -> bbrt_protocol::TaskBrief {
+    let v: serde_json::Value =
+        serde_json::from_str(&call.args_json).unwrap_or(serde_json::json!({}));
+    let s = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let vecs = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|i| i.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    bbrt_protocol::TaskBrief {
+        task: s("task"),
+        workspace: workspace.to_string(),
+        constraints: vecs("constraints"),
+        context: vec![],
+        acceptance: vecs("acceptance"),
+        forbidden: vecs("forbidden"),
+    }
+}
+
+/// WAL/事件内嵌 JSON 字符串转义（避免手拼破坏 JSON 结构）
+fn escape_json(s: &str) -> String {
+    serde_json::to_string(s)
+        .unwrap_or_default()
+        .trim_matches('"')
+        .to_string()
 }
 
 /// 事件外发小工具（闭包拿 session_id，避免重复借用）

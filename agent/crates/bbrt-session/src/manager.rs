@@ -62,6 +62,8 @@ pub struct SessionManager {
     sessions: Mutex<HashMap<String, Arc<ManagedSession>>>,
     /// 审批回执路由（session_id → runner channel sender）
     permission_tx: Mutex<HashMap<String, Sender<PermissionResponse>>>,
+    /// 委派指令路由（delegate_task_id 前缀 dt- 的 call_id 归属会话）
+    delegate_tx: Mutex<HashMap<String, Sender<crate::loop_runner::DelegateHostMsg>>>,
 }
 
 impl SessionManager {
@@ -71,6 +73,7 @@ impl SessionManager {
             store,
             sessions: Mutex::new(HashMap::new()),
             permission_tx: Mutex::new(HashMap::new()),
+            delegate_tx: Mutex::new(HashMap::new()),
         }
     }
 
@@ -126,6 +129,10 @@ impl SessionManager {
             .lock()
             .unwrap()
             .insert(session_id.clone(), runner.permission_sender());
+        self.delegate_tx
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), runner.delegate_sender());
         self.deps.wal.append(
             &session_id,
             "session.start",
@@ -200,6 +207,18 @@ impl SessionManager {
             .map_err(|_| ManagerError::NotFound(session_id.into()))
     }
 
+    /// 委派指令路由（launch/input/cancel/review；v0.1 单会话广播：活跃会话通常唯一）
+    pub fn respond_delegate(
+        &self,
+        msg: crate::loop_runner::DelegateHostMsg,
+    ) -> Result<(), ManagerError> {
+        let txs: Vec<_> = self.delegate_tx.lock().unwrap().values().cloned().collect();
+        for tx in txs {
+            let _ = tx.send(msg.clone());
+        }
+        Ok(())
+    }
+
     /// session.end：runner 收口 + 存档 + WAL 闭合 + 路由清理。
     /// 竞态容忍：turn 线程尚未归还 runner 时短轮询等待（turn 已至收尾，≤2s）
     pub fn end(&self, session_id: &str, summary: &str) -> Result<(), ManagerError> {
@@ -234,6 +253,7 @@ impl SessionManager {
         }
         self.sessions.lock().unwrap().remove(session_id);
         self.permission_tx.lock().unwrap().remove(session_id);
+        self.delegate_tx.lock().unwrap().remove(session_id);
         Ok(())
     }
 
