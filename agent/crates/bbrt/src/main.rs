@@ -156,6 +156,42 @@ fn run() -> Result<(), String> {
         },
     );
 
+    // OBO 续签看护（D11 §10.1：到期前 2min 触发 obo.renew；宿主回 obo.token NTF
+    // → dispatch 更新缓存 → 模型令牌闭包自动取新值）。REQ 走全局 stdout 直写，
+    // 与主循环写路径互不持锁（stdout 内部自锁）
+    {
+        let obo_watch = Arc::clone(&obo);
+        let renew_seq = Arc::new(std::sync::Mutex::new(0u64));
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            // 仅"已有令牌且进入到期窗口"才续签：无缓存不请求——宿主在首个需要 OBO 的
+            // 调用前主动发放（D11 §10.1 会话启动行），空缓存轮询会刷屏
+            let needs = obo_watch
+                .lock()
+                .map(|c| c.get(0).is_some() && c.needs_renew(now))
+                .unwrap_or(false);
+            if !needs {
+                continue;
+            }
+            let mut n = renew_seq.lock().unwrap();
+            *n += 1;
+            if let Ok(env) = Envelope::wrap(
+                1,
+                format!("r-obo-{n}"),
+                &RuntimeToHost::OboRenew {
+                    scopes: vec![],
+                    reason: bbrt_protocol::RenewReason::Expiring,
+                },
+            ) {
+                write_env(&env);
+            }
+        });
+    }
+
     // 启动回补的日报补报
     for rep in backfilled {
         send(
