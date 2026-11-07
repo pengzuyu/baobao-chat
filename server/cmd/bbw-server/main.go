@@ -50,6 +50,10 @@ import (
 	mailrepo "github.com/baobaowork/server/internal/mail/repo"
 	mailservice "github.com/baobaowork/server/internal/mail/service"
 	"github.com/baobaowork/server/internal/mcpgw"
+	"github.com/baobaowork/server/internal/meeting"
+	meetingapi "github.com/baobaowork/server/internal/meeting/api"
+	meetingrepo "github.com/baobaowork/server/internal/meeting/repo"
+	meetingservice "github.com/baobaowork/server/internal/meeting/service"
 	"github.com/baobaowork/server/internal/message"
 	"github.com/baobaowork/server/internal/message/api"
 	"github.com/baobaowork/server/internal/message/repo"
@@ -681,6 +685,23 @@ func main() {
 	mux.Handle("GET /api/v1/admin/acl", adminOnly(handleACLList(aclSvc)))
 	mux.Handle("POST /api/v1/admin/acl", adminOnly(handleACLGrant(aclSvc)))
 	mux.Handle("DELETE /api/v1/admin/acl/{id}", adminOnly(handleACLRevoke(aclSvc)))
+
+	// ── 会议域（21 篇阶段一务实版）：预约/日历/RSVP/忙闲 ──
+	// 媒体/信令复用 rtc（入会=join 模式群通话，call_id=meeting_no 约定）；
+	// 推送经 hub 直推 meeting.*（瞬态，rtc 同款）
+	var meetingRepoInst meetingrepo.Repo
+	if pgPool != nil {
+		meetingRepoInst = meetingrepo.NewPostgres(pgPool)
+	} else {
+		meetingRepoInst = meetingrepo.NewMemory()
+	}
+	meetPush := gateway.RtcPusher{Hub: hub}
+	meetingMod := meeting.NewModule(meetingservice.Options{
+		PushMeet: func(userID int64, typ string, payload any) {
+			meetPush.PushRTC([]int64{userID}, typ, payload)
+		},
+	}, meetingRepoInst)
+	meetingapi.RegisterRoutes(mux, authed, meetingMod.API())
 
 	// ── 机器人域（20 篇阶段一+二：Incoming + Outgoing）──
 	workerCtx, workerStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

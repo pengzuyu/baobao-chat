@@ -70,6 +70,9 @@ var resourceAclSQL string
 //go:embed 0018_bot_delivery_log.sql
 var botDeliveryLogSQL string
 
+//go:embed 0019_meeting.sql
+var meetingSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -108,4 +111,6 @@ var List = []Migration{
 	{Version: 17, Name: "0017_resource_acl", Probe: "", SQL: resourceAclSQL},
 	// 0018 同理留空：bot_delivery_log 仅本迁移创建 + bot_webhook 扩列（幂等 IF NOT EXISTS/IF NOT COLUMN 兜底）
 	{Version: 18, Name: "0018_bot_delivery_log", Probe: "", SQL: botDeliveryLogSQL},
+	// 0019 同理留空：meeting_* 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（21 篇阶段一务实版）
+	{Version: 19, Name: "0019_meeting", Probe: "", SQL: meetingSQL},
 }
