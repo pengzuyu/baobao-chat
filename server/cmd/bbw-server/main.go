@@ -40,6 +40,7 @@ import (
 	kbapi "github.com/baobaowork/server/internal/kb/api"
 	kbrepo "github.com/baobaowork/server/internal/kb/repo"
 	kbservice "github.com/baobaowork/server/internal/kb/service"
+	"github.com/baobaowork/server/internal/mcpgw"
 	"github.com/baobaowork/server/internal/message"
 	"github.com/baobaowork/server/internal/message/api"
 	"github.com/baobaowork/server/internal/message/repo"
@@ -348,6 +349,29 @@ func main() {
 	mux.Handle("POST /api/v1/kb/docs/{id}/reingest", authed(handleKBReingest(kbSvc)))
 	mux.Handle("POST /api/v1/kb/query", authed(handleKBQuery(kbSvc)))
 	mux.Handle("GET /api/v1/kb/jobs", authed(handleKBJobs(kbSvc)))
+
+	// ── MCP 网关供给层（D14 §6 裁决 2026-11-07）：公司域工具包成 MCP server
+	// 暴露，Runtime bbrt-mcp 连接期 initialize+tools/list 发现（mcp.corp.* 命名
+	// 空间），tools/call 携带 OBO 逐请求传播（三层身份：连接/主体/归因）；
+	// 试点 kb_query+doc_read（OQ-B26）。独立鉴权链（Bearer=用户 JWT/OBO，
+	// 同 aigw 口径），不走 /api/v1 authed ──
+	mcpgwMod := mcpgw.NewModule(mcpgw.Options{
+		Verify: func(_ context.Context, token string) (*authjwt.Claims, error) {
+			return authAPI.Verify(context.Background(), token)
+		},
+		// 跨域闭包（D02 §4：mcpgw 不横向依赖 kb/doc 包；数据过滤在域服务=防线三）
+		KBQuery: func(ctx context.Context, tenantID, uid int64, spaceIDs []string, keyword string, topK int) (any, error) {
+			return kbSvc.Query(ctx, tenantID, uid, spaceIDs, keyword, topK)
+		},
+		DocRead: func(ctx context.Context, tenantID, uid, docID int64) (any, error) {
+			return docSvc.GetFile(ctx, tenantID, uid, docID)
+		},
+		Audit: func(_ context.Context, e mcpgw.AuditEntry) {
+			log.Printf("[mcpgw] tool=%s tenant=%d subject=%d obo=%v act=%s ok=%v err=%s %dms",
+				e.Tool, e.TenantID, e.Subject, e.OBO, e.Act, e.OK, e.ErrCode, e.Duration)
+		},
+	})
+	mux.HandleFunc("POST /mcp/corp", mcpgwMod.API().HandleMCP)
 
 	// ── 管理域（D10 阶段一务实版）──
 	// 跨域聚合闭包注入（D02 §4：admin 域不横向依赖业务包）：
