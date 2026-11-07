@@ -877,6 +877,7 @@ fn tool_executor_trait对象可装配loopdeps() {
         wal: Arc::new(bbrt_session::NoopEventLog),
         sink: Arc::new(bbrt_session::NullSink),
         snapshots: None,
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         budget: Default::default(),
     };
     let _ = &deps;

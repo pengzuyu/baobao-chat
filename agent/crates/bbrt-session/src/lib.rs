@@ -21,6 +21,7 @@ pub mod executor;
 pub mod loop_runner;
 pub mod manager;
 pub mod recovery;
+pub mod skills;
 pub mod state;
 
 pub use checkpoint::{GitSnapshots, SnapshotOutcome, SnapshotService};
@@ -36,6 +37,7 @@ pub use loop_runner::{
 };
 pub use manager::{ManagerError, RestoredSummary, SessionManager, StartParams};
 pub use recovery::{recover, InFlightTool, ReplayReport};
+pub use skills::{SkillEntry, SkillIndex};
 pub use state::{
     accept_user_message, begin, begin_delegation, begin_fanout, complete_delegation,
     complete_round, end, fail_delegation, fail_initialization, fail_unrecoverable, initialized,

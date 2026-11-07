@@ -9,7 +9,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::delegation::{DelegateEvt, DelegateLaunchReq, DelegateLauncher};
@@ -213,6 +213,8 @@ pub struct LoopDeps {
     pub sink: Arc<dyn SessionSink>,
     /// 检查点服务（None=未装配 → pre-edit/委派快照跳过；08 §4.4）
     pub snapshots: Option<Arc<dyn crate::checkpoint::SnapshotService>>,
+    /// 技能索引（10 篇 §4.5：triggers 命中正文注入 skills 区块；tools.reload 热替换）
+    pub skills: Arc<Mutex<crate::skills::SkillIndex>>,
     pub budget: BudgetConfig,
 }
 
@@ -321,11 +323,18 @@ impl SessionRunner {
 
             // ② 组装 + 请求模型
             report.steps += 1;
+            // 技能命中注入（10 篇 §4.5：用户消息含 trigger 的技能正文进 skills
+            // 区块，context 预算 5% 截断兜底；索引空/未命中=空段零成本）
+            let skills_text = {
+                let idx = deps.skills.lock().unwrap_or_else(|p| p.into_inner());
+                let matched = idx.match_for(user_text);
+                idx.render(&matched)
+            };
             let assembled = assemble(
                 &deps.budget,
                 AssembleParts {
                     system: SYSTEM_PROMPT,
-                    skills: "",
+                    skills: &skills_text,
                     project: &format!("workspace: {}", self.workspace),
                     memory_index: &memory_index,
                     history: &self.history,
@@ -1056,9 +1065,10 @@ const SYSTEM_PROMPT: &str = "你是 BaobaoWork 的本机 Agent，服务单一用
 fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {
     let mut msgs = vec![ChatMessage {
         role: "system".into(),
+        // [技能] 段（10 篇 §4.5 命中注入；此前 Assembled.skills 组装后被丢弃——补消费）
         content: format!(
-            "{}\n\n[项目]\n{}\n\n[记忆]\n{}",
-            a.system, a.project, a.memory_index
+            "{}\n\n[技能]\n{}\n\n[项目]\n{}\n\n[记忆]\n{}",
+            a.system, a.skills, a.project, a.memory_index
         ),
         tool_calls: vec![],
         tool_call_id: None,

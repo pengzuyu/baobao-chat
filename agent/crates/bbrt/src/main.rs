@@ -118,6 +118,11 @@ fn run() -> Result<(), String> {
             eprintln!("[bbrt] MCP server '{name}' 连接降级: {e}");
         }
     }
+    // 技能索引（10 篇 §4.5）：扫描 {dataDir}/eco/skills/*/SKILL.md；
+    // tools.reload{reason:skill} 热重载（宿主安装/更新/卸载技能包后触发）
+    let skills_index = Arc::new(Mutex::new(bbrt_session::SkillIndex::scan(
+        &data_dir.join("eco/skills"),
+    )));
     let tools = Arc::new(bbrt_tools::PipelineExecutor::new(bbrt_tools::ToolsConfig {
         workspace: PathBuf::from("."),
         launcher: None, // detect() 探测（Seatbelt/Baseline + 降级徽标）
@@ -152,6 +157,7 @@ fn run() -> Result<(), String> {
         wal: store.clone(),
         sink: sink.clone(),
         snapshots: Some(Arc::new(bbrt_session::GitSnapshots::new(store.clone()))),
+        skills: skills_index.clone(),
         budget: Default::default(),
     };
     let mgr = Arc::new(SessionManager::new(deps, Some(store.clone())));
@@ -235,7 +241,17 @@ fn run() -> Result<(), String> {
             Ok(None) => return Ok(()), // EOF 优雅退出
             Err(_) => continue,        // 坏行：codec 已丢弃（忽略+计数对齐 D11 §4）
         };
-        let reply = dispatch(&mgr, &memory, &sink, &store, &obo, &mut ids, &env);
+        let reply = dispatch(
+            &mgr,
+            &memory,
+            &sink,
+            &store,
+            &obo,
+            &skills_index,
+            &data_dir.join("eco/skills"),
+            &mut ids,
+            &env,
+        );
         if let Some(msg) = reply {
             if let Ok(mut ack) = Envelope::wrap(1, format!("r-{}", ids.next_id()), &msg) {
                 ack.reply_to = Some(env.id.clone());
@@ -252,6 +268,8 @@ fn dispatch(
     sink: &Arc<BrtSink>,
     store: &Arc<Mutex<Store>>,
     obo: &Arc<std::sync::Mutex<bbrt_hostapi::OboCache>>,
+    skills: &Arc<Mutex<bbrt_session::SkillIndex>>,
+    eco_skills_dir: &std::path::Path,
     ids: &mut IdGen,
     env: &Envelope,
 ) -> Option<RuntimeToHost> {
@@ -536,6 +554,14 @@ fn dispatch(
                     error: Some(e),
                 }),
             }
+        }
+        // 工具/技能热重载（10 篇 §4.5：宿主安装/更新/卸载技能包后 tools.reload
+        // {reason:skill}；App/Policy 亦触发技能重扫——生态内容变更的统一失效信号）
+        HostToRuntime::ToolsReload { .. } => {
+            if let Ok(mut idx) = skills.lock() {
+                *idx = bbrt_session::SkillIndex::scan(eco_skills_dir);
+            }
+            None // 效果经后续轮次注入体现（协议无独立回执变体）
         }
         _ => None, // 其余 REQ 阶段二；NTF 误投忽略
     }
