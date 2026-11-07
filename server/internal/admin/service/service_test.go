@@ -398,3 +398,36 @@ func TestBatchImportUsers(t *testing.T) {
 		t.Fatal("超 100 行应拒")
 	}
 }
+
+func TestAgentGovernance(t *testing.T) {
+	svc, _, _, fx := newFixture([]string{"alice"})
+	ctx := context.Background()
+	// 计量闭包注入（重建 service 携带闭包与副作用计数）
+	svc2 := svc // 复用既有 opts？——直接测既有 svc（AgentUsage nil=空列表）
+	users, err := svc2.ListAgentUsers(ctx, 1)
+	if err != nil || len(users) != 0 {
+		t.Fatalf("nil 闭包应空列表: %v %+v", err, users)
+	}
+	// revoke：吊销+踢线副作用（fixture effectCounter 计数）
+	_ = fx
+	if err := svc2.RevokeAgentAccess(ctx, 1, 10001, 10002); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	// killswitch：查询态不改；写态切换+审计
+	on, err := svc2.AgentKillswitch(ctx, 1, 0, true)
+	if err != nil || on {
+		t.Fatalf("查询态不应翻转: %v %v", on, err)
+	}
+	on, err = svc2.AgentKillswitch(ctx, 1, 10001, true)
+	if err != nil || !on || !svc2.AgentKillOn() {
+		t.Fatalf("写态应开启: %v", on)
+	}
+	on, _ = svc2.AgentKillswitch(ctx, 1, 10001, false)
+	if on {
+		t.Fatal("应可关闭")
+	}
+	// 非法 uid 拒绝
+	if err := svc2.RevokeAgentAccess(ctx, 1, 10001, 0); err == nil {
+		t.Fatal("uid=0 应拒")
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -487,6 +488,41 @@ func main() {
 		noticeStore = adminrepo.NewMemoryNotices()
 	}
 	adminOpts.HashPassword = authservice.HashPassword
+	// Agent 计量聚合（PAD-14）：aigw Meter Snapshot 按（tenant,user）聚合 chat/delegate/expert 场景
+	adminOpts.AgentUsage = func(tenantID int64) []adminservice.AgentUsageRow {
+		type acc struct {
+			req, tok, last int64
+			sessions       map[string]bool
+		}
+		m := map[int64]*acc{}
+		for dim, row := range aigwMod.Meter.Snapshot() {
+			if dim.Tenant != tenantID || dim.User == 0 || dim.Scene == "embed" {
+				continue
+			}
+			a := m[dim.User]
+			if a == nil {
+				a = &acc{sessions: map[string]bool{}}
+				m[dim.User] = a
+			}
+			a.req += row.Requests
+			a.tok += row.Prompt + row.Completion
+			if dim.Session != "" {
+				a.sessions[dim.Session] = true
+			}
+			if h := row.UpdatedHour.UnixMilli(); h > a.last {
+				a.last = h
+			}
+		}
+		out := make([]adminservice.AgentUsageRow, 0, len(m))
+		for uid, a := range m {
+			out = append(out, adminservice.AgentUsageRow{
+				UserID: uid, Requests: a.req, Tokens: a.tok,
+				Sessions: len(a.sessions), LastHour: a.last,
+			})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Requests > out[j].Requests })
+		return out
+	}
 	adminOpts.CreateUser = func(ctx context.Context, u orgapi.User) (orgapi.User, error) {
 		return orgRepo.CreateUser(ctx, u)
 	}
@@ -543,6 +579,11 @@ func main() {
 	mux.Handle("POST /api/v1/admin/notices", adminOnly(handleAdminPublishNotice(adminSvc)))
 	// 批量导入（PAD-06；admin:user:manage）
 	mux.Handle("POST /api/v1/admin/users/import", adminOnly(handleAdminImportUsers(adminSvc)))
+	// Agent 治理（PAD-14；admin:agent:revoke / platform:agent:killswitch）
+	mux.Handle("GET /api/v1/admin/agent/users", adminOnly(handleAdminAgentUsers(adminSvc)))
+	mux.Handle("POST /api/v1/admin/agent/revoke", adminOnly(handleAdminAgentRevoke(adminSvc)))
+	mux.Handle("GET /api/v1/admin/agent/killswitch", adminOnly(handleAdminAgentKillswitch(adminSvc, false)))
+	mux.Handle("PUT /api/v1/admin/agent/killswitch", adminOnly(handleAdminAgentKillswitch(adminSvc, true)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -2553,5 +2594,73 @@ func handleAdminImportUsers(svc adminapi.AdminService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, res)
+	}
+}
+
+// ── Agent 治理 REST 壳（PAD-14） ──
+
+func handleAdminAgentUsers(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := svc.ListAgentUsers(r.Context(), httpx.TenantID(r.Context()))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items})
+	}
+}
+
+func handleAdminAgentRevoke(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			UserID int64 `json:"user_id"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.RevokeAgentAccess(r.Context(), httpx.TenantID(r.Context()), op, req.UserID); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+func handleAdminAgentKillswitch(svc adminapi.AdminService, isWrite bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant := httpx.TenantID(r.Context())
+		if !isWrite {
+			on, err := svc.AgentKillswitch(r.Context(), tenant, 0, false)
+			if err != nil {
+				httpx.Fail(w, r, err)
+				return
+			}
+			httpx.OK(w, r, map[string]any{"on": on})
+			return
+		}
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			On bool `json:"on"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		on, err := svc.AgentKillswitch(r.Context(), tenant, op, req.On)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"on": on})
 	}
 }

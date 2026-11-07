@@ -337,3 +337,35 @@ export async function batchImportUsers(rows: ImportInputRow[]): Promise<ImportRe
   if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持批量导入');
   return http.post<ImportResult>('/admin/users/import', { rows });
 }
+
+/* ── Agent 治理（PAD-14） ── */
+
+export interface AgentUserRow {
+  user_id: string;
+  name: string;
+  requests: number;
+  tokens: number;
+  sessions: number;
+  last_hour: number;
+}
+
+export async function fetchAgentUsers(): Promise<AgentUserRow[]> {
+  if (USE_MOCK) return [];
+  const data = await http.get<{ items: AgentUserRow[] }>('/admin/agent/users');
+  return data.items;
+}
+
+export async function revokeAgentAccess(userId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await http.post('/admin/agent/revoke', { user_id: Number(userId) });
+}
+
+export async function agentKillswitch(on?: boolean): Promise<boolean> {
+  if (USE_MOCK) return false;
+  if (on === undefined) {
+    const data = await http.get<{ on: boolean }>('/admin/agent/killswitch');
+    return data.on;
+  }
+  const data = await http.put<{ on: boolean }>('/admin/agent/killswitch', { on });
+  return data.on;
+}

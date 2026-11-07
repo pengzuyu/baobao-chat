@@ -200,7 +200,23 @@ type ImportResult struct {
 	Rows    []ImportRow `json:"rows"`
 }
 
+// AgentUserRow Agent 活跃用户行（PAD-14；aigw 计量按用户聚合）
+type AgentUserRow struct {
+	UserID   int64  `json:"user_id,string"`
+	Name     string `json:"name"`
+	Requests int64  `json:"requests"`  // 计量窗内请求数
+	Tokens   int64  `json:"tokens"`    // prompt+completion
+	Sessions int    `json:"sessions"`  // 活跃会话数（X-BBW-Agent-Session 去重）
+	LastHour int64  `json:"last_hour"` // 最近开票小时（ms）
+}
+
 type AdminService interface {
+	// ── Agent 治理（PAD-14；admin:agent:revoke / platform:agent:killswitch）──
+	ListAgentUsers(ctx context.Context, tenantID int64) ([]AgentUserRow, error)
+	// RevokeAgentAccess 吊销该用户 Agent 通道（OBO/refresh 全失效+踢线）
+	RevokeAgentAccess(ctx context.Context, tenantID, operatorID, userID int64) error
+	// AgentKillswitch 平台总闸（true=紧急停止；生效路径阶段二接 OBO 签发闸门，登记）
+	AgentKillswitch(ctx context.Context, tenantID, operatorID int64, on bool) (bool, error)
 	// ── 批量导入（PAD-06；v0.1 同步 ≤100 行/次，admin_task 异步化阶段二登记）──
 	BatchImportUsers(ctx context.Context, tenantID, operatorID int64, rows []ImportUserRow) (*ImportResult, error)
 	// ── 平台公告（PAD-15；admin:notice:publish）──

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/baobaowork/server/internal/admin/api"
@@ -52,6 +53,8 @@ type Options struct {
 	HashPassword func(password string) (string, error)
 	// CreateUser 建用户闭包（PAD-06；main 注入 orgRepo.CreateUser——admin 域不引 org repo）
 	CreateUser func(ctx context.Context, u orgapi.User) (orgapi.User, error)
+	// AgentUsage Agent 计量聚合闭包（PAD-14；main 注入 aigw Meter Snapshot 按用户聚合；nil=空列表）
+	AgentUsage func(tenantID int64) []AgentUsageRow
 
 	// Now 时钟注入（测试用）
 	Now func() time.Time
@@ -74,6 +77,9 @@ type Service struct {
 	roles   adminrepo.RoleRepo   // 角色管理（PAD-08；nil=未装配）
 	notices adminrepo.NoticeRepo // 平台公告（PAD-15；nil=未装配）
 	opts    Options
+
+	agentKill   bool // Agent 平台总闸（PAD-14；内存态——持久化随策略域阶段二，登记）
+	agentKillMu sync.Mutex
 }
 
 // internal 统一内部错误（角色/授权链路）
@@ -757,4 +763,74 @@ func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int
 	}
 	_ = s.audit(ctx, tenantID, operatorID, "users.import", "", map[string]any{"created": res.Created, "failed": res.Failed})
 	return res, nil
+}
+
+/* ── Agent 治理（PAD-14；v0.1：计量聚合视图+令牌吊销+总闸内存态） ── */
+
+// AgentUsageRow 计量闭包输入（main 从 aigw Meter Snapshot 聚合）
+type AgentUsageRow struct {
+	UserID   int64
+	Requests int64
+	Tokens   int64
+	Sessions int
+	LastHour int64 // ms
+}
+
+func (s *Service) ListAgentUsers(ctx context.Context, tenantID int64) ([]adminapi.AgentUserRow, error) {
+	if s.opts.AgentUsage == nil {
+		return []adminapi.AgentUserRow{}, nil
+	}
+	rows := s.opts.AgentUsage(tenantID)
+	out := make([]adminapi.AgentUserRow, 0, len(rows))
+	for _, r := range rows {
+		name := ""
+		if u, err := s.same.GetUser(ctx, r.UserID); err == nil && u != nil {
+			name = u.DisplayName
+		}
+		out = append(out, adminapi.AgentUserRow{
+			UserID: r.UserID, Name: name,
+			Requests: r.Requests, Tokens: r.Tokens, Sessions: r.Sessions, LastHour: r.LastHour,
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) RevokeAgentAccess(ctx context.Context, tenantID, operatorID, userID int64) error {
+	if userID <= 0 {
+		return errx.New(errx.CodeBadRequest, "user_id 非法")
+	}
+	// 通道一：吊销全部会话令牌（refresh+OBO——auth 域 Logout all）
+	if s.opts.RevokeSessions != nil {
+		if err := s.opts.RevokeSessions(ctx, userID); err != nil {
+			return s.internal("令牌吊销失败")
+		}
+	}
+	// 通道二：踢线（活跃 WS 断开，Agent 宿主 OboCache 续签即失败）
+	kicked := 0
+	if s.opts.KickUser != nil {
+		kicked = s.opts.KickUser(userID)
+	}
+	return s.audit(ctx, tenantID, operatorID, "agent.revoke", "", map[string]any{
+		"user_id": userID, "kicked": kicked,
+	})
+}
+
+func (s *Service) AgentKillswitch(_ context.Context, tenantID, operatorID int64, on bool) (bool, error) {
+	s.agentKillMu.Lock()
+	prev := s.agentKill
+	if operatorID > 0 { // operatorID=0 查询态（不审计不改）
+		s.agentKill = on
+	}
+	s.agentKillMu.Unlock()
+	if operatorID > 0 && prev != on {
+		_ = s.audit(context.Background(), tenantID, operatorID, "agent.killswitch", "", map[string]any{"on": on})
+	}
+	return s.agentKill, nil
+}
+
+// AgentKillOn 总闸状态读（生效路径阶段二：OBO 签发/aigw scene 闸门接入，登记）
+func (s *Service) AgentKillOn() bool {
+	s.agentKillMu.Lock()
+	defer s.agentKillMu.Unlock()
+	return s.agentKill
 }
