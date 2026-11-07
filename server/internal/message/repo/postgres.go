@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,6 +29,7 @@ const (
 	lockKeyConversation int64 = 9102
 	lockKeyConvMember   int64 = 9105
 	lockKeyConvApply    int64 = 9106
+	lockKeyMsgFavorite  int64 = 9107
 )
 
 // Postgres message 域 PG 仓储
@@ -809,4 +811,192 @@ func (p *Postgres) ListAppliesByConv(ctx context.Context, convID int64, status i
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// ── 搜索（D03 §3.7 PIM-07 服务端态；API-IM-12）──
+
+// likeEscape ILIKE 通配符转义（keyword 作为纯子串语义，%/_/\ 按字面匹配）
+func likeEscape(s string) string {
+	r := strings.ReplaceAll(s, `\`, `\\`)
+	r = strings.ReplaceAll(r, `%`, `\%`)
+	return strings.ReplaceAll(r, `_`, `\_`)
+}
+
+// SearchMessages 服务端态搜索（阶段一 ILIKE；zhparser 全文索引阶段二）：
+// 可见性=发起者在群成员的会话（JOIN conversation_member status=1）；
+// 命中口径 body->>'text' / body->>'name'（与内存版 searchableTextOf 一致）；
+// 已撤回(status=2)不可检索；msg_id 倒序分页（cursor=上一页最后一条 msg_id）。
+func (p *Postgres) SearchMessages(ctx context.Context, f SearchFilter) ([]messageapi.Message, error) {
+	if f.Limit <= 0 || f.Limit > 100 {
+		f.Limit = 20
+	}
+	q := `SELECT m.id, m.conv_id, m.seq, m.client_msg_id, m.sender_id, m.type, m.body, m.mentions,
+		m.reply_to_seq, m.ext, m.status,
+		(extract(epoch from COALESCE(m.edited_at, to_timestamp(0)))*1000)::bigint,
+		COALESCE(m.edit_version, 1), (extract(epoch from m.ts)*1000)::bigint
+	FROM message m
+	JOIN conversation_member cm ON cm.conv_id = m.conv_id AND cm.user_id = $1 AND cm.status = 1
+	WHERE m.status <> 2
+		AND (m.body->>'text' ILIKE '%' || $2 || '%' ESCAPE '\' OR m.body->>'name' ILIKE '%' || $2 || '%' ESCAPE '\')`
+	args := []any{f.UserID, likeEscape(f.Keyword)}
+	if f.FromUID > 0 {
+		args = append(args, f.FromUID)
+		q += ` AND m.sender_id = $` + strconv.Itoa(len(args))
+	}
+	if f.ConvID > 0 {
+		args = append(args, f.ConvID)
+		q += ` AND m.conv_id = $` + strconv.Itoa(len(args))
+	}
+	if f.Type != "" {
+		args = append(args, f.Type)
+		q += ` AND m.type = $` + strconv.Itoa(len(args))
+	}
+	if f.FromTS > 0 {
+		args = append(args, float64(f.FromTS))
+		q += ` AND m.ts >= to_timestamp($` + strconv.Itoa(len(args)) + `::double precision/1000)`
+	}
+	if f.ToTS > 0 {
+		args = append(args, float64(f.ToTS))
+		q += ` AND m.ts <= to_timestamp($` + strconv.Itoa(len(args)) + `::double precision/1000)`
+	}
+	if f.Cursor > 0 {
+		args = append(args, f.Cursor)
+		q += ` AND m.id < $` + strconv.Itoa(len(args))
+	}
+	args = append(args, f.Limit)
+	q += ` ORDER BY m.id DESC LIMIT $` + strconv.Itoa(len(args))
+
+	rows, err := p.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []messageapi.Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
+// ── 收藏（D03 §3.8 PIM-08；§6.1 message_favorite，迁移 0005）──
+
+// AddFavorite 收藏（UK(user_id,msg_id) 冲突幂等返回现值 created=false；
+// tenant_id 取自消息所属会话行——RLS 写入检查需要）
+func (p *Postgres) AddFavorite(ctx context.Context, userID, msgID, convID int64) (Favorite, bool, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Favorite{}, false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
+	var favID int64
+	if favID, err = bbwpg.AllocID(ctx, tx, lockKeyMsgFavorite, "message_favorite"); err != nil {
+		return Favorite{}, false, err
+	}
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO message_favorite (id, tenant_id, user_id, msg_id, conv_id)
+		SELECT $1, c.tenant_id, $2, $3, c.id FROM conversation c WHERE c.id = $4
+		ON CONFLICT (user_id, msg_id) DO NOTHING`,
+		favID, userID, msgID, convID)
+	if err != nil {
+		return Favorite{}, false, err
+	}
+	if tag.RowsAffected() == 0 { // 已收藏：返回现值（幂等）
+		if err = tx.Commit(ctx); err != nil {
+			return Favorite{}, false, err
+		}
+		cur, err := p.getFavorite(ctx, userID, msgID)
+		if err != nil {
+			return Favorite{}, false, err
+		}
+		return *cur, false, nil
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Favorite{}, false, err
+	}
+	cur, err := p.getFavorite(ctx, userID, msgID)
+	if err != nil {
+		return Favorite{}, false, err
+	}
+	return *cur, true, nil
+}
+
+// getFavorite 查收藏行（不存在返回 ErrNotFound）
+func (p *Postgres) getFavorite(ctx context.Context, userID, msgID int64) (*Favorite, error) {
+	var f Favorite
+	err := p.pool.QueryRow(ctx, `
+		SELECT id, user_id, msg_id, conv_id, created_at
+		FROM message_favorite WHERE user_id=$1 AND msg_id=$2`, userID, msgID).
+		Scan(&f.ID, &f.UserID, &f.MsgID, &f.ConvID, &f.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, messageapi.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// RemoveFavorite 取消收藏（不存在 no-op，幂等）
+func (p *Postgres) RemoveFavorite(ctx context.Context, userID, msgID int64) error {
+	_, err := p.pool.Exec(ctx,
+		`DELETE FROM message_favorite WHERE user_id=$1 AND msg_id=$2`, userID, msgID)
+	return err
+}
+
+// ListFavorites 收藏列表（created_at 倒序 + id 次序稳定；type 过滤经消息行 JOIN；
+// cursor=收藏 id，0=首页）
+func (p *Postgres) ListFavorites(ctx context.Context, userID int64, msgType string, cursor int64, limit int) ([]Favorite, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	q := `SELECT f.id, f.user_id, f.msg_id, f.conv_id, f.created_at
+		FROM message_favorite f`
+	args := []any{userID}
+	if msgType != "" {
+		q += ` JOIN message m ON m.id = f.msg_id AND m.type = $2`
+		args = append(args, msgType)
+	}
+	q += ` WHERE f.user_id = $1`
+	if cursor > 0 {
+		args = append(args, cursor)
+		q += ` AND f.id < $` + strconv.Itoa(len(args))
+	}
+	args = append(args, limit)
+	q += ` ORDER BY f.created_at DESC, f.id DESC LIMIT $` + strconv.Itoa(len(args))
+
+	rows, err := p.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Favorite{}
+	for rows.Next() {
+		var f Favorite
+		if err := rows.Scan(&f.ID, &f.UserID, &f.MsgID, &f.ConvID, &f.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// CountFavorites 收藏总数（上限 1000 校验依据）
+func (p *Postgres) CountFavorites(ctx context.Context, userID int64) (int64, error) {
+	var n int64
+	err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM message_favorite WHERE user_id=$1`, userID).Scan(&n)
+	return n, err
+}
+
+// ExistsFavorite UK(user_id,msg_id) 探测
+func (p *Postgres) ExistsFavorite(ctx context.Context, userID, msgID int64) (bool, error) {
+	var exists bool
+	err := p.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM message_favorite WHERE user_id=$1 AND msg_id=$2)`,
+		userID, msgID).Scan(&exists)
+	return exists, err
 }

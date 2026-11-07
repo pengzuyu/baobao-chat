@@ -28,6 +28,12 @@ var aiGatewaySQL string
 //go:embed 0004_conversation_apply.sql
 var convApplySQL string
 
+//go:embed 0005_message_favorite.sql
+var msgFavoriteSQL string
+
+//go:embed 0006_sensitive_word.sql
+var sensitiveWordSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -38,4 +44,8 @@ var List = []Migration{
 	{Version: 3, Name: "0003_ai_gateway", Probe: "", SQL: aiGatewaySQL},
 	// 0004 同理留空：conversation_apply 仅本迁移创建；幂等由 IF NOT EXISTS 兜底
 	{Version: 4, Name: "0004_conversation_apply", Probe: "", SQL: convApplySQL},
+	// 0005 同理留空：message_favorite 仅本迁移创建；幂等由 IF NOT EXISTS 兜底
+	{Version: 5, Name: "0005_message_favorite", Probe: "", SQL: msgFavoriteSQL},
+	// 0006 同理留空：sensitive_word 仅本迁移创建；幂等由 IF NOT EXISTS 兜底
+	{Version: 6, Name: "0006_sensitive_word", Probe: "", SQL: sensitiveWordSQL},
 }

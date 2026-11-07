@@ -115,6 +115,55 @@ type Repo interface {
 	UpdateApplyStatus(ctx context.Context, id int64, status int, handledBy int64, handledAt time.Time) error
 	// ListAppliesByConv 按状态列申请（status=0 表示全部）
 	ListAppliesByConv(ctx context.Context, convID int64, status int) ([]Apply, error)
+
+	// ── 搜索（D03 §3.7 PIM-07 服务端态；API-IM-12）──
+
+	// SearchMessages 服务端态搜索：仅命中发起者可见的会话（在群成员），
+	// 过滤器 AND 组合（keyword/from_uid/conv_id/type/from_ts/to_ts），
+	// 按 msg_id 倒序分页（cursor=上一页最后一条 msg_id，0=首页）。
+	// 实现：PG=ILIKE（zhparser 全文索引阶段二）；内存=遍历+子串匹配（大小写不敏感，对齐 ILIKE）
+	SearchMessages(ctx context.Context, f SearchFilter) ([]messageapi.Message, error)
+
+	// ── 收藏（D03 §3.8 PIM-08；§6.1 message_favorite）──
+	FavoriteStore
+}
+
+// FavoriteStore 收藏存储（UK(user_id,msg_id) 幂等；上限 1000 由 service 应用层校验→3022）。
+// 快照仅存 msg_id+conv_id——详情实时取（撤回消息可收藏，列表渲染占位语义）。
+type FavoriteStore interface {
+	// AddFavorite 收藏（已收藏幂等：created=false 并返回现值）
+	AddFavorite(ctx context.Context, userID, msgID, convID int64) (f Favorite, created bool, err error)
+	// RemoveFavorite 取消收藏（不存在 no-op，幂等）
+	RemoveFavorite(ctx context.Context, userID, msgID int64) error
+	// ListFavorites 收藏列表（created_at 倒序；msgType 空串=全部，按消息 type 过滤；
+	// cursor=上一页最后一条收藏 id，0=首页；limit≤0 或 >100 取 20）
+	ListFavorites(ctx context.Context, userID int64, msgType string, cursor int64, limit int) ([]Favorite, error)
+	// CountFavorites 收藏总数（上限校验依据）
+	CountFavorites(ctx context.Context, userID int64) (int64, error)
+	// ExistsFavorite UK(user_id,msg_id) 探测（幂等前置：已收藏不占新额度）
+	ExistsFavorite(ctx context.Context, userID, msgID int64) (bool, error)
+}
+
+// Favorite 收藏行（04 篇 §5.1 message_favorite）
+type Favorite struct {
+	ID        int64
+	UserID    int64
+	MsgID     int64
+	ConvID    int64
+	CreatedAt time.Time
+}
+
+// SearchFilter 服务端态搜索过滤器（D03 API-IM-12：AND 组合；零值=不限）
+type SearchFilter struct {
+	UserID  int64  // 发起者（可见性过滤：仅在群成员的会话）
+	Keyword string // 已由 service 校验（非空白、≤64 字）
+	FromUID int64
+	ConvID  int64
+	Type    string
+	FromTS  int64 // ms 含边界
+	ToTS    int64 // ms 含边界
+	Cursor  int64 // 上一页最后一条 msg_id；0=首页
+	Limit   int   // ≤0 或 >100 取 20
 }
 
 // GroupSetting 群设置（04 篇 §5.1 group_setting）

@@ -11,6 +11,7 @@ package messagerepo
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -46,6 +47,7 @@ func TestPGSmoke(t *testing.T) {
 
 	sfx := strconv.FormatInt(time.Now().UnixNano(), 10)
 	t.Cleanup(func() { // 清理本轮及历史遗留的冒烟数据
+		_, _ = pool.Exec(ctx, `DELETE FROM message_favorite WHERE user_id IN (SELECT id FROM users WHERE employee_no LIKE 'pgsmoke-%')`)
 		_, _ = pool.Exec(ctx, `DELETE FROM message WHERE conv_id IN (SELECT id FROM conversation WHERE name LIKE 'pgsmoke-%')`)
 		_, _ = pool.Exec(ctx, `DELETE FROM message_receipt WHERE conv_id IN (SELECT id FROM conversation WHERE name LIKE 'pgsmoke-%')`)
 		_, _ = pool.Exec(ctx, `DELETE FROM conversation_member WHERE conv_id IN (SELECT id FROM conversation WHERE name LIKE 'pgsmoke-%')`)
@@ -221,6 +223,92 @@ func TestPGSmoke(t *testing.T) {
 	if r, err := mr.GetReceipt(ctx, conv.ID, u2.ID); err != nil || r.ReadSeq != 1 {
 		t.Fatalf("GetReceipt(只进不退): %v %+v", err, r)
 	}
+
+	// ── 搜索（PIM-07 服务端态：ILIKE + 过滤器 + 可见性 + msg_id 倒序分页）──
+	for i, txt := range []string{`{"text":"pgsmoke 关键词甲"}`, `{"text":"PGSMOKE 关键词乙"}`, `{"text":"无关文案"}`} {
+		seqX, err := mr.AllocSeq(ctx, conv.ID)
+		if err != nil {
+			t.Fatalf("AllocSeq(search#%d): %v", i, err)
+		}
+		mx := messageapi.Message{
+			ID: 9_900_000_100 + int64(i), ConvID: conv.ID, Seq: seqX,
+			ClientMsgID: fmt.Sprintf("pgsmoke-s-%s-%d", sfx, i),
+			SenderID:    u1.ID, Type: "text", Body: []byte(txt),
+			Status: messageapi.MsgNormal, TS: time.Now().UnixMilli(),
+		}
+		if err := mr.InsertMessage(ctx, mx); err != nil {
+			t.Fatalf("InsertMessage(search#%d): %v", i, err)
+		}
+	}
+	// 大小写不敏感（ILIKE 口径）+ 可见性（u1 在群）
+	hits, err := mr.SearchMessages(ctx, SearchFilter{UserID: u1.ID, Keyword: "pgsmoke"})
+	if err != nil || len(hits) != 2 {
+		t.Fatalf("SearchMessages: %v %d", err, len(hits))
+	}
+	if hits[0].ID <= hits[1].ID {
+		t.Fatalf("搜索结果应 msg_id 倒序: %d %d", hits[0].ID, hits[1].ID)
+	}
+	if !strings.Contains(string(hits[0].Body), "关键词乙") { // 最新（ID 更大）在前
+		t.Fatalf("倒序首条应含 关键词乙: %s", hits[0].Body)
+	}
+	// from_uid 过滤（u2 无命中消息）+ 非成员可见性（u2 被移出后不可见）
+	if bySender, err := mr.SearchMessages(ctx, SearchFilter{UserID: u1.ID, Keyword: "pgsmoke", FromUID: u2.ID}); err != nil || len(bySender) != 0 {
+		t.Fatalf("SearchMessages(from_uid): %v %d", err, len(bySender))
+	}
+	// cursor 翻页：limit=1 → 首条最新，cursor 续拉次条
+	p1, err := mr.SearchMessages(ctx, SearchFilter{UserID: u1.ID, Keyword: "pgsmoke", Limit: 1})
+	if err != nil || len(p1) != 1 || p1[0].ID != hits[0].ID {
+		t.Fatalf("SearchMessages(分页1): %v %+v", err, p1)
+	}
+	p2, err := mr.SearchMessages(ctx, SearchFilter{UserID: u1.ID, Keyword: "pgsmoke", Limit: 1, Cursor: p1[0].ID})
+	if err != nil || len(p2) != 1 || p2[0].ID != hits[1].ID {
+		t.Fatalf("SearchMessages(分页2): %v %+v", err, p2)
+	}
+
+	// ── 收藏（PIM-08：UK 幂等/倒序/type 过滤/count/exists）──
+	f1, created, err := mr.AddFavorite(ctx, u1.ID, msg.ID, conv.ID)
+	if err != nil || !created || f1.ID == 0 {
+		t.Fatalf("AddFavorite#1: %v %+v created=%v", err, f1, created)
+	}
+	f1b, created, err := mr.AddFavorite(ctx, u1.ID, msg.ID, conv.ID) // UK 幂等
+	if err != nil || created || f1b.ID != f1.ID {
+		t.Fatalf("AddFavorite(重复应幂等返回原行): %v %+v vs %+v created=%v", err, f1b, f1, created)
+	}
+	favMsg2 := int64(9_900_000_101) // 关键词乙消息
+	f2, _, err := mr.AddFavorite(ctx, u1.ID, favMsg2, conv.ID)
+	if err != nil {
+		t.Fatalf("AddFavorite#2: %v", err)
+	}
+	if n, err := mr.CountFavorites(ctx, u1.ID); err != nil || n != 2 {
+		t.Fatalf("CountFavorites: %v %d", err, n)
+	}
+	if ok, err := mr.ExistsFavorite(ctx, u1.ID, msg.ID); err != nil || !ok {
+		t.Fatalf("ExistsFavorite: %v %v", err, ok)
+	}
+	if ok, err := mr.ExistsFavorite(ctx, u2.ID, msg.ID); err != nil || ok {
+		t.Fatalf("ExistsFavorite(他人应 false): %v %v", err, ok)
+	}
+	favs, err := mr.ListFavorites(ctx, u1.ID, "", 0, 20)
+	if err != nil || len(favs) != 2 || favs[0].ID != f2.ID { // created_at 倒序：最新收藏在前
+		t.Fatalf("ListFavorites(倒序): %v %+v", err, favs)
+	}
+	favsText, err := mr.ListFavorites(ctx, u1.ID, "text", 0, 20)
+	if err != nil || len(favsText) != 2 {
+		t.Fatalf("ListFavorites(type=text): %v %d", err, len(favsText))
+	}
+	if favsFile, err := mr.ListFavorites(ctx, u1.ID, "file", 0, 20); err != nil || len(favsFile) != 0 {
+		t.Fatalf("ListFavorites(type=file 应空): %v %d", err, len(favsFile))
+	}
+	if err := mr.RemoveFavorite(ctx, u1.ID, msg.ID); err != nil {
+		t.Fatalf("RemoveFavorite: %v", err)
+	}
+	if n, _ := mr.CountFavorites(ctx, u1.ID); n != 1 {
+		t.Fatalf("RemoveFavorite 后应剩 1: %d", n)
+	}
+	if err := mr.RemoveFavorite(ctx, u1.ID, msg.ID); err != nil { // 重复取消 no-op
+		t.Fatalf("RemoveFavorite(重复应 no-op): %v", err)
+	}
+
 	if err := mr.DissolveConversation(ctx, conv.ID); err != nil {
 		t.Fatalf("DissolveConversation: %v", err)
 	}

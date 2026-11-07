@@ -36,6 +36,10 @@ type Options struct {
 	MaxAnnouncement     int           // 公告上限（默认 2000，D03 §5.2）
 	MaxApplyReason      int           // 申请理由上限（默认 200，D03 §5.2）
 	ApplyTTL            time.Duration // 申请待审时长（默认 7 天→status=4，D03 §3.6）
+
+	// ── 搜索与收藏（D03 §3.7 PIM-07 / §3.8 PIM-08）──
+	MaxFavorites         int // 收藏上限/人（默认 1000，超限 3022，04 篇 §9-2）
+	MaxSearchKeywordRuns int // 搜索词上限（默认 64 字，API-IM-12）
 }
 
 func (o *Options) fillDefaults() {
@@ -74,6 +78,12 @@ func (o *Options) fillDefaults() {
 	}
 	if o.ApplyTTL == 0 {
 		o.ApplyTTL = 7 * 24 * time.Hour
+	}
+	if o.MaxFavorites == 0 {
+		o.MaxFavorites = 1000
+	}
+	if o.MaxSearchKeywordRuns == 0 {
+		o.MaxSearchKeywordRuns = 64
 	}
 	if o.Now == nil {
 		o.Now = time.Now

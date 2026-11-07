@@ -132,6 +132,12 @@ func main() {
 	mux.Handle("PATCH /api/v1/convs/{id}/state", authed(handleConvState(msgMod.API())))
 	// 增量同步（API-IM-01：登录/重连补投）
 	mux.Handle("GET /api/v1/sync", authed(handleSync(msgMod.API())))
+	// 收藏（D03 §3.8 PIM-08；API-IM-10/11）
+	mux.Handle("POST /api/v1/messages/{id}/favorite", authed(handleFavoriteMessage(msgMod.API())))
+	mux.Handle("DELETE /api/v1/messages/{id}/favorite", authed(handleUnfavoriteMessage(msgMod.API())))
+	mux.Handle("GET /api/v1/favorites", authed(handleListFavorites(msgMod.API())))
+	// 全局搜索（D03 §3.7 PIM-07 服务端态；API-IM-12——本地 FTS5 属 Tauri/Rust 侧，不在本路由）
+	mux.Handle("GET /api/v1/messages/search", authed(handleSearchMessages(msgMod.API())))
 
 	// AI 网关（docs/19 §6：OpenAI 兼容入口；独立鉴权链——JWT/OBO/开发令牌，不走 /api/v1 authed）
 	aigwMod := aigw.NewModule(pgPool, func(token string) (*authjwt.Claims, error) {
@@ -510,6 +516,107 @@ func uidFrom(r *http.Request) (int64, error) {
 		return 0, errx.New(errx.CodeBadRequest, "身份非法")
 	}
 	return uid, nil
+}
+
+// ── 搜索与收藏 REST 壳（D03 §3.7 PIM-07 / §3.8 PIM-08）──
+
+// msgIDFrom 路径消息 ID 解析（收藏/取消收藏共用）
+func msgIDFrom(r *http.Request) (int64, error) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, errx.New(errx.CodeBadRequest, "消息 ID 非法")
+	}
+	return id, nil
+}
+
+// handleFavoriteMessage 收藏（API-IM-10 POST：幂等 UK；上限 1000→3022）
+func handleFavoriteMessage(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		msgID, err := msgIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		res, err := svc.Favorite(r.Context(), uid, msgID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleUnfavoriteMessage 取消收藏（API-IM-10 DELETE：幂等 no-op，响应 {}）
+func handleUnfavoriteMessage(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		msgID, err := msgIDFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.Unfavorite(r.Context(), uid, msgID); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+// handleListFavorites 收藏列表（API-IM-11：cursor/limit/type；type=消息类型过滤）
+func handleListFavorites(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		cursor, _ := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		res, err := svc.ListFavorites(r.Context(), uid, r.URL.Query().Get("type"), cursor, limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+// handleSearchMessages 服务端态搜索（API-IM-12：keyword 必填；
+// from_uid/conv_id/type/from_ts/to_ts/cursor/limit 过滤器 AND 组合）
+func handleSearchMessages(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		q := r.URL.Query()
+		fromUID, _ := strconv.ParseInt(q.Get("from_uid"), 10, 64)
+		convID, _ := strconv.ParseInt(q.Get("conv_id"), 10, 64)
+		fromTS, _ := strconv.ParseInt(q.Get("from_ts"), 10, 64)
+		toTS, _ := strconv.ParseInt(q.Get("to_ts"), 10, 64)
+		cursor, _ := strconv.ParseInt(q.Get("cursor"), 10, 64)
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		res, err := svc.SearchMessages(r.Context(), uid, messageapi.SearchParams{
+			Keyword: q.Get("keyword"), FromUID: fromUID, ConvID: convID, Type: q.Get("type"),
+			FromTS: fromTS, ToTS: toTS, Cursor: cursor, Limit: limit,
+		})
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
 }
 
 // seedDemo 演示数据：alice/bob（口令 demo-pass-123）+ 单聊会话。

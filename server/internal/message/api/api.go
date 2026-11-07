@@ -252,9 +252,88 @@ type MessageService interface {
 	// HandleApply 审批（approve 入群/reject；仅 owner/admin）→ member.joined(通过申请)
 	HandleApply(ctx context.Context, userID int64, p ApplyHandlePayload) error
 	// GetConvDetail 会话详情（API-IM-03：conversation+group_setting+my+成员概要）
-	GetConvDetail(ctx context.Context, userID, convID int64) (*ConvDetailDTO, error)
+	GetConvDetail(ctx context.Context, userID int64, convID int64) (*ConvDetailDTO, error)
 	// ListMembers 成员列表（API-IM-05 简版：在群成员含 role/mute_until）
-	ListMembers(ctx context.Context, userID, convID int64) ([]MemberDTO, error)
+	ListMembers(ctx context.Context, userID int64, convID int64) ([]MemberDTO, error)
+
+	// ── 搜索与收藏（D03 §3.7 PIM-07 / §3.8 PIM-08）──
+
+	// Favorite 收藏（API-IM-10：幂等 UK(user_id,msg_id)；上限 1000→3022；撤回消息可收藏）
+	Favorite(ctx context.Context, userID int64, msgID int64) (*FavoriteResult, error)
+	// Unfavorite 取消收藏（幂等：不存在 no-op）
+	Unfavorite(ctx context.Context, userID int64, msgID int64) error
+	// ListFavorites 收藏列表（API-IM-11：created_at 倒序 + type 过滤 + cursor 翻页）
+	ListFavorites(ctx context.Context, userID int64, msgType string, cursor int64, limit int) (*FavoriteListResult, error)
+	// SearchMessages 服务端态搜索（API-IM-12：keyword+过滤器 AND；仅本人可见会话）
+	SearchMessages(ctx context.Context, userID int64, p SearchParams) (*SearchResult, error)
+}
+
+// ── 收藏（D03 §3.8 PIM-08；API-IM-10/11）──
+
+// FavoriteResult POST /messages/{id}/favorite 响应（幂等命中 Duplicate=true 返回原行）
+type FavoriteResult struct {
+	FavoriteID int64 `json:"favoriteId,string"`
+	CreatedAt  int64 `json:"createdAt"` // ms
+	Duplicate  bool  `json:"duplicate,omitempty"`
+}
+
+// FavoriteConv 来源会话快照（收藏列表项内嵌）
+type FavoriteConv struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type int    `json:"type"`
+}
+
+// FavoriteItem 收藏列表项（msg 实时快照：已撤回时 status=2，端内渲染占位——
+// 快照只存 msg_id+conv_id，详情实时取，D03 INT-IM-06）
+type FavoriteItem struct {
+	ID        int64        `json:"id,string"`
+	Msg       *Message     `json:"msg"`
+	Conv      FavoriteConv `json:"conv"`
+	CreatedAt int64        `json:"createdAt"` // ms
+}
+
+// FavoriteListResult GET /favorites 响应（cursor=收藏 id）
+type FavoriteListResult struct {
+	Items      []FavoriteItem `json:"items"`
+	NextCursor string         `json:"nextCursor,omitempty"`
+	HasMore    bool           `json:"hasMore"`
+}
+
+// ── 搜索（D03 §3.7 PIM-07 服务端态；API-IM-12）──
+
+// SearchParams GET /messages/search 入参（过滤器 AND 组合；零值=不限）
+type SearchParams struct {
+	Keyword string // 必填：非空白、≤64 字（9001）
+	FromUID int64
+	ConvID  int64
+	Type    string
+	FromTS  int64 // ms 含边界
+	ToTS    int64 // ms 含边界
+	Cursor  int64 // 上一页最后一条 msg_id；0=首页
+	Limit   int   // ≤0 或 >100 取 20
+}
+
+// SearchHighlight 命中片段（text 消息 body.text 内字节偏移，最多 3 处；
+// 端内另按 keyword substring 高亮兜底——大小写不敏感口径一致）
+type SearchHighlight struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// SearchItem 搜索结果项
+type SearchItem struct {
+	Msg        Message           `json:"msg"`
+	ConvName   string            `json:"convName"`
+	SenderName string            `json:"senderName"`
+	Highlight  []SearchHighlight `json:"highlight,omitempty"`
+}
+
+// SearchResult GET /messages/search 响应（cursor=最后一条 msg_id）
+type SearchResult struct {
+	Items      []SearchItem `json:"items"`
+	NextCursor string       `json:"nextCursor,omitempty"`
+	HasMore    bool         `json:"hasMore"`
 }
 
 // ── 增量同步（API-IM-01）──

@@ -2,7 +2,9 @@ package messagerepo
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,32 +13,35 @@ import (
 
 // Memory 内存实现：阶段一跑通全链路；并发安全（单锁足够，量级见 04 篇 §1.1 基线）
 type Memory struct {
-	mu       sync.Mutex
-	convs    map[int64]*Conversation
-	members  map[int64][]*Member                // convID → members
-	msgs     map[int64][]*messageapi.Message    // convID → 按 seq 有序
-	dupIndex map[int64]map[string]int64         // convID → clientMsgID → msgID
-	receipts map[int64]map[int64]*Receipt       // convID → userID
-	seqs     map[int64]int64                    // convID → 已分配最大 seq（对齐 Redis INCR 语义）
-	states   map[int64]map[int64]*UserConvState // userID → convID → 态
-	settings map[int64]*GroupSetting            // convID → 群设置（群/广播群才有）
-	applies  map[int64]*Apply                   // applyID → 申请
-	nextID   int64
+	mu        sync.Mutex
+	convs     map[int64]*Conversation
+	members   map[int64][]*Member                // convID → members
+	msgs      map[int64][]*messageapi.Message    // convID → 按 seq 有序
+	dupIndex  map[int64]map[string]int64         // convID → clientMsgID → msgID
+	receipts  map[int64]map[int64]*Receipt       // convID → userID
+	seqs      map[int64]int64                    // convID → 已分配最大 seq（对齐 Redis INCR 语义）
+	states    map[int64]map[int64]*UserConvState // userID → convID → 态
+	settings  map[int64]*GroupSetting            // convID → 群设置（群/广播群才有）
+	applies   map[int64]*Apply                   // applyID → 申请
+	favorites map[int64]map[int64]*Favorite      // userID → msgID → 收藏行（PIM-08）
+	nextID    int64
+	favNextID int64 // 收藏行 ID 自增（与 nextID 分段：表级分配语义对齐 PG AllocID）
 }
 
 // NewMemory 构造
 func NewMemory() *Memory {
 	return &Memory{
-		convs:    map[int64]*Conversation{},
-		members:  map[int64][]*Member{},
-		msgs:     map[int64][]*messageapi.Message{},
-		dupIndex: map[int64]map[string]int64{},
-		receipts: map[int64]map[int64]*Receipt{},
-		seqs:     map[int64]int64{},
-		states:   map[int64]map[int64]*UserConvState{},
-		settings: map[int64]*GroupSetting{},
-		applies:  map[int64]*Apply{},
-		nextID:   0, // 会话 ID 从 1 起（雪花占位）
+		convs:     map[int64]*Conversation{},
+		members:   map[int64][]*Member{},
+		msgs:      map[int64][]*messageapi.Message{},
+		dupIndex:  map[int64]map[string]int64{},
+		receipts:  map[int64]map[int64]*Receipt{},
+		seqs:      map[int64]int64{},
+		states:    map[int64]map[int64]*UserConvState{},
+		settings:  map[int64]*GroupSetting{},
+		applies:   map[int64]*Apply{},
+		favorites: map[int64]map[int64]*Favorite{},
+		nextID:    0, // 会话 ID 从 1 起（雪花占位）
 	}
 }
 
@@ -569,4 +574,191 @@ func (m *Memory) ListAppliesByConv(_ context.Context, convID int64, status int) 
 		}
 	}
 	return out, nil
+}
+
+// ── 搜索（D03 §3.7 PIM-07 服务端态；API-IM-12）──
+
+// searchableTextOf 内存版可检索文本：text 取 body.text，其余类型取 body.name
+// （与 PG 版 SQL 的 body->>'text' / body->>'name' ILIKE 口径一致）
+func searchableTextOf(m *messageapi.Message) string {
+	if len(m.Body) == 0 {
+		return ""
+	}
+	var b struct {
+		Text string `json:"text"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(m.Body, &b); err != nil {
+		return ""
+	}
+	if b.Text != "" {
+		return b.Text
+	}
+	return b.Name
+}
+
+// SearchMessages 遍历 + 过滤（阶段一内存口径）：可见会话=在群成员；keyword 子串
+// 匹配大小写不敏感（对齐 PG ILIKE）；已撤回(status=2)不可检索（正文已撤回占位语义）。
+// 排序 msg_id 倒序，cursor=上一页最后一条 msg_id。
+func (m *Memory) SearchMessages(_ context.Context, f SearchFilter) ([]messageapi.Message, error) {
+	if f.Limit <= 0 || f.Limit > 100 {
+		f.Limit = 20
+	}
+	kw := strings.ToLower(f.Keyword)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 可见性：发起者当前在群的会话集合
+	visible := map[int64]bool{}
+	for convID, ms := range m.members {
+		for _, e := range ms {
+			if e.UserID == f.UserID && e.Status == 1 {
+				visible[convID] = true
+				break
+			}
+		}
+	}
+	var hits []messageapi.Message
+	for convID, list := range m.msgs {
+		if !visible[convID] {
+			continue
+		}
+		for _, msg := range list {
+			if msg.Status == messageapi.MsgRecalled {
+				continue // 已撤回：占位渲染，正文不可检索
+			}
+			if f.ConvID > 0 && msg.ConvID != f.ConvID {
+				continue
+			}
+			if f.FromUID > 0 && msg.SenderID != f.FromUID {
+				continue
+			}
+			if f.Type != "" && msg.Type != f.Type {
+				continue
+			}
+			if f.FromTS > 0 && msg.TS < f.FromTS {
+				continue
+			}
+			if f.ToTS > 0 && msg.TS > f.ToTS {
+				continue
+			}
+			if kw != "" && !strings.Contains(strings.ToLower(searchableTextOf(msg)), kw) {
+				continue
+			}
+			hits = append(hits, *msg)
+		}
+	}
+	// msg_id 倒序（全局时间线近似：自增 ID 趋势递增，雪花接入后语义不变）
+	sort.Slice(hits, func(i, j int) bool { return hits[i].ID > hits[j].ID })
+	if f.Cursor > 0 {
+		for i, h := range hits {
+			if h.ID < f.Cursor {
+				hits = hits[i:]
+				goto paged
+			}
+		}
+		hits = nil
+	}
+paged:
+	if len(hits) > f.Limit {
+		hits = hits[:f.Limit]
+	}
+	return hits, nil
+}
+
+// ── 收藏（D03 §3.8 PIM-08；§6.1 message_favorite）──
+
+// findMsgByIDLocked 按消息 ID 全表定位（须持锁；ListFavorites 的 type 过滤用）
+func (m *Memory) findMsgByIDLocked(msgID int64) *messageapi.Message {
+	for _, list := range m.msgs {
+		for _, msg := range list {
+			if msg.ID == msgID {
+				return msg
+			}
+		}
+	}
+	return nil
+}
+
+// AddFavorite 收藏（幂等：已收藏返回现值 created=false）
+func (m *Memory) AddFavorite(_ context.Context, userID, msgID, convID int64) (Favorite, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	byMsg, ok := m.favorites[userID]
+	if !ok {
+		byMsg = map[int64]*Favorite{}
+		m.favorites[userID] = byMsg
+	}
+	if cur, dup := byMsg[msgID]; dup {
+		return *cur, false, nil
+	}
+	m.favNextID++
+	f := &Favorite{ID: m.favNextID, UserID: userID, MsgID: msgID, ConvID: convID, CreatedAt: time.Now()}
+	byMsg[msgID] = f
+	return *f, true, nil
+}
+
+// RemoveFavorite 取消收藏（不存在 no-op）
+func (m *Memory) RemoveFavorite(_ context.Context, userID, msgID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if byMsg, ok := m.favorites[userID]; ok {
+		delete(byMsg, msgID)
+	}
+	return nil
+}
+
+// ListFavorites 收藏列表（created_at 倒序；type 过滤实时回查消息行）
+func (m *Memory) ListFavorites(_ context.Context, userID int64, msgType string, cursor int64, limit int) ([]Favorite, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Favorite{}
+	for _, f := range m.favorites[userID] {
+		if msgType != "" {
+			msg := m.findMsgByIDLocked(f.MsgID)
+			if msg == nil || msg.Type != msgType {
+				continue
+			}
+		}
+		out = append(out, *f)
+	}
+	// created_at 倒序（id 次序稳定：自增分配天然同序）
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if cursor > 0 {
+		for i, f := range out {
+			if f.ID < cursor {
+				out = out[i:]
+				goto paged
+			}
+		}
+		out = nil
+	}
+paged:
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// CountFavorites 收藏总数
+func (m *Memory) CountFavorites(_ context.Context, userID int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return int64(len(m.favorites[userID])), nil
+}
+
+// ExistsFavorite UK(user_id,msg_id) 探测
+func (m *Memory) ExistsFavorite(_ context.Context, userID, msgID int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.favorites[userID][msgID]
+	return ok, nil
 }
