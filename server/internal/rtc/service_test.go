@@ -223,6 +223,16 @@ func hasReason(bodies []string, reason string) bool {
 	return false
 }
 
+// hasState rtc.state 载荷含指定 kind（connecting/connected 等非终态推送）
+func hasState(bodies []string, kind string) bool {
+	for _, s := range bodies {
+		if strings.Contains(s, `"kind":"`+kind+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
 // 被叫拒接：declined；accept(answer=false) 同义
 func TestRejectFlow(t *testing.T) {
 	svc, push, card := newTestService(time.Hour)
@@ -330,5 +340,77 @@ func TestValidation(t *testing.T) {
 	big := map[string]any{"kind": "sdp", "sdp": strings.Repeat("x", MaxSignalBytes)}
 	if code := codeOf(t, svc.Signal(ctx, 10001, rtcapi.SignalPayload{CallID: "ca-big", Data: big})); code != 9001 {
 		t.Fatalf("signal 超限应 9001: %d", code)
+	}
+}
+
+// 挂断并接听（OQ-C06 原子化）：accept 携带 bye_call_id——旧通话 ended(bye)、
+// 新通话接通；单帧处理消除客户端 bye 未 ack 即 accept 的竞态窗口。
+// 注：新呼到达忙线被叫（INT-RTC-16 触发路径）随 D04 阶段二（需端侧自动 busy
+// 配套——服务端 userConflict 现拦主/被叫任一忙）；本用例白盒注入第二通，
+// 专测服务端原子能力本身
+func TestAcceptWithByeCallIDAtomic(t *testing.T) {
+	svc, push, card := newTestService(time.Hour)
+	ctx := context.Background()
+
+	// alice 呼 bob（conv=1）并接通
+	if _, err := svc.Invite(ctx, 10001, rtcapi.InvitePayload{CallID: "call-a", ConvID: "1", CalleeID: "10002", CallType: rtcapi.CallTypeAudio}); err != nil {
+		t.Fatalf("invite A: %v", err)
+	}
+	if err := svc.Accept(ctx, 10002, rtcapi.AcceptPayload{CallID: "call-a", Answer: true, DID: "d0"}); err != nil {
+		t.Fatalf("accept A: %v", err)
+	}
+	// 白盒注入通话 B（conv=2，bob 被叫）——直接写 Registry 索引绕过 Create 的
+	// 用户忙拦截（removeLocked 条件删除保证 A 结束不误清 B 的索引），
+	// 模拟阶段二"通话中来电"到达后的服务端状态
+	now := time.UnixMilli(1760000000000)
+	callB := &Call{
+		ID: "call-b", ConvID: 2, CallType: rtcapi.CallTypeAudio,
+		CallerID: 10001, CalleeID: 10002,
+		State: rtcapi.StateRinging, RingAt: now,
+	}
+	svc.reg.mu.Lock()
+	svc.reg.byID["call-b"] = callB
+	svc.reg.byConv[2] = callB
+	svc.reg.byUser[10001] = callB
+	svc.reg.byUser[10002] = callB
+	svc.reg.mu.Unlock()
+
+	// bob 挂断并接听：单帧 bye(call-a) + accept(call-b)
+	if err := svc.Accept(ctx, 10002, rtcapi.AcceptPayload{CallID: "call-b", Answer: true, DID: "d1", ByeCallID: "call-a"}); err != nil {
+		t.Fatalf("挂断并接听: %v", err)
+	}
+
+	// 旧通话 A：ended(bye) + 卡片回写
+	if !hasReason(push.of("rtc.state"), "bye") {
+		t.Fatal("旧通话应 ended(bye)")
+	}
+	if card.finish != 1 {
+		t.Fatalf("旧通话卡片应回写 ended: %+v", card)
+	}
+	// 新通话 B：connecting（接通链路照常）
+	if !hasState(push.of("rtc.state"), "connecting") {
+		t.Fatal("新通话应进入 connecting")
+	}
+
+	// bye_call_id 指向已结束通话：尽力挂断容忍，接听不受阻
+	callC := &Call{
+		ID: "call-c", ConvID: 2, CallType: rtcapi.CallTypeAudio,
+		CallerID: 10001, CalleeID: 10002,
+		State: rtcapi.StateRinging, RingAt: now,
+	}
+	svc.reg.mu.Lock()
+	svc.reg.byID["call-c"] = callC
+	svc.reg.byConv[2] = callC
+	svc.reg.mu.Unlock()
+	if err := svc.Accept(ctx, 10002, rtcapi.AcceptPayload{CallID: "call-c", Answer: true, ByeCallID: "call-a"}); err != nil {
+		t.Fatalf("旧通话已结束时挂断并接听应容忍: %v", err)
+	}
+}
+
+// all_left（OQ-C05）：枚举预登记——常量可引用且不与既有 reason 冲突
+// （产生场景=群通话全员退出，随 D04 阶段二；1v1 由 bye 覆盖）
+func TestAllLeftReasonRegistered(t *testing.T) {
+	if rtcapi.ReasonAllLeft != "all_left" {
+		t.Fatalf("all_left 常量: %q", rtcapi.ReasonAllLeft)
 	}
 }

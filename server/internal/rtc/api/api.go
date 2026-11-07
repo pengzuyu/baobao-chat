@@ -35,6 +35,9 @@ const (
 	ReasonBye       = "bye"                // 接通后任一端挂断
 	ReasonFailed    = "failed"             // 信令/媒体失败兜底
 	ReasonElsewhere = "answered_elsewhere" // 多端：他端已接听（kind 复用 state 推送）
+	// all_left（OQ-C05）：群通话"全员退出自动结束"归一——枚举预登记，
+	// 1v1 无产生场景（任一端 bye 即结束），产生逻辑随 D04 阶段二群通话落地
+	ReasonAllLeft = "all_left"
 )
 
 // InvitePayload WS rtc.call.invite（c→s）
@@ -60,6 +63,10 @@ type AcceptPayload struct {
 	CallID string `json:"call_id"`
 	Answer bool   `json:"answer"` // true 接听 / false 视同拒接（declined）
 	DID    string `json:"did"`    // 接听端设备标识（多端 answered_elsewhere 判定）
+	// 挂断并接听（OQ-C06 服务端原子化，D04 INT-RTC-16/开放问题 4）：非空时
+	// 服务端在接听前先结束该指定通话——单帧处理消除客户端"bye 未 ack 即
+	// accept"的竞态窗口；旧通话已结束/不存在按尽力挂断容忍（不阻断接听）
+	ByeCallID string `json:"bye_call_id,omitempty"`
 }
 
 // RejectPayload WS rtc.reject（c→s，被叫）

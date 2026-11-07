@@ -167,6 +167,7 @@ func (s *Service) Cancel(ctx context.Context, callerID int64, p rtcapi.CallIDPay
 
 // Accept 被叫接听（D04 INT-RTC-05/07）：
 // answer=true → connecting + 其余端 answered_elsewhere(did)；answer=false 视同拒接。
+// bye_call_id 非空=挂断并接听（OQ-C06 原子化）：先结束指定通话再接听，单帧无竞态。
 func (s *Service) Accept(ctx context.Context, calleeID int64, p rtcapi.AcceptPayload) error {
 	if p.CallID == "" {
 		return errx.New(errx.CodeBadRequest, "call_id 必填")
@@ -174,6 +175,17 @@ func (s *Service) Accept(ctx context.Context, calleeID int64, p rtcapi.AcceptPay
 	if !p.Answer {
 		// answer=false：语义同拒接（declined），与 Reject 共用收尾
 		return s.Reject(ctx, calleeID, rtcapi.RejectPayload{CallID: p.CallID, Reason: rtcapi.ReasonDeclined})
+	}
+	// 挂断并接听（OQ-C06）：在接听状态迁移**前**结束旧通话——服务端单帧内
+	// bye→accept 定序，消除客户端两帧间隔的竞态（bye 未 ack 即 accept /
+	// 状态互踩）；旧通话已结束/非本人通话按尽力挂断容忍（不阻断接听）
+	if p.ByeCallID != "" && p.ByeCallID != p.CallID {
+		if _, err := s.mustParticipant(ctx, calleeID, p.ByeCallID); err == nil {
+			if snap, ok := s.reg.End(p.ByeCallID, rtcapi.ReasonBye, s.opts.now()); ok {
+				stopTimer(snap)
+				s.finishAndNotify(snap, rtcapi.ReasonBye)
+			}
+		}
 	}
 	call, err := s.mustParticipant(ctx, calleeID, p.CallID)
 	if err != nil {
