@@ -1864,6 +1864,35 @@ body {
   background: var(--bbw-gray-2);
 }
 
+/* ─────────────── 消息统一右键/长按菜单（D03 §4.1 INT-IM-25） ─────────────── */
+/* 复用 .ctx-menu 基座；消息菜单加宽 + 组间分隔线 + 危险项（撤回）红态 */
+.ctx-menu--msg {
+  min-width: 168px;
+}
+
+.ctx-menu__sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--bbw-gray-3);
+}
+
+.ctx-menu__item--danger {
+  color: var(--bbw-danger, #d54941);
+}
+
+.ctx-menu__item--danger:hover {
+  background: rgba(213, 73, 65, 0.08);
+}
+
+/* 文件卡片拖出（INT-IM-25）：拖到系统=下载（dataTransfer 携带文件 id），抓取光标提示 */
+.file-card--draggable {
+  cursor: grab;
+}
+
+.file-card--draggable:active {
+  cursor: grabbing;
+}
+
 /* 转发弹窗（PIM-10 简版） */
 .modal-mask {
   position: fixed;

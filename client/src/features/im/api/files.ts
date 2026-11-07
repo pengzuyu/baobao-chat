@@ -22,7 +22,7 @@ export interface UploadResult {
   dedup?: boolean;
 }
 
-/** 下载票据响应（GET /files/{id}/ticket） */
+/** 下载票据响应（GET /files/ticket/{id}；路由修正：原 {id}/ticket 与 convs/uploads 段二义） */
 export interface DownloadTicket {
   url: string; // 相对路径 /api/v1/files/dl?t=...
   expiresIn: number; // 秒（恒 120）
@@ -91,7 +91,7 @@ export function uploadFile(
 /** 取下载票据（owner 或会话成员；一次性 120s） */
 export async function getDownloadTicket(fileId: string): Promise<DownloadTicket> {
   if (USE_MOCK) return { url: `/api/v1/files/dl?t=mock-${fileId}`, expiresIn: 120 };
-  return http.get<DownloadTicket>(`/files/${encodeURIComponent(fileId)}/ticket`);
+  return http.get<DownloadTicket>(`/files/ticket/${encodeURIComponent(fileId)}`);
 }
 
 /** 票据相对路径 → 绝对地址（服务端返回 /api/v1 前缀相对 URL） */

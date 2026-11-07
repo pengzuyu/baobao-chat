@@ -262,7 +262,10 @@ func main() {
 	// 我的文件/软删 + check 秒传/分片会话/complete + 分享外链）
 	mux.Handle("POST /api/v1/files/upload", authed(handleFileUpload(fileSvc)))
 	mux.Handle("GET /api/v1/files/me", authed(handleMyFiles(fileSvc)))
-	mux.Handle("GET /api/v1/files/{id}/ticket", authed(handleFileTicket(fileSvc)))
+	// 路由修正：原 /files/{id}/ticket 与 /files/convs/{id}、/files/uploads/{id} 在 Go≥1.22
+	// mux 下互为二义（seg2 通配 vs 字面量 + seg3 字面量 vs 通配，各自更具体）→ 启动即 panic；
+	// 改字面量前缀段消除（API-FL-05 语义不变，路径形态调整登记）
+	mux.Handle("GET /api/v1/files/ticket/{id}", authed(handleFileTicket(fileSvc)))
 	mux.Handle("DELETE /api/v1/files/{id}", authed(handleFileDelete(fileSvc)))
 	// 分片上传会话（07 §4.1 本地盘形态：PATCH 直传，无预签名；对象存储化阶段三换）
 	mux.Handle("GET /api/v1/files/convs/{id}", authed(handleFileConvFiles(fileSvc)))

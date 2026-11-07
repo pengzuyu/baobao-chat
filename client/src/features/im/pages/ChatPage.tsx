@@ -49,6 +49,7 @@ import { ConvInfoSidebar } from '../components/ConvInfoSidebar';
 import { CreateConvModal } from '../components/CreateConvModal';
 import { FileSendPreview } from '../components/FileSendPreview';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
+import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from '../components/stream/MsgContextMenu';
 import { MessageInput } from '../components/MessageInput';
 import { ForwardModal } from '../components/ForwardModal';
 import { MultiSelectBar } from '../components/MultiSelectBar';
@@ -90,6 +91,8 @@ export function ChatPage() {
   const pendingMentionsRef = useRef<Array<{ uid: string; name: string }>>([]);
   /** PIM-07 全局搜索框（⌘K 聚焦目标） */
   const searchInputRef = useRef<HTMLInputElement>(null);
+  /** 消息右键菜单态（INT-IM-25）：局部 useState 即可，不入全局 store */
+  const [menuMsg, setMenuMsg] = useState<{ msg: Message; anchor: MenuAnchor } | null>(null);
 
   // ---- 服务端态（Query）----
   const convQuery = useConversations('all');
@@ -144,9 +147,10 @@ export function ChatPage() {
   }, [convId, msgQuery.data, replaceMessages]);
   useEffect(() => {
     setActiveConv(convId ?? null);
-    // 切换会话清交互态（引用/编辑/多选不跨会话残留）
+    // 切换会话清交互态（引用/编辑/多选/右键菜单不跨会话残留）
     setReplyTo(null);
     setEditing(null);
+    setMenuMsg(null);
     if (useImStore.getState().multiSelect.isActive) exitMultiSelect();
     // 离开 /im（卸载）必须清 activeConvId：否则在其它页面收消息被误判
     // "当前会话可见"而不计未读（appendIncoming/markRead 的可见性判定依据）
@@ -560,6 +564,37 @@ export function ChatPage() {
     },
   };
 
+  // ---- 消息统一右键菜单（INT-IM-25）：右键/长按/悬浮条 ⋯ 三入口共开一份菜单 ----
+  const openMsgMenu = useCallback((m: Message, at: MenuAnchor) => {
+    setMenuMsg({ msg: m, anchor: at });
+  }, []);
+  /** 菜单动作：全部复用 bubbleActions 现有 handlers；回复/引用/复制为菜单新增语义 */
+  const msgMenuActions: MsgMenuActions = {
+    // 回复=携带引用发消息：插入引用条 + 聚焦输入框直接撰写（INT-IM-04）
+    onReply: (m) => {
+      bubbleActions.onReply(m);
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLTextAreaElement>('.message-input__textarea')?.focus();
+      });
+    },
+    // 引用=只插入引用条，不预填文本不抢焦点（现 MessageInput 引用条支持）
+    onQuote: (m) => {
+      setEditing(null);
+      setReplyTo(m);
+    },
+    // 复制：text 全文；非 text 类型化 digest；system 模板文案（copyTextOf 统一）
+    onCopy: (m) => {
+      void navigator.clipboard?.writeText(copyTextOf(m)).catch(() => undefined);
+      setFwdToast({ text: '已复制到剪贴板', ok: true });
+      setTimeout(() => setFwdToast(null), 2500);
+    },
+    onForward: bubbleActions.onForward,
+    onFavorite: bubbleActions.onFavorite,
+    onMultiSelect: bubbleActions.onMultiSelect,
+    onEdit: bubbleActions.onEdit,
+    onRecall: bubbleActions.onRecall,
+  };
+
   // 搜索结果点击（PIM-07）：跳会话 + 定位闪烁（同会话也走 pendingLocate 统一路径）
   const onSearchSelect = useCallback(
     (hit: SearchHit) => {
@@ -721,6 +756,7 @@ export function ChatPage() {
             actions={m.type === 'system' ? undefined : bubbleActions}
             myUid={myUid}
             myRole={myRole}
+            onOpenMsgMenu={openMsgMenu}
             /* 多选：仅已落服务端消息参与（sending/failed 无 msgId，批量操作不可达） */
             multiSelect={
               msActive && m.type !== 'system' && m.status !== 2 && m.msgId
@@ -925,6 +961,16 @@ export function ChatPage() {
       {showList ? convListNode : null}
       {showStream ? streamNode : null}
       {detailNode}
+      {/* 消息统一右键菜单（INT-IM-25）：portal 到 body，视口定位+边缘翻转在组件内处理 */}
+      {menuMsg ? (
+        <MsgContextMenu
+          message={menuMsg.msg}
+          myUid={myUid}
+          anchor={menuMsg.anchor}
+          onClose={() => setMenuMsg(null)}
+          {...msgMenuActions}
+        />
+      ) : null}
       {forwardIds ? (
         <ForwardModal
           convs={convs}

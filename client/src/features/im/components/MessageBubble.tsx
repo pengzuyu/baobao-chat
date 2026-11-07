@@ -5,7 +5,10 @@
  * - 表情回应条：ext.reactions 全量快照渲染，点击增删本人（INT-IM-23）
  * - 已编辑角标 / 撤回占位（store 已转 system 形态）/ merge_forward 卡片
  * - @提及高亮：mentions.range 内文本主色+底纹（INT-IM-24）
- * - 悬浮操作条：快捷表情 + 更多菜单（回复/复制/编辑/撤回/转发，INT-IM-25 条件显隐）
+ * - 悬浮操作条（瘦身，INT-IM-25）：快捷 emoji + 回复 + ⋯（打开统一右键菜单；
+ *   编辑/撤回/转发/收藏/多选移入菜单，显隐与菜单共用 msgActionsVisible）
+ * - 右键/长按 500ms 打开统一菜单（system 仅复制、撤回占位无菜单——hasAnyMsgAction 判定）
+ * - 文件卡片可拖出（draggable → dataTransfer 文件 id，拖到系统=下载票据触发，D06 承接）
  * - 本地态尾标：sending 灰钟 → sent ✓ → 对方已读 ✓✓（msg.receipt，04 篇 §4.2）；failed 红叹号（点击重试，INT-IM-01a）
  */
 
@@ -20,13 +23,12 @@ import {
   Clock3,
   FileText,
   Image as ImageIcon,
-  ListChecks,
   ListOrdered,
   Mic,
+  MoreHorizontal,
   Phone,
   RotateCcw,
   SmilePlus,
-  Star,
   Video,
 } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
@@ -38,6 +40,8 @@ import { digestOf } from '../store/im';
 import { systemMessageText } from '../pages/systemMessageRegistry';
 import { downloadUrl, getDownloadTicket } from '../api/files';
 import { ApplyCard } from './ApplyCard';
+import { hasAnyMsgAction, msgActionsVisible } from './stream/msgActions';
+import type { MenuAnchor } from './stream/MsgContextMenu';
 import type {
   DocCardBody,
   FileMessageBody,
@@ -108,6 +112,44 @@ interface MessageBubbleProps {
   multiSelect?: { active: boolean; selected: boolean };
   /** 多选勾选/取消（active 时行点击与复选框共用） */
   onSelectToggle?: (m: Message) => void;
+  /** 打开统一右键菜单（INT-IM-25）：右键/长按 500ms/悬浮条 ⋯ 三入口共用；
+   *  system（仅复制）可开、撤回占位不可开——由 hasAnyMsgAction 判定 */
+  onOpenMsgMenu?: (m: Message, at: MenuAnchor) => void;
+}
+
+/**
+ * 长按 500ms 合成菜单锚点（INT-IM-25 触屏路径；桌面右键走 contextmenu）。
+ * 长按触发后 touchend preventDefault 抑制合成 click——防随后的点击误触行内交互/误关菜单。
+ */
+function useLongPressMenu(open: ((at: MenuAnchor) => void) | null) {
+  const timerRef = useRef<number | null>(null);
+  const firedRef = useRef(false);
+  const clear = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+  useEffect(() => clear, [clear]);
+  if (!open) return {};
+  return {
+    onTouchStart: (e: React.TouchEvent) => {
+      const t = e.touches[0];
+      if (!t) return;
+      firedRef.current = false;
+      clear();
+      timerRef.current = window.setTimeout(() => {
+        firedRef.current = true;
+        open({ x: t.clientX, y: t.clientY });
+      }, 500);
+    },
+    onTouchMove: clear,
+    onTouchCancel: clear,
+    onTouchEnd: (e: React.TouchEvent) => {
+      clear();
+      if (firedRef.current) e.preventDefault();
+    },
+  };
 }
 
 /** 本地态/服务端态尾标（✓✓=对方已读，单聊回执） */
@@ -274,7 +316,18 @@ function DocCard({ body }: { body: DocCardBody }) {
   );
 }
 
-/** 文件卡片（D06 阶段一真实化）：名/大小人性化(B/KB/MB)/ext 图标 + ⤓ 票据下载 */
+/**
+ * 文件拖出→系统下载的承接占位（INT-IM-25/D06）：
+ * 拖出数据已就绪（file_id + 名称），票据 API（getDownloadTicket）已有；
+ * WKWebView 内把拖放转系统落盘需 Tauri 侧接管 drag session——阶段一留 handler 占位，
+ * D06 拖出下载接入后在此取票触发。
+ */
+function onFileDragOut(fileId: string): void {
+  // TODO(D06)：getDownloadTicket(fileId) → 票据 URL 交系统侧下载
+  void fileId;
+}
+
+/** 文件卡片（D06 阶段一真实化）：名/大小人性化(B/KB/MB)/ext 图标 + ⤓ 票据下载 + 拖出（INT-IM-25） */
 function FileCard({ body }: { body: FileMessageBody }) {
   const [downloading, setDownloading] = useState(false);
   const doDownload = () => {
@@ -289,7 +342,22 @@ function FileCard({ body }: { body: FileMessageBody }) {
       .finally(() => setDownloading(false));
   };
   return (
-    <div className="file-card" data-testid="file-card">
+    <div
+      className="file-card file-card--draggable"
+      data-testid="file-card"
+      draggable
+      title="点击 ⤓ 下载；可拖出到桌面/文件夹（拖出=下载）"
+      onDragStart={(e) => {
+        // 拖出（INT-IM-25）：dataTransfer 携带文件标识（自描述 JSON + 纯文本名兜底）
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData(
+          'application/x-bbw-file',
+          JSON.stringify({ file_id: body.file_id, name: body.name ?? '', size: body.size ?? 0 }),
+        );
+        e.dataTransfer.setData('text/plain', body.name ?? body.file_id);
+        onFileDragOut(body.file_id); // 下载承接占位（见上）
+      }}
+    >
       <div className="file-card__icon">
         <FileText size={20} />
       </div>
@@ -418,8 +486,25 @@ export function MessageBubble({
   onApplyHandled,
   multiSelect,
   onSelectToggle,
+  onOpenMsgMenu,
 }: MessageBubbleProps) {
-  // 系统消息/撤回占位：居中弱化，不参与回执/右键（PIM-12）
+  // 右键/长按可开菜单判定（INT-IM-25 与悬浮条/菜单同源 msgActionsVisible）：
+  // 撤回占位（status=2）无任何项不开；system 仅「复制」可开
+  const canOpenMenu = !!onOpenMsgMenu && hasAnyMsgAction(msgActionsVisible(message, myUid));
+  const openMenu = canOpenMenu && onOpenMsgMenu ? (at: MenuAnchor) => onOpenMsgMenu(message, at) : null;
+  const longPress = useLongPressMenu(openMenu);
+  /** 右键/长按挂接属性（不可开菜单的消息不带——撤回占位走浏览器原生行为） */
+  const menuTriggerProps = openMenu
+    ? {
+        onContextMenu: (e: React.MouseEvent) => {
+          e.preventDefault();
+          openMenu({ x: e.clientX, y: e.clientY });
+        },
+        ...longPress,
+      }
+    : undefined;
+
+  // 系统消息/撤回占位：居中弱化，不参与回执；system 可右键仅「复制」（PIM-12 + INT-IM-25）
   if (message.type === 'system') {
     // 服务端下发的占位消息：按 body.kind 套注册表模板（systemMessageRegistry）
     if ('kind' in message.body && message.body.kind) {
@@ -427,7 +512,7 @@ export function MessageBubble({
       if (body.kind === 'apply.submitted' && body.apply_id && onApplyHandled) {
         // 审批卡（PIM-06）：owner/admin 可见按钮，member 只读
         return (
-          <div className="msg-system msg-system--card">
+          <div className="msg-system msg-system--card" {...menuTriggerProps}>
             <ApplyCard
               body={body}
               submittedAt={message.ts}
@@ -438,14 +523,22 @@ export function MessageBubble({
           </div>
         );
       }
-      return <div className="msg-system">{systemMessageText(body)}</div>;
+      return (
+        <div className="msg-system" data-testid="msg-system" {...menuTriggerProps}>
+          {systemMessageText(body)}
+        </div>
+      );
     }
-    // 撤回占位等本地生成的 system 形态（body={text}）
+    // 撤回占位等本地生成的 system 形态（body={text}）——status=2 时 canOpenMenu 已为 false
     const text = 'text' in message.body ? message.body.text : '群通知';
-    return <div className="msg-system">{text}</div>;
+    return (
+      <div className="msg-system" data-testid="msg-system" {...menuTriggerProps}>
+        {text}
+      </div>
+    );
   }
   // 历史拉取路径的已撤回消息（服务端真值 status=2，type 仍为原文案类型）：
-  // 与实时 msg.recall 推送同款占位（实时路径由 store 转 system 形态，此处兜底）
+  // 与实时 msg.recall 推送同款占位（实时路径由 store 转 system 形态，此处兜底）；无菜单
   if (message.status === 2) {
     return (
       <div className="msg-system">
@@ -466,9 +559,8 @@ export function MessageBubble({
   const docBody = isDocCard && 'doc_id' in message.body ? (message.body as DocCardBody) : null;
   // file/image body 窄化（D06：{file_id,...}；服务端透传）
   const fileBody = (isImage || isFile) && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
-  // 编辑窗口（5min）与本人判定：编辑入口显隐（INT-IM-02；撤回态已在上方早退）
-  const editable = mine && isText && Date.now() - message.ts < 5 * 60 * 1000;
-  const recallable = mine && Date.now() - message.ts < 24 * 60 * 60 * 1000;
+  // 编辑/撤回显隐不再在此判——悬浮条瘦身（快捷 emoji+回复+⋯），条件项全部移入
+  // 统一右键菜单，与菜单共用 msgActionsVisible（INT-IM-25）
   const text = isText && 'text' in message.body ? message.body.text : '';
 
   /** 回应切换：add/remove 由调用方按 ext.reactions 现态判定（全量快照回收保证一致） */
@@ -485,6 +577,7 @@ export function MessageBubble({
       data-seq={message.seq}
       data-testid="msg-row"
       onClick={selecting ? doToggle : undefined}
+      {...menuTriggerProps}
     >
       {/* 多选复选框浮层（system/撤回占位已在上方早退，不参与多选） */}
       {selecting ? (
@@ -550,7 +643,8 @@ export function MessageBubble({
             </span>
           )}
 
-          {/* 悬浮操作条（INT-IM-25）：快捷表情 + 回复/编辑/撤回/转发（撤回态已早退） */}
+          {/* 悬浮操作条（瘦身，INT-IM-25）：快捷 emoji + 回复 + ⋯（开统一菜单；
+              编辑/撤回/转发/收藏/多选移入菜单，减少重复入口——快捷表情区无菜单语义，保留原样） */}
           {actions ? (
             <div className="msg-actions">
               {QUICK_EMOJIS.slice(0, 3).map((e) => (
@@ -572,46 +666,22 @@ export function MessageBubble({
               <button type="button" className="msg-actions__btn" title="回复" onClick={() => actions.onReply(message)}>
                 回复
               </button>
-              <button
-                type="button"
-                className="msg-actions__btn"
-                title="收藏"
-                data-testid="msg-favorite-btn"
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  actions.onFavorite(message);
-                }}
-              >
-                <Star size={14} />
-                收藏
-              </button>
-              {editable ? (
-                <button type="button" className="msg-actions__btn" title="编辑" onClick={() => actions.onEdit(message)}>
-                  编辑
+              {/* ⋯ 打开统一右键菜单（锚定按钮左下角；菜单内动作复用同一套 handlers） */}
+              {onOpenMsgMenu ? (
+                <button
+                  type="button"
+                  className="msg-actions__btn"
+                  data-testid="msg-more-btn"
+                  title="更多操作（右键消息同款菜单）"
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+                    onOpenMsgMenu(message, { x: r.left, y: r.bottom + 4 });
+                  }}
+                >
+                  <MoreHorizontal size={14} />
                 </button>
               ) : null}
-              {recallable ? (
-                <button type="button" className="msg-actions__btn msg-actions__btn--danger" title="撤回" onClick={() => actions.onRecall(message)}>
-                  撤回
-                </button>
-              ) : null}
-              <button type="button" className="msg-actions__btn" title="转发" onClick={() => actions.onForward(message)}>
-                转发
-              </button>
-              {/* 多选入口（INT-IM-14/PIM-10：进入批量条模式，触发消息预选） */}
-              <button
-                type="button"
-                className="msg-actions__btn"
-                data-testid="msg-multiselect-btn"
-                title="多选"
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  actions.onMultiSelect(message);
-                }}
-              >
-                <ListChecks size={14} />
-                多选
-              </button>
             </div>
           ) : null}
         </div>

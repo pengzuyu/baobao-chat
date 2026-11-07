@@ -180,7 +180,7 @@ clean: ## 清理构建产物（不动数据卷）
 # 一键验证门（CI 同源；本地/流水线同一入口）
 # ---------------------------------------------------------------------------
 .PHONY: verify
-verify: verify-server verify-client verify-agent verify-deploy ## 四栈硬门禁：编译+测试+静态检查+格式（CI 同源）
+verify: verify-server verify-client verify-agent verify-deploy smoke ## 四栈硬门禁+启动冒烟（CI 同源）
 
 .PHONY: verify-server
 verify-server: ## 服务端硬门禁：build + vet + gofmt -l 须空 + go test ./...
@@ -219,3 +219,10 @@ verify-quick: ## 快速门禁（跳过测试）：四栈 build/typecheck/clippy
 .PHONY: e2e
 e2e: ## 协议级 E2E 回归套件（进程内全栈：登录→WS→IM 全流，14 篇信封契约）
 	@cd server && go test ./internal/e2e/ -v -count=1
+
+.PHONY: smoke
+smoke: ## 启动冒烟门（mux 路由二义在注册期 panic，build/test 抓不到——真启动 1.5s + healthz）
+	@cd server && go build -o /tmp/bbw-smoke ./cmd/bbw-server
+	@BBW_HTTP_ADDR=:18099 BBW_JWT_SECRET=dev-only-secret-change-me-0123456789abcdef BBW_SEED_DEMO=0 /tmp/bbw-smoke > /tmp/bbw-smoke.log 2>&1 & echo $$! > /tmp/bbw-smoke.pid
+	@sleep 1.5 && curl -sf http://localhost:18099/healthz > /dev/null && echo "smoke ✓" || { echo "smoke ✗ 启动失败："; tail -3 /tmp/bbw-smoke.log; kill $$(cat /tmp/bbw-smoke.pid) 2>/dev/null; exit 1; }
+	@kill $$(cat /tmp/bbw-smoke.pid) 2>/dev/null; rm -f /tmp/bbw-smoke /tmp/bbw-smoke.pid

@@ -269,7 +269,15 @@ export const useImStore = create<ImState>((set, get) => ({
       const hitIdx = list.findIndex((m) => m.clientMsgId === msg.clientMsgId);
       if (hitIdx >= 0) {
         const next = [...list];
-        next[hitIdx] = { ...next[hitIdx], localState: 'sent', seq: msg.seq, msgId: msg.msgId, ts: msg.ts };
+        // 本端发送副本命中推送：ext 以服务端真值覆盖（引用快照/回应权威源；本地预填兜底）
+        next[hitIdx] = {
+          ...next[hitIdx],
+          localState: 'sent',
+          seq: msg.seq,
+          msgId: msg.msgId,
+          ts: msg.ts,
+          ext: msg.ext ?? next[hitIdx].ext,
+        };
         // 服务端真值到达即自愈：清 outbox 行 + 落本地库（settle 的 ack 写幂等兜底）；
         // 回填真 seq 后重排（乐观负序占位可能落在错误槽位）
         void outboxSettle(msg.clientMsgId, true, next[hitIdx]);
@@ -433,6 +441,22 @@ export const useImStore = create<ImState>((set, get) => ({
   sendText: async (convId, text, replyToSeq, mentions) => {
     const { myUid } = get();
     const clientMsgId = crypto.randomUUID(); // 发送幂等键（14 篇 §4.1）
+    // 引用快照预填（INT-IM-04）：本端乐观消息即带 reply_digest，引用条即时渲染；
+    // 服务端 msg.new/历史真值随后覆盖（appendIncoming 去重分支合并 ext）
+    const replyTarget = replyToSeq
+      ? (get().messagesByConv[convId] ?? []).find((m) => m.seq === replyToSeq)
+      : undefined;
+    const ext = replyTarget
+      ? {
+          reply_digest: {
+            sender_id: replyTarget.senderId,
+            sender_name: replyTarget.senderName,
+            type: replyTarget.type,
+            digest: digestOf(replyTarget).slice(0, 60), // 摘要 60 字截断（D03 §3.2）
+            seq: replyTarget.seq,
+          },
+        }
+      : undefined;
     // 乐观更新：先上屏 sending（灰钟），临时负序置底
     const optimistic: Message = {
       msgId: '',
@@ -445,6 +469,7 @@ export const useImStore = create<ImState>((set, get) => ({
       body: { text },
       replyToSeq,
       mentions,
+      ext,
       status: 1,
       ts: Date.now(),
       localState: 'sending',
