@@ -1,0 +1,15 @@
+# bbrt-delegate：17 篇委派体系：CodingBackend 适配器、事件归一化、进程组管理（D11 §2.6/§8）
+[package]
+name = "bbrt-delegate"
+description = "本地编码智能体委派：claude/zcode/通用 CLI 适配器、事件归一化、进程组取消、健康检查、任务简报（17 篇 + D11 §2.6/§8）"
+version.workspace = true
+edition.workspace = true
+
+# 硬约束：依赖仅 serde/serde_json/thiserror + bbrt-protocol；
+# 信号/进程组/文件锁经 extern "C" 符号直连（libc 随 std 链接，参考 bbrt-sec/sandbox/launcher.rs）；
+# 全部同步 API，禁止 tokio；无第三方 dev 依赖（测试临时目录/桩脚本自管理）。
+[dependencies]
+bbrt-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

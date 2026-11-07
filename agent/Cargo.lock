@@ -52,6 +52,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bbrt-delegate"
+version = "0.1.0"
+dependencies = [
+ "bbrt-protocol",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "bbrt-hostapi"
 version = "0.1.0"
 dependencies = [

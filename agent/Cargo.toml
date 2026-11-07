@@ -2,7 +2,7 @@
 # 依赖方向由 CI cargo-deny 强制（禁止环）：protocol ← 所有。
 [workspace]
 resolver = "2"
-members = ["crates/bbrt-protocol", "crates/bbrt-session", "crates/bbrt-sec", "crates/bbrt-memory", "crates/bbrt-store", "crates/bbrt-context", "crates/bbrt-aigw", "crates/bbrt-hostapi", "crates/bbrt-tools", "crates/bbrt"]
+members = ["crates/bbrt-protocol", "crates/bbrt-session", "crates/bbrt-sec", "crates/bbrt-delegate", "crates/bbrt-memory", "crates/bbrt-store", "crates/bbrt-context", "crates/bbrt-aigw", "crates/bbrt-hostapi", "crates/bbrt-tools", "crates/bbrt"]
 
 [workspace.package]
 version = "0.1.0"
