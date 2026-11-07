@@ -90,6 +90,7 @@ func (s *Service) InitUpload(ctx context.Context, tenantID, ownerID int64, req f
 	if hit, err := s.repo.GetBySHA(ctx, tenantID, req.SHA256); err != nil {
 		return nil, errx.From(err)
 	} else if hit != nil {
+		s.recordTransferDone(ctx, tenantID, ownerID, hit.ID, hit.Size) // init 入口秒传：直接终态
 		return &fileapi.UploadInitResult{FileID: strconv.FormatInt(hit.ID, 10), Dedup: true}, nil
 	}
 	partSize := req.PartSize
@@ -118,6 +119,7 @@ func (s *Service) InitUpload(ctx context.Context, tenantID, ownerID int64, req f
 		expires: now.Add(uploadSessionTTL),
 	}
 	s.mu.Unlock()
+	s.recordTransferQueued(ctx, tenantID, ownerID, uploadID, req.Size)
 	return &fileapi.UploadInitResult{UploadID: uploadID, PartSize: partSize, PartTotal: partTotal}, nil
 }
 
@@ -159,6 +161,11 @@ func (s *Service) UploadPart(ctx context.Context, tenantID, userID int64, upload
 			return errx.New(errx.CodeFileSizeLimit, "分片超过 part_size")
 		}
 		return errx.New(errx.CodeBadRequest, "分片写入失败")
+	}
+	// 进度镜像：resuming=此前已有存量分片（位图语义），否则 transferring
+	received, lerr := s.store.ListStaging(ctx, uploadID)
+	if lerr == nil {
+		s.recordTransferProgress(ctx, tenantID, uploadID, len(received) > 1, int64(len(received))*sess.partSize)
 	}
 	return nil
 }
@@ -204,6 +211,7 @@ func (s *Service) CompleteUpload(ctx context.Context, tenantID, userID int64, up
 	}
 	if size != sess.size || sha != sess.sha256 {
 		s.store.RemoveStaging(ctx, uploadID) // 不一致整档作废（07 §4.1 ⑦）
+		s.recordTransferComplete(ctx, tenantID, uploadID, 0, 0, int(errx.CodeFileSHA256Mismatch))
 		return nil, errx.New(errx.CodeFileSHA256Mismatch, "整体 sha256 与声明不一致")
 	}
 	if err := s.store.Promote(ctx, tenantID, sha, tmpPath); err != nil {
@@ -216,6 +224,9 @@ func (s *Service) CompleteUpload(ctx context.Context, tenantID, userID int64, up
 		return nil, uerr
 	}
 	s.store.RemoveStaging(ctx, uploadID) // ⑦ 合并后即删 staging
+	if fid, perr := strconv.ParseInt(res.ID, 10, 64); perr == nil {
+		s.recordTransferComplete(ctx, tenantID, uploadID, fid, size, 0)
+	}
 	done := &fileapi.CompleteResult{FileID: res.ID, Dedup: res.Dedup}
 	s.mu.Lock()
 	sess.done = done

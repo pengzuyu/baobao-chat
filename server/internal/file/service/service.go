@@ -53,13 +53,14 @@ var extBlacklist = map[string]bool{"exe": true, "sh": true}
 
 // Service 实现 fileapi.FileService
 type Service struct {
-	repo    filerepo.Repo
-	shares  filerepo.ShareRepo // 分享外链仓储（nil=分享未装配，阶段一形态）
-	store   filestore.Storage
-	opts    Options
-	mu      sync.Mutex
-	tickets map[string]ticketEntry    // 一次性下载票据（内存态；阶段二 Redis TTL）
-	uploads map[string]*uploadSession // 分片上传会话（内存态；重启由 ResetStaging 回收）
+	repo      filerepo.Repo
+	shares    filerepo.ShareRepo    // 分享外链仓储（nil=分享未装配，阶段一形态）
+	transfers filerepo.TransferRepo // 传输记录镜像（nil=不记录，阶段一形态）
+	store     filestore.Storage
+	opts      Options
+	mu        sync.Mutex
+	tickets   map[string]ticketEntry    // 一次性下载票据（内存态；阶段二 Redis TTL）
+	uploads   map[string]*uploadSession // 分片上传会话（内存态；重启由 ResetStaging 回收）
 }
 
 // ticketEntry 票据条目（绑定用户与文件，07 §4.3 ①）
@@ -69,13 +70,13 @@ type ticketEntry struct {
 	expires time.Time
 }
 
-// New 构造（shares 可为 nil——阶段一装配形态；启动回收 staging 孤儿分片：
-// 会话元数据内存态，重启即与磁盘失配）
-func New(opts Options, r filerepo.Repo, shares filerepo.ShareRepo, store filestore.Storage) *Service {
+// New 构造（shares/transfers 可为 nil——阶段一装配形态；启动回收 staging
+// 孤儿分片：会话元数据内存态，重启即与磁盘失配）
+func New(opts Options, r filerepo.Repo, shares filerepo.ShareRepo, transfers filerepo.TransferRepo, store filestore.Storage) *Service {
 	opts.fillDefaults()
 	_ = store.ResetStaging()
 	return &Service{
-		repo: r, shares: shares, store: store, opts: opts,
+		repo: r, shares: shares, transfers: transfers, store: store, opts: opts,
 		tickets: map[string]ticketEntry{}, uploads: map[string]*uploadSession{},
 	}
 }
@@ -137,11 +138,13 @@ func (s *Service) Upload(ctx context.Context, tenantID, ownerID int64, name, con
 	if err != nil {
 		if err == filerepo.ErrDuplicateFileSHA {
 			if hit, gerr := s.repo.GetBySHA(ctx, tenantID, sha); gerr == nil && hit != nil {
+				s.recordTransferDone(ctx, tenantID, ownerID, hit.ID, hit.Size) // 秒传/并发去重也记 done
 				return toUploadResult(*hit, true), nil
 			}
 		}
 		return nil, errx.From(err)
 	}
+	s.recordTransferDone(ctx, tenantID, ownerID, f.ID, f.Size)
 	return toUploadResult(f, false), nil
 }
 
@@ -202,6 +205,7 @@ func (s *Service) Download(ctx context.Context, token string) (*fileapi.Download
 	if err != nil {
 		return nil, nil, errx.New(errx.CodeFileNotFound, "文件内容缺失")
 	}
+	s.recordTransferDownload(ctx, f.TenantID, ent.userID, f.ID, f.Size) // 07 §5 下载镜像
 	return &fileapi.DownloadTarget{
 		FileID: f.ID, TenantID: f.TenantID, Name: f.Name,
 		ContentType: f.ContentType, SHA256: f.SHA256, Size: f.Size,

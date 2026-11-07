@@ -55,6 +55,9 @@ var botSQL string
 //go:embed 0013_file_share.sql
 var fileShareSQL string
 
+//go:embed 0014_transfer_record.sql
+var transferRecordSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -83,4 +86,6 @@ var List = []Migration{
 	{Version: 12, Name: "0012_bot", Probe: "", SQL: botSQL},
 	// 0013 同理留空：file_share 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D06 阶段二外链）
 	{Version: 13, Name: "0013_file_share", Probe: "", SQL: fileShareSQL},
+	// 0014 同理留空：transfer_record 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D06 阶段二传输镜像）
+	{Version: 14, Name: "0014_transfer_record", Probe: "", SQL: transferRecordSQL},
 }

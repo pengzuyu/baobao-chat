@@ -166,4 +166,21 @@ type FileService interface {
 	ResolveShare(ctx context.Context, tenantID, userID int64, code, password string) (*ShareView, error)
 	// RevokeShare 取消分享（creator only；链接即刻失效）
 	RevokeShare(ctx context.Context, tenantID, userID int64, code string) error
+
+	// ListTransfers 本人传输记录（07 §5 跨端镜像；direction 0=全部）
+	ListTransfers(ctx context.Context, tenantID, userID int64, direction int, limit int) ([]TransferDTO, error)
+}
+
+// TransferDTO 传输记录项（GET /files/transfers）
+type TransferDTO struct {
+	ID               string `json:"id"`
+	FileID           string `json:"file_id,omitempty"` // complete 后回填
+	FileName         string `json:"file_name,omitempty"`
+	Direction        int    `json:"direction"` // 1 上传 2 下载
+	State            string `json:"state"`     // queued/transferring/resuming/…/done/failed
+	BytesTransferred int64  `json:"bytes_transferred"`
+	TotalBytes       int64  `json:"total_bytes"`
+	ErrorCode        int    `json:"error_code,omitempty"`
+	CreatedAt        int64  `json:"createdAt"`
+	UpdatedAt        int64  `json:"updatedAt"`
 }

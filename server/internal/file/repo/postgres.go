@@ -292,3 +292,103 @@ func (p *PostgresShares) DisableShare(ctx context.Context, tenantID, id, creator
 	}
 	return nil
 }
+
+// ── TransferRepo PG 实现（迁移 0014） ──
+
+// PostgresTransfers 传输记录 PG 仓储（advisory lock 9121）
+type PostgresTransfers struct{ pool *pgxpool.Pool }
+
+var _ TransferRepo = (*PostgresTransfers)(nil)
+
+const lockKeyTransfer int64 = 9121
+
+// NewPostgresTransfers 构造
+func NewPostgresTransfers(pool *pgxpool.Pool) TransferRepo { return &PostgresTransfers{pool: pool} }
+
+func (p *PostgresTransfers) Insert(ctx context.Context, t TransferRecord) (TransferRecord, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return TransferRecord{}, err
+	}
+	defer tx.Rollback(ctx)
+	if t.ID == 0 {
+		if t.ID, err = bbwpg.AllocID(ctx, tx, lockKeyTransfer, "transfer_record"); err != nil {
+			return TransferRecord{}, err
+		}
+	}
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = time.Now()
+	}
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO transfer_record (id, tenant_id, user_id, file_id, upload_id, direction, state,
+			bytes_transferred, total_bytes, error_code, created_at, updated_at)
+		VALUES ($1,$2,$3,NULLIF($4,0),NULLIF($5,''),$6,$7,$8,$9,NULLIF($10,0),$11,$11)
+		RETURNING created_at, updated_at`,
+		t.ID, t.TenantID, t.UserID, t.FileID, t.UploadID, t.Direction, t.State,
+		t.BytesTransferred, t.TotalBytes, t.ErrorCode, t.CreatedAt).
+		Scan(&t.CreatedAt, &t.UpdatedAt); err != nil {
+		return TransferRecord{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return TransferRecord{}, err
+	}
+	return t, nil
+}
+
+func (p *PostgresTransfers) GetByUpload(ctx context.Context, _ int64, uploadID string) (*TransferRecord, error) {
+	return scanTransfer(p.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, user_id, COALESCE(file_id,0), COALESCE(upload_id,''),
+			direction, state, bytes_transferred, total_bytes, COALESCE(error_code,0), created_at, updated_at
+		FROM transfer_record WHERE upload_id=$1 LIMIT 1`, uploadID))
+}
+
+func (p *PostgresTransfers) UpdateProgress(ctx context.Context, id int64, state string, bytes int64, fileID int64, errorCode int) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE transfer_record SET state=$1,
+			bytes_transferred=CASE WHEN $2 >= 0 THEN $2 ELSE bytes_transferred END,
+			file_id=CASE WHEN $3 > 0 THEN $3 ELSE file_id END,
+			error_code=CASE WHEN $4 > 0 THEN $4 ELSE error_code END,
+			updated_at=now()
+		WHERE id=$5`, state, bytes, fileID, errorCode, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (p *PostgresTransfers) ListByUser(ctx context.Context, tenantID, userID int64, direction int, limit int) ([]TransferRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, tenant_id, user_id, COALESCE(file_id,0), COALESCE(upload_id,''),
+			direction, state, bytes_transferred, total_bytes, COALESCE(error_code,0), created_at, updated_at
+		FROM transfer_record WHERE tenant_id=$1 AND user_id=$2 AND ($3=0 OR direction=$3)
+		ORDER BY created_at DESC LIMIT $4`, tenantID, userID, direction, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TransferRecord{}
+	for rows.Next() {
+		t, serr := scanTransfer(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
+func scanTransfer(row pgx.Row) (*TransferRecord, error) {
+	var t TransferRecord
+	if err := row.Scan(&t.ID, &t.TenantID, &t.UserID, &t.FileID, &t.UploadID,
+		&t.Direction, &t.State, &t.BytesTransferred, &t.TotalBytes, &t.ErrorCode,
+		&t.CreatedAt, &t.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}

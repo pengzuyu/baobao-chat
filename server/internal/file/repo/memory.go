@@ -216,3 +216,85 @@ func (s *shareStore) DisableShare(_ context.Context, tenantID, id, creatorID int
 	s.shares[id] = sh
 	return nil
 }
+
+// ── TransferRepo 内存实现 ──
+
+type transferStore struct {
+	mu     sync.RWMutex
+	nextID int64
+	rows   map[int64]TransferRecord
+	byUp   map[string]int64 // upload_id → 行
+}
+
+// NewMemoryTransfers 传输记录内存仓储
+func NewMemoryTransfers() TransferRepo {
+	return &transferStore{nextID: 300, rows: map[int64]TransferRecord{}, byUp: map[string]int64{}}
+}
+
+func (s *transferStore) Insert(_ context.Context, t TransferRecord) (TransferRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID++
+	t.ID = s.nextID
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = time.Now()
+	}
+	t.UpdatedAt = t.CreatedAt
+	s.rows[t.ID] = t
+	if t.UploadID != "" {
+		s.byUp[t.UploadID] = t.ID
+	}
+	return t, nil
+}
+
+func (s *transferStore) GetByUpload(_ context.Context, _ int64, uploadID string) (*TransferRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if id, ok := s.byUp[uploadID]; ok {
+		t := s.rows[id]
+		return &t, nil
+	}
+	return nil, ErrNotFound
+}
+
+func (s *transferStore) UpdateProgress(_ context.Context, id int64, state string, bytes int64, fileID int64, errorCode int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.rows[id]
+	if !ok {
+		return ErrNotFound
+	}
+	t.State = state
+	if bytes >= 0 {
+		t.BytesTransferred = bytes
+	}
+	if fileID > 0 {
+		t.FileID = fileID
+	}
+	if errorCode > 0 {
+		t.ErrorCode = errorCode
+	}
+	t.UpdatedAt = time.Now()
+	s.rows[id] = t
+	return nil
+}
+
+func (s *transferStore) ListByUser(_ context.Context, tenantID, userID int64, direction int, limit int) ([]TransferRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []TransferRecord{}
+	for _, t := range s.rows {
+		if t.TenantID != tenantID || t.UserID != userID {
+			continue
+		}
+		if direction != 0 && t.Direction != direction {
+			continue
+		}
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}

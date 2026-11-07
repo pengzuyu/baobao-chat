@@ -113,12 +113,15 @@ func main() {
 	fileStore := filestore.NewLocal(envOr("BBW_DATA_DIR", "./data"))
 	var fileRepo filerepo.Repo
 	var fileShares filerepo.ShareRepo
+	var fileTransfers filerepo.TransferRepo
 	if pgPool != nil {
 		fileRepo = filerepo.NewPostgres(pgPool)
 		fileShares = filerepo.NewPostgresShares(pgPool)
+		fileTransfers = filerepo.NewPostgresTransfers(pgPool)
 	} else {
 		fileRepo = filerepo.NewMemory()
 		fileShares = filerepo.NewMemoryShares()
+		fileTransfers = filerepo.NewMemoryTransfers()
 	}
 	fileMod := file.NewModule(fileservice.Options{
 		MaxUploadBytes: 20 << 20, // 单文件 20MB（multipart 直传与 complete 合并共用上限）
@@ -127,7 +130,7 @@ func main() {
 			m, err := msgRepo.MemberOf(ctx, convID, userID)
 			return err == nil && m != nil && m.Status == 1
 		},
-	}, fileRepo, fileShares, fileStore)
+	}, fileRepo, fileShares, fileTransfers, fileStore)
 	fileSvc := fileMod.API()
 
 	// 管理域仓储先行（D10 阶段一务实版）：敏感词库热更闭包需在 message 装配前就绪
@@ -257,6 +260,7 @@ func main() {
 	mux.Handle("DELETE /api/v1/files/{id}", authed(handleFileDelete(fileSvc)))
 	// 分片上传会话（07 §4.1 本地盘形态：PATCH 直传，无预签名；对象存储化阶段三换）
 	mux.Handle("GET /api/v1/files/convs/{id}", authed(handleFileConvFiles(fileSvc)))
+	mux.Handle("GET /api/v1/files/transfers", authed(handleFileTransfers(fileSvc)))
 	mux.Handle("POST /api/v1/files/check", authed(handleFileCheck(fileSvc)))
 	mux.Handle("POST /api/v1/files/uploads", authed(handleFileUploadInit(fileSvc)))
 	mux.Handle("GET /api/v1/files/uploads/{id}", authed(handleFileUploadStatus(fileSvc)))
@@ -2252,6 +2256,25 @@ func handleFileConvFiles(svc fileapi.FileService) http.HandlerFunc {
 			return
 		}
 		items, err := svc.ListByConv(r.Context(), httpx.TenantID(r.Context()), uid, convID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items})
+	}
+}
+
+// handleFileTransfers 本人传输记录（07 §5 跨端镜像；?direction=1|2&limit=）
+func handleFileTransfers(svc fileapi.FileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		direction, _ := strconv.Atoi(r.URL.Query().Get("direction"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		items, err := svc.ListTransfers(r.Context(), httpx.TenantID(r.Context()), uid, direction, limit)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return

@@ -28,7 +28,7 @@ func newUploadFixture(t *testing.T) *Service {
 		MaxUploadBytes: 8 << 20,
 		TicketTTL:      time.Minute,
 		Now:            func() time.Time { return now },
-	}, filerepo.NewMemory(), filerepo.NewMemoryShares(), filestore.NewLocal(dir))
+	}, filerepo.NewMemory(), filerepo.NewMemoryShares(), filerepo.NewMemoryTransfers(), filestore.NewLocal(dir))
 }
 
 func shaOf(b []byte) string {
@@ -252,4 +252,120 @@ func TestShareLifecycleMatrix(t *testing.T) {
 	if err := svc.RevokeShare(ctx, 1, 8, sh4.Code); codeOf(t, err) != errx.CodeFileNotFound {
 		t.Fatal("非创建者 revoke 应拒")
 	}
+}
+
+// 传输记录镜像（07 §5）：分片全程状态轨迹（queued→transferring/resuming→done
+// 回填 file_id）+ multipart 终态行 + 下载行 + direction 过滤 + 4006 failed
+func TestTransferRecordMirror(t *testing.T) {
+	svc := newUploadFixture(t)
+	ctx := context.Background()
+
+	// ① multipart 上传 → up/done 行（file_name 联查）
+	up, err := svc.Upload(ctx, 1, 7, "直传.txt", "text/plain", 0, strings.NewReader("direct"))
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	// ② 票据下载 → down/transferring 行
+	ticket, err := svc.IssueTicket(ctx, 1, 7, mustParseID(t, up.ID))
+	if err != nil {
+		t.Fatalf("ticket: %v", err)
+	}
+	if _, _, derr := svc.Download(ctx, strings.TrimPrefix(ticket.URL, "/api/v1/files/dl?t=")); derr != nil {
+		t.Fatalf("download: %v", derr)
+	}
+	// ③ 分片：init → queued；part → transferring；再来一片 → resuming；complete → done+file_id
+	content := bytes.Repeat([]byte("rec-"), 600000) // 2.4MB → 3 片
+	init, err := svc.InitUpload(ctx, 1, 7, fileapi.UploadInitReq{
+		SHA256: shaOf(content), Size: int64(len(content)), Name: "分片.bin", PartSize: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	svc.UploadPart(ctx, 1, 7, init.UploadID, 1, bytes.NewReader(content[0:1<<20]))
+	svc.UploadPart(ctx, 1, 7, init.UploadID, 2, bytes.NewReader(content[1<<20:2<<20]))
+	done, err := svc.CompleteUpload(ctx, 1, 7, init.UploadID)
+	_ = done
+	if err != nil { // 缺片 4007 → failed 行（error_code 记 4007）
+		if codeOf(t, err) != errx.CodeFilePartMissing {
+			t.Fatalf("应 4007: %v", err)
+		}
+	}
+	svc.UploadPart(ctx, 1, 7, init.UploadID, 3, bytes.NewReader(content[2<<20:]))
+	done, err = svc.CompleteUpload(ctx, 1, 7, init.UploadID)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	// 断言：状态轨迹与过滤
+	all, err := svc.ListTransfers(ctx, 1, 7, 0, 50)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("应 3 行（直传 done/下载/分片 done）: %+v", all)
+	}
+	// 固定时钟下 created_at 相同（倒序退化）——按互斥条件区分三行：
+	// 直传=up+len("direct")；下载=down；分片=up+len(content)（三者大小互异）
+	var chunked, direct, down *fileapi.TransferDTO
+	for i := range all {
+		switch {
+		case all[i].Direction == 2:
+			down = &all[i]
+		case all[i].TotalBytes == int64(len("direct")):
+			direct = &all[i]
+		case all[i].TotalBytes == int64(len(content)):
+			chunked = &all[i]
+		}
+	}
+	if direct == nil || direct.State != "done" || direct.FileName != "直传.txt" || direct.FileID != up.ID {
+		t.Fatalf("直传行: %+v", direct)
+	}
+	if down == nil || down.State != "transferring" { // 下载完成度不可知（登记）
+		t.Fatalf("下载行: %+v", down)
+	}
+	if chunked == nil || chunked.State != "done" || chunked.FileID != done.FileID ||
+		chunked.BytesTransferred != int64(len(content)) || chunked.FileName != "分片.bin" {
+		t.Fatalf("分片行: %+v", chunked)
+	}
+	// direction 过滤
+	ups, _ := svc.ListTransfers(ctx, 1, 7, 1, 50)
+	if len(ups) != 2 {
+		t.Fatalf("direction=1 应 2 行: %d", len(ups))
+	}
+	// 他人不可见
+	other, _ := svc.ListTransfers(ctx, 1, 8, 0, 50)
+	if len(other) != 0 {
+		t.Fatalf("他人应 0 行: %d", len(other))
+	}
+}
+
+// 4006 作废 → failed 行（error_code 记档）
+func TestTransferRecordFailedOnMismatch(t *testing.T) {
+	svc := newUploadFixture(t)
+	ctx := context.Background()
+	init, err := svc.InitUpload(ctx, 1, 7, fileapi.UploadInitReq{
+		SHA256: shaOf([]byte("declared")), Size: 13, Name: "m.bin", PartSize: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := svc.UploadPart(ctx, 1, 7, init.UploadID, 1, bytes.NewReader([]byte("actual bytes!"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CompleteUpload(ctx, 1, 7, init.UploadID); codeOf(t, err) != errx.CodeFileSHA256Mismatch {
+		t.Fatal("应 4006")
+	}
+	rows, _ := svc.ListTransfers(ctx, 1, 7, 1, 10)
+	if len(rows) != 1 || rows[0].State != "failed" || rows[0].ErrorCode != 4006 {
+		t.Fatalf("failed 行: %+v", rows)
+	}
+}
+
+func mustParseID(t *testing.T, s string) int64 {
+	t.Helper()
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return n
 }

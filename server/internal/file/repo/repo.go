@@ -119,3 +119,51 @@ type ShareRepo interface {
 	// DisableShare 取消分享（creator 校验在 service；行不存在 ErrNotFound）
 	DisableShare(ctx context.Context, tenantID, id, creatorID int64) error
 }
+
+// ── 传输记录（07 §5：服务端镜像，跨端"我发过/收过什么"） ──
+
+// direction 取值
+const (
+	TransferUp   = 1
+	TransferDown = 2
+)
+
+// state 取值（OQ-C29 已回填 07 篇枚举；paused/expired 由客户端操作触发，阶段三接）
+const (
+	TransferQueued       = "queued"
+	TransferTransferring = "transferring"
+	TransferResuming     = "resuming"
+	TransferProcessing   = "processing"
+	TransferDone         = "done"
+	TransferFailed       = "failed"
+	TransferCanceled     = "canceled"
+	TransferExpired      = "expired"
+)
+
+// TransferRecord 传输记录行（迁移 0014）
+type TransferRecord struct {
+	ID               int64
+	TenantID         int64
+	UserID           int64
+	FileID           int64 // 0=进行中（complete 后回填）
+	UploadID         string
+	Direction        int
+	State            string
+	BytesTransferred int64
+	TotalBytes       int64
+	ErrorCode        int
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// TransferRepo 传输记录仓储
+type TransferRepo interface {
+	// Insert 新增（分片会话 init/上传成功/票据下载节点）
+	Insert(ctx context.Context, t TransferRecord) (TransferRecord, error)
+	// GetByUpload 分片会话关联行（无/多返回首行 nil）
+	GetByUpload(ctx context.Context, tenantID int64, uploadID string) (*TransferRecord, error)
+	// UpdateProgress 进度更新（state/bytes；file_id>0 时回填；error_code -1 清空）
+	UpdateProgress(ctx context.Context, id int64, state string, bytes int64, fileID int64, errorCode int) error
+	// ListByUser 本人记录（direction 0=全部；created_at 倒序）
+	ListByUser(ctx context.Context, tenantID, userID int64, direction int, limit int) ([]TransferRecord, error)
+}
