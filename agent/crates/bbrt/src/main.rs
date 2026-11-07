@@ -263,6 +263,8 @@ fn run() -> Result<(), String> {
 }
 
 /// host→runtime 分发；REQ 返回成对回执
+/// （宿主协议分发天然多依赖——装配态参数群，阶段二若继续膨胀引入 Ctx 结构体收敛）
+#[allow(clippy::too_many_arguments)]
 fn dispatch(
     mgr: &Arc<SessionManager>,
     memory: &Arc<MemoryEngine>,
@@ -568,7 +570,9 @@ fn dispatch(
     }
 }
 
-/// BBW_RT_MCP_SERVERS="name=cmd;name2=cmd --flag"（stdio 本地 MCP server v0.1）
+/// BBW_RT_MCP_SERVERS="corp=http://127.0.0.1:8090/mcp/corp;fake=fake-server --flag"
+/// （值 http:// 前缀=远程 MCP 网关（公司域 mcpgw，D14 §6.1 连接期发现
+/// mcp.{name}.*）；否则=stdio 本地子进程命令行）
 fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
     raw.split(';')
         .filter_map(|seg| {
@@ -576,17 +580,25 @@ fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
             if seg.is_empty() {
                 return None;
             }
-            let (name, cmd) = seg.split_once('=')?;
-            let mut parts = cmd.split_whitespace();
-            let command = parts.next()?.to_string();
-            Some(bbrt_mcp::McpServerConfig {
-                name: name.trim().to_string(),
-                transport: bbrt_mcp::TransportConfig::Stdio {
+            let (name, target) = seg.split_once('=')?;
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let transport = if target.trim_start().starts_with("http://") {
+                bbrt_mcp::TransportConfig::Http {
+                    base_url: target.trim().to_string(),
+                }
+            } else {
+                let mut parts = target.split_whitespace();
+                let command = parts.next()?.to_string();
+                bbrt_mcp::TransportConfig::Stdio {
                     command,
                     args: parts.map(str::to_string).collect(),
                     env: vec![],
-                },
-            })
+                }
+            };
+            Some(bbrt_mcp::McpServerConfig { name, transport })
         })
         .collect()
 }
@@ -672,5 +684,31 @@ impl RuntimeHandler for RtHandler {
             "memory".into(),
             "reports".into(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MCP server 配置双形态：http:// 前缀=远程网关（mcpgw）；否则 stdio 命令行
+    #[test]
+    fn parse_mcp_servers_http_and_stdio() {
+        let cfgs = parse_mcp_servers(
+            "corp=http://127.0.0.1:8090/mcp/corp; fake=fake-server --flag --v; bad; =x",
+        );
+        assert_eq!(cfgs.len(), 2, "坏段（无名/无=）应跳过: {cfgs:?}");
+        assert!(matches!(
+            &cfgs[0].transport,
+            bbrt_mcp::TransportConfig::Http { base_url }
+                if base_url == "http://127.0.0.1:8090/mcp/corp",
+        ));
+        assert_eq!(cfgs[0].name, "corp");
+        assert!(matches!(
+            &cfgs[1].transport,
+            bbrt_mcp::TransportConfig::Stdio { command, args, .. }
+                if command == "fake-server" && args == &vec!["--flag".to_string(), "--v".to_string()],
+        ));
+        assert!(parse_mcp_servers("").is_empty());
     }
 }

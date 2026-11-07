@@ -357,12 +357,12 @@ fn last_text(history: &[Round]) -> String {
 
 /// 流收集（单轮：文本 + 工具调用 + finish）
 fn drain(
-    mut stream: Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+    stream: Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
 ) -> (String, Vec<ToolCallMsg>, FinishReason) {
     let mut text = String::new();
     let mut calls = vec![];
     let mut finish = FinishReason::Stop;
-    while let Some(ev) = stream.next() {
+    for ev in stream {
         match ev {
             Ok(StreamEvent::TextDelta { text: t }) => text.push_str(&t),
             Ok(StreamEvent::ToolCallBegin { id, name, .. }) => calls.push(ToolCallMsg {
