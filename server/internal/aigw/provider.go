@@ -173,35 +173,66 @@ func (m *MockProvider) StreamChat(_ context.Context, req *ChatRequest) *Provider
 func (m *MockProvider) Embed(_ context.Context, input []string) ([][]float32, *UsageOpenAI, error) {
 	out := make([][]float32, 0, len(input))
 	for _, s := range input {
-		vec := make([]float32, 1024)
-		mac := hmac.New(sha256.New, []byte("bbw-embed-mock"))
-		mac.Write([]byte(s))
-		seed := mac.Sum(nil)
-		for i := 0; i < 1024; i += 8 {
-			chunk := seed[i%len(seed) : (i%len(seed))+8]
-			bits := binary.BigEndian.Uint64(append(chunk, chunk...)) >> 1
-			for j := 0; j < 8 && i+j < 1024; j++ {
-				vec[i+j] = float32(bits>>(3*j)&0x7) / 8.0
-			}
-		}
-		// 归一化
-		var norm float64
-		for _, v := range vec {
-			norm += float64(v) * float64(v)
-		}
-		if norm > 0 {
-			sqrt := float32(math.Sqrt(norm))
-			for i := range vec {
-				vec[i] /= sqrt
-			}
-		}
-		out = append(out, vec)
+		out = append(out, mockEmbedOne(s))
 	}
 	tokens := 0
 	for _, s := range input {
 		tokens += len([]rune(s))
 	}
 	return out, &UsageOpenAI{PromptTokens: tokens, TotalTokens: tokens}, nil
+}
+
+// mockEmbedOne 词袋嵌入：分词（CJK 2-gram + ASCII 词）→ 每词 HMAC 定维累加 → L2 归一化。
+// 语义性质：共享词汇的文本余弦相似度高（查询与文档重叠词越多越靠前）——
+// KB 自检索（摄入 mock 向量→query mock 向量→pgvector 排序）因此真实可测；
+// 完全不同的文本向量近正交（词袋不相交）。HMAC 确定性：同文本同向量。
+func mockEmbedOne(s string) []float32 {
+	vec := make([]float32, 1024)
+	add := func(tok string, weight float32) {
+		mac := hmac.New(sha256.New, []byte("bbw-embed-mock"))
+		mac.Write([]byte(tok))
+		sum := mac.Sum(nil)
+		dim := binary.BigEndian.Uint32(sum[4:8]) % 1024
+		vec[dim] += weight
+	}
+	runes := []rune(strings.ToLower(s))
+	var ascii strings.Builder
+	flushASCII := func() {
+		if ascii.Len() > 0 {
+			add(ascii.String(), 2.0) // 完整 ASCII 词权重高于 CJK 2-gram
+			ascii.Reset()
+		}
+	}
+	for i, r := range runes {
+		if r < 128 && !isSpaceASCII(byte(r)) {
+			ascii.WriteRune(r)
+			continue
+		}
+		flushASCII()
+		if r >= 0x4e00 && r <= 0x9fff && i+1 < len(runes) && runes[i+1] >= 0x4e00 && runes[i+1] <= 0x9fff {
+			add(string(runes[i:i+2]), 1.0) // CJK bigram
+		}
+	}
+	flushASCII()
+	var norm float64
+	for _, v := range vec {
+		norm += float64(v) * float64(v)
+	}
+	if norm > 0 {
+		sqrt := float32(math.Sqrt(norm))
+		for i := range vec {
+			vec[i] /= sqrt
+		}
+	}
+	return vec
+}
+
+func isSpaceASCII(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r', ',', '.', '!', '?', ';', ':', '"', '\'', '(', ')', '[', ']', '{', '}', '<', '>', '/', '\\', '|', '@', '#', '$', '%', '^', '&', '*', '+', '=', '~', '`':
+		return true
+	}
+	return false
 }
 
 // ---- openai_compatible 供应商（真实上游透传）----

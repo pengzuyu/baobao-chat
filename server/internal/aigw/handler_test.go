@@ -3,6 +3,7 @@ package aigw
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -205,5 +206,31 @@ func TestMeteringSceneAndSessionHeader(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("scene/session 维度缺失: %+v", snap)
+	}
+}
+
+func TestMockEmbedSemanticSimilarity(t *testing.T) {
+	// 词袋语义：同主题文本相似度高、不同主题近正交（KB 自检索的向量层前提）
+	mock := NewMockProvider(1, "m")
+	vecs, _, _ := mock.Embed(context.Background(), []string{"量子计算的基本原理与应用前景", "量子计算应用前景广阔", "红烧肉的传统做法与火候"})
+	a1, a2, b := vecs[0], vecs[1], vecs[2]
+	cos := func(x, y []float32) float64 {
+		var d float64
+		for i := range x {
+			d += float64(x[i]) * float64(y[i])
+		}
+		return d
+	}
+	if cos(a1, a2) < 0.3 {
+		t.Fatalf("同主题相似度应 ≥0.3: %f", cos(a1, a2))
+	}
+	if cos(a1, b) > 0.15 {
+		t.Fatalf("不同主题应近正交: %f", cos(a1, b))
+	}
+	// 确定性
+	vecs2, _, _ := mock.Embed(context.Background(), []string{"量子计算的基本原理与应用前景"})
+	a1b := vecs2[0]
+	if cos(a1, a1b) < 0.999 {
+		t.Fatalf("同文本应同向量: %f", cos(a1, a1b))
 	}
 }
