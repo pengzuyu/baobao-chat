@@ -100,7 +100,21 @@ fn run() -> Result<(), String> {
         memory: Some(memory.clone()),
         ..Default::default()
     }));
-    let model = Arc::new(AigwClient::new(&gateway, move || token.clone()));
+    // OBO 动态令牌：宿主 obo.token 写缓存，过期回退静态 BBW_RT_TOKEN（D11 §10.1）
+    let obo = Arc::new(std::sync::Mutex::new(bbrt_hostapi::OboCache::default()));
+    let obo_for_model = Arc::clone(&obo);
+    let static_token = token.clone();
+    let model = Arc::new(AigwClient::new(&gateway, move || {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        obo_for_model
+            .lock()
+            .ok()
+            .and_then(|c| c.get(now).map(str::to_string))
+            .unwrap_or_else(|| static_token.clone())
+    }));
 
     let sink = Arc::new(BrtSink {
         pending: Mutex::new(std::collections::HashMap::new()),
@@ -161,7 +175,7 @@ fn run() -> Result<(), String> {
             Ok(None) => return Ok(()), // EOF 优雅退出
             Err(_) => continue,        // 坏行：codec 已丢弃（忽略+计数对齐 D11 §4）
         };
-        let reply = dispatch(&mgr, &memory, &sink, &store, &mut ids, &env);
+        let reply = dispatch(&mgr, &memory, &sink, &store, &obo, &mut ids, &env);
         if let Some(msg) = reply {
             if let Ok(mut ack) = Envelope::wrap(1, format!("r-{}", ids.next_id()), &msg) {
                 ack.reply_to = Some(env.id.clone());
@@ -177,6 +191,7 @@ fn dispatch(
     memory: &Arc<MemoryEngine>,
     sink: &Arc<BrtSink>,
     store: &Arc<Mutex<Store>>,
+    obo: &Arc<std::sync::Mutex<bbrt_hostapi::OboCache>>,
     ids: &mut IdGen,
     env: &Envelope,
 ) -> Option<RuntimeToHost> {
@@ -193,6 +208,13 @@ fn dispatch(
     };
     match msg {
         HostToRuntime::Ping => Some(RuntimeToHost::Pong),
+        // 宿主发放/续签 OBO 令牌（NTF；缓存后模型通道自动切换，D11 §10.1）
+        HostToRuntime::OboToken { token, exp, scopes } => {
+            if let Ok(mut c) = obo.lock() {
+                c.set(token, exp, scopes);
+            }
+            None
+        }
         HostToRuntime::Initialize { .. } => Some(RuntimeToHost::InitializeResult {
             runtime_version: env!("CARGO_PKG_VERSION").into(),
             tools: vec![],
