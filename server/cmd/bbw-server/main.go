@@ -198,6 +198,16 @@ func main() {
 			c, err := msgRepo.GetConversation(ctx, convID)
 			return err == nil && c != nil && c.Status == messageapi.ConvActive
 		},
+		// 群呼全员 ringing 目标集（D04 阶段二 join 模式）
+		ConvMembersOf: func(ctx context.Context, convID int64) []int64 {
+			ids, err := msgRepo.MembersOf(ctx, convID)
+			if err != nil {
+				return nil
+			}
+			return ids
+		},
+		// 被叫忙放行（OQ-C06 配套：端侧收 ringing 自动回 busy / bye_call_id 挂旧接新）
+		AllowBusyCallee: true,
 		IsConvMember: func(ctx context.Context, convID, userID int64) bool {
 			m, err := msgRepo.MemberOf(ctx, convID, userID)
 			return err == nil && m != nil && m.Status == 1

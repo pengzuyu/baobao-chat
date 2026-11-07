@@ -518,6 +518,16 @@ func (g *Gateway) handleEnvelope(ctx context.Context, uid int64, env *Envelope) 
 			return map[string]any{}, svc.Reject(ctx, uid, p)
 		})
 
+	case "rtc.join":
+		var p rtcapi.JoinPayload
+		if err := unmarshalPayload(env, &p); err != nil {
+			e := errx.From(err)
+			return NewAck(env, int(e.Code), errBody(e.Msg))
+		}
+		return g.handleRTC(env, func(svc rtcapi.RTCService) (any, error) {
+			return map[string]any{}, svc.Join(ctx, uid, p)
+		})
+
 	case "rtc.bye":
 		var p rtcapi.CallIDPayload
 		if err := unmarshalPayload(env, &p); err != nil {

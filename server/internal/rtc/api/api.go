@@ -1,7 +1,8 @@
 // Package rtcapi 通话域对外接口与 DTO（D04 阶段一务实版）。
 // 文档：docs/05-音视频通话设计.md §4/§6 · docs/detail/D04-通话模块详细设计.md §5.1。
 // 阶段一口径（与 05 篇差异处均已登记）：
-//   - 只做 1v1：callee_id 单人，群通话/通话中邀请/节点迁移/质量面板/屏幕共享不做；
+//   - 1v1 全链 + 群通话阶段二（callee_id 空=群呼 join 模式：全员 ringing+
+//     独立协商加入+all_left 30s 窗口+席位 64）；媒体面 SFU/节点迁移/质量面板不做；
 //   - WebRTC P2P：服务端纯信令（SDP/ICE 经 rtc.signal 透传，不落库）；
 //   - 通话记录=IM 流内 call_card 消息，服务端不建表（CallRegistry 内存态）；
 //   - 推送扇出按 user 广播（多端 did 过滤在客户端做，登记）。
@@ -44,7 +45,7 @@ const (
 type InvitePayload struct {
 	CallID   string `json:"call_id"`   // 客户端生成（UUID，重试不换——幂等键，14 篇 §5.3）
 	ConvID   string `json:"conv_id"`   // 关联会话（卡片落此会话）
-	CalleeID string `json:"callee_id"` // 被叫 uid（1v1 恰 1 人）
+	CalleeID string `json:"callee_id"` // 被叫 uid（1v1 恰 1 人；空=群呼全员 ringing）
 	CallType string `json:"call_type"` // audio | video
 }
 
@@ -75,6 +76,12 @@ type RejectPayload struct {
 	Reason string `json:"reason"` // declined | busy | timeout_local
 }
 
+// JoinPayload WS rtc.join（c→s，群通话加入；05 §4.1 群内多人 join 模式）
+type JoinPayload struct {
+	CallID string `json:"call_id"`
+	DID    string `json:"did"` // 加入端设备标识
+}
+
 // SignalPayload WS rtc.signal（c→s，SDP/ICE 透传）
 type SignalPayload struct {
 	CallID string         `json:"call_id"`
@@ -88,18 +95,19 @@ type CallerInfo struct {
 	Avatar string `json:"avatar,omitempty"` // org 用户模型 v0.1 无头像字段，恒空（登记）
 }
 
-// RingingPush rtc.ringing（s→c，推被叫全端）
+// RingingPush rtc.ringing（s→c，推被叫全端；群呼 group=true）
 type RingingPush struct {
 	CallID   string     `json:"call_id"`
 	Caller   CallerInfo `json:"caller"`
 	CallType string     `json:"call_type"`
 	ConvID   string     `json:"conv_id"`
+	Group    bool       `json:"group,omitempty"` // 群呼：端侧展示"群通话·点击加入"
 }
 
 // StatePush rtc.state（s→c，双端；kind 判别联合的务实子集）
 type StatePush struct {
 	CallID   string `json:"call_id"`
-	Kind     string `json:"kind"`               // dialing|ringing|connecting|connected|ended|answered_elsewhere
+	Kind     string `json:"kind"`               // dialing|ringing|connecting|connected|ended|answered_elsewhere|joined|left
 	Reason   string `json:"reason,omitempty"`   // kind=ended：canceled|declined|busy|timeout|bye|failed
 	Duration int64  `json:"duration,omitempty"` // kind=ended：接通秒数（未接通 0）
 	DID      string `json:"did,omitempty"`      // kind=answered_elsewhere：接听端 did（客户端过滤本端）
@@ -135,4 +143,7 @@ type RTCService interface {
 	Bye(ctx context.Context, userID int64, p CallIDPayload) error
 	// Signal SDP/ICE 透传给对端；connecting 态首个 signal 到达 → connected（近似，登记）
 	Signal(ctx context.Context, userID int64, p SignalPayload) error
+	// Join 群通话加入（阶段二）：席位校验（64，5002）→ 参与者集 → 全员
+	// state{joined}；all_left 窗口内再加入自动取消结束定时器
+	Join(ctx context.Context, userID int64, p JoinPayload) error
 }

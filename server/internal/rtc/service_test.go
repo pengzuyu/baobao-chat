@@ -371,8 +371,8 @@ func TestAcceptWithByeCallIDAtomic(t *testing.T) {
 	svc.reg.mu.Lock()
 	svc.reg.byID["call-b"] = callB
 	svc.reg.byConv[2] = callB
-	svc.reg.byUser[10001] = callB
-	svc.reg.byUser[10002] = callB
+	svc.reg.byUser[10001] = map[string]*Call{"call-b": callB}
+	svc.reg.byUser[10002] = map[string]*Call{"call-b": callB}
 	svc.reg.mu.Unlock()
 
 	// bob 挂断并接听：单帧 bye(call-a) + accept(call-b)
@@ -412,5 +412,239 @@ func TestAcceptWithByeCallIDAtomic(t *testing.T) {
 func TestAllLeftReasonRegistered(t *testing.T) {
 	if rtcapi.ReasonAllLeft != "all_left" {
 		t.Fatalf("all_left 常量: %q", rtcapi.ReasonAllLeft)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 群通话阶段二（05 §4.1 join 模式 / §7.4 all_left / OQ-C06 被叫忙放行）
+// ---------------------------------------------------------------------------
+
+// newGroupSvc 三人群呼测试装配（conv=9：alice/bob/carol）
+func newGroupSvc(allLeft time.Duration) (*Service, *fakePush, *fakeCard) {
+	p := &fakePush{}
+	card := &fakeCard{}
+	members := map[int64]bool{10001: true, 10002: true, 10003: true}
+	svc := New(NewRegistry(), p, card, Options{
+		IsConvActive:    func(_ context.Context, convID int64) bool { return convID == 9 },
+		IsConvMember:    func(_ context.Context, _, uid int64) bool { return members[uid] },
+		ConvMembersOf:   func(_ context.Context, _ int64) []int64 { return []int64{10001, 10002, 10003} },
+		NameOf:          func(id int64) string { return "user-" + strconv.FormatInt(id, 10) },
+		RingTimeout:     time.Hour,
+		AllLeftWindow:   allLeft,
+		AllowBusyCallee: true,
+		Now:             func() time.Time { return time.UnixMilli(1760000000000) },
+	})
+	return svc, p, card
+}
+
+func groupInviteP(callID string) rtcapi.InvitePayload {
+	return rtcapi.InvitePayload{CallID: callID, ConvID: "9", CallType: rtcapi.CallTypeAudio} // 无 callee=群呼
+}
+
+// 群呼发起：全员 ringing(group=true，除主叫) + 主叫即参与者 + connecting
+func TestGroupInviteFanoutRinging(t *testing.T) {
+	svc, push, card := newGroupSvc(time.Hour)
+	ack, err := svc.Invite(context.Background(), 10001, groupInviteP("g-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.CallID != "g-1" {
+		t.Fatal(ack)
+	}
+	// 群 ringing 一次推送扇出两被叫（fakePush 按调用记录；users 数组断言）
+	rang := push.of("rtc.ringing")
+	if len(rang) != 1 || !strings.Contains(rang[0], `"group":true`) {
+		t.Fatalf("群 ringing 应一条 group 推送：%v", rang)
+	}
+	// 卡片落流
+	if len(card.sent) != 1 {
+		t.Fatalf("卡片：%v", card.sent)
+	}
+	// 主叫 connecting（等待首个成员 signal）
+	if !hasState(push.of("rtc.state"), "connecting") {
+		t.Fatal("主叫应见 connecting")
+	}
+	// 主叫已在参与者集（bye 可退出）
+	if err := svc.Bye(context.Background(), 10001, rtcapi.CallIDPayload{CallID: "g-1"}); err != nil {
+		t.Fatalf("主叫应可退出：%v", err)
+	}
+}
+
+// join 全链：加入 → joined 推送 → signal 首帧 connected（全员）→ 群内转发
+func TestGroupJoinAndSignal(t *testing.T) {
+	svc, push, _ := newGroupSvc(time.Hour)
+	ctx := context.Background()
+	if _, err := svc.Invite(ctx, 10001, groupInviteP("g-2")); err != nil {
+		t.Fatal(err)
+	}
+	// 非 1v1：accept 群呼被拒
+	if code := codeOf(t, svc.Accept(ctx, 10002, rtcapi.AcceptPayload{CallID: "g-2", Answer: true})); code != 9001 {
+		t.Fatalf("群呼 accept 应 9001：%d", code)
+	}
+	if err := svc.Join(ctx, 10002, rtcapi.JoinPayload{CallID: "g-2", DID: "d-b"}); err != nil {
+		t.Fatal(err)
+	}
+	if !hasState(push.of("rtc.state"), "joined") {
+		t.Fatal("应推 joined")
+	}
+	// 非会话成员 join → 5011（members 集外 uid）
+	if code := codeOf(t, svc.Join(ctx, 99999, rtcapi.JoinPayload{CallID: "g-2"})); code != 5011 {
+		t.Fatalf("外人 join 应 5011：%d", code)
+	}
+	// bob 首帧 signal → connected 广播全员；信令转发给其他参与者
+	if err := svc.Signal(ctx, 10002, rtcapi.SignalPayload{
+		CallID: "g-2", Data: map[string]any{"kind": "sdp", "sdp": "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !hasState(push.of("rtc.state"), "connected") {
+		t.Fatal("首帧 signal 应 connected")
+	}
+	sig := push.of("rtc.signal")
+	if len(sig) != 1 || !strings.Contains(sig[0], `"from":"10002"`) {
+		t.Fatalf("信令应转发其余参与者：%v", sig)
+	}
+	// 重复 join 幂等
+	if err := svc.Join(ctx, 10002, rtcapi.JoinPayload{CallID: "g-2"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// all_left：全员退出 → 窗口到点 End(all_left)+卡片；窗口内再加入复活
+func TestGroupAllLeftWindow(t *testing.T) {
+	svc, push, card := newGroupSvc(60 * time.Millisecond)
+	ctx := context.Background()
+	if _, err := svc.Invite(ctx, 10001, groupInviteP("g-3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Join(ctx, 10002, rtcapi.JoinPayload{CallID: "g-3"}); err != nil {
+		t.Fatal(err)
+	}
+	// carol 未加入；bob 退 → 剩主叫；主叫退 → 空 → 窗口
+	if err := svc.Bye(ctx, 10002, rtcapi.CallIDPayload{CallID: "g-3"}); err != nil {
+		t.Fatal(err)
+	}
+	if !hasState(push.of("rtc.state"), "left") {
+		t.Fatal("应推 left")
+	}
+	if err := svc.Bye(ctx, 10001, rtcapi.CallIDPayload{CallID: "g-3"}); err != nil {
+		t.Fatal(err)
+	}
+	// 窗口内 carol 加入 → 复活（取消 all_left）
+	if err := svc.Join(ctx, 10003, rtcapi.JoinPayload{CallID: "g-3"}); err != nil {
+		t.Fatalf("窗口内加入应复活：%v", err)
+	}
+	time.Sleep(120 * time.Millisecond) // 窗口已取消：不应结束
+	if hasReason(push.of("rtc.state"), "all_left") {
+		t.Fatal("复活后不应 all_left")
+	}
+	// carol 再退 → 空窗口 → 到点 all_left + 卡片回写
+	if err := svc.Bye(ctx, 10003, rtcapi.CallIDPayload{CallID: "g-3"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(120 * time.Millisecond)
+	if !hasReason(push.of("rtc.state"), rtcapi.ReasonAllLeft) {
+		t.Fatal("全员退出窗口到点应 all_left")
+	}
+	if card.finish != 1 {
+		t.Fatalf("卡片应回写 ended：%+v", card)
+	}
+	// 结束后 join → 5010
+	if code := codeOf(t, svc.Join(ctx, 10002, rtcapi.JoinPayload{CallID: "g-3"})); code != 5010 {
+		t.Fatalf("结束后 join 应 5010：%d", code)
+	}
+}
+
+// 通话中追加被叫：existed 群呼 + 指定 callee → 仅该被叫 ringing
+func TestGroupInviteExtraCallee(t *testing.T) {
+	svc, push, _ := newGroupSvc(time.Hour)
+	_ = push // 首轮推送后清零复用
+	ctx := context.Background()
+	if _, err := svc.Invite(ctx, 10001, groupInviteP("g-4")); err != nil {
+		t.Fatal(err)
+	}
+	push.mu.Lock()
+	push.pushes = nil // 清首轮
+	push.mu.Unlock()
+	ack, err := svc.Invite(ctx, 10001, rtcapi.InvitePayload{
+		CallID: "g-4", ConvID: "9", CalleeID: "10002", CallType: rtcapi.CallTypeAudio})
+	if err != nil || ack.CallID != "g-4" {
+		t.Fatalf("追加被叫：%v", err)
+	}
+	// 仅新增被叫收到 ringing（users 断言——payload 不含被叫 uid）
+	push.mu.Lock()
+	var targets []int64
+	for _, pr := range push.pushes {
+		if pr.typ == "rtc.ringing" {
+			targets = pr.users
+		}
+	}
+	push.mu.Unlock()
+	if len(targets) != 1 || targets[0] != 10002 {
+		t.Fatalf("应仅推新增被叫 10002：%v", targets)
+	}
+	// 非参与者不可追加
+	_, extraErr := svc.Invite(ctx, 10003, rtcapi.InvitePayload{
+		CallID: "g-4", ConvID: "9", CalleeID: "10002", CallType: rtcapi.CallTypeAudio})
+	if code := codeOf(t, extraErr); code != 5011 {
+		t.Fatalf("非参与者追加应 5011：%d", code)
+	}
+}
+
+// 被叫忙放行（OQ-C06）：B 在 1v1 中 A 呼 B → ringing 送达 + 主叫收 busy 提示；
+// 主叫忙恒拦
+func TestInviteBusyCalleeAllowed(t *testing.T) {
+	svc, _, _ := newGroupSvc(time.Hour)
+	ctx := context.Background()
+	// conv=9 内先建 1v1：alice→bob（占线）
+	if _, err := svc.Invite(ctx, 10001, rtcapi.InvitePayload{
+		CallID: "b-1", ConvID: "9", CalleeID: "10002", CallType: rtcapi.CallTypeAudio}); err != nil {
+		t.Fatal(err)
+	}
+	// 同会话第二通 1v1 会先撞 5009（conv 互斥）——被叫忙放行验证需另一会话：
+	// 本测试装配仅 conv=9，改用群呼与 1v1 并存验证 byUser 多值：carol 发起群呼
+	// （carol 空闲、conv=9 已有通话 → 5009）。故被叫忙放行路径在 conv=9 内
+	// 无法与 conv 互斥解耦——单独装配验证：
+	p2 := &fakePush{}
+	c2 := &fakeCard{}
+	svc2 := New(NewRegistry(), p2, c2, Options{
+		IsConvActive: func(_ context.Context, convID int64) bool { return convID == 1 || convID == 2 || convID == 3 },
+		IsConvMember: func(_ context.Context, _, uid int64) bool {
+			return uid == 10001 || uid == 10002 || uid == 10003
+		},
+		NameOf:          func(id int64) string { return "u" },
+		RingTimeout:     time.Hour,
+		AllowBusyCallee: true,
+		Now:             func() time.Time { return time.UnixMilli(1760000000000) },
+	})
+	// conv=1 既有 1v1（bob 被叫占线）→ conv=2 alice 再呼 bob：放行+busy 提示
+	if _, err := svc2.Invite(ctx, 10001, rtcapi.InvitePayload{
+		CallID: "b-occ", ConvID: "1", CalleeID: "10002", CallType: rtcapi.CallTypeAudio}); err != nil {
+		t.Fatal(err)
+	}
+	// carol（空闲）呼 bob（被叫占线）→ 放行 + busy 提示给 carol
+	ack, err := svc2.Invite(ctx, 10003, rtcapi.InvitePayload{
+		CallID: "b-new", ConvID: "2", CalleeID: "10002", CallType: rtcapi.CallTypeAudio})
+	if err != nil {
+		t.Fatalf("被叫忙应放行：%v", err)
+	}
+	_ = ack
+	states := p2.of("rtc.state")
+	busyHint := false
+	for _, s := range states {
+		if strings.Contains(s, `"reason":"busy"`) {
+			busyHint = true
+		}
+	}
+	if !busyHint {
+		t.Fatal("主叫应收 busy 提示")
+	}
+	if len(p2.of("rtc.ringing")) != 2 {
+		t.Fatal("两通 ringing 均应送达")
+	}
+	// bob（被叫占线者）再发起呼叫：主叫忙恒拦 5004（独立 conv=3 避 5009 干扰）
+	_, busyErr := svc2.Invite(ctx, 10002, rtcapi.InvitePayload{
+		CallID: "b-3", ConvID: "3", CalleeID: "10001", CallType: rtcapi.CallTypeAudio})
+	if code := codeOf(t, busyErr); code != 5004 {
+		t.Fatalf("主叫忙应 5004：%d", code)
 	}
 }
