@@ -129,19 +129,24 @@ function flushRead(convId: string): void {
   void wsClient.request('msg.read', { conv_id: convId, read_seq: seq }).catch(() => undefined);
 }
 
-/** sending 消息临时序：-1 起递减，保证置底且不与服务端 seq 冲突 */
+/** sending 消息临时序：-1 起递减，不与服务端 seq 冲突（真实置底由 sortMessages 的未决规则保证） */
 let localSeq = 0;
 function nextLocalSeq(): number {
   localSeq -= 1;
   return localSeq;
 }
 
-/** 会话内消息排序：服务端 seq 升序；本端未决消息（负临时序）稳定置底
- * （D03 INT-IM-01"临时负序置底"——负数在纯升序下会排到最顶，须以 MAX_SAFE 键压底，
- *  Array.sort 稳定性保证多个 sending 按插入顺序排列） */
+/** 会话内消息排序（D03 INT-IM-01"临时负序置底"）：
+ * - 已确认消息按 seq 升序（上旧下新；负临时序在纯升序下会排到最顶，须压底）
+ * - 本端未决（sending/failed）恒在已确认之后（置底）；未决之间后发的更靠下（临时序越负越新） */
 function sortMessages(list: Message[]): Message[] {
-  const key = (m: Message) => (m.seq > 0 ? m.seq : Number.MAX_SAFE_INTEGER);
-  return [...list].sort((a, b) => key(a) - key(b));
+  return [...list].sort((a, b) => {
+    const aPending = a.localState && a.localState !== 'sent' ? 1 : 0;
+    const bPending = b.localState && b.localState !== 'sent' ? 1 : 0;
+    if (aPending !== bPending) return aPending - bPending;
+    if (aPending === 1) return b.seq - a.seq;
+    return a.seq - b.seq;
+  });
 }
 
 /** 更新会话的 lastMsg 摘要（列表即时反馈） */
@@ -279,7 +284,7 @@ export const useImStore = create<ImState>((set, get) => ({
           ext: msg.ext ?? next[hitIdx].ext,
         };
         // 服务端真值到达即自愈：清 outbox 行 + 落本地库（settle 的 ack 写幂等兜底）；
-        // 回填真 seq 后重排（乐观负序占位可能落在错误槽位）
+        // 回填真 seq 后重排归位（乐观副本可能仍在顶部/中部，负序占位槽位可能偏移）
         void outboxSettle(msg.clientMsgId, true, next[hitIdx]);
         return { messagesByConv: { ...s.messagesByConv, [msg.convId]: sortMessages(next) } };
       }
@@ -571,7 +576,7 @@ async function settle(
     set((s) => ({
       messagesByConv: {
         ...s.messagesByConv,
-        // 回填真 seq 后重排（乐观负序占位槽位可能偏移，D03 INT-IM-01 置底不变量）
+        // 回填真 seq 后重排归位（乐观期按未决置底，此处转入 seq 序；D03 INT-IM-01 置底不变量）
         [convId]: sortMessages(
           (s.messagesByConv[convId] ?? []).map((m) =>
             m.clientMsgId === clientMsgId ? { ...m, localState: 'sent' as const, seq: ack.seq, msgId: ack.msgId, ts: ack.ts } : m,
@@ -597,8 +602,10 @@ async function settle(
     set((s) => ({
       messagesByConv: {
         ...s.messagesByConv,
-        [convId]: (s.messagesByConv[convId] ?? []).map((m) =>
-          m.clientMsgId === clientMsgId ? { ...m, localState: 'failed' as const } : m,
+        [convId]: sortMessages(
+          (s.messagesByConv[convId] ?? []).map((m) =>
+            m.clientMsgId === clientMsgId ? { ...m, localState: 'failed' as const } : m,
+          ),
         ),
       },
     }));

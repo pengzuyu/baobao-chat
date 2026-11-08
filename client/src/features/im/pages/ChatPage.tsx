@@ -11,7 +11,6 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, Bell, Megaphone, SquarePen, Star } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
-import { wsClient } from '../../../shared/api/ws';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
@@ -22,7 +21,6 @@ import { useConversationMessages, useConversations, useUnreadNotificationCount }
 import {
   fetchConvDetail,
   fetchMessagesBefore,
-  mapMsgNew,
   editMessage,
   favoriteMessage,
   recallMessage,
@@ -30,17 +28,7 @@ import {
   type SearchHit,
 } from '../api/im';
 import { hydrateConv, hydrateLocal, hookSyncOnReconnect, resendOutbox, runSync } from '../api/local';
-import type {
-  ConvStatePushPayload,
-  ConvUpdatedPushPayload,
-  Mention,
-  Message,
-  MsgNewPayload,
-  MsgReactionNewPayload,
-  MsgRecallPayload,
-  MsgUpdatedPayload,
-  TypingPushPayload,
-} from '../model/types';
+import type { Mention, Message } from '../model/types';
 import { formatMuteUntil } from './systemMessageRegistry';
 import { TYPING_TTL_MS, useImStore } from '../store/im';
 import { ChatHeader } from '../components/ChatHeader';
@@ -111,11 +99,9 @@ export function ChatPage() {
   const setConvs = useImStore((s) => s.setConvs);
   const setActiveConv = useImStore((s) => s.setActiveConv);
   const replaceMessages = useImStore((s) => s.replaceMessages);
-  const appendIncoming = useImStore((s) => s.appendIncoming);
   const setDraft = useImStore((s) => s.setDraft);
   const sendText = useImStore((s) => s.sendText);
   const retrySend = useImStore((s) => s.retrySend);
-  const applyTyping = useImStore((s) => s.applyTyping);
   const togglePin = useImStore((s) => s.togglePin);
   const toggleMute = useImStore((s) => s.toggleMute);
   // 多选模式（INT-IM-14/PIM-10）：选择集在 store（滚动/上翻不丢选择）
@@ -152,12 +138,13 @@ export function ChatPage() {
     setEditing(null);
     setMenuMsg(null);
     if (useImStore.getState().multiSelect.isActive) exitMultiSelect();
-    // 离开 /im（卸载）必须清 activeConvId：否则在其它页面收消息被误判
-    // "当前会话可见"而不计未读（appendIncoming/markRead 的可见性判定依据）
+    // 离开 /im（卸载）必须清 activeConvId：全局 msg.new 处理器（wsEvents.ts）
+    // 据此判定"当前会话可见"才"可见即读"，否则在其它页面收消息被误判不计未读
     return () => setActiveConv(null);
   }, [convId, setActiveConv, exitMultiSelect]);
 
   // 已读时机①：进入会话且消息加载完成 → 上报至最新 seq（INT-IM-12）
+  // （WS 事件绑定已上移至 MainLayout 常驻，任意页面均实时入流，见 store/wsEvents.ts）
   const markRead = useImStore((s) => s.markRead);
   useEffect(() => {
     if (!convId) return;
@@ -166,61 +153,8 @@ export function ChatPage() {
     if (lastSeq > 0) markRead(convId, lastSeq);
   }, [convId, msgQuery.data, markRead]);
 
-  // ---- WS 推送全事件接线（D03 §5.3）----
-  useEffect(() => {
-    const offs = [
-      wsClient.on<MsgNewPayload>('msg.new', (payload) => {
-        appendIncoming(mapMsgNew(payload));
-        void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
-        // 已读时机②：当前会话收到新消息（可见即读）
-        if (payload.conv_id === useImStore.getState().activeConvId) markRead(payload.conv_id, payload.seq);
-      }),
-      // 对方已读回执 → ✓✓ 渲染依据（04 篇 §4.2）
-      wsClient.on<{ conv_id: string; user_id: string; read_seq: number }>('msg.receipt', (p) => {
-        useImStore.getState().applyReceipt(p.conv_id, p.user_id, p.read_seq);
-      }),
-      // 撤回占位（INT-IM-03：seq 不断裂，原地转 system 形态）
-      wsClient.on<MsgRecallPayload>('msg.recall', (p) => {
-        useImStore.getState().applyRecall(p.conv_id, p.msg_id, p.operator_id);
-        void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
-      }),
-      // 编辑原地更新（INT-IM-02："已编辑"角标）
-      wsClient.on<MsgUpdatedPayload>('msg.updated', (p) => {
-        useImStore.getState().applyUpdated(p.conv_id, p.msg_id, p.body, p.edited_at, p.edit_version);
-        void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
-      }),
-      // 表情回应全量快照（INT-IM-23：端侧幂等合并）
-      wsClient.on<MsgReactionNewPayload>('msg.reaction.new', (p) => {
-        useImStore.getState().applyReactions(p.conv_id, p.msg_id, p.reactions);
-      }),
-      // 正在输入（INT-IM-11：TTL 5s 端内过期）
-      wsClient.on<TypingPushPayload>('msg.typing', (p) => {
-        if (p.user_id !== useImStore.getState().myUid) applyTyping(p.conv_id, p.user_id);
-      }),
-      // 会话事件分发（D03 §5.3）：kind=state 仅本人多端；meta/member/setting/status/announcement 全端
-      wsClient.on<ConvStatePushPayload | ConvUpdatedPushPayload>('conv.updated', (p) => {
-        if (p.kind === 'state') {
-          const state = p as ConvStatePushPayload;
-          const store = useImStore.getState();
-          store.setConvs(
-            store.convs.map((c) =>
-              c.id === state.conv_id && c.my ? { ...c, my: { ...c.my, ...state.applied } } : c,
-            ),
-          );
-          return;
-        }
-        // 群管理事件：快照/members_delta 合并（成员数、角色、公告、解散置灰）
-        useImStore.getState().applyConvUpdated(p as ConvUpdatedPushPayload);
-        void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
-      }),
-      wsClient.on('badge.updated', () => void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] })),
-      // 在线状态（D03 §5.3：presence.changed → store 投影）
-      wsClient.on<{ uid: string; status: string }>('presence.changed', (p) => {
-        useImStore.getState().applyPresence(p.uid, p.status);
-      }),
-    ];
-    return () => offs.forEach((off) => off());
-  }, [queryClient, appendIncoming, markRead, applyTyping]);
+  // （WS 推送全事件接线已上移至 MainLayout 常驻的 store/wsEvents.ts——
+  //  订阅不再随聊天页销毁，任意页面均实时入流/更新摘要与徽标，D03 §5.3）
 
   // ---- 六态推导 ----
   const connStatus = useConnectionStore((s) => s.status);

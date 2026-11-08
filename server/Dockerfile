@@ -9,6 +9,8 @@
 # 运行层默认 alpine（gcr.io distroless 内网不可达）；外网/生产环境可
 # BBW_RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot 切回——二进制
 # 静态无 CGO，两运行层通用（切 distroless 时 USER bbw 行需一并调整）。
+# 注意：供 FROM 使用的 ARG 必须声明在首个 FROM 之前（全局作用域），
+#       放在 stage 之间则只属于该 stage，后续 FROM 不可见。
 
 ARG GO_BUILDER_IMAGE=golang:1.22-alpine
 ARG RUNTIME_IMAGE=alpine:3.20
