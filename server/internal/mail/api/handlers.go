@@ -1,6 +1,6 @@
 // REST 壳（mail 包内自持——用户面 /api/v1/mail/* 与治理面 /api/v1/admin/mail/*；
 // 鉴权链由 main 挂载：用户面走 authed，治理面走 adminOnly——PAD-16 为租户
-// 管理员功能，严于 bot 域 authed 先例）。响应统一 platform/httpx（14 篇 §5）。
+// 管理员功能）。响应统一 platform/httpx（14 篇 §5）。
 package mailapi
 
 import (
@@ -240,7 +240,7 @@ func handleAdminResume(svc *mailservice.Service) http.HandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// 薄壳工具（bot 域同款）
+// 薄壳工具
 // ---------------------------------------------------------------------------
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -283,7 +283,7 @@ func actorOf(r *http.Request) int64 {
 }
 
 func tenantOf(r *http.Request) int64 {
-	// 单租户阶段一 tenant=1（bot/file 同款；httpx.Tenant 中间件注入位随多租户）
+	// 单租户阶段一 tenant=1（file 域同款；httpx.Tenant 中间件注入位随多租户）
 	return 1
 }
 

@@ -605,7 +605,7 @@ func (s *Service) allowRate(uid int64) bool {
 	return true
 }
 
-// sensitiveHit 命中词（subject+body；bot 域同款拼接语义）
+// sensitiveHit 命中词（subject+body 拼接）
 func sensitiveHit(words func() []string, subject, body string) string {
 	if words == nil {
 		return ""

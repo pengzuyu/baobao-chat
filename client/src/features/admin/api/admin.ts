@@ -259,8 +259,8 @@ const MOCK_ROLES: AdminRole[] = [
     user_count: 1, created_at: Date.now() - 86400_000 * 30,
   },
   {
-    id: '2', name: '应用管理员', description: '应用/技能/bot 管理（内置）', is_builtin: true,
-    permissions: ['admin:app:publish', 'bot:manage'],
+    id: '2', name: '应用管理员', description: '应用/技能管理（内置）', is_builtin: true,
+    permissions: ['admin:app:publish'],
     user_count: 0, created_at: Date.now() - 86400_000 * 30,
   },
   {

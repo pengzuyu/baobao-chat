@@ -101,10 +101,6 @@ var permDictionary = []PermGroup{
 		{"admin:meeting:policy", "admin", "会议策略（21 篇）"},
 		{"admin:mail:govern", "admin", "邮件域治理（22 篇）"},
 	}},
-	{"bot", "机器人", []PermPoint{
-		{"bot:manage", "bot", "机器人管理（20 篇；默认应用管理员）"},
-		{"bot:install", "bot", "拉机器人入会话（20 篇；群主默认）"},
-	}},
 	{"platform", "平台运营", []PermPoint{
 		{"platform:tenant:manage", "platform", "租户生命周期"},
 		{"platform:quota:manage", "platform", "套餐配额"},

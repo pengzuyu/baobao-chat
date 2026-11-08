@@ -49,9 +49,6 @@ var adminAuditSQL string
 //go:embed 0011_doc.sql
 var docSQL string
 
-//go:embed 0012_bot.sql
-var botSQL string
-
 //go:embed 0013_file_share.sql
 var fileShareSQL string
 
@@ -66,9 +63,6 @@ var mailSQL string
 
 //go:embed 0017_resource_acl.sql
 var resourceAclSQL string
-
-//go:embed 0018_bot_delivery_log.sql
-var botDeliveryLogSQL string
 
 //go:embed 0019_meeting.sql
 var meetingSQL string
@@ -103,8 +97,6 @@ var List = []Migration{
 	{Version: 10, Name: "0010_admin_audit", Probe: "", SQL: adminAuditSQL},
 	// 0011 同理留空：doc_file/doc_version 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D05 阶段一务实版）
 	{Version: 11, Name: "0011_doc", Probe: "", SQL: docSQL},
-	// 0012 同理留空：bot/bot_webhook 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（20 篇阶段一务实版）
-	{Version: 12, Name: "0012_bot", Probe: "", SQL: botSQL},
 	// 0013 同理留空：file_share 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D06 阶段二外链）
 	{Version: 13, Name: "0013_file_share", Probe: "", SQL: fileShareSQL},
 	// 0014 同理留空：transfer_record 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D06 阶段二传输镜像）
@@ -115,8 +107,6 @@ var List = []Migration{
 	{Version: 16, Name: "0016_mail", Probe: "", SQL: mailSQL},
 	// 0017 同理留空：resource_acl 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（03 §4.4 资源级 ACL）
 	{Version: 17, Name: "0017_resource_acl", Probe: "", SQL: resourceAclSQL},
-	// 0018 同理留空：bot_delivery_log 仅本迁移创建 + bot_webhook 扩列（幂等 IF NOT EXISTS/IF NOT COLUMN 兜底）
-	{Version: 18, Name: "0018_bot_delivery_log", Probe: "", SQL: botDeliveryLogSQL},
 	// 0019 同理留空：meeting_* 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（21 篇阶段一务实版）
 	{Version: 19, Name: "0019_meeting", Probe: "", SQL: meetingSQL},
 	// 0020 同理留空：eco_expert 仅本迁移创建；幂等由 IF NOT EXISTS 兜底（D14 §5/10 篇通道阶段一）

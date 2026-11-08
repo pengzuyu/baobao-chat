@@ -31,10 +31,6 @@ import (
 	"github.com/baobaowork/server/internal/auth/api"
 	"github.com/baobaowork/server/internal/auth/repo"
 	"github.com/baobaowork/server/internal/auth/service"
-	"github.com/baobaowork/server/internal/bot"
-	botapi "github.com/baobaowork/server/internal/bot/api"
-	botrepo "github.com/baobaowork/server/internal/bot/repo"
-	botservice "github.com/baobaowork/server/internal/bot/service"
 	"github.com/baobaowork/server/internal/doc"
 	docapi "github.com/baobaowork/server/internal/doc/api"
 	docrepo "github.com/baobaowork/server/internal/doc/repo"
@@ -474,7 +470,7 @@ func main() {
 			return docSvc.GetFile(ctx, tenantID, uid, docID)
 		},
 		// im_send：以发起用户身份走消息主干（成员/敏感词/频率校验在 message 域；
-		// 幂等键 mcp- 前缀与 bot-/REST 客户端段隔离）
+		// 幂等键 mcp- 前缀与 REST 客户端段隔离）
 		ImSend: func(ctx context.Context, tenantID, uid, convID int64, msgType string, body json.RawMessage) (any, error) {
 			res, err := msgMod.API().Send(ctx, uid, messageapi.SendPayload{
 				ConvID:      messageapi.ConvID(strconv.FormatInt(convID, 10)),
@@ -823,93 +819,6 @@ func main() {
 	}, meetingRepoInst)
 	meetingapi.RegisterRoutes(mux, authed, meetingMod.API())
 
-	// ── 机器人域（20 篇阶段一+二：Incoming + Outgoing）──
-	workerCtx, workerStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer workerStop()
-	// bot=特殊 user(type=2 永不登录)；跨域全闭包（D02 §4：不引 org/message/admin 包）
-	var botRepo botrepo.Repo
-	var botDeliveries botrepo.DeliveryRepo
-	if pgPool != nil {
-		botRepo = botrepo.NewPostgres(pgPool)
-		botDeliveries = botrepo.NewPostgresDeliveries(pgPool)
-	} else {
-		botRepo = botrepo.NewMemory()
-		botDeliveries = botrepo.NewMemoryDeliveries()
-	}
-	botMod := bot.NewModule(botservice.Options{
-		// user(type=bot)：employee_no 走 bot- 前缀独立段（20 篇 §3.2，不占员工编号段）
-		CreateUser: func(ctx context.Context, tenantID int64, name string) (int64, error) {
-			u, err := orgRepo.CreateUser(ctx, orgapi.User{
-				TenantID: tenantID, Type: orgapi.UserTypeBot,
-				EmployeeNo:  "bot-" + strconv.FormatInt(time.Now().UnixNano(), 36),
-				DisplayName: name, Status: orgapi.UserStatusActive,
-			})
-			if err != nil {
-				return 0, err
-			}
-			return u.ID, nil
-		},
-		// 会话成员判定/安装（message 仓闭包；role=5 为 bot 成员，20 篇 §5）
-		MemberRole: func(ctx context.Context, convID, userID int64) int {
-			m, err := msgRepo.MemberOf(ctx, convID, userID)
-			if err != nil || m == nil || m.Status != 1 {
-				return 0
-			}
-			return m.Role
-		},
-		AddMember: func(ctx context.Context, convID, userID int64, role int) error {
-			return msgRepo.AddMember(ctx, messagerepo.Member{ConvID: convID, UserID: userID, Role: role})
-		},
-		RemoveMember: func(ctx context.Context, convID, userID int64) error {
-			return msgRepo.RemoveMember(ctx, convID, userID)
-		},
-		// 以 bot 身份走消息主干（seq/扇出/同步复用 message 服务；幂等键 bot- 前缀）
-		SendMsg: func(ctx context.Context, senderID, convID int64, msgType string, body json.RawMessage, mentionUIDs []string) (int64, int64, error) {
-			mentions := make([]messageapi.Mention, 0, len(mentionUIDs))
-			for _, uid := range mentionUIDs {
-				mentions = append(mentions, messageapi.Mention{UID: uid})
-			}
-			res, err := msgMod.API().Send(ctx, senderID, messageapi.SendPayload{
-				ConvID:      messageapi.ConvID(strconv.FormatInt(convID, 10)),
-				ClientMsgID: "bot-" + strconv.FormatInt(time.Now().UnixNano(), 36),
-				Type:        msgType, Body: body, Mentions: mentions,
-			})
-			if err != nil {
-				return 0, 0, err
-			}
-			return res.MsgID, res.Seq, nil
-		},
-		// 敏感词与人类消息同库同路径（20 篇 §7.2）
-		SensitiveWords: func() []string {
-			words, err := adminStore.EnabledSensitiveWords(context.Background(), 1)
-			if err != nil {
-				return nil
-			}
-			return words
-		},
-	}, botRepo, botDeliveries)
-	botapi.RegisterAdminRoutes(mux, authed, botMod.API())
-	mux.HandleFunc("POST /hook/bot/{hook_id}", botapi.HandleHookDeliver(botMod.API()))
-	// Outgoing 事件订阅投递（20 §4.3 阶段二）：msg.created 消费 + 投递 worker
-	if out := botMod.Outgoing(); out != nil {
-		botapi.RegisterOutgoingRoutes(mux, authed, out)
-		bus.Subscribe(eventbus.TopicMsgCreated, func(_ context.Context, evt eventbus.Event) error {
-			e, ok := evt.Payload.(messageapi.MsgCreatedEvent)
-			if !ok {
-				return nil // payload 类型异常静默（gateway 同款容错）
-			}
-			out.OnMsgCreated(botservice.MsgCreatedLight{
-				TenantID: 1, // 单租户阶段一（Message 无 tenant 冗余字段；多租户随 03 篇全面启用）
-				MsgID:    e.Message.ID, ConvID: e.Message.ConvID,
-				SenderID: e.Message.SenderID, SenderName: e.Message.SenderName,
-				MsgType: e.Message.Type, Body: e.Message.Body,
-				Mentions: mentionUIDsOf(e.Message.Mentions),
-			})
-			return nil
-		})
-		go out.Run(workerCtx)
-	}
-
 	// ── 邮件域（22 篇阶段一务实版）：内域收发 + 治理 REST ──
 	// 邮件栈=进程内直投（docker-mailserver/auth-bridge/路径②随阶段二）；
 	// 懒开户="登录即有邮箱"（user.offboarded 联动随 D02 消费方阶段二）；
@@ -931,7 +840,7 @@ func main() {
 			}
 			return u.EmployeeNo, nil
 		},
-		// 外发敏感词（04 篇库复用，bot 同款热更闭包）
+		// 外发敏感词（04 篇库复用，热更闭包）
 		SensitiveWords: func() []string {
 			words, err := adminStore.EnabledSensitiveWords(context.Background(), 1)
 			if err != nil {
@@ -2782,8 +2691,8 @@ func seedBuiltinRoles(store adminrepo.RoleRepo) {
 				"admin:org:manage", "admin:user:manage", "admin:usage:read", "admin:kb:govern"}},
 		{Name: "审计合规员", Description: "只读审计与导出（内置）", IsBuiltin: true,
 			Permissions: []string{"admin:audit:read", "admin:audit:export", "doc:audit:read"}},
-		{Name: "应用管理员", Description: "应用/技能/bot 管理（内置）", IsBuiltin: true,
-			Permissions: []string{"admin:app:publish", "bot:manage"}},
+		{Name: "应用管理员", Description: "应用/技能管理（内置）", IsBuiltin: true,
+			Permissions: []string{"admin:app:publish"}},
 	}
 	for _, r := range builtin {
 		r.TenantID = 1
@@ -3238,15 +3147,6 @@ func handleACLRevoke(svc *orgacl.Service) http.HandlerFunc {
 		}
 		httpx.OK(w, r, map[string]bool{"ok": true})
 	}
-}
-
-// mentionUIDsOf mentions → uid 字符串集（bot Outgoing @bot 判定口径）
-func mentionUIDsOf(ms []messageapi.Mention) []string {
-	out := make([]string, 0, len(ms))
-	for _, m := range ms {
-		out = append(out, m.UID)
-	}
-	return out
 }
 
 // handleAdminKBSpaces KB 空间总览（PAD-10）

@@ -40,32 +40,28 @@ const (
 
 // ───────────────────────── 3xxx IM（04 篇 §6.3） ─────────────────────────
 const (
-	CodeIMNotInConversation  Code = 3001 // 不在会话中
-	CodeIMConvDissolved      Code = 3002 // 群已解散
-	CodeIMRecallTimeout      Code = 3003 // 撤回超时
-	CodeIMContentTooLong     Code = 3004 // 内容超限（text ≤5000 字）
-	CodeIMSensitiveBlocked   Code = 3005 // 敏感词拦截
-	CodeIMMuted              Code = 3006 // 禁言中
-	CodeIMRateLimited        Code = 3007 // 频率限制
-	CodeIMEditWindowPassed   Code = 3008 // 编辑超窗（>5min）
-	CodeIMNotMessageOwner    Code = 3009 // 无权操作该消息
-	CodeIMMemberLimit        Code = 3010 // 群成员数超上限（500/5000）
-	CodeIMTargetNotJoinable  Code = 3011 // 目标不可加入
-	CodeIMALreadyInConv      Code = 3012 // 已在会话中
-	CodeIMBroadcastReadOnly  Code = 3013 // 广播群只读（非 publisher）
-	CodeIMMentionAllDenied   Code = 3014 // @全体被策略禁止
-	CodeIMApplyInvalid       Code = 3015 // 入群申请无效/无权审批
-	CodeIMOwnerCannotQuit    Code = 3016 // 群主不可退群
-	CodeIMMessageNotFound    Code = 3017 // 消息不存在
-	CodeIMInvalidCursor      Code = 3018 // 非法 seq/游标
-	CodeIMConvNotFound       Code = 3019 // 会话不存在
-	CodeIMDraftTooLong       Code = 3020 // 草稿超限
-	CodeIMMergeForwardLimit  Code = 3021 // 合并转发超限
-	CodeIMFavoriteLimit      Code = 3022 // 收藏数量超限
-	CodeIMBotCredential      Code = 3030 // 无效 bot 凭证/签名
-	CodeIMBotTargetDenied    Code = 3031 // bot 投递目标未授权
-	CodeIMBotRateLimited     Code = 3032 // bot 频率超限
-	CodeIMBotSubscription404 Code = 3033 // 事件订阅不存在
+	CodeIMNotInConversation Code = 3001 // 不在会话中
+	CodeIMConvDissolved     Code = 3002 // 群已解散
+	CodeIMRecallTimeout     Code = 3003 // 撤回超时
+	CodeIMContentTooLong    Code = 3004 // 内容超限（text ≤5000 字）
+	CodeIMSensitiveBlocked  Code = 3005 // 敏感词拦截
+	CodeIMMuted             Code = 3006 // 禁言中
+	CodeIMRateLimited       Code = 3007 // 频率限制
+	CodeIMEditWindowPassed  Code = 3008 // 编辑超窗（>5min）
+	CodeIMNotMessageOwner   Code = 3009 // 无权操作该消息
+	CodeIMMemberLimit       Code = 3010 // 群成员数超上限（500/5000）
+	CodeIMTargetNotJoinable Code = 3011 // 目标不可加入
+	CodeIMALreadyInConv     Code = 3012 // 已在会话中
+	CodeIMBroadcastReadOnly Code = 3013 // 广播群只读（非 publisher）
+	CodeIMMentionAllDenied  Code = 3014 // @全体被策略禁止
+	CodeIMApplyInvalid      Code = 3015 // 入群申请无效/无权审批
+	CodeIMOwnerCannotQuit   Code = 3016 // 群主不可退群
+	CodeIMMessageNotFound   Code = 3017 // 消息不存在
+	CodeIMInvalidCursor     Code = 3018 // 非法 seq/游标
+	CodeIMConvNotFound      Code = 3019 // 会话不存在
+	CodeIMDraftTooLong      Code = 3020 // 草稿超限
+	CodeIMMergeForwardLimit Code = 3021 // 合并转发超限
+	CodeIMFavoriteLimit     Code = 3022 // 收藏数量超限
 )
 
 // ───────────────────────── 4xxx 文件（07 篇） ─────────────────────────

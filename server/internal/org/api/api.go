@@ -16,10 +16,9 @@ const (
 	UserStatusDisabled = 2
 )
 
-// 用户类型（20 篇：bot 也是 user）
+// 用户类型（users.type 预埋列：v0.1 仅 human）
 const (
 	UserTypeHuman = 1
-	UserTypeBot   = 2
 )
 
 // User 用户实体（口令哈希仅 auth 域消费；其余模块不得读取）
