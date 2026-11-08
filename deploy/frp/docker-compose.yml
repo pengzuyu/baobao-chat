@@ -1,0 +1,60 @@
+# =============================================================================
+# BaobaoWork frp 最小公网暴露实验台（阶段一：内存版 bbw-server 单容器）
+# -----------------------------------------------------------------------------
+# 两条隧道路径共用一套 compose：
+#   · 路径 A（frp L7 HTTPS 隧道，TLS 由节点终止）：
+#       docker compose up -d --build        → 只跑 bbw
+#       隧道本地地址填 127.0.0.1:8080
+#   · 路径 B（TCP 隧道，端到端 TLS 自持）：
+#       docker compose --profile tls up -d --build   → bbw + nginx TLS 终止
+#       隧道本地地址填 127.0.0.1:8443（证书见 gen-cert.sh）
+# 安全基线：端口仅回环发布 / cap_drop ALL / no-new-privileges / read-only
+#           / pids·内存·CPU 上限；宿主侧建议 userns-remap（见 README §5）
+# =============================================================================
+
+services:
+  bbw:
+    build:
+      context: ../../server
+      args:
+        # gcr.io 不可达的网络环境用镜像源（南大）；默认不动，生产仍走 gcr.io
+        RUNTIME_IMAGE: ${BBW_RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}
+    image: bbw-server:0.1.0-lab
+    restart: unless-stopped
+    environment:
+      BBW_JWT_SECRET: ${BBW_JWT_SECRET:?先 cp .env.tpl .env 并填入 32+ 字节随机串}
+      BBW_CORS_ORIGINS: ${BBW_CORS_ORIGINS:-http://localhost:5173,http://tauri.localhost,tauri://localhost}
+    ports:
+      - "127.0.0.1:8080:8080"   # ★仅回环发布：frp launcher 之外无人可达（路径 A 入口）
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1.0
+
+  nginx:
+    image: nginx:1.27.4-alpine3.21   # 与 deploy/compose 主栈同版本锚点
+    profiles: [tls]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8443:8443"   # ★仅回环发布（路径 B 入口）
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    cap_drop: [ALL]
+    # 官方镜像必需的最小集：入口脚本 chown 缓存目录(CHOWN) + master 降权派生 worker(SETUID/SETGID)
+    cap_add: [CHOWN, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://127.0.0.1:8443/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on: [bbw]

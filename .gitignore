@@ -50,6 +50,7 @@ agent/Cargo.lock.bak
 # ---- 部署交付物运行时数据（compose 形态；数据/证书/备份不入库，16 篇 §3.4）----
 deploy/compose/volumes/
 deploy/compose/backups/
+deploy/frp/certs/
 *.dump
 *.tar.gz.bak
 
