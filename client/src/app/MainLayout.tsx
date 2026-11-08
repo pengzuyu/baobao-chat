@@ -12,6 +12,7 @@ import { Bot, BrainCircuit, FileText, Gauge, MessageCircle, Phone } from 'lucide
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
+import { useImWsEvents } from '../features/im/store/wsEvents';
 import { useConnectionStore } from '../shared/store/connection';
 import { useThemeStore, type ThemeMode } from '../shared/store/theme';
 import { Logo } from '../shared/ui/Logo';
@@ -53,6 +54,8 @@ function ConnectionBanner() {
 
 export function MainLayout() {
   const navigate = useNavigate();
+  // IM WS 事件常驻绑定：任意页面实时入流 + 未读徽标（订阅随主布局，D01 §4.2）
+  useImWsEvents();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const themeMode = useThemeStore((s) => s.mode);

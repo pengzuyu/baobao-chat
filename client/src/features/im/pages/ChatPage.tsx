@@ -7,10 +7,8 @@
 
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
 import { Search, SquarePen } from 'lucide-react';
 import { ApiError } from '../../../shared/api/http';
-import { wsClient } from '../../../shared/api/ws';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
@@ -18,8 +16,6 @@ import { useConnectionStore } from '../../../shared/store/connection';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { dayKey, formatDayDivider } from '../../../shared/utils/time';
 import { useConversationMessages, useConversations } from '../api/hooks';
-import { mapMsgNew } from '../api/im';
-import type { MsgNewPayload } from '../model/types';
 import { useImStore } from '../store/im';
 import { ChatHeader } from '../components/ChatHeader';
 import { ConversationList } from '../components/ConversationList';
@@ -35,7 +31,6 @@ function isForbiddenError(err: unknown): boolean {
 export function ChatPage() {
   const { convId } = useParams<{ convId: string }>();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const bp = useBreakpoint();
   const [detailOpen, setDetailOpen] = useState(false);
 
@@ -52,7 +47,6 @@ export function ChatPage() {
   const setConvs = useImStore((s) => s.setConvs);
   const setActiveConv = useImStore((s) => s.setActiveConv);
   const replaceMessages = useImStore((s) => s.replaceMessages);
-  const appendIncoming = useImStore((s) => s.appendIncoming);
   const setDraft = useImStore((s) => s.setDraft);
   const sendText = useImStore((s) => s.sendText);
   const retrySend = useImStore((s) => s.retrySend);
@@ -66,9 +60,12 @@ export function ChatPage() {
   }, [convId, msgQuery.data, replaceMessages]);
   useEffect(() => {
     setActiveConv(convId ?? null);
+    // 离开聊天页清空激活会话：全局 msg.new 处理器据此判定"可见即读"（见 wsEvents.ts）
+    return () => setActiveConv(null);
   }, [convId, setActiveConv]);
 
   // 已读时机①：进入会话且消息加载完成 → 上报至最新 seq（INT-IM-12）
+  // （WS 事件绑定已上移至 MainLayout 常驻，任意页面均实时入流，见 store/wsEvents.ts）
   const markRead = useImStore((s) => s.markRead);
   useEffect(() => {
     if (!convId) return;
@@ -76,25 +73,6 @@ export function ChatPage() {
     const lastSeq = msgs.length > 0 ? msgs[msgs.length - 1].seq : 0;
     if (lastSeq > 0) markRead(convId, lastSeq);
   }, [convId, msgQuery.data, markRead]);
-
-  // WS 推送：新消息入流 + 会话/徽标精准失效（重连补投由 ack/sync 通道保证幂等）
-  useEffect(() => {
-    const offs = [
-      wsClient.on<MsgNewPayload>('msg.new', (payload) => {
-        appendIncoming(mapMsgNew(payload));
-        void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
-        // 已读时机②：当前会话收到新消息（可见即读）
-        if (payload.conv_id === useImStore.getState().activeConvId) markRead(payload.conv_id, payload.seq);
-      }),
-      // 对方已读回执 → ✓✓ 渲染依据（04 篇 §4.2）
-      wsClient.on<{ conv_id: string; user_id: string; read_seq: number }>('msg.receipt', (p) => {
-        useImStore.getState().applyReceipt(p.conv_id, p.user_id, p.read_seq);
-      }),
-      wsClient.on('conv.updated', () => void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] })),
-      wsClient.on('badge.updated', () => void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] })),
-    ];
-    return () => offs.forEach((off) => off());
-  }, [queryClient, appendIncoming, markRead]);
 
   // ---- 六态推导 ----
   const connStatus = useConnectionStore((s) => s.status);
