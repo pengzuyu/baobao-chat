@@ -174,9 +174,9 @@ func (s *Service) Invite(ctx context.Context, callerID int64, p rtcapi.InvitePay
 		busyHint = true
 	}
 
-	// ① 通话卡片（群呼同卡：status=calling；结束 PATCH ended）
+	// ① 通话卡片（群呼同卡：status=calling+group 标记，端侧[加入]按钮判定；结束 PATCH ended）
 	if s.card != nil {
-		if mid := s.card.SendCard(ctx, callerID, convID, "callcard-"+p.CallID, cardBody(p, "calling", 0, "")); mid > 0 {
+		if mid := s.card.SendCard(ctx, callerID, convID, "callcard-"+p.CallID, cardBody(p, "calling", 0, "", isGroup)); mid > 0 {
 			call.CardMsgID = mid
 		}
 	}
@@ -538,7 +538,7 @@ func (s *Service) finishAndNotify(snap *Call, reason string) {
 	s.pushState(snap.Recipients(), snap.ID, rtcapi.StateEnded, reason, dur, "", s.opts.now())
 	if s.card != nil && snap.CardMsgID > 0 {
 		s.card.FinishCard(context.Background(), snap.CardMsgID,
-			cardBody(rtcapi.InvitePayload{CallID: snap.ID, CallType: snap.CallType}, "ended", dur, reason))
+			cardBody(rtcapi.InvitePayload{CallID: snap.ID, CallType: snap.CallType}, "ended", dur, reason, snap.Group))
 	}
 }
 
@@ -561,13 +561,16 @@ func (s *Service) nameOf(id int64) string {
 
 // cardBody call_card 消息 body 构造：
 //
-//	进行中 {"call_id","call_type","status":"calling"}
-//	已结束 {"call_id","call_type","status":"ended","duration","reason"}
-func cardBody(p rtcapi.InvitePayload, status string, duration int64, reason string) json.RawMessage {
+//	进行中 {"call_id","call_type","status":"calling"[,"group":true]}
+//	已结束 {"call_id","call_type","status":"ended","duration","reason"[,"group":true]}
+func cardBody(p rtcapi.InvitePayload, status string, duration int64, reason string, group bool) json.RawMessage {
 	b := map[string]any{
 		"call_id":   p.CallID,
 		"call_type": p.CallType,
 		"status":    status,
+	}
+	if group {
+		b["group"] = true // D17：群呼标记（端侧进行中卡片[加入]按钮判定）
 	}
 	if status == "ended" {
 		b["duration"] = duration
