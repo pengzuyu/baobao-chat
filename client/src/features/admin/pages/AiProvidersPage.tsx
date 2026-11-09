@@ -8,7 +8,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { PlugZap, Plus, Save, Trash2, Undo2 } from 'lucide-react';
+import { PlugZap, Plus, Save, Search, Trash2, Undo2 } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
@@ -16,7 +16,7 @@ import { StateView, type ViewStateOrOk } from '../../../shared/ui/StateView';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { probeAIProvider, probeAIProviderRaw } from '../api/admin';
 import { useAIProviders, useAIRoutes, useDeleteAIProvider, usePutAIRoutes, useSaveAIProvider } from '../api/hooks';
-import type { AIProvider } from '../model/types';
+import { PROVIDER_PRESETS, presetKeyOfBaseUrl, type AIProvider } from '../model/types';
 
 export function AiProvidersPage() {
   return (
@@ -35,14 +35,15 @@ export function AiProvidersPage() {
 
 interface FormState {
   id: string; // 空=新建
+  vendor: string; // 厂商预设 key（zhipu/deepseek/custom）
   name: string;
   baseUrl: string;
   apiKey: string;
   models: string[]; // 选中的模型 id 集（有序按加入序）
-  candidates: string[]; // 探活拉到的上游模型
+  candidates: string[]; // 探测到的上游模型
 }
 
-const emptyForm: FormState = { id: '', name: '', baseUrl: '', apiKey: '', models: [], candidates: [] };
+const emptyForm: FormState = { id: '', vendor: 'zhipu', name: '智谱开放平台', baseUrl: PROVIDER_PRESETS[0].baseUrl, apiKey: '', models: [], candidates: [] };
 
 function ProvidersPanel() {
   const query = useAIProviders();
@@ -53,6 +54,7 @@ function ProvidersPanel() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formError, setFormError] = useState('');
   const [probing, setProbing] = useState(false);
+  const [connResult, setConnResult] = useState<{ ok: boolean; ms: number; models: number } | null>(null); // 测试连接/探测结果
   const [editingKey, setEditingKey] = useState(false); // 编辑态是否重填密钥
 
   const items = query.data ?? [];
@@ -66,7 +68,15 @@ function ProvidersPanel() {
         ? 'offline'
         : 'ok';
 
-  const probe = async () => {
+  /** 选厂商：预设自动填名称与 Base URL（自定义=清空手填），用户仍可改 */
+  const pickVendor = (key: string) => {
+    const preset = PROVIDER_PRESETS.find((p) => p.key === key) ?? PROVIDER_PRESETS[2];
+    setConnResult(null);
+    setForm((f) => ({ ...f, vendor: key, name: preset.name || f.name, baseUrl: preset.baseUrl, candidates: [], models: [] }));
+  };
+
+  /** 探测共用（mode=conn 仅验证连通鉴权；mode=models 拉清单填候选） */
+  const probe = async (mode: 'conn' | 'models') => {
     const baseUrl = form.baseUrl.trim();
     if (!baseUrl) {
       setFormError('先填 Base URL');
@@ -74,15 +84,20 @@ function ProvidersPanel() {
     }
     setProbing(true);
     setFormError('');
+    const startedAt = Date.now();
     try {
-      const key = form.id && !editingKey ? '' : form.apiKey.trim(); // 未重填时用服务端已存密钥探活
+      const key = form.id && !editingKey ? '' : form.apiKey.trim(); // 未重填时用服务端已存密钥探测
       const models = form.id && !editingKey
         ? await probeAIProvider(form.id)
         : await probeAIProviderRaw(baseUrl, key);
-      if (models.length === 0) setFormError('上游未返回模型清单');
-      setForm((f) => ({ ...f, candidates: models }));
+      setConnResult({ ok: true, ms: Date.now() - startedAt, models: models.length });
+      if (mode === 'models') {
+        if (models.length === 0) setFormError('上游未返回模型清单');
+        setForm((f) => ({ ...f, candidates: models }));
+      }
     } catch (err) {
-      setFormError(err instanceof ApiError ? getErrorText(err.code) : '探活失败');
+      setConnResult(null);
+      setFormError(err instanceof ApiError ? getErrorText(err.code) : '连接失败');
     } finally {
       setProbing(false);
     }
@@ -103,7 +118,7 @@ function ProvidersPanel() {
       return;
     }
     if (form.models.length === 0) {
-      setFormError('至少选择 1 个模型（可先「测试连通」拉取清单）');
+      setFormError('至少选择 1 个模型（可先「探测可用模型」拉取清单）');
       return;
     }
     if (!form.id && form.apiKey.trim() === '' ) {
@@ -134,6 +149,7 @@ function ProvidersPanel() {
   const edit = (p: AIProvider) => {
     setForm({
       id: p.id,
+      vendor: presetKeyOfBaseUrl(p.baseUrl),
       name: p.name,
       baseUrl: p.baseUrl,
       apiKey: '',
@@ -142,6 +158,7 @@ function ProvidersPanel() {
     });
     setEditingKey(false);
     setFormError('');
+    setConnResult(null);
   };
 
   const toggleStatus = (p: AIProvider) => {
@@ -163,11 +180,18 @@ function ProvidersPanel() {
           <span className="admin-panel__meta">OpenAI 兼容（GLM/Qwen/DeepSeek/vLLM）· 密钥 AES-256-GCM 加密落库</span>
         </div>
         <div className="admin-word-form admin-word-form--top">
-          <input className="bbw-input" style={{ width: 150 }} value={form.name} placeholder={form.id ? '名称' : '名称（如 智谱开放平台）'} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} data-testid="ai-prov-name" />
-          <input className="bbw-input" style={{ width: 260 }} value={form.baseUrl} placeholder="Base URL（https://…/v4）" onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))} data-testid="ai-prov-base" />
+          <select className="bbw-input" style={{ width: 150 }} value={form.vendor} onChange={(e) => pickVendor(e.target.value)} data-testid="ai-prov-vendor">
+            {PROVIDER_PRESETS.map((p) => (
+              <option key={p.key} value={p.key}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <input className="bbw-input" style={{ width: 150 }} value={form.name} placeholder={form.id ? '名称' : '名称（随厂商自动填）'} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} data-testid="ai-prov-name" />
+          <input className="bbw-input" style={{ width: 250 }} value={form.baseUrl} placeholder={form.vendor === 'custom' ? 'Base URL（https://…/v1）' : 'Base URL（随厂商自动填，可改）'} onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))} data-testid="ai-prov-base" />
           <input
             className="bbw-input"
-            style={{ width: 210 }}
+            style={{ width: 200 }}
             type="password"
             value={form.apiKey}
             placeholder={form.id && !editingKey ? '密钥已保存（不改则留空）' : 'API Key'}
@@ -177,18 +201,26 @@ function ProvidersPanel() {
             }}
             data-testid="ai-prov-key"
           />
-          <Button variant="secondary" onClick={() => void probe()} loading={probing}>
-            <PlugZap size={13} /> 测试连通
+          <Button variant="secondary" onClick={() => void probe('conn')} loading={probing} data-testid="ai-prov-test">
+            <PlugZap size={13} /> 测试连接
+          </Button>
+          <Button variant="secondary" onClick={() => void probe('models')} loading={probing} data-testid="ai-prov-detect">
+            <Search size={13} /> 探测可用模型
           </Button>
           <Button onClick={submit} loading={save.isPending} data-testid="ai-prov-save">
             {form.id ? <Save size={13} /> : <Plus size={13} />} {form.id ? '保存修改' : '新增供应商'}
           </Button>
           {form.id ? (
-            <Button variant="secondary" onClick={() => { setForm(emptyForm); setEditingKey(false); }}>
+            <Button variant="secondary" onClick={() => { setForm(emptyForm); setEditingKey(false); setConnResult(null); }}>
               <Undo2 size={13} /> 取消
             </Button>
           ) : null}
         </div>
+        {connResult ? (
+          <div className="admin-page__meta" style={{ marginBottom: 8 }} data-testid="ai-prov-conn">
+            ✅ 连接成功（{connResult.ms}ms · 上游 {connResult.models} 个模型）
+          </div>
+        ) : null}
         {/* 模型清单：探活候选 chips 点选 + 已选手动移除；无探活结果时可手动输入 */}
         <div className="admin-provider-models" data-testid="ai-prov-models">
           {form.candidates.length > 0 ? (
@@ -202,7 +234,7 @@ function ProvidersPanel() {
               className="bbw-input"
               style={{ width: 240 }}
               value=""
-              placeholder="先「测试连通」拉取上游模型清单"
+              placeholder="先「探测可用模型」拉取上游模型清单"
               onChange={() => undefined}
             />
           )}
@@ -220,7 +252,7 @@ function ProvidersPanel() {
         <StateView
           state={state}
           skeleton={<SkeletonList count={4} />}
-          emptyText="尚无供应商：上方录入首个（推荐先「测试连通」拉取模型清单）"
+          emptyText="尚无供应商：上方选厂商录入首个（推荐先「探测可用模型」拉清单）"
           error={query.error}
           onRetry={() => void query.refetch()}
           forbiddenText="需要 admin:policy:manage 权限"

@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { Select } from 'antd';
-import { PlugZap, Plus, Trash2, Zap } from 'lucide-react';
+import { PlugZap, Plus, Search, Trash2, Zap } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import {
@@ -21,7 +21,7 @@ import {
   probeMyProviderRaw,
   type AIDefaultSetting,
 } from '../api/ai';
-import type { AIProvider } from '../../admin/model/types';
+import { PROVIDER_PRESETS, type AIProvider } from '../../admin/model/types';
 
 export function AgentSettingsPage() {
   return (
@@ -176,9 +176,11 @@ function DefaultModelCard() {
 function MyProvidersCard() {
   const [mine, setMine] = useState<AIProvider[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [vendor, setVendor] = useState('zhipu');
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [connResult, setConnResult] = useState<{ ok: boolean; ms: number; models: number } | null>(null);
   const [candidates, setCandidates] = useState<string[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [probing, setProbing] = useState(false);
@@ -198,19 +200,35 @@ function MyProvidersCard() {
     void reload();
   }, []);
 
-  const probe = async () => {
+  /** 选厂商：预设自动填名称与 Base URL */
+  const pickVendor = (key: string) => {
+    const preset = PROVIDER_PRESETS.find((p) => p.key === key) ?? PROVIDER_PRESETS[2];
+    setVendor(key);
+    setName(preset.name);
+    setBaseUrl(preset.baseUrl);
+    setCandidates([]);
+    setModels([]);
+    setConnResult(null);
+  };
+
+  const probe = async (mode: 'conn' | 'models') => {
     if (!baseUrl.trim()) {
       setError('先填 Base URL');
       return;
     }
     setProbing(true);
     setError('');
+    const startedAt = Date.now();
     try {
       const list = await probeMyProviderRaw(baseUrl.trim(), apiKey.trim());
-      if (list.length === 0) setError('上游未返回模型清单');
-      setCandidates(list);
+      setConnResult({ ok: true, ms: Date.now() - startedAt, models: list.length });
+      if (mode === 'models') {
+        if (list.length === 0) setError('上游未返回模型清单');
+        setCandidates(list);
+      }
     } catch (err) {
-      setError(err instanceof ApiError ? getErrorText(err.code) : '探活失败');
+      setConnResult(null);
+      setError(err instanceof ApiError ? getErrorText(err.code) : '连接失败');
     } finally {
       setProbing(false);
     }
@@ -220,7 +238,7 @@ function MyProvidersCard() {
     const n = name.trim();
     const b = baseUrl.trim().replace(/\/+$/, '');
     if (!n || !b || models.length === 0) {
-      setError('名称/Base URL/模型清单均必填（模型可「测试连通」拉取）');
+      setError('名称/Base URL/模型清单均必填（模型可「探测模型」拉取）');
       return;
     }
     setSaving(true);
@@ -232,6 +250,7 @@ function MyProvidersCard() {
       setApiKey('');
       setCandidates([]);
       setModels([]);
+      setConnResult(null);
       await reload();
     } catch (err) {
       setError(err instanceof ApiError ? getErrorText(err.code) : '添加失败');
@@ -291,16 +310,31 @@ function MyProvidersCard() {
         )
       ) : null}
       <div className="admin-word-form">
-        <input className="bbw-input" style={{ width: 140 }} value={name} placeholder="名称（如 我的DeepSeek）" onChange={(e) => setName(e.target.value)} />
-        <input className="bbw-input" style={{ width: 230 }} value={baseUrl} placeholder="Base URL（https://…/v1）" onChange={(e) => setBaseUrl(e.target.value)} />
+        <select className="bbw-input" style={{ width: 150 }} value={vendor} onChange={(e) => pickVendor(e.target.value)}>
+          {PROVIDER_PRESETS.map((p) => (
+            <option key={p.key} value={p.key}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+        <input className="bbw-input" style={{ width: 130 }} value={name} placeholder="名称（随厂商自动填）" onChange={(e) => setName(e.target.value)} />
+        <input className="bbw-input" style={{ width: 215 }} value={baseUrl} placeholder={vendor === 'custom' ? 'Base URL（https://…/v1）' : 'Base URL（自动填，可改）'} onChange={(e) => setBaseUrl(e.target.value)} />
         <input className="bbw-input" style={{ width: 190 }} type="password" value={apiKey} placeholder="API Key" onChange={(e) => setApiKey(e.target.value)} />
-        <Button variant="secondary" onClick={() => void probe()} loading={probing}>
-          <PlugZap size={13} /> 测试连通
+        <Button variant="secondary" onClick={() => void probe('conn')} loading={probing}>
+          <PlugZap size={13} /> 测试连接
+        </Button>
+        <Button variant="secondary" onClick={() => void probe('models')} loading={probing}>
+          <Search size={13} /> 探测模型
         </Button>
         <Button onClick={() => void submit()} loading={saving}>
           <Plus size={13} /> 添加
         </Button>
       </div>
+      {connResult ? (
+        <div className="settings-row__desc" style={{ marginBottom: 6 }}>
+          ✅ 连接成功（{connResult.ms}ms · 上游 {connResult.models} 个模型）
+        </div>
+      ) : null}
       {candidates.length > 0 ? (
         <div className="admin-provider-models">
           {candidates.map((m) => (

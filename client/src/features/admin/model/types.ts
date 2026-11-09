@@ -145,3 +145,23 @@ export interface AIProviderInput {
   models?: AIProviderModel[];
   status?: number;
 }
+
+/** 厂商预设（v0.1 国内三家：智谱/DeepSeek/自定义 OpenAI 兼容；后续按此扩展） */
+export interface ProviderPreset {
+  key: string;
+  label: string;
+  baseUrl: string;
+  name: string;
+}
+
+export const PROVIDER_PRESETS: ProviderPreset[] = [
+  { key: 'zhipu', label: '智谱开放平台', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', name: '智谱开放平台' },
+  { key: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', name: 'DeepSeek' },
+  { key: 'custom', label: '自定义（OpenAI 兼容）', baseUrl: '', name: '' },
+];
+
+/** 按 baseUrl 反推预设 key（编辑态回显用；不匹配=custom） */
+export function presetKeyOfBaseUrl(baseUrl: string): string {
+  const hit = PROVIDER_PRESETS.find((p) => p.baseUrl && baseUrl.replace(/\/+$/, '') === p.baseUrl.replace(/\/+$/, ''));
+  return hit?.key ?? 'custom';
+}
