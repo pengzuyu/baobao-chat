@@ -13,7 +13,11 @@ fn main() {
     let d2 = done.clone();
     let emit = Arc::new(move |payload: serde_json::Value| {
         let t = payload["type"].as_str().unwrap_or("").to_string();
-        let brief: String = serde_json::to_string(&payload).unwrap_or_default().chars().take(200).collect();
+        let brief: String = serde_json::to_string(&payload)
+            .unwrap_or_default()
+            .chars()
+            .take(200)
+            .collect();
         println!("EVT {t} {brief}");
         if t == "stream.done" {
             d2.store(true, Ordering::SeqCst);
@@ -23,7 +27,9 @@ fn main() {
     let host = AgentHost::new(data_dir, emit);
 
     let model = std::env::var("SMOKE_MODEL").ok();
-    let sid = host.start_session("/tmp", "ask", "strong", model.as_deref()).expect("start_session");
+    let sid = host
+        .start_session("/tmp", "ask", "strong", model.as_deref())
+        .expect("start_session");
     println!("== session: {sid}");
 
     host.request(
@@ -39,7 +45,10 @@ fn main() {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    println!("== sessions: {}", serde_json::to_string(&host.list_sessions()).unwrap());
+    println!(
+        "== sessions: {}",
+        serde_json::to_string(&host.list_sessions()).unwrap()
+    );
     if done.load(Ordering::SeqCst) {
         println!("SMOKE PASS");
     } else {

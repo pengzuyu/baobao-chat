@@ -32,14 +32,25 @@ pub fn agent_start_session(
 /// 用户输入（回执=session.state running/queued；命令返回 ok 而非透传协议回执）
 #[tauri::command]
 pub fn agent_input(host: Host, session_id: String, text: String) -> Result<Value, String> {
-    host.request("user.message", json!({ "sessionId": session_id, "text": text, "attachments": [] }))?;
+    host.request(
+        "user.message",
+        json!({ "sessionId": session_id, "text": text, "attachments": [] }),
+    )?;
     Ok(json!({ "ok": true }))
 }
 
 /// 会话内切换模型（model=直达引用 p:<id>:<model>；回执 model.switched 事件驱动 UI）
 #[tauri::command]
-pub fn agent_switch_model(host: Host, session_id: String, to: String, model: Option<String>) -> Result<(), String> {
-    host.fire("model.switch", json!({ "sessionId": session_id, "to": to, "model": model, "reason": "user" }))
+pub fn agent_switch_model(
+    host: Host,
+    session_id: String,
+    to: String,
+    model: Option<String>,
+) -> Result<(), String> {
+    host.fire(
+        "model.switch",
+        json!({ "sessionId": session_id, "to": to, "model": model, "reason": "user" }),
+    )
 }
 
 /// 权限模式（协议缺口：宿主本地记录）
@@ -75,15 +86,26 @@ pub fn agent_emergency_stop(host: Host) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn agent_approve(host: Host, request_id: String, scope: String, edited_args: Option<Value>) -> Result<(), String> {
-    host.fire("permission.response", json!({
-        "requestId": request_id, "decision": "allow", "scope": scope, "editedArgs": edited_args,
-    }))
+pub fn agent_approve(
+    host: Host,
+    request_id: String,
+    scope: String,
+    edited_args: Option<Value>,
+) -> Result<(), String> {
+    host.fire(
+        "permission.response",
+        json!({
+            "requestId": request_id, "decision": "allow", "scope": scope, "editedArgs": edited_args,
+        }),
+    )
 }
 
 #[tauri::command]
 pub fn agent_reject(host: Host, request_id: String) -> Result<(), String> {
-    host.fire("permission.response", json!({ "requestId": request_id, "decision": "deny", "scope": "once" }))
+    host.fire(
+        "permission.response",
+        json!({ "requestId": request_id, "decision": "deny", "scope": "once" }),
+    )
 }
 
 /// 知识记忆列表（REQ→memory.list.result；条目键名转 snake 供 FE MemoryRow）
@@ -113,7 +135,11 @@ pub fn report_get(host: Host, date: String) -> Result<Value, String> {
     if date.len() != 10 || !date.chars().all(|c| c.is_ascii_digit() || c == '-') {
         return Err("非法日期".into());
     }
-    let path = host.data_dir().join("agent").join("reports").join(format!("{date}.md"));
+    let path = host
+        .data_dir()
+        .join("agent")
+        .join("reports")
+        .join(format!("{date}.md"));
     let markdown = std::fs::read_to_string(&path).map_err(|_| format!("日报不存在: {date}"))?;
     Ok(json!({ "markdown": markdown }))
 }
@@ -134,7 +160,12 @@ pub fn agent_delegate_launch(
         .list_sessions()
         .iter()
         .find(|s| s["id"].as_str() == Some(session_id.as_str()))
-        .map(|s| (s["mode"].as_str().unwrap_or("ask").to_string(), s["workspace"].as_str().unwrap_or("").to_string()))
+        .map(|s| {
+            (
+                s["mode"].as_str().unwrap_or("ask").to_string(),
+                s["workspace"].as_str().unwrap_or("").to_string(),
+            )
+        })
         .unwrap_or_else(|| ("ask".into(), String::new()));
     host.fire(
         "delegate.launch",
@@ -147,19 +178,33 @@ pub fn agent_delegate_launch(
 
 /// 委派追加指令（模式 C 续问；17 §8 send_input）
 #[tauri::command]
-pub fn agent_delegate_input(host: Host, delegate_task_id: String, text: String) -> Result<(), String> {
-    host.fire("delegate.input", json!({ "delegateTaskId": delegate_task_id, "text": text }))
+pub fn agent_delegate_input(
+    host: Host,
+    delegate_task_id: String,
+    text: String,
+) -> Result<(), String> {
+    host.fire(
+        "delegate.input",
+        json!({ "delegateTaskId": delegate_task_id, "text": text }),
+    )
 }
 
 /// 取消委派（SIGINT→3s→SIGKILL 进程组；后台/简报期均可）
 #[tauri::command]
 pub fn agent_delegate_cancel(host: Host, delegate_task_id: String) -> Result<(), String> {
-    host.fire("delegate.cancel", json!({ "delegateTaskId": delegate_task_id, "graceful": true }))
+    host.fire(
+        "delegate.cancel",
+        json!({ "delegateTaskId": delegate_task_id, "graceful": true }),
+    )
 }
 
 /// 委派审查结论（delegate.review；后台 run 经 hub 按 run_id 定向路由）
 #[tauri::command]
-pub fn agent_delegate_review(host: Host, delegate_task_id: String, accept: bool) -> Result<(), String> {
+pub fn agent_delegate_review(
+    host: Host,
+    delegate_task_id: String,
+    accept: bool,
+) -> Result<(), String> {
     host.fire(
         "delegate.review",
         json!({ "delegateTaskId": delegate_task_id, "decision": if accept { "accept" } else { "reject" } }),
