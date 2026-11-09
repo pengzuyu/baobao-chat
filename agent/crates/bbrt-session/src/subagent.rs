@@ -1,33 +1,29 @@
-//! 探查子 Agent（08 §4.5 / D11 §7）：主 Agent 派生的**独立上下文窗口**
-//! 轻量执行体——只读工具子集、快模型、单任务 ≤15 步、只回传摘要
-//! （≤2k tokens，不回传原文），并发 ≤3。
+//! 通用子 Agent（08 §4.5 / D16 决策①）：主 Agent 的"分身"——
+//! **system prompt、技能、记忆侧写、工具、MCP、模型全部与主会话一致**，
+//! 唯一区别是上下文历史清零 + 收到主 Agent 派发的任务提示词。
 //!
-//! 触发：FanoutPlanner（bin 装配快模型实现；测试注入假件）判定任务
-//! complex 并给出子任务清单。执行体直接复用 LoopDeps 的模型与工具
-//! （完整走 bbrt-tools 管线：gate/审计/脱敏——"复用 09 篇权限模型"，
-//! 只读子集天然 A 放行，不产生检查点）。
+//! 用途：上下文污染防治（独立窗口）、并行调查/执行。原"只读探查"
+//! 白名单形态并入任务写法（主 Agent 派活时写明"只调查不改"）——
+//! 写操作经与主同一九步门控管线，该弹审批弹审批。
+//!
+//! 护栏（与时长无关，D16 §2）：独立上下文窗口、步数上限（缺省 60，可配）、
+//! 摘要 ≤2k tokens 回填、并发 ≤3。执行体落 agent_run（kind=probe，
+//! def_ref=builtin.probe，D16 §3.1）。
 
-use bbrt_aigw::{
-    ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent, ToolCallMsg, ToolSpec,
-};
+use std::sync::{Arc, Mutex};
+
+use bbrt_aigw::{ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent, ToolCallMsg};
 use bbrt_context::{estimate_tokens, Round};
+use bbrt_memory::MemoryEngine;
 
-use crate::events::SessionEvent;
+use crate::events::{SessionEvent, SessionSink};
 use crate::executor::{ToolExecutor, ToolInvocation, ToolOutcome};
+use crate::loop_runner::EventLog;
 use crate::state::{self, SessionState};
 use bbrt_sec::gate::PermissionMode;
 
-/// 探查工具白名单（08 §4.5 只读子集；kb_query/doc_read 随网关供给后加入）
-pub const PROBE_TOOLS: &[&str] = &[
-    "read_file",
-    "list_dir",
-    "search_files",
-    "git_status",
-    "git_diff",
-];
-
-/// 单子任务步数上限（超步自杀，返回部分结果 + fail 标注）
-pub const PROBE_MAX_STEPS: usize = 15;
+/// 单子任务步数上限（通用化后调大；超步自杀返回部分结果 + fail 标注）
+pub const SUBAGENT_MAX_STEPS: usize = 60;
 
 /// 摘要上限（token 估算；超限截断尾部）
 pub const PROBE_SUMMARY_TOKENS: usize = 2000;
@@ -35,7 +31,7 @@ pub const PROBE_SUMMARY_TOKENS: usize = 2000;
 /// 并发上限（subtasks.take）
 pub const PROBE_MAX_CONCURRENCY: usize = 3;
 
-/// 子任务简报（独立上下文：仅此文本 + 探查角色 system，无主历史）
+/// 子任务简报（独立上下文：仅此文本 + 与主同构的 system 组装，无主历史）
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeSpec {
     pub task: String,
@@ -56,13 +52,14 @@ pub trait FanoutPlanner: Send + Sync {
 }
 
 /// 快模型判定器（19 篇 bbw-fast；输出 JSON {complex, subtasks[]}，
-/// 解析失败/围栏噪声一律降级为"不分解"——探查是优化不是依赖）
+/// 解析失败/围栏噪声一律降级为"不分解"——fan-out 是优化不是依赖）
 pub struct FastPlanner;
 
-const PLANNER_SYSTEM: &str = "判定任务是否值得并行探查。输出纯 JSON（无围栏无解释）：\n\
-    {\"complex\": true|false, \"subtasks\": [\"独立可并行的探查任务\", ...]}\n\
-    判定 complex：涉及多目录/多文件/多信息源，且子任务只读可并行（最多 3 条）；\
-    单一问题/修改类任务 complex=false。";
+const PLANNER_SYSTEM: &str = "判定任务是否值得并行派发子任务。输出纯 JSON（无围栏无解释）：\n\
+    {\"complex\": true|false, \"subtasks\": [\"独立可并行的子任务\", ...]}\n\
+    判定 complex：涉及多目录/多文件/多信息源，可拆出彼此独立的子任务（最多 3 条）；\
+    单一问题不拆。修改类任务如需拆分，把写操作留在主任务串行执行，\
+    子任务只承担调查与信息收集（在子任务描述里写明）。";
 
 impl FanoutPlanner for FastPlanner {
     fn plan(&self, model: &dyn ChatClient, user_text: &str) -> Option<Vec<ProbeSpec>> {
@@ -102,27 +99,51 @@ pub(crate) fn strip_fence(s: &str) -> &str {
     body.strip_suffix("```").map(str::trim).unwrap_or(body)
 }
 
-/// 探查执行上下文（借用 LoopDeps 的模型与工具执行器）
-pub struct ProbeCtx<'a> {
-    pub model: &'a dyn ChatClient,
-    pub tools: &'a dyn ToolExecutor,
+/// 通用子 Agent 执行上下文（owned Arc——线程派发/后台化安全；
+/// D16 决策①：system/技能/记忆/工具/模型与主会话同一来源）
+pub struct ProbeCtx {
+    pub model: Arc<dyn ChatClient>,
+    pub tools: Arc<dyn ToolExecutor>,
     pub mode: PermissionMode,
+    /// 主 system prompt（loop_runner::SYSTEM_PROMPT）
+    pub system: String,
+    /// 技能索引（按任务文本命中注入，同主口径 ≤3 条）
+    pub skills: Arc<Mutex<crate::skills::SkillIndex>>,
+    /// 记忆侧写（recall_for(任务)，同主口径只读注入）
+    pub memory: Option<Arc<MemoryEngine>>,
+    pub workspace: String,
+    /// 主循环同款模型名（override 优先回落档位——"与主一致"）
+    pub model_name: String,
 }
 
-const PROBE_SYSTEM: &str = "你是只读探查 Agent（子任务执行体）。只使用提供的只读工具收集信息，\
-    不做任何修改。完成后输出结构化摘要（要点、关键路径、结论），\
-    不粘贴文件原文大段内容。";
+/// 与主 to_chat_messages 同构的 system 组装（[技能]/[项目]/[记忆] 三段）
+fn probe_system(ctx: &ProbeCtx, task: &str) -> String {
+    let skills_text = {
+        let idx = ctx.skills.lock().unwrap_or_else(|p| p.into_inner());
+        let matched = idx.match_for(task);
+        idx.render(&matched)
+    };
+    let memory_index = ctx
+        .memory
+        .as_ref()
+        .and_then(|m| m.knowledge().recall_for(task).ok())
+        .unwrap_or_default();
+    format!(
+        "{}\n\n[技能]\n{}\n\n[项目]\nworkspace: {}\n\n[记忆]\n{}",
+        ctx.system, skills_text, ctx.workspace, memory_index
+    )
+}
 
-/// 跑一个探查子任务：run 起始 → spawn 事件 → mini-loop（≤15 步，工具经
-/// 完整管线执行）→ done/fail 事件 + run 终态（phase delta 略——探查摘要
-/// 以 done 一次性上报）。run 行落 agent_run（kind=probe，D16 §3.1）。
+/// 跑一个子任务：run 起始 → spawn 事件 → mini-loop（≤SUBAGENT_MAX_STEPS 步，
+/// **全量工具**经完整管线执行——写操作走同一审批/沙箱）→ done/fail 事件 +
+/// run 终态。run 行落 agent_run（kind=probe，D16 §3.1）。
 pub fn run_probe(
-    ctx: ProbeCtx<'_>,
+    ctx: ProbeCtx,
     session_id: &str,
     run_id: &str,
     spec: &ProbeSpec,
-    sink: &dyn crate::events::SessionSink,
-    wal: &dyn crate::loop_runner::EventLog,
+    sink: Arc<dyn SessionSink>,
+    wal: Arc<dyn EventLog>,
 ) -> ProbeResult {
     use crate::loop_runner::{RunEnd, RunStart};
     let started = std::time::Instant::now();
@@ -137,11 +158,12 @@ pub fn run_probe(
         eta_hint_ms: 0,
         actor: String::new(),
     });
+    let tool_names: Vec<String> = ctx.tools.tool_specs().into_iter().map(|s| s.name).collect();
     sink.emit(SessionEvent::SubagentSpawned {
         session_id: session_id.to_string(),
         sub_id: run_id.to_string(),
         task_digest: truncate_chars(&spec.task, 60),
-        tool_subset: PROBE_TOOLS.iter().map(|s| s.to_string()).collect(),
+        tool_subset: tool_names,
     });
     wal.append_run(
         session_id,
@@ -153,24 +175,26 @@ pub fn run_probe(
         ),
     );
 
+    let system_full = probe_system(&ctx, &spec.task);
+    let tools = ctx.tools.tool_specs();
     let mut history: Vec<Round> = vec![];
     let mut steps = 0usize;
     let result = loop {
-        if steps >= PROBE_MAX_STEPS {
+        if steps >= SUBAGENT_MAX_STEPS {
             break ProbeResult {
                 run_id: run_id.to_string(),
                 ok: false,
                 summary: format!(
-                    "超步自杀（>{PROBE_MAX_STEPS}），部分结果：{}",
+                    "超步自杀（>{SUBAGENT_MAX_STEPS}），部分结果：{}",
                     last_text(&history)
                 ),
             };
         }
         steps += 1;
         let req = ChatRequest {
-            model: "bbw-fast".to_string(),
-            messages: probe_messages(&history, &spec.task),
-            tools: probe_specs(ctx.tools),
+            model: ctx.model_name.clone(),
+            messages: messages_with(&system_full, &history, &spec.task),
+            tools: tools.clone(),
         };
         let Ok(stream) = ctx.model.chat(&req) else {
             break ProbeResult {
@@ -243,16 +267,18 @@ pub fn run_probe(
 }
 
 /// fan-out 编排（loop_runner 调用）：状态迁移 #9 → 线程并行 ≤3 → join #10。
-/// 返回聚合结果（调用方负责回填主上下文与 join 事件）。
+/// 返回聚合 digest（调用方负责回填主上下文与 join 事件——见 join_summary）。
 /// run id 主线程串行预分配（wal 发号有序；未接 Store 退回 sub-{ms}-{i} 临时 id）。
+#[allow(clippy::too_many_arguments)]
 pub fn fanout_probes(
     session_id: &str,
     deps_mode: PermissionMode,
-    model: &dyn ChatClient,
-    tools: &dyn ToolExecutor,
-    sink: &dyn crate::events::SessionSink,
-    wal: &dyn crate::loop_runner::EventLog,
+    model: Arc<dyn ChatClient>,
+    tools: Arc<dyn ToolExecutor>,
+    sink: Arc<dyn SessionSink>,
+    wal: Arc<dyn EventLog>,
     subs: &[ProbeSpec],
+    env: &FanoutEnv<'_>,
 ) -> Vec<ProbeResult> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -272,20 +298,20 @@ pub fn fanout_probes(
             .map(|(spec, run_id)| {
                 let run_id = run_id.clone();
                 let spec = spec.clone();
-                s.spawn(move || {
-                    run_probe(
-                        ProbeCtx {
-                            model,
-                            tools,
-                            mode: deps_mode,
-                        },
-                        session_id,
-                        &run_id,
-                        &spec,
-                        sink,
-                        wal,
-                    )
-                })
+                let ctx = ProbeCtx {
+                    model: Arc::clone(&model),
+                    tools: Arc::clone(&tools),
+                    mode: deps_mode,
+                    system: env.system.to_string(),
+                    skills: Arc::clone(env.skills),
+                    memory: env.memory.cloned(),
+                    workspace: env.workspace.to_string(),
+                    model_name: env.model_name.clone(),
+                };
+                let sink = Arc::clone(&sink);
+                let wal = Arc::clone(&wal);
+                let sid = session_id.to_string();
+                s.spawn(move || run_probe(ctx, &sid, &run_id, &spec, sink, wal))
             })
             .collect();
         handles
@@ -302,12 +328,22 @@ pub fn fanout_probes(
     })
 }
 
+/// fan-out 环境（主会话投影：system/技能/记忆/工作区/模型名）
+pub struct FanoutEnv<'a> {
+    pub system: &'a str,
+    pub skills: &'a Arc<Mutex<crate::skills::SkillIndex>>,
+    pub memory: Option<&'a Arc<MemoryEngine>>,
+    pub workspace: &'a str,
+    /// 主循环同款模型名（override 优先回落档位）
+    pub model_name: String,
+}
+
 /// join 收口：协议事件 + WAL + 摘要文本（主上下文回填用）
 pub fn join_summary(
     session_id: &str,
     results: &[ProbeResult],
-    sink: &dyn crate::events::SessionSink,
-    wal: &dyn crate::loop_runner::EventLog,
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
 ) -> String {
     let proto: Vec<bbrt_protocol::SubagentResult> = results
         .iter()
@@ -414,12 +450,7 @@ pub(crate) fn drain(
     (text, calls, finish)
 }
 
-/// 探查消息组装（独立窗口：system 角色 + 任务指令，无主历史）
-fn probe_messages(history: &[Round], task: &str) -> Vec<ChatMessage> {
-    messages_with(PROBE_SYSTEM, history, task)
-}
-
-/// 通用独立窗口组装（探查/专家子会话共用：任意 system + 任务指令，无主历史）
+/// 独立窗口组装（探查/专家子会话共用：任意 system + 任务指令，无主历史）
 pub(crate) fn messages_with(system: &str, history: &[Round], task: &str) -> Vec<ChatMessage> {
     let mut msgs = vec![
         ChatMessage {
@@ -472,15 +503,6 @@ pub(crate) fn messages_with(system: &str, history: &[Round], task: &str) -> Vec<
         }
     }
     msgs
-}
-
-/// 白名单工具 specs（模型只见只读子集）
-fn probe_specs(tools: &dyn ToolExecutor) -> Vec<ToolSpec> {
-    tools
-        .tool_specs()
-        .into_iter()
-        .filter(|s| PROBE_TOOLS.contains(&s.name.as_str()))
-        .collect()
 }
 
 #[cfg(test)]

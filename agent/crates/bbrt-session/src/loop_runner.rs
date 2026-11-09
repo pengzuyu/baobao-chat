@@ -428,14 +428,30 @@ impl SessionRunner {
                     "subagent.fanout",
                     &format!("{{\"count\":{}}}", subs.len()),
                 );
+                // 通用子 agent＝主的分身（D16 决策①）：system/技能/记忆/
+                // 工具/模型与主会话同源，仅任务提示词不同、历史清零
+                let model_name =
+                    self.model_override
+                        .clone()
+                        .unwrap_or_else(|| match self.model_policy {
+                            ModelTier::Fast => "bbw-fast".to_string(),
+                            ModelTier::Strong => "bbw-strong".to_string(),
+                        });
                 let results = crate::subagent::fanout_probes(
                     &self.session_id,
                     self.mode,
-                    deps.model.as_ref(),
-                    deps.tools.as_ref(),
-                    deps.sink.as_ref(),
-                    deps.wal.as_ref(),
+                    Arc::clone(&deps.model),
+                    Arc::clone(&deps.tools),
+                    Arc::clone(&deps.sink),
+                    Arc::clone(&deps.wal),
                     &subs,
+                    &crate::subagent::FanoutEnv {
+                        system: SYSTEM_PROMPT,
+                        skills: &deps.skills,
+                        memory: deps.memory.as_ref(),
+                        workspace: &self.workspace,
+                        model_name,
+                    },
                 );
                 self.state = crate::subagent::transition_join(self.state);
                 let digest = crate::subagent::join_summary(
@@ -1320,7 +1336,7 @@ impl SessionRunner {
 }
 
 /// 系统提示（08 篇行为规格 + D15 §2.2 W1 记忆使用规范；技能注入阶段二）
-const SYSTEM_PROMPT: &str = "你是 BaobaoWork 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n长期记忆（memory_save 工具，跨会话生效）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。";
+pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoWork 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n长期记忆（memory_save 工具，跨会话生效）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。";
 
 /// 组装结果 → 模型消息序列（system/记忆/项目 → history → 工具结果）
 fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {

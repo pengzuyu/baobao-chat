@@ -84,7 +84,8 @@ impl ChatClient for ProbeModel {
             .get(1)
             .map(|m| m.content.clone())
             .unwrap_or_default();
-        let is_probe = m0.contains("只读探查");
+        // 通用子 agent（D16 决策①）：system 与主同构，按任务指令文本区分
+        let is_probe = m1.contains("查认证模块") || m1.contains("查配置加载");
         if is_probe {
             self.seen.lock().unwrap().push((m0, m1));
         }
@@ -249,10 +250,16 @@ fn fanout_two_probes_join_into_history() {
     let executed = tools.0.lock().unwrap().clone();
     assert_eq!(executed.len(), 2, "两个子任务各执行一次只读工具");
 
-    // 独立上下文：system=探查角色、user=任务指令、无主历史
+    // 独立上下文：system=与主同构（含主 prompt + [技能]/[项目]/[记忆] 段）、
+    // user=任务指令、无主历史（D16 决策①：通用子 agent＝主的分身）
     let seen = probe_model.seen.lock().unwrap().clone();
     assert!(seen.len() >= 4, "2 子任务 × ≥2 轮");
-    assert!(seen.iter().all(|(s, _)| s.contains("只读探查")));
+    assert!(seen
+        .iter()
+        .all(|(s, _)| s.contains("BaobaoWork 的本机 Agent")));
+    assert!(seen
+        .iter()
+        .all(|(s, _)| s.contains("[项目]") && s.contains("/ws")));
     assert!(seen.iter().any(|(_, u)| u.contains("认证模块")));
     assert!(seen.iter().any(|(_, u)| u.contains("配置加载")));
 
