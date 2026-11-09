@@ -159,13 +159,13 @@ func TestPGRolePermPoints(t *testing.T) {
 
 	uid := int64(920000000) + time.Now().UnixNano()%1_000_000
 	r1, err := roles.InsertRole(ctx, Role{TenantID: 1,
-		Name: "pg-test-hr-" + time.Now().Format("150405.000000000"),
+		Name:        "pg-test-hr-" + time.Now().Format("150405.000000000"),
 		Permissions: []string{"admin:user:manage", "im:message:send"}})
 	if err != nil {
 		t.Fatalf("InsertRole: %v", err)
 	}
 	r2, err := roles.InsertRole(ctx, Role{TenantID: 1,
-		Name: "pg-test-audit-" + time.Now().Format("150405.000000000"),
+		Name:        "pg-test-audit-" + time.Now().Format("150405.000000000"),
 		Permissions: []string{"admin:audit:read"}})
 	if err != nil {
 		t.Fatalf("InsertRole 2: %v", err)

@@ -20,7 +20,7 @@ import (
 // effectCounter 写副作用记录（断言禁用即踢线/吊销语义）
 type effectCounter struct {
 	aliceID, bobID int64
-	notified map[int64]string // perm.changed 单播记录（NotifyUser 闭包写入）
+	notified       map[int64]string // perm.changed 单播记录（NotifyUser 闭包写入）
 	kicked         []int64
 	revoked        []int64
 }

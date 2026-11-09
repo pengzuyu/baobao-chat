@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	stickerrepo "github.com/baobaowork/server/internal/sticker/repo"
 	errx "github.com/baobaowork/server/internal/platform/errors"
+	stickerrepo "github.com/baobaowork/server/internal/sticker/repo"
 )
 
 func newSvc(maxSets int) *Service {

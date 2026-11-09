@@ -44,7 +44,7 @@ func TestResolveForRefGuards(t *testing.T) {
 		uid   int64
 		code  errx.Code
 	}{
-		{"p:999:glm-4.7", 42, errx.CodeAIGWProviderNotFound},  // 不存在
+		{"p:999:glm-4.7", 42, errx.CodeAIGWProviderNotFound},   // 不存在
 		{"p:102:qwen-max", 42, errx.CodeAIGWProviderForbidden}, // 他人 BYOK
 		{"p:100:glm-5", 42, errx.CodeAIGWModelNotAllowed},      // 不在清单
 		{"p:abc:glm-4.7", 42, errx.CodeBadRequest},             // 非数字 id
@@ -88,12 +88,12 @@ func TestResolveForTierFallback(t *testing.T) {
 
 func TestValidateInputGuards(t *testing.T) {
 	bad := []ProviderInput{
-		{Name: "", BaseURL: "https://x", Models: []ModelDef{{ID: "m"}}},                         // 空 name
-		{Name: "x", BaseURL: "ftp://x", Models: []ModelDef{{ID: "m"}}},                          // 非 http(s)
-		{Name: "x", BaseURL: "https://x", Kind: "anthropic", Models: []ModelDef{{ID: "m"}}},     // kind 未开放
-		{Name: "x", BaseURL: "https://x", Models: nil},                                          // 空清单
-		{Name: "x", BaseURL: "https://x", Models: []ModelDef{{ID: "m"}, {ID: "m"}}},             // 重复模型
-		{Name: "x", BaseURL: "https://x", Models: []ModelDef{{ID: " "}}},                        // 空 id
+		{Name: "", BaseURL: "https://x", Models: []ModelDef{{ID: "m"}}},                     // 空 name
+		{Name: "x", BaseURL: "ftp://x", Models: []ModelDef{{ID: "m"}}},                      // 非 http(s)
+		{Name: "x", BaseURL: "https://x", Kind: "anthropic", Models: []ModelDef{{ID: "m"}}}, // kind 未开放
+		{Name: "x", BaseURL: "https://x", Models: nil},                                      // 空清单
+		{Name: "x", BaseURL: "https://x", Models: []ModelDef{{ID: "m"}, {ID: "m"}}},         // 重复模型
+		{Name: "x", BaseURL: "https://x", Models: []ModelDef{{ID: " "}}},                    // 空 id
 	}
 	for i, in := range bad {
 		if err := validateInput(&in, false); err == nil {

@@ -15,13 +15,13 @@ var ErrDupItem = errors.New("stickerrepo: duplicate sticker item")
 
 // Set sticker_set 行（OwnerID 0=租户公共集）
 type Set struct {
-	ID         int64
-	TenantID   int64
-	Name       string
+	ID          int64
+	TenantID    int64
+	Name        string
 	CoverFileID int64
-	OwnerID    int64
-	Status     int // 1 启用 2 停用（公共集下架）
-	CreatedAt  time.Time
+	OwnerID     int64
+	Status      int // 1 启用 2 停用（公共集下架）
+	CreatedAt   time.Time
 }
 
 // Item sticker 行
