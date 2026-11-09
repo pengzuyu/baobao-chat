@@ -18,6 +18,8 @@ export function DelegateCard({ item }: { item: DelegateItem }) {
   const confirmDelegate = useAgentStore((st) => st.confirmDelegate);
   const reviewDelegate = useAgentStore((st) => st.reviewDelegate);
   const cancelDelegate = useAgentStore((st) => st.cancelDelegate);
+  const sendRunInput = useAgentStore((st) => st.sendRunInput);
+  const [draft, setDraft] = useState('');
   const [open, setOpen] = useState(false);
 
   const failed = item.end !== undefined && item.end.exitCode !== 0;
@@ -66,7 +68,29 @@ export function DelegateCard({ item }: { item: DelegateItem }) {
 
       {item.phase === 'running' ? (
         <div className="delegate-card__actions">
-          <div className="delegate-card__btns">
+          <div className="delegate-card__input-row">
+            <input
+              className="delegate-card__input"
+              value={draft}
+              placeholder="运行中补充指令（转发子进程）…"
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  sendRunInput(item.runId, draft);
+                  setDraft('');
+                }
+              }}
+            />
+            <Button
+              variant="secondary"
+              disabled={!draft.trim()}
+              onClick={() => {
+                sendRunInput(item.runId, draft);
+                setDraft('');
+              }}
+            >
+              下发
+            </Button>
             <Button variant="secondary" onClick={() => cancelDelegate(item.runId)}>
               取消委派
             </Button>

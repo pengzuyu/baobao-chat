@@ -16,6 +16,8 @@
 > ④ **同步/异步**：探查/专家 spawn 后同步等待 **120s**，超窗转后台；委派**直接后台**。**不设最大执行时长**——不做超时终止，仅用户主动 cancel/interrupt（8034 错误码留档不启用）。
 > ⑤ **run 落库一期仅本机 SQLite**；服务端上收（run 摘要 / agent_session_backup）阶段二。
 > ⑥ **一次调用＝一次 run＝一条可重放审计流水**（修订 D14 决策②"无会话记录"：有审计记录、无可续聊会话、无记忆）。
+> ⑦ **完成通知本地环先行**（2026-11-09 补记）：后台 run 完成时若工作台不可见（非 /agent 路由/窗口隐藏）弹**本机系统通知**（tauri-plugin-notification，懒申请权限，降级静默）；跨端 `agent_done`（服务端 user_notification → 多端推送）待服务端建立 agent 事件源后做。
+> ⑧ **补充机制＝运行中调整**（2026-11-09 补记）：三形态统一通道——探查/专家 run 在执行循环前经 hub 注册 per-run 输入通道（复用委派 `delegate.input`/`delegate.cancel` 协议与路由，按 run_id 定向）：**Input 注入为 user 轮（"[主 Agent 补充指令]"前缀，下一模型轮生效）**、**Cancel 优雅取消（cancelled 终态，部分结果保留）**；委派侧 `delegate.input` 真正下发子进程（DelegateStream::send_input，不支持的 backend 静默忽略）。主 Agent 侧新增 `subagent.adjust`/`subagent.cancel` 工具（薄门面+专用路径拦截，经 hub 同通道）。**完成后追问（resume）不在此列**，另行立项。
 
 ## 2. 三形态统一视图（最终版）
 

@@ -3310,6 +3310,23 @@ body {
   gap: var(--bbw-space-2);
 }
 
+.delegate-card__input-row {
+  display: flex;
+  gap: var(--bbw-space-2);
+  align-items: center;
+}
+
+.delegate-card__input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-input, 6px);
+  padding: 4px var(--bbw-space-2);
+  font-size: var(--bbw-font-12);
+  background: var(--bbw-gray-1);
+  color: var(--bbw-gray-9);
+}
+
 .delegate-card__files {
   max-height: 160px;
   overflow: auto;

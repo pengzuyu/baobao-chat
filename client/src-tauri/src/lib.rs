@@ -37,6 +37,7 @@ fn win_minimize(window: tauri::Window) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // Agent 宿主桥：数据目录={appData}/agent-runtime；事件泵→WebView（agent://event）
             let handle = app.handle().clone();

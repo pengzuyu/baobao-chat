@@ -8,6 +8,7 @@
 
 import { create } from 'zustand';
 import { getAgentBridge } from '../bridge';
+import { notifyAgentDone, workbenchVisible } from '../bridge/notify';
 import type {
   AgentEvent,
   AgentReport,
@@ -110,6 +111,10 @@ interface AgentState {
   reviewDelegate: (runId: string, accept: boolean) => void;
   /** 取消委派（简报期/后台运行/审查期） */
   cancelDelegate: (runId: string) => void;
+  /** 运行中子任务补充指令（D16 决策⑧：探查/专家/委派通用——delegate.input 通道） */
+  sendRunInput: (runId: string, text: string) => void;
+  /** 运行中子任务取消（探查/专家/委派通用） */
+  cancelRun: (runId: string) => void;
   pauseActive: () => void;
   resumeActive: () => void;
   endActive: () => void;
@@ -296,6 +301,15 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   cancelDelegate: (runId) => {
     // 乐观置 resolved（终态展示"已取消"；RT 侧 delegate.cancel → cancelled run）
     patchDelegateCard(get, set, runId, (it) => (it.phase === 'brief' ? { ...it, phase: 'resolved' } : it));
+    void bridge.cancelDelegate(runId).catch(() => undefined);
+  },
+
+  sendRunInput: (runId, text) => {
+    if (!text.trim()) return;
+    void bridge.delegateInput(runId, text.trim()).catch(() => undefined);
+  },
+
+  cancelRun: (runId) => {
     void bridge.cancelDelegate(runId).catch(() => undefined);
   },
 
@@ -515,7 +529,21 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           return { streams: { ...s.streams, [event.sessionId]: [...list, item] } };
         }
         case 'subagentEvent': {
-          // delta 不刷卡（探查摘要以 done 一次性上报，D11 §7）
+          // delta=运行中反馈（补充指令注入等，D16 决策⑧）→ 刷新卡摘要；
+          // 终态 done/fail 才刷卡（探查摘要以 done 一次性上报，D11 §7）
+          if (event.phase === 'delta') {
+            const list0 = s.streams[event.sessionId] ?? [];
+            return {
+              streams: {
+                ...s.streams,
+                [event.sessionId]: list0.map((it) =>
+                  it.kind === 'subagent' && it.runId === event.runId && event.summary
+                    ? { ...it, summary: event.summary }
+                    : it,
+                ),
+              },
+            };
+          }
           if (event.phase !== 'done' && event.phase !== 'fail') return s;
           const list = s.streams[event.sessionId] ?? [];
           return {
@@ -603,6 +631,18 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         .listReports()
         .then((reports) => set({ reports }))
         .catch(() => undefined);
+    }
+    // 本地完成通知（D16 本地环：工作台不可见时弹系统通知；跨端待服务端）
+    if (!workbenchVisible()) {
+      if (event.type === 'delegateEnd') {
+        void notifyAgentDone(
+          `委派完成（${event.exitCode === 0 ? '待审查' : '退出 ' + event.exitCode}）`,
+          event.summary.slice(0, 80) || `run ${event.runId}`,
+        );
+      } else if (event.type === 'subagentJoin') {
+        const ok = event.results.filter((r) => r.ok).length;
+        void notifyAgentDone('并行子任务完成', `${ok}/${event.results.length} 项成功，结论已回填`);
+      }
     }
     // run 生命周期事件 → 刷新该会话 run 面板（D16 §3.1；后台完成也可见）
     if (

@@ -6,12 +6,17 @@
 
 import { useState } from 'react';
 import { ChevronRight, Loader2, Radar } from 'lucide-react';
+import { Button } from '../../../shared/ui/Button';
+import { useAgentStore } from '../store/agent';
 import type { StreamItem } from '../store/agent';
 
 type SubagentItem = Extract<StreamItem, { kind: 'subagent' }>;
 
 export function SubagentCard({ item }: { item: SubagentItem }) {
   const [open, setOpen] = useState(false);
+  const sendRunInput = useAgentStore((st) => st.sendRunInput);
+  const cancelRun = useAgentStore((st) => st.cancelRun);
+  const [draft, setDraft] = useState('');
 
   const statusNode =
     item.status === 'running' ? (
@@ -34,6 +39,37 @@ export function SubagentCard({ item }: { item: SubagentItem }) {
         <span className="subagent-card__digest">{item.taskDigest}</span>
         <span className="tool-card__status-wrap">{statusNode}</span>
       </button>
+      {item.status === 'running' ? (
+        <div className="delegate-card__actions">
+          <div className="delegate-card__input-row">
+            <input
+              className="delegate-card__input"
+              value={draft}
+              placeholder="运行中补充指令（下一轮生效）…"
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  sendRunInput(item.runId, draft);
+                  setDraft('');
+                }
+              }}
+            />
+            <Button
+              variant="secondary"
+              disabled={!draft.trim()}
+              onClick={() => {
+                sendRunInput(item.runId, draft);
+                setDraft('');
+              }}
+            >
+              下发
+            </Button>
+            <Button variant="secondary" onClick={() => cancelRun(item.runId)}>
+              取消
+            </Button>
+          </div>
+        </div>
+      ) : null}
       {open ? (
         <div className="tool-card__body">
           <div className="tool-card__section">
