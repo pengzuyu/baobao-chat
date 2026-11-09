@@ -949,6 +949,7 @@ export function MessageBubble({
                 body={callBody}
                 mine={mine}
                 onRecall={(video) => emit('im:invoke-call', { convId: message.convId, video })}
+                onJoin={() => emit('rtc:join-call', { callId: callBody.call_id, convId: message.convId, video: callBody.call_type === 'video' })}
               />
             </span>
           ) : isDocCard && docBody ? (

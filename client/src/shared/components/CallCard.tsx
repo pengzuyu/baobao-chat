@@ -13,6 +13,8 @@ export interface CallCardBody {
   call_id: string;
   call_type: 'audio' | 'video';
   status: 'calling' | 'ended';
+  /** 群通话（D17：服务端落卡标记；进行中卡片显示[加入]） */
+  group?: boolean;
   duration?: number;
   reason?: string;
 }
@@ -49,9 +51,11 @@ interface CallCardProps {
   mine: boolean;
   /** 再次呼叫回调（bus 转发 rtc；未接/已结束可回拨） */
   onRecall?: (video: boolean) => void;
+  /** 加入进行中群通话（D17 join 模式；status=calling 且 group 时展示） */
+  onJoin?: () => void;
 }
 
-export function CallCard({ body, mine, onRecall }: CallCardProps) {
+export function CallCard({ body, mine, onRecall, onJoin }: CallCardProps) {
   const video = body.call_type === 'video';
   // 状态图标：进行中=电话动效；未接（timeout 呼入）= missed；其余按方向
   const missed = body.status === 'ended' && body.reason === 'timeout' && !mine;
@@ -72,7 +76,20 @@ export function CallCard({ body, mine, onRecall }: CallCardProps) {
           {callCardText(body, mine)}
           {connected ? ` · ${formatCallDuration(body.duration ?? 0)}` : ''}
         </div>
+        {body.group && body.status === 'calling' ? <span className="call-card__group-tag">群通话</span> : null}
       </div>
+      {body.group && body.status === 'calling' && onJoin ? (
+        <button
+          type="button"
+          className="call-card__recall"
+          data-testid="call-card-join"
+          title="加入进行中的群通话"
+          onClick={onJoin}
+        >
+          <PhoneCall size={15} />
+          加入
+        </button>
+      ) : null}
       {body.status === 'ended' && onRecall ? (
         <button
           type="button"

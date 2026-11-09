@@ -10,6 +10,8 @@ declare module '../../shared/bus' {
     'rtc:incoming': { callId: string; callerName: string; video: boolean };
     /** 通话终态 → im（卡片终态）/notification（未接红点） */
     'rtc:call-ended': { callId: string; reason: string; durationSec: number };
+    /** 群通话加入（进行中卡片[加入]按钮 → rtc 域经 bus 解耦，D01 §12.2） */
+    'rtc:join-call': { callId: string; convId: string; video: boolean };
   }
 }
 

@@ -1,16 +1,17 @@
 /**
- * rtcStore（D04 §4.2 状态机的端内单一投影，阶段一务实版）：
- * - 活动通话 call（主/被叫合一）+ 来电 incoming（接听前不建引擎）
- * - rtc.ringing / rtc.state / rtc.signal 三推送经 RtcOverlay 接线驱动
- * - ended 后 3s 保窗（展示时长/原因）→ 自动 reset（D04 §4.2 ended 态 3s 关窗）
- * - 单设备单活动通话：通话中来电自动回 busy（INT-RTC-08 简化，登记）
+ * rtcStore（05 篇 §4.2 状态机端内投影 + D17 统一媒体面）：
+ * - 活动通话 call（1v1/群合一，group 区分）+ 来电 incoming（1v1 接听弹窗/群"点击加入"）
+ * - 媒体引擎=LiveKitEngine（SFU 进房；凭证经 GET /calls/{id}/token，D17 §3.3）：
+ *   取 token 失败/连接失败 → mediaFailed 降级（信令照走，UI 横幅提示）
+ * - rtc.ringing / rtc.state 推送驱动；rtc.signal 已退役（D17 §7）
+ * - ended 后 3s 保窗 → 自动 reset；单设备单活动通话（群响铃不打扰——静默忽略不回 busy）
  */
 
 import { create } from 'zustand';
 import { emit } from '../../../shared/bus';
-import { RtcEngine } from '../engine/RtcEngine';
-import { rtcAccept, rtcBye, rtcCancel, rtcInvite, rtcReject } from '../api/rtcApi';
-import type { RtcCallState, RtcCallType, RtcRingingPayload, RtcSignalData, RtcSignalPayload, RtcStatePayload } from '../model/types';
+import { LiveKitEngine, type EngineParticipant } from '../engine/LiveKitEngine';
+import { fetchCallToken, rtcAccept, rtcBye, rtcCancel, rtcInvite, rtcJoin, rtcReject } from '../api/rtcApi';
+import type { RtcCallState, RtcCallType, RtcRingingPayload, RtcStatePayload } from '../model/types';
 import '../events'; // bus 事件类型声明装载
 
 /** 活动通话快照（UI 投影） */
@@ -18,7 +19,9 @@ export interface ActiveCall {
   callId: string;
   convId: string;
   callType: RtcCallType;
-  role: 'caller' | 'callee';
+  /** 群通话（join 模式：成员随时加入/退出） */
+  group: boolean;
+  role: 'caller' | 'callee' | 'member';
   peer: { uid: string; name: string };
   state: RtcCallState;
   reason?: string;
@@ -38,45 +41,47 @@ function newCallId(): string {
 /** ended 保窗时长（展示终态后自动收窗） */
 const ENDED_HOLD_MS = 3000;
 
-// ---- 模块级运行态（非 React 投影）：引擎 + 信令缓冲 ----
-let engine: RtcEngine | null = null;
-/** 引擎就绪前到达的 signal（offer 可能先于 accept ack 到达被叫） */
-const signalBuffer = new Map<string, RtcSignalData[]>();
+// ---- 模块级运行态（非 React 投影）----
+let engine: LiveKitEngine | null = null;
+/** ensureEngine 重入防护（同 call 只建一次） */
+let engineCallId: string | null = null;
 let endedTimer: ReturnType<typeof setTimeout> | null = null;
 
 interface RtcState {
   /** 当前用户 uid（app 组合层注入，同 im 口径） */
   myUid: string;
   setMyUid: (uid: string) => void;
-  /** 本端 did（answered_elsewhere 过滤；与 WS 连接 did 同源） */
+  /** 本端 did（与 WS 连接 did 同源；LiveKit identity=uid:did） */
   myDid: string;
 
   call: ActiveCall | null;
   incoming: RtcRingingPayload | null;
-  localStream: MediaStream | null;
-  remoteStream: MediaStream | null;
+  /** 会议网格投影（engine 驱动；本端恒在首位） */
+  participants: EngineParticipant[];
   micOn: boolean;
   camOn: boolean;
-  /** 轻提示（已在其他设备接听/对方已拒绝等，3s 自清） */
+  /** 轻提示（3s 自清） */
   toast: { text: string; at: number } | null;
 
   /** 发起 1v1（对端已解析；ChatHeader/bus 入口 → RtcOverlay 解析后调这里） */
   startOutgoing: (convId: string, peer: { uid: string; name: string }, callType: RtcCallType) => Promise<void>;
-  /** 接听来电 */
+  /** 发起群呼（callee 空=全员 ringing+join 模式；主叫即参与者） */
+  startGroupCall: (convId: string, callType: RtcCallType) => Promise<void>;
+  /** 加入群通话（群响铃[加入]/进行中卡片[加入]；callId/convId 已知） */
+  joinCall: (callId: string, convId: string, callType: RtcCallType, caller: { uid: string; name: string }) => Promise<void>;
+  /** 接听来电（1v1） */
   acceptIncoming: () => Promise<void>;
-  /** 拒接来电 */
+  /** 拒接来电（1v1） */
   rejectIncoming: () => void;
-  /** 挂断/取消（按当前态路由 cancel/bye/reject） */
+  /** 挂断/取消（按当前态路由 cancel/bye） */
   hangup: () => void;
   toggleMic: () => void;
   toggleCam: () => void;
 
-  /** rtc.ringing 推送（来电；通话中自动 busy） */
+  /** rtc.ringing 推送（来电/群呼邀请；通话中 1v1 自动 busy、群呼静默忽略） */
   applyRinging: (p: RtcRingingPayload) => void;
   /** rtc.state 推送（状态机驱动） */
   applyState: (p: RtcStatePayload) => void;
-  /** rtc.signal 推送（SDP/ICE 入站 → 引擎/缓冲） */
-  applySignal: (p: RtcSignalPayload) => void;
   /** toast 自清 */
   clearToast: () => void;
   /** 终态清理（ended 保窗后） */
@@ -86,47 +91,66 @@ interface RtcState {
 export const useRtcStore = create<RtcState>((set, get) => {
   /** 引擎回调 → store 投影 */
   const engineCallbacks = {
-    onLocalStream: (s: MediaStream | null) => set({ localStream: s }),
-    onRemoteStream: (s: MediaStream | null) => set({ remoteStream: s }),
-    onConnectionChange: (state: RTCPeerConnectionState) => {
-      // 媒体层确认：与信令层 connected 近似互补（先到先亮）；failed 提示不强制收窗
-      if (state === 'connected') {
-        const call = get().call;
-        if (call && call.state !== 'connected' && call.state !== 'ended') {
-          set({ call: { ...call, state: 'connected', startedAt: call.startedAt ?? Date.now() } });
-        }
+    onParticipants: (participants: EngineParticipant[]) => set({ participants }),
+    onConnectionChange: (state: string) => {
+      if (state === 'reconnecting') set({ toast: { text: '媒体重连中…', at: Date.now() } });
+      if (state === 'disconnected') {
+        // 本端已离房：结束流由服务端（webhook participant_left → rtc.state）权威驱动
+        set({ toast: { text: '媒体连接已断开', at: Date.now() } });
       }
     },
   };
 
-  /** 建/重建引擎并消费 store 级信令缓冲（引擎构造即建 PeerConnection；
-   *  offer 发送时机：主叫在 connecting 态触发——媒体未决时由引擎内部挂起放行） */
-  const attachEngine = (callId: string, callType: RtcCallType): RtcEngine => {
-    const eng = new RtcEngine(callId, engineCallbacks);
-    void eng.initMedia(callType).then(() => {
-      set({ micOn: eng.micOn, camOn: eng.camOn });
-      const call = get().call;
-      if (call) set({ call: { ...call, mediaFailed: eng.mediaFailed } });
-      // 消费引擎构造前到达的缓冲信令（引擎内部对媒体未决期再次缓冲，不丢帧）
-      const buf = signalBuffer.get(callId) ?? [];
-      signalBuffer.delete(callId);
-      for (const d of buf) void eng.handleSignal(d);
-    });
-    return eng;
+  const teardownEngine = () => {
+    engine?.leave();
+    engine = null;
+    engineCallId = null;
+    set({ participants: [], micOn: false, camOn: false });
   };
 
-  const teardownEngine = () => {
-    engine?.close();
-    engine = null;
-    set({ localStream: null, remoteStream: null });
+  /**
+   * 建引擎进房（幂等）：取 token → LiveKit connect → 发布轨道。
+   * 失败（媒体面未配置 5003 / 连接失败）→ mediaFailed 降级：信令照走，
+   * UI 横幅提示（通话卡片仍会正常落流）。
+   */
+  const ensureEngine = async (call: ActiveCall): Promise<void> => {
+    if (engine && engineCallId === call.callId) return;
+    if (engine) teardownEngine();
+    engineCallId = call.callId;
+    try {
+      const ack = await fetchCallToken(call.callId, get().myDid);
+      const eng = new LiveKitEngine(engineCallbacks);
+      engine = eng;
+      await eng.join(ack.url, ack.token, call.callType);
+      set({ micOn: eng.micOn, camOn: eng.camOn, participants: [] });
+      const cur = get().call;
+      if (cur && cur.callId === call.callId) set({ call: { ...cur, mediaFailed: false } });
+    } catch {
+      // 无媒体降级：不建引擎，信令/卡片照走（D17 §3.3 5003 场景与连接失败统一口径）
+      engine = null;
+      engineCallId = null;
+      const cur = get().call;
+      if (cur && cur.callId === call.callId) set({ call: { ...cur, mediaFailed: true } });
+      set({ toast: { text: '媒体服务未就绪（无媒体模式，通话记录正常）', at: Date.now() } });
+    }
   };
 
   /** 终态进入：停引擎 + 3s 保窗后 reset */
   const enterEnded = (call: ActiveCall, reason: string, serverDuration?: number) => {
     teardownEngine();
     set({ call: { ...call, state: 'ended', reason, serverDuration: serverDuration ?? call.serverDuration } });
+    emit('rtc:call-ended', { callId: call.callId, reason, durationSec: serverDuration ?? 0 });
     if (endedTimer) clearTimeout(endedTimer);
     endedTimer = setTimeout(() => get().reset(), ENDED_HOLD_MS);
+  };
+
+  /** 已有活动通话守卫（发起/加入前） */
+  const busy = (): boolean => {
+    if (get().call || get().incoming) {
+      set({ toast: { text: '当前设备已有进行中通话', at: Date.now() } });
+      return true;
+    }
+    return false;
   };
 
   return {
@@ -136,39 +160,63 @@ export const useRtcStore = create<RtcState>((set, get) => {
 
     call: null,
     incoming: null,
-    localStream: null,
-    remoteStream: null,
+    participants: [],
     micOn: false,
     camOn: false,
     toast: null,
 
     startOutgoing: async (convId, peer, callType) => {
-      if (get().call || get().incoming) {
-        set({ toast: { text: '当前设备已有进行中通话', at: Date.now() } });
-        return;
-      }
+      if (busy()) return;
       const callId = newCallId();
-      // 先建引擎（采集失败→无媒体通话模式，仍走信令——E2E 既定口径）；
-      // offer 在服务端推 connecting（被叫已接听）后发送（applyState 触发）
-      engine = attachEngine(callId, callType);
       try {
         await rtcInvite({ callId, convId, calleeId: peer.uid, callType });
       } catch {
-        teardownEngine();
         set({ toast: { text: '呼叫发起失败（对方忙线或会话已有通话）', at: Date.now() } });
         return;
       }
+      // 1v1 主叫：dialing 等待 accept → connecting 时 ensureEngine（applyState 触发）
       set({
-        call: {
-          callId, convId, callType, role: 'caller', peer,
-          state: 'dialing', mediaFailed: engine.mediaFailed,
-        },
+        call: { callId, convId, callType, group: false, role: 'caller', peer, state: 'dialing', mediaFailed: false },
       });
+    },
+
+    startGroupCall: async (convId, callType) => {
+      if (busy()) return;
+      const callId = newCallId();
+      try {
+        await rtcInvite({ callId, convId, calleeId: '', callType });
+      } catch {
+        set({ toast: { text: '群通话发起失败（会话已有进行中通话）', at: Date.now() } });
+        return;
+      }
+      // 群呼主叫即参与者：服务端直接推 connecting，此处先建引擎（不等推送）
+      const call: ActiveCall = {
+        callId, convId, callType, group: true, role: 'caller',
+        peer: { uid: get().myUid, name: '群通话' }, state: 'connecting', mediaFailed: false,
+      };
+      set({ call });
+      void ensureEngine(call);
+    },
+
+    joinCall: async (callId, convId, callType, caller) => {
+      if (busy()) return;
+      try {
+        await rtcJoin(callId, get().myDid);
+      } catch {
+        set({ toast: { text: '加入失败：通话已结束或人数已满', at: Date.now() } });
+        return;
+      }
+      const call: ActiveCall = {
+        callId, convId, callType, group: true, role: 'member',
+        peer: { uid: caller.uid, name: caller.name }, state: 'connecting', mediaFailed: false,
+      };
+      set({ call });
+      void ensureEngine(call);
     },
 
     acceptIncoming: async () => {
       const inc = get().incoming;
-      if (!inc) return;
+      if (!inc || inc.group) return;
       set({ incoming: null });
       try {
         await rtcAccept(inc.call_id, true, get().myDid);
@@ -176,21 +224,20 @@ export const useRtcStore = create<RtcState>((set, get) => {
         set({ toast: { text: '接听失败：通话已结束', at: Date.now() } });
         return;
       }
-      engine = attachEngine(inc.call_id, inc.call_type);
-      set({
-        call: {
-          callId: inc.call_id, convId: inc.conv_id, callType: inc.call_type, role: 'callee',
-          peer: { uid: inc.caller.id, name: inc.caller.name },
-          state: 'connecting', mediaFailed: false,
-        },
-      });
+      const call: ActiveCall = {
+        callId: inc.call_id, convId: inc.conv_id, callType: inc.call_type, group: false, role: 'callee',
+        peer: { uid: inc.caller.id, name: inc.caller.name }, state: 'connecting', mediaFailed: false,
+      };
+      set({ call });
+      void ensureEngine(call);
     },
 
     rejectIncoming: () => {
       const inc = get().incoming;
       if (!inc) return;
       set({ incoming: null });
-      void rtcReject(inc.call_id, 'declined').catch(() => undefined);
+      if (!inc.group) void rtcReject(inc.call_id, 'declined').catch(() => undefined);
+      // 群呼"忽略"无信令动作（join 模式非被叫应答）
     },
 
     hangup: () => {
@@ -206,6 +253,7 @@ export const useRtcStore = create<RtcState>((set, get) => {
         enterEnded(call, 'canceled');
         return;
       }
+      // 1v1=整通结束；群=单成员退出（服务端剩余成员继续/all_left 窗口）
       void rtcBye(callId).catch(() => undefined);
       enterEnded(call, 'bye');
     },
@@ -220,10 +268,10 @@ export const useRtcStore = create<RtcState>((set, get) => {
     },
 
     applyRinging: (p) => {
-      const { call } = get();
-      if (call) {
-        // 单设备单活动通话：自动回 busy（INT-RTC-08 简化，登记）
-        void rtcReject(p.call_id, 'busy').catch(() => undefined);
+      const { call, incoming } = get();
+      if (call || incoming) {
+        // 单设备单活动通话：1v1 自动回 busy；群呼静默忽略（不打扰进行中通话）
+        if (!p.group && !call) void rtcReject(p.call_id, 'busy').catch(() => undefined);
         return;
       }
       set({ incoming: p });
@@ -231,7 +279,7 @@ export const useRtcStore = create<RtcState>((set, get) => {
 
     applyState: (p) => {
       const { call, incoming } = get();
-      // 被叫来电侧终态：canceled/timeout 收起来电弹窗（未接场景）
+      // 来电侧终态：canceled/timeout 收起来电弹窗（未接场景）
       if (incoming && incoming.call_id === p.call_id && p.kind === 'ended') {
         set({ incoming: null, toast: { text: p.reason === 'canceled' ? '对方已取消' : '未接听', at: Date.now() } });
         return;
@@ -243,6 +291,8 @@ export const useRtcStore = create<RtcState>((set, get) => {
         }
         return;
       }
+      // 群成员加入/退出广播：参与网格由 engine 驱动，此处在通话中仅提示性刷新（无动作）
+      if (p.kind === 'joined' || p.kind === 'left') return;
       if (!call || call.callId !== p.call_id) return;
       switch (p.kind) {
         case 'dialing':
@@ -251,8 +301,8 @@ export const useRtcStore = create<RtcState>((set, get) => {
           break;
         case 'connecting':
           if (call.state !== 'ended') set({ call: { ...call, state: 'connecting' } });
-          // 主叫：被叫已接听 → 发送 offer（引擎在 invite 前已就绪）
-          if (call.role === 'caller' && engine) void engine.sendOffer();
+          // 1v1 主叫：被叫已接听 → 进房（群呼/被叫在各自入口已建引擎，ensureEngine 幂等）
+          if (call.role === 'caller') void ensureEngine(call);
           break;
         case 'connected':
           if (call.state !== 'ended') {
@@ -267,23 +317,11 @@ export const useRtcStore = create<RtcState>((set, get) => {
       }
     },
 
-    applySignal: (p) => {
-      if (engine && get().call?.callId === p.call_id) {
-        void engine.handleSignal(p.data);
-        return;
-      }
-      // 引擎未就绪（offer 先于 accept ack 到达被叫）：按 call_id 缓冲
-      const buf = signalBuffer.get(p.call_id) ?? [];
-      buf.push(p.data);
-      signalBuffer.set(p.call_id, buf);
-    },
-
     clearToast: () => set({ toast: null }),
     reset: () => {
       if (endedTimer) clearTimeout(endedTimer);
       endedTimer = null;
       teardownEngine();
-      signalBuffer.clear();
       set({ call: null, incoming: null });
     },
   };
@@ -297,6 +335,6 @@ export function formatDuration(sec: number): string {
 }
 
 /** 发起通话 bus 出口（im 侧 invoke；ChatHeader/CallCard 经 bus 解耦，D01 §12.2） */
-export function invokeCall(convId: string, video: boolean): void {
-  emit('im:invoke-call', { convId, video });
+export function invokeCall(convId: string, video: boolean, group = false): void {
+  emit('im:invoke-call', { convId, video, group });
 }

@@ -37,7 +37,8 @@ export function ChatHeader({ conv, typing, peerStatus, onBack, onToggleDetail }:
   /** 发起通话（单聊 only；群通话入口待阶段二，D04 INT-RTC-02 登记） */
   const startCall = (video: boolean) => {
     setCallMenuOpen(false);
-    emit('im:invoke-call', { convId: conv.id, video });
+    // 群会话→群呼（callee 空=全员 ringing+join 模式，D17）；单聊→1v1
+    emit('im:invoke-call', { convId: conv.id, video, group: conv.type === 2 });
   };
 
   return (
@@ -59,8 +60,8 @@ export function ChatHeader({ conv, typing, peerStatus, onBack, onToggleDetail }:
         {typing ? <span className="chat-header__typing">{typing}</span> : null}
       </span>
       <div className="chat-header__actions">
-        {/* 通话入口（D04 INT-RTC-01：单聊 only；403 rtc:call:start 权限点 v0.1 缺省放行，登记） */}
-        {conv.type === 1 && conv.status === 1 ? (
+        {/* 通话入口（D04 INT-RTC-01 + D17 群呼：单聊 1v1/群聊群呼） */}
+        {(conv.type === 1 || conv.type === 2) && conv.status === 1 ? (
           <div className="chat-header__call" ref={menuRef}>
             <button
               className="icon-btn"

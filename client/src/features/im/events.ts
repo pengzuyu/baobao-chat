@@ -12,7 +12,7 @@ declare module '../../shared/bus' {
     /** 打开协作文档 → doc(D05) */
     'im:open-doc': { docId: string };
     /** 发起通话 → rtc(D04) */
-    'im:invoke-call': { convId: string; video: boolean };
+    'im:invoke-call': { convId: string; video: boolean; group?: boolean };
   }
 }
 
