@@ -65,7 +65,16 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return (
     <>
       {children}
-      <RtcOverlay />
+      {/* D17 §4：auth 源经组合层下发（Tauri 宿主下拉起独立会议窗口的 handoff 载荷用） */}
+      <RtcOverlay
+        auth={{
+          getToken: () => useAuthStore.getState().token,
+          getRefreshToken: () => useAuthStore.getState().refreshToken,
+          getExpiresAt: () => useAuthStore.getState().expiresAt ?? 0,
+          getUid: () => useAuthStore.getState().user?.uid ?? '',
+          getDisplayName: () => useAuthStore.getState().user?.name ?? '',
+        }}
+      />
     </>
   );
 }

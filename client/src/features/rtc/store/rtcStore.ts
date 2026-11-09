@@ -31,6 +31,15 @@ export interface ActiveCall {
   mediaFailed: boolean;
 }
 
+/** 会议窗口交接动作载荷（shared/meeting/launcher 与 Rust MeetingHandoff 的 action 子集） */
+export interface MeetingHandoffAction {
+  action: 'outgoing1v1' | 'outgoingGroup' | 'accept1v1' | 'joinGroup';
+  callId: string;
+  convId: string;
+  video: boolean;
+  peer: { uid: string; name: string };
+}
+
 /** call_id 生成（幂等键：重试不换，14 篇 §5.3） */
 let callSeq = 0;
 function newCallId(): string {
@@ -51,8 +60,9 @@ interface RtcState {
   /** 当前用户 uid（app 组合层注入，同 im 口径） */
   myUid: string;
   setMyUid: (uid: string) => void;
-  /** 本端 did（与 WS 连接 did 同源；LiveKit identity=uid:did） */
+  /** 本端 did（与 WS 连接 did 同源；LiveKit identity=uid:did；会议窗口注入 'meeting'） */
   myDid: string;
+  setMyDid: (did: string) => void;
 
   call: ActiveCall | null;
   incoming: RtcRingingPayload | null;
@@ -60,13 +70,15 @@ interface RtcState {
   participants: EngineParticipant[];
   micOn: boolean;
   camOn: boolean;
+  screenOn: boolean;
   /** 轻提示（3s 自清） */
   toast: { text: string; at: number } | null;
 
-  /** 发起 1v1（对端已解析；ChatHeader/bus 入口 → RtcOverlay 解析后调这里） */
-  startOutgoing: (convId: string, peer: { uid: string; name: string }, callType: RtcCallType) => Promise<void>;
+  /** 发起 1v1（对端已解析；ChatHeader/bus 入口 → RtcOverlay 解析后调这里；
+   *  callId 外部传入=独立会议窗口已用其作窗口幂等键） */
+  startOutgoing: (convId: string, peer: { uid: string; name: string }, callType: RtcCallType, callId?: string) => Promise<void>;
   /** 发起群呼（callee 空=全员 ringing+join 模式；主叫即参与者） */
-  startGroupCall: (convId: string, callType: RtcCallType) => Promise<void>;
+  startGroupCall: (convId: string, callType: RtcCallType, callId?: string) => Promise<void>;
   /** 加入群通话（群响铃[加入]/进行中卡片[加入]；callId/convId 已知） */
   joinCall: (callId: string, convId: string, callType: RtcCallType, caller: { uid: string; name: string }) => Promise<void>;
   /** 接听来电（1v1） */
@@ -77,7 +89,11 @@ interface RtcState {
   hangup: () => void;
   toggleMic: () => void;
   toggleCam: () => void;
+  /** 屏幕共享开/关（D17 P1；失败 toast：权限拒绝 5007 / 平台不支持） */
+  toggleScreen: () => void;
 
+  /** 独立会议窗口 bootstrap（D17 §4）：交接载荷分发到既有动作（accept1v1 内部走 accept） */
+  bootstrapHandoff: (h: MeetingHandoffAction) => Promise<void>;
   /** rtc.ringing 推送（来电/群呼邀请；通话中 1v1 自动 busy、群呼静默忽略） */
   applyRinging: (p: RtcRingingPayload) => void;
   /** rtc.state 推送（状态机驱动） */
@@ -105,7 +121,7 @@ export const useRtcStore = create<RtcState>((set, get) => {
     engine?.leave();
     engine = null;
     engineCallId = null;
-    set({ participants: [], micOn: false, camOn: false });
+    set({ participants: [], micOn: false, camOn: false, screenOn: false });
   };
 
   /**
@@ -135,6 +151,16 @@ export const useRtcStore = create<RtcState>((set, get) => {
     }
   };
 
+  /** 被叫接通后进入通话态（acceptIncoming 与会议窗口 bootstrap 复用） */
+  const beginCallee = (callId: string, convId: string, callType: RtcCallType, peer: { uid: string; name: string }) => {
+    const call: ActiveCall = {
+      callId, convId, callType, group: false, role: 'callee',
+      peer, state: 'connecting', mediaFailed: false,
+    };
+    set({ call });
+    void ensureEngine(call);
+  };
+
   /** 终态进入：停引擎 + 3s 保窗后 reset */
   const enterEnded = (call: ActiveCall, reason: string, serverDuration?: number) => {
     teardownEngine();
@@ -157,17 +183,19 @@ export const useRtcStore = create<RtcState>((set, get) => {
     myUid: '',
     setMyUid: (uid) => set({ myUid: uid }),
     myDid: 'dev-device', // 与 App.tsx WS 连接 did 同源（正式版 Rust 层生成，D01 §12.3）
+    setMyDid: (did) => set({ myDid: did }),
 
     call: null,
     incoming: null,
     participants: [],
     micOn: false,
     camOn: false,
+    screenOn: false,
     toast: null,
 
-    startOutgoing: async (convId, peer, callType) => {
+    startOutgoing: async (convId, peer, callType, externalCallId) => {
       if (busy()) return;
-      const callId = newCallId();
+      const callId = externalCallId ?? newCallId();
       try {
         await rtcInvite({ callId, convId, calleeId: peer.uid, callType });
       } catch {
@@ -180,9 +208,9 @@ export const useRtcStore = create<RtcState>((set, get) => {
       });
     },
 
-    startGroupCall: async (convId, callType) => {
+    startGroupCall: async (convId, callType, externalCallId) => {
       if (busy()) return;
-      const callId = newCallId();
+      const callId = externalCallId ?? newCallId();
       try {
         await rtcInvite({ callId, convId, calleeId: '', callType });
       } catch {
@@ -224,12 +252,31 @@ export const useRtcStore = create<RtcState>((set, get) => {
         set({ toast: { text: '接听失败：通话已结束', at: Date.now() } });
         return;
       }
-      const call: ActiveCall = {
-        callId: inc.call_id, convId: inc.conv_id, callType: inc.call_type, group: false, role: 'callee',
-        peer: { uid: inc.caller.id, name: inc.caller.name }, state: 'connecting', mediaFailed: false,
-      };
-      set({ call });
-      void ensureEngine(call);
+      beginCallee(inc.call_id, inc.conv_id, inc.call_type, { uid: inc.caller.id, name: inc.caller.name });
+    },
+
+    bootstrapHandoff: async (h) => {
+      const callType: RtcCallType = h.video ? 'video' : 'audio';
+      switch (h.action) {
+        case 'outgoing1v1':
+          await get().startOutgoing(h.convId, h.peer, callType, h.callId);
+          return;
+        case 'outgoingGroup':
+          await get().startGroupCall(h.convId, callType, h.callId);
+          return;
+        case 'accept1v1':
+          try {
+            await rtcAccept(h.callId, true, get().myDid);
+          } catch {
+            set({ toast: { text: '接听失败：通话已结束', at: Date.now() } });
+            return;
+          }
+          beginCallee(h.callId, h.convId, callType, h.peer);
+          return;
+        case 'joinGroup':
+          await get().joinCall(h.callId, h.convId, callType, h.peer);
+          return;
+      }
     },
 
     rejectIncoming: () => {
@@ -265,6 +312,31 @@ export const useRtcStore = create<RtcState>((set, get) => {
     toggleCam: () => {
       const on = engine?.toggleCam() ?? !get().camOn;
       set({ camOn: on });
+    },
+    toggleScreen: () => {
+      const eng = engine;
+      if (!eng) {
+        set({ toast: { text: '媒体服务未就绪，无法共享', at: Date.now() } });
+        return;
+      }
+      if (eng.screenOn) {
+        void eng.stopScreenShare().then(() => set({ screenOn: false }));
+        return;
+      }
+      void eng
+        .startScreenShare()
+        .then(() => set({ screenOn: true }))
+        .catch((err: unknown) => {
+          const denied = err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+          set({
+            toast: {
+              text: denied
+                ? '屏幕共享被拒绝（5007）：请在系统设置授权屏幕录制后重试'
+                : '当前平台/环境不支持屏幕共享（5007）',
+              at: Date.now(),
+            },
+          });
+        });
     },
 
     applyRinging: (p) => {
