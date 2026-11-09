@@ -68,9 +68,60 @@ pub enum DelegateHostMsg {
     },
 }
 
-/// WAL 出口抽象（Store 实现；测试可注入 Noop）
+/// run 起始快照（D16 §3.1：agent_run 行的会话侧形态；三形态统一审计）
+#[derive(Debug, Clone)]
+pub struct RunStart {
+    pub run_id: String,
+    pub session_id: String,
+    /// 调用链根会话（v0.1 子 agent 均为顶层：root=session；嵌套链随 P1 扩展）
+    pub root_session_id: String,
+    /// 父 run（team 成员 expert run=team run id；其余空）
+    pub parent_run_id: String,
+    /// 触发本次 run 的工具调用 id（委派=coding.delegate 的 call_id）
+    pub parent_call_id: String,
+    /// probe | expert | team | delegate
+    pub kind: &'static str,
+    /// builtin.probe / {expertId}@{version} / team:{topology} / backend:{type}
+    pub def_ref: String,
+    /// ETA 预估毫秒（P1-6 滚动统计接线前恒 0）
+    pub eta_hint_ms: i64,
+    /// OBO subject 快照（宿主身份接线前空串，登记）
+    pub actor: String,
+}
+
+/// run 终态回写（D16 §3.1 状态机：done/failed/cancelled；interrupted 仅恢复写入）
+#[derive(Debug, Clone, Copy)]
+pub struct RunEnd<'a> {
+    pub status: &'a str,
+    pub eta_actual_ms: i64,
+    pub summary: &'a str,
+    /// 委派子进程会话句柄（--resume 续接；其余空）
+    pub child_session_ref: &'a str,
+}
+
+/// WAL 出口抽象（Store 实现；测试可注入 Noop）。
+/// run 记录族（next_run_id/run_start/run_end/append_run）带默认 no-op：
+/// 旧测试假件只实现 append 即可编译，行为退化为不落 run 行——显式接线
+/// 由 Mutex<Store> 实现承载（bin 装配零改动）。
 pub trait EventLog: Send + Sync {
     fn append(&self, session_id: &str, type_: &str, payload: &str);
+
+    /// 持久 run 发号（r-{seq} 跨重启唯一；None=未接 Store，调用方退回进程内临时 id）
+    fn next_run_id(&self) -> Option<String> {
+        None
+    }
+    /// run 起始落库（status=running）
+    fn run_start(&self, run: &RunStart) {
+        let _ = run;
+    }
+    /// run 终态回写
+    fn run_end(&self, run_id: &str, end: &RunEnd<'_>) {
+        let _ = (run_id, end);
+    }
+    /// 带 run 归属的事件（默认丢 run_id 退化为 append）
+    fn append_run(&self, session_id: &str, _run_id: &str, type_: &str, payload: &str) {
+        self.append(session_id, type_, payload);
+    }
 }
 pub struct NoopEventLog;
 impl EventLog for NoopEventLog {
@@ -85,6 +136,58 @@ impl EventLog for std::sync::Mutex<Store> {
             }
         }
     }
+    fn next_run_id(&self) -> Option<String> {
+        self.lock().ok().and_then(|s| s.next_run_id().ok())
+    }
+    fn run_start(&self, run: &RunStart) {
+        if let Ok(store) = self.lock() {
+            let now = unix_now_ms();
+            let _ = store.insert_run(&bbrt_store::RunRow {
+                id: run.run_id.clone(),
+                session_id: run.session_id.clone(),
+                root_session_id: run.root_session_id.clone(),
+                parent_run_id: run.parent_run_id.clone(),
+                parent_call_id: run.parent_call_id.clone(),
+                kind: run.kind.to_string(),
+                def_ref: run.def_ref.clone(),
+                status: "running".into(),
+                eta_hint_ms: run.eta_hint_ms,
+                eta_actual_ms: 0,
+                summary: String::new(),
+                child_session_ref: String::new(),
+                actor: run.actor.clone(),
+                created_at: now,
+                started_at: now,
+                ended_at: None,
+            });
+        }
+    }
+    fn run_end(&self, run_id: &str, end: &RunEnd<'_>) {
+        if let Ok(store) = self.lock() {
+            let _ = store.finish_run(
+                run_id,
+                end.status,
+                end.eta_actual_ms,
+                end.summary,
+                end.child_session_ref,
+            );
+        }
+    }
+    fn append_run(&self, session_id: &str, run_id: &str, type_: &str, payload: &str) {
+        if let Ok(store) = self.lock() {
+            if let Ok(seq) = store.next_event_seq(session_id) {
+                let _ = store.append_event_with_run(session_id, seq, type_, payload, run_id);
+            }
+        }
+    }
+}
+
+/// Unix 毫秒（run 行时间戳；manager 同名私有函数同源）
+fn unix_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or_default()
 }
 
 /// 快模型摘要器（compaction 用；08 §4.6 降档语义的正面应用）
@@ -775,7 +878,12 @@ impl SessionRunner {
                 summary: "未装配委派后端（registry 为空）".into(),
             };
         };
-        let task_id = format!("dt-{}", call.call_id);
+        // run 发号（D16 §3.1：委派 run=agent_run 行 kind=delegate；
+        // 未接 Store 时退回进程内临时 id，兼容旧格式 dt-{call_id}）
+        let run_id = deps
+            .wal
+            .next_run_id()
+            .unwrap_or_else(|| format!("dt-{}", call.call_id));
         let backends = delegator.backends();
         let suggestion = backends.first().cloned().unwrap_or_default();
 
@@ -788,13 +896,13 @@ impl SessionRunner {
         });
         emit(deps, &self.session_id, |id| SessionEvent::DelegateBrief {
             session_id: id,
-            delegate_task_id: task_id.clone(),
+            delegate_task_id: run_id.clone(),
             backend_suggestion: suggestion.clone(),
         });
         deps.wal.append(
             &self.session_id,
             "delegate.brief",
-            &format!("{{\"task_id\":\"{task_id}\"}}"),
+            &format!("{{\"run_id\":\"{run_id}\"}}"),
         );
 
         // 等宿主 delegate.launch（复用审批超时 120s；超时/取消=放弃该工具调用）
@@ -805,7 +913,7 @@ impl SessionRunner {
                 deps.wal.append(
                     &self.session_id,
                     "delegate.brief_timeout",
-                    &format!("{{\"task_id\":\"{task_id}\",\"code\":8030}}"),
+                    &format!("{{\"run_id\":\"{run_id}\",\"code\":8030}}"),
                 );
                 self.state =
                     state::complete_delegation(self.state).unwrap_or(SessionState::Running);
@@ -817,7 +925,7 @@ impl SessionRunner {
         };
         let brief = brief_override.unwrap_or_else(|| parse_brief(call, &self.workspace));
         let req = DelegateLaunchReq {
-            delegate_task_id: task_id.clone(),
+            delegate_task_id: run_id.clone(),
             backend: if backend.is_empty() {
                 suggestion
             } else {
@@ -826,16 +934,40 @@ impl SessionRunner {
             brief,
             mode: self.mode,
         };
+        // run 起始（D16 §3.1：backend 确定后落 agent_run；简报超时未 launch
+        // 不产生 run 行——无执行过程，审计由 delegate.brief_timeout WAL 覆盖）
+        let started = std::time::Instant::now();
+        deps.wal.run_start(&RunStart {
+            run_id: run_id.clone(),
+            session_id: self.session_id.clone(),
+            root_session_id: self.session_id.clone(),
+            parent_run_id: String::new(),
+            parent_call_id: call.call_id.clone(),
+            kind: "delegate",
+            def_ref: format!("backend:{}", req.backend),
+            eta_hint_ms: 0,
+            actor: String::new(),
+        });
         let mut stream = match delegator.launch(&req) {
             Ok(s) => s,
             Err(e) => {
-                deps.wal.append(
+                deps.wal.append_run(
                     &self.session_id,
+                    &run_id,
                     "delegate.launch_failed",
                     &format!(
-                        "{{\"task_id\":\"{task_id}\",\"code\":8035,\"error\":\"{}\"}}",
+                        "{{\"run_id\":\"{run_id}\",\"code\":8035,\"error\":\"{}\"}}",
                         crate::subagent::truncate_chars(&e, 120)
                     ),
+                );
+                deps.wal.run_end(
+                    &run_id,
+                    &RunEnd {
+                        status: "failed",
+                        eta_actual_ms: started.elapsed().as_millis() as i64,
+                        summary: &crate::subagent::truncate_chars(&e, 400),
+                        child_session_ref: "",
+                    },
                 );
                 emit(deps, &self.session_id, |id| SessionEvent::Error {
                     session_id: id,
@@ -857,11 +989,12 @@ impl SessionRunner {
                 emit_checkpoint(deps, &self.session_id, &out);
             }
         }
-        deps.wal.append(
+        deps.wal.append_run(
             &self.session_id,
+            &run_id,
             "delegate.launch",
             &format!(
-                "{{\"task_id\":\"{task_id}\",\"backend\":\"{}\"}}",
+                "{{\"run_id\":\"{run_id}\",\"backend\":\"{}\"}}",
                 req.backend
             ),
         );
@@ -873,15 +1006,18 @@ impl SessionRunner {
         }
 
         // 事件流：归一化事件外发；Input/Cancel 即时处理；interrupt 优雅取消
+        let mut cancelled = false;
         loop {
             if self.interrupted.load(Ordering::Relaxed) {
-                deps.wal.append(
+                deps.wal.append_run(
                     &self.session_id,
+                    &run_id,
                     "delegate.cancel",
                     &format!(
-                        "{{\"task_id\":\"{task_id}\",\"graceful\":true,\"source\":\"interrupt\"}}"
+                        "{{\"run_id\":\"{run_id}\",\"graceful\":true,\"source\":\"interrupt\"}}"
                     ),
                 );
+                cancelled = true;
                 stream.cancel(true);
             }
             while let Ok(msg) = self.delegate_rx.try_recv() {
@@ -889,17 +1025,19 @@ impl SessionRunner {
                     DelegateHostMsg::Input { text } => {
                         emit(deps, &self.session_id, |id| SessionEvent::DelegateEvt {
                             session_id: id,
-                            delegate_task_id: task_id.clone(),
+                            delegate_task_id: run_id.clone(),
                             kind: "input".into(),
                             payload: text,
                         });
                     }
                     DelegateHostMsg::Cancel { graceful } => {
-                        deps.wal.append(
+                        deps.wal.append_run(
                             &self.session_id,
+                            &run_id,
                             "delegate.cancel",
-                            &format!("{{\"task_id\":\"{task_id}\",\"graceful\":{graceful}}}"),
+                            &format!("{{\"run_id\":\"{run_id}\",\"graceful\":{graceful}}}"),
                         );
+                        cancelled = true;
                         stream.cancel(graceful);
                     }
                     _ => {}
@@ -922,10 +1060,11 @@ impl SessionRunner {
                     },
                 ),
                 DelegateEvt::ToolUse { call_id, tool, .. } => {
-                    deps.wal.append(
+                    deps.wal.append_run(
                         &self.session_id,
+                        &run_id,
                         "delegate.tool_use",
-                        &format!("{{\"task_id\":\"{task_id}\",\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
+                        &format!("{{\"run_id\":\"{run_id}\",\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
                     );
                     (
                         "tool_use",
@@ -933,11 +1072,12 @@ impl SessionRunner {
                     )
                 }
                 DelegateEvt::ToolResult { call_id, ok, .. } => {
-                    deps.wal.append(
+                    deps.wal.append_run(
                         &self.session_id,
+                        &run_id,
                         "delegate.tool_result",
                         &format!(
-                            "{{\"task_id\":\"{task_id}\",\"call_id\":\"{call_id}\",\"ok\":{ok}}}"
+                            "{{\"run_id\":\"{run_id}\",\"call_id\":\"{call_id}\",\"ok\":{ok}}}"
                         ),
                     );
                     (
@@ -950,7 +1090,7 @@ impl SessionRunner {
             };
             emit(deps, &self.session_id, |id| SessionEvent::DelegateEvt {
                 session_id: id,
-                delegate_task_id: task_id.clone(),
+                delegate_task_id: run_id.clone(),
                 kind: kind.to_string(),
                 payload,
             });
@@ -961,14 +1101,32 @@ impl SessionRunner {
         let exit_code = final_rep.exit_code.unwrap_or(-1);
         emit(deps, &self.session_id, |id| SessionEvent::DelegateEnd {
             session_id: id,
-            delegate_task_id: task_id.clone(),
+            delegate_task_id: run_id.clone(),
             exit_code,
             summary: final_rep.summary.clone(),
         });
-        deps.wal.append(
+        deps.wal.append_run(
             &self.session_id,
+            &run_id,
             "delegate.end",
-            &format!("{{\"task_id\":\"{task_id}\",\"exit\":{exit_code}}}"),
+            &format!("{{\"run_id\":\"{run_id}\",\"exit\":{exit_code}}}"),
+        );
+        // run 终态（D16 §3.1：cancelled 区分于 failed；执行完成即落终态，
+        // 审查 reject 不改写 run 状态——决策在 delegate.review WAL 里）
+        deps.wal.run_end(
+            &run_id,
+            &RunEnd {
+                status: if cancelled {
+                    "cancelled"
+                } else if exit_code != 0 {
+                    "failed"
+                } else {
+                    "done"
+                },
+                eta_actual_ms: started.elapsed().as_millis() as i64,
+                summary: &crate::subagent::truncate_chars(&final_rep.summary, 400),
+                child_session_ref: final_rep.session_ref.as_deref().unwrap_or(""),
+            },
         );
         if let Some(m) = deps.memory.as_ref() {
             let _ = m.record(&ActivityEvent::DelegateEnded {
@@ -1003,18 +1161,19 @@ impl SessionRunner {
                 Err(_) => break false,
             }
         };
-        deps.wal.append(
+        deps.wal.append_run(
             &self.session_id,
+            &run_id,
             "delegate.review",
             &format!(
-                "{{\"task_id\":\"{task_id}\",\"decision\":\"{}\"}}",
+                "{{\"run_id\":\"{run_id}\",\"decision\":\"{}\"}}",
                 if accepted { "accept" } else { "reject" }
             ),
         );
         emit(deps, &self.session_id, |id| {
             SessionEvent::DelegateReviewResolved {
                 session_id: id,
-                delegate_task_id: task_id.clone(),
+                delegate_task_id: run_id.clone(),
                 decision: if accepted { "accept" } else { "reject" }.into(),
             }
         });

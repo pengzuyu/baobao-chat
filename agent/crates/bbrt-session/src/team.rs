@@ -144,11 +144,13 @@ pub struct TeamResult {
     pub escalated: bool,
 }
 
-/// TeamRun 序号（run_id 唯一化；WAL 审计关联）
+/// TeamRun 序号（进程内唯一化；仅未接 Store 时的 run id 退路）
 static TEAM_SEQ: AtomicUsize = AtomicUsize::new(0);
 
-/// 跑一次会诊型 TeamRun：team.start（WAL）→ 并行 Activation（thread::scope，
-/// 单节点 panic 不阻塞 join 标注——同 fanout 口径）→ team.joined → 摘要。
+/// 跑一次会诊型 TeamRun：team run 起始（agent_run kind=team，D16 §3.1；
+/// 成员 expert run 以本 run 为 parent_run_id 成链）→ team.start（WAL）→
+/// 并行 Activation（thread::scope，单节点 panic 不阻塞 join 标注——同
+/// fanout 口径）→ team.joined → 摘要 → team run 终态。
 /// 各节点事件复用 subagent.* 协议变体（Spawned/ProbeEvt，协议冻结）。
 pub fn run_team(
     ctx: &ExpertCtx<'_>,
@@ -157,16 +159,32 @@ pub fn run_team(
     sink: &dyn SessionSink,
     wal: &dyn EventLog,
 ) -> Result<TeamResult, TeamError> {
+    use crate::loop_runner::{RunEnd, RunStart};
     validate_graph(graph)?;
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let run_id = format!("team-{now_ms}-{}", TEAM_SEQ.fetch_add(1, Ordering::Relaxed));
+    let started = std::time::Instant::now();
+    let run_id = wal
+        .next_run_id()
+        .unwrap_or_else(|| format!("team-{now_ms}-{}", TEAM_SEQ.fetch_add(1, Ordering::Relaxed)));
+    wal.run_start(&RunStart {
+        run_id: run_id.clone(),
+        session_id: session_id.to_string(),
+        root_session_id: session_id.to_string(),
+        parent_run_id: String::new(),
+        parent_call_id: String::new(),
+        kind: "team",
+        def_ref: format!("team:{}", topology_name(graph.topology)),
+        eta_hint_ms: 0,
+        actor: String::new(),
+    });
     let labels: Vec<&str> = graph.members.iter().map(|m| m.label.as_str()).collect();
-    wal.append(
+    wal.append_run(
         session_id,
+        &run_id,
         "team.start",
         &format!(
             "{{\"run_id\":\"{run_id}\",\"topology\":\"{}\",\"members\":{},\"task\":\"{}\"}}",
@@ -177,9 +195,17 @@ pub fn run_team(
     );
 
     let (nodes, rounds, escalated) = match graph.topology {
-        TeamTopology::Pipeline => (run_pipeline(ctx, session_id, graph, sink, wal), 1, false),
-        TeamTopology::ReviewLoop => run_review_loop(ctx, session_id, graph, sink, wal),
-        TeamTopology::Consult => (run_consult(ctx, session_id, graph, sink, wal), 1, false),
+        TeamTopology::Pipeline => (
+            run_pipeline(ctx, session_id, graph, sink, wal, &run_id),
+            1,
+            false,
+        ),
+        TeamTopology::ReviewLoop => run_review_loop(ctx, session_id, graph, sink, wal, &run_id),
+        TeamTopology::Consult => (
+            run_consult(ctx, session_id, graph, sink, wal, &run_id),
+            1,
+            false,
+        ),
     };
 
     let failed: Vec<String> = nodes
@@ -188,14 +214,24 @@ pub fn run_team(
         .map(|n| n.label.clone())
         .collect();
     let ok_count = nodes.len() - failed.len();
-    wal.append(
+    wal.append_run(
         session_id,
+        &run_id,
         "team.joined",
         &format!(
             "{{\"run_id\":\"{run_id}\",\"total\":{},\"ok\":{ok_count},\"failed\":{},\"rounds\":{rounds},\"escalated\":{escalated}}}",
             nodes.len(),
             serde_json::to_string(&failed).unwrap_or_else(|_| "[]".into())
         ),
+    );
+    wal.run_end(
+        &run_id,
+        &RunEnd {
+            status: if failed.is_empty() { "done" } else { "failed" },
+            eta_actual_ms: started.elapsed().as_millis() as i64,
+            summary: &truncate_chars(&team_summary(&nodes), 400),
+            child_session_ref: "",
+        },
     );
 
     Ok(TeamResult {
@@ -224,6 +260,7 @@ fn run_consult(
     graph: &TeamGraph,
     sink: &dyn SessionSink,
     wal: &dyn EventLog,
+    parent_run_id: &str,
 ) -> Vec<NodeResult> {
     // 并行 Activation（ChatClient: Send+Sync；共享简报=黑板中转，节点间零直连；
     // panic 兜底按 handle/member 同序索引取回标签，同 fanout join 口径）
@@ -247,6 +284,7 @@ fn run_consult(
                         &task_brief,
                         sink,
                         wal,
+                        parent_run_id,
                     );
                     NodeResult {
                         label,
@@ -265,7 +303,7 @@ fn run_consult(
                     round: 1,
                     label: graph.members[i].label.clone(),
                     result: ExpertResult {
-                        activation_id: String::new(),
+                        run_id: String::new(),
                         persona_id: graph.members[i].expert.manifest.id.clone(),
                         ok: false,
                         summary: "节点线程 panic".into(),
@@ -293,6 +331,7 @@ fn run_pipeline(
     graph: &TeamGraph,
     sink: &dyn SessionSink,
     wal: &dyn EventLog,
+    parent_run_id: &str,
 ) -> Vec<NodeResult> {
     let mut nodes: Vec<NodeResult> = vec![];
     let mut board = String::new(); // 黑板：上游结论链
@@ -316,6 +355,7 @@ fn run_pipeline(
             &brief,
             sink,
             wal,
+            parent_run_id,
         );
         board.push_str(&format!(
             "- [{}] {}：{}\n",
@@ -341,6 +381,7 @@ fn run_review_loop(
     graph: &TeamGraph,
     sink: &dyn SessionSink,
     wal: &dyn EventLog,
+    parent_run_id: &str,
 ) -> (Vec<NodeResult>, usize, bool) {
     let producer = &graph.members[0];
     let reviewer = &graph.members[1];
@@ -377,6 +418,7 @@ fn run_review_loop(
             &prod_brief,
             sink,
             wal,
+            parent_run_id,
         );
         let artifact = prod.summary.clone(); // 本轮产出（即产即用）
         nodes.push(NodeResult {
@@ -406,6 +448,7 @@ fn run_review_loop(
             &rev_input,
             sink,
             wal,
+            parent_run_id,
         );
         let passed = rev.ok && parse_verdict(&rev.summary);
         nodes.push(NodeResult {
@@ -418,8 +461,9 @@ fn run_review_loop(
         }
     }
     // N 轮 revise 用尽：转人工（§3.1 ③）
-    wal.append(
+    wal.append_run(
         session_id,
+        parent_run_id,
         "team.escalated",
         &format!("{{\"task\":\"{}\"}}", truncate_chars(&graph.task, 60)),
     );

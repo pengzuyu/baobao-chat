@@ -28,6 +28,8 @@ pub struct ReplayReport {
     pub in_flight_tools: Vec<InFlightTool>,
     /// 恢复期作废的未决审批 id
     pub void_permissions: Vec<String>,
+    /// 恢复期置 interrupted 的子 Agent run 条数（D16 §3.2；会话无 run 恒 0）
+    pub interrupted_runs: u32,
 }
 
 impl Default for ReplayReport {
@@ -40,6 +42,7 @@ impl Default for ReplayReport {
             history: vec![],
             in_flight_tools: vec![],
             void_permissions: vec![],
+            interrupted_runs: 0,
         }
     }
 }
@@ -201,6 +204,9 @@ pub fn recover(store: &Store, session_id: &str) -> ReplayReport {
                 state::pause(SessionState::Running).unwrap_or(SessionState::Paused);
         }
     }
+    // ⑤ 子 Agent run 收口（D16 §3.2）：进程已死，running 态 run 一律置
+    // interrupted（幂等；不做 run 级断点续跑——一次性语义，可重发）
+    report.interrupted_runs = store.interrupt_running_runs(session_id).unwrap_or(0) as u32;
     report
 }
 

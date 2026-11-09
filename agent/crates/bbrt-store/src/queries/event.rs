@@ -22,6 +22,9 @@ pub struct EventRow {
     /// JSON payload
     pub payload: String,
     pub created_at: i64,
+    /// 归属 run（D16 §3.1；主循环事件为空串）
+    #[serde(default)]
+    pub run_id: String,
 }
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<EventRow> {
@@ -32,6 +35,7 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<EventRow> {
         type_: row.get(3)?,
         payload: row.get(4)?,
         created_at: row.get(5)?,
+        run_id: row.get(6)?,
     })
 }
 
@@ -45,10 +49,23 @@ impl Store {
         type_: &str,
         payload: &str,
     ) -> Result<(), StoreError> {
+        self.append_event_with_run(session_id, seq, type_, payload, "")
+    }
+
+    /// 带 run 归属的事件追加（D16 §3.1：子 agent 里程碑事件挂 run_id；
+    /// 主循环事件沿用 append_event，run_id 空）。同 (session_id, seq) 唯一约束。
+    pub fn append_event_with_run(
+        &self,
+        session_id: &str,
+        seq: i64,
+        type_: &str,
+        payload: &str,
+        run_id: &str,
+    ) -> Result<(), StoreError> {
         self.conn.execute(
-            "INSERT INTO agent_event (session_id, seq, type, payload, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![session_id, seq, type_, payload, now_ms()],
+            "INSERT INTO agent_event (session_id, seq, type, payload, created_at, run_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![session_id, seq, type_, payload, now_ms(), run_id],
         )?;
         Ok(())
     }
@@ -71,7 +88,7 @@ impl Store {
         limit: u32,
     ) -> Result<Vec<EventRow>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, seq, type, payload, created_at FROM agent_event
+            "SELECT id, session_id, seq, type, payload, created_at, run_id FROM agent_event
              WHERE session_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
         )?;
         let rows = stmt.query_map(params![session_id, after_seq, limit as i64], from_row)?;

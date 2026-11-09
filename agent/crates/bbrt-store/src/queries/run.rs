@@ -1,0 +1,265 @@
+//! 子 Agent run 记录（agent_run，D16 §3.1）。
+//!
+//! 三形态（probe/expert/team/delegate）统一审计行：一次调用 = 一条 run
+//! 加一段带 run_id 的 agent_event 事件流，可完整重放（审计口径）。
+//! 发号 r-{seq} 跨重启唯一（单连接互斥下 max+1，无并发竞态）；
+//! 取代 001 的 delegate_task（从未接线，DDL 留待清理迁移）。
+
+use rusqlite::{params, Row};
+
+use crate::{now_ms, Store, StoreError};
+
+/// agent_run 行。ended_at 为 None 即未终态（running）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunRow {
+    /// r-{seq} 持久发号
+    pub id: String,
+    pub session_id: String,
+    /// 调用链根会话（顶层 run=父会话 id）
+    pub root_session_id: String,
+    /// 父 run（team 成员 expert run=team run id；其余空）
+    #[serde(default)]
+    pub parent_run_id: String,
+    /// 触发本次 run 的工具调用 id（委派=coding.delegate call_id）
+    #[serde(default)]
+    pub parent_call_id: String,
+    /// probe | expert | team | delegate
+    pub kind: String,
+    /// builtin.probe / {expertId}@{version} / team:{topology} / backend:{type}
+    #[serde(default)]
+    pub def_ref: String,
+    /// running | done | failed | cancelled | interrupted（interrupted 仅恢复写入）
+    pub status: String,
+    #[serde(default)]
+    pub eta_hint_ms: i64,
+    #[serde(default)]
+    pub eta_actual_ms: i64,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub child_session_ref: String,
+    /// OBO subject 快照（鉴权审计；宿主身份接线前空串）
+    #[serde(default)]
+    pub actor: String,
+    pub created_at: i64,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+}
+
+const RUN_COLS: &str = "id, session_id, root_session_id, parent_run_id, parent_call_id, \
+                        kind, def_ref, status, eta_hint_ms, eta_actual_ms, summary, \
+                        child_session_ref, actor, created_at, started_at, ended_at";
+
+fn from_row(row: &Row<'_>) -> rusqlite::Result<RunRow> {
+    Ok(RunRow {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        root_session_id: row.get(2)?,
+        parent_run_id: row.get(3)?,
+        parent_call_id: row.get(4)?,
+        kind: row.get(5)?,
+        def_ref: row.get(6)?,
+        status: row.get(7)?,
+        eta_hint_ms: row.get(8)?,
+        eta_actual_ms: row.get(9)?,
+        summary: row.get(10)?,
+        child_session_ref: row.get(11)?,
+        actor: row.get(12)?,
+        created_at: row.get(13)?,
+        started_at: row.get(14)?,
+        ended_at: row.get(15)?,
+    })
+}
+
+impl Store {
+    /// 持久发号：r-{max(seq)+1}（库内唯一，重启不重号）。
+    pub fn next_run_id(&self) -> Result<String, StoreError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(CAST(substr(id, 3) AS INTEGER)), 0) + 1 FROM agent_run",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(format!("r-{n}"))
+    }
+
+    /// run 起始落库（status=running；created_at/started_at 存储侧取 now）。
+    pub fn insert_run(&self, row: &RunRow) -> Result<(), StoreError> {
+        let now = now_ms();
+        self.conn.execute(
+            &format!(
+                "INSERT INTO agent_run ({RUN_COLS})
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, 0, '', '', ?9, ?10, ?10, NULL)"
+            ),
+            params![
+                row.id,
+                row.session_id,
+                row.root_session_id,
+                row.parent_run_id,
+                row.parent_call_id,
+                row.kind,
+                row.def_ref,
+                row.eta_hint_ms,
+                row.actor,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// run 终态回写（ended_at 存储侧取 now；summary/child_session_ref 全量覆盖）。
+    pub fn finish_run(
+        &self,
+        run_id: &str,
+        status: &str,
+        eta_actual_ms: i64,
+        summary: &str,
+        child_session_ref: &str,
+    ) -> Result<(), StoreError> {
+        let n = self.conn.execute(
+            "UPDATE agent_run
+             SET status = ?2, eta_actual_ms = ?3, summary = ?4,
+                 child_session_ref = ?5, ended_at = ?6
+             WHERE id = ?1",
+            params![
+                run_id,
+                status,
+                eta_actual_ms,
+                summary,
+                child_session_ref,
+                now_ms()
+            ],
+        )?;
+        if n == 0 {
+            return Err(StoreError::Sqlite(format!("run 不存在: {run_id}")));
+        }
+        Ok(())
+    }
+
+    /// 会话的 run 清单（created_at 升序；UI run 面板/审计检索用）。
+    pub fn runs_of(&self, session_id: &str) -> Result<Vec<RunRow>, StoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {RUN_COLS} FROM agent_run
+             WHERE session_id = ?1 ORDER BY created_at ASC, id ASC"
+        ))?;
+        let rows = stmt.query_map(params![session_id], from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 崩溃恢复收口：该会话所有 running 态 run 置 interrupted（进程已死，
+    /// 不可能仍在执行；返回标记条数）。幂等：二次调用无 running 行即 0。
+    pub fn interrupt_running_runs(&self, session_id: &str) -> Result<usize, StoreError> {
+        let n = self.conn.execute(
+            "UPDATE agent_run
+             SET status = 'interrupted', ended_at = ?2
+             WHERE session_id = ?1 AND status = 'running'",
+            params![session_id, now_ms()],
+        )?;
+        Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{testutil, RunRow};
+
+    fn start_row(id: &str, session: &str, kind: &str) -> RunRow {
+        RunRow {
+            id: id.to_string(),
+            session_id: session.to_string(),
+            root_session_id: session.to_string(),
+            parent_run_id: String::new(),
+            parent_call_id: String::new(),
+            kind: kind.to_string(),
+            def_ref: format!("def:{kind}"),
+            status: "running".to_string(), // insert_run 强制 running，此值不落库
+            eta_hint_ms: 0,
+            eta_actual_ms: 0,
+            summary: String::new(),
+            child_session_ref: String::new(),
+            actor: String::new(),
+            created_at: 0,
+            started_at: 0,
+            ended_at: None,
+        }
+    }
+
+    /// 发号：空库 r-1 起、单调、跨 Store 重开不重号
+    #[test]
+    fn next_run_id_is_monotonic_across_reopen() {
+        let (dir, store) = testutil::open_store();
+        assert_eq!(store.next_run_id().unwrap(), "r-1");
+        testutil::seed_session(&store, "sess-1");
+        let id = store.next_run_id().unwrap();
+        assert_eq!(id, "r-1"); // 未占用可重复取（调用方串行发号后立即落库）
+        store
+            .insert_run(&start_row(&id, "sess-1", "probe"))
+            .unwrap();
+        assert_eq!(store.next_run_id().unwrap(), "r-2");
+        drop(store);
+        let store2 = crate::Store::open(&dir.path().join("agent").join("runtime.sqlite3")).unwrap();
+        assert_eq!(store2.next_run_id().unwrap(), "r-2", "重开后接续 max+1");
+    }
+
+    /// 生命周期：insert 强制 running → finish 覆盖终态字段 → runs_of 可查
+    #[test]
+    fn lifecycle_start_finish_list() {
+        let (_dir, store) = testutil::open_store();
+        testutil::seed_session(&store, "sess-1");
+        store
+            .insert_run(&start_row("r-1", "sess-1", "delegate"))
+            .unwrap();
+        store
+            .insert_run(&start_row("r-2", "sess-1", "probe"))
+            .unwrap();
+        // insert 后均 running、无终态
+        let runs = store.runs_of("sess-1").unwrap();
+        assert_eq!(runs.len(), 2);
+        assert!(runs
+            .iter()
+            .all(|r| r.status == "running" && r.ended_at.is_none()));
+
+        store
+            .finish_run("r-1", "done", 123_456, "委派完成摘要", "claude-session-9")
+            .unwrap();
+        let runs = store.runs_of("sess-1").unwrap();
+        assert_eq!(runs[0].status, "done");
+        assert_eq!(runs[0].eta_actual_ms, 123_456);
+        assert_eq!(runs[0].summary, "委派完成摘要");
+        assert_eq!(runs[0].child_session_ref, "claude-session-9");
+        assert!(runs[0].ended_at.is_some(), "终态应带 ended_at");
+        assert_eq!(runs[1].status, "running", "其余 run 不受影响");
+
+        // 不存在的 run：报错不静默
+        assert!(store.finish_run("r-404", "done", 0, "", "").is_err());
+    }
+
+    /// 恢复收口：running → interrupted（幂等），终态 run 不动
+    #[test]
+    fn interrupt_running_marks_only_running() {
+        let (_dir, store) = testutil::open_store();
+        testutil::seed_session(&store, "sess-1");
+        testutil::seed_session(&store, "sess-2");
+        store
+            .insert_run(&start_row("r-1", "sess-1", "probe"))
+            .unwrap();
+        store
+            .insert_run(&start_row("r-2", "sess-1", "expert"))
+            .unwrap();
+        store.finish_run("r-2", "failed", 50, "超步", "").unwrap();
+        store
+            .insert_run(&start_row("r-3", "sess-2", "probe"))
+            .unwrap();
+
+        assert_eq!(store.interrupt_running_runs("sess-1").unwrap(), 1);
+        let runs = store.runs_of("sess-1").unwrap();
+        assert_eq!(runs[0].status, "interrupted");
+        assert_eq!(runs[1].status, "failed", "终态不被恢复改写");
+        assert_eq!(
+            store.runs_of("sess-2").unwrap()[0].status,
+            "running",
+            "其它会话不受影响"
+        );
+        assert_eq!(store.interrupt_running_runs("sess-1").unwrap(), 0, "幂等");
+    }
+}

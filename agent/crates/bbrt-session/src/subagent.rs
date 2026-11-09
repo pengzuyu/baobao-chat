@@ -44,7 +44,8 @@ pub struct ProbeSpec {
 /// 子任务产物（join 聚合与主上下文回填用）
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeResult {
-    pub sub_id: String,
+    /// 持久 run id（D16 §3.1：接 Store 时 r-{seq}；否则退回进程内临时 id）
+    pub run_id: String,
     pub ok: bool,
     pub summary: String,
 }
@@ -112,28 +113,42 @@ const PROBE_SYSTEM: &str = "你是只读探查 Agent（子任务执行体）。�
     不做任何修改。完成后输出结构化摘要（要点、关键路径、结论），\
     不粘贴文件原文大段内容。";
 
-/// 跑一个探查子任务：spawn 事件 → mini-loop（≤15 步，工具经完整管线执行）
-/// → done/fail 事件（phase delta 略——探查摘要以 done 一次性上报）。
+/// 跑一个探查子任务：run 起始 → spawn 事件 → mini-loop（≤15 步，工具经
+/// 完整管线执行）→ done/fail 事件 + run 终态（phase delta 略——探查摘要
+/// 以 done 一次性上报）。run 行落 agent_run（kind=probe，D16 §3.1）。
 pub fn run_probe(
     ctx: ProbeCtx<'_>,
     session_id: &str,
-    sub_id: &str,
+    run_id: &str,
     spec: &ProbeSpec,
     sink: &dyn crate::events::SessionSink,
     wal: &dyn crate::loop_runner::EventLog,
 ) -> ProbeResult {
+    use crate::loop_runner::{RunEnd, RunStart};
+    let started = std::time::Instant::now();
+    wal.run_start(&RunStart {
+        run_id: run_id.to_string(),
+        session_id: session_id.to_string(),
+        root_session_id: session_id.to_string(),
+        parent_run_id: String::new(),
+        parent_call_id: String::new(),
+        kind: "probe",
+        def_ref: "builtin.probe".to_string(),
+        eta_hint_ms: 0,
+        actor: String::new(),
+    });
     sink.emit(SessionEvent::SubagentSpawned {
         session_id: session_id.to_string(),
-        sub_id: sub_id.to_string(),
+        sub_id: run_id.to_string(),
         task_digest: truncate_chars(&spec.task, 60),
         tool_subset: PROBE_TOOLS.iter().map(|s| s.to_string()).collect(),
     });
-    wal.append(
+    wal.append_run(
         session_id,
+        run_id,
         "subagent.spawn",
         &format!(
-            "{{\"sub_id\":\"{}\",\"task\":\"{}\"}}",
-            sub_id,
+            "{{\"run_id\":\"{run_id}\",\"task\":\"{}\"}}",
             truncate_chars(&spec.task, 60)
         ),
     );
@@ -143,7 +158,7 @@ pub fn run_probe(
     let result = loop {
         if steps >= PROBE_MAX_STEPS {
             break ProbeResult {
-                sub_id: sub_id.to_string(),
+                run_id: run_id.to_string(),
                 ok: false,
                 summary: format!(
                     "超步自杀（>{PROBE_MAX_STEPS}），部分结果：{}",
@@ -159,7 +174,7 @@ pub fn run_probe(
         };
         let Ok(stream) = ctx.model.chat(&req) else {
             break ProbeResult {
-                sub_id: sub_id.to_string(),
+                run_id: run_id.to_string(),
                 ok: false,
                 summary: "模型通道失败".into(),
             };
@@ -178,7 +193,7 @@ pub fn run_probe(
         });
         if finish != FinishReason::ToolCalls || tool_calls.is_empty() {
             break ProbeResult {
-                sub_id: sub_id.to_string(),
+                run_id: run_id.to_string(),
                 ok: true,
                 summary: clamp_summary(&text),
             };
@@ -205,20 +220,31 @@ pub fn run_probe(
     let phase = if result.ok { "done" } else { "fail" };
     sink.emit(SessionEvent::SubagentProbeEvt {
         session_id: session_id.to_string(),
-        sub_id: sub_id.to_string(),
+        sub_id: run_id.to_string(),
         phase: phase.into(),
         summary: Some(truncate_chars(&result.summary, 200)),
     });
-    wal.append(
+    wal.append_run(
         session_id,
+        run_id,
         "subagent.event",
-        &format!("{{\"sub_id\":\"{sub_id}\",\"phase\":\"{phase}\"}}"),
+        &format!("{{\"run_id\":\"{run_id}\",\"phase\":\"{phase}\"}}"),
+    );
+    wal.run_end(
+        run_id,
+        &RunEnd {
+            status: if result.ok { "done" } else { "failed" },
+            eta_actual_ms: started.elapsed().as_millis() as i64,
+            summary: &truncate_chars(&result.summary, 400),
+            child_session_ref: "",
+        },
     );
     result
 }
 
 /// fan-out 编排（loop_runner 调用）：状态迁移 #9 → 线程并行 ≤3 → join #10。
 /// 返回聚合结果（调用方负责回填主上下文与 join 事件）。
+/// run id 主线程串行预分配（wal 发号有序；未接 Store 退回 sub-{ms}-{i} 临时 id）。
 pub fn fanout_probes(
     session_id: &str,
     deps_mode: PermissionMode,
@@ -232,13 +258,19 @@ pub fn fanout_probes(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
+    let run_ids: Vec<String> = (0..subs.len())
+        .map(|i| {
+            wal.next_run_id()
+                .unwrap_or_else(|| format!("sub-{now_ms}-{i}"))
+        })
+        .collect();
     // 线程并行（ChatClient: Send+Sync；单任务 panic 不阻塞——join 处标注，08 §4.5）
     std::thread::scope(|s| {
         let handles: Vec<_> = subs
             .iter()
-            .enumerate()
-            .map(|(i, spec)| {
-                let sub_id = format!("sub-{now_ms}-{i}");
+            .zip(run_ids.iter())
+            .map(|(spec, run_id)| {
+                let run_id = run_id.clone();
                 let spec = spec.clone();
                 s.spawn(move || {
                     run_probe(
@@ -248,7 +280,7 @@ pub fn fanout_probes(
                             mode: deps_mode,
                         },
                         session_id,
-                        &sub_id,
+                        &run_id,
                         &spec,
                         sink,
                         wal,
@@ -258,10 +290,10 @@ pub fn fanout_probes(
             .collect();
         handles
             .into_iter()
-            .enumerate()
-            .map(|(i, h)| {
+            .zip(run_ids.iter())
+            .map(|(h, run_id)| {
                 h.join().unwrap_or_else(|_| ProbeResult {
-                    sub_id: format!("sub-{now_ms}-{i}"),
+                    run_id: run_id.clone(),
                     ok: false,
                     summary: "子任务线程 panic".into(),
                 })
@@ -280,7 +312,7 @@ pub fn join_summary(
     let proto: Vec<bbrt_protocol::SubagentResult> = results
         .iter()
         .map(|r| bbrt_protocol::SubagentResult {
-            sub_id: r.sub_id.clone(),
+            sub_id: r.run_id.clone(),
             ok: r.ok,
             summary: truncate_chars(&r.summary, 200),
         })
@@ -300,7 +332,7 @@ pub fn join_summary(
             format!(
                 "- [{}] {}：{}",
                 if r.ok { "ok" } else { "fail" },
-                r.sub_id,
+                r.run_id,
                 truncate_chars(&r.summary, 400)
             )
         })

@@ -20,7 +20,7 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 pub use queries::{
-    BackendRow, CheckpointRow, ContextRow, DelegateTaskRow, EventRow, GrantRow, SessionRow,
+    BackendRow, CheckpointRow, ContextRow, DelegateTaskRow, EventRow, GrantRow, RunRow, SessionRow,
     ViolationRow, Workspace,
 };
 

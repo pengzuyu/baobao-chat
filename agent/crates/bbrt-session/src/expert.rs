@@ -422,18 +422,20 @@ pub struct ExpertCtx<'a> {
 /// 单次 Activation 产物（编排层黑板/汇总用）
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpertResult {
-    pub activation_id: String,
+    /// 持久 run id（D16 §3.1：接 Store 时 r-{seq}；否则退回进程内临时 id）
+    pub run_id: String,
     pub persona_id: String,
     pub ok: bool,
     pub summary: String,
 }
 
-/// Activation 序号（进程内唯一化；审计 act 值域 §6.2）
+/// Activation 序号（进程内唯一化；仅未接 Store 时的 run id 退路）
 static ACT_SEQ: AtomicUsize = AtomicUsize::new(0);
 
-/// 跑一次专家 Activation：独立上下文 mini-loop（manifest 步数/预算上限，
-/// 工具经完整管线）→ done/fail。复用 subagent 协议事件（协议冻结不新增
-/// 变体），专家身份经 WAL `expert.*` 类型与 `act=expert:{id}:{activation}`。
+/// 跑一次专家 Activation：run 起始 → 独立上下文 mini-loop（manifest 步数/
+/// 预算上限，工具经完整管线）→ done/fail + run 终态。复用 subagent 协议事件
+/// （协议冻结不新增变体），专家身份经 WAL `expert.*` 类型与
+/// `act=expert:{id}:{run_id}`。run 行落 agent_run（kind=expert，D16 §3.1）。
 pub fn run_expert(
     ctx: ExpertCtx<'_>,
     session_id: &str,
@@ -441,26 +443,43 @@ pub fn run_expert(
     task: &str,
     sink: &dyn crate::events::SessionSink,
     wal: &dyn crate::loop_runner::EventLog,
+    parent_run_id: &str,
 ) -> ExpertResult {
+    use crate::loop_runner::{RunEnd, RunStart};
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let activation_id = format!("act-{now_ms}-{}", ACT_SEQ.fetch_add(1, Ordering::Relaxed));
+    let started = std::time::Instant::now();
+    let run_id = wal
+        .next_run_id()
+        .unwrap_or_else(|| format!("act-{now_ms}-{}", ACT_SEQ.fetch_add(1, Ordering::Relaxed)));
     let persona_id = assembled.manifest.id.clone();
-    let act = format!("expert:{persona_id}:{activation_id}");
+    let act = format!("expert:{persona_id}:{run_id}");
 
+    wal.run_start(&RunStart {
+        run_id: run_id.clone(),
+        session_id: session_id.to_string(),
+        root_session_id: session_id.to_string(),
+        parent_run_id: parent_run_id.to_string(),
+        parent_call_id: String::new(),
+        kind: "expert",
+        def_ref: format!("{}@{}", assembled.manifest.id, assembled.manifest.version),
+        eta_hint_ms: 0,
+        actor: String::new(),
+    });
     sink.emit(SessionEvent::SubagentSpawned {
         session_id: session_id.to_string(),
-        sub_id: activation_id.clone(),
+        sub_id: run_id.clone(),
         task_digest: truncate_chars(&format!("{}：{}", assembled.manifest.display, task), 60),
         tool_subset: assembled.tool_names.clone(),
     });
-    wal.append(
+    wal.append_run(
         session_id,
+        &run_id,
         "expert.activate",
         &format!(
-            "{{\"persona\":\"{persona_id}\",\"activation\":\"{activation_id}\",\"act\":\"{act}\",\"tools\":{}}}",
+            "{{\"persona\":\"{persona_id}\",\"run_id\":\"{run_id}\",\"act\":\"{act}\",\"tools\":{}}}",
             serde_json::to_string(&assembled.tool_names).unwrap_or_else(|_| "[]".into())
         ),
     );
@@ -470,7 +489,7 @@ pub fn run_expert(
     let result = loop {
         if steps >= assembled.max_steps {
             break ExpertResult {
-                activation_id: activation_id.clone(),
+                run_id: run_id.clone(),
                 persona_id: persona_id.clone(),
                 ok: false,
                 summary: format!(
@@ -489,7 +508,7 @@ pub fn run_expert(
             > assembled.max_context_tokens
         {
             break ExpertResult {
-                activation_id: activation_id.clone(),
+                run_id: run_id.clone(),
                 persona_id: persona_id.clone(),
                 ok: false,
                 summary: format!(
@@ -506,7 +525,7 @@ pub fn run_expert(
         };
         let Ok(stream) = ctx.model.chat(&req) else {
             break ExpertResult {
-                activation_id: activation_id.clone(),
+                run_id: run_id.clone(),
                 persona_id: persona_id.clone(),
                 ok: false,
                 summary: "模型通道失败".into(),
@@ -526,7 +545,7 @@ pub fn run_expert(
         });
         if finish != bbrt_aigw::FinishReason::ToolCalls || tool_calls.is_empty() {
             break ExpertResult {
-                activation_id: activation_id.clone(),
+                run_id: run_id.clone(),
                 persona_id: persona_id.clone(),
                 ok: true,
                 summary: clamp_summary(&text),
@@ -554,18 +573,28 @@ pub fn run_expert(
     let phase = if result.ok { "done" } else { "fail" };
     sink.emit(SessionEvent::SubagentProbeEvt {
         session_id: session_id.to_string(),
-        sub_id: activation_id.clone(),
+        sub_id: run_id.clone(),
         phase: phase.into(),
         summary: Some(truncate_chars(&result.summary, 200)),
     });
-    wal.append(
+    wal.append_run(
         session_id,
+        &run_id,
         if result.ok {
             "expert.done"
         } else {
             "expert.fail"
         },
-        &format!("{{\"activation\":\"{activation_id}\",\"act\":\"{act}\",\"phase\":\"{phase}\"}}"),
+        &format!("{{\"run_id\":\"{run_id}\",\"act\":\"{act}\",\"phase\":\"{phase}\"}}"),
+    );
+    wal.run_end(
+        &run_id,
+        &RunEnd {
+            status: if result.ok { "done" } else { "failed" },
+            eta_actual_ms: started.elapsed().as_millis() as i64,
+            summary: &truncate_chars(&result.summary, 400),
+            child_session_ref: "",
+        },
     );
     result
 }

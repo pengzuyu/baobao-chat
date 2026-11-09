@@ -245,12 +245,13 @@ fn run_expert_full_chain() {
         "评审 PR #42 的改动",
         sink.as_ref(),
         &log,
+        "", // parent_run_id（无 team 编排）
     );
 
     assert!(r.ok);
     assert!(r.summary.contains("阻断问题"));
     assert!(r.persona_id == "corp.code-reviewer");
-    assert!(r.activation_id.starts_with("act-"));
+    assert!(r.run_id.starts_with("act-"), "未接 Store 退回进程内临时 id");
     // 独立上下文与档位路由
     let seen = model.seen.lock().unwrap().clone();
     assert!(seen
@@ -304,6 +305,7 @@ fn run_expert_step_limit() {
         "评审",
         sink.as_ref(),
         &log,
+        "", // parent_run_id（无 team 编排）
     );
 
     assert!(!r.ok);
@@ -346,6 +348,7 @@ fn run_expert_context_budget() {
         "评审",
         sink.as_ref(),
         &log,
+        "", // parent_run_id（无 team 编排）
     );
 
     assert!(!r.ok);
