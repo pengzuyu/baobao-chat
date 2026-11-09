@@ -24,6 +24,8 @@ export interface EngineParticipant {
   videoTrack?: MediaStreamTrack;
   /** 静音（远端 publication.muted / 本端 track 状态） */
   micMuted: boolean;
+  /** 屏幕共享轨（D17 P1；本端+远端，摄像头轨并存） */
+  screenTrack?: MediaStreamTrack;
 }
 
 export type LkConnectionState = 'connected' | 'reconnecting' | 'failed' | 'disconnected';
@@ -38,9 +40,11 @@ export class LiveKitEngine {
   private cbs: LkEngineCallbacks;
   private closed = false;
   private callType: RtcCallType = 'audio';
+  private screenTrack: MediaStreamTrack | null = null;
 
   micOn = true;
   camOn = false;
+  screenOn = false;
 
   constructor(cbs: LkEngineCallbacks) {
     this.cbs = cbs;
@@ -93,14 +97,19 @@ export class LiveKitEngine {
   private remoteOf(p: RemoteParticipant): EngineParticipant {
     let audioTrack: MediaStreamTrack | undefined;
     let videoTrack: MediaStreamTrack | undefined;
+    let screenTrack: MediaStreamTrack | undefined;
     let audioMuted = true;
     p.trackPublications.forEach((pub: RemoteTrackPublication) => {
       if (!pub.track) return;
       if (pub.kind === Track.Kind.Audio) {
         audioTrack = pub.track.mediaStreamTrack;
         audioMuted = pub.isMuted;
+        return;
       }
-      if (pub.kind === Track.Kind.Video) videoTrack = pub.track.mediaStreamTrack;
+      if (pub.kind !== Track.Kind.Video) return;
+      // 视频按 source 分流：摄像头 vs 屏幕共享（05 篇 S3：可并存两路 Producer）
+      if (pub.source === Track.Source.ScreenShare) screenTrack = pub.track.mediaStreamTrack;
+      else videoTrack = pub.track.mediaStreamTrack;
     });
     const [uid] = p.identity.split(':');
     return {
@@ -110,6 +119,7 @@ export class LiveKitEngine {
       isLocal: false,
       audioTrack,
       videoTrack,
+      screenTrack,
       micMuted: audioMuted,
     };
   }
@@ -131,6 +141,9 @@ export class LiveKitEngine {
       videoTrack: localVideo,
       micMuted: !this.micOn,
     });
+    // 本端共享轨（远端经 publication source 判定，见 remoteOf）
+    const localScreen = room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack;
+    if (list[0]) list[0] = { ...list[0], screenTrack: localScreen };
     room.remoteParticipants.forEach((p) => list.push(this.remoteOf(p)));
     this.cbs.onParticipants(list);
   }
@@ -150,10 +163,52 @@ export class LiveKitEngine {
     return this.camOn;
   }
 
+  /**
+   * 屏幕共享开（D17 P1）：getDisplayMedia 采集 → 以 ScreenSharing source 发布。
+   * 失败抛出（NotAllowedError=权限拒绝 5007 / 平台不支持——WKWebView 等运行时探测），
+   * 由 store 统一降级提示；用户点系统"停止共享"条 → onended 自动回收。
+   */
+  async startScreenShare(): Promise<void> {
+    if (!this.room || this.screenOn) return;
+    const media = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 15 },
+      audio: false,
+    });
+    const track = media.getVideoTracks()[0];
+    if (!track) {
+      media.getTracks().forEach((t) => t.stop());
+      throw new Error('no-screen-track');
+    }
+    track.onended = () => {
+      void this.stopScreenShare();
+    };
+    await this.room.localParticipant.publishTrack(track, { source: Track.Source.ScreenShare });
+    this.screenTrack = track;
+    this.screenOn = true;
+    this.emitParticipants();
+  }
+
+  /** 屏幕共享关（幂等；系统停止条同路回收） */
+  async stopScreenShare(): Promise<void> {
+    const track = this.screenTrack;
+    this.screenOn = false;
+    this.screenTrack = null;
+    if (track && this.room) {
+      try {
+        await this.room.localParticipant.unpublishTrack(track, true);
+      } catch {
+        /* 已停止 */
+      }
+    }
+    track?.stop();
+    this.emitParticipants();
+  }
+
   /** 离房（幂等；服务器侧 bye 信令由 store 发） */
   leave(): void {
     if (this.closed) return;
     this.closed = true;
+    void this.stopScreenShare();
     try {
       void this.room?.disconnect();
     } catch {

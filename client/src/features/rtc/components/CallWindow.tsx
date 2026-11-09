@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Mic, MicOff, Phone, PhoneOff, Video, VideoOff } from 'lucide-react';
+import { Mic, MicOff, MonitorOff, MonitorUp, Phone, PhoneOff, Video, VideoOff } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { formatDuration, useRtcStore } from '../store/rtcStore';
 import type { ActiveCall } from '../store/rtcStore';
@@ -120,8 +120,10 @@ export function CallWindow() {
   const participants = useRtcStore((s) => s.participants);
   const micOn = useRtcStore((s) => s.micOn);
   const camOn = useRtcStore((s) => s.camOn);
+  const screenOn = useRtcStore((s) => s.screenOn);
   const toggleMic = useRtcStore((s) => s.toggleMic);
   const toggleCam = useRtcStore((s) => s.toggleCam);
+  const toggleScreen = useRtcStore((s) => s.toggleScreen);
   const hangup = useRtcStore((s) => s.hangup);
   const [now, setNow] = useState(Date.now());
 
@@ -145,7 +147,9 @@ export function CallWindow() {
   const remote = participants.filter((p) => !p.isLocal);
   const local = participants.find((p) => p.isLocal);
   const main = remote[0];
-  const hasAnyVideo = participants.some((p) => !!p.videoTrack);
+  const hasAnyVideo = participants.some((p) => !!p.videoTrack || !!p.screenTrack);
+  // 屏幕共享大画面（05 篇 S3：任意参与者一路共享，优先于网格/演讲者展示）
+  const sharer = participants.find((p) => !!p.screenTrack);
 
   return (
     <div className="rtc-call-window" data-testid="rtc-call-window" data-state={call.state} data-group={call.group || undefined}>
@@ -160,6 +164,14 @@ export function CallWindow() {
         ) : null}
         {call.mediaFailed ? <span className="rtc-call-window__media-warn">无媒体通话模式（媒体服务未就绪）</span> : null}
       </div>
+
+      {/* 共享大画面（演讲者区上方独占；网格区随之下移） */}
+      {sharer && call.state !== 'ended' ? (
+        <div className="rtc-share-stage" data-testid="rtc-share-stage">
+          <VideoTile track={sharer.screenTrack} muted className="rtc-share-stage__video" />
+          <div className="rtc-share-stage__tag">共享中 · {sharer.name}{sharer.isLocal ? '（我）' : ''}</div>
+        </div>
+      ) : null}
 
       {/* 画面区 */}
       <div className={call.group ? 'rtc-call-window__grid' : 'rtc-call-window__stage'}>
@@ -208,6 +220,15 @@ export function CallWindow() {
           style={{ display: call.callType === 'audio' ? 'none' : undefined }}
         >
           {camOn ? <Video size={20} /> : <VideoOff size={20} />}
+        </button>
+        <button
+          type="button"
+          className={`rtc-btn${screenOn ? ' rtc-btn--on' : ''}`}
+          data-testid="rtc-screen"
+          title={screenOn ? '停止共享' : '共享屏幕'}
+          onClick={toggleScreen}
+        >
+          {screenOn ? <MonitorOff size={20} /> : <MonitorUp size={20} />}
         </button>
         <button
           type="button"
