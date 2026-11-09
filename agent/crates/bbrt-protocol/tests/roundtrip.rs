@@ -77,7 +77,7 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             session_id: "sess-1".into(),
             delegate_task_id: "dt-1".into(),
             backend: "claude".into(),
-            task_brief: task_brief(),
+            task_brief: Some(task_brief()),
             mode: PermissionMode::FullAuto,
             workspace: "~/code/bbw".into(),
         },
@@ -229,6 +229,7 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             tool_subset: vec!["read_file".into(), "search_files".into()],
         },
         RuntimeToHost::SubagentEvent {
+            session_id: "sess-1".into(),
             sub_id: "sub-1".into(),
             phase: SubagentPhase::Delta,
             summary: Some("已读 3 个文件".into()),
@@ -247,11 +248,13 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             backend_suggestion: "zcode".into(),
         },
         RuntimeToHost::DelegateEvent {
+            session_id: "sess-1".into(),
             delegate_task_id: "dt-1".into(),
             kind: DelegateEventKind::ToolUse,
             payload: json!({"tool": "Edit", "file": "src/auth.rs"}),
         },
         RuntimeToHost::DelegateEnd {
+            session_id: "sess-1".into(),
             delegate_task_id: "dt-1".into(),
             exit_code: 0,
             summary: "完成修复".into(),
@@ -612,11 +615,12 @@ fn golden_delegate_brief_launch_end_review() {
     );
     golden(
         &RuntimeToHost::DelegateEvent {
+            session_id: "sess-1".into(),
             delegate_task_id: "dt-1".into(),
             kind: DelegateEventKind::ToolResult,
             payload: json!({"ok": true}),
         },
-        json!({"type":"delegate.event","delegateTaskId":"dt-1","kind":"tool_result","payload":{"ok":true}}),
+        json!({"type":"delegate.event","sessionId":"sess-1","delegateTaskId":"dt-1","kind":"tool_result","payload":{"ok":true}}),
     );
 }
 

@@ -424,8 +424,10 @@ pub enum HostToRuntime {
         session_id: String,
         delegate_task_id: String,
         backend: String,
-        /// 可被用户编辑后的简报
-        task_brief: TaskBrief,
+        /// 用户编辑后的简报；None=沿用模型产出原稿（D16 客户端接线：
+        /// 确认不改稿是主路径，编辑稿随 P1 简报编辑器）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_brief: Option<TaskBrief>,
         mode: PermissionMode,
         workspace: String,
     },
@@ -678,9 +680,12 @@ pub enum RuntimeToHost {
         tool_subset: Vec<String>,
     },
 
-    /// 子 Agent 事件（UNT）
+    /// 子 Agent 事件（UNT；session_id 由 bin bridge 补挂——变体本身可选，
+    /// 兼容 bbrt-delegate 侧无会话上下文的构造）
     #[serde(rename = "subagent.event", rename_all = "camelCase")]
     SubagentEvent {
+        #[serde(default)]
+        session_id: String,
         sub_id: String,
         phase: SubagentPhase,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -703,9 +708,11 @@ pub enum RuntimeToHost {
         backend_suggestion: String,
     },
 
-    /// 委派归一化事件（UNT；§8.3 映射表产物）
+    /// 委派归一化事件（UNT；§8.3 映射表产物；session_id 由 bin bridge 补挂）
     #[serde(rename = "delegate.event", rename_all = "camelCase")]
     DelegateEvent {
+        #[serde(default)]
+        session_id: String,
         delegate_task_id: String,
         kind: DelegateEventKind,
         payload: Value,
@@ -714,6 +721,8 @@ pub enum RuntimeToHost {
     /// 委派子进程退出（UNT；触发 diff 审查卡）
     #[serde(rename = "delegate.end", rename_all = "camelCase")]
     DelegateEnd {
+        #[serde(default)]
+        session_id: String,
         delegate_task_id: String,
         exit_code: i32,
         summary: String,

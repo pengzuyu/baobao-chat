@@ -94,6 +94,7 @@ pub struct EventCtx {
 pub fn to_runtime_message(ev: &NormalizedEvent, ctx: &EventCtx) -> Option<RuntimeToHost> {
     let msg = match ev {
         NormalizedEvent::Meta { text, session_ref } => RuntimeToHost::DelegateEvent {
+            session_id: ctx.session_id.clone(),
             delegate_task_id: ctx.delegate_task_id.clone(),
             kind: DelegateEventKind::Meta,
             payload: json!({ "text": text, "sessionRef": session_ref }),
@@ -132,6 +133,7 @@ pub fn to_runtime_message(ev: &NormalizedEvent, ctx: &EventCtx) -> Option<Runtim
             duration_ms: None,
         },
         NormalizedEvent::Warning { text } => RuntimeToHost::DelegateEvent {
+            session_id: ctx.session_id.clone(),
             delegate_task_id: ctx.delegate_task_id.clone(),
             kind: DelegateEventKind::Warning,
             payload: json!({ "text": text }),
@@ -144,6 +146,7 @@ pub fn to_runtime_message(ev: &NormalizedEvent, ctx: &EventCtx) -> Option<Runtim
 
 /// 进程退出 → `delegate.end`（§8.3 末行：触发 diff 审查卡）
 pub fn exit_to_delegate_end(
+    session_id: &str,
     delegate_task_id: &str,
     exit_code: i32,
     summary: String,
@@ -152,6 +155,7 @@ pub fn exit_to_delegate_end(
     child_session_ref: Option<String>,
 ) -> RuntimeToHost {
     RuntimeToHost::DelegateEnd {
+        session_id: session_id.to_string(),
         delegate_task_id: delegate_task_id.to_string(),
         exit_code,
         summary,
@@ -511,6 +515,7 @@ mod tests {
     #[test]
     fn exit_maps_to_delegate_end() {
         let m = exit_to_delegate_end(
+            "sess-1",
             "d-101",
             0,
             "完成".into(),

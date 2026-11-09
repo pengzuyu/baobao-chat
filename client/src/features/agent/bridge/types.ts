@@ -148,7 +148,32 @@ export type AgentEvent =
   | { type: 'reportDaily'; date: string; path: string; stats: ReportStats }
   | { type: 'sessionEnded'; sessionId: string; summary: string }
   | { type: 'checkpointCreated'; sessionId: string; checkpointId: string; filesChanged: string[]; reason: string }
-  | { type: 'modelSwitched'; sessionId: string; from: 'fast' | 'strong' | 'auto'; to: 'fast' | 'strong' | 'auto'; modelOverride?: string; reason: string };
+  | { type: 'modelSwitched'; sessionId: string; from: 'fast' | 'strong' | 'auto'; to: 'fast' | 'strong' | 'auto'; modelOverride?: string; reason: string }
+  /**
+   * 子 Agent（D16 类型 1：探查/通用子 agent）。sub_id 即持久 run_id（r-{seq}）；
+   * spawn 携 session 归属，event 按 runId 定位会话流内卡片
+   */
+  | { type: 'subagentSpawn'; sessionId: string; runId: string; taskDigest: string; toolSubset: string[] }
+  | { type: 'subagentEvent'; sessionId: string; runId: string; phase: 'spawn' | 'delta' | 'done' | 'fail'; summary?: string }
+  | { type: 'subagentJoin'; sessionId: string; results: Array<{ runId: string; ok: boolean; summary: string }> }
+  /**
+   * 委派（D16 类型 3：本机 CLI 后台运行——launch 后 turn 立即返回，
+   * delegate.end 异步到达驱动审查卡）。brief 阶段待确认（delegate.launch），
+   * 事件 kind：meta|output|tool_use|tool_result|warning
+   */
+  | { type: 'delegateBrief'; sessionId: string; runId: string; backendSuggestion: string }
+  | { type: 'delegateEvt'; sessionId: string; runId: string; kind: string; payload: Record<string, unknown> }
+  | {
+      type: 'delegateEnd';
+      sessionId: string;
+      runId: string;
+      exitCode: number;
+      summary: string;
+      changedFiles: string[];
+      checkpointId?: string;
+      childSessionRef?: string;
+    }
+  | { type: 'delegateReviewResolved'; sessionId: string; runId: string; decision: 'accept' | 'reject' };
 
 /**
  * Agent 桥接接口：UI 只面对该接口（D08 §5.1 Tauri 命令表的前端封装）。
@@ -185,6 +210,16 @@ export interface AgentBridge {
   ): Promise<void>;
   /** 会话内切换权限模式（agent_set_mode） */
   setMode(sessionId: string, mode: PermissionMode): Promise<void>;
+
+  /** 确认委派启动（agent_delegate_launch；backend=简报卡建议后端；
+   *  D16 主路径=不改简报直接确认，编辑稿随 P1 简报编辑器） */
+  launchDelegate(sessionId: string, runId: string, backend: string): Promise<void>;
+  /** 委派追加指令（agent_delegate_input；模式 C 续问） */
+  delegateInput(runId: string, text: string): Promise<void>;
+  /** 取消委派（agent_delegate_cancel；简报期/后台运行/审查期均可） */
+  cancelDelegate(runId: string): Promise<void>;
+  /** 委派审查结论（agent_delegate_review；delegate.end 到达后出现审查卡） */
+  reviewDelegate(runId: string, accept: boolean): Promise<void>;
 
   /** 知识记忆列表（D15 §2.4 memory.list） */
   listMemories(): Promise<MemoryEntry[]>;

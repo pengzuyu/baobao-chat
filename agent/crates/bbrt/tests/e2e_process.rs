@@ -494,14 +494,14 @@ fn e2e_delegate_via_generic_cli() {
             session_id: "sess-dlg".into(),
             delegate_task_id: "dt-call-d1".into(),
             backend: "generic".into(),
-            task_brief: bbrt_protocol::TaskBrief {
+            task_brief: Some(bbrt_protocol::TaskBrief {
                 task: "修复构建".into(),
                 workspace: ws.to_string_lossy().into_owned(),
                 constraints: vec![],
                 context: vec![],
                 acceptance: vec![],
                 forbidden: vec!["git push".into()],
-            },
+            }),
             mode: bbrt_protocol::PermissionMode::AutoEdit,
             workspace: ws.to_string_lossy().into_owned(),
         },

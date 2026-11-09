@@ -354,6 +354,16 @@ export class MockAgentBridge implements AgentBridge {
     this.touch(sessionId);
   }
 
+  // ---- 委派（D16：真实链路命令；mock 剧本不含委派场景——浏览器演示 no-op）----
+
+  async launchDelegate(_sessionId: string, _runId: string, _backend: string): Promise<void> {}
+
+  async delegateInput(_runId: string, _text: string): Promise<void> {}
+
+  async cancelDelegate(_runId: string): Promise<void> {}
+
+  async reviewDelegate(_runId: string, _accept: boolean): Promise<void> {}
+
   // ---- 记忆 / 日报（D15）----
 
   async listMemories(): Promise<MemoryEntry[]> {

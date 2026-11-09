@@ -519,7 +519,7 @@ fn dispatch(
                 &session_id,
                 bbrt_session::loop_runner::DelegateHostMsg::Launch {
                     backend,
-                    brief: Some(task_brief),
+                    brief: task_brief, // None=沿用模型原稿（D16：确认不改稿是主路径）
                 },
             )
             .ok();

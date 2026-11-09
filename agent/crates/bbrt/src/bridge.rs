@@ -95,11 +95,12 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             tool_subset: tool_subset.clone(),
         },
         SessionEvent::SubagentProbeEvt {
-            session_id: _,
+            session_id,
             sub_id,
             phase,
             summary,
         } => RuntimeToHost::SubagentEvent {
+            session_id: session_id.clone(),
             sub_id: sub_id.clone(),
             phase: match phase.as_str() {
                 "spawn" => bbrt_protocol::SubagentPhase::Spawn,
@@ -325,23 +326,24 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             },
         },
         SessionEvent::DelegateBrief {
+            session_id,
             delegate_task_id,
             backend_suggestion,
-            ..
         } => {
             let delegate_task_id = delegate_task_id.clone();
             // 简报原文在 WAL/上下文；协议侧发待确认信号（编辑稿经 delegate.launch 下发）
             RuntimeToHost::DelegateEvent {
+                session_id: session_id.clone(),
                 delegate_task_id,
                 kind: bbrt_protocol::DelegateEventKind::Meta,
                 payload: serde_json::json!({ "brief_pending": true, "backend_suggestion": backend_suggestion }),
             }
         }
         SessionEvent::DelegateEvt {
+            session_id,
             delegate_task_id,
             kind,
             payload,
-            ..
         } => {
             let delegate_task_id = delegate_task_id.clone();
             let k = match kind.as_str() {
@@ -352,6 +354,7 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
                 _ => bbrt_protocol::DelegateEventKind::Meta,
             };
             RuntimeToHost::DelegateEvent {
+                session_id: session_id.clone(),
                 delegate_task_id,
                 kind: k,
                 payload: serde_json::from_str(payload.as_str())
@@ -359,18 +362,19 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             }
         }
         SessionEvent::DelegateEnd {
+            session_id,
             delegate_task_id,
             exit_code,
             summary,
             changed_files,
             checkpoint_id,
             child_session_ref,
-            ..
         } => {
             let delegate_task_id = delegate_task_id.clone();
             // P0-2③ 修复：此前三字段置空上行——diff 审查卡（changed_files+
             // checkpoint_id 回滚锚点）与 --resume 续接句柄数据源恢复
             RuntimeToHost::DelegateEnd {
+                session_id: session_id.clone(),
                 delegate_task_id,
                 exit_code: *exit_code,
                 summary: summary.clone(),
@@ -380,12 +384,13 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             }
         }
         SessionEvent::DelegateReviewResolved {
+            session_id,
             delegate_task_id,
             decision,
-            ..
         } => {
             let delegate_task_id = delegate_task_id.clone();
             RuntimeToHost::DelegateEvent {
+                session_id: session_id.clone(),
                 delegate_task_id,
                 kind: bbrt_protocol::DelegateEventKind::Meta,
                 payload: serde_json::json!({ "review": decision }),

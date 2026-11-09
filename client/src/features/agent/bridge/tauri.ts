@@ -214,6 +214,23 @@ export class TauriAgentBridge implements AgentBridge {
     await invoke('agent_set_mode', { sessionId, mode });
   }
 
+  async launchDelegate(sessionId: string, runId: string, backend: string): Promise<void> {
+    // taskBrief=null=沿用模型简报原稿（D16 主路径：确认不改稿）
+    await invoke('agent_delegate_launch', { sessionId, delegateTaskId: runId, backend, taskBrief: null });
+  }
+
+  async delegateInput(runId: string, text: string): Promise<void> {
+    await invoke('agent_delegate_input', { delegateTaskId: runId, text });
+  }
+
+  async cancelDelegate(runId: string): Promise<void> {
+    await invoke('agent_delegate_cancel', { delegateTaskId: runId });
+  }
+
+  async reviewDelegate(runId: string, accept: boolean): Promise<void> {
+    await invoke('agent_delegate_review', { delegateTaskId: runId, accept });
+  }
+
   async listMemories(): Promise<MemoryEntry[]> {
     const data = await invoke<{ items: MemoryRow[] }>('memory_list', {});
     return data.items.map((m) => ({
@@ -364,6 +381,56 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         date: str(raw.date),
         path: str(raw.path),
         stats: (raw.stats as ReportStats | undefined) ?? { sessions: 0, tools: 0, blocked: 0, files: 0, memorySaved: 0 },
+      };
+    case 'subagent.spawn':
+      return {
+        type: 'subagentSpawn',
+        sessionId: sid,
+        runId: str(raw.sub_id),
+        taskDigest: str(raw.task_digest),
+        toolSubset: (raw.tool_subset as string[] | undefined) ?? [],
+      };
+    case 'subagent.event':
+      return {
+        type: 'subagentEvent',
+        sessionId: sid,
+        runId: str(raw.sub_id),
+        phase: (['spawn', 'delta', 'done', 'fail'].includes(str(raw.phase)) ? str(raw.phase) : 'delta') as 'spawn' | 'delta' | 'done' | 'fail',
+        summary: raw.summary ? str(raw.summary) : undefined,
+      };
+    case 'subagent.join':
+      return {
+        type: 'subagentJoin',
+        sessionId: sid,
+        results: ((raw.results as Array<{ sub_id?: string; ok?: boolean; summary?: string }> | undefined) ?? []).map((r) => ({
+          runId: str(r.sub_id),
+          ok: r.ok === true,
+          summary: str(r.summary),
+        })),
+      };
+    case 'delegate.event': {
+      const runId = str(raw.delegate_task_id);
+      const kind = str(raw.kind);
+      const payload = (raw.payload as Record<string, unknown> | undefined) ?? {};
+      // meta 复合：简报待确认信号 / 审查结论镜像（bbrt bridge 映射口径）
+      if (kind === 'meta' && payload.brief_pending === true) {
+        return { type: 'delegateBrief', sessionId: sid, runId, backendSuggestion: str(payload.backend_suggestion) };
+      }
+      if (kind === 'meta' && typeof payload.review === 'string') {
+        return { type: 'delegateReviewResolved', sessionId: sid, runId, decision: payload.review === 'accept' ? 'accept' : 'reject' };
+      }
+      return { type: 'delegateEvt', sessionId: sid, runId, kind, payload };
+    }
+    case 'delegate.end':
+      return {
+        type: 'delegateEnd',
+        sessionId: sid,
+        runId: str(raw.delegate_task_id),
+        exitCode: num(raw.exit_code, -1),
+        summary: str(raw.summary),
+        changedFiles: (raw.changed_files as string[] | undefined) ?? [],
+        checkpointId: raw.checkpoint_id ? str(raw.checkpoint_id) : undefined,
+        childSessionRef: raw.child_session_ref ? str(raw.child_session_ref) : undefined,
       };
     default:
       return null; // 未知事件忽略 + 上层计数（前向兼容）

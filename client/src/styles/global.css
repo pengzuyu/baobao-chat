@@ -3253,6 +3253,100 @@ body {
   overflow: hidden;
 }
 
+/* ---- 子 Agent 卡 / 委派卡（D16 三形态 · P0-4；复用 tool-card 骨架）---- */
+
+.subagent-card,
+.delegate-card {
+  align-self: stretch;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-card);
+  background: var(--bbw-gray-1);
+  overflow: hidden;
+}
+
+.subagent-card--failed,
+.delegate-card--failed {
+  border-color: var(--bbw-danger);
+}
+
+.subagent-card__label,
+.delegate-card__backend {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+  flex-shrink: 0;
+}
+
+.delegate-card__backend {
+  font-family: var(--bbw-font-mono);
+  color: var(--bbw-gray-9);
+}
+
+.subagent-card__digest {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-8);
+}
+
+.delegate-card__actions,
+.delegate-card__review,
+.delegate-card__resolved {
+  border-top: 1px solid var(--bbw-gray-3);
+  padding: var(--bbw-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--bbw-space-2);
+}
+
+.delegate-card__hint {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+}
+
+.delegate-card__btns {
+  display: flex;
+  gap: var(--bbw-space-2);
+}
+
+.delegate-card__files {
+  max-height: 160px;
+  overflow: auto;
+}
+
+.delegate-card__meta {
+  display: flex;
+  gap: var(--bbw-space-3);
+  flex-wrap: wrap;
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+  font-family: var(--bbw-font-mono);
+}
+
+.delegate-card__logs {
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.delegate-card__verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--bbw-font-12);
+}
+
+.delegate-card__verdict--ok {
+  color: var(--bbw-success);
+}
+
+.delegate-card__verdict--fail {
+  color: var(--bbw-gray-6);
+}
+
 .tool-card__head {
   display: flex;
   align-items: center;

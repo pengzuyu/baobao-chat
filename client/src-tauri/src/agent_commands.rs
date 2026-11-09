@@ -118,6 +118,54 @@ pub fn report_get(host: Host, date: String) -> Result<Value, String> {
     Ok(json!({ "markdown": markdown }))
 }
 
+/// 确认委派启动（delegate.launch；D16 §5 简报阶段——run 尚未后台化，
+/// RT 按 sessionId 定向投递 runner 通道）。task_brief=None=沿用模型原稿
+/// （确认不改稿是主路径；编辑稿随 P1 简报编辑器）。mode/workspace 为协议
+/// 必填字段，从会话缓存回填（RT dispatch 侧忽略）。
+#[tauri::command]
+pub fn agent_delegate_launch(
+    host: Host,
+    session_id: String,
+    delegate_task_id: String,
+    backend: String,
+    task_brief: Option<Value>,
+) -> Result<(), String> {
+    let (mode, workspace) = host
+        .list_sessions()
+        .iter()
+        .find(|s| s["id"].as_str() == Some(session_id.as_str()))
+        .map(|s| (s["mode"].as_str().unwrap_or("ask").to_string(), s["workspace"].as_str().unwrap_or("").to_string()))
+        .unwrap_or_else(|| ("ask".into(), String::new()));
+    host.fire(
+        "delegate.launch",
+        json!({
+            "sessionId": session_id, "delegateTaskId": delegate_task_id, "backend": backend,
+            "taskBrief": task_brief, "mode": mode, "workspace": workspace,
+        }),
+    )
+}
+
+/// 委派追加指令（模式 C 续问；17 §8 send_input）
+#[tauri::command]
+pub fn agent_delegate_input(host: Host, delegate_task_id: String, text: String) -> Result<(), String> {
+    host.fire("delegate.input", json!({ "delegateTaskId": delegate_task_id, "text": text }))
+}
+
+/// 取消委派（SIGINT→3s→SIGKILL 进程组；后台/简报期均可）
+#[tauri::command]
+pub fn agent_delegate_cancel(host: Host, delegate_task_id: String) -> Result<(), String> {
+    host.fire("delegate.cancel", json!({ "delegateTaskId": delegate_task_id, "graceful": true }))
+}
+
+/// 委派审查结论（delegate.review；后台 run 经 hub 按 run_id 定向路由）
+#[tauri::command]
+pub fn agent_delegate_review(host: Host, delegate_task_id: String, accept: bool) -> Result<(), String> {
+    host.fire(
+        "delegate.review",
+        json!({ "delegateTaskId": delegate_task_id, "decision": if accept { "accept" } else { "reject" } }),
+    )
+}
+
 /// 登录/刷新成功后下发 token（obo.token → RT 的 OboCache；obo.renew 由桥应答）
 #[tauri::command]
 pub fn auth_set_token(host: Host, token: String, expires_at: i64) -> Result<(), String> {

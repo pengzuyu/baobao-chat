@@ -27,6 +27,8 @@ import { AgentContextSidebar } from '../components/AgentContextSidebar';
 import { StreamMessage, ReasoningCollapse, UserMessage } from '../components/StreamMessage';
 import { ToolCard } from '../components/ToolCard';
 import { PermissionCard, type PermissionDecision } from '../components/PermissionCard';
+import { SubagentCard } from '../components/SubagentCard';
+import { DelegateCard } from '../components/DelegateCard';
 import { TypingState } from '../components/TypingState';
 import { Composer } from '../components/Composer';
 
@@ -266,6 +268,10 @@ export function AgentWorkbenchPage() {
             return <ToolCard key={item.key} item={item} />;
           case 'permission':
             return <PermissionCard key={item.key} item={item} onRespond={handleRespond} />;
+          case 'subagent':
+            return <SubagentCard key={item.key} item={item} />;
+          case 'delegate':
+            return <DelegateCard key={item.key} item={item} />;
           case 'system':
             return (
               <div key={item.key} className="agent-system-row">

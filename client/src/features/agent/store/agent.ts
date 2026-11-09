@@ -36,6 +36,27 @@ export type StreamItem =
       /** null=等待中；'timeout'=120s 到点（灰显=拒绝）；对象=已决策 */
       outcome: null | 'timeout' | { decision: 'allow' | 'deny' | 'cancelled'; scope?: GrantScope; at: number };
     }
+  /** 子 Agent 卡（D16 类型 1；runId=持久 r-{seq}，状态由 subagent.event 驱动） */
+  | {
+      kind: 'subagent';
+      key: string;
+      runId: string;
+      taskDigest: string;
+      status: 'running' | 'done' | 'failed';
+      summary?: string;
+    }
+  /** 委派卡（D16 类型 3：brief 待确认 → running 后台 → review 审查 → resolved 终态） */
+  | {
+      kind: 'delegate';
+      key: string;
+      runId: string;
+      backend: string;
+      phase: 'brief' | 'running' | 'review' | 'resolved';
+      /** 后端输出尾部行（output/delta；≤50 行滚动窗） */
+      logs: string[];
+      end?: Extract<AgentEvent, { type: 'delegateEnd' }>;
+      decision?: 'accept' | 'reject';
+    }
   | { kind: 'system'; key: string; text: string };
 
 /** 检查点（checkpoint.created 投影，右栏时间线） */
@@ -80,6 +101,12 @@ interface AgentState {
   startSession: (mode: PermissionMode, model?: string) => Promise<void>;
   sendText: (text: string) => Promise<void>;
   respondPermission: (requestId: string, decision: 'allow' | 'deny', scope?: GrantScope, editedArgs?: Record<string, unknown>) => void;
+  /** 确认委派启动（简报卡；乐观置 running，真实状态由 delegate.event 驱动） */
+  confirmDelegate: (runId: string, backend: string) => void;
+  /** 委派审查结论（审查卡；乐观置 resolved） */
+  reviewDelegate: (runId: string, accept: boolean) => void;
+  /** 取消委派（简报期/后台运行/审查期） */
+  cancelDelegate: (runId: string) => void;
   pauseActive: () => void;
   resumeActive: () => void;
   endActive: () => void;
@@ -104,6 +131,23 @@ let itemSeq = 0;
 function nextKey(prefix: string): string {
   itemSeq += 1;
   return `${prefix}-${itemSeq}`;
+}
+
+/** 定位并修补当前会话流内的委派卡（动作乐观更新；真实状态由事件驱动覆盖） */
+function patchDelegateCard(
+  get: () => AgentState,
+  set: (fn: (s: AgentState) => Partial<AgentState>) => void,
+  runId: string,
+  patch: (it: Extract<StreamItem, { kind: 'delegate' }>) => Extract<StreamItem, { kind: 'delegate' }>,
+) {
+  const sid = get().activeSessionId;
+  if (!sid) return;
+  set((s) => ({
+    streams: {
+      ...s.streams,
+      [sid]: (s.streams[sid] ?? []).map((it) => (it.kind === 'delegate' && it.runId === runId ? patch(it) : it)),
+    },
+  }));
 }
 
 function touchSession(sessions: AgentSessionMeta[], sessionId: string, patch: Partial<AgentSessionMeta>): AgentSessionMeta[] {
@@ -229,6 +273,24 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       }));
     }
     void bridge.respondPermission(requestId, decision, scope, editedArgs).catch(() => undefined);
+  },
+
+  confirmDelegate: (runId, backend) => {
+    // 乐观置 running（真实流转由 delegate.event/output 驱动；120s 未确认 RT 侧自弃）
+    patchDelegateCard(get, set, runId, (it) => ({ ...it, phase: 'running' }));
+    const sid = get().activeSessionId;
+    if (sid) void bridge.launchDelegate(sid, runId, backend).catch(() => undefined);
+  },
+
+  reviewDelegate: (runId, accept) => {
+    patchDelegateCard(get, set, runId, (it) => ({ ...it, phase: 'resolved', decision: accept ? 'accept' : 'reject' }));
+    void bridge.reviewDelegate(runId, accept).catch(() => undefined);
+  },
+
+  cancelDelegate: (runId) => {
+    // 乐观置 resolved（终态展示"已取消"；RT 侧 delegate.cancel → cancelled run）
+    patchDelegateCard(get, set, runId, (it) => (it.phase === 'brief' ? { ...it, phase: 'resolved' } : it));
+    void bridge.cancelDelegate(runId).catch(() => undefined);
   },
 
   pauseActive: () => {
@@ -424,6 +486,97 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             streams: {
               ...s.streams,
               [event.sessionId]: [...list, { kind: 'system', key: nextKey('sys'), text: `会话已结束：${event.summary}` }],
+            },
+          };
+        }
+        // ---- 子 Agent 卡（D16 类型 1）----
+        case 'subagentSpawn': {
+          const list = s.streams[event.sessionId] ?? [];
+          const item: StreamItem = {
+            kind: 'subagent',
+            key: `sa-${event.runId}`,
+            runId: event.runId,
+            taskDigest: event.taskDigest,
+            status: 'running',
+          };
+          return { streams: { ...s.streams, [event.sessionId]: [...list, item] } };
+        }
+        case 'subagentEvent': {
+          // delta 不刷卡（探查摘要以 done 一次性上报，D11 §7）
+          if (event.phase !== 'done' && event.phase !== 'fail') return s;
+          const list = s.streams[event.sessionId] ?? [];
+          return {
+            streams: {
+              ...s.streams,
+              [event.sessionId]: list.map((it) =>
+                it.kind === 'subagent' && it.runId === event.runId
+                  ? { ...it, status: event.phase === 'done' ? 'done' : 'failed', summary: event.summary }
+                  : it,
+              ),
+            },
+          };
+        }
+        case 'subagentJoin': {
+          const list = s.streams[event.sessionId] ?? [];
+          const ok = event.results.filter((r) => r.ok).length;
+          return {
+            streams: {
+              ...s.streams,
+              [event.sessionId]: [
+                ...list,
+                { kind: 'system', key: nextKey('sys'), text: `并行探查完成：${ok}/${event.results.length} 项成功，结论已回填主对话` },
+              ],
+            },
+          };
+        }
+        // ---- 委派卡（D16 类型 3：launch 后 turn 立即返回，end 异步驱动审查）----
+        case 'delegateBrief': {
+          const list = s.streams[event.sessionId] ?? [];
+          const item: StreamItem = {
+            kind: 'delegate',
+            key: `dg-${event.runId}`,
+            runId: event.runId,
+            backend: event.backendSuggestion,
+            phase: 'brief',
+            logs: [],
+          };
+          return { streams: { ...s.streams, [event.sessionId]: [...list, item] } };
+        }
+        case 'delegateEvt': {
+          const list = s.streams[event.sessionId] ?? [];
+          const line = typeof event.payload.text === 'string' ? event.payload.text : '';
+          return {
+            streams: {
+              ...s.streams,
+              [event.sessionId]: list.map((it) => {
+                if (it.kind !== 'delegate' || it.runId !== event.runId) return it;
+                const logs = line ? [...it.logs, line].slice(-50) : it.logs;
+                return { ...it, phase: it.phase === 'brief' ? 'running' : it.phase, logs };
+              }),
+            },
+          };
+        }
+        case 'delegateEnd': {
+          const list = s.streams[event.sessionId] ?? [];
+          return {
+            streams: {
+              ...s.streams,
+              [event.sessionId]: list.map((it) =>
+                it.kind === 'delegate' && it.runId === event.runId
+                  ? { ...it, phase: event.exitCode === 0 ? 'review' : 'resolved', end: event }
+                  : it,
+              ),
+            },
+          };
+        }
+        case 'delegateReviewResolved': {
+          const list = s.streams[event.sessionId] ?? [];
+          return {
+            streams: {
+              ...s.streams,
+              [event.sessionId]: list.map((it) =>
+                it.kind === 'delegate' && it.runId === event.runId ? { ...it, phase: 'resolved', decision: event.decision } : it,
+              ),
             },
           };
         }

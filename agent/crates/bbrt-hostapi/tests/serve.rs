@@ -544,6 +544,7 @@ fn transport_write_backpressure_beyond_8mb() {
             PROTOCOL_VERSION,
             "r-1",
             &RuntimeToHost::DelegateEvent {
+                session_id: "sess-1".into(),
                 delegate_task_id: "dt-1".into(),
                 kind: DelegateEventKind::Meta,
                 payload: json!({ "blob": big }),
