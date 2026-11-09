@@ -87,14 +87,14 @@ export async function sendTextMessage(
 }
 
 /**
- * 发送文件/图片/语音消息（WS msg.send，D06 阶段一：先 POST /files/upload 得 file_id 再发消息）。
+ * 发送文件/图片/语音/视频消息（WS msg.send，D06 阶段一：先 POST /files/upload 得 file_id 再发消息）。
  * 服务端校验 body.file_id（存在/owner 或 source=message/未删；audio_clip 另校验
- * duration_ms ≤60s），回执与 msg.new 不变。
+ * duration_ms ≤60s；video 校验 duration ≤10min；image 可带 caption ≤500 字），回执与 msg.new 不变。
  */
 export async function sendFileMessage(
   convId: string,
   clientMsgId: string,
-  type: 'image' | 'file' | 'audio_clip',
+  type: 'image' | 'file' | 'audio_clip' | 'video',
   body: {
     file_id: string;
     name?: string;
@@ -103,7 +103,9 @@ export async function sendFileMessage(
     width?: number;
     height?: number;
     contentType?: string;
+    caption?: string;
     duration_ms?: number;
+    poster_file_id?: string;
   },
   replyToSeq?: number,
 ): Promise<SendAck> {

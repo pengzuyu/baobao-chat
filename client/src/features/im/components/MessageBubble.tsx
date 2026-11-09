@@ -429,6 +429,86 @@ function FileCard({ body }: { body: FileMessageBody }) {
 }
 
 /**
+ * 视频卡片气泡（04 §1.2 第 8 类 video）：主视频票据拉流 + poster 票据封面，
+ * 原生控件内联播放（preload=metadata）；时长角标；失败红态可重试。
+ */
+function VideoCard({ body }: { body: FileMessageBody }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [poster, setPoster] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const srcRef = useRef<string | null>(null);
+  const posterRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setFailed(false);
+    (async () => {
+      try {
+        const t = await getDownloadTicket(body.file_id);
+        const resp = await fetch(downloadUrl(t.url));
+        if (!resp.ok) throw new Error(`status ${resp.status}`);
+        const blob = await resp.blob();
+        if (!alive) return;
+        const u = URL.createObjectURL(blob);
+        srcRef.current = u;
+        setSrc(u);
+        if (body.poster_file_id) {
+          try {
+            const pt = await getDownloadTicket(body.poster_file_id);
+            const pr = await fetch(downloadUrl(pt.url));
+            if (pr.ok) {
+              const pb = await pr.blob();
+              if (alive) {
+                const pu = URL.createObjectURL(pb);
+                posterRef.current = pu;
+                setPoster(pu);
+              }
+            }
+          } catch {
+            /* poster 可缺省 */
+          }
+        }
+      } catch {
+        if (alive) setFailed(true);
+      }
+    })();
+    return () => {
+      alive = false;
+      if (srcRef.current) URL.revokeObjectURL(srcRef.current);
+      if (posterRef.current) URL.revokeObjectURL(posterRef.current);
+      srcRef.current = null;
+      posterRef.current = null;
+    };
+  }, [body.file_id, body.poster_file_id]);
+
+  if (failed) {
+    return (
+      <div className="msg-image msg-image--error" data-testid="video-error">
+        <Video size={16} />
+        <span>视频加载失败</span>
+      </div>
+    );
+  }
+  return (
+    <div className="msg-video-card" data-testid="msg-video-card">
+      {src ? (
+        <video
+          className="msg-video"
+          src={src}
+          poster={poster ?? undefined}
+          controls
+          preload="metadata"
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <span className="msg-video msg-video--loading" />
+      )}
+      {body.duration_ms ? <span className="msg-video__dur">{Math.round(body.duration_ms / 1000)}s</span> : null}
+    </div>
+  );
+}
+
+/**
  * 表情包气泡（0022 sticker）：票据 → blob → objectURL 大图渲染（≤120px 等比，
  * 无气泡底，点击灯箱复用图片口径）；失败占位不阻塞布局。
  */
@@ -681,6 +761,8 @@ function ImageCard({ body }: { body: FileMessageBody }) {
           setZoom(true);
         }}
       />
+      {/* caption 随图说明（04 §1.2 第 5 类；渲染于缩略图下方） */}
+      {body.caption ? <span className="msg-image__caption">{body.caption}</span> : null}
       {zoom ? (
         <div className="image-lightbox" data-testid="image-lightbox" onClick={() => setZoom(false)}>
           <img className="image-lightbox__img" src={objUrl} alt={body.name ?? '图片'} />
@@ -786,6 +868,9 @@ export function MessageBubble({
   // 表情包（0022 sticker：body {sticker_id,file_id}）
   const isSticker = message.type === 'sticker';
   const stickerBody = isSticker && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
+  // 视频卡片（04 §1.2 第 8 类：body {file_id,poster_file_id,duration_ms,...}）
+  const isVideo = message.type === 'video';
+  const videoBody = isVideo && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
   // 通话卡片（D04 §4.5 call_card：方向/状态/时长/再次呼叫；组件在 shared，回拨经 bus 转发 rtc）
   const isCallCard = message.type === 'call_card';
   const callBody = isCallCard && 'call_id' in message.body ? (message.body as CallCardBody) : null;
@@ -856,6 +941,8 @@ export function MessageBubble({
             <AudioClipCard body={audioBody} mine={mine} />
           ) : isSticker && stickerBody ? (
             <StickerCard body={stickerBody} />
+          ) : isVideo && videoBody ? (
+            <VideoCard body={videoBody} />
           ) : isCallCard && callBody ? (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
               <CallCard

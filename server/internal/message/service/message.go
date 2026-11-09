@@ -211,6 +211,14 @@ type stickerBody struct {
 	FileID    flexID `json:"file_id"`
 }
 
+// captionBody image 随图说明（04 §1.2 第 5 类；≤500 字）
+type captionBody struct {
+	Caption string `json:"caption"`
+}
+
+// videoMaxMs 视频时长上限（10 分钟；客户端元数据采集，缺省不查）
+const videoMaxMs = 600_000
+
 func (s *Service) convLock(convID int64) *sync.Mutex {
 	v, _ := s.convLocks.LoadOrStore(convID, &sync.Mutex{})
 	return v.(*sync.Mutex)
@@ -302,10 +310,11 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 			return nil, err
 		}
 	}
-	// ③b 文件消息校验（D06：file/image/audio_clip 携 body.file_id → file 域校验存在/owner/未删；
-	// audio_clip 另校验 duration_ms ≤60s）
+	// ③b 文件消息校验（D06：file/image/audio_clip/video 携 body.file_id → file 域校验存在/owner/未删；
+	// audio_clip 另校验 duration_ms ≤60s；video 校验 duration ≤10min（传了才查）；
+	// image 可带 caption ≤500 字）
 	fileID := int64(0)
-	if p.Type == "file" || p.Type == "image" || p.Type == "audio_clip" {
+	if p.Type == "file" || p.Type == "image" || p.Type == "audio_clip" || p.Type == "video" {
 		var fb fileBody
 		if len(p.Body) == 0 {
 			return nil, errx.New(errx.CodeBadRequest, "file/image 消息 body 应含 file_id")
@@ -318,6 +327,19 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 			var vb voiceBody
 			if err := json.Unmarshal(p.Body, &vb); err != nil || vb.DurationMs <= 0 || vb.DurationMs > voiceMaxMs {
 				return nil, errx.New(errx.CodeBadRequest, "语音时长应在 1s~60s")
+			}
+		}
+		if p.Type == "video" {
+			var vb voiceBody // duration 字段形态同语音（复用解析器）
+			_ = json.Unmarshal(p.Body, &vb)
+			if vb.DurationMs < 0 || vb.DurationMs > videoMaxMs {
+				return nil, errx.New(errx.CodeBadRequest, "视频时长应 ≤10 分钟")
+			}
+		}
+		if p.Type == "image" {
+			var cb captionBody
+			if err := json.Unmarshal(p.Body, &cb); err == nil && len([]rune(cb.Caption)) > 500 {
+				return nil, errx.New(errx.CodeBadRequest, "随图说明 ≤500 字")
 			}
 		}
 		if s.opts.FileCheck != nil {

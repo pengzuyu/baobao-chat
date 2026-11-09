@@ -39,8 +39,12 @@ export interface FileMessageBody {
   width?: number;
   height?: number;
   contentType?: string;
-  /** 语音条时长（audio_clip 专用，ms） */
+  /** 随图说明文字（image 专用，04 篇 §1.2 第 5 类；渲染于缩略图下方） */
+  caption?: string;
+  /** 语音条时长（audio_clip/video 专用，ms） */
   duration_ms?: number;
+  /** 视频封面帧文件（video 专用；端侧截首帧上传） */
+  poster_file_id?: string;
 }
 
 /**

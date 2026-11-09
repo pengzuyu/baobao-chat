@@ -4923,6 +4923,53 @@ body {
   cursor: zoom-in;
   object-fit: contain;
 }
+
+/* caption 随图说明（04 §1.2 第 5 类：缩略图下方小字） */
+.msg-image__caption {
+  display: block;
+  max-width: 240px;
+  margin-top: 4px;
+  padding: 6px 10px;
+  border-radius: var(--bbw-radius-bubble, 12px);
+  background: var(--bbw-gray-2);
+  font-size: var(--bbw-font-13);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 视频卡片气泡（04 §1.2 第 8 类） */
+.msg-video-card {
+  position: relative;
+  display: inline-block;
+  max-width: 280px;
+}
+
+.msg-video {
+  display: block;
+  width: 280px;
+  max-height: 320px;
+  border-radius: var(--bbw-radius-bubble, 12px);
+  background: #000;
+}
+
+.msg-video--loading {
+  width: 240px;
+  height: 160px;
+  background: var(--bbw-gray-2);
+}
+
+.msg-video__dur {
+  position: absolute;
+  right: 8px;
+  bottom: 28px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: var(--bbw-font-12);
+  font-variant-numeric: tabular-nums;
+}
 .msg-image--loading {
   width: 180px;
   height: 130px;
@@ -5035,6 +5082,23 @@ body {
 .file-send-preview__meta {
   min-width: 0;
   flex: 1;
+}
+/* 视频本地预览（发送前播放确认 + 截帧源） */
+.file-send-preview__video {
+  width: 220px;
+  max-height: 160px;
+  border-radius: var(--bbw-radius-control, 8px);
+  background: #000;
+  flex-shrink: 0;
+}
+/* caption 附言输入（image 专用） */
+.file-send-preview__caption {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-control, 8px);
+  font-size: var(--bbw-font-13);
+  background: var(--bbw-bg-card, #fff);
 }
 .file-send-preview__name {
   display: flex;

@@ -619,7 +619,8 @@ export function digestOf(msg: Message): string {
     case 'text':
       return 'text' in msg.body ? msg.body.text : '';
     case 'image':
-      return '[图片]';
+      // caption 随图说明（04 §1.2）：会话摘要优先显示附言
+      return ('caption' in msg.body && msg.body.caption) || '[图片]';
     case 'file':
       return '[文件]';
     case 'audio_clip':

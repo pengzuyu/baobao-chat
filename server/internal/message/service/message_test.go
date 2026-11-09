@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -416,6 +417,42 @@ func TestSendVoiceValidation(t *testing.T) {
 	// 文件不存在 → 4005（FileCheck 链路同 file）
 	if _, err := svc.Send(ctx, 10001, filePayload(1, "v-4", "audio_clip", "404", map[string]any{"duration_ms": 3000})); errx.From(err).Code != errx.CodeFileNotFound {
 		t.Fatalf("文件不存在应拒 4005: %v", err)
+	}
+}
+
+// TestSendVideoAndCaption video 时长上限 + image caption 上限（04 §1.2 第 5/8 类）
+func TestSendVideoAndCaption(t *testing.T) {
+	opts := Options{
+		FileCheck: func(ctx context.Context, senderID int64, fileID int64) error {
+			if fileID != 88 {
+				return errx.New(errx.CodeFileNotFound, "文件不存在")
+			}
+			return nil
+		},
+	}
+	svc, _, _ := seedFixture(t, opts)
+	ctx := context.Background()
+
+	// 正常视频（带 poster/duration）→ 放行
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "vd-1", "video", "88", map[string]any{"duration_ms": 30000, "poster_file_id": "77"})); err != nil {
+		t.Fatalf("正常视频应放行: %v", err)
+	}
+	// duration 缺省放行（客户端元数据采集失败可无）
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "vd-2", "video", "88", nil)); err != nil {
+		t.Fatalf("无 duration 视频应放行: %v", err)
+	}
+	// 超 10min → 9001
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "vd-3", "video", "88", map[string]any{"duration_ms": 600001})); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("超 10min 应拒 9001: %v", err)
+	}
+	// image caption 正常 → 放行
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "cap-1", "image", "88", map[string]any{"caption": "周会白板"})); err != nil {
+		t.Fatalf("caption 图片应放行: %v", err)
+	}
+	// caption 超 500 字 → 9001
+	long := strings.Repeat("字", 501)
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "cap-2", "image", "88", map[string]any{"caption": long})); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("超长 caption 应拒 9001: %v", err)
 	}
 }
 
