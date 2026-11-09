@@ -34,7 +34,8 @@ docker compose --profile core --profile media --profile docs up -d   # 或显式
 | 443 | tcp | nginx-lb | 客户端 → 服务器 | https/wss 主入口（REST `/api/`、WS `/ws/`、更新源 `/update/`、信令 `/rtc/`） |
 | 80 | tcp | nginx-lb | 客户端 → 服务器 | 仅 301 跳转 + `/healthz` |
 | 8443 | tcp | nginx-lb | 客户端 → 服务器 | OnlyOffice 编辑器独立 TLS 入口（docs 组） |
-| 8082 | tcp | media | 客户端 → 服务器 | mediasoup 信令（media 组） |
+| 7880 | tcp | media | 客户端 → 服务器 | LiveKit 信令 wss（D17，media 组；经 nginx /rtc/ 或直连） |
+| 3478 | udp | media | 客户端 → 服务器 | LiveKit 内嵌 TURN（D17；coturn 已退役） |
 | 40000–50100 | **udp** | media | 客户端 ↔ 服务器 | SRTP 媒体段，**独占**（media 组） |
 | 3478 | udp+tcp | coturn | 客户端 → 服务器 | TURN/STUN 兜底（media 组，跨园区才启用） |
 | 5349 | tcp | coturn | 客户端 → 服务器 | TURN/TLS |
@@ -46,7 +47,7 @@ docker compose --profile core --profile media --profile docs up -d   # 或显式
 | 源 | → 目标:端口 | 协议 | 用途 |
 |---|---|---|---|
 | 客户端网段 | VM:443, 8443 | tcp | 主入口 / 文档编辑 |
-| 客户端网段 | VM:8082, 40000-50100/udp | tcp/udp | 通话信令与媒体（media 组） |
+| 客户端网段 | VM:7880, 3478/udp, 40000-50100/udp | tcp/udp | 通话信令与媒体（D17 LiveKit，media 组） |
 | 跨园区网段 | VM:3478, 5349 | udp/tcp | TURN 兜底（按需） |
 | 外部邮件服务器 | VM:25 | tcp | 入站邮件（mail 组） |
 | VM → 内部 Registry | 443 | tcp | 拉取 bbw-* 镜像 |
