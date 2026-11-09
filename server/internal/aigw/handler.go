@@ -7,6 +7,7 @@ package aigw
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -139,6 +140,7 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		f, ok := <-r2.Frames // 阻塞至首帧/关闭（goroutine 内先置 Err 再 close，happens-before）
 		dim.Provider = c.Provider.ID()
 		if !ok && r2.Err != nil {
+			log.Printf("[aigw] 候选降级 provider=%d model=%s err=%v", c.Provider.ID(), creq.Model, r2.Err)
 			continue // 本候选失败 → 降级下一候选
 		}
 		res = r2

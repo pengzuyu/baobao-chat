@@ -498,6 +498,7 @@ fn loop_expert_consult_wiring() {
         "/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     runner.run_turn("多维度评审 PR#7", &deps);
 
@@ -607,6 +608,7 @@ fn loop_expert_invalid_graph_fallback() {
         "/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     runner.run_turn("任务", &deps); // 不 panic 即兜底成立
     let entries = log.0.lock().unwrap().clone();

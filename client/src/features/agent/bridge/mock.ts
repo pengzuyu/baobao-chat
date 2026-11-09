@@ -251,7 +251,7 @@ export class MockAgentBridge implements AgentBridge {
     return [...this.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string): Promise<AgentSessionMeta> {
     await delay(200);
     this.sessionSeq += 1;
     const meta: AgentSessionMeta = {
@@ -260,6 +260,7 @@ export class MockAgentBridge implements AgentBridge {
       workspace,
       mode,
       modelPolicy: 'auto',
+      modelOverride: model,
       status: 'starting',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -272,6 +273,18 @@ export class MockAgentBridge implements AgentBridge {
       this.emit({ type: 'stateChanged', sessionId: meta.id, state: 'idle', reason: 'session.ready' });
     }, 400);
     return { ...meta };
+  }
+
+  async switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void> {
+    await delay(120);
+    const meta = this.sessions.find((s) => s.id === sessionId);
+    const from = meta?.modelPolicy ?? 'auto';
+    if (meta) {
+      meta.modelPolicy = to;
+      meta.modelOverride = model;
+      meta.updatedAt = Date.now();
+    }
+    this.emit({ type: 'modelSwitched', sessionId, from, to, modelOverride: model, reason: 'user' });
   }
 
   async sendMessage(sessionId: string, text: string): Promise<void> {

@@ -235,6 +235,7 @@ fn e2e_full_runtime_process() {
             workspace: tmp.path().to_string_lossy().into_owned(),
             mode: bbrt_protocol::PermissionMode::Ask,
             model_policy: bbrt_protocol::ModelPolicy::Strong,
+            model: None,
             skills: vec![],
             history_ref: None,
             backend_hint: None,
@@ -448,6 +449,7 @@ fn e2e_delegate_via_generic_cli() {
             workspace: ws.to_string_lossy().into_owned(),
             mode: bbrt_protocol::PermissionMode::AutoEdit, // generic 后端 ask 被拒
             model_policy: bbrt_protocol::ModelPolicy::Strong,
+            model: None,
             skills: vec![],
             history_ref: None,
             backend_hint: None,

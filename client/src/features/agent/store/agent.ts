@@ -61,8 +61,8 @@ interface AgentState {
   streams: Record<string, StreamItem[]>;
   /** sessionId → 检查点栈（新→旧） */
   checkpoints: Record<string, CheckpointItem[]>;
-  /** sessionId → 当前模型档位（model.switched 维护） */
-  modelBySession: Record<string, 'fast' | 'strong' | 'auto'>;
+  /** sessionId → 当前模型选择（model.switched 维护；override=直达引用 p:<id>:<model>） */
+  modelBySession: Record<string, { policy: 'fast' | 'strong' | 'auto'; override?: string }>;
   /** sessionId → 最近一轮用量（stream.done usage） */
   usageBySession: Record<string, { in: number; out: number }>;
 
@@ -77,7 +77,7 @@ interface AgentState {
   // ---- 动作 ----
   init: () => Promise<void>;
   selectSession: (sessionId: string | null) => void;
-  startSession: (mode: PermissionMode) => Promise<void>;
+  startSession: (mode: PermissionMode, model?: string) => Promise<void>;
   sendText: (text: string) => Promise<void>;
   respondPermission: (requestId: string, decision: 'allow' | 'deny', scope?: GrantScope, editedArgs?: Record<string, unknown>) => void;
   pauseActive: () => void;
@@ -85,6 +85,8 @@ interface AgentState {
   endActive: () => void;
   emergencyStop: () => void;
   setMode: (mode: PermissionMode) => void;
+  /** 会话内切换模型（model=直达引用；缺省=档位；回执 modelSwitched 事件驱动 UI） */
+  switchModel: (to: 'fast' | 'strong' | 'auto', model?: string) => void;
   deleteMemory: (name: string) => Promise<void>;
   /** 事件唯一入口（reducer 式分发；包一层便于桥接入） */
   handleEvent: (event: AgentEvent) => void;
@@ -184,13 +186,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   selectSession: (sessionId) => set({ activeSessionId: sessionId }),
 
-  startSession: async (mode) => {
-    // 演示默认工作区（正式版走 workspace_pick 系统选择器 + 信任确认，D08 §5.1）
-    const meta = await bridge.startSession('~/code/bbw-server', mode);
+  startSession: async (mode, model) => {
+    // 演示默认工作区（正式版走 workspace_pick 系统选择器 + 信任确认，D08 §5.1）；
+    // model=用户默认模型的直达引用（settings.ai_default 解析，0023；缺省=档位别名）
+    const meta = await bridge.startSession('~/code/bbw-server', mode, model);
     set((s) => ({
       sessions: [meta, ...s.sessions],
       activeSessionId: meta.id,
-      modelBySession: { ...s.modelBySession, [meta.id]: meta.modelPolicy },
+      modelBySession: { ...s.modelBySession, [meta.id]: { policy: meta.modelPolicy, override: meta.modelOverride } },
     }));
   },
 
@@ -256,6 +259,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       },
     }));
     void bridge.setMode(sid, mode).catch(() => undefined);
+  },
+
+  switchModel: (to, model) => {
+    const sid = get().activeSessionId;
+    if (!sid) return;
+    // 状态更新与时间线提示以 modelSwitched 回执事件驱动（与 Runtime 口径一致）
+    void bridge.switchModel(sid, to, model).catch(() => undefined);
   },
 
   deleteMemory: async (name) => {
@@ -355,12 +365,18 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         case 'modelSwitched': {
           const list = s.streams[event.sessionId] ?? [];
           return {
-            modelBySession: { ...s.modelBySession, [event.sessionId]: event.to },
+            modelBySession: { ...s.modelBySession, [event.sessionId]: { policy: event.to, override: event.modelOverride } },
             streams: {
               ...s.streams,
               [event.sessionId]: [
                 ...list,
-                { kind: 'system', key: nextKey('sys'), text: `模型档位切换：${event.from} → ${event.to}（${event.reason}）` },
+                {
+                  kind: 'system',
+                  key: nextKey('sys'),
+                  text: event.modelOverride
+                    ? `模型切换：${event.from} → ${event.modelOverride}（${event.reason}）`
+                    : `模型档位切换：${event.from} → ${event.to}（${event.reason}）`,
+                },
               ],
             },
           };

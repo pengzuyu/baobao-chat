@@ -147,6 +147,9 @@ pub struct SessionRunner {
     pub workspace: String,
     pub mode: PermissionMode,
     pub model_policy: ModelTier,
+    /// 会话级模型直达引用（0023：p:<provider_id>:<model>；None=档位别名）。
+    /// 仅主循环对话模型；planner/压缩/探查/选角等辅助调用恒档位
+    pub model_override: Option<String>,
     state: SessionState,
     history: Vec<Round>,
     tool_results: Vec<ToolResultEntry>,
@@ -182,6 +185,7 @@ impl SessionRunner {
         workspace: String,
         mode: PermissionMode,
         model_policy: ModelTier,
+        model_override: Option<String>,
     ) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let (dtx, drx) = std::sync::mpsc::channel();
@@ -190,6 +194,7 @@ impl SessionRunner {
             workspace,
             mode,
             model_policy,
+            model_override,
             state: state::begin(),
             history: vec![],
             tool_results: vec![],
@@ -453,11 +458,15 @@ impl SessionRunner {
                 },
             );
             let messages = to_chat_messages(&assembled);
-            // 19 篇 §3.2：调用方 model 只允许档位别名
-            let model_name = match self.model_policy {
-                ModelTier::Fast => "bbw-fast".to_string(),
-                ModelTier::Strong => "bbw-strong".to_string(),
-            };
+            // 19 篇 §3.2 + 0023 引用扩展：override 直达引用优先（p:<id>:<model>，
+            // 网关校验归属/清单），缺省回落档位别名
+            let model_name =
+                self.model_override
+                    .clone()
+                    .unwrap_or_else(|| match self.model_policy {
+                        ModelTier::Fast => "bbw-fast".to_string(),
+                        ModelTier::Strong => "bbw-strong".to_string(),
+                    });
             let req = ChatRequest {
                 model: model_name,
                 messages,

@@ -328,7 +328,7 @@ bbrt-mcp/src/
 | 宿主→RT | initialize | 握手 | protocolVersion, capabilities[], dataDir, proxyConfig | 进程拉起后首条 | REQ→initialize.result |
 | RT→宿主 | initialize.result | 握手回执 | runtimeVersion, tools[], capabilities[] | 收 initialize | 回执 |
 | RT→宿主 | runtime.ready ★ | 就绪信号 | runtimeVersion, activeSessions=0, walHealthy | 握手后、进入服务态前 | NTF |
-| 宿主→RT | session.start | 新建/恢复会话 | sessionId, workspace, mode, modelPolicy, skills[], historyRef(恢复指针), backendHint? | 用户新建/崩溃恢复 | REQ→session.ready |
+| 宿主→RT | session.start | 新建/恢复会话 | sessionId, workspace, mode, modelPolicy, skills[], historyRef(恢复指针), backendHint?, **model?(0023 直达引用 p:\<providerId\>:\<model\>，仅主循环对话模型，planner/压缩等辅助调用恒档位)** | 用户新建/崩溃恢复 | REQ→session.ready |
 | RT→宿主 | session.ready ★（=08 session.started 细化） | 会话可用 | sessionId, restored(bool), replayedEvents?, warnings[] | 初始化/重放完成 | 回执 |
 | 宿主→RT | user.message | 用户输入 | sessionId, text, attachments[], slash?(/strong…) | 用户发送/斜杠指令 | REQ（回执=接受入队） |
 | RT→宿主 | stream.delta | 流式增量 | sessionId, delta, seq, channel(text\|reasoning)★ | SSE chunk 到达 | UNT |
@@ -342,7 +342,7 @@ bbrt-mcp/src/
 | 宿主→RT | checkpoint.restore ★ | 恢复 | checkpointId | 用户确认恢复 | REQ→checkpoint.restored {ok, newCheckpointId}（恢复前自动建 pre-restore 保护快照；2026-11-07 落地命名） |
 | RT→宿主 | checkpoint.restored | 恢复回执 | ok, newCheckpointId, error | 同上 | REQ 成对回执 |
 | RT→宿主 | compaction.event | 压缩通知 | sessionId, phase(start/done), freedTokens, keptRounds | §5.2 | UNT |
-| RT→宿主 | model.switched | 档位切换 | sessionId, from, to, reason(auto/user/降档) | §路由规则 | UNT |
+| RT→宿主 | model.switched | 档位切换 | sessionId, from, to, **model?(0023 切换后直达引用，None=档位别名)**, reason(auto/user/降档) | §路由规则 | UNT |
 | RT→宿主 | subagent.spawn ★ | 子 Agent 派生 | sessionId, subId, taskDigest, toolSubset | §7 fan-out | UNT |
 | RT→宿主 | subagent.event | 子 Agent 事件 | subId, phase(spawn/delta/done/fail), summary | 子循环内 | UNT |
 | RT→宿主 | subagent.join ★ | 汇总完成 | sessionId, results[{subId, ok, summary≤2k}] | 全部 join/自杀 | UNT |

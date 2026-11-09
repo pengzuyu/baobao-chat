@@ -42,6 +42,8 @@ pub struct StartParams {
     pub workspace: String,
     pub mode: PermissionMode,
     pub model_policy: ModelTier,
+    /// 会话级模型直达引用（0023：p:<provider_id>:<model>；None=档位别名）
+    pub model_override: Option<String>,
     pub title: String,
     /// 崩溃恢复产物（session.start 带 historyRef 时由装配层先行 recover；
     /// None=全新会话）
@@ -111,6 +113,7 @@ impl SessionManager {
                 .to_string(),
                 backend: None,
                 model_policy: format!("{:?}", p.model_policy).to_lowercase(),
+                model_override: p.model_override.clone(),
                 status: "idle".into(),
                 share_enabled: false,
                 created_at: now as i64,
@@ -131,6 +134,7 @@ impl SessionManager {
             p.workspace.clone(),
             p.mode,
             p.model_policy,
+            p.model_override.clone(),
         );
         self.permission_tx
             .lock()
@@ -244,6 +248,7 @@ impl SessionManager {
         &self,
         session_id: Option<&str>,
         to: crate::events::ModelTier,
+        model_override: Option<&str>,
         reason: &str,
     ) -> Result<usize, ManagerError> {
         let entries: Vec<(String, Arc<ManagedSession>)> = {
@@ -269,24 +274,38 @@ impl SessionManager {
                 continue; // turn 中：跳过该会话（广播语义尽力而为）
             };
             let from = runner.model_policy;
-            if from == to {
-                continue; // 同档幂等
+            if from == to && runner.model_override.as_deref() == model_override {
+                continue; // 同档且同 override：幂等
             }
             runner.model_policy = to;
+            runner.model_override = model_override.map(str::to_string);
             drop(guard);
+            // 持久化（修既有缺陷：此前切换不回写 agent_session，重启即丢）
+            if let Some(store) = &self.store {
+                let _ = store.lock().unwrap().update_session_model(
+                    &sid,
+                    &format!("{to:?}").to_lowercase(),
+                    model_override,
+                );
+            }
             self.deps
                 .sink
                 .emit(crate::events::SessionEvent::ModelSwitched {
                     session_id: sid.clone(),
                     from,
                     to,
+                    model_override: model_override.map(str::to_string),
                     reason: reason.to_string(),
                 });
             self.deps.wal.append(
                 &sid,
                 "model.switched",
                 &format!(
-                    "{{\"from\":\"{from:?}\",\"to\":\"{to:?}\",\"reason\":\"{}\"}}",
+                    "{{\"from\":\"{from:?}\",\"to\":\"{to:?}\",\"model\":{},\"reason\":\"{}\"}}",
+                    match model_override {
+                        Some(m) => format!("\"{m}\""),
+                        None => "null".to_string(),
+                    },
                     reason
                 ),
             );

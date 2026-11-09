@@ -129,6 +129,7 @@ fn skill_body_injected_on_trigger_only() {
         "/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
 
     // 命中轮
@@ -276,6 +277,7 @@ fn pick_tools_narrows_to_declared_union() {
         "/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     runner.run_turn("帮我部署服务", &deps);
     let seen = model.0.lock().unwrap().clone();
@@ -325,6 +327,7 @@ fn pick_tools_keeps_full_when_undeclared() {
         "/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     runner.run_turn("自由发挥", &deps);
     let seen = model.0.lock().unwrap().clone();

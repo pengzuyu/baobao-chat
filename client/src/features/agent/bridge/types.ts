@@ -38,6 +38,8 @@ export interface AgentSessionMeta {
   workspace: string;
   mode: PermissionMode;
   modelPolicy: 'fast' | 'strong' | 'auto';
+  /** 会话级模型直达引用（0023 多供应商；p:<providerId>:<model>；缺省=档位别名） */
+  modelOverride?: string;
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;
@@ -146,7 +148,7 @@ export type AgentEvent =
   | { type: 'reportDaily'; date: string; path: string; stats: ReportStats }
   | { type: 'sessionEnded'; sessionId: string; summary: string }
   | { type: 'checkpointCreated'; sessionId: string; checkpointId: string; filesChanged: string[]; reason: string }
-  | { type: 'modelSwitched'; sessionId: string; from: 'fast' | 'strong' | 'auto'; to: 'fast' | 'strong' | 'auto'; reason: string };
+  | { type: 'modelSwitched'; sessionId: string; from: 'fast' | 'strong' | 'auto'; to: 'fast' | 'strong' | 'auto'; modelOverride?: string; reason: string };
 
 /**
  * Agent 桥接接口：UI 只面对该接口（D08 §5.1 Tauri 命令表的前端封装）。
@@ -160,10 +162,13 @@ export interface AgentBridge {
 
   /** 会话列表（session_list，按 updated_at 倒序） */
   listSessions(): Promise<AgentSessionMeta[]>;
-  /** 新建会话（agent_start_session：workspace + 模式；form 固定 workbench） */
-  startSession(workspace: string, mode: PermissionMode): Promise<AgentSessionMeta>;
+  /** 新建会话（agent_start_session：workspace + 模式 + 模型直达引用（0023 可选）；form 固定 workbench） */
+  startSession(workspace: string, mode: PermissionMode, model?: string): Promise<AgentSessionMeta>;
   /** 发送用户消息（agent_input；UI 乐观上屏，回复经 streamDelta 事件回流） */
   sendMessage(sessionId: string, text: string): Promise<void>;
+  /** 会话内切换模型（agent_switch_model：model 非空=直达引用；to 为名义档位；
+   *  model 缺省=清引用回档位。回执 modelSwitched 事件） */
+  switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void>;
   /** 暂停/恢复（agent_pause / agent_resume，D11 §3 迁移 16/17） */
   pause(sessionId: string): Promise<void>;
   resume(sessionId: string): Promise<void>;

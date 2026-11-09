@@ -64,6 +64,8 @@ interface SessionRow {
   workspace: string;
   mode: PermissionMode;
   model_policy: 'fast' | 'strong' | 'auto';
+  /** 0023 模型直达引用（agent_session.model_override） */
+  model_override?: string;
   status: SessionStatus;
   created_at: number;
   updated_at: number;
@@ -106,6 +108,7 @@ function mapSession(row: SessionRow): AgentSessionMeta {
     workspace: row.workspace,
     mode: row.mode,
     modelPolicy: row.model_policy,
+    modelOverride: row.model_override,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -146,12 +149,14 @@ export class TauriAgentBridge implements AgentBridge {
     return data.items.map(mapSession).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string): Promise<AgentSessionMeta> {
     const ack = await invoke<{ session_id: string }>('agent_start_session', {
       workspaceId: workspace,
       form: 'workbench',
       mode,
       modelPolicy: 'auto',
+      // 0023 模型直达引用（p:<id>:<model>）；缺省=档位别名（宿主命令透传 Runtime session.start）
+      model: model ?? null,
     });
     // 起始元信息由 session.state 事件补全；先给最小可用投影
     return {
@@ -160,6 +165,7 @@ export class TauriAgentBridge implements AgentBridge {
       workspace,
       mode,
       modelPolicy: 'auto',
+      modelOverride: model,
       status: 'starting',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -168,6 +174,11 @@ export class TauriAgentBridge implements AgentBridge {
 
   async sendMessage(sessionId: string, text: string): Promise<void> {
     await invoke('agent_input', { sessionId, text });
+  }
+
+  async switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void> {
+    // 回执经 agent://event 的 model.switched 镜像事件
+    await invoke('agent_switch_model', { sessionId, to, model: model ?? null });
   }
 
   async pause(sessionId: string): Promise<void> {
@@ -335,6 +346,7 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         sessionId: sid,
         from: (str(raw.from) || 'auto') as 'fast' | 'strong' | 'auto',
         to: (str(raw.to) || 'auto') as 'fast' | 'strong' | 'auto',
+        modelOverride: raw.model ? str(raw.model) : undefined,
         reason: str(raw.reason),
       };
     case 'memory.saved':

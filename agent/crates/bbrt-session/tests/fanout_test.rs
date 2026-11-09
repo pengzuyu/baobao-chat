@@ -241,6 +241,7 @@ fn fanout_two_probes_join_into_history() {
         "/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     runner.run_turn("梳理这个项目的认证与配置", &deps);
 
@@ -329,6 +330,7 @@ fn fanout_none_keeps_normal_loop() {
         "/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     runner.run_turn("普通单任务", &deps);
 

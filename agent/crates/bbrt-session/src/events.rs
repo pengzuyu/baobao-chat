@@ -108,6 +108,8 @@ pub enum SessionEvent {
         session_id: String,
         from: ModelTier,
         to: ModelTier,
+        /// 切换后的直达引用（0023；None=档位别名模式）
+        model_override: Option<String>,
         reason: String,
     },
     /// checkpoint.created（08 §4.4 修改前快照/手动/委派/恢复保护）

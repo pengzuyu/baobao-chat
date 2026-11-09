@@ -87,6 +87,7 @@ fn seed_session(store: &Store, dir: &Path, session_id: &str) {
             mode: "ask".into(),
             backend: None,
             model_policy: "strong".into(),
+            model_override: None,
             status: "idle".into(),
             share_enabled: false,
             created_at: 0,
@@ -354,6 +355,7 @@ fn pre_edit_snapshot_fires_on_write_tool() {
         "/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     runner.run_turn("帮我改 a.txt", &deps);
 
@@ -402,6 +404,7 @@ fn wal_replay_recovers_user_turn_after_fix() {
         dir.to_string_lossy().into_owned(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     runner.run_turn("修复登录超时并跑测试", &deps);
 
@@ -464,6 +467,7 @@ fn manager_workspace_of() {
             workspace: "/ws/mine".into(),
             mode: PermissionMode::Ask,
             model_policy: ModelTier::Strong,
+            model_override: None,
             title: "t".into(),
             restored: None,
         },

@@ -189,6 +189,7 @@ fn happy_path_tool_call_then_answer() {
         "/tmp/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     let report = runner.run_turn("读一下 foo.txt", &d);
 
@@ -243,6 +244,7 @@ fn permission_allow_executes_and_denies_blocks() {
         "/tmp/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     runner.permission_timeout = Duration::from_millis(500);
     let tx = runner.permission_sender();
@@ -288,6 +290,7 @@ fn permission_allow_executes_and_denies_blocks() {
         "/tmp/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     r2.permission_timeout = Duration::from_millis(500);
     let tx = r2.permission_sender();
@@ -323,6 +326,7 @@ fn permission_timeout_counts_as_deny() {
         "/tmp/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     runner.permission_timeout = Duration::from_millis(100);
     let report = runner.run_turn("无人应答", &d);
@@ -354,6 +358,7 @@ fn memory_heuristic_and_daily_report() {
         "/tmp/ws".into(),
         PermissionMode::Ask,
         ModelTier::Fast,
+        None,
     );
     runner.run_turn("记住：本机服务端口用 8090", &d);
     let evs = events_of(sink.as_ref());
@@ -392,6 +397,7 @@ fn consecutive_failures_pause_loop() {
         "/tmp/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     let report = runner.run_turn("反复失败", &d);
     assert!(report.paused);
@@ -472,6 +478,7 @@ fn wal_records_monotonic_events() {
         "/tmp/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     runner.run_turn("记录一下", &d);
     let wal = log.0.lock().unwrap();
@@ -500,6 +507,7 @@ fn manager_limits_three_active_sessions() {
                 workspace: "/w".into(),
                 mode: PermissionMode::Ask,
                 model_policy: ModelTier::Fast,
+                model_override: None,
                 title: "t".into(),
                 restored: None,
             },
@@ -513,6 +521,7 @@ fn manager_limits_three_active_sessions() {
                 workspace: "/w".into(),
                 mode: PermissionMode::Ask,
                 model_policy: ModelTier::Fast,
+                model_override: None,
                 title: "t".into(),
                 restored: None
             }
@@ -527,6 +536,7 @@ fn manager_limits_three_active_sessions() {
             workspace: "/w".into(),
             mode: PermissionMode::Ask,
             model_policy: ModelTier::Fast,
+            model_override: None,
             title: "t".into(),
             restored: None,
         },
@@ -567,6 +577,7 @@ fn compaction_triggers_on_long_history() {
         "/tmp/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     // 预填长历史
     let _ = MiniBudget;
@@ -628,6 +639,7 @@ fn max_steps_guard() {
         "/tmp/ws".into(),
         PermissionMode::FullAuto,
         ModelTier::Fast,
+        None,
     );
     let report = runner.run_turn("无限工具循环", &d);
     assert!(report.steps <= MAX_STEPS);
@@ -821,6 +833,7 @@ fn delegate_flow_accept_review() {
         "/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     runner.permission_timeout = Duration::from_millis(800);
     let dtx = runner.delegate_sender();
@@ -876,6 +889,7 @@ fn delegate_flow_reject_review() {
         "/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     runner.permission_timeout = Duration::from_millis(800);
     let dtx = runner.delegate_sender();
@@ -923,6 +937,7 @@ fn delegate_without_launcher_blocked_8030() {
         "/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     runner.permission_timeout = Duration::from_millis(200);
     let _ = runner.run_turn("委派", &d);
@@ -1003,6 +1018,7 @@ fn w2_lesson_after_repeated_tool_failures() {
         "/ws".into(),
         PermissionMode::FullAuto,
         ModelTier::Strong,
+        None,
     );
     let _ = runner.run_turn("跑一下构建", &d);
 
@@ -1046,6 +1062,7 @@ fn w3_distills_memories_on_session_end() {
         "/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     let _ = runner.run_turn("以后做事先给我方案再动手", &d);
     runner.end(&d, "");
@@ -1084,6 +1101,7 @@ fn w3_distill_swallows_unparseable_output() {
         "/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     let _ = runner.run_turn("帮我看下配置", &d);
     runner.end(&d, "");
@@ -1112,6 +1130,7 @@ fn w3_skipped_when_no_assistant_reply() {
         "/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     runner.end(&d, ""); // 未发生任何对话
     assert_eq!(
@@ -1147,6 +1166,7 @@ fn system_prompt_carries_memory_guidance_and_recall() {
         "/ws".into(),
         PermissionMode::Ask,
         ModelTier::Strong,
+        None,
     );
     let _ = runner.run_turn("8090 端口起服务", &d);
     let systems = model.seen_system.lock().unwrap().clone();
@@ -1200,6 +1220,7 @@ fn delegate_wal_audit_trail() {
         "/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     runner.permission_timeout = Duration::from_millis(800);
     let dtx = runner.delegate_sender();
@@ -1258,6 +1279,7 @@ fn delegate_brief_timeout_wal() {
         "/ws".into(),
         PermissionMode::AutoEdit,
         ModelTier::Strong,
+        None,
     );
     runner.permission_timeout = Duration::from_millis(200);
     // 不发 Launch → brief 超时
@@ -1308,6 +1330,7 @@ fn manager_switch_model_emits() {
             workspace: "/ws-sw".into(),
             mode: PermissionMode::AutoEdit,
             model_policy: ModelTier::Strong,
+            model_override: None,
             title: "切换测试".into(),
             restored: None,
         },
@@ -1316,13 +1339,13 @@ fn manager_switch_model_emits() {
 
     // 同档幂等：不产生事件
     assert_eq!(
-        mgr.switch_model(Some("s-sw"), ModelTier::Strong, "user")
+        mgr.switch_model(Some("s-sw"), ModelTier::Strong, None, "user")
             .unwrap(),
         0
     );
     // 切档：事件 + WAL
     assert_eq!(
-        mgr.switch_model(Some("s-sw"), ModelTier::Fast, "user")
+        mgr.switch_model(Some("s-sw"), ModelTier::Fast, None, "user")
             .unwrap(),
         1
     );
@@ -1336,7 +1359,171 @@ fn manager_switch_model_emits() {
         .contains(&"model.switched".to_string()));
     // 不存在的会话 → NotFound
     assert!(mgr
-        .switch_model(Some("nope"), ModelTier::Fast, "user")
+        .switch_model(Some("nope"), ModelTier::Fast, None, "user")
         .is_err());
     let _ = NoopEventLog; // 引用保持（避免 unused import 波动）
+}
+
+// ── 0023 模型直达引用：override 优先 / 档位回落 / 切换持久化 ──
+
+/// 捕获型假模型：记录每次请求的 model（剧本=纯文本收尾）
+struct CapturingModel {
+    models: Mutex<Vec<String>>,
+}
+impl ChatClient for CapturingModel {
+    fn chat(
+        &self,
+        req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        self.models.lock().unwrap().push(req.model.clone());
+        Ok(Box::new(
+            vec![
+                Ok(StreamEvent::TextDelta { text: "答".into() }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 5,
+                        completion_tokens: 1,
+                    },
+                }),
+            ]
+            .into_iter(),
+        ))
+    }
+}
+
+fn capture_deps(model: Arc<CapturingModel>) -> LoopDeps {
+    LoopDeps {
+        model,
+        delegator: None,
+        tools: Arc::new(FakeTools {
+            confirm: false,
+            executed: Mutex::new(vec![]),
+            fail: false,
+        }),
+        memory: None,
+        wal: Arc::new(NoopEventLog),
+        sink: Arc::new(CollectSink::default()),
+        snapshots: None,
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    }
+}
+
+/// override 存在 → 主循环 model 直达引用透传；None → 回落档位别名
+#[test]
+fn model_override_routes_reference_and_falls_back() {
+    let cap = Arc::new(CapturingModel {
+        models: Mutex::new(vec![]),
+    });
+    let d = capture_deps(cap.clone());
+    let mut runner = SessionRunner::new(
+        "s-ref".into(),
+        "/tmp/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        Some("p:1:glm-5.3".into()),
+    );
+    let _ = runner.run_turn("你好", &d);
+    assert_eq!(*cap.models.lock().unwrap(), vec!["p:1:glm-5.3".to_string()]);
+
+    let cap2 = Arc::new(CapturingModel {
+        models: Mutex::new(vec![]),
+    });
+    let d2 = capture_deps(cap2.clone());
+    let mut runner2 = SessionRunner::new(
+        "s-ref2".into(),
+        "/tmp/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    let _ = runner2.run_turn("你好", &d2);
+    assert_eq!(*cap2.models.lock().unwrap(), vec!["bbw-strong".to_string()]);
+}
+
+/// switch_model 带 override：事件携带引用 + agent_session 持久化（含清除）
+#[test]
+fn switch_model_override_persists() {
+    use bbrt_session::events::SessionEvent;
+    use bbrt_session::manager::SessionManager;
+    use bbrt_store::Store;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Mutex::new(Store::open(&tmp.path().join("t.db")).unwrap()));
+    let sink = Arc::new(CollectSink::default());
+    let d = LoopDeps {
+        model: Arc::new(FakeModel {
+            calls: AtomicUsize::new(0),
+            tool_name: None,
+        }),
+        delegator: None,
+        tools: Arc::new(FakeTools {
+            confirm: false,
+            executed: Mutex::new(vec![]),
+            fail: false,
+        }),
+        memory: None,
+        wal: Arc::new(NoopEventLog),
+        sink: sink.clone(),
+        snapshots: None,
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let mgr = SessionManager::new(d, Some(store.clone()));
+    mgr.start(
+        "s-ov".into(),
+        bbrt_session::StartParams {
+            workspace: "/ws".into(),
+            mode: PermissionMode::Ask,
+            model_policy: ModelTier::Strong,
+            model_override: Some("p:2:deepseek-chat".into()),
+            title: "引用持久化".into(),
+            restored: None,
+        },
+    )
+    .unwrap();
+    // start 即带 override → 落库
+    {
+        let s = store.lock().unwrap();
+        let row = s.get_session("s-ov").unwrap().unwrap();
+        assert_eq!(row.model_override.as_deref(), Some("p:2:deepseek-chat"));
+    }
+
+    // 切到档位（清 override）→ 事件 + 库回写
+    assert_eq!(
+        mgr.switch_model(Some("s-ov"), ModelTier::Fast, None, "user")
+            .unwrap(),
+        1
+    );
+    let evts = events_of(sink.as_ref());
+    assert!(evts.iter().any(|e| matches!(
+        e,
+        SessionEvent::ModelSwitched { to, model_override: None, .. } if *to == ModelTier::Fast
+    )));
+    {
+        let s = store.lock().unwrap();
+        let row = s.get_session("s-ov").unwrap().unwrap();
+        assert_eq!(row.model_policy, "fast");
+        assert!(row.model_override.is_none());
+    }
+
+    // 再切回引用 → 库存 override
+    assert_eq!(
+        mgr.switch_model(Some("s-ov"), ModelTier::Fast, Some("p:1:glm-5.3"), "user")
+            .unwrap(),
+        1
+    );
+    {
+        let s = store.lock().unwrap();
+        let row = s.get_session("s-ov").unwrap().unwrap();
+        assert_eq!(row.model_override.as_deref(), Some("p:1:glm-5.3"));
+    }
 }

@@ -280,7 +280,7 @@ func (p *OpenAICompatProvider) StreamChat(ctx context.Context, req *ChatRequest)
 		}
 		body := map[string]any{"model": upstream, "messages": req.Messages, "stream": true}
 		if len(req.Tools) > 0 {
-			body["tools"] = req.Tools
+			body["tools"] = normalizeToolsForUpstream(req.Tools)
 		}
 		if req.Temperature != nil {
 			body["temperature"] = *req.Temperature
@@ -342,6 +342,38 @@ func (p *OpenAICompatProvider) Embed(_ context.Context, _ []string) ([][]float32
 }
 
 // ---- 小工具 ----
+
+// normalizeToolsForUpstream 工具定义出站归一化（§3.1 适配层职责）：调用方形态不
+// 一——Runtime（D11 §2.7）发 {name,description,inputSchema} 扁平 camelCase，
+// OpenAI 官方客户端发 {type:"function",function:{name,description,parameters}}。
+// 上游按 OpenAI 形态校验（智谱 1214：type cannot be empty），已带 type 的原样透传，
+// 扁平形态包一层 function 壳；两形都不是的透传由上游报错。
+func normalizeToolsForUpstream(tools []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		if _, ok := t["type"]; ok {
+			out = append(out, t)
+			continue
+		}
+		name, _ := t["name"].(string)
+		if name == "" {
+			out = append(out, t)
+			continue
+		}
+		fn := map[string]any{"name": name}
+		if d, ok := t["description"]; ok {
+			fn["description"] = d
+		}
+		for _, key := range []string{"parameters", "inputSchema", "input_schema"} {
+			if v, ok := t[key]; ok {
+				fn["parameters"] = v
+				break
+			}
+		}
+		out = append(out, map[string]any{"type": "function", "function": fn})
+	}
+	return out
+}
 
 func tierOf(alias string) string {
 	return strings.TrimPrefix(alias, "bbw-")

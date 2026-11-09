@@ -48,6 +48,7 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             workspace: "~/code/bbw".into(),
             mode: PermissionMode::AutoEdit,
             model_policy: ModelPolicy::Auto,
+            model: Some("p:1:glm-5.3".into()),
             skills: vec!["sql-review".into()],
             history_ref: None,
             backend_hint: Some("zcode".into()),
@@ -122,6 +123,7 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
         HostToRuntime::ModelSwitch {
             session_id: Some("s1".into()),
             to: bbrt_protocol::ModelPolicy::Fast,
+            model: Some("p:2:deepseek-chat".into()),
             reason: Some("user".into()),
         },
     ]
@@ -217,6 +219,7 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             session_id: "sess-1".into(),
             from: ModelPolicy::Fast,
             to: ModelPolicy::Strong,
+            model: Some("p:1:glm-5.3".into()),
             reason: ModelSwitchReason::Auto,
         },
         RuntimeToHost::SubagentSpawn {
@@ -386,6 +389,7 @@ fn golden_session_start() {
             workspace: "~/code/bbw".into(),
             mode: PermissionMode::Ask,
             model_policy: ModelPolicy::Fast,
+            model: None, // None=缺席不序列化(golden)
             skills: vec!["sql-review".into()],
             history_ref: None,
             backend_hint: None,
@@ -543,6 +547,7 @@ fn golden_compaction_and_model_switched() {
             session_id: "s".into(),
             from: ModelPolicy::Strong,
             to: ModelPolicy::Fast,
+            model: None,
             reason: ModelSwitchReason::Downgrade,
         },
         json!({"type":"model.switched","sessionId":"s","from":"strong","to":"fast","reason":"downgrade"}),
@@ -841,6 +846,7 @@ fn unknown_fields_are_tolerated() {
             workspace: "w".into(),
             mode: PermissionMode::Ask,
             model_policy: ModelPolicy::Auto,
+            model: None,
             skills: vec![],
             history_ref: None,
             backend_hint: None,
@@ -859,6 +865,7 @@ fn envelope_wrap_unwrap_roundtrip() {
         workspace: "~/code/bbw".into(),
         mode: PermissionMode::Ask,
         model_policy: ModelPolicy::Auto,
+        model: None,
         skills: vec![],
         history_ref: None,
         backend_hint: None,

@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Dropdown, Modal, type MenuProps } from 'antd';
-import { Pause, Play, PanelRightClose, PanelRightOpen, ShieldCheck, Square } from 'lucide-react';
+import { Pause, Play, PanelRightClose, PanelRightOpen, ShieldCheck, Sparkles, Square } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
@@ -19,6 +19,8 @@ import { useConnectionStore } from '../../../shared/store/connection';
 import { useAgentStore, selectActiveSession, selectPendingPermissions, composerDisabledFor } from '../store/agent';
 import { AGENT_MODE_OPTIONS, MODEL_TIER_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
 import type { PermissionMode } from '../bridge/types';
+import { fetchMeSettings, fetchMyProviders, fetchSharedProviders, type AIDefaultSetting } from '../../settings/api/ai';
+import type { AIProvider } from '../../admin/model/types';
 import { AgentSubNav } from '../components/AgentSubNav';
 import { AgentSessionList } from '../components/AgentSessionList';
 import { AgentContextSidebar } from '../components/AgentContextSidebar';
@@ -27,6 +29,18 @@ import { ToolCard } from '../components/ToolCard';
 import { PermissionCard, type PermissionDecision } from '../components/PermissionCard';
 import { TypingState } from '../components/TypingState';
 import { Composer } from '../components/Composer';
+
+/** ai_default → 会话 model 直达引用（mode=org/解析失败 → undefined=档位别名） */
+async function resolveDefaultModel(): Promise<string | undefined> {
+  try {
+    const settings = await fetchMeSettings();
+    const ai = settings.ai_default as AIDefaultSetting | undefined;
+    if (ai?.mode === 'provider' && ai.providerId && ai.model) return `p:${ai.providerId}:${ai.model}`;
+  } catch {
+    /* mock 桥/未登录：回落档位 */
+  }
+  return undefined;
+}
 
 export function AgentWorkbenchPage() {
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
@@ -55,6 +69,21 @@ export function AgentWorkbenchPage() {
   const endActive = useAgentStore((s) => s.endActive);
   const emergencyStop = useAgentStore((s) => s.emergencyStop);
   const setMode = useAgentStore((s) => s.setMode);
+  const switchModel = useAgentStore((s) => s.switchModel);
+
+  // ---- 模型选项（0023 多供应商：公司级 shared + 我的 BYOK；失败静默回落纯档位）----
+  const [aiProviders, setAiProviders] = useState<{ shared: AIProvider[]; mine: AIProvider[] }>({ shared: [], mine: [] });
+  useEffect(() => {
+    let disposed = false;
+    void Promise.all([fetchSharedProviders(), fetchMyProviders().catch(() => [])])
+      .then(([shared, mine]) => {
+        if (!disposed) setAiProviders({ shared, mine });
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     void init();
@@ -160,10 +189,13 @@ export function AgentWorkbenchPage() {
   };
   const handleCreate = () => {
     const currentMode = activeSession?.mode ?? 'ask';
-    void startSession(currentMode).then(() => {
-      const sid = useAgentStore.getState().activeSessionId;
-      if (sid) navigate(`/agent/s/${sid}`);
-    });
+    // 新会话模型 = 用户默认（settings.ai_default → p: 引用；未设/失败=档位别名）
+    void resolveDefaultModel()
+      .then((model) => startSession(currentMode, model))
+      .then(() => {
+        const sid = useAgentStore.getState().activeSessionId;
+        if (sid) navigate(`/agent/s/${sid}`);
+      });
   };
   const handleRespond = (d: PermissionDecision) => {
     respondPermission(d.requestId, d.decision, d.scope, d.editedArgs);
@@ -174,7 +206,41 @@ export function AgentWorkbenchPage() {
   const canResume = status === 'paused';
   const canStop = canPause || canResume;
   const modeOption = AGENT_MODE_OPTIONS.find((m) => m.value === activeSession?.mode);
-  const modelTier = (activeSessionId && modelBySession[activeSessionId]) || activeSession?.modelPolicy || 'auto';
+  const modelChoice = (activeSessionId && modelBySession[activeSessionId]) || {
+    policy: activeSession?.modelPolicy ?? 'auto',
+    override: activeSession?.modelOverride,
+  };
+  const modelTier = modelChoice.policy;
+  /** override 展示名：p:<id>:<model> → 模型尾段（供应商名由下拉菜单承载） */
+  const overrideModel = modelChoice.override?.split(':')[2];
+
+  // ---- 模型切换菜单（0023）：档位 + 公司供应商模型 + 我的供应商模型 ----
+  const providerItems: MenuProps['items'] = useMemo(() => {
+    const ofProvider = (label: string, p: AIProvider): NonNullable<MenuProps['items']> =>
+      p.models.map((m) => ({
+        key: `p:${p.id}:${m.id}`,
+        label: `${label}${p.name} · ${m.label ? `${m.label}（${m.id}）` : m.id}`,
+      }));
+    const shared = aiProviders.shared.flatMap((p) => ofProvider('', p));
+    const mine = aiProviders.mine.flatMap((p) => ofProvider('我的 · ', p));
+    return [
+      { key: 'tier:fast', label: '快 · bbw-fast（公司默认快档）' },
+      { key: 'tier:strong', label: '强 · bbw-strong（公司默认强档）' },
+      ...(shared.length > 0 ? [{ type: 'divider' as const }, { key: 'grp-shared', label: '公司供应商', disabled: true }, ...shared] : []),
+      ...(mine.length > 0 ? [{ type: 'divider' as const }, { key: 'grp-mine', label: '我的供应商', disabled: true }, ...mine] : []),
+    ];
+  }, [aiProviders]);
+
+  const onModelMenuClick: MenuProps['onClick'] = ({ key }) => {
+    if (key.startsWith('tier:')) {
+      switchModel(key.slice(5) as 'fast' | 'strong');
+      return;
+    }
+    // p:<id>:<model> 直达引用（名义档位随当前；回执 modelSwitched 事件驱动 UI）
+    switchModel(modelTier === 'fast' ? 'fast' : 'strong', key);
+  };
+
+  const modelMenu: MenuProps = { items: providerItems, onClick: onModelMenuClick };
 
   const sessionListNode = (
     <AgentSessionList
@@ -261,9 +327,12 @@ export function AgentWorkbenchPage() {
                     {modeOption?.label ?? activeSession.mode}
                   </button>
                 </Dropdown>
-                <span className="agent-model-chip" title="模型档位（model.switched 自动升降档）">
-                  模型 {MODEL_TIER_LABELS[modelTier]}
-                </span>
+                {/* 模型选择（0023：档位别名或供应商模型直达引用；会话内即时切换） */}
+                <Dropdown menu={modelMenu} trigger={['click']}>
+                  <button type="button" className="agent-model-chip" title="切换模型（档位=公司默认路由；供应商模型=直达引用）">
+                    <Sparkles size={13} aria-hidden /> {overrideModel ? `模型 ${overrideModel}` : `模型 ${MODEL_TIER_LABELS[modelTier]}`}
+                  </button>
+                </Dropdown>
                 {/* 状态徽标（D11 §3 枚举中文） */}
                 <span className={`agent-status-badge agent-status-badge--${activeSession.status}`}>
                   <i className="agent-status-badge__dot" aria-hidden />

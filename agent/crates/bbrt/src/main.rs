@@ -320,6 +320,7 @@ fn dispatch(
             workspace,
             mode,
             model_policy,
+            model,
             history_ref,
             ..
         } => {
@@ -364,6 +365,7 @@ fn dispatch(
                     workspace,
                     mode: sec_mode,
                     model_policy: tier,
+                    model_override: model,
                     title: session_id.clone(),
                     restored,
                 },
@@ -486,9 +488,11 @@ fn dispatch(
         HostToRuntime::ModelSwitch {
             session_id,
             to,
+            model,
             reason,
         } => {
-            // model.switched 产生方（D11 §4）：空闲会话档位切换；turn 中跳过
+            // model.switched 产生方（D11 §4）：空闲会话切换；turn 中跳过。
+            // model=直达引用（0023）透传；缺省=清 override 回 to 档位
             let tier = match to {
                 bbrt_protocol::ModelPolicy::Fast => bbrt_session::ModelTier::Fast,
                 bbrt_protocol::ModelPolicy::Strong => bbrt_session::ModelTier::Strong,
@@ -497,6 +501,7 @@ fn dispatch(
             let _ = mgr.switch_model(
                 session_id.as_deref(),
                 tier,
+                model.as_deref(),
                 reason.as_deref().unwrap_or("user"),
             );
             None

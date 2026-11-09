@@ -11,8 +11,12 @@ use rusqlite::Connection;
 
 use crate::StoreError;
 
-/// 迁移脚本清单（下标即版本号-1）。001_init 为 D11 §11 全表 DDL 逐表照建。
-const MIGRATIONS: &[&str] = &[include_str!("migrations/001_init.sql")];
+/// 迁移脚本清单（下标即版本号-1）。001_init 为 D11 §11 全表 DDL 逐表照建；
+/// 002 增列 model_override（会话级模型直达引用，0023 多供应商）。
+const MIGRATIONS: &[&str] = &[
+    include_str!("migrations/001_init.sql"),
+    include_str!("migrations/002_model_override.sql"),
+];
 
 /// 执行所有未应用的迁移。
 pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
@@ -27,9 +31,8 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
         let tx = conn
             .transaction()
             .map_err(|e| StoreError::Migration(format!("开启迁移事务失败: {e}")))?;
-        tx.execute_batch(script).map_err(|e| {
-            StoreError::Migration(format!("版本 {target}（001_init）执行失败: {e}"))
-        })?;
+        tx.execute_batch(script)
+            .map_err(|e| StoreError::Migration(format!("版本 {target} 迁移脚本执行失败: {e}")))?;
         tx.pragma_update(None, "user_version", target)
             .map_err(|e| {
                 StoreError::Migration(format!("user_version 提升到 {target} 失败: {e}"))
@@ -43,7 +46,7 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
 
 #[cfg(test)]
 mod tests {
-    use super::run;
+    use super::{run, MIGRATIONS};
     use crate::Store;
 
     /// 同一文件 open 两次：第二次迁移应整体跳过（重复 CREATE TABLE 会直接报错）。
@@ -57,7 +60,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 1, "迁移后 user_version 应为 1");
+        assert_eq!(v, MIGRATIONS.len() as i64, "迁移后 user_version 应到位");
     }
 
     /// 迁移落库后重开：版本保持、数据仍在（WAL 落盘）。
@@ -74,7 +77,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 1);
+        assert_eq!(v, MIGRATIONS.len() as i64);
         assert!(
             store2.get_session("sess-keep").unwrap().is_some(),
             "重开后数据应仍在"
@@ -90,7 +93,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 1);
+        assert_eq!(v, MIGRATIONS.len() as i64);
         // 再跑一遍验证幂等分支（conn 已应用）
         run(&mut conn).expect("重复迁移失败");
         let tables: i64 = conn

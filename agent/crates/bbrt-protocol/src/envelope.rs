@@ -367,6 +367,10 @@ pub enum HostToRuntime {
         workspace: String,
         mode: PermissionMode,
         model_policy: ModelPolicy,
+        /// 会话级模型直达引用（0023 多供应商）：p:<provider_id>:<model>；
+        /// 缺省=走 model_policy 档位别名。仅主循环对话模型，内部辅助调用恒档位
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
         #[serde(default)]
         skills: Vec<String>,
         /// 恢复指针：崩溃恢复时指向本地事件镜像
@@ -448,6 +452,10 @@ pub enum HostToRuntime {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
         to: ModelPolicy,
+        /// 直达引用（0023）：非空=切到 p:<id>:<model>（to 为名义档位）；
+        /// 显式 null/缺省=清除 override 回 to 档位
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
@@ -654,6 +662,9 @@ pub enum RuntimeToHost {
         session_id: String,
         from: ModelPolicy,
         to: ModelPolicy,
+        /// 切换后的直达引用（0023；None=档位别名模式）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
         reason: ModelSwitchReason,
     },
 

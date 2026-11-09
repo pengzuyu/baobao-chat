@@ -151,6 +151,7 @@ fn row(id: &str) -> bbrt_store::SessionRow {
         mode: "ask".into(),
         backend: None,
         model_policy: "fast".into(),
+        model_override: None,
         status: "idle".into(),
         share_enabled: false,
         created_at: 0,

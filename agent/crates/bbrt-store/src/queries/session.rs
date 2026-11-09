@@ -23,6 +23,9 @@ pub struct SessionRow {
     pub backend: Option<String>,
     /// fast | strong | auto
     pub model_policy: String,
+    /// 会话级模型直达引用（0023 多供应商；p:<provider_id>:<model>）。
+    /// NULL=走 model_policy 档位别名；仅作用于主循环对话模型（002 迁移增列）。
+    pub model_override: Option<String>,
     /// D11 §3 状态机枚举
     pub status: String,
     pub share_enabled: bool,
@@ -33,7 +36,8 @@ pub struct SessionRow {
 }
 
 /// SELECT 列清单（顺序与 from_row 一致）
-const COLS: &str = "id, workspace_id, title, form, mode, backend, model_policy, status, \
+const COLS: &str =
+    "id, workspace_id, title, form, mode, backend, model_policy, model_override, status, \
                     share_enabled, created_at, updated_at, ended_at, summary";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
@@ -45,12 +49,13 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         mode: row.get(4)?,
         backend: row.get(5)?,
         model_policy: row.get(6)?,
-        status: row.get(7)?,
-        share_enabled: row.get::<_, i64>(8)? != 0,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
-        ended_at: row.get(11)?,
-        summary: row.get(12)?,
+        model_override: row.get(7)?,
+        status: row.get(8)?,
+        share_enabled: row.get::<_, i64>(9)? != 0,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        ended_at: row.get(12)?,
+        summary: row.get(13)?,
     })
 }
 
@@ -59,9 +64,9 @@ impl Store {
     pub fn insert_session(&self, s: &SessionRow) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO agent_session
-                 (id, workspace_id, title, form, mode, backend, model_policy, status,
+                 (id, workspace_id, title, form, mode, backend, model_policy, model_override, status,
                   share_enabled, created_at, updated_at, ended_at, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 s.id,
                 s.workspace_id,
@@ -70,6 +75,7 @@ impl Store {
                 s.mode,
                 s.backend,
                 s.model_policy,
+                s.model_override,
                 s.status,
                 s.share_enabled,
                 s.created_at,
@@ -100,6 +106,25 @@ impl Store {
                                    ELSE ended_at END
              WHERE id = ?1",
             params![id, status, summary, now],
+        )?;
+        Ok(())
+    }
+
+    /// 模型选择回写（model.switch 持久化；override None=清直达引用回档位）。
+    pub fn update_session_model(
+        &self,
+        id: &str,
+        policy: &str,
+        model_override: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let now = now_ms();
+        self.conn.execute(
+            "UPDATE agent_session
+             SET model_policy   = ?2,
+                 model_override = ?3,
+                 updated_at     = ?4
+             WHERE id = ?1",
+            params![id, policy, model_override, now],
         )?;
         Ok(())
     }

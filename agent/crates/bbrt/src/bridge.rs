@@ -263,11 +263,13 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             session_id,
             from,
             to,
+            model_override,
             reason,
         } => RuntimeToHost::ModelSwitched {
             session_id: session_id.clone(),
             from: tier_policy(*from),
             to: tier_policy(*to),
+            model: model_override.clone(),
             reason: match reason.as_str() {
                 "user" => ModelSwitchReason::User,
                 "downgrade" => ModelSwitchReason::Downgrade,

@@ -120,6 +120,7 @@ pub(crate) mod testutil {
             mode: "ask".to_string(),
             backend: None,
             model_policy: "auto".to_string(),
+            model_override: None,
             status: "idle".to_string(),
             share_enabled: false,
             created_at: crate::now_ms(),
