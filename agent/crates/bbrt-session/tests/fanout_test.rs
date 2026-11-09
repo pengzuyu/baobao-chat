@@ -461,3 +461,130 @@ fn fanout_window_timeout_goes_background() {
     // 注入回填（manager 级 drain→inject 同款调用面）
     runner.inject_delegate_join("fanout-2", &joins[0].name, &joins[0].summary);
 }
+
+// ---------------------------------------------------------------------------
+// 运行中补充机制（D16 决策⑧）
+// ---------------------------------------------------------------------------
+
+/// 可调子任务模型：未见补充指令→每轮 sleep 50ms+工具调用（保活）；
+/// 见 "[主 Agent 补充指令]" → 按新方向收尾
+struct AdjustableModel;
+impl ChatClient for AdjustableModel {
+    fn chat(
+        &self,
+        req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        let adjusted = req
+            .messages
+            .iter()
+            .any(|m| m.content.contains("[主 Agent 补充指令]"));
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if adjusted {
+            vec![
+                Ok(StreamEvent::TextDelta {
+                    text: "已按补充调整：聚焦配置链路。".into(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 5,
+                        completion_tokens: 3,
+                    },
+                }),
+            ]
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            vec![
+                Ok(StreamEvent::ToolCallBegin {
+                    index: 0,
+                    id: "adj-1".into(),
+                    name: "search_files".into(),
+                }),
+                Ok(StreamEvent::ToolCallDelta {
+                    index: 0,
+                    args_delta: "{}".into(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::ToolCalls,
+                    usage: Usage {
+                        prompt_tokens: 5,
+                        completion_tokens: 2,
+                    },
+                }),
+            ]
+        };
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+/// 运行中补充：探查转后台后经 hub 下发 Input → 注入 user 轮 → 下一模型轮
+/// 按新方向收尾；WAL 留痕 subagent.input。
+#[test]
+fn fanout_midrun_adjust_injected() {
+    let sink = Arc::new(CollectSink(Mutex::new(vec![])));
+    let log = SharedLog::default();
+    let tools = Arc::new(AllowTools(Mutex::new(vec![])));
+    let deps = deps_for(
+        Arc::new(AdjustableModel),
+        Arc::new(TwoTasks),
+        sink.clone(),
+        log.clone(),
+        tools,
+    );
+    let hub = Arc::new(bbrt_session::delegate_bg::DelegateHub::new());
+    let mut runner = SessionRunner::new(
+        "s-adj".into(),
+        "/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    runner.subagent_wait_window = std::time::Duration::from_millis(250);
+    runner.delegate_hub = Some(hub.clone());
+    runner.run_turn("梳理认证与配置", &deps);
+
+    // 从 spawn 事件拿 run_id（探查注册于 spawn 前——路由即达）
+    let mut run_id = String::new();
+    for _ in 0..200 {
+        let evs = sink.0.lock().unwrap().clone();
+        if let Some(SessionEvent::SubagentSpawned { sub_id, .. }) = evs
+            .iter()
+            .find(|e| matches!(e, SessionEvent::SubagentSpawned { .. }))
+        {
+            run_id = sub_id.clone();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!run_id.is_empty(), "应捕获 spawn 事件");
+
+    // 运行中补充：经 hub 定向下发（主 Agent subagent.adjust 同通道）
+    assert!(hub.route(
+        &run_id,
+        &bbrt_session::loop_runner::DelegateHostMsg::Input {
+            text: "只聚焦配置加载链路，忽略认证".into(),
+        }
+    ));
+
+    // 下一模型轮按新方向收尾
+    let mut done = false;
+    for _ in 0..600 {
+        let evs = sink.0.lock().unwrap().clone();
+        if evs.iter().any(|e| {
+            matches!(e, SessionEvent::SubagentProbeEvt { phase, summary, .. }
+                if phase == "done" && summary.as_deref().is_some_and(|s| s.contains("已按补充调整")))
+        }) {
+            done = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(done, "补充指令应注入并被执行");
+    // WAL 留痕（subagent.input）
+    let wal = log.0.lock().unwrap().clone();
+    assert!(wal
+        .iter()
+        .any(|(_, t, p)| t == "subagent.input" && p.contains("配置加载链路")));
+}

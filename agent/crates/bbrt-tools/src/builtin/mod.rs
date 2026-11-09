@@ -156,4 +156,6 @@ pub(crate) fn register_all(registry: &mut ToolRegistry) {
     registry.register(http::http_fetch_def());
     registry.register(memory::memory_save_def());
     registry.register(memory::coding_delegate_def());
+    registry.register(memory::subagent_adjust_def());
+    registry.register(memory::subagent_cancel_def());
 }

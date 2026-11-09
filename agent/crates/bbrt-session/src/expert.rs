@@ -497,6 +497,8 @@ pub struct ExpertCtx {
     pub model: Arc<dyn ChatClient>,
     pub tools: Arc<dyn ToolExecutor>,
     pub mode: PermissionMode,
+    /// 运行中枢（D16 决策⑧：Activation 注册补充指令/取消通道；None=仅本地跑）
+    pub hub: Option<Arc<crate::delegate_bg::DelegateHub>>,
 }
 
 /// 单次 Activation 产物（编排层黑板/汇总用）
@@ -534,6 +536,12 @@ pub fn run_expert(
     let run_id = wal
         .next_run_id()
         .unwrap_or_else(|| format!("act-{now_ms}-{}", ACT_SEQ.fetch_add(1, Ordering::Relaxed)));
+    // 补充指令通道（D16 决策⑧）：注册先于执行循环（同探查口径）
+    let (input_tx, input_rx) = std::sync::mpsc::channel::<crate::loop_runner::DelegateHostMsg>();
+    if let Some(hub) = ctx.hub.as_ref() {
+        hub.register(&run_id, session_id, input_tx.clone());
+    }
+    drop(input_tx);
     let persona_id = assembled.manifest.id.clone();
     let act = format!("expert:{persona_id}:{run_id}");
 
@@ -570,7 +578,48 @@ pub fn run_expert(
 
     let mut history: Vec<Round> = vec![];
     let mut steps = 0usize;
+    let mut cancelled = false;
     let result = loop {
+        // 补充指令 drain（每步轮询；注入为 user 轮——下一模型轮即见）
+        while let Ok(msg) = input_rx.try_recv() {
+            match msg {
+                crate::loop_runner::DelegateHostMsg::Input { text } => {
+                    wal.append_run(
+                        session_id,
+                        &run_id,
+                        "expert.input",
+                        &serde_json::json!({ "run_id": run_id, "text": text }).to_string(),
+                    );
+                    history.push(Round::User {
+                        content: format!("[主 Agent 补充指令] {text}"),
+                    });
+                    sink.emit(SessionEvent::SubagentProbeEvt {
+                        session_id: session_id.to_string(),
+                        sub_id: run_id.clone(),
+                        phase: "delta".into(),
+                        summary: Some(format!("收到补充指令：{}", truncate_chars(&text, 40))),
+                    });
+                }
+                crate::loop_runner::DelegateHostMsg::Cancel { .. } => {
+                    wal.append_run(
+                        session_id,
+                        &run_id,
+                        "expert.cancel",
+                        &serde_json::json!({ "run_id": run_id }).to_string(),
+                    );
+                    cancelled = true;
+                }
+                _ => {}
+            }
+        }
+        if cancelled {
+            break ExpertResult {
+                run_id: run_id.clone(),
+                persona_id: persona_id.clone(),
+                ok: false,
+                summary: format!("已按指令取消，部分结果：{}", last_text(&history)),
+            };
+        }
         if steps >= assembled.max_steps {
             break ExpertResult {
                 run_id: run_id.clone(),
@@ -674,12 +723,21 @@ pub fn run_expert(
     wal.run_end(
         &run_id,
         &RunEnd {
-            status: if result.ok { "done" } else { "failed" },
+            status: if cancelled {
+                "cancelled"
+            } else if result.ok {
+                "done"
+            } else {
+                "failed"
+            },
             eta_actual_ms: started.elapsed().as_millis() as i64,
             summary: &truncate_chars(&result.summary, 400),
             child_session_ref: "",
         },
     );
+    if let Some(hub) = ctx.hub.as_ref() {
+        hub.unregister(&run_id);
+    }
     result
 }
 

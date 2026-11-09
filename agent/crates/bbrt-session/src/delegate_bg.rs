@@ -181,8 +181,21 @@ impl DelegateHub {
         self.runs.lock().unwrap().len()
     }
 
-    fn unregister(&self, run_id: &str) {
+    /// 注销（探查/专家 run 也经此复用——补充指令/取消通道随 run 生命周期）
+    pub fn unregister(&self, run_id: &str) {
         self.runs.lock().unwrap().remove(run_id);
+    }
+
+    /// 注册（探查/专家：run 内部 run_id 分配后、执行循环前调用；
+    /// 注册先于执行=宿主/主 Agent 指令零窗口丢失）
+    pub fn register(&self, run_id: &str, session_id: &str, tx: Sender<DelegateHostMsg>) {
+        self.runs.lock().unwrap().insert(
+            run_id.to_string(),
+            BgRun {
+                session_id: session_id.to_string(),
+                tx,
+            },
+        );
     }
 }
 

@@ -16,9 +16,10 @@ use bbrt_aigw::{ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent,
 use bbrt_context::{estimate_tokens, Round};
 use bbrt_memory::MemoryEngine;
 
+use crate::delegate_bg::DelegateHub;
 use crate::events::{SessionEvent, SessionSink};
 use crate::executor::{ToolExecutor, ToolInvocation, ToolOutcome};
-use crate::loop_runner::EventLog;
+use crate::loop_runner::{DelegateHostMsg, EventLog};
 use crate::state::{self, SessionState};
 use bbrt_sec::gate::PermissionMode;
 
@@ -114,6 +115,8 @@ pub struct ProbeCtx {
     pub workspace: String,
     /// 主循环同款模型名（override 优先回落档位——"与主一致"）
     pub model_name: String,
+    /// 运行中枢（D16 决策⑧：注册补充指令/取消通道；None=未装配仅本地跑）
+    pub hub: Option<Arc<DelegateHub>>,
 }
 
 /// 与主 to_chat_messages 同构的 system 组装（[技能]/[项目]/[记忆] 三段）
@@ -147,6 +150,13 @@ pub fn run_probe(
 ) -> ProbeResult {
     use crate::loop_runner::{RunEnd, RunStart};
     let started = std::time::Instant::now();
+    // 补充指令通道（D16 决策⑧）：注册先于执行循环——主 Agent/宿主
+    // 经 hub 定向下发 Input（注入 user 轮）/Cancel（按指令取消）
+    let (input_tx, input_rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
+    if let Some(hub) = ctx.hub.as_ref() {
+        hub.register(run_id, session_id, input_tx.clone());
+    }
+    drop(input_tx);
     // ETA（P1-6）：滚动统计优先，无样本回落静态表
     let def_ref = "builtin.probe";
     let eta_hint = wal
@@ -184,7 +194,47 @@ pub fn run_probe(
     let tools = ctx.tools.tool_specs();
     let mut history: Vec<Round> = vec![];
     let mut steps = 0usize;
+    let mut cancelled = false;
     let result = loop {
+        // 补充指令 drain（每步轮询；注入为 user 轮——下一模型轮即见）
+        while let Ok(msg) = input_rx.try_recv() {
+            match msg {
+                DelegateHostMsg::Input { text } => {
+                    wal.append_run(
+                        session_id,
+                        run_id,
+                        "subagent.input",
+                        &serde_json::json!({ "run_id": run_id, "text": text }).to_string(),
+                    );
+                    history.push(Round::User {
+                        content: format!("[主 Agent 补充指令] {text}"),
+                    });
+                    sink.emit(SessionEvent::SubagentProbeEvt {
+                        session_id: session_id.to_string(),
+                        sub_id: run_id.to_string(),
+                        phase: "delta".into(),
+                        summary: Some(format!("收到补充指令：{}", truncate_chars(&text, 40))),
+                    });
+                }
+                DelegateHostMsg::Cancel { .. } => {
+                    wal.append_run(
+                        session_id,
+                        run_id,
+                        "subagent.cancel",
+                        &serde_json::json!({ "run_id": run_id }).to_string(),
+                    );
+                    cancelled = true;
+                }
+                _ => {}
+            }
+        }
+        if cancelled {
+            break ProbeResult {
+                run_id: run_id.to_string(),
+                ok: false,
+                summary: format!("已按指令取消，部分结果：{}", last_text(&history)),
+            };
+        }
         if steps >= SUBAGENT_MAX_STEPS {
             break ProbeResult {
                 run_id: run_id.to_string(),
@@ -262,12 +312,21 @@ pub fn run_probe(
     wal.run_end(
         run_id,
         &RunEnd {
-            status: if result.ok { "done" } else { "failed" },
+            status: if cancelled {
+                "cancelled"
+            } else if result.ok {
+                "done"
+            } else {
+                "failed"
+            },
             eta_actual_ms: started.elapsed().as_millis() as i64,
             summary: &truncate_chars(&result.summary, 400),
             child_session_ref: "",
         },
     );
+    if let Some(hub) = ctx.hub.as_ref() {
+        hub.unregister(run_id);
+    }
     result
 }
 
@@ -315,6 +374,7 @@ pub fn fanout_probes(
             memory: env.memory.cloned(),
             workspace: env.workspace.to_string(),
             model_name: env.model_name.clone(),
+            hub: env.hub.clone(),
         };
         let tx = tx.clone();
         let sink = Arc::clone(&sink);

@@ -111,6 +111,47 @@ pub fn memory_save_def() -> ToolDef {
 
 /// coding.delegate 薄门面（D11 §2.4 coding.rs：定义 inputSchema/风险级，执行由 session
 /// 循环的委派专用路径承接——本 crate 的 execute 不会收到该调用；schema 即模型可发现面）
+/// subagent.adjust 薄门面（D16 决策⑧：运行中子任务补充指令——探查/专家/
+/// 委派通用；执行由 session 循环专用路径经 hub 定向下发，execute 不会收到）
+pub fn subagent_adjust_def() -> ToolDef {
+    ToolDef {
+        name: "subagent.adjust".into(),
+        description: "向正在运行的子任务（探查/专家/委派，run_id 见会话内子任务卡或\
+                      运行记录）下发补充指令调整方向；下一轮即生效。\
+                      已结束的 run 不可调整（重新派发即可）"
+            .into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string", "description": "目标 run（r- 前缀）"},
+                "instruction": {"type": "string", "description": "补充/调整指令（一句话）"}
+            },
+            "required": ["run_id", "instruction"]
+        }),
+        risk: RiskLevel::Medium,
+        category: bbrt_sec::gate::ActionCategory::ReadOnly,
+    }
+}
+
+/// subagent.cancel 薄门面（运行中子任务取消；同上专用路径承接）
+pub fn subagent_cancel_def() -> ToolDef {
+    ToolDef {
+        name: "subagent.cancel".into(),
+        description: "取消正在运行的子任务（探查/专家/委派通用；优雅取消，\
+                      已产出部分结果会保留。）"
+            .into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string", "description": "目标 run（r- 前缀）"}
+            },
+            "required": ["run_id"]
+        }),
+        risk: RiskLevel::Medium,
+        category: bbrt_sec::gate::ActionCategory::ReadOnly,
+    }
+}
+
 pub fn coding_delegate_def() -> ToolDef {
     ToolDef {
         name: "coding.delegate".into(),

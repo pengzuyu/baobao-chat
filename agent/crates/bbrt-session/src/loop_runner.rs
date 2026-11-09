@@ -418,6 +418,7 @@ impl SessionRunner {
                     model: Arc::clone(&deps.model),
                     tools: Arc::clone(&deps.tools),
                     mode: self.mode,
+                    hub: self.delegate_hub.clone(),
                 };
                 let sid = self.session_id.clone();
                 let sink_bg = Arc::clone(&deps.sink);
@@ -991,6 +992,69 @@ impl SessionRunner {
         report
     }
 
+    /// 子 Agent 运行中调整（D16 决策⑧）：subagent.adjust{run_id,instruction} /
+    /// subagent.cancel{run_id} → hub 定向 Input/Cancel（探查/专家/委派通用）
+    fn run_subagent_adjust(&self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
+        let v: serde_json::Value =
+            serde_json::from_str(&call.args_json).unwrap_or(serde_json::json!({}));
+        let run_id = v
+            .get("run_id")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if run_id.is_empty() {
+            return ToolOutcome::Blocked {
+                code: 8002,
+                summary: "缺少 run_id 参数".into(),
+            };
+        }
+        let Some(hub) = self.delegate_hub.as_ref() else {
+            return ToolOutcome::Blocked {
+                code: 8002,
+                summary: "运行中枢未装配（无法调整子任务）".into(),
+            };
+        };
+        let msg = if call.name == "subagent.cancel" {
+            deps.wal.append(
+                &self.session_id,
+                "subagent.adjust",
+                &serde_json::json!({ "run_id": run_id, "op": "cancel" }).to_string(),
+            );
+            DelegateHostMsg::Cancel { graceful: true }
+        } else {
+            let instruction = v
+                .get("instruction")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if instruction.is_empty() {
+                return ToolOutcome::Blocked {
+                    code: 8002,
+                    summary: "缺少 instruction 参数".into(),
+                };
+            }
+            deps.wal.append(
+                &self.session_id,
+                "subagent.adjust",
+                &serde_json::json!({ "run_id": run_id, "op": "input" }).to_string(),
+            );
+            DelegateHostMsg::Input { text: instruction }
+        };
+        if hub.route(&run_id, &msg) {
+            ToolOutcome::Ok {
+                summary: format!("已下发至运行中的 {run_id}"),
+                truncated: false,
+                exit_code: None,
+                duration_ms: 0,
+            }
+        } else {
+            ToolOutcome::Blocked {
+                code: 8002,
+                summary: format!("{run_id} 不在运行中（可能已完成或未注册）"),
+            }
+        }
+    }
+
     /// 委派全流程：简报确认 → 宿主 launch → 事件流 → 审查 → 回填摘要
     fn run_delegate(
         &mut self,
@@ -1253,6 +1317,11 @@ impl SessionRunner {
         // 委派编码（D11 §3 #11-13）：专用路径——delegating 态 + 宿主确认 + 事件流 + 审查
         if call.name == "coding.delegate" || call.name == "coding_delegate" {
             return self.run_delegate(deps, call, masked, risk);
+        }
+        // 子 Agent 运行中调整（D16 决策⑧）：经 hub 定向下发补充指令/取消
+        // ——适用探查/专家/委派全部在跑 run（bbrt-tools 门面仅提供可发现性）
+        if call.name == "subagent.adjust" || call.name == "subagent.cancel" {
+            return self.run_subagent_adjust(deps, call);
         }
         match deps.tools.check(self.mode, call) {
             CheckOutcome::Allow { source } => {
@@ -1578,6 +1647,8 @@ pub(crate) fn pump_delegate_stream(
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 DelegateHostMsg::Input { text } => {
+                    // D16 决策⑧：真正下发子进程（不支持的 backend 静默忽略）+ 事件回显留痕
+                    stream.send_input(&text);
                     sink.emit(SessionEvent::DelegateEvt {
                         session_id: session_id.to_string(),
                         delegate_task_id: run_id.to_string(),
