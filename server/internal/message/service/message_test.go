@@ -388,6 +388,37 @@ func TestSendFileMessageValidation(t *testing.T) {
 	}
 }
 
+// TestSendVoiceValidation audio_clip：duration_ms 1s~60s 窗口 + file_id 校验同 file
+func TestSendVoiceValidation(t *testing.T) {
+	opts := Options{
+		FileCheck: func(ctx context.Context, senderID int64, fileID int64) error {
+			if fileID != 88 {
+				return errx.New(errx.CodeFileNotFound, "文件不存在")
+			}
+			return nil
+		},
+	}
+	svc, _, _ := seedFixture(t, opts)
+	ctx := context.Background()
+
+	// 正常 5s 语音 → 放行且 body 透传 duration_ms
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "v-1", "audio_clip", "88", map[string]any{"duration_ms": 5000})); err != nil {
+		t.Fatalf("5s 语音应放行: %v", err)
+	}
+	// 超 60s → 9001
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "v-2", "audio_clip", "88", map[string]any{"duration_ms": 61000})); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("超 60s 应拒 9001: %v", err)
+	}
+	// 缺 duration_ms → 9001
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "v-3", "audio_clip", "88", nil)); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("缺 duration_ms 应拒 9001: %v", err)
+	}
+	// 文件不存在 → 4005（FileCheck 链路同 file）
+	if _, err := svc.Send(ctx, 10001, filePayload(1, "v-4", "audio_clip", "404", map[string]any{"duration_ms": 3000})); errx.From(err).Code != errx.CodeFileNotFound {
+		t.Fatalf("文件不存在应拒 4005: %v", err)
+	}
+}
+
 // TestSendFileCheckNil FileCheck 未注入（text-only 部署）：跳过校验直接发送成功
 func TestSendFileCheckNil(t *testing.T) {
 	svc, _, _ := seedFixture(t, Options{})

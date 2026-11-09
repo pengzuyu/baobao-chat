@@ -24,9 +24,11 @@ import {
   editMessage,
   favoriteMessage,
   recallMessage,
+  sendFileMessage,
   setReaction,
   type SearchHit,
 } from '../api/im';
+import { uploadFileSmart } from '../api/files';
 import { hydrateConv, hydrateLocal, hookSyncOnReconnect, resendOutbox, runSync } from '../api/local';
 import type { Mention, Message } from '../model/types';
 import { formatMuteUntil } from './systemMessageRegistry';
@@ -575,6 +577,25 @@ export function ChatPage() {
       .catch(() => undefined);
   };
 
+  /** 语音条发送（audio_clip）：智能上传 → msg.send；气泡由 msg.new 回流（同 file 链路） */
+  const sendVoiceFlow = async (file: File, durationMs: number) => {
+    if (!convId) return;
+    try {
+      const up = await uploadFileSmart(file, convId);
+      await sendFileMessage(convId, crypto.randomUUID(), 'audio_clip', {
+        file_id: up.id,
+        name: file.name,
+        size: up.size,
+        ext: up.ext,
+        duration_ms: durationMs,
+        ...(up.contentType ? { contentType: up.contentType } : {}),
+      });
+    } catch {
+      setFwdToast({ text: '语音发送失败，请重试', ok: false, targetConvId: '' });
+      setTimeout(() => setFwdToast(null), 3500);
+    }
+  };
+
   // @提及候选：已加载消息去重发送者（正式版走 API-IM-05 成员表）+「@全体」受策略显隐
   const mentionCandidates = useMemo(() => {
     const seen = new Map<string, string>();
@@ -854,6 +875,7 @@ export function ChatPage() {
           mentionCandidates={mentionCandidates}
           onMentionPicked={(uid, name) => pendingMentionsRef.current.push({ uid, name })}
           onPickFile={setPickedFile}
+          onSendVoice={(file, durationMs) => void sendVoiceFlow(file, durationMs)}
         />
       ) : null}
     </section>

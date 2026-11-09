@@ -191,6 +191,15 @@ type fileBody struct {
 	FileID flexID `json:"file_id"`
 }
 
+// voiceBody audio_clip 消息体（file_id + duration_ms ≤60s，04 篇 §1.2）
+type voiceBody struct {
+	FileID     flexID `json:"file_id"`
+	DurationMs int64  `json:"duration_ms"`
+}
+
+// voiceMaxMs 语音条时长上限（60s；客户端同规则 60s 自动停）
+const voiceMaxMs = 60_000
+
 func (s *Service) convLock(convID int64) *sync.Mutex {
 	v, _ := s.convLocks.LoadOrStore(convID, &sync.Mutex{})
 	return v.(*sync.Mutex)
@@ -282,9 +291,10 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 			return nil, err
 		}
 	}
-	// ③b 文件消息校验（D06：file/image 携 body.file_id → file 域校验存在/owner/未删）
+	// ③b 文件消息校验（D06：file/image/audio_clip 携 body.file_id → file 域校验存在/owner/未删；
+	// audio_clip 另校验 duration_ms ≤60s）
 	fileID := int64(0)
-	if p.Type == "file" || p.Type == "image" {
+	if p.Type == "file" || p.Type == "image" || p.Type == "audio_clip" {
 		var fb fileBody
 		if len(p.Body) == 0 {
 			return nil, errx.New(errx.CodeBadRequest, "file/image 消息 body 应含 file_id")
@@ -293,6 +303,12 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 			return nil, errx.New(errx.CodeBadRequest, "file_id 非法")
 		}
 		fileID = int64(fb.FileID)
+		if p.Type == "audio_clip" {
+			var vb voiceBody
+			if err := json.Unmarshal(p.Body, &vb); err != nil || vb.DurationMs <= 0 || vb.DurationMs > voiceMaxMs {
+				return nil, errx.New(errx.CodeBadRequest, "语音时长应在 1s~60s")
+			}
+		}
 		if s.opts.FileCheck != nil {
 			if err := s.opts.FileCheck(ctx, senderID, fileID); err != nil {
 				return nil, err

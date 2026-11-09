@@ -38,6 +38,8 @@ export interface FileMessageBody {
   width?: number;
   height?: number;
   contentType?: string;
+  /** 语音条时长（audio_clip 专用，ms） */
+  duration_ms?: number;
 }
 
 /**

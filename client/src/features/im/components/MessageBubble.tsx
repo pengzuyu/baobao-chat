@@ -26,7 +26,9 @@ import {
   ListOrdered,
   Mic,
   MoreHorizontal,
+  Pause,
   Phone,
+  Play,
   RotateCcw,
   SmilePlus,
   Video,
@@ -427,6 +429,108 @@ function FileCard({ body }: { body: FileMessageBody }) {
 }
 
 /**
+ * 语音条气泡（audio_clip）：票据 → blob → objectURL，<audio> 驱动自绘播放条
+ * （播放/暂停 + 伪波纹 + 进度 + 时长；时长优先 body.duration_ms，音频元数据兜底）。
+ * 加载失败红态可重试（票据一次性，同图片口径）。
+ */
+function AudioClipCard({ body, mine }: { body: FileMessageBody; mine: boolean }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef<string | null>(null);
+  const [objUrl, setObjUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0); // 0-1
+  const [durSec, setDurSec] = useState(body.duration_ms ? Math.round(body.duration_ms / 1000) : 0);
+
+  const load = useCallback(async (fileId: string) => {
+    setFailed(false);
+    try {
+      const t = await getDownloadTicket(fileId);
+      const resp = await fetch(downloadUrl(t.url));
+      if (!resp.ok) throw new Error(`status ${resp.status}`);
+      const blob = await resp.blob();
+      const u = URL.createObjectURL(blob);
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      urlRef.current = u;
+      setObjUrl(u);
+    } catch {
+      setFailed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load(body.file_id);
+    return () => {
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
+    };
+  }, [load, body.file_id]);
+
+  // 元数据兜底时长（录音端 duration_ms 缺失时）
+  useEffect(() => {
+    const a = audioRef.current;
+    if (a && !body.duration_ms && a.duration && Number.isFinite(a.duration)) {
+      setDurSec(Math.round(a.duration));
+    }
+  }, [objUrl, body.duration_ms]);
+
+  if (failed) {
+    return (
+      <div className="msg-image msg-image--error" data-testid="voice-error">
+        <Mic size={16} />
+        <span>语音加载失败</span>
+        <button type="button" className="msg-image__retry" onClick={() => void load(body.file_id)}>
+          重试
+        </button>
+      </div>
+    );
+  }
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (a.paused) {
+      void a.play();
+    } else {
+      a.pause();
+    }
+  };
+
+  const label = body.duration_ms ? `${Math.round(body.duration_ms / 1000)}″` : durSec ? `${durSec}″` : '…';
+
+  return (
+    <span className={`voice-msg${mine ? ' voice-msg--mine' : ''}`} data-testid="voice-msg">
+      {objUrl ? (
+        <audio
+          ref={audioRef}
+          src={objUrl}
+          preload="metadata"
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => {
+            setPlaying(false);
+            setProgress(0);
+          }}
+          onTimeUpdate={(e) => {
+            const a = e.currentTarget;
+            if (a.duration && Number.isFinite(a.duration)) setProgress(a.currentTime / a.duration);
+          }}
+        />
+      ) : null}
+      <button type="button" className="voice-msg__play" data-testid="voice-play" onClick={toggle} disabled={!objUrl}>
+        {playing ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+      </button>
+      <span className="voice-msg__wave" aria-hidden>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <i key={i} className={playing && progress * 5 > i ? ' voice-msg__bar--lit' : undefined} />
+        ))}
+      </span>
+      <span className="voice-msg__dur">{label}</span>
+    </span>
+  );
+}
+
+/**
  * 图片气泡（D06 阶段一）：取一次性票据 → fetch blob → objectURL 渲染（票据一次性不可直接作 src 复用）；
  * 点击灯箱放大查看（三级预览只做原图+灯箱，服务端缩略不做——端内 CSS 渲染原图，登记）；
  * 4014/加载失败红态可重试。
@@ -601,6 +705,9 @@ export function MessageBubble({
   const isMerge = message.type === 'merge_forward';
   const isImage = message.type === 'image';
   const isFile = message.type === 'file';
+  // 语音条（audio_clip：body 同 file 形态 + duration_ms）
+  const isAudio = message.type === 'audio_clip';
+  const audioBody = isAudio && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
   // 通话卡片（D04 §4.5 call_card：方向/状态/时长/再次呼叫；组件在 shared，回拨经 bus 转发 rtc）
   const isCallCard = message.type === 'call_card';
   const callBody = isCallCard && 'call_id' in message.body ? (message.body as CallCardBody) : null;
@@ -667,6 +774,8 @@ export function MessageBubble({
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
               <FileCard body={fileBody} />
             </span>
+          ) : isAudio && audioBody ? (
+            <AudioClipCard body={audioBody} mine={mine} />
           ) : isCallCard && callBody ? (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
               <CallCard

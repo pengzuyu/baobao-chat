@@ -9,11 +9,23 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { AtSign, Mic, Paperclip, Smile, X } from 'lucide-react';
+import { AtSign, Mic, Paperclip, Smile, Square, Trash2, X } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { sendTyping } from '../api/im';
 import type { Message } from '../model/types';
 import { EmojiPicker } from './EmojiPicker';
+
+/** 语音条上限（60s；服务端 Send 同规则兜底） */
+const VOICE_MAX_MS = 60_000;
+/** 短于 1s 视为误触丢弃 */
+const VOICE_MIN_MS = 800;
+
+/** 录音容器后缀（Safari/WKWebView=mp4，Chrome=webm） */
+function voiceExtOf(mime: string): string {
+  if (mime.includes('mp4')) return 'm4a';
+  if (mime.includes('ogg')) return 'ogg';
+  return 'webm';
+}
 
 interface MessageInputProps {
   convId: string;
@@ -36,6 +48,8 @@ interface MessageInputProps {
   onMentionPicked?: (uid: string, name: string) => void;
   /** 附件选择（D06：file input → 父层 FileSendPreview 预览弹层） */
   onPickFile?: (file: File) => void;
+  /** 语音条发送（audio_clip：父层走 upload→msg.send，气泡由 msg.new 回流） */
+  onSendVoice?: (file: File, durationMs: number) => void;
 }
 
 export function MessageInput({
@@ -53,9 +67,20 @@ export function MessageInput({
   mentionCandidates,
   onMentionPicked,
   onPickFile,
+  onSendVoice,
 }: MessageInputProps) {
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  /** 录音态（recorder 引用经 ref 持有，state 仅驱动 UI） */
+  const [recording, setRecording] = useState(false);
+  const [voiceSec, setVoiceSec] = useState(0);
+  /** 录音失败提示（权限/不支持；3s 自清） */
+  const [voiceErr, setVoiceErr] = useState('');
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const startedAtRef = useRef(0);
+  const chunksRef = useRef<Blob[]>([]);
+  const cancelFlagRef = useRef(false);
+  const voiceTimerRef = useRef<number | null>(null);
   /** @面板：起始位置 + 过滤词（截到最后一个 @ 之后的片段） */
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
@@ -101,6 +126,81 @@ export function MessageInput({
       sendTyping(convId);
     }
   };
+
+  // ── 语音条（audio_clip）：点击 Mic 开始 → 工具条切录音条 → 完成/取消/60s 自动停 ──
+
+  const stopVoice = (cancel: boolean) => {
+    cancelFlagRef.current = cancel;
+    recorderRef.current?.stop(); // 收尾（取流释放/上抛）在 onstop
+  };
+
+  const clearVoiceTimer = () => {
+    if (voiceTimerRef.current !== null) {
+      clearInterval(voiceTimerRef.current);
+      voiceTimerRef.current = null;
+    }
+  };
+
+  const startVoice = async () => {
+    if (recording) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceErr('当前环境不支持录音');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      cancelFlagRef.current = false;
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      startedAtRef.current = Date.now();
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        clearVoiceTimer();
+        setRecording(false);
+        setVoiceSec(0);
+        const canceled = cancelFlagRef.current;
+        const duration = Date.now() - startedAtRef.current;
+        recorderRef.current = null;
+        if (canceled || duration < VOICE_MIN_MS || chunksRef.current.length === 0) return;
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        const ext = voiceExtOf(recorder.mimeType || 'audio/webm');
+        onSendVoice?.(new File([blob], `voice-${startedAtRef.current}.${ext}`, { type: blob.type }), duration);
+      };
+      recorder.start();
+      recorderRef.current = recorder;
+      setRecording(true);
+      setVoiceSec(0);
+      voiceTimerRef.current = window.setInterval(() => {
+        const elapsed = Date.now() - startedAtRef.current;
+        setVoiceSec(Math.floor(elapsed / 1000));
+        if (elapsed >= VOICE_MAX_MS) stopVoice(false);
+      }, 250);
+    } catch {
+      setVoiceErr('无法访问麦克风（请检查系统权限）');
+    }
+  };
+
+  // 卸载兜底：录音中离开页面释放麦克风与定时器
+  useEffect(
+    () => () => {
+      if (recorderRef.current?.state === 'recording') {
+        cancelFlagRef.current = true;
+        recorderRef.current.stop();
+      }
+      clearVoiceTimer();
+    },
+    [],
+  );
+
+  // 录音失败提示 3s 自清
+  useEffect(() => {
+    if (!voiceErr) return;
+    const t = setTimeout(() => setVoiceErr(''), 3000);
+    return () => clearTimeout(t);
+  }, [voiceErr]);
 
   const insertText = (insert: string) => {
     const ta = taRef.current;
@@ -249,10 +349,33 @@ export function MessageInput({
             if (f) onPickFile?.(f);
           }}
         />
-        <button className="tool-btn" title="语音" type="button">
+        <button className="tool-btn" title="语音（最长 60 秒）" type="button" data-testid="voice-btn" onClick={() => void startVoice()}>
           <Mic size={17} />
         </button>
       </div>
+
+      {/* 录音条（语音进行中替代输入提示；完成=上抛发送，取消/超短丢弃） */}
+      {recording ? (
+        <div className="voice-bar" data-testid="voice-bar">
+          <span className="voice-bar__dot" />
+          <span className="voice-bar__time">
+            录音中 {Math.floor(voiceSec / 60)}:{String(voiceSec % 60).padStart(2, '0')} / 1:00
+          </span>
+          <button type="button" className="voice-bar__btn" title="取消（丢弃）" onClick={() => stopVoice(true)}>
+            <Trash2 size={14} />
+          </button>
+          <button
+            type="button"
+            className="voice-bar__btn voice-bar__btn--send"
+            title="完成并发送"
+            data-testid="voice-send"
+            onClick={() => stopVoice(false)}
+          >
+            <Square size={12} fill="currentColor" />
+          </button>
+        </div>
+      ) : null}
+      {voiceErr ? <div className="voice-bar__error">{voiceErr}</div> : null}
 
       {/* 分栏 emoji 选择器（INT-IM-25 完整版）：插入不关面板便于连续输入，Smile 按钮/Esc 关闭 */}
       {emojiOpen ? (
