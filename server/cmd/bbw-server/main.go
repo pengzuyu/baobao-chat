@@ -73,6 +73,7 @@ import (
 	"github.com/baobaowork/server/internal/platform/httpx"
 	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
 	"github.com/baobaowork/server/internal/rtc"
+	rtcapi "github.com/baobaowork/server/internal/rtc/api"
 	stickerapi "github.com/baobaowork/server/internal/sticker/api"
 	stickerrepo "github.com/baobaowork/server/internal/sticker/repo"
 	stickerservice "github.com/baobaowork/server/internal/sticker/service"
@@ -288,6 +289,13 @@ func main() {
 			}
 			return ""
 		},
+		// LiveKit 统一媒体面（D17：BBW_LIVEKIT_* 三项齐备启用；未配置=无媒体降级信令照走）
+		LK: rtc.LiveKitParams{
+			URL:        os.Getenv("BBW_LIVEKIT_URL"),
+			APIKey:     os.Getenv("BBW_LIVEKIT_API_KEY"),
+			APISecret:  os.Getenv("BBW_LIVEKIT_API_SECRET"),
+			ICEServers: envCSV("BBW_LIVEKIT_ICE"),
+		},
 	})
 	gw.MountRTC(rtcMod.API())
 
@@ -352,6 +360,16 @@ func main() {
 	mux.Handle("PATCH /api/v1/convs/{id}/state", authed(handleConvState(msgMod.API())))
 	// 增量同步（API-IM-01：登录/重连补投）
 	mux.Handle("GET /api/v1/sync", authed(handleSync(msgMod.API())))
+
+	// rtc 媒体面 REST（D17 §3：config 下发 + 进房凭证；webhook 为 livekit 回调
+	// ——公开路由，Authorization JWT 验签在 handler 内做（与用户 JWT 体系无关））
+	mux.Handle("GET /api/v1/rtc/config", authed(handleRtcConfig(rtcMod.API())))
+	mux.Handle("GET /api/v1/calls/{id}/token", authed(handleCallToken(rtcMod.API())))
+	mux.HandleFunc("POST /api/v1/rtc/webhook", handleRtcWebhook(rtcMod.API(), rtc.LiveKitParams{
+		URL:       os.Getenv("BBW_LIVEKIT_URL"),
+		APIKey:    os.Getenv("BBW_LIVEKIT_API_KEY"),
+		APISecret: os.Getenv("BBW_LIVEKIT_API_SECRET"),
+	}))
 	// 收藏（D03 §3.8 PIM-08；API-IM-10/11）
 	mux.Handle("POST /api/v1/messages/{id}/favorite", authed(handleFavoriteMessage(msgMod.API())))
 	mux.Handle("DELETE /api/v1/messages/{id}/favorite", authed(handleUnfavoriteMessage(msgMod.API())))
@@ -2579,6 +2597,61 @@ func (a rtcCardSink) SendCard(ctx context.Context, senderID, convID int64, clien
 // FinishCard 结束时 PATCH body（status=ended{duration,reason}）→ 复用 msg.updated 扇出
 func (a rtcCardSink) FinishCard(ctx context.Context, msgID int64, body json.RawMessage) {
 	_ = a.msgs.UpdateCallCard(ctx, msgID, body)
+}
+
+// ── rtc 媒体面 REST 壳（D17 §3.2/3.3：薄壳 → rtc service）──
+
+// handleRtcConfig GET /api/v1/rtc/config：livekit_url + ICE 运行时下发（固定域名终态=客户端零写死）
+func handleRtcConfig(svc rtcapi.RTCService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		httpx.OK(w, r, svc.MediaConfig())
+	}
+}
+
+// handleCallToken GET /api/v1/calls/{id}/token?did=：LiveKit 进房凭证（JWT identity=uid:did）
+func handleCallToken(svc rtcapi.RTCService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		ack, err := svc.JoinToken(r.Context(), uid, r.PathValue("id"), r.URL.Query().Get("did"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, ack)
+	}
+}
+
+// handleRtcWebhook POST /api/v1/rtc/webhook：livekit 事件回调（participant_joined/left、
+// room_finished）——Authorization 头为 livekit API key 签发的 JWT，验签后才交给 service
+func handleRtcWebhook(svc rtcapi.RTCService, lk rtc.LiveKitParams) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var ev rtcapi.WebhookEvent
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&ev); err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "webhook 载荷非法"))
+			return
+		}
+		if err := lk.VerifyWebhook(r.Header.Get("Authorization"), time.Now()); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		svc.HandleWebhook(r.Context(), &ev)
+		httpx.OK(w, r, map[string]string{"status": "ok"})
+	}
+}
+
+// envCSV 逗号分隔环境变量（空项剔除；BBW_LIVEKIT_ICE 用）
+func envCSV(key string) []string {
+	var out []string
+	for _, v := range strings.Split(os.Getenv(key), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // ── 文档中心 REST 壳（D05 阶段一务实版：薄壳 → docSvc → 统一响应包）──

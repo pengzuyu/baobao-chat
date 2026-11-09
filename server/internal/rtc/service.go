@@ -52,6 +52,9 @@ type Options struct {
 	RingTimeout time.Duration
 	// Now 时钟注入（测试）
 	Now func() time.Time
+	// LK LiveKit 统一媒体面（D17：token 签发/配置下发/webhook 验签；
+	// 零值=未配置——token/config 返 5003，端侧无媒体降级，信令照走）
+	LK LiveKitParams
 }
 
 func (o *Options) ringTimeout() time.Duration {

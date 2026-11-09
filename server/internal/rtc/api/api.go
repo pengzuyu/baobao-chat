@@ -127,6 +127,36 @@ type Pusher interface {
 	PushRTC(userIDs []int64, typ string, payload any) int
 }
 
+// MediaConfigAck GET /api/v1/rtc/config（05 篇 §6.2 D17 扩展）：
+// livekit_url 运行时下发——固定域名终态下客户端零写死，媒体面迁移纯后端侧
+type MediaConfigAck struct {
+	LiveKitURL string   `json:"livekit_url"`           // 空=媒体面未配置（端侧无媒体降级，信令照走）
+	ICEServers []string `json:"ice_servers,omitempty"` // 附加 ICE urls（内网 host 直连为主，TURN 兜底 P1）
+}
+
+// JoinTokenAck GET /api/v1/calls/{id}/token（D17 §3.3）：URL 随凭证同回，端侧免二次拉配置
+type JoinTokenAck struct {
+	Token    string `json:"token"`
+	URL      string `json:"url"`
+	Room     string `json:"room"`     // = call_id（LiveKit 房间名）
+	Identity string `json:"identity"` // uid:did（多端各自入房，对齐 call_member 按设备口径）
+}
+
+// WebhookParticipant livekit 参与者子集（identity=uid:did）
+type WebhookParticipant struct {
+	Identity string `json:"identity"`
+	Name     string `json:"name"`
+}
+
+// WebhookEvent livekit webhook 载荷子集（D17 §3.4：仅取 rtc 域关心的字段）
+type WebhookEvent struct {
+	Event string `json:"event"` // participant_joined | participant_left | room_finished
+	Room  struct {
+		Name string `json:"name"`
+	}
+	Participant *WebhookParticipant `json:"participant"`
+}
+
 // RTCService 通话信令服务接口（gateway 依赖，D02 §4 依赖倒置）
 type RTCService interface {
 	// Invite 发起 1v1：校验会话/成员/忙线 → 建 CallRegistry 项 → 推 ringing/落 call_card。
@@ -142,8 +172,17 @@ type RTCService interface {
 	// Bye 任一端挂断 → 双端 ended(bye, duration)
 	Bye(ctx context.Context, userID int64, p CallIDPayload) error
 	// Signal SDP/ICE 透传给对端；connecting 态首个 signal 到达 → connected（近似，登记）
+	// —— D17：统一 LiveKit 后客户端不再使用（枚举保留兼容旧端）
 	Signal(ctx context.Context, userID int64, p SignalPayload) error
 	// Join 群通话加入（阶段二）：席位校验（64，5002）→ 参与者集 → 全员
 	// state{joined}；all_left 窗口内再加入自动取消结束定时器
 	Join(ctx context.Context, userID int64, p JoinPayload) error
+	// MediaConfig（D17）媒体面配置下发（livekit_url 空=未配置）
+	MediaConfig() MediaConfigAck
+	// JoinToken（D17）签发 LiveKit 进房凭证：媒体面未启用 5003 / 通话已结束 5010 /
+	// 非成员 5011 / 群席位满 5002
+	JoinToken(ctx context.Context, uid int64, callID, did string) (*JoinTokenAck, error)
+	// HandleWebhook（D17）livekit webhook 事件同步 Registry
+	// （participant_joined/left、room_finished → connected/leave/结束兜底）
+	HandleWebhook(ctx context.Context, ev *WebhookEvent)
 }
