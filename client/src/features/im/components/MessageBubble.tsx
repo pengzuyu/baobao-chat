@@ -429,6 +429,81 @@ function FileCard({ body }: { body: FileMessageBody }) {
 }
 
 /**
+ * 表情包气泡（0022 sticker）：票据 → blob → objectURL 大图渲染（≤120px 等比，
+ * 无气泡底，点击灯箱复用图片口径）；失败占位不阻塞布局。
+ */
+function StickerCard({ body }: { body: FileMessageBody }) {
+  const [objUrl, setObjUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const urlRef = useRef<string | null>(null);
+  const [zoom, setZoom] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const t = await getDownloadTicket(body.file_id);
+        const resp = await fetch(downloadUrl(t.url));
+        if (!resp.ok) throw new Error(`status ${resp.status}`);
+        const blob = await resp.blob();
+        if (!alive) return;
+        const u = URL.createObjectURL(blob);
+        urlRef.current = u;
+        setObjUrl(u);
+      } catch {
+        if (alive) setFailed(true);
+      }
+    })();
+    return () => {
+      alive = false;
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    };
+  }, [body.file_id]);
+
+  useEffect(() => {
+    if (!zoom) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setZoom(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoom]);
+
+  if (failed) {
+    return (
+      <div className="msg-image msg-image--error" data-testid="sticker-error">
+        <ImageIcon size={16} />
+        <span>表情加载失败</span>
+      </div>
+    );
+  }
+  return (
+    <>
+      {objUrl ? (
+        <img
+          className="msg-sticker"
+          data-testid="msg-sticker"
+          src={objUrl}
+          alt="表情"
+          title={body.name}
+          onClick={(e) => {
+            e.stopPropagation();
+            setZoom(true);
+          }}
+        />
+      ) : (
+        <span className="msg-sticker msg-sticker--loading" />
+      )}
+      {zoom ? (
+        <div className="image-lightbox" onClick={() => setZoom(false)}>
+          <img className="image-lightbox__img" src={objUrl ?? ''} alt="表情" />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
  * 语音条气泡（audio_clip）：票据 → blob → objectURL，<audio> 驱动自绘播放条
  * （播放/暂停 + 伪波纹 + 进度 + 时长；时长优先 body.duration_ms，音频元数据兜底）。
  * 加载失败红态可重试（票据一次性，同图片口径）。
@@ -708,6 +783,9 @@ export function MessageBubble({
   // 语音条（audio_clip：body 同 file 形态 + duration_ms）
   const isAudio = message.type === 'audio_clip';
   const audioBody = isAudio && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
+  // 表情包（0022 sticker：body {sticker_id,file_id}）
+  const isSticker = message.type === 'sticker';
+  const stickerBody = isSticker && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
   // 通话卡片（D04 §4.5 call_card：方向/状态/时长/再次呼叫；组件在 shared，回拨经 bus 转发 rtc）
   const isCallCard = message.type === 'call_card';
   const callBody = isCallCard && 'call_id' in message.body ? (message.body as CallCardBody) : null;
@@ -776,6 +854,8 @@ export function MessageBubble({
             </span>
           ) : isAudio && audioBody ? (
             <AudioClipCard body={audioBody} mine={mine} />
+          ) : isSticker && stickerBody ? (
+            <StickerCard body={stickerBody} />
           ) : isCallCard && callBody ? (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
               <CallCard

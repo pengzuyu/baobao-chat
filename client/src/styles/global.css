@@ -1745,9 +1745,285 @@ body {
   border-radius: var(--bbw-radius-control);
 }
 
+/* ── 表情包面板（0022，EmojiPicker「表情包」页签）── */
+.sticker-panel {
+  max-height: 232px;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--bbw-space-2);
+}
+
+.sticker-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sticker-panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-2);
+}
+
+.sticker-panel__title {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+}
+
+.sticker-panel__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  color: var(--bbw-primary, #1677ff);
+  font-size: var(--bbw-font-12);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.sticker-panel__add:hover {
+  background: var(--bbw-gray-2);
+}
+
+.sticker-panel__add:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sticker-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.sticker-panel__item {
+  position: relative;
+}
+
+.sticker-panel__item > button {
+  border: none;
+  background: transparent;
+  padding: 2px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  width: 100%;
+}
+
+.sticker-panel__item > button:hover {
+  background: var(--bbw-gray-2);
+}
+
+.sticker-panel__img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
+.sticker-panel__ph {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  background: var(--bbw-gray-2);
+  display: inline-block;
+}
+
+.sticker-panel__del {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: var(--bbw-gray-6);
+  color: #fff;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.sticker-panel__item:hover .sticker-panel__del {
+  display: inline-flex;
+}
+
+.sticker-panel__empty {
+  padding: var(--bbw-space-4);
+  text-align: center;
+  color: var(--bbw-gray-5);
+  font-size: var(--bbw-font-12);
+}
+
+.sticker-panel__empty--inline {
+  padding: 4px 0;
+  text-align: left;
+  grid-column: 1 / -1;
+}
+
+.sticker-panel__error {
+  padding: 4px;
+  font-size: var(--bbw-font-12);
+  color: #e5484d;
+}
+
+/* 表情消息气泡（大图无底，≤120px 等比） */
+.msg-sticker {
+  max-width: 120px;
+  max-height: 120px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: block;
+}
+
+.msg-sticker--loading {
+  width: 96px;
+  height: 96px;
+  background: var(--bbw-gray-2);
+}
+
+/* ── 管理端表情集治理页（0022）── */
+.admin-stickers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bbw-space-3);
+}
+
+.admin-stickers__create {
+  display: flex;
+  gap: var(--bbw-space-2);
+  align-items: center;
+}
+
+.admin-stickers__input {
+  flex: 0 0 280px;
+  padding: 6px 10px;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-control);
+  font-size: var(--bbw-font-13);
+  background: var(--bbw-bg-card, #fff);
+}
+
+.admin-stickers__error {
+  color: #e5484d;
+  font-size: var(--bbw-font-13);
+}
+
+.admin-stickers__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bbw-space-3);
+}
+
+.admin-stickers__set {
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-card, 12px);
+  padding: var(--bbw-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--bbw-space-2);
+  background: var(--bbw-bg-card, #fff);
+}
+
+.admin-stickers__set--off {
+  opacity: 0.62;
+}
+
+.admin-stickers__set-head {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-3);
+}
+
+.admin-stickers__set-name {
+  font-weight: 500;
+}
+
+.admin-stickers__set-meta {
+  flex: 1;
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-5);
+}
+
+.admin-stickers__set-ops {
+  display: flex;
+  gap: var(--bbw-space-2);
+}
+
+.admin-stickers__op {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--bbw-gray-3);
+  background: transparent;
+  border-radius: var(--bbw-radius-control);
+  padding: 4px 10px;
+  font-size: var(--bbw-font-12);
+  cursor: pointer;
+  color: var(--bbw-gray-6);
+}
+
+.admin-stickers__op:hover:not(:disabled) {
+  border-color: var(--bbw-primary, #1677ff);
+  color: var(--bbw-primary, #1677ff);
+}
+
+.admin-stickers__op:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.admin-stickers__op--danger:hover:not(:disabled) {
+  border-color: #e5484d;
+  color: #e5484d;
+}
+
+.admin-stickers__thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bbw-space-2);
+}
+
+.admin-stickers__thumb {
+  display: inline-flex;
+}
+
+.admin-stickers__empty {
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-5);
+}
+
 /* 分栏 emoji 选择器（INT-IM-25 完整版：输入面板与消息回应 popover 共用） */
 .emoji-picker {
   width: 312px;
+}
+
+/* 模式切换（Emoji | 表情包，0022） */
+.emoji-picker__mode {
+  display: flex;
+  gap: 2px;
+  padding: 6px 6px 0;
+}
+
+.emoji-picker__mode-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 3px 10px;
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-6);
+  border-radius: 4px 4px 0 0;
+  border-bottom: 2px solid transparent;
+}
+
+.emoji-picker__mode-btn--active {
+  color: var(--bbw-primary, #1677ff);
+  border-bottom-color: var(--bbw-primary, #1677ff);
+  font-weight: 500;
 }
 
 .emoji-picker__tabs {

@@ -624,6 +624,8 @@ export function digestOf(msg: Message): string {
       return '[文件]';
     case 'audio_clip':
       return '[语音]';
+    case 'sticker':
+      return '[表情]';
     case 'video':
       return '[视频]';
     case 'doc_card':

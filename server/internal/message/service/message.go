@@ -57,6 +57,11 @@ type Options struct {
 	FileCheck func(ctx context.Context, senderID int64, fileID int64) error
 	// 发送成功后回填 file.source='message'+conv_id（尽力而为：失败不影响消息）
 	FileMarkSent func(ctx context.Context, fileID int64, convID int64) error
+
+	// ── 表情包消息（0022 sticker）──
+	// msg.send type=sticker 时校验 body.sticker_id 可见性（个人集 owner=sender /
+	// 公共集启用）并核对 file_id 一致；main 注入 sticker 域闭包；nil=跳过（未装配）
+	StickerCheck func(ctx context.Context, senderID, stickerID, fileID int64) error
 }
 
 func (o *Options) fillDefaults() {
@@ -200,6 +205,12 @@ type voiceBody struct {
 // voiceMaxMs 语音条时长上限（60s；客户端同规则 60s 自动停）
 const voiceMaxMs = 60_000
 
+// stickerBody 表情包消息体（0022：sticker_id 可见性 + file_id 归属双校验）
+type stickerBody struct {
+	StickerID flexID `json:"sticker_id"`
+	FileID    flexID `json:"file_id"`
+}
+
 func (s *Service) convLock(convID int64) *sync.Mutex {
 	v, _ := s.convLocks.LoadOrStore(convID, &sync.Mutex{})
 	return v.(*sync.Mutex)
@@ -314,6 +325,22 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 				return nil, err
 			}
 		}
+	}
+	// ③c 表情包消息（0022）：body {sticker_id,file_id} → sticker 可见性 + file 归属
+	if p.Type == "sticker" {
+		var sb stickerBody
+		if len(p.Body) == 0 {
+			return nil, errx.New(errx.CodeBadRequest, "sticker 消息 body 应含 sticker_id/file_id")
+		}
+		if err := json.Unmarshal(p.Body, &sb); err != nil || sb.StickerID <= 0 || sb.FileID <= 0 {
+			return nil, errx.New(errx.CodeBadRequest, "sticker_id/file_id 非法")
+		}
+		if s.opts.StickerCheck != nil {
+			if err := s.opts.StickerCheck(ctx, senderID, int64(sb.StickerID), int64(sb.FileID)); err != nil {
+				return nil, err
+			}
+		}
+		fileID = int64(sb.FileID) // FileMarkSent 回填口径同 file
 	}
 	// ③b mentions 上限 + 引用目标校验/快照（D03 §5.2：reply_digest 服务端冗余入 ext）
 	if len(p.Mentions) > s.opts.MaxMentions {

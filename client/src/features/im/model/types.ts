@@ -11,6 +11,7 @@ export type MsgType =
   | 'image'
   | 'file'
   | 'audio_clip'
+  | 'sticker'
   | 'video'
   | 'doc_card'
   | 'agent_card'

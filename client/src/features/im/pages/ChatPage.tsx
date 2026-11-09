@@ -29,6 +29,7 @@ import {
   type SearchHit,
 } from '../api/im';
 import { uploadFileSmart } from '../api/files';
+import { sendStickerMessage } from '../api/stickers';
 import { hydrateConv, hydrateLocal, hookSyncOnReconnect, resendOutbox, runSync } from '../api/local';
 import type { Mention, Message } from '../model/types';
 import { formatMuteUntil } from './systemMessageRegistry';
@@ -876,6 +877,13 @@ export function ChatPage() {
           onMentionPicked={(uid, name) => pendingMentionsRef.current.push({ uid, name })}
           onPickFile={setPickedFile}
           onSendVoice={(file, durationMs) => void sendVoiceFlow(file, durationMs)}
+          onPickSticker={(item) => {
+            if (!convId) return;
+            sendStickerMessage(convId, item).catch(() => {
+              setFwdToast({ text: '表情发送失败，请重试', ok: false, targetConvId: '' });
+              setTimeout(() => setFwdToast(null), 3500);
+            });
+          }}
         />
       ) : null}
     </section>

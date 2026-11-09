@@ -73,6 +73,9 @@ import (
 	"github.com/baobaowork/server/internal/platform/httpx"
 	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
 	"github.com/baobaowork/server/internal/rtc"
+	stickerapi "github.com/baobaowork/server/internal/sticker/api"
+	stickerrepo "github.com/baobaowork/server/internal/sticker/repo"
+	stickerservice "github.com/baobaowork/server/internal/sticker/service"
 	"github.com/baobaowork/server/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -193,6 +196,17 @@ func main() {
 		adminStore = adminrepo.NewMemory()
 	}
 
+	// 表情包域（0022 自定义表情包）：个人集+租户公共集；文件归属校验复用 file 域
+	var stickerStore stickerrepo.Repo
+	if pgPool != nil {
+		stickerStore = stickerrepo.NewPostgres(pgPool)
+	} else {
+		stickerStore = stickerrepo.NewMemory()
+	}
+	stickerSvc := stickerservice.New(stickerservice.Options{
+		FileCheck: fileSvc.CheckSendable, // 上传者 owner 口径与 file 消息一致
+	}, stickerStore)
+
 	msgMod := message.NewModule(msgRepo, bus, messageservice.Options{
 		// 发送人名称解析：闭包经 org 仓查询（跨模块不引 org 包，D02 §4 依赖规则）
 		NameOf: func(id int64) string {
@@ -204,6 +218,17 @@ func main() {
 		// 文件消息校验/回填（D06 阶段一：msg.send type=file/image 的 body.file_id）
 		FileCheck:    fileSvc.CheckSendable,
 		FileMarkSent: fileSvc.MarkSent,
+		// 表情包消息校验（0022：msg.send type=sticker 的可见性 + file 一致）
+		StickerCheck: func(ctx context.Context, senderID, stickerID, fileID int64) error {
+			got, err := stickerSvc.CheckUsable(ctx, senderID, stickerID)
+			if err != nil {
+				return err
+			}
+			if got != fileID {
+				return errx.New(errx.CodeBadRequest, "sticker 与 file_id 不一致")
+			}
+			return fileSvc.CheckSendable(ctx, senderID, fileID) // 图片文件归属同 file 口径
+		},
 		// 敏感词热更源（D10 策略页增删即时生效 3005；阶段一单租户 tenant=1）
 		SensitiveWordSource: func() []string {
 			words, err := adminStore.EnabledSensitiveWords(context.Background(), 1)
@@ -305,6 +330,13 @@ func main() {
 	mux.Handle("POST /api/v1/auth/obo/token", authed(handleOBO(authAPI)))
 	mux.Handle("POST /api/v1/auth/logout", authed(handleLogout(authAPI)))
 	mux.Handle("GET /api/v1/me", authed(handleMe))
+
+	// 表情包（0022 个人集；公共集治理走 /admin/stickers/*）
+	mux.Handle("GET /api/v1/stickers", authed(handleStickerLibrary(stickerSvc)))
+	mux.Handle("POST /api/v1/stickers/sets", authed(handleStickerCreateSet(stickerSvc)))
+	mux.Handle("POST /api/v1/stickers/items", authed(handleStickerAddItem(stickerSvc, false)))
+	mux.Handle("DELETE /api/v1/stickers/items/{id}", authed(handleStickerRemoveItem(stickerSvc, false)))
+	mux.Handle("DELETE /api/v1/stickers/sets/{id}", authed(handleStickerRemoveSet(stickerSvc, false)))
 
 	// 消息 REST（04 篇 §6.1 摘要：会话列表 + 历史拉取；其余走 WS）
 	mux.Handle("GET /api/v1/convs", authed(handleListConvs(msgMod.API())))
@@ -715,6 +747,12 @@ func main() {
 	mux.Handle("GET /api/v1/admin/policies/sensitive-words", requirePerm("admin:policy:manage")(handleAdminListWords(adminSvc)))
 	mux.Handle("POST /api/v1/admin/policies/sensitive-words", requirePerm("admin:policy:manage")(handleAdminAddWord(adminSvc)))
 	mux.Handle("DELETE /api/v1/admin/policies/sensitive-words/{id}", requirePerm("admin:policy:manage")(handleAdminDeleteWord(adminSvc)))
+	// 表情包治理（0022：公共集上下架/维护，随策略域权限点）
+	mux.Handle("GET /api/v1/admin/stickers/sets", requirePerm("admin:policy:manage")(handleStickerAdminSets(stickerSvc)))
+	mux.Handle("POST /api/v1/admin/stickers/sets", requirePerm("admin:policy:manage")(handleStickerCreatePublicSet(stickerSvc)))
+	mux.Handle("POST /api/v1/admin/stickers/sets/{id}/items", requirePerm("admin:policy:manage")(handleStickerAddItem(stickerSvc, true)))
+	mux.Handle("PATCH /api/v1/admin/stickers/sets/{id}/status", requirePerm("admin:policy:manage")(handleStickerSetStatus(stickerSvc)))
+	mux.Handle("DELETE /api/v1/admin/stickers/sets/{id}", requirePerm("admin:policy:manage")(handleStickerRemoveSet(stickerSvc, true)))
 	mux.Handle("GET /api/v1/admin/usage/summary", requirePerm("admin:usage:read")(handleAdminUsage(adminSvc)))
 	mux.Handle("GET /api/v1/admin/audit", requirePerm("admin:audit:read")(handleAdminAudit(adminSvc)))
 	// 角色与授权（PAD-08 角色编辑器）
@@ -1244,6 +1282,182 @@ func handleConvReceipts(svc messageapi.MessageService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, panel)
+	}
+}
+
+// ── 表情包 REST（0022 自定义表情包）──
+
+type stickerSetReq struct {
+	Name string `json:"name"`
+}
+
+type stickerItemReq struct {
+	SetID  string `json:"set_id"`
+	FileID string `json:"file_id"`
+	Name   string `json:"name"`
+}
+
+type stickerStatusReq struct {
+	Status int `json:"status"`
+}
+
+// stickerUID 路由通用：uid + path id 解析
+func stickerUID(r *http.Request, key string) (uid, id int64, err error) {
+	uid, err = uidFrom(r)
+	if err != nil {
+		return
+	}
+	id, err = strconv.ParseInt(r.PathValue(key), 10, 64)
+	if err != nil || id <= 0 {
+		err = errx.New(errx.CodeBadRequest, "ID 非法")
+	}
+	return
+}
+
+func handleStickerLibrary(svc stickerapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		lib, err := svc.Library(r.Context(), uid)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, lib)
+	}
+}
+
+func handleStickerCreateSet(svc stickerapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req stickerSetReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		set, err := svc.CreateSet(r.Context(), uid, req.Name)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, set)
+	}
+}
+
+func handleStickerCreatePublicSet(svc stickerapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req stickerSetReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		set, err := svc.CreatePublicSet(r.Context(), uid, req.Name)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, set)
+	}
+}
+
+func handleStickerAddItem(svc stickerapi.Service, allowPublic bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req stickerItemReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		setID, err1 := strconv.ParseInt(req.SetID, 10, 64)
+		fileID, err2 := strconv.ParseInt(req.FileID, 10, 64)
+		if err1 != nil || err2 != nil || setID <= 0 || fileID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "set_id/file_id 非法"))
+			return
+		}
+		item, err := svc.AddItem(r.Context(), uid, setID, fileID, req.Name, allowPublic)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, item)
+	}
+}
+
+func handleStickerRemoveItem(svc stickerapi.Service, allowPublic bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, itemID, err := stickerUID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.RemoveItem(r.Context(), uid, itemID, allowPublic); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+func handleStickerRemoveSet(svc stickerapi.Service, allowPublic bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, setID, err := stickerUID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.RemoveSet(r.Context(), uid, setID, allowPublic); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+func handleStickerSetStatus(svc stickerapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, setID, err := stickerUID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req stickerStatusReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.SetPublicStatus(r.Context(), setID, req.Status); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, nil)
+	}
+}
+
+// handleStickerAdminSets 管理端全量公共集（含下架）
+func handleStickerAdminSets(svc stickerapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sets, err := svc.AdminLibrary(r.Context())
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": sets})
 	}
 }
 

@@ -14,6 +14,7 @@ import { Button } from '../../../shared/ui/Button';
 import { sendTyping } from '../api/im';
 import type { Message } from '../model/types';
 import { EmojiPicker } from './EmojiPicker';
+import type { StickerItem } from '../api/stickers';
 
 /** 语音条上限（60s；服务端 Send 同规则兜底） */
 const VOICE_MAX_MS = 60_000;
@@ -50,6 +51,8 @@ interface MessageInputProps {
   onPickFile?: (file: File) => void;
   /** 语音条发送（audio_clip：父层走 upload→msg.send，气泡由 msg.new 回流） */
   onSendVoice?: (file: File, durationMs: number) => void;
+  /** 表情包点击即发送（0022 sticker；不传=表情面板无「表情包」页签） */
+  onPickSticker?: (item: StickerItem) => void;
 }
 
 export function MessageInput({
@@ -68,6 +71,7 @@ export function MessageInput({
   onMentionPicked,
   onPickFile,
   onSendVoice,
+  onPickSticker,
 }: MessageInputProps) {
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -377,10 +381,10 @@ export function MessageInput({
       ) : null}
       {voiceErr ? <div className="voice-bar__error">{voiceErr}</div> : null}
 
-      {/* 分栏 emoji 选择器（INT-IM-25 完整版）：插入不关面板便于连续输入，Smile 按钮/Esc 关闭 */}
+      {/* 分栏 emoji 选择器（INT-IM-25 完整版 + 0022 表情包）：插入/发送后不关面板，Smile 按钮/Esc 关闭 */}
       {emojiOpen ? (
         <div className="emoji-panel">
-          <EmojiPicker onPick={(e) => insertText(e)} />
+          <EmojiPicker onPick={(e) => insertText(e)} onPickSticker={onPickSticker} />
         </div>
       ) : null}
 
