@@ -8,12 +8,32 @@
 import { Link } from 'react-router-dom';
 import type { CheckpointItem } from '../store/agent';
 import { AGENT_MODE_OPTIONS, MEMORY_TYPE_LABELS, MODEL_TIER_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
-import type { AgentSessionMeta, MemoryEntry } from '../bridge/types';
+import type { AgentSessionMeta, MemoryEntry, RunInfo } from '../bridge/types';
 
 function formatClock(ts: number): string {
   const d = new Date(ts);
   const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = {
+  probe: '子任务',
+  expert: '专家',
+  team: '团队',
+  delegate: '委派',
+};
+
+const RUN_STATUS_LABELS: Record<RunInfo['status'], string> = {
+  running: '运行中',
+  done: '完成',
+  failed: '失败',
+  cancelled: '已取消',
+  interrupted: '已中断',
+};
+
+function formatDuration(ms: number): string {
+  if (ms <= 0) return '';
+  return ms >= 60_000 ? `${Math.round(ms / 60_000)}min` : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
 
 interface AgentContextSidebarProps {
@@ -23,9 +43,11 @@ interface AgentContextSidebarProps {
   memories: MemoryEntry[];
   usage?: { in: number; out: number };
   pendingCount: number;
+  /** run 记录（D16 §3.1；新建在末尾展示最近 8 条倒序） */
+  runs: RunInfo[];
 }
 
-export function AgentContextSidebar({ session, model, checkpoints, memories, usage, pendingCount }: AgentContextSidebarProps) {
+export function AgentContextSidebar({ session, model, checkpoints, memories, usage, pendingCount, runs }: AgentContextSidebarProps) {
   const modeLabel = AGENT_MODE_OPTIONS.find((m) => m.value === session.mode)?.label ?? session.mode;
 
   return (
@@ -56,6 +78,29 @@ export function AgentContextSidebar({ session, model, checkpoints, memories, usa
             </>
           ) : null}
         </dl>
+      </div>
+
+      <div className="agent-side__section">
+        <div className="agent-side__title">运行记录</div>
+        {runs.length === 0 ? (
+          <div className="agent-side__empty">暂无子任务（探查/专家/委派启动后在此可见）</div>
+        ) : (
+          <ul className="agent-run-list">
+            {[...runs].reverse().slice(0, 8).map((r) => (
+              <li key={r.id} className="agent-run-item" title={`${r.id} · ${r.defRef}${r.summary ? ` · ${r.summary.slice(0, 120)}` : ''}`}>
+                <span className={`agent-run-item__kind agent-run-item__kind--${r.kind}`}>{RUN_KIND_LABELS[r.kind]}</span>
+                <span className="agent-run-item__def">{r.defRef.replace('backend:', '').replace('builtin.', '')}</span>
+                <span
+                  className={`agent-run-item__status agent-run-item__status--${r.status}${r.status === 'running' ? ' agent-run-item__status--live' : ''}`}
+                >
+                  {RUN_STATUS_LABELS[r.status]}
+                  {r.status === 'running' && r.etaHintMs > 0 ? ` ~${formatDuration(r.etaHintMs)}` : ''}
+                  {r.etaActualMs > 0 ? ` ${formatDuration(r.etaActualMs)}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <div className="agent-side__section">

@@ -48,6 +48,7 @@ import type {
   PermissionPreview,
   ReportStats,
   RiskLevel,
+  RunInfo,
   SessionStatus,
 } from './types';
 
@@ -245,6 +246,11 @@ export class TauriAgentBridge implements AgentBridge {
 
   async deleteMemory(name: string): Promise<void> {
     await invoke('memory_delete', { name });
+  }
+
+  async listRuns(sessionId?: string): Promise<RunInfo[]> {
+    const data = await invoke<{ items: RunInfo[] }>('agent_runs_list', { sessionId: sessionId ?? null });
+    return data.items;
   }
 
   async listReports(): Promise<AgentReport[]> {

@@ -18,6 +18,7 @@
 //! （防线二）不在本模块——装配器是编排层的基元。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use bbrt_aigw::{ChatClient, ChatRequest, ToolSpec};
 use bbrt_context::{estimate_tokens, Round};
@@ -489,11 +490,12 @@ fn build_system(m: &ExpertManifest, skill_bodies: &[(String, String)]) -> String
 // 受限子会话（§3.2：独立上下文一次性执行，D11 对齐）
 // ---------------------------------------------------------------------------
 
-/// 专家执行上下文（借用 LoopDeps 的模型与工具执行器——完整走 bbrt-tools
+/// 专家执行上下文（owned Arc——线程派发/后台化安全；完整走 bbrt-tools
 /// 管线 gate/审计/脱敏，"专家权限 ≤ 主会话档位"由此保证）
-pub struct ExpertCtx<'a> {
-    pub model: &'a dyn ChatClient,
-    pub tools: &'a dyn ToolExecutor,
+#[derive(Clone)]
+pub struct ExpertCtx {
+    pub model: Arc<dyn ChatClient>,
+    pub tools: Arc<dyn ToolExecutor>,
     pub mode: PermissionMode,
 }
 
@@ -515,7 +517,7 @@ static ACT_SEQ: AtomicUsize = AtomicUsize::new(0);
 /// （协议冻结不新增变体），专家身份经 WAL `expert.*` 类型与
 /// `act=expert:{id}:{run_id}`。run 行落 agent_run（kind=expert，D16 §3.1）。
 pub fn run_expert(
-    ctx: ExpertCtx<'_>,
+    ctx: &ExpertCtx,
     session_id: &str,
     assembled: &AssembledExpert,
     task: &str,
@@ -535,6 +537,10 @@ pub fn run_expert(
     let persona_id = assembled.manifest.id.clone();
     let act = format!("expert:{persona_id}:{run_id}");
 
+    let def_ref = format!("{}@{}", assembled.manifest.id, assembled.manifest.version);
+    let eta_hint = wal
+        .eta_hint(&def_ref)
+        .unwrap_or_else(|| crate::loop_runner::static_eta_ms("expert"));
     wal.run_start(&RunStart {
         run_id: run_id.clone(),
         session_id: session_id.to_string(),
@@ -542,8 +548,8 @@ pub fn run_expert(
         parent_run_id: parent_run_id.to_string(),
         parent_call_id: String::new(),
         kind: "expert",
-        def_ref: format!("{}@{}", assembled.manifest.id, assembled.manifest.version),
-        eta_hint_ms: 0,
+        def_ref: def_ref.clone(),
+        eta_hint_ms: eta_hint,
         actor: String::new(),
     });
     sink.emit(SessionEvent::SubagentSpawned {
@@ -599,7 +605,7 @@ pub fn run_expert(
         let req = ChatRequest {
             model: assembled.model.clone(),
             messages: msgs,
-            tools: expert_specs(ctx.tools, &assembled.tool_names),
+            tools: expert_specs(ctx.tools.as_ref(), &assembled.tool_names),
         };
         let Ok(stream) = ctx.model.chat(&req) else {
             break ExpertResult {

@@ -148,9 +148,9 @@ fn member(label: &str, persona_mark: &str, max_steps: usize) -> TeamMember {
 /// WAL team.start→[2×expert.activate/joined]→team.joined → 摘要含双结论
 #[test]
 fn team_consult_full_chain() {
-    let model = TeamModel {
+    let model = Arc::new(TeamModel {
         seen: Mutex::new(vec![]),
-    };
+    });
     let sink = Arc::new(CollectSink(Mutex::new(vec![])));
     let log = SharedLog::default();
     let tools = AllowTools;
@@ -165,8 +165,8 @@ fn team_consult_full_chain() {
 
     let result = run_team(
         &ExpertCtx {
-            model: &model,
-            tools: &tools,
+            model: model.clone(),
+            tools: Arc::new(tools),
             mode: PermissionMode::AutoEdit,
         },
         "sess-team-1",
@@ -211,9 +211,9 @@ fn team_consult_full_chain() {
 /// 图校验拒绝在 Activation 前（WAL 零写入）
 #[test]
 fn team_invalid_graph_no_activation() {
-    let model = TeamModel {
+    let model = Arc::new(TeamModel {
         seen: Mutex::new(vec![]),
-    };
+    });
     let sink = Arc::new(CollectSink(Mutex::new(vec![])));
     let log = SharedLog::default();
     // 4×40=160 > 120
@@ -230,8 +230,8 @@ fn team_invalid_graph_no_activation() {
     assert_eq!(
         run_team(
             &ExpertCtx {
-                model: &model,
-                tools: &AllowTools,
+                model: model.clone(),
+                tools: Arc::new(AllowTools),
                 mode: PermissionMode::AutoEdit,
             },
             "sess-team-2",
@@ -341,10 +341,10 @@ fn fast_caster_casts() {
         index: idx,
         assemble_for: fixture_assembler,
     };
-    let model = CasterModel(
+    let model = Arc::new(CasterModel(
         "{\"team\": true, \"cast\": [{\"id\": \"corp.sec\"}, {\"id\": \"corp.perf\", \"label\": \"性能\"}, {\"id\": \"corp.sec\"}]}",
-    );
-    let graph = caster.cast(&model, "多维度评审这个 PR").unwrap();
+    ));
+    let graph = caster.cast(model.as_ref(), "多维度评审这个 PR").unwrap();
     assert_eq!(graph.members.len(), 2, "重复选角去重");
     assert_eq!(graph.members[0].label, "安全专家", "label 缺省=display");
     assert_eq!(graph.members[1].label, "性能");
@@ -685,7 +685,7 @@ fn topo_team_model(verdicts: Vec<&'static str>) -> TopoModel {
 /// 流水线：三段串行，下游简报含上游结论（黑板链），nodes 保序
 #[test]
 fn pipeline_three_stages_flow() {
-    let model = topo_team_model(vec![]);
+    let model = Arc::new(topo_team_model(vec![]));
     let sink = Arc::new(CollectSink(Mutex::new(vec![])));
     let log = SharedLog::default();
     let graph = TeamGraph {
@@ -700,8 +700,8 @@ fn pipeline_three_stages_flow() {
     };
     let result = run_team(
         &ExpertCtx {
-            model: &model,
-            tools: &AllowTools,
+            model: model.clone(),
+            tools: Arc::new(AllowTools),
             mode: PermissionMode::AutoEdit,
         },
         "sess-pipe",
@@ -733,7 +733,7 @@ fn pipeline_three_stages_flow() {
 /// 评审环：一轮 pass（reviewer 首行 VERDICT: pass）
 #[test]
 fn review_loop_pass_first_round() {
-    let model = topo_team_model(vec!["pass"]);
+    let model = Arc::new(topo_team_model(vec!["pass"]));
     let sink = Arc::new(CollectSink(Mutex::new(vec![])));
     let log = SharedLog::default();
     let graph = TeamGraph {
@@ -747,8 +747,8 @@ fn review_loop_pass_first_round() {
     };
     let result = run_team(
         &ExpertCtx {
-            model: &model,
-            tools: &AllowTools,
+            model: model.clone(),
+            tools: Arc::new(AllowTools),
             mode: PermissionMode::AutoEdit,
         },
         "sess-rev1",
@@ -766,7 +766,7 @@ fn review_loop_pass_first_round() {
 /// 评审环：round1 revise → round2 pass（返工简报含评审意见）
 #[test]
 fn review_loop_revise_then_pass() {
-    let model = topo_team_model(vec!["revise", "pass"]);
+    let model = Arc::new(topo_team_model(vec!["revise", "pass"]));
     let sink = Arc::new(CollectSink(Mutex::new(vec![])));
     let log = SharedLog::default();
     let graph = TeamGraph {
@@ -780,8 +780,8 @@ fn review_loop_revise_then_pass() {
     };
     let result = run_team(
         &ExpertCtx {
-            model: &model,
-            tools: &AllowTools,
+            model: model.clone(),
+            tools: Arc::new(AllowTools),
             mode: PermissionMode::AutoEdit,
         },
         "sess-rev2",
@@ -805,7 +805,7 @@ fn review_loop_revise_then_pass() {
 /// 评审环：N=2 用尽仍 revise → escalated 转人工（WAL team.escalated）
 #[test]
 fn review_loop_escalates_after_max_rounds() {
-    let model = topo_team_model(vec!["revise", "revise", "revise"]);
+    let model = Arc::new(topo_team_model(vec!["revise", "revise", "revise"]));
     let sink = Arc::new(CollectSink(Mutex::new(vec![])));
     let log = SharedLog::default();
     let graph = TeamGraph {
@@ -819,8 +819,8 @@ fn review_loop_escalates_after_max_rounds() {
     };
     let result = run_team(
         &ExpertCtx {
-            model: &model,
-            tools: &AllowTools,
+            model: model.clone(),
+            tools: Arc::new(AllowTools),
             mode: PermissionMode::AutoEdit,
         },
         "sess-rev3",
@@ -853,8 +853,8 @@ fn review_loop_graph_validation() {
     };
     assert!(run_team(
         &ExpertCtx {
-            model: &topo_team_model(vec![]),
-            tools: &AllowTools,
+            model: Arc::new(topo_team_model(vec![])),
+            tools: Arc::new(AllowTools),
             mode: PermissionMode::AutoEdit
         },
         "s-x",

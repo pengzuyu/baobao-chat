@@ -583,6 +583,10 @@ fn dispatch(
             .ok();
             None
         }
+        // run 清单（D16 §3.1：agent_run 投影；run 面板/审计检索）
+        HostToRuntime::RunsList { session_id } => Some(RuntimeToHost::RunsListResult {
+            items: mgr.list_runs(session_id.as_deref()),
+        }),
         // 手动检查点（PAG-06；回执即 checkpoint.created）
         HostToRuntime::CheckpointCreate { session_id, reason } => {
             let reason = if reason.is_empty() {

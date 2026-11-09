@@ -215,7 +215,7 @@ impl SessionManager {
         // 后台委派产物注入（D16 §5：上一轮审查通过的摘要在此回填主上下文，
         // 以 delegate.join 轮次参与本轮组装）
         for join in self.hub.drain_joins(session_id) {
-            runner.inject_delegate_join(&join.run_id, &join.summary);
+            runner.inject_delegate_join(&join.run_id, &join.name, &join.summary);
         }
         let report = runner.run_turn(text, &self.deps);
         *entry.state.lock().unwrap() = runner.state();
@@ -380,6 +380,22 @@ impl SessionManager {
         // 线程自注销不阻塞收口）
         self.hub.cancel_session(session_id);
         Ok(())
+    }
+
+    /// run 清单（D16 §3.1：runs.list REQ 数据源；None=全部会话）。
+    /// agent_run 行 camelCase 序列化直出（协议 payload 口径）
+    pub fn list_runs(&self, session_id: Option<&str>) -> Vec<serde_json::Value> {
+        let Some(store) = &self.store else {
+            return vec![];
+        };
+        let store = store.lock().unwrap();
+        let rows = match session_id {
+            Some(sid) => store.runs_of(sid).unwrap_or_default(),
+            None => store.runs_all().unwrap_or_default(),
+        };
+        rows.into_iter()
+            .filter_map(|r| serde_json::to_value(&r).ok())
+            .collect()
     }
 
     /// 活跃会话数（runtime.ready 上报）

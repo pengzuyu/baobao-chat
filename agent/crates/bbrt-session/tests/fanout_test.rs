@@ -350,3 +350,114 @@ fn fanout_none_keeps_normal_loop() {
     let wal = log.0.lock().unwrap();
     assert!(!wal.iter().any(|(_, t, _)| t == "subagent.fanout"));
 }
+
+// ---------------------------------------------------------------------------
+// 超窗转后台（D16 决策④/P1-6）
+// ---------------------------------------------------------------------------
+
+/// 慢子任务模型：探查任务每轮 sleep 500ms（两子任务 ≈1s > 窗 150ms）；
+/// 主循环请求立即收尾
+struct SlowProbeModel;
+impl ChatClient for SlowProbeModel {
+    fn chat(
+        &self,
+        req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        let m1 = req
+            .messages
+            .get(1)
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        let is_probe = m1.contains("查认证") || m1.contains("查配置");
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if is_probe {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            vec![
+                Ok(StreamEvent::TextDelta {
+                    text: "慢探查结论".into(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 5,
+                        completion_tokens: 2,
+                    },
+                }),
+            ]
+        } else {
+            vec![
+                Ok(StreamEvent::TextDelta {
+                    text: "收到，继续处理。".into(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 5,
+                        completion_tokens: 2,
+                    },
+                }),
+            ]
+        };
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+/// 等待窗 150ms：探查需 ~500ms → 超窗转后台。turn 不被阻塞（<窗+松弛返回）、
+/// 后台收口 SubagentJoined 事件 + hub park（下一轮注入回填）。
+#[test]
+fn fanout_window_timeout_goes_background() {
+    let sink = Arc::new(CollectSink(Mutex::new(vec![])));
+    let log = SharedLog::default();
+    let tools = Arc::new(AllowTools(Mutex::new(vec![])));
+    let deps = deps_for(
+        Arc::new(SlowProbeModel),
+        Arc::new(TwoTasks),
+        sink.clone(),
+        log.clone(),
+        tools,
+    );
+    let hub = Arc::new(bbrt_session::delegate_bg::DelegateHub::new());
+    let mut runner = SessionRunner::new(
+        "s-bg-fan".into(),
+        "/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    runner.subagent_wait_window = std::time::Duration::from_millis(150);
+    runner.delegate_hub = Some(hub.clone());
+
+    let t0 = std::time::Instant::now();
+    runner.run_turn("梳理这个项目的认证与配置", &deps);
+    let turn_elapsed = t0.elapsed();
+    assert!(
+        turn_elapsed < std::time::Duration::from_millis(450),
+        "turn 应超窗即返回不阻塞：{turn_elapsed:?}"
+    );
+
+    // 后台收口：SubagentJoined 事件 + hub park（≤5s）
+    let mut joined = false;
+    for _ in 0..500 {
+        if sink
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, SessionEvent::SubagentJoined { .. }))
+        {
+            joined = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(joined, "后台收口应发出 subagent.join 事件");
+    let joins = hub.drain_joins("s-bg-fan");
+    assert_eq!(joins.len(), 1, "超窗产物应 park 一条");
+    assert_eq!(joins[0].name, "subagent.join");
+    assert!(joins[0].summary.contains("慢探查结论"));
+
+    // 注入回填（manager 级 drain→inject 同款调用面）
+    runner.inject_delegate_join("fanout-2", &joins[0].name, &joins[0].summary);
+}

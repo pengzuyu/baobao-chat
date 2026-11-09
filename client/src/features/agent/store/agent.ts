@@ -12,6 +12,7 @@ import type {
   AgentEvent,
   AgentReport,
   AgentSessionMeta,
+  RunInfo,
   GrantScope,
   MemoryEntry,
   PermissionMode,
@@ -86,6 +87,8 @@ interface AgentState {
   modelBySession: Record<string, { policy: 'fast' | 'strong' | 'auto'; override?: string }>;
   /** sessionId → 最近一轮用量（stream.done usage） */
   usageBySession: Record<string, { in: number; out: number }>;
+  /** sessionId → run 记录（D16 §3.1 runs.list；子任务生命周期事件触发刷新） */
+  runsBySession: Record<string, RunInfo[]>;
 
   memories: MemoryEntry[];
   memoriesLoading: boolean;
@@ -115,6 +118,8 @@ interface AgentState {
   /** 会话内切换模型（model=直达引用；缺省=档位；回执 modelSwitched 事件驱动 UI） */
   switchModel: (to: 'fast' | 'strong' | 'auto', model?: string) => void;
   deleteMemory: (name: string) => Promise<void>;
+  /** 拉取会话 run 记录（D16 §3.1 run 面板） */
+  loadRuns: (sessionId: string) => void;
   /** 事件唯一入口（reducer 式分发；包一层便于桥接入） */
   handleEvent: (event: AgentEvent) => void;
 }
@@ -194,6 +199,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   checkpoints: {},
   modelBySession: {},
   usageBySession: {},
+  runsBySession: {},
 
   memories: [],
   memoriesLoading: false,
@@ -334,6 +340,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // 乐观移除 + 桥删除（PAG-11 撤销，即时生效）
     set((s) => ({ memories: s.memories.filter((m) => m.name !== name) }));
     await bridge.deleteMemory(name).catch(() => undefined);
+  },
+
+  loadRuns: (sessionId) => {
+    void bridge
+      .listRuns(sessionId)
+      .then((runs) => set((s) => ({ runsBySession: { ...s.runsBySession, [sessionId]: runs } })))
+      .catch(() => undefined);
   },
 
   // ---- 事件分发（reducer 式；全部经此入口改 streams/sessions/…）----
@@ -590,6 +603,18 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         .listReports()
         .then((reports) => set({ reports }))
         .catch(() => undefined);
+    }
+    // run 生命周期事件 → 刷新该会话 run 面板（D16 §3.1；后台完成也可见）
+    if (
+      (event.type === 'subagentSpawn' ||
+        event.type === 'subagentJoin' ||
+        (event.type === 'subagentEvent' && (event.phase === 'done' || event.phase === 'fail')) ||
+        event.type === 'delegateBrief' ||
+        event.type === 'delegateEnd' ||
+        event.type === 'delegateReviewResolved') &&
+      event.sessionId
+    ) {
+      useAgentStore.getState().loadRuns(event.sessionId);
     }
   },
 }));

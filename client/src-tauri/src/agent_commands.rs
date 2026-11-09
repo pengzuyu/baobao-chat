@@ -166,6 +166,14 @@ pub fn agent_delegate_review(host: Host, delegate_task_id: String, accept: bool)
     )
 }
 
+/// run 清单（D16 §3.1：runs.list REQ → agent_run 行 camelCase 投影；
+/// session_id 缺省=全部会话。run 面板/审计检索数据源）
+#[tauri::command]
+pub fn agent_runs_list(host: Host, session_id: Option<String>) -> Result<Value, String> {
+    let result = host.request("runs.list", json!({ "sessionId": session_id }))?;
+    Ok(json!({ "items": result["items"].clone() }))
+}
+
 /// 登录/刷新成功后下发 token（obo.token → RT 的 OboCache；obo.renew 由桥应答）
 #[tauri::command]
 pub fn auth_set_token(host: Host, token: String, expires_at: i64) -> Result<(), String> {

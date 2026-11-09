@@ -33,6 +33,20 @@ pub const MAX_CONSECUTIVE_FAILURES: usize = 3;
 /// 审批等待窗口（09 §4.1 ⑥；测试可注入更短值）
 pub const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// 子任务同步等待窗（D16 决策④：探查/专家 120s 超窗转后台；委派直接后台）
+pub const SUBAGENT_WAIT_WINDOW: Duration = Duration::from_secs(120);
+
+/// ETA 静态初值表毫秒（D16 §5/P1-6：滚动统计无样本时的兜底）
+pub(crate) fn static_eta_ms(kind: &str) -> i64 {
+    match kind {
+        "probe" => 45_000,
+        "expert" => 180_000,
+        "team" => 300_000,
+        "delegate" => 600_000,
+        _ => 60_000,
+    }
+}
+
 /// 审批回执（宿主 → 循环）
 #[derive(Debug, Clone)]
 pub struct PermissionResponse {
@@ -110,6 +124,11 @@ pub trait EventLog: Send + Sync {
     fn next_run_id(&self) -> Option<String> {
         None
     }
+    /// ETA 滚动统计（P1-6：按 def_ref 最近 8 次均值；None=无样本回落静态表）
+    fn eta_hint(&self, def_ref: &str) -> Option<i64> {
+        let _ = def_ref;
+        None
+    }
     /// run 起始落库（status=running）
     fn run_start(&self, run: &RunStart) {
         let _ = run;
@@ -138,6 +157,11 @@ impl EventLog for std::sync::Mutex<Store> {
     }
     fn next_run_id(&self) -> Option<String> {
         self.lock().ok().and_then(|s| s.next_run_id().ok())
+    }
+    fn eta_hint(&self, def_ref: &str) -> Option<i64> {
+        self.lock()
+            .ok()
+            .and_then(|s| s.eta_hint_ms(def_ref).ok().flatten())
     }
     fn run_start(&self, run: &RunStart) {
         if let Ok(store) = self.lock() {
@@ -269,6 +293,9 @@ pub struct SessionRunner {
     err_tracker: bbrt_memory::ErrorTracker,
     /// 审批超时（测试注入）
     pub permission_timeout: Duration,
+    /// 子任务同步等待窗（D16 决策④：探查/专家 spawn 后同步等 120s，
+    /// 超窗转后台继续跑——摘要经 hub park 下一轮回填；测试注入更短值）
+    pub subagent_wait_window: Duration,
     /// 后台委派中枢（D16 §5：Some=委派后台化——launch 后 turn 立即返回；
     /// None=同步退化路径（raw runner 测试/嵌入式用法）。manager.start 注入，
     /// 生产路径恒 Some；与 manager 共享同一实例（指令定向路由 + join 注入）
@@ -314,16 +341,17 @@ impl SessionRunner {
             // v0.1 恒开（`memory.heuristic=off` 开关随配置系统接线，D15 §2.2）
             err_tracker: bbrt_memory::ErrorTracker::new(true),
             permission_timeout: PERMISSION_TIMEOUT,
+            subagent_wait_window: SUBAGENT_WAIT_WINDOW,
             delegate_hub: None,
         }
     }
 
-    /// 后台委派产物注入（D16 §5：审查通过的摘要经 manager 在下一轮
-    /// run_turn 前 drain 后调用——主上下文以 delegate.join 轮次回填）
-    pub fn inject_delegate_join(&mut self, run_id: &str, summary: &str) {
+    /// 后台产物注入（D16 §5：委派/探查/团队经 hub park 的摘要由 manager
+    /// 在下一轮 run_turn 前 drain 后调用——主上下文以对应 join 轮次回填）
+    pub fn inject_delegate_join(&mut self, run_id: &str, name: &str, summary: &str) {
         self.history.push(Round::Tool {
             call_id: run_id.to_string(),
-            name: "delegate.join".to_string(),
+            name: name.to_string(),
             summary: summary.to_string(),
         });
     }
@@ -384,18 +412,67 @@ impl SessionRunner {
                     state: "subagent_fanout".into(),
                     reason: "team.cast".into(),
                 });
-                if let Ok(team) = crate::team::run_team(
-                    &crate::expert::ExpertCtx {
-                        model: deps.model.as_ref(),
-                        tools: deps.tools.as_ref(),
-                        mode: self.mode,
-                    },
-                    &self.session_id,
-                    &graph,
-                    deps.sink.as_ref(),
-                    deps.wal.as_ref(),
-                ) {
-                    self.state = crate::subagent::transition_join(self.state);
+                // 等待窗 + 超窗转后台（D16 决策④：同探查口径；TeamRun 在
+                // 专用线程，窗内收口即时回填 / 超窗 park 摘要下一轮注入）
+                let ctx = crate::expert::ExpertCtx {
+                    model: Arc::clone(&deps.model),
+                    tools: Arc::clone(&deps.tools),
+                    mode: self.mode,
+                };
+                let sid = self.session_id.clone();
+                let sink_bg = Arc::clone(&deps.sink);
+                let wal_bg = Arc::clone(&deps.wal);
+                let hub = self.delegate_hub.clone();
+                let (ttx, trx) = std::sync::mpsc::channel::<Option<crate::team::TeamResult>>();
+                let _ = std::thread::Builder::new()
+                    .name("bbw-team".into())
+                    .spawn(move || {
+                        let team = crate::team::run_team(
+                            &ctx,
+                            &sid,
+                            &graph,
+                            sink_bg.as_ref(),
+                            wal_bg.as_ref(),
+                        );
+                        // rx 已关（主线程超窗弃等）→ send Err：超窗路径 park 摘要
+                        // （TeamError 非 Clone：ok() 值传递，Err 路径无产物不 park）
+                        let parked = match &team {
+                            Ok(t) => Some(t.clone()),
+                            Err(_) => None,
+                        };
+                        if ttx.send(team.ok()).is_err() {
+                            if let (Some(hub), Some(team)) = (hub, parked) {
+                                hub.park_join(
+                                    &sid,
+                                    crate::delegate_bg::DelegateJoin {
+                                        name: "team.join".into(),
+                                        run_id: team.run_id.clone(),
+                                        summary: format!(
+                                            "## 专家会诊结果（后台完成）\n{}",
+                                            team.summary
+                                        ),
+                                    },
+                                );
+                            }
+                        }
+                    });
+                // rx 先移出（超窗须显式 drop 才能让线程 send 失败→走 park 路径）
+                let (team_in_window, timed_out) = {
+                    let rx = trx;
+                    match rx.recv_timeout(self.subagent_wait_window) {
+                        Ok(opt) => (opt, false),
+                        // 关窗瞬间防丢：非阻塞补收一次再弃等（drop 触发 park）
+                        Err(_) => match rx.try_recv() {
+                            Ok(opt) => (opt, false),
+                            Err(_) => {
+                                drop(rx);
+                                (None, true)
+                            }
+                        },
+                    }
+                };
+                self.state = crate::subagent::transition_join(self.state);
+                if let Some(team) = team_in_window {
                     self.history.push(Round::Tool {
                         call_id: format!("team-{}", team.run_id),
                         name: "team.join".to_string(),
@@ -406,10 +483,15 @@ impl SessionRunner {
                         state: "running".into(),
                         reason: "team.join".into(),
                     });
-                } else {
-                    // 图校验拒绝（选角器已前置校验，此处兜底）→ 回 running 走主循环
-                    self.state = crate::subagent::transition_join(self.state);
+                } else if timed_out {
+                    deps.wal.append(&self.session_id, "team.backgrounded", "{}");
+                    emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                        session_id: id,
+                        state: "running".into(),
+                        reason: "team.backgrounded".into(),
+                    });
                 }
+                // else：图校验拒绝（选角器已前置校验，此处兜底）→ 回 running 走主循环
             }
         }
 
@@ -437,7 +519,7 @@ impl SessionRunner {
                             ModelTier::Fast => "bbw-fast".to_string(),
                             ModelTier::Strong => "bbw-strong".to_string(),
                         });
-                let results = crate::subagent::fanout_probes(
+                let outcome = crate::subagent::fanout_probes(
                     &self.session_id,
                     self.mode,
                     Arc::clone(&deps.model),
@@ -451,25 +533,39 @@ impl SessionRunner {
                         memory: deps.memory.as_ref(),
                         workspace: &self.workspace,
                         model_name,
+                        wait_window: self.subagent_wait_window,
+                        hub: self.delegate_hub.clone(),
                     },
                 );
                 self.state = crate::subagent::transition_join(self.state);
-                let digest = crate::subagent::join_summary(
-                    &self.session_id,
-                    &results,
-                    deps.sink.as_ref(),
-                    deps.wal.as_ref(),
-                );
-                self.history.push(Round::Tool {
-                    call_id: format!("fanout-{}", self.history.len()),
-                    name: "subagent.join".to_string(),
-                    summary: format!("## 并行探查结果\n{digest}"),
-                });
-                emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-                    session_id: id,
-                    state: "running".into(),
-                    reason: "subagent.join".into(),
-                });
+                match outcome {
+                    crate::subagent::FanoutOutcome::Joined(digest) => {
+                        self.history.push(Round::Tool {
+                            call_id: format!("fanout-{}", self.history.len()),
+                            name: "subagent.join".to_string(),
+                            summary: format!("## 并行子任务结果\n{digest}"),
+                        });
+                        emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                            session_id: id,
+                            state: "running".into(),
+                            reason: "subagent.join".into(),
+                        });
+                    }
+                    crate::subagent::FanoutOutcome::Backgrounded { pending } => {
+                        // 超窗转后台（D16 决策④）：turn 继续，收口线程完成后
+                        // 经 hub park 摘要，manager 下一轮 run_turn 注入回填
+                        deps.wal.append(
+                            &self.session_id,
+                            "subagent.backgrounded",
+                            &format!("{{\"pending\":{pending}}}"),
+                        );
+                        emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                            session_id: id,
+                            state: "running".into(),
+                            reason: "subagent.backgrounded".into(),
+                        });
+                    }
+                }
             }
         }
 
@@ -970,6 +1066,11 @@ impl SessionRunner {
         // run 起始（D16 §3.1：backend 确定后落 agent_run；简报超时未 launch
         // 不产生 run 行——无执行过程，审计由 delegate.brief_timeout WAL 覆盖）
         let started = std::time::Instant::now();
+        let def_ref = format!("backend:{}", req.backend);
+        let eta_hint = deps
+            .wal
+            .eta_hint(&def_ref)
+            .unwrap_or_else(|| static_eta_ms("delegate"));
         deps.wal.run_start(&RunStart {
             run_id: run_id.clone(),
             session_id: self.session_id.clone(),
@@ -977,8 +1078,8 @@ impl SessionRunner {
             parent_run_id: String::new(),
             parent_call_id: call.call_id.clone(),
             kind: "delegate",
-            def_ref: format!("backend:{}", req.backend),
-            eta_hint_ms: 0,
+            def_ref: def_ref.clone(),
+            eta_hint_ms: eta_hint,
             actor: String::new(),
         });
         let mut stream = match delegator.launch(&req) {

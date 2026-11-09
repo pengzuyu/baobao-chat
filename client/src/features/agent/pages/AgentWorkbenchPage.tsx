@@ -63,6 +63,8 @@ export function AgentWorkbenchPage() {
   const memories = useAgentStore((s) => s.memories);
   const modelBySession = useAgentStore((s) => s.modelBySession);
   const usageBySession = useAgentStore((s) => s.usageBySession);
+  const runsBySession = useAgentStore((s) => s.runsBySession);
+  const loadRuns = useAgentStore((s) => s.loadRuns);
   const startSession = useAgentStore((s) => s.startSession);
   const sendText = useAgentStore((s) => s.sendText);
   const respondPermission = useAgentStore((s) => s.respondPermission);
@@ -99,6 +101,12 @@ export function AgentWorkbenchPage() {
 
   const activeSession = useAgentStore(selectActiveSession);
   const items = activeSessionId ? (streams[activeSessionId] ?? []) : [];
+  const runs = activeSessionId ? (runsBySession[activeSessionId] ?? []) : [];
+
+  // run 面板数据（D16 §3.1）：会话切换时拉取；生命周期事件触发的刷新在 store 内
+  useEffect(() => {
+    if (activeSessionId) loadRuns(activeSessionId);
+  }, [activeSessionId, loadRuns]);
   const pendingPerms = useMemo(() => selectPendingPermissions(items), [items]);
   const composerState = composerDisabledFor(activeSession?.status);
 
@@ -420,6 +428,7 @@ export function AgentWorkbenchPage() {
               memories={memories}
               usage={activeSessionId ? usageBySession[activeSessionId] : undefined}
               pendingCount={pendingPerms.length}
+              runs={runs}
             />
           </aside>
         ) : null}

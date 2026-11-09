@@ -471,6 +471,13 @@ pub enum HostToRuntime {
         rejected_hunks: Option<Vec<String>>,
     },
 
+    /// run 清单查询（D16 §3.1：REQ→runs.list.result；session_id 缺省=全部会话）
+    #[serde(rename = "runs.list", rename_all = "camelCase")]
+    RunsList {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
+
     /// 暂停会话
     #[serde(rename = "session.pause", rename_all = "camelCase")]
     SessionPause { session_id: String },
@@ -822,6 +829,13 @@ pub enum RuntimeToHost {
     ReportListResult {
         #[serde(default)]
         items: Vec<ReportListItem>,
+    },
+
+    /// runs.list 回执（D16 §3.1：agent_run 行 camelCase 投影，字段全集）
+    #[serde(rename = "runs.list.result", rename_all = "camelCase")]
+    RunsListResult {
+        #[serde(default)]
+        items: Vec<Value>,
     },
 }
 

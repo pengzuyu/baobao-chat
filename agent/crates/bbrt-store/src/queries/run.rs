@@ -136,6 +136,21 @@ impl Store {
         Ok(())
     }
 
+    /// ETA 滚动统计（D16 §5/P1-6：按 def_ref 取最近 8 次已完成 run 的平均
+    /// 实际耗时——静态初值表的高阶修正；无样本=None，调用方回落静态表）
+    pub fn eta_hint_ms(&self, def_ref: &str) -> Result<Option<i64>, StoreError> {
+        let avg: Option<f64> = self.conn.query_row(
+            "SELECT AVG(eta_actual_ms) FROM (
+                 SELECT eta_actual_ms FROM agent_run
+                 WHERE def_ref = ?1 AND status IN ('done','failed') AND eta_actual_ms > 0
+                 ORDER BY ended_at DESC LIMIT 8
+             )",
+            params![def_ref],
+            |row| row.get(0),
+        )?;
+        Ok(avg.map(|v| v.max(0.0) as i64))
+    }
+
     /// 会话的 run 清单（created_at 升序；UI run 面板/审计检索用）。
     pub fn runs_of(&self, session_id: &str) -> Result<Vec<RunRow>, StoreError> {
         let mut stmt = self.conn.prepare(&format!(
@@ -143,6 +158,15 @@ impl Store {
              WHERE session_id = ?1 ORDER BY created_at ASC, id ASC"
         ))?;
         let rows = stmt.query_map(params![session_id], from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 全部 run 清单（created_at 升序；runs.list 全量口径）
+    pub fn runs_all(&self) -> Result<Vec<RunRow>, StoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {RUN_COLS} FROM agent_run ORDER BY created_at ASC, id ASC"
+        ))?;
+        let rows = stmt.query_map([], from_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 

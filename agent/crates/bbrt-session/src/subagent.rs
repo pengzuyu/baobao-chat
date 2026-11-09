@@ -147,6 +147,11 @@ pub fn run_probe(
 ) -> ProbeResult {
     use crate::loop_runner::{RunEnd, RunStart};
     let started = std::time::Instant::now();
+    // ETA（P1-6）：滚动统计优先，无样本回落静态表
+    let def_ref = "builtin.probe";
+    let eta_hint = wal
+        .eta_hint(def_ref)
+        .unwrap_or_else(|| crate::loop_runner::static_eta_ms("probe"));
     wal.run_start(&RunStart {
         run_id: run_id.to_string(),
         session_id: session_id.to_string(),
@@ -154,8 +159,8 @@ pub fn run_probe(
         parent_run_id: String::new(),
         parent_call_id: String::new(),
         kind: "probe",
-        def_ref: "builtin.probe".to_string(),
-        eta_hint_ms: 0,
+        def_ref: def_ref.to_string(),
+        eta_hint_ms: eta_hint,
         actor: String::new(),
     });
     let tool_names: Vec<String> = ctx.tools.tool_specs().into_iter().map(|s| s.name).collect();
@@ -170,7 +175,7 @@ pub fn run_probe(
         run_id,
         "subagent.spawn",
         &format!(
-            "{{\"run_id\":\"{run_id}\",\"task\":\"{}\"}}",
+            "{{\"run_id\":\"{run_id}\",\"eta_hint_ms\":{eta_hint},\"task\":\"{}\"}}",
             truncate_chars(&spec.task, 60)
         ),
     );
@@ -266,9 +271,16 @@ pub fn run_probe(
     result
 }
 
-/// fan-out 编排（loop_runner 调用）：状态迁移 #9 → 线程并行 ≤3 → join #10。
-/// 返回聚合 digest（调用方负责回填主上下文与 join 事件——见 join_summary）。
-/// run id 主线程串行预分配（wal 发号有序；未接 Store 退回 sub-{ms}-{i} 临时 id）。
+/// fan-out 结果（D16 决策④：等待窗内收口=Joined 即时回填；
+/// 超窗=Backgrounded——剩余子任务后台继续，摘要经 hub park 下一轮回填）
+pub enum FanoutOutcome {
+    Joined(String),
+    Backgrounded { pending: usize },
+}
+
+/// fan-out 编排（loop_runner 调用）：状态迁移 #9 → 线程并行 ≤3（detached）
+/// → 等待窗内 join #10 即时回填 / 超窗转后台（收口线程聚合剩余 →
+/// join 事件 + hub park，D16 §5）。返回聚合产物给调用方决定回填方式。
 #[allow(clippy::too_many_arguments)]
 pub fn fanout_probes(
     session_id: &str,
@@ -279,56 +291,96 @@ pub fn fanout_probes(
     wal: Arc<dyn EventLog>,
     subs: &[ProbeSpec],
     env: &FanoutEnv<'_>,
-) -> Vec<ProbeResult> {
+) -> FanoutOutcome {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let run_ids: Vec<String> = (0..subs.len())
+    let total = subs.len();
+    let run_ids: Vec<String> = (0..total)
         .map(|i| {
             wal.next_run_id()
                 .unwrap_or_else(|| format!("sub-{now_ms}-{i}"))
         })
         .collect();
-    // 线程并行（ChatClient: Send+Sync；单任务 panic 不阻塞——join 处标注，08 §4.5）
-    std::thread::scope(|s| {
-        let handles: Vec<_> = subs
-            .iter()
-            .zip(run_ids.iter())
-            .map(|(spec, run_id)| {
-                let run_id = run_id.clone();
-                let spec = spec.clone();
-                let ctx = ProbeCtx {
-                    model: Arc::clone(&model),
-                    tools: Arc::clone(&tools),
-                    mode: deps_mode,
-                    system: env.system.to_string(),
-                    skills: Arc::clone(env.skills),
-                    memory: env.memory.cloned(),
-                    workspace: env.workspace.to_string(),
-                    model_name: env.model_name.clone(),
-                };
-                let sink = Arc::clone(&sink);
-                let wal = Arc::clone(&wal);
-                let sid = session_id.to_string();
-                s.spawn(move || run_probe(ctx, &sid, &run_id, &spec, sink, wal))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .zip(run_ids.iter())
-            .map(|(h, run_id)| {
-                h.join().unwrap_or_else(|_| ProbeResult {
-                    run_id: run_id.clone(),
-                    ok: false,
-                    summary: "子任务线程 panic".into(),
-                })
-            })
-            .collect()
-    })
+    // detached 线程（超窗后仍继续跑——D16 决策④无时长上限；结果经通道回投）
+    let (tx, rx) = std::sync::mpsc::channel::<ProbeResult>();
+    for (spec, run_id) in subs.iter().zip(run_ids.iter()) {
+        let ctx = ProbeCtx {
+            model: Arc::clone(&model),
+            tools: Arc::clone(&tools),
+            mode: deps_mode,
+            system: env.system.to_string(),
+            skills: Arc::clone(env.skills),
+            memory: env.memory.cloned(),
+            workspace: env.workspace.to_string(),
+            model_name: env.model_name.clone(),
+        };
+        let tx = tx.clone();
+        let sink = Arc::clone(&sink);
+        let wal = Arc::clone(&wal);
+        let sid = session_id.to_string();
+        let run_id = run_id.clone();
+        let spec = spec.clone();
+        let _ = std::thread::Builder::new()
+            .name(format!("bbw-subagent-{run_id}"))
+            .spawn(move || {
+                // 单任务 panic 不阻塞（结果通道缺项由收口侧兜底标注）
+                let r = run_probe(ctx, &sid, &run_id, &spec, sink, wal);
+                let _ = tx.send(r);
+            });
+    }
+    drop(tx); // 发送端全在子线程：全部结果到齐后 rx 自然 EOF
+              // 等待窗（缺省 120s，SessionRunner.subagent_wait_window 注入）
+    let deadline = std::time::Instant::now() + env.wait_window;
+    let mut results: Vec<ProbeResult> = Vec::with_capacity(total);
+    while results.len() < total {
+        let remain = deadline.saturating_duration_since(std::time::Instant::now());
+        if remain.is_zero() {
+            break;
+        }
+        match rx.recv_timeout(remain) {
+            Ok(r) => results.push(r),
+            Err(_) => break,
+        }
+    }
+    if results.len() == total {
+        // 窗内收口：join 摘要即时回填（旧行为）
+        let digest = join_summary(session_id, &results, sink.as_ref(), wal.as_ref());
+        return FanoutOutcome::Joined(digest);
+    }
+    // 超窗转后台：收口线程聚合剩余 → join 事件 + hub park（manager 下轮注入）
+    let pending = total - results.len();
+    let sid = session_id.to_string();
+    let sink_bg = Arc::clone(&sink);
+    let wal_bg = Arc::clone(&wal);
+    let hub = env.hub.clone();
+    let _ = std::thread::Builder::new()
+        .name("bbw-fanout-join".into())
+        .spawn(move || {
+            let mut all = results;
+            while all.len() < total {
+                match rx.recv() {
+                    Ok(r) => all.push(r),
+                    Err(_) => break, // 发送端全失（panic 兜底）：带部分结果收口
+                }
+            }
+            let digest = join_summary(&sid, &all, sink_bg.as_ref(), wal_bg.as_ref());
+            if let Some(hub) = hub {
+                hub.park_join(
+                    &sid,
+                    crate::delegate_bg::DelegateJoin {
+                        name: "subagent.join".into(),
+                        run_id: format!("fanout-{total}"),
+                        summary: format!("## 并行子任务结果（后台完成）\n{digest}"),
+                    },
+                );
+            }
+        });
+    FanoutOutcome::Backgrounded { pending }
 }
 
-/// fan-out 环境（主会话投影：system/技能/记忆/工作区/模型名）
+/// fan-out 环境（主会话投影：system/技能/记忆/工作区/模型名 + 等待窗 + hub）
 pub struct FanoutEnv<'a> {
     pub system: &'a str,
     pub skills: &'a Arc<Mutex<crate::skills::SkillIndex>>,
@@ -336,6 +388,10 @@ pub struct FanoutEnv<'a> {
     pub workspace: &'a str,
     /// 主循环同款模型名（override 优先回落档位）
     pub model_name: String,
+    /// 同步等待窗（超窗转后台，D16 决策④）
+    pub wait_window: std::time::Duration,
+    /// 后台产物 parking（None=无 manager 装配：后台收口仅发事件不注入）
+    pub hub: Option<Arc<crate::delegate_bg::DelegateHub>>,
 }
 
 /// join 收口：协议事件 + WAL + 摘要文本（主上下文回填用）

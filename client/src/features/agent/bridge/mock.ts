@@ -17,6 +17,7 @@ import type {
   AgentSessionMeta,
   GrantScope,
   MemoryEntry,
+  RunInfo,
   PermissionMode,
   PermissionPreview,
 } from './types';
@@ -361,6 +362,10 @@ export class MockAgentBridge implements AgentBridge {
   async delegateInput(_runId: string, _text: string): Promise<void> {}
 
   async cancelDelegate(_runId: string): Promise<void> {}
+
+  async listRuns(_sessionId?: string): Promise<RunInfo[]> {
+    return []; // 剧本无 run 记录（真实链路经 agent_runs_list）
+  }
 
   async reviewDelegate(_runId: string, _accept: boolean): Promise<void> {}
 

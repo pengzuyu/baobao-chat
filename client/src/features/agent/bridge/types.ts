@@ -47,6 +47,25 @@ export interface AgentSessionMeta {
   summary?: string;
 }
 
+/** 子 Agent run 行（D16 §3.1 agent_run 投影；runs.list 数据源） */
+export interface RunInfo {
+  id: string;
+  sessionId: string;
+  rootSessionId: string;
+  parentRunId: string;
+  parentCallId: string;
+  kind: 'probe' | 'expert' | 'team' | 'delegate';
+  defRef: string;
+  status: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+  etaHintMs: number;
+  etaActualMs: number;
+  summary: string;
+  childSessionRef: string;
+  createdAt: number;
+  startedAt: number;
+  endedAt?: number;
+}
+
 /** 知识记忆条目（D15 §2.1：一文件一事实 + MEMORY.md 索引行） */
 export interface MemoryEntry {
   /** slug（文件名），删除即 memory.delete(name) */
@@ -228,6 +247,8 @@ export interface AgentBridge {
 
   /** 日报列表（D15 §3.3 report.list + 报告正文） */
   listReports(): Promise<AgentReport[]>;
+  /** run 清单（D16 §3.1 runs.list；sessionId 缺省=全部） */
+  listRuns(sessionId?: string): Promise<RunInfo[]>;
 }
 
 // ---- 展示映射（纯数据，组件与 store 共用）----

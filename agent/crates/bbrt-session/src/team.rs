@@ -153,7 +153,7 @@ static TEAM_SEQ: AtomicUsize = AtomicUsize::new(0);
 /// fanout 口径）→ team.joined → 摘要 → team run 终态。
 /// 各节点事件复用 subagent.* 协议变体（Spawned/ProbeEvt，协议冻结）。
 pub fn run_team(
-    ctx: &ExpertCtx<'_>,
+    ctx: &ExpertCtx,
     session_id: &str,
     graph: &TeamGraph,
     sink: &dyn SessionSink,
@@ -170,6 +170,10 @@ pub fn run_team(
     let run_id = wal
         .next_run_id()
         .unwrap_or_else(|| format!("team-{now_ms}-{}", TEAM_SEQ.fetch_add(1, Ordering::Relaxed)));
+    let def_ref = format!("team:{}", topology_name(graph.topology));
+    let eta_hint = wal
+        .eta_hint(&def_ref)
+        .unwrap_or_else(|| crate::loop_runner::static_eta_ms("team"));
     wal.run_start(&RunStart {
         run_id: run_id.clone(),
         session_id: session_id.to_string(),
@@ -177,8 +181,8 @@ pub fn run_team(
         parent_run_id: String::new(),
         parent_call_id: String::new(),
         kind: "team",
-        def_ref: format!("team:{}", topology_name(graph.topology)),
-        eta_hint_ms: 0,
+        def_ref: def_ref.clone(),
+        eta_hint_ms: eta_hint,
         actor: String::new(),
     });
     let labels: Vec<&str> = graph.members.iter().map(|m| m.label.as_str()).collect();
@@ -255,7 +259,7 @@ fn topology_name(t: TeamTopology) -> &'static str {
 
 /// 会诊型：并行 Activation（原 run_team 主体；panic 兜底按索引挂标签）
 fn run_consult(
-    ctx: &ExpertCtx<'_>,
+    ctx: &ExpertCtx,
     session_id: &str,
     graph: &TeamGraph,
     sink: &dyn SessionSink,
@@ -272,13 +276,10 @@ fn run_consult(
                 let expert = Arc::clone(&m.expert);
                 let label = m.label.clone();
                 let task_brief = brief_for(&graph.task, &label);
+                let ctx = ctx.clone(); // owned：线程内独立持有
                 s.spawn(move || {
                     let result = run_expert(
-                        ExpertCtx {
-                            model: ctx.model,
-                            tools: ctx.tools,
-                            mode: ctx.mode,
-                        },
+                        &ctx,
                         session_id,
                         &expert,
                         &task_brief,
@@ -326,7 +327,7 @@ fn brief_for(task: &str, label: &str) -> String {
 /// 流水线：有序串行——上游结论经黑板流入下游简报（§3.1 ②）；上游
 /// fail 不阻断：下游简报带失败标注继续（降级语义同 §3.2"失败不阻塞"）
 fn run_pipeline(
-    ctx: &ExpertCtx<'_>,
+    ctx: &ExpertCtx,
     session_id: &str,
     graph: &TeamGraph,
     sink: &dyn SessionSink,
@@ -344,19 +345,7 @@ fn run_pipeline(
                 graph.task, m.label, i + 1, board
             )
         };
-        let result = run_expert(
-            ExpertCtx {
-                model: ctx.model,
-                tools: ctx.tools,
-                mode: ctx.mode,
-            },
-            session_id,
-            &m.expert,
-            &brief,
-            sink,
-            wal,
-            parent_run_id,
-        );
+        let result = run_expert(ctx, session_id, &m.expert, &brief, sink, wal, parent_run_id);
         board.push_str(&format!(
             "- [{}] {}：{}\n",
             if result.ok { "ok" } else { "fail" },
@@ -376,7 +365,7 @@ fn run_pipeline(
 /// 意见返工 ≤N 轮，超限转人工（escalated；§3.1 ③）。verdict 解析失败按
 /// revise 保守处理（评审产出不明=不放行）。
 fn run_review_loop(
-    ctx: &ExpertCtx<'_>,
+    ctx: &ExpertCtx,
     session_id: &str,
     graph: &TeamGraph,
     sink: &dyn SessionSink,
@@ -408,11 +397,7 @@ fn run_review_loop(
             )
         };
         let prod = run_expert(
-            ExpertCtx {
-                model: ctx.model,
-                tools: ctx.tools,
-                mode: ctx.mode,
-            },
+            ctx,
             session_id,
             &producer.expert,
             &prod_brief,
@@ -438,11 +423,7 @@ fn run_review_loop(
             truncate_chars(&artifact, 2000)
         );
         let rev = run_expert(
-            ExpertCtx {
-                model: ctx.model,
-                tools: ctx.tools,
-                mode: ctx.mode,
-            },
+            ctx,
             session_id,
             &reviewer.expert,
             &rev_input,

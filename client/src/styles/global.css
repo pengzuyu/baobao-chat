@@ -3343,6 +3343,72 @@ body {
   color: var(--bbw-success);
 }
 
+/* 运行记录（D16 §3.1 run 面板，右栏） */
+.agent-run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--bbw-space-1);
+}
+
+.agent-run-item {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-2);
+  font-size: var(--bbw-font-12);
+  min-width: 0;
+}
+
+.agent-run-item__kind {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--bbw-radius-tag, 4px);
+  background: var(--bbw-gray-2);
+  color: var(--bbw-gray-7);
+}
+
+.agent-run-item__kind--delegate {
+  color: var(--bbw-primary, var(--bbw-gray-9));
+  background: var(--bbw-gray-2);
+}
+
+.agent-run-item__def {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--bbw-font-mono);
+  color: var(--bbw-gray-8);
+}
+
+.agent-run-item__status {
+  flex-shrink: 0;
+  color: var(--bbw-gray-6);
+}
+
+.agent-run-item__status--done {
+  color: var(--bbw-success);
+}
+
+.agent-run-item__status--failed,
+.agent-run-item__status--interrupted {
+  color: var(--bbw-danger);
+}
+
+.agent-run-item__status--live::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--bbw-primary, var(--bbw-gray-6));
+  margin-right: 4px;
+  animation: bbw-pulse 1.2s ease-in-out infinite;
+}
+
 .delegate-card__verdict--fail {
   color: var(--bbw-gray-6);
 }
@@ -6677,6 +6743,28 @@ body {
 }
 
 /* ---- D17 网格样式段结束 ---- */
+
+/* ---- D17 独立会议窗口（meeting.html 入口） ---- */
+.meeting-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.meeting-fallback,
+.meeting-fatal {
+  margin: auto;
+  padding: 24px 32px;
+  border-radius: 10px;
+  background: var(--bg-surface-2, #1c1f26);
+  color: var(--text-secondary, #8a94a6);
+  font-size: 14px;
+}
+
+.meeting-fatal {
+  color: #ff6b6b;
+}
 
 .rtc-toast {
   position: fixed;

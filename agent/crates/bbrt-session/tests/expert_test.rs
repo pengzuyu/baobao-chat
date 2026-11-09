@@ -227,17 +227,17 @@ fn run_expert_full_chain() {
         &skill_index(),
         &AssemblePolicy::default(),
     );
-    let model = ScriptModel {
+    let model = Arc::new(ScriptModel {
         seen: Mutex::new(vec![]),
         always_tool: false,
-    };
+    });
     let sink = Arc::new(CollectSink(Mutex::new(vec![])));
     let log = SharedLog::default();
 
     let r = run_expert(
-        ExpertCtx {
-            model: &model,
-            tools: tools.as_ref(),
+        &ExpertCtx {
+            model: model.clone(),
+            tools: tools.clone(),
             mode: PermissionMode::AutoEdit,
         },
         "sess-1",
@@ -287,17 +287,17 @@ fn run_expert_step_limit() {
         &skill_index(),
         &AssemblePolicy::default(),
     );
-    let model = ScriptModel {
+    let model = Arc::new(ScriptModel {
         seen: Mutex::new(vec![]),
         always_tool: true,
-    };
+    });
     let sink = Arc::new(CollectSink(Mutex::new(vec![])));
     let log = SharedLog::default();
 
     let r = run_expert(
-        ExpertCtx {
-            model: &model,
-            tools: tools.as_ref(),
+        &ExpertCtx {
+            model: model.clone(),
+            tools: tools.clone(),
             mode: PermissionMode::AutoEdit,
         },
         "sess-2",
@@ -330,17 +330,17 @@ fn run_expert_context_budget() {
         &skill_index(),
         &AssemblePolicy::default(),
     );
-    let model = ScriptModel {
+    let model = Arc::new(ScriptModel {
         seen: Mutex::new(vec![]),
         always_tool: false,
-    };
+    });
     let sink = Arc::new(CollectSink(Mutex::new(vec![])));
     let log = SharedLog::default();
 
     let r = run_expert(
-        ExpertCtx {
-            model: &model,
-            tools: tools.as_ref(),
+        &ExpertCtx {
+            model: model.clone(),
+            tools: tools.clone(),
             mode: PermissionMode::AutoEdit,
         },
         "sess-3",

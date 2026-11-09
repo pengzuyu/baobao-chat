@@ -29,9 +29,11 @@ struct BgRun {
     tx: Sender<DelegateHostMsg>,
 }
 
-/// 审查通过待回填主上下文的产物
+/// 待回填主上下文的产物（多形态共用：delegate.join/subagent.join/team.join）
 #[derive(Debug, Clone, PartialEq)]
 pub struct DelegateJoin {
+    /// 注入 history 的轮次名（Round::Tool.name）
+    pub name: String,
     pub run_id: String,
     pub summary: String,
 }
@@ -123,6 +125,7 @@ impl DelegateHub {
                     hub.park_join(
                         &sid,
                         DelegateJoin {
+                            name: "delegate.join".into(),
                             run_id: rid.clone(),
                             summary: format!("[委派完成·审查通过] {}", final_rep.summary),
                         },
@@ -209,6 +212,7 @@ mod tests {
         hub.park_join(
             "s-1",
             DelegateJoin {
+                name: "delegate.join".into(),
                 run_id: "r-1".into(),
                 summary: "x".into(),
             },
@@ -216,6 +220,7 @@ mod tests {
         hub.park_join(
             "s-1",
             DelegateJoin {
+                name: "subagent.join".into(),
                 run_id: "r-2".into(),
                 summary: "y".into(),
             },
@@ -223,6 +228,7 @@ mod tests {
         hub.park_join(
             "s-2",
             DelegateJoin {
+                name: "team.join".into(),
                 run_id: "r-3".into(),
                 summary: "z".into(),
             },
