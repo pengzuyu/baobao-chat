@@ -291,6 +291,11 @@ func main() {
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authAPI))
 	mux.HandleFunc("POST /api/v1/auth/refresh", handleRefresh(authAPI))
 
+	// setup 初始化向导（16 篇 §2.2 Web 化主通道）：空租户免认证引导首个管理员；
+	// 建户即关（租户内有任何用户 → bootstrap 永久 1014）。CLI bootstrap 降级为兜底
+	mux.HandleFunc("GET /api/v1/setup/status", handleSetupStatus(orgRepo))
+	mux.HandleFunc("POST /api/v1/setup/bootstrap", handleSetupBootstrap(orgRepo, roleStore))
+
 	// 受保护路由：auth → tenant（D02 §6 链尾两环）
 	authed := func(h http.HandlerFunc) http.Handler {
 		return httpx.Chain(h, httpx.Auth(authAPI.Verify), httpx.Tenant)
@@ -933,6 +938,84 @@ func handleRefresh(svc authapi.AuthService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, pair)
+	}
+}
+
+// ── setup 初始化向导（16 篇 §2.2 Web 化：开源产品式开箱引导） ──
+// 判定口径：默认租户（阶段一 tenant=1）users 计数 >0 即已初始化。向导只在
+// 空库窗口期开放：首户建成即永久关闭（1014）。安全边界：端点免认证，暴露面
+// 仅为"布尔状态 + 建首户"，不泄露用户数；抢注窗口 = 部署完成到管理员提交的
+// 时间差，内部部署（compose/helm 内网）可接受——与 CLI bootstrap 同口径。
+
+type setupBootstrapReq struct {
+	EmployeeNo  string `json:"employee_no"`  // 缺省 admin
+	DisplayName string `json:"display_name"` // 缺省"平台管理员"
+	Password    string `json:"password"`
+}
+
+// handleSetupStatus 初始化状态（免认证；仅回布尔）
+func handleSetupStatus(orgs orgrepo.Repo) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		n, err := orgs.CountUsers(r.Context(), bbwpg.DefaultTenantID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]bool{"initialized": n > 0})
+	}
+}
+
+// handleSetupBootstrap 建首个管理员（仅空租户可用）。与 CLI bootstrap 同链路：
+// 建户 → 挂内置「管理员」角色；前端成功后自动走 /auth/login 进系统。
+// 并发竞态：两笔不同工号同窗到达可能均建成（毫秒级窗口，内网可达者才可能）；
+// 同工号由 UK(tenant,empno) 兜底拒绝——登记为已知窗口，阶段二加租户级初始化锁
+func handleSetupBootstrap(orgs orgrepo.Repo, roles adminrepo.RoleRepo) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req setupBootstrapReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if req.EmployeeNo == "" {
+			req.EmployeeNo = "admin"
+		}
+		if req.DisplayName == "" {
+			req.DisplayName = "平台管理员"
+		}
+		if len(req.EmployeeNo) > 64 || len(req.DisplayName) > 64 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "工号/姓名 ≤64 字"))
+			return
+		}
+		if len(req.Password) < 8 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "口令至少 8 位"))
+			return
+		}
+		ctx := r.Context()
+		n, err := orgs.CountUsers(ctx, bbwpg.DefaultTenantID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if n > 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeAuthSetupDone, "系统已初始化，引导已关闭"))
+			return
+		}
+		hash, err := authservice.HashPassword(req.Password)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		created, err := orgs.CreateUser(ctx, orgapi.User{
+			TenantID: bbwpg.DefaultTenantID, Type: orgapi.UserTypeHuman,
+			EmployeeNo: req.EmployeeNo, DisplayName: req.DisplayName,
+			Email: req.EmployeeNo + "@bbw.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
+		})
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		grantAdminRole(ctx, roles, created.ID)
+		httpx.OK(w, r, map[string]any{"uid": strconv.FormatInt(created.ID, 10), "employee_no": req.EmployeeNo})
 	}
 }
 

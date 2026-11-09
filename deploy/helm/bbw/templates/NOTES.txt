@@ -16,8 +16,9 @@
 
 2. 首次初始化（16 篇 §2.2）
    · 迁移已由 pre-install Job（{{ include "bbw.fullname" . }}-migrate）执行
-   · 引导平台管理员：
-     kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "bbw.fullname" . }}-app -- \
+   · 打开客户端即进入初始化向导：填写管理员工号/姓名/口令即完成引导并自动登录
+     （向导仅在系统无任何用户时出现；建户即永久关闭）
+   · 兜底通道（向导不可用时）：kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "bbw.fullname" . }}-app -- \
        bbw-server admin bootstrap --admin-password '<强密码>'
    · 访问 Web 管理台完成租户初始化（12 篇）
 

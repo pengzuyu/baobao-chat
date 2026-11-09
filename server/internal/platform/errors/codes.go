@@ -25,6 +25,7 @@ const (
 	CodeAuthBrowserLoginDenied  Code = 1011 // 浏览器端已拒绝
 	CodeAuthConfirmMismatch     Code = 1012 // 确认码不匹配
 	CodeAuthCodeInvalidDevice   Code = 1013 // code 已使用或非发起设备
+	CodeAuthSetupDone           Code = 1014 // 系统已初始化（setup 引导已关闭）
 )
 
 // ───────────────────────── 2xxx 组织/权限/租户（03 篇） ─────────────────────────

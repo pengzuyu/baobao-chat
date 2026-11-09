@@ -9,6 +9,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../features/auth/store/auth';
 import { LoginPage } from '../features/auth/pages/LoginPage';
+import { SetupPage } from '../features/auth/pages/SetupPage';
 import { DocCenterPage } from '../features/doc/pages/DocCenterPage';
 import { DocEditorPage } from '../features/doc/pages/DocEditorPage';
 import { DocTrashPage } from '../features/doc/pages/DocTrashPage';
@@ -130,6 +131,8 @@ export function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/auth" element={<LoginPage />} />
+        {/* 初始化向导（16 篇 §2.2 Web 化）：空系统引导首个管理员；已初始化自动回 /auth */}
+        <Route path="/setup" element={<SetupPage />} />
         {/* 分享外链解析（D06 §4.4：登录态访问——企业内不匿名；独立轻页面不走主布局） */}
         <Route
           path="/s/:code"

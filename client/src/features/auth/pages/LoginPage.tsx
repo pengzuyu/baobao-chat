@@ -9,6 +9,7 @@ import { Navigate } from 'react-router-dom';
 import { getErrorText } from '../../../shared/api/http';
 import { Logo } from '../../../shared/ui/Logo';
 import { useAuthStore } from '../store/auth';
+import { apiSetupStatus } from '../api/auth';
 
 /** 锁定剩余秒数（每秒心跳刷新） */
 function useLockCountdown(lockUntil: number): number {
@@ -32,8 +33,21 @@ export function LoginPage() {
   const lockSecondsLeft = useLockCountdown(lockUntil);
   const locked = lockSecondsLeft > 0;
 
+  // 空系统检测：未初始化 → 初始化向导（16 篇 §2.2；探测失败静默留在登录页）
+  const [needsSetup, setNeedsSetup] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    apiSetupStatus()
+      .then((s) => alive && setNeedsSetup(!s.initialized))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // 已登录（含登录成功）→ 回默认落点 /im
   if (token) return <Navigate to="/im" replace />;
+  if (needsSetup) return <Navigate to="/setup" replace />;
 
   return (
     <div className="login-page">

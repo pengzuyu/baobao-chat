@@ -73,6 +73,30 @@ export async function apiRefresh(refreshToken: string): Promise<LoginResult> {
   };
 }
 
+/** ── setup 初始化向导（16 篇 §2.2 Web 化：空系统引导首个管理员） ── */
+
+/** 系统是否已初始化（租户内已有用户）。mock 模式恒已初始化——纯前端走查不被向导打断 */
+export async function apiSetupStatus(): Promise<{ initialized: boolean }> {
+  if (USE_MOCK) return { initialized: true };
+  return http.get<{ initialized: boolean }>('/setup/status');
+}
+
+/**
+ * 建首个管理员（仅未初始化时可用，1014=已初始化）。
+ * 成功后由调用方自动走 apiLogin 进系统（口令仍在内存中，无需再输一遍）
+ */
+export async function apiSetupBootstrap(employeeNo: string, displayName: string, password: string): Promise<void> {
+  if (USE_MOCK) {
+    await delay(500);
+    throw new ApiError(1014, 'mock 模式不支持初始化向导');
+  }
+  await http.post('/setup/bootstrap', {
+    employee_no: employeeNo,
+    display_name: displayName,
+    password,
+  });
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
