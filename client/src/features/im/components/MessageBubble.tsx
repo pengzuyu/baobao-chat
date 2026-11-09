@@ -40,6 +40,7 @@ import { digestOf } from '../store/im';
 import { systemMessageText } from '../pages/systemMessageRegistry';
 import { downloadUrl, getDownloadTicket } from '../api/files';
 import { ApplyCard } from './ApplyCard';
+import { EmojiPicker } from './EmojiPicker';
 import { hasAnyMsgAction, msgActionsVisible } from './stream/msgActions';
 import type { MenuAnchor } from './stream/MsgContextMenu';
 import type {
@@ -488,6 +489,15 @@ export function MessageBubble({
   onSelectToggle,
   onOpenMsgMenu,
 }: MessageBubbleProps) {
+  /** 完整表情选择器 popover（INT-IM-25：悬浮条「更多表情」真选择器，替换旧固定🎉） */
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  // popover 打开时点外部关闭（capture 阶段，按钮自身已 stopPropagation 不误触）
+  useEffect(() => {
+    if (!emojiPickerOpen) return;
+    const close = () => setEmojiPickerOpen(false);
+    document.addEventListener('click', close, true);
+    return () => document.removeEventListener('click', close, true);
+  }, [emojiPickerOpen]);
   // 右键/长按可开菜单判定（INT-IM-25 与悬浮条/菜单同源 msgActionsVisible）：
   // 撤回占位（status=2）无任何项不开；system 仅「复制」可开
   const canOpenMenu = !!onOpenMsgMenu && hasAnyMsgAction(msgActionsVisible(message, myUid));
@@ -660,9 +670,27 @@ export function MessageBubble({
                   {e}
                 </button>
               ))}
-              <button type="button" className="msg-actions__btn" title="更多表情" onClick={() => doReact(QUICK_EMOJIS[3])}>
+              <button
+                type="button"
+                className="msg-actions__btn"
+                title="更多表情"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  setEmojiPickerOpen((v) => !v);
+                }}
+              >
                 <SmilePlus size={14} />
               </button>
+              {emojiPickerOpen ? (
+                <div className="msg-emoji-popover">
+                  <EmojiPicker
+                    onPick={(e) => {
+                      doReact(e);
+                      setEmojiPickerOpen(false);
+                    }}
+                  />
+                </div>
+              ) : null}
               <button type="button" className="msg-actions__btn" title="回复" onClick={() => actions.onReply(message)}>
                 回复
               </button>

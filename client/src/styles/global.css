@@ -1725,27 +1725,73 @@ body {
 
 /* 表情面板 / @面板（INT-IM-24 / 输入工具） */
 .emoji-panel {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 2px;
-  padding: var(--bbw-space-2);
+  padding: var(--bbw-space-1);
   margin: 0 var(--bbw-space-3);
   background: var(--bbw-bg-card, #fff);
   border: 1px solid var(--bbw-gray-3);
   border-radius: var(--bbw-radius-control);
 }
 
-.emoji-panel__item {
+/* 分栏 emoji 选择器（INT-IM-25 完整版：输入面板与消息回应 popover 共用） */
+.emoji-picker {
+  width: 312px;
+}
+
+.emoji-picker__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--bbw-gray-3);
+}
+
+.emoji-picker__tab {
   border: none;
   background: transparent;
-  font-size: 16px;
+  font-size: 15px;
+  padding: 4px 6px;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  opacity: 0.55;
+  border-bottom: 2px solid transparent;
+}
+
+.emoji-picker__tab--active {
+  opacity: 1;
+  border-bottom-color: var(--bbw-primary, #1677ff);
+}
+
+.emoji-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  padding: 6px;
+  max-height: 176px;
+  overflow-y: auto;
+}
+
+.emoji-picker__item {
+  border: none;
+  background: transparent;
+  font-size: 18px;
   padding: 3px;
   border-radius: 4px;
   cursor: pointer;
 }
 
-.emoji-panel__item:hover {
+.emoji-picker__item:hover {
   background: var(--bbw-gray-2);
+}
+
+/* 消息悬浮条「更多表情」popover（锚定 msg-actions 上方；容器 relative 见 .msg-actions） */
+.msg-emoji-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  background: var(--bbw-bg-card, #fff);
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: var(--bbw-radius-control);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
 
 .mention-panel {

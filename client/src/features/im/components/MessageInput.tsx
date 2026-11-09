@@ -13,9 +13,7 @@ import { AtSign, Mic, Paperclip, Smile, X } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { sendTyping } from '../api/im';
 import type { Message } from '../model/types';
-
-/** 表情面板常用集（分类全集阶段二接技能库分发） */
-const EMOJI_PANEL = ['😀', '😂', '🥰', '😭', '😡', '👍', '👎', '❤️', '🎉', '🙏', '🔥', '✅', '🤔', '💤', '🚀', '☕'];
+import { EmojiPicker } from './EmojiPicker';
 
 interface MessageInputProps {
   convId: string;
@@ -179,6 +177,10 @@ export function MessageInput({
         return;
       }
     }
+    if (e.key === 'Escape' && emojiOpen) {
+      setEmojiOpen(false);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       doSend();
@@ -252,21 +254,10 @@ export function MessageInput({
         </button>
       </div>
 
+      {/* 分栏 emoji 选择器（INT-IM-25 完整版）：插入不关面板便于连续输入，Smile 按钮/Esc 关闭 */}
       {emojiOpen ? (
         <div className="emoji-panel">
-          {EMOJI_PANEL.map((e) => (
-            <button
-              key={e}
-              type="button"
-              className="emoji-panel__item"
-              onClick={() => {
-                insertText(e);
-                setEmojiOpen(false);
-              }}
-            >
-              {e}
-            </button>
-          ))}
+          <EmojiPicker onPick={(e) => insertText(e)} />
         </div>
       ) : null}
 
