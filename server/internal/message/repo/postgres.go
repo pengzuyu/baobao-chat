@@ -536,6 +536,26 @@ func (p *Postgres) SetReadSeq(ctx context.Context, convID, userID, readSeq int64
 	return err
 }
 
+// ListReceipts 全成员回执行（API-IM-06 已读面板；空集=全员从未已读）
+func (p *Postgres) ListReceipts(ctx context.Context, convID int64) ([]Receipt, error) {
+	rows, err := p.pool.Query(ctx,
+		`SELECT user_id, delivered_seq, read_seq FROM message_receipt WHERE conv_id=$1`, convID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Receipt{}
+	for rows.Next() {
+		var r Receipt
+		if err := rows.Scan(&r.UserID, &r.DeliveredSeq, &r.ReadSeq); err != nil {
+			return nil, err
+		}
+		r.ConvID = convID
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ── 群管理（D03 §3.5/§3.6/§4.1 INT-IM-15~19；表见 migrations/0001/0004）──
 
 // UpdateMemberRole 角色变更（status 非 0 时一并覆盖；行不存在返回 ErrNotFound）

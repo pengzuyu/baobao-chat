@@ -40,6 +40,7 @@ import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from '../components/stream/MsgContextMenu';
 import { MessageInput } from '../components/MessageInput';
 import { ForwardModal } from '../components/ForwardModal';
+import { ReadReceiptModal } from '../components/ReadReceiptModal';
 import { MultiSelectBar } from '../components/MultiSelectBar';
 import { MergeForwardDrawer } from '../components/MergeForwardDrawer';
 import { SearchPanel } from '../components/SearchPanel';
@@ -62,6 +63,8 @@ export function ChatPage() {
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [forwardIds, setForwardIds] = useState<string[] | null>(null);
+  /** 已读面板（API-IM-06）：seq 非 0 即打开；仅群/广播群开入口（单聊 ✓✓ 已足够） */
+  const [receiptSeq, setReceiptSeq] = useState(0);
   /** 转发弹窗默认方式（批量条「合并转发」入口预置 merge；PIM-10b radio 可改） */
   const [forwardMode, setForwardMode] = useState<'merge' | 'one_by_one'>('one_by_one');
   /** PIM-11 合并转发详情抽屉：点击 merge_forward 气泡打开 */
@@ -691,6 +694,7 @@ export function ChatPage() {
             myUid={myUid}
             myRole={myRole}
             onOpenMsgMenu={openMsgMenu}
+            onOpenReceipts={activeConv && activeConv.type !== 1 ? (m) => setReceiptSeq(m.seq) : undefined}
             /* 多选：仅已落服务端消息参与（sending/failed 无 msgId，批量操作不可达） */
             multiSelect={
               msActive && m.type !== 'system' && m.status !== 2 && m.msgId
@@ -926,6 +930,9 @@ export function ChatPage() {
             setTimeout(() => setFwdToast(null), 3500);
           }}
         />
+      ) : null}
+      {receiptSeq > 0 && convId ? (
+        <ReadReceiptModal convId={convId} seq={receiptSeq} onClose={() => setReceiptSeq(0)} />
       ) : null}
       {mergeDrawerMsg ? (
         <MergeForwardDrawer message={mergeDrawerMsg} onClose={() => setMergeDrawerMsg(null)} />

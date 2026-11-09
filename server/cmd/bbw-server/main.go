@@ -311,7 +311,8 @@ func main() {
 	mux.Handle("GET /api/v1/convs/{id}", authed(handleConvDetail(msgMod.API())))
 	mux.Handle("GET /api/v1/convs/{id}/members", authed(handleConvMembers(msgMod.API())))
 	mux.Handle("GET /api/v1/convs/{id}/messages", authed(handleListMessages(msgMod.API())))
-	// TODO(阶段二)：GET /api/v1/convs/{id}/receipts 群已读回执面板（API-IM-06，租户 im.read_receipt 策略联动）
+	// 已读回执面板（API-IM-06：?seq= 已读/未读分组；租户 im.read_receipt 策略联动阶段二接）
+	mux.Handle("GET /api/v1/convs/{id}/receipts", authed(handleConvReceipts(msgMod.API())))
 	// 会话交互 REST（D03 §5.1：编辑/撤回/转发/会话态）
 	mux.Handle("POST /api/v1/messages/{id}/recall", authed(handleRecallMessage(msgMod.API())))
 	mux.Handle("PATCH /api/v1/messages/{id}", authed(handleEditMessage(msgMod.API())))
@@ -1216,6 +1217,33 @@ func handleConvMembers(svc messageapi.MessageService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, map[string]any{"items": members, "has_more": false})
+	}
+}
+
+// handleConvReceipts 已读回执面板（API-IM-06：?seq=被查询消息）
+func handleConvReceipts(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		convID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || convID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "会话 ID 非法"))
+			return
+		}
+		seq, err := strconv.ParseInt(r.URL.Query().Get("seq"), 10, 64)
+		if err != nil || seq <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "seq 非法"))
+			return
+		}
+		panel, err := svc.ListReceiptPanel(r.Context(), uid, convID, seq)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, panel)
 	}
 }
 

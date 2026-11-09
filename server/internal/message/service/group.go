@@ -915,6 +915,55 @@ func (s *Service) ListMembers(ctx context.Context, userID, convID int64) ([]mess
 	return out, nil
 }
 
+// ListReceiptPanel 已读回执面板（API-IM-06）：在群成员 ⋈ message_receipt，
+// read_seq≥seq 判已读；无回执行=未读（并集口径）；发送者本人不入名单
+// （自己的消息对自己恒已读，产品语义同企微）。成员即可查（本人或他人
+// 消息的已读分布同权——租户 im.read_receipt 策略联动阶段二接）。
+func (s *Service) ListReceiptPanel(ctx context.Context, userID, convID, seq int64) (*messageapi.ReceiptPanelDTO, error) {
+	if seq <= 0 {
+		return nil, errx.New(errx.CodeBadRequest, "seq 必填")
+	}
+	if _, err := s.GetConvDetail(ctx, userID, convID); err != nil { // 成员权限校验复用
+		return nil, err
+	}
+	// seq 对应消息须存在且属本会话（防跨会话探测成员）；repo 契约未命中=(nil,nil)
+	m, err := s.repo.GetMessageBySeq(ctx, convID, seq)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	if m == nil {
+		return nil, errx.New(errx.CodeNotFound, "消息不存在")
+	}
+	senderID := m.SenderID
+	members, err := s.repo.ListMembersDetailed(ctx, convID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	receipts, err := s.repo.ListReceipts(ctx, convID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	readMap := make(map[int64]bool, len(receipts))
+	for _, r := range receipts {
+		if r.ReadSeq >= seq {
+			readMap[r.UserID] = true
+		}
+	}
+	dto := &messageapi.ReceiptPanelDTO{Seq: seq, Read: []messageapi.ReceiptMemberDTO{}, Unread: []messageapi.ReceiptMemberDTO{}}
+	for _, mm := range members {
+		if mm.Status != 1 || mm.UserID == senderID { // 仅在群成员参与；发送者不入名单
+			continue
+		}
+		row := messageapi.ReceiptMemberDTO{UID: strconv.FormatInt(mm.UserID, 10), DisplayName: s.nameOf(mm.UserID)}
+		if readMap[mm.UserID] {
+			dto.Read = append(dto.Read, row)
+		} else {
+			dto.Unread = append(dto.Unread, row)
+		}
+	}
+	return dto, nil
+}
+
 // decodeSystemBody body → SystemBody（测试断言用）
 func decodeSystemBody(raw json.RawMessage) messageapi.SystemBody {
 	var b messageapi.SystemBody

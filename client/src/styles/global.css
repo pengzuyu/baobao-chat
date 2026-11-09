@@ -777,6 +777,19 @@ body {
   align-items: center;
   gap: 2px;
 }
+/* 群消息尾标可点开已读面板（API-IM-06） */
+.msg-state--clickable {
+  border: none;
+  background: transparent;
+  padding: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--bbw-gray-6);
+}
+.msg-state--clickable:hover {
+  background: var(--bbw-gray-2);
+  color: var(--bbw-primary, #1677ff);
+}
 .msg-row--mine .msg-state {
   align-self: flex-end;
 }
@@ -1960,6 +1973,93 @@ body {
   border-radius: var(--bbw-radius-card, 12px);
   padding: var(--bbw-space-4);
   gap: var(--bbw-space-3);
+}
+
+/* 已读回执面板（API-IM-06） */
+.receipt-modal {
+  width: 320px;
+  max-width: 90vw;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bbw-bg-card, #fff);
+  border-radius: var(--bbw-radius-card, 12px);
+  padding: var(--bbw-space-4);
+  gap: var(--bbw-space-2);
+}
+
+.receipt-modal__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 500;
+}
+
+.receipt-modal__close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--bbw-gray-5);
+  display: inline-flex;
+  padding: 2px;
+}
+
+.receipt-modal__tabs {
+  display: flex;
+  gap: var(--bbw-space-2);
+  border-bottom: 1px solid var(--bbw-gray-3);
+}
+
+.receipt-modal__tab {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 6px 10px;
+  font-size: var(--bbw-font-13);
+  color: var(--bbw-gray-6);
+  border-bottom: 2px solid transparent;
+}
+
+.receipt-modal__tab--active {
+  color: var(--bbw-primary, #1677ff);
+  border-bottom-color: var(--bbw-primary, #1677ff);
+}
+
+.receipt-modal__list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 80px;
+}
+
+.receipt-modal__row {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-2);
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.receipt-modal__row:hover {
+  background: var(--bbw-gray-2);
+}
+
+.receipt-modal__name {
+  flex: 1;
+  font-size: var(--bbw-font-13);
+}
+
+.receipt-modal__check {
+  color: var(--bbw-primary, #1677ff);
+}
+
+.receipt-modal__empty {
+  padding: var(--bbw-space-4);
+  text-align: center;
+  color: var(--bbw-gray-5);
+  font-size: var(--bbw-font-13);
 }
 
 .forward-modal__head {

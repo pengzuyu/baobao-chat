@@ -152,6 +152,24 @@ export async function setReaction(msgId: string, emoji: string, action: 'add' | 
   await wsClient.request('msg.reaction.set', { msg_id: msgId, emoji, action });
 }
 
+/** 已读面板成员行（API-IM-06） */
+export interface ReceiptPanelRow {
+  uid: string;
+  displayName: string;
+}
+
+/** 已读回执面板（API-IM-06：seq 的已读/未读分组；群聊尾标点击拉取） */
+export async function fetchReceiptPanel(convId: string, seq: number): Promise<{ read: ReceiptPanelRow[]; unread: ReceiptPanelRow[] }> {
+  if (USE_MOCK) {
+    await delay(200);
+    return { read: [], unread: [] };
+  }
+  const data = await http.get<{ seq: number; read: ReceiptPanelRow[]; unread: ReceiptPanelRow[] }>(
+    `/convs/${encodeURIComponent(convId)}/receipts?seq=${seq}`,
+  );
+  return { read: data.read, unread: data.unread };
+}
+
 /** 正在输入（WS msg.typing，瞬时：不重试不落库，TTL 5s；ack 为空） */
 export function sendTyping(convId: string): void {
   if (USE_MOCK) return;

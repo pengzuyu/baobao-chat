@@ -331,6 +331,17 @@ func (m *Memory) GetReceipt(_ context.Context, convID, userID int64) (Receipt, e
 	return Receipt{ConvID: convID, UserID: userID}, nil
 }
 
+// ListReceipts 全成员回执行（API-IM-06 已读面板）
+func (m *Memory) ListReceipts(_ context.Context, convID int64) ([]Receipt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Receipt{}
+	for _, r := range m.receipts[convID] {
+		out = append(out, *r)
+	}
+	return out, nil
+}
+
 // SetReadSeq 更新已读游标
 func (m *Memory) SetReadSeq(_ context.Context, convID, userID, readSeq int64) error {
 	m.mu.Lock()

@@ -77,6 +77,8 @@ type Repo interface {
 	TouchConversation(ctx context.Context, convID int64, seq, ts int64) error
 
 	GetReceipt(ctx context.Context, convID, userID int64) (Receipt, error)
+	// ListReceipts 全成员回执行（已读面板 API-IM-06；无行=从未已读，由调用方并成员集补齐）
+	ListReceipts(ctx context.Context, convID int64) ([]Receipt, error)
 	// SetReadSeq 已读游标（调用方保证只进不退）
 	SetReadSeq(ctx context.Context, convID, userID, readSeq int64) error
 

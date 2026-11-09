@@ -255,6 +255,9 @@ type MessageService interface {
 	GetConvDetail(ctx context.Context, userID int64, convID int64) (*ConvDetailDTO, error)
 	// ListMembers 成员列表（API-IM-05 简版：在群成员含 role/mute_until）
 	ListMembers(ctx context.Context, userID int64, convID int64) ([]MemberDTO, error)
+	// ListReceiptPanel 已读回执面板（API-IM-06：seq 的已读/未读成员分组；
+	// read_seq≥seq 判已读；租户 im.read_receipt 策略联动阶段二接——当前成员即可查）
+	ListReceiptPanel(ctx context.Context, userID int64, convID int64, seq int64) (*ReceiptPanelDTO, error)
 
 	// ── 搜索与收藏（D03 §3.7 PIM-07 / §3.8 PIM-08）──
 
@@ -582,6 +585,19 @@ type MemberDTO struct {
 	Status      int    `json:"status"`
 	MuteUntil   int64  `json:"muteUntil,omitempty"` // ms
 	JoinAt      int64  `json:"joinAt"`              // ms
+}
+
+// ReceiptMemberDTO 已读面板成员行（API-IM-06）
+type ReceiptMemberDTO struct {
+	UID         string `json:"uid"`
+	DisplayName string `json:"displayName"`
+}
+
+// ReceiptPanelDTO 已读/未读分组（API-IM-06；seq=被查询消息 seq）
+type ReceiptPanelDTO struct {
+	Seq    int64              `json:"seq"`
+	Read   []ReceiptMemberDTO `json:"read"`
+	Unread []ReceiptMemberDTO `json:"unread"`
 }
 
 // ConvDetailDTO 会话详情（API-IM-03：conversation 全字段 + group_setting + my + 成员概要）

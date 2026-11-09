@@ -113,6 +113,8 @@ interface MessageBubbleProps {
   multiSelect?: { active: boolean; selected: boolean };
   /** 多选勾选/取消（active 时行点击与复选框共用） */
   onSelectToggle?: (m: Message) => void;
+  /** 打开已读回执面板（API-IM-06：群聊消息尾标点击；单聊不传=尾标不可点） */
+  onOpenReceipts?: (m: Message) => void;
   /** 打开统一右键菜单（INT-IM-25）：右键/长按 500ms/悬浮条 ⋯ 三入口共用；
    *  system（仅复制）可开、撤回占位不可开——由 hasAnyMsgAction 判定 */
   onOpenMsgMenu?: (m: Message, at: MenuAnchor) => void;
@@ -153,8 +155,18 @@ function useLongPressMenu(open: ((at: MenuAnchor) => void) | null) {
   };
 }
 
-/** 本地态/服务端态尾标（✓✓=对方已读，单聊回执） */
-function StateTag({ message, onRetry, peerReadSeq = 0 }: { message: Message; onRetry: (id: string) => void; peerReadSeq?: number }) {
+/** 本地态/服务端态尾标（✓✓=对方已读，单聊回执；群聊可点开已读面板 API-IM-06） */
+function StateTag({
+  message,
+  onRetry,
+  peerReadSeq = 0,
+  onOpenReceipts,
+}: {
+  message: Message;
+  onRetry: (id: string) => void;
+  peerReadSeq?: number;
+  onOpenReceipts?: (m: Message) => void;
+}) {
   if (!message.localState) return null;
   if (message.localState === 'sending')
     return (
@@ -162,12 +174,39 @@ function StateTag({ message, onRetry, peerReadSeq = 0 }: { message: Message; onR
         <Clock3 size={13} />
       </span>
     );
-  if (message.localState === 'sent')
+  if (message.localState === 'sent') {
+    const read = peerReadSeq >= message.seq;
+    const icon = read ? <CheckCheck size={14} /> : <Check size={14} />;
+    const title = onOpenReceipts
+      ? read
+        ? '已读 · 点击查看名单'
+        : '已送达 · 点击查看名单'
+      : read
+        ? '对方已读'
+        : '已送达';
+    // 群聊（onOpenReceipts 存在）：尾标可点开已读/未读名单面板（API-IM-06）
+    if (onOpenReceipts) {
+      return (
+        <button
+          type="button"
+          className="msg-state msg-state--clickable"
+          title={title}
+          data-testid="receipt-tag"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenReceipts(message);
+          }}
+        >
+          {icon}
+        </button>
+      );
+    }
     return (
-      <span className="msg-state" title={peerReadSeq >= message.seq ? '对方已读' : '已送达'}>
-        {peerReadSeq >= message.seq ? <CheckCheck size={14} /> : <Check size={14} />}
+      <span className="msg-state" title={title}>
+        {icon}
       </span>
     );
+  }
   return (
     <span
       className="msg-state msg-state--failed"
@@ -488,6 +527,7 @@ export function MessageBubble({
   multiSelect,
   onSelectToggle,
   onOpenMsgMenu,
+  onOpenReceipts,
 }: MessageBubbleProps) {
   /** 完整表情选择器 popover（INT-IM-25：悬浮条「更多表情」真选择器，替换旧固定🎉） */
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
@@ -714,7 +754,7 @@ export function MessageBubble({
           ) : null}
         </div>
         <ReactionBar message={message} myUid={myUid} onReact={(e) => doReact(e)} />
-        {mine ? <StateTag message={message} onRetry={onRetry} peerReadSeq={peerReadSeq} /> : null}
+        {mine ? <StateTag message={message} onRetry={onRetry} peerReadSeq={peerReadSeq} onOpenReceipts={onOpenReceipts} /> : null}
       </div>
     </div>
   );

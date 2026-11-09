@@ -626,3 +626,55 @@ func mustParseI64(t *testing.T, s string) int64 {
 	}
 	return v
 }
+
+// ── 已读回执面板（API-IM-06）──
+
+// TestListReceiptPanel 已读/未读分组：发送者不入名单；read_seq≥seq 判已读；
+// 非成员查询被 3001 拒绝。
+func TestListReceiptPanel(t *testing.T) {
+	svc, r, _ := seedFixture(t, Options{})
+	ctx := context.Background()
+
+	// alice 在单聊 conv1 发 3 条（seq 1-3）
+	for i := 1; i <= 3; i++ {
+		if _, err := svc.Send(ctx, 10001, textPayload(1, fmt.Sprintf("rp-%d", i), "read panel")); err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+	}
+	// bob 已读到 seq=2
+	if _, err := svc.MarkRead(ctx, 10002, messageapi.ReadPayload{ConvID: cid(1), ReadSeq: 2}); err != nil {
+		t.Fatalf("markread: %v", err)
+	}
+	_ = r // seedFixture 返回值对齐（repo 直接断言不需要）
+
+	// 查 seq=2：bob 已读；alice（发送者）不入名单 → read=[bob] unread=[]
+	p, err := svc.ListReceiptPanel(ctx, 10001, 1, 2)
+	if err != nil {
+		t.Fatalf("panel seq2: %v", err)
+	}
+	if len(p.Read) != 1 || p.Read[0].UID != "10002" {
+		t.Fatalf("seq2 read 应仅 bob: %+v", p.Read)
+	}
+	if len(p.Unread) != 0 {
+		t.Fatalf("seq2 unread 应空: %+v", p.Unread)
+	}
+
+	// 查 seq=3：bob 未读 → read=[] unread=[bob]
+	p, err = svc.ListReceiptPanel(ctx, 10001, 1, 3)
+	if err != nil {
+		t.Fatalf("panel seq3: %v", err)
+	}
+	if len(p.Read) != 0 || len(p.Unread) != 1 || p.Unread[0].UID != "10002" {
+		t.Fatalf("seq3 应 bob 未读: read=%+v unread=%+v", p.Read, p.Unread)
+	}
+
+	// 非成员（广播群外的 root=10003 不在 conv1）被 3001 拒绝
+	if _, err := svc.ListReceiptPanel(ctx, 10003, 1, 2); err == nil || errx.From(err).Code != errx.CodeIMNotInConversation {
+		t.Fatalf("非成员应 3001 拒绝, got %v", err)
+	}
+
+	// seq 不存在 → 9002
+	if _, err := svc.ListReceiptPanel(ctx, 10001, 1, 99); err == nil || errx.From(err).Code != errx.CodeNotFound {
+		t.Fatalf("不存在的 seq 应 9002, got %v", err)
+	}
+}
