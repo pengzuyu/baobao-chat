@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 pub mod checkpoint;
+pub mod delegate_bg;
 pub mod delegation;
 pub mod events;
 pub mod executor;

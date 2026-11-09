@@ -78,9 +78,10 @@ impl DelegateLauncher for RegistryLauncher {
     }
 }
 
-/// parent_session_id：session 契约未带（会话内隐式），审计关联由事件流 session_id 承担
-fn parent_session_of(_req: &DelegateLaunchReq) -> String {
-    String::new()
+/// parent_session_id（P0-2① 修复：此前传空串——LaunchOpts 有字段但断链；
+/// 委派子进程审计现在携带父会话关联）
+fn parent_session_of(req: &DelegateLaunchReq) -> String {
+    req.session_id.clone()
 }
 
 /// 单会话事件流适配：NormalizedEvent → DelegateEvt 镜像（持锁至流销毁）

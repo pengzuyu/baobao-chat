@@ -507,31 +507,60 @@ fn dispatch(
             None
         }
         HostToRuntime::DelegateLaunch {
+            session_id,
+            delegate_task_id,
             backend,
             task_brief,
             ..
         } => {
-            mgr.respond_delegate(bbrt_session::loop_runner::DelegateHostMsg::Launch {
-                backend,
-                brief: Some(task_brief),
-            })
+            // 简报阶段确认：run 尚未后台化（hub 未注册），按 session 定向
+            mgr.respond_delegate(
+                &delegate_task_id,
+                &session_id,
+                bbrt_session::loop_runner::DelegateHostMsg::Launch {
+                    backend,
+                    brief: Some(task_brief),
+                },
+            )
             .ok();
             None // 委派事件流（delegate.event/end）即回显
         }
-        HostToRuntime::DelegateInput { text, .. } => {
-            mgr.respond_delegate(bbrt_session::loop_runner::DelegateHostMsg::Input { text })
-                .ok();
+        HostToRuntime::DelegateInput {
+            delegate_task_id,
+            text,
+        } => {
+            mgr.respond_delegate(
+                &delegate_task_id,
+                "",
+                bbrt_session::loop_runner::DelegateHostMsg::Input { text },
+            )
+            .ok();
             None
         }
-        HostToRuntime::DelegateCancel { graceful, .. } => {
-            mgr.respond_delegate(bbrt_session::loop_runner::DelegateHostMsg::Cancel { graceful })
-                .ok();
+        HostToRuntime::DelegateCancel {
+            delegate_task_id,
+            graceful,
+        } => {
+            mgr.respond_delegate(
+                &delegate_task_id,
+                "",
+                bbrt_session::loop_runner::DelegateHostMsg::Cancel { graceful },
+            )
+            .ok();
             None
         }
-        HostToRuntime::DelegateReview { decision, .. } => {
+        HostToRuntime::DelegateReview {
+            delegate_task_id,
+            decision,
+            ..
+        } => {
             let accept = matches!(decision, bbrt_protocol::ReviewDecision::Accept);
-            mgr.respond_delegate(bbrt_session::loop_runner::DelegateHostMsg::Review { accept })
-                .ok();
+            mgr.respond_delegate(
+                &delegate_task_id,
+                "",
+                bbrt_session::loop_runner::DelegateHostMsg::Review { accept },
+            )
+            .ok();
             None
         }
         // 手动检查点（PAG-06；回执即 checkpoint.created）

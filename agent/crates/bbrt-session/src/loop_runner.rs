@@ -269,6 +269,10 @@ pub struct SessionRunner {
     err_tracker: bbrt_memory::ErrorTracker,
     /// 审批超时（测试注入）
     pub permission_timeout: Duration,
+    /// 后台委派中枢（D16 §5：Some=委派后台化——launch 后 turn 立即返回；
+    /// None=同步退化路径（raw runner 测试/嵌入式用法）。manager.start 注入，
+    /// 生产路径恒 Some；与 manager 共享同一实例（指令定向路由 + join 注入）
+    pub delegate_hub: Option<Arc<crate::delegate_bg::DelegateHub>>,
 }
 
 /// 一轮 turn 的产物（manager 记账用）
@@ -310,7 +314,18 @@ impl SessionRunner {
             // v0.1 恒开（`memory.heuristic=off` 开关随配置系统接线，D15 §2.2）
             err_tracker: bbrt_memory::ErrorTracker::new(true),
             permission_timeout: PERMISSION_TIMEOUT,
+            delegate_hub: None,
         }
+    }
+
+    /// 后台委派产物注入（D16 §5：审查通过的摘要经 manager 在下一轮
+    /// run_turn 前 drain 后调用——主上下文以 delegate.join 轮次回填）
+    pub fn inject_delegate_join(&mut self, run_id: &str, summary: &str) {
+        self.history.push(Round::Tool {
+            call_id: run_id.to_string(),
+            name: "delegate.join".to_string(),
+            summary: summary.to_string(),
+        });
     }
 }
 
@@ -926,6 +941,8 @@ impl SessionRunner {
         let brief = brief_override.unwrap_or_else(|| parse_brief(call, &self.workspace));
         let req = DelegateLaunchReq {
             delegate_task_id: run_id.clone(),
+            // P0-2①：父会话关联接线（delegate_bridge → LaunchOpts.parent_session_id）
+            session_id: self.session_id.clone(),
             backend: if backend.is_empty() {
                 suggestion
             } else {
@@ -983,10 +1000,13 @@ impl SessionRunner {
                 };
             }
         };
-        // 委派前置快照（08 §4.4 reason=delegate；子进程改动可回滚锚点，17 篇）
+        // 委派前置快照（08 §4.4 reason=delegate；子进程改动可回滚锚点，17 篇）。
+        // checkpoint_id 随 DelegateEnd 上行（P0-2③：审查卡回滚锚点数据源）
+        let mut checkpoint_id: Option<String> = None;
         if let Some(svc) = deps.snapshots.as_ref() {
             if let Ok(out) = svc.create(&self.session_id, &self.workspace, "delegate") {
                 emit_checkpoint(deps, &self.session_id, &out);
+                checkpoint_id = Some(out.checkpoint_id.clone());
             }
         }
         deps.wal.append_run(
@@ -1005,136 +1025,62 @@ impl SessionRunner {
             });
         }
 
-        // 事件流：归一化事件外发；Input/Cancel 即时处理；interrupt 优雅取消
-        let mut cancelled = false;
-        loop {
-            if self.interrupted.load(Ordering::Relaxed) {
-                deps.wal.append_run(
-                    &self.session_id,
-                    &run_id,
-                    "delegate.cancel",
-                    &format!(
-                        "{{\"run_id\":\"{run_id}\",\"graceful\":true,\"source\":\"interrupt\"}}"
-                    ),
-                );
-                cancelled = true;
-                stream.cancel(true);
-            }
-            while let Ok(msg) = self.delegate_rx.try_recv() {
-                match msg {
-                    DelegateHostMsg::Input { text } => {
-                        emit(deps, &self.session_id, |id| SessionEvent::DelegateEvt {
-                            session_id: id,
-                            delegate_task_id: run_id.clone(),
-                            kind: "input".into(),
-                            payload: text,
-                        });
-                    }
-                    DelegateHostMsg::Cancel { graceful } => {
-                        deps.wal.append_run(
-                            &self.session_id,
-                            &run_id,
-                            "delegate.cancel",
-                            &format!("{{\"run_id\":\"{run_id}\",\"graceful\":{graceful}}}"),
-                        );
-                        cancelled = true;
-                        stream.cancel(graceful);
-                    }
-                    _ => {}
-                }
-            }
-            let Some(evt) = stream.next() else { break };
-            let (kind, payload) = match evt {
-                DelegateEvt::Meta { text, .. } => ("meta", text),
-                DelegateEvt::Delta { channel, text } => (
-                    "delta",
-                    match channel {
-                        crate::delegation::DelegateChannel::Text => format!(
-                            "{{\"channel\":\"text\",\"text\":\"{}\"}}",
-                            escape_json(&text)
-                        ),
-                        crate::delegation::DelegateChannel::Reasoning => format!(
-                            "{{\"channel\":\"reasoning\",\"text\":\"{}\"}}",
-                            escape_json(&text)
-                        ),
-                    },
-                ),
-                DelegateEvt::ToolUse { call_id, tool, .. } => {
-                    deps.wal.append_run(
-                        &self.session_id,
-                        &run_id,
-                        "delegate.tool_use",
-                        &format!("{{\"run_id\":\"{run_id}\",\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
-                    );
-                    (
-                        "tool_use",
-                        format!("{{\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
-                    )
-                }
-                DelegateEvt::ToolResult { call_id, ok, .. } => {
-                    deps.wal.append_run(
-                        &self.session_id,
-                        &run_id,
-                        "delegate.tool_result",
-                        &format!(
-                            "{{\"run_id\":\"{run_id}\",\"call_id\":\"{call_id}\",\"ok\":{ok}}}"
-                        ),
-                    );
-                    (
-                        "tool_result",
-                        format!("{{\"call_id\":\"{call_id}\",\"ok\":{ok}}}"),
-                    )
-                }
-                DelegateEvt::Warning { text } => ("warning", text),
-                DelegateEvt::Exit { .. } => ("exit", String::new()),
-            };
-            emit(deps, &self.session_id, |id| SessionEvent::DelegateEvt {
+        // ── 后台路径（D16 §5：hub 装配即后台——launch 后 turn 立即返回，会话
+        // 可继续对话；事件流/审查在专用线程，宿主指令经 hub 定向路由）──
+        if let Some(hub) = self.delegate_hub.clone() {
+            hub.spawn(
+                run_id.clone(),
+                self.session_id.clone(),
+                req.backend.clone(),
+                checkpoint_id,
+                stream,
+                deps.sink.clone(),
+                deps.wal.clone(),
+                deps.memory.clone(),
+                self.permission_timeout,
+                started,
+            );
+            self.state = state::complete_delegation(self.state).unwrap_or(SessionState::Running);
+            emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
                 session_id: id,
-                delegate_task_id: run_id.clone(),
-                kind: kind.to_string(),
-                payload,
+                state: "running".into(),
+                reason: "delegate.backgrounded".into(),
             });
+            let _ = masked;
+            return ToolOutcome::Ok {
+                summary: format!(
+                    "[委派后台运行] {run_id}（后端 {}）执行中；完成后出审查卡，通过即自动回填结果",
+                    req.backend
+                ),
+                truncated: false,
+                exit_code: None,
+                duration_ms: 0,
+            };
         }
 
-        // finalize + delegate.end（异常退出 8033）
-        let final_rep = stream.finalize();
-        let exit_code = final_rep.exit_code.unwrap_or(-1);
-        emit(deps, &self.session_id, |id| SessionEvent::DelegateEnd {
-            session_id: id,
-            delegate_task_id: run_id.clone(),
-            exit_code,
-            summary: final_rep.summary.clone(),
-        });
-        deps.wal.append_run(
+        // ── 同步退化路径（未装配 hub：raw runner 测试/嵌入式用法=旧阻塞语义）──
+        let cancelled = pump_delegate_stream(
             &self.session_id,
             &run_id,
-            "delegate.end",
-            &format!("{{\"run_id\":\"{run_id}\",\"exit\":{exit_code}}}"),
+            stream.as_mut(),
+            &self.delegate_rx,
+            Some(&self.interrupted),
+            deps.sink.as_ref(),
+            deps.wal.as_ref(),
         );
-        // run 终态（D16 §3.1：cancelled 区分于 failed；执行完成即落终态，
-        // 审查 reject 不改写 run 状态——决策在 delegate.review WAL 里）
-        deps.wal.run_end(
+        let final_rep = finish_delegate_stream(
+            &self.session_id,
             &run_id,
-            &RunEnd {
-                status: if cancelled {
-                    "cancelled"
-                } else if exit_code != 0 {
-                    "failed"
-                } else {
-                    "done"
-                },
-                eta_actual_ms: started.elapsed().as_millis() as i64,
-                summary: &crate::subagent::truncate_chars(&final_rep.summary, 400),
-                child_session_ref: final_rep.session_ref.as_deref().unwrap_or(""),
-            },
+            &req.backend,
+            checkpoint_id.as_deref(),
+            cancelled,
+            started,
+            stream.as_mut(),
+            deps.sink.as_ref(),
+            deps.wal.as_ref(),
+            deps.memory.as_deref(),
         );
-        if let Some(m) = deps.memory.as_ref() {
-            let _ = m.record(&ActivityEvent::DelegateEnded {
-                session: self.session_id.clone(),
-                backend: req.backend.clone(),
-                exit_code,
-            });
-        }
+        let exit_code = final_rep.exit_code.unwrap_or(-1);
         if exit_code != 0 {
             self.state = state::fail_delegation(self.state).unwrap_or(SessionState::Running);
             return ToolOutcome::Blocked {
@@ -1150,33 +1096,18 @@ impl SessionRunner {
             state: "waiting_review".into(),
             reason: "delegate.review".into(),
         });
-        let accepted = loop {
-            if self.interrupted.load(Ordering::Relaxed) {
-                break false;
-            }
-            match self.delegate_rx.recv_timeout(self.permission_timeout) {
-                Ok(DelegateHostMsg::Review { accept }) => break accept,
-                Ok(DelegateHostMsg::Cancel { .. }) => break false,
-                Ok(_) => continue,
-                Err(_) => break false,
-            }
-        };
-        deps.wal.append_run(
+        let accepted = await_delegate_review(
+            &self.delegate_rx,
+            self.permission_timeout,
+            Some(&self.interrupted),
+        );
+        resolve_delegate_review(
             &self.session_id,
             &run_id,
-            "delegate.review",
-            &format!(
-                "{{\"run_id\":\"{run_id}\",\"decision\":\"{}\"}}",
-                if accepted { "accept" } else { "reject" }
-            ),
+            accepted,
+            deps.sink.as_ref(),
+            deps.wal.as_ref(),
         );
-        emit(deps, &self.session_id, |id| {
-            SessionEvent::DelegateReviewResolved {
-                session_id: id,
-                delegate_task_id: run_id.clone(),
-                decision: if accepted { "accept" } else { "reject" }.into(),
-            }
-        });
         self.state = state::resolve_review(self.state).unwrap_or(SessionState::Running);
         let _ = masked;
         if accepted {
@@ -1501,6 +1432,216 @@ impl SessionRunner {
             Err(_) => {}
         }
     }
+}
+
+/// 委派事件流泵（同步/后台两路径共用，D16 §5）：归一化事件外发 + WAL；
+/// Input 回显、Cancel/interrupt 优雅取消。返回是否发生过取消请求
+/// （后台路径 interrupted=None——会话暂停不终止后台委派，仅用户 cancel）。
+pub(crate) fn pump_delegate_stream(
+    session_id: &str,
+    run_id: &str,
+    stream: &mut dyn crate::delegation::DelegateStream,
+    rx: &Receiver<DelegateHostMsg>,
+    interrupted: Option<&AtomicBool>,
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
+) -> bool {
+    let mut cancelled = false;
+    loop {
+        if interrupted.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            wal.append_run(
+                session_id,
+                run_id,
+                "delegate.cancel",
+                &format!("{{\"run_id\":\"{run_id}\",\"graceful\":true,\"source\":\"interrupt\"}}"),
+            );
+            cancelled = true;
+            stream.cancel(true);
+        }
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                DelegateHostMsg::Input { text } => {
+                    sink.emit(SessionEvent::DelegateEvt {
+                        session_id: session_id.to_string(),
+                        delegate_task_id: run_id.to_string(),
+                        kind: "input".into(),
+                        payload: text,
+                    });
+                }
+                DelegateHostMsg::Cancel { graceful } => {
+                    wal.append_run(
+                        session_id,
+                        run_id,
+                        "delegate.cancel",
+                        &format!("{{\"run_id\":\"{run_id}\",\"graceful\":{graceful}}}"),
+                    );
+                    cancelled = true;
+                    stream.cancel(graceful);
+                }
+                _ => {}
+            }
+        }
+        let Some(evt) = stream.next() else { break };
+        let (kind, payload) = match evt {
+            DelegateEvt::Meta { text, .. } => ("meta", text),
+            DelegateEvt::Delta { channel, text } => (
+                "delta",
+                match channel {
+                    crate::delegation::DelegateChannel::Text => format!(
+                        "{{\"channel\":\"text\",\"text\":\"{}\"}}",
+                        escape_json(&text)
+                    ),
+                    crate::delegation::DelegateChannel::Reasoning => format!(
+                        "{{\"channel\":\"reasoning\",\"text\":\"{}\"}}",
+                        escape_json(&text)
+                    ),
+                },
+            ),
+            DelegateEvt::ToolUse { call_id, tool, .. } => {
+                wal.append_run(
+                    session_id,
+                    run_id,
+                    "delegate.tool_use",
+                    &format!(
+                        "{{\"run_id\":\"{run_id}\",\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"
+                    ),
+                );
+                (
+                    "tool_use",
+                    format!("{{\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
+                )
+            }
+            DelegateEvt::ToolResult { call_id, ok, .. } => {
+                wal.append_run(
+                    session_id,
+                    run_id,
+                    "delegate.tool_result",
+                    &format!("{{\"run_id\":\"{run_id}\",\"call_id\":\"{call_id}\",\"ok\":{ok}}}"),
+                );
+                (
+                    "tool_result",
+                    format!("{{\"call_id\":\"{call_id}\",\"ok\":{ok}}}"),
+                )
+            }
+            DelegateEvt::Warning { text } => ("warning", text),
+            DelegateEvt::Exit { .. } => ("exit", String::new()),
+        };
+        sink.emit(SessionEvent::DelegateEvt {
+            session_id: session_id.to_string(),
+            delegate_task_id: run_id.to_string(),
+            kind: kind.to_string(),
+            payload,
+        });
+    }
+    cancelled
+}
+
+/// 委派收尾（两路径共用）：finalize → delegate.end（P0-2③ 全字段上行：
+/// changed_files/checkpoint_id/child_session_ref——diff 审查卡数据源与
+/// --resume 续接句柄）→ WAL + run 终态 → journal。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn finish_delegate_stream(
+    session_id: &str,
+    run_id: &str,
+    backend: &str,
+    checkpoint_id: Option<&str>,
+    cancelled: bool,
+    started: std::time::Instant,
+    stream: &mut dyn crate::delegation::DelegateStream,
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
+    memory: Option<&bbrt_memory::MemoryEngine>,
+) -> crate::delegation::DelegateFinal {
+    let final_rep = stream.finalize();
+    let exit_code = final_rep.exit_code.unwrap_or(-1);
+    sink.emit(SessionEvent::DelegateEnd {
+        session_id: session_id.to_string(),
+        delegate_task_id: run_id.to_string(),
+        exit_code,
+        summary: final_rep.summary.clone(),
+        changed_files: final_rep.changed_files.clone(),
+        checkpoint_id: checkpoint_id.map(str::to_string),
+        child_session_ref: final_rep.session_ref.clone(),
+    });
+    wal.append_run(
+        session_id,
+        run_id,
+        "delegate.end",
+        &format!("{{\"run_id\":\"{run_id}\",\"exit\":{exit_code}}}"),
+    );
+    // run 终态（D16 §3.1：cancelled 区分于 failed；执行完成即落终态，
+    // 审查 reject 不改写 run 状态——决策在 delegate.review WAL 里）
+    wal.run_end(
+        run_id,
+        &RunEnd {
+            status: if cancelled {
+                "cancelled"
+            } else if exit_code != 0 {
+                "failed"
+            } else {
+                "done"
+            },
+            eta_actual_ms: started.elapsed().as_millis() as i64,
+            summary: &crate::subagent::truncate_chars(&final_rep.summary, 400),
+            child_session_ref: final_rep.session_ref.as_deref().unwrap_or(""),
+        },
+    );
+    if let Some(m) = memory {
+        let _ = m.record(&ActivityEvent::DelegateEnded {
+            session: session_id.to_string(),
+            backend: backend.to_string(),
+            exit_code,
+        });
+    }
+    final_rep
+}
+
+/// 审查等待（两路径共用；120s 窗口超时/取消/interrupt=拒绝——09 §7.4 口径）
+pub(crate) fn await_delegate_review(
+    rx: &Receiver<DelegateHostMsg>,
+    timeout: Duration,
+    interrupted: Option<&AtomicBool>,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if interrupted.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            return false;
+        }
+        let remain = deadline.saturating_duration_since(std::time::Instant::now());
+        if remain.is_zero() {
+            return false;
+        }
+        match rx.recv_timeout(remain) {
+            Ok(DelegateHostMsg::Review { accept }) => return accept,
+            Ok(DelegateHostMsg::Cancel { .. }) => return false,
+            Ok(_) => continue,
+            Err(_) => return false,
+        }
+    }
+}
+
+/// 审查结论落账（两路径共用）：WAL + 事件镜像
+pub(crate) fn resolve_delegate_review(
+    session_id: &str,
+    run_id: &str,
+    accepted: bool,
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
+) {
+    wal.append_run(
+        session_id,
+        run_id,
+        "delegate.review",
+        &format!(
+            "{{\"run_id\":\"{run_id}\",\"decision\":\"{}\"}}",
+            if accepted { "accept" } else { "reject" }
+        ),
+    );
+    sink.emit(SessionEvent::DelegateReviewResolved {
+        session_id: session_id.to_string(),
+        delegate_task_id: run_id.to_string(),
+        decision: if accepted { "accept" } else { "reject" }.into(),
+    });
 }
 
 /// 检查点落账：WAL + checkpoint.created 事件（pre-edit/manual/delegate/pre-restore 共用）

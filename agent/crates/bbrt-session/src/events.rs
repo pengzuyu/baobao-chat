@@ -180,12 +180,18 @@ pub enum SessionEvent {
         kind: String, // meta|delta|tool_use|tool_result|warning|exit
         payload: String,
     },
-    /// delegate.end：子进程退出（触发审查卡）
+    /// delegate.end：子进程退出（触发审查卡；P0-2③ 补齐 diff 审查卡
+    /// 数据源与续接句柄——此前 bridge 上行时置空）
     DelegateEnd {
         session_id: String,
         delegate_task_id: String,
         exit_code: i32,
         summary: String,
+        changed_files: Vec<String>,
+        /// 委派前置检查点（非 git 工作区/快照失败时 None）
+        checkpoint_id: Option<String>,
+        /// 子进程会话句柄（--resume 模式 C 追问）
+        child_session_ref: Option<String>,
     },
     /// 审查结论镜像（accept/reject/timeout）
     DelegateReviewResolved {

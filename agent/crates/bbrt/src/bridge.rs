@@ -362,16 +362,21 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             delegate_task_id,
             exit_code,
             summary,
+            changed_files,
+            checkpoint_id,
+            child_session_ref,
             ..
         } => {
             let delegate_task_id = delegate_task_id.clone();
+            // P0-2③ 修复：此前三字段置空上行——diff 审查卡（changed_files+
+            // checkpoint_id 回滚锚点）与 --resume 续接句柄数据源恢复
             RuntimeToHost::DelegateEnd {
                 delegate_task_id,
                 exit_code: *exit_code,
                 summary: summary.clone(),
-                changed_files: vec![],
-                checkpoint_id: None,
-                child_session_ref: None,
+                changed_files: changed_files.clone(),
+                checkpoint_id: checkpoint_id.clone(),
+                child_session_ref: child_session_ref.clone(),
             }
         }
         SessionEvent::DelegateReviewResolved {

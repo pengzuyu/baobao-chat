@@ -8,6 +8,9 @@ use bbrt_protocol::TaskBrief;
 #[derive(Debug, Clone)]
 pub struct DelegateLaunchReq {
     pub delegate_task_id: String,
+    /// 父会话 id（P0-2①：接线 LaunchOpts.parent_session_id——委派子进程
+    /// 审计关联此前断链，delegate_bridge 传空串）
+    pub session_id: String,
     pub backend: String,
     pub brief: TaskBrief,
     /// 权限模式（→ 各后端启动参数映射，§8.2）
