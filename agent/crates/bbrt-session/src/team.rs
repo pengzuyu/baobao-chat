@@ -513,21 +513,44 @@ pub struct ExpertIndex {
 }
 
 impl ExpertIndex {
-    /// 扫描专家库目录（缺失/空目录=空索引；yaml/yml 双扩展）
+    /// 扫描专家库目录（缺失/空目录=空索引；yaml/yml 双扩展）。
+    /// `{id}.override.yaml` = 本地覆写（D16 §6 三层配置：建议配置→覆写→
+    /// 硬上限）：tools/skills 合并增强、constraints/model 覆盖后重校验；
+    /// 坏覆写降级=沿用建议配置（不阻塞该专家可用）。
     pub fn scan(dir: &std::path::Path) -> Self {
         let rd = match std::fs::read_dir(dir) {
             Ok(rd) => rd,
             Err(_) => return Self::default(),
         };
-        let mut manifests: Vec<ExpertManifest> = rd
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| matches!(p.extension().and_then(|x| x.to_str()), Some("yaml" | "yml")))
-            .filter_map(|p| {
-                let text = std::fs::read_to_string(&p).ok()?;
-                parse_manifest(&text).ok()
-            })
-            .collect();
+        let mut manifests: Vec<ExpertManifest> = vec![];
+        let mut overrides: Vec<(String, String)> = vec![]; // (id, 覆写文本)
+        for p in rd.filter_map(|e| e.ok()).map(|e| e.path()) {
+            if !matches!(p.extension().and_then(|x| x.to_str()), Some("yaml" | "yml")) {
+                continue;
+            }
+            let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            if let Some(stem) = name
+                .strip_suffix(".override.yaml")
+                .or_else(|| name.strip_suffix(".override.yml"))
+            {
+                overrides.push((stem.to_string(), text));
+            } else if let Ok(m) = parse_manifest(&text) {
+                manifests.push(m);
+            }
+        }
+        for (id, text) in overrides {
+            let Some(m) = manifests.iter_mut().find(|m| m.id == id) else {
+                continue; // 孤儿覆写（上游已删）：忽略
+            };
+            if let Err(e) = crate::expert::apply_override(m, &text) {
+                eprintln!("[bbrt] 专家 {id} 本地覆写非法，沿用建议配置：{e}");
+            }
+        }
         manifests.sort_by(|a, b| a.id.cmp(&b.id)); // 确定性：选角清单顺序稳定
         Self { manifests }
     }

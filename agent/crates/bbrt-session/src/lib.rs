@@ -37,8 +37,8 @@ pub use delegation::{
 pub use events::{ModelTier, NullSink, SessionEvent, SessionSink, StreamChannel};
 pub use executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview};
 pub use expert::{
-    assemble, parse_manifest, AssemblePolicy, AssembledExpert, Dropped, ExpertConstraints,
-    ExpertCtx, ExpertError, ExpertManifest, ExpertResult, ManifestTools,
+    apply_override, assemble, parse_manifest, AssemblePolicy, AssembledExpert, Dropped,
+    ExpertConstraints, ExpertCtx, ExpertError, ExpertManifest, ExpertResult, ManifestTools,
 };
 pub use loop_runner::{
     EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, SessionRunner,

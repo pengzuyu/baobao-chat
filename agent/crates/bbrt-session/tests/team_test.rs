@@ -884,3 +884,36 @@ fn review_loop_graph_validation() {
     };
     assert!(bbrt_session::team::validate_graph(&consult).is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// 本地覆写扫描合并（D16 §6）
+// ---------------------------------------------------------------------------
+
+/// ExpertIndex::scan：{id}.override.yaml 合并进 manifest；坏覆写降级沿用建议配置
+#[test]
+fn expert_index_merges_override_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let edir = dir.path().join("experts");
+    std::fs::create_dir_all(&edir).unwrap();
+    std::fs::write(
+        edir.join("corp.demo.yaml"),
+        "id: corp.demo\ntype: local\nversion: 1.0.0\ndisplay: 演示\npersona: |\n  干活\nconstraints:\n  max_steps: 20\nsource: company\n",
+    )
+    .unwrap();
+    std::fs::write(
+        edir.join("corp.demo.override.yaml"),
+        "tools:\n  builtin: [read_file]\nconstraints:\n  max_steps: 80\nmodel: { tier: fast }\n",
+    )
+    .unwrap();
+    std::fs::write(edir.join("corp.bad.override.yaml"), "persona: |\n  x\n").unwrap();
+
+    let idx = bbrt_session::team::ExpertIndex::scan(&edir);
+    assert_eq!(idx.manifests.len(), 1, "坏覆写不产生专家行");
+    let m = idx.get("corp.demo").unwrap();
+    assert_eq!(m.constraints.max_steps, 80, "覆写调参生效");
+    assert_eq!(m.model_tier, "fast");
+    assert!(
+        m.tools.builtin.contains(&"read_file".to_string()),
+        "覆写加工具生效"
+    );
+}

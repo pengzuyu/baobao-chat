@@ -271,6 +271,84 @@ fn validate(m: &ExpertManifest) -> Result<(), ExpertError> {
 }
 
 // ---------------------------------------------------------------------------
+// 本地覆写层（D16 §6：上游建议配置 → 用户覆写 → 硬上限）
+// ---------------------------------------------------------------------------
+
+/// 覆写键白名单（封闭 schema：只能增强/调参——加工具/加 MCP/调步数预算/
+/// 调档位；id/type/version/persona/signature/source 身份字段锁死）
+const OVERRIDE_KEYS: &[&str] = &["tools", "skills", "constraints", "model"];
+
+/// 应用本地覆写（`{id}.override.yaml`，与 manifest 同一受限 YAML 子集）：
+/// - tools/skills：**合并**（union，上游在前）——"不满意就加工具/MCP 增强"主路径
+/// - constraints：字段级覆盖；model：tier 覆盖
+/// - 硬上限不可突破：合并后整 manifest 重走 validate（步数/预算/枚举/重复）
+pub fn apply_override(m: &mut ExpertManifest, text: &str) -> Result<(), ExpertError> {
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let (key, val) =
+            split_kv(t).ok_or_else(|| ExpertError::Parse(format!("覆写非法行：{t}")))?;
+        if !OVERRIDE_KEYS.contains(&key.as_str()) {
+            return Err(ExpertError::Parse(format!(
+                "覆写未知/禁改键：{key}（可覆写 tools/skills/constraints/model）"
+            )));
+        }
+        match key.as_str() {
+            "tools" => {
+                expect_empty(val, "tools")?;
+                let extra = parse_tools_block(&mut lines)?;
+                let union = |a: &mut Vec<String>, b: Vec<String>| {
+                    for x in b {
+                        if !a.contains(&x) {
+                            a.push(x);
+                        }
+                    }
+                };
+                union(&mut m.tools.builtin, extra.builtin);
+                union(&mut m.tools.apps, extra.apps);
+                union(&mut m.tools.mcp, extra.mcp);
+            }
+            "skills" => {
+                for x in parse_flow_list(&val) {
+                    if !m.skills.contains(&x) {
+                        m.skills.push(x);
+                    }
+                }
+            }
+            "constraints" => {
+                expect_empty(val, "constraints")?;
+                for (k, v) in parse_sub_block(&mut lines, "constraints")? {
+                    match k.as_str() {
+                        "max_steps" => {
+                            m.constraints.max_steps = v
+                                .parse()
+                                .map_err(|_| ExpertError::Parse(format!("max_steps 非数值：{v}")))?
+                        }
+                        "max_context" => m.constraints.max_context_k = parse_k(&v)?,
+                        "write_policy" => m.constraints.write_policy = v,
+                        "command_policy" => m.constraints.command_policy = v,
+                        _ => return Err(ExpertError::Parse(format!("constraints 未知子键：{k}"))),
+                    }
+                }
+            }
+            "model" => {
+                for (k, v) in flow_map_inner(&val) {
+                    if k != "tier" {
+                        return Err(ExpertError::Parse(format!("model 未知子键：{k}")));
+                    }
+                    m.model_tier = v;
+                }
+            }
+            _ => unreachable!("白名单已过滤"),
+        }
+    }
+    validate(m)
+}
+
+// ---------------------------------------------------------------------------
 // 装配过滤（§6.3 防线一）
 // ---------------------------------------------------------------------------
 
@@ -849,6 +927,38 @@ signature: abc123
             parse_manifest(&over_steps),
             Err(ExpertError::Invalid(_))
         ));
+    }
+
+    /// 本地覆写（D16 §6）：合并增强 + 调参 + 硬上限不可突破 + 身份锁死
+    #[test]
+    fn override_merges_and_enforces_limits() {
+        let mut m = parse_manifest(SAMPLE).unwrap();
+        apply_override(
+            &mut m,
+            "tools:\n  builtin: [write_file]\n  mcp: [my.local.tool]\nskills: [my.extra-skill]\nconstraints:\n  max_steps: 120\nmodel: { tier: fast }\n",
+        )
+        .unwrap();
+        // 合并：上游工具保留 + 新增；技能合并
+        assert!(m.tools.builtin.contains(&"run_command".to_string()));
+        assert!(m.tools.builtin.contains(&"write_file".to_string()));
+        assert!(m.tools.mcp.contains(&"my.local.tool".to_string()));
+        assert!(m.tools.mcp.contains(&"kb.search".to_string()));
+        assert!(m.skills.contains(&"corp.review-standards".to_string()));
+        assert!(m.skills.contains(&"my.extra-skill".to_string()));
+        // 调参/档位覆盖
+        assert_eq!(m.constraints.max_steps, 120);
+        assert_eq!(m.model_tier, "fast");
+
+        // 硬上限：超步数顶拒绝
+        let mut m2 = parse_manifest(SAMPLE).unwrap();
+        assert!(apply_override(&mut m2, "constraints:\n  max_steps: 999\n").is_err());
+        // 硬上限：非法档位拒绝
+        let mut m3 = parse_manifest(SAMPLE).unwrap();
+        assert!(apply_override(&mut m3, "model: { tier: mega }\n").is_err());
+        // 身份锁死：persona/id 禁改
+        let mut m4 = parse_manifest(SAMPLE).unwrap();
+        assert!(apply_override(&mut m4, "persona: |\n  换个人设\n").is_err());
+        assert!(apply_override(&mut m4, "id: corp.other\n").is_err());
     }
 
     /// 策略通配：mcp.kb.* 拒 kb.search 不拒 oa.lookup
