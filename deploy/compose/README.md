@@ -21,7 +21,7 @@ cd deploy/compose
 cp .env.tpl .env && vim .env        # 修改域名/密码/镜像仓库；启用组别改 COMPOSE_PROFILES
 mkdir -p volumes/certs              # 放置 tls.crt / tls.key / ca.crt（内部 CA 签发）
 docker compose up -d                # COMPOSE_PROFILES=core（默认）即可拉起核心链路
-docker compose --profile core --profile media --profile docs up -d   # 或显式多组
+docker compose --profile core --profile media up -d          # 或显式多组
 ```
 
 - 首次启动 `app-init` 自动执行 `init/01-init.sh`：等待 pg → 应用 `server/migrations` → 打印管理员引导命令。
@@ -33,7 +33,6 @@ docker compose --profile core --profile media --profile docs up -d   # 或显式
 |---|---|---|---|---|
 | 443 | tcp | nginx-lb | 客户端 → 服务器 | https/wss 主入口（REST `/api/`、WS `/ws/`、更新源 `/update/`、信令 `/rtc/`） |
 | 80 | tcp | nginx-lb | 客户端 → 服务器 | 仅 301 跳转 + `/healthz` |
-| 8443 | tcp | nginx-lb | 客户端 → 服务器 | OnlyOffice 编辑器独立 TLS 入口（docs 组） |
 | 7880 | tcp | media | 客户端 → 服务器 | LiveKit 信令 wss（D17，media 组；经 nginx /rtc/ 或直连） |
 | 3478 | udp | media | 客户端 → 服务器 | LiveKit 内嵌 TURN（D17；coturn 已退役） |
 | 40000–50100 | **udp** | media | 客户端 ↔ 服务器 | SRTP 媒体段，**独占**（media 组） |
@@ -46,7 +45,7 @@ docker compose --profile core --profile media --profile docs up -d   # 或显式
 
 | 源 | → 目标:端口 | 协议 | 用途 |
 |---|---|---|---|
-| 客户端网段 | VM:443, 8443 | tcp | 主入口 / 文档编辑 |
+| 客户端网段 | VM:443 | tcp | 主入口 |
 | 客户端网段 | VM:7880, 3478/udp, 40000-50100/udp | tcp/udp | 通话信令与媒体（D17 LiveKit，media 组） |
 | 跨园区网段 | VM:3478, 5349 | udp/tcp | TURN 兜底（按需） |
 | 外部邮件服务器 | VM:25 | tcp | 入站邮件（mail 组） |
@@ -71,16 +70,26 @@ docker compose --profile core --profile media --profile docs up -d   # 或显式
 
 | 文件 | 用途 |
 |---|---|
-| `docker-compose.yml` | 全量拓扑（profiles：core/media/docs/ops/mail） |
+| `docker-compose.yml` | 全量拓扑（profiles：core/media/ops/mail） |
 | `.env.tpl` | 全部配置键+中文注释（与 Helm values 一一对应，行内 “helm:” 标注） |
 | `init/01-init.sh` | 首次初始化（幂等）：等 pg → 应用 /migrations → 管理员引导提示 |
 | `upgrade.sh` / `rollback.sh` | §4.4 顺序升级 / 一键切回 N-1 |
 | `backup.sh` / `restore.sh` | §4.6 单机备份恢复（pgBackRest/WAL-G 占位实现） |
+| `updates/latest.json.example` | Tauri updater 标准 manifest 样例（CI 签名后投放 `updates-data` 卷） |
 | `volumes/` | 证书（`certs/`）、备份产物（`backup/`）等宿主数据（gitignore） |
+
+### 6.1 更新源双轨 manifest（16 篇 §5.1）
+
+| 文件 | 职责 | 生成方 |
+|---|---|---|
+| `/update/latest.json` | **Tauri updater 事实安装源**：壳 `plugins.updater` 直连，ed25519 验签后安装（样例见 `updates/latest.json.example`） | CI 发布流水线（`tauri signer sign` 各平台包后生成） |
+| `/update/update-manifest.json` | **自研渠道/灰度决策清单**（channel/rollout 百分比/force 最低版本）：阶段二壳侧消费决策是否触发更新 | 发布流水线（当前 compose 内联占位） |
+
+启用 updater 前置：`npm --prefix client run tauri signer generate` 生成 ed25519 密钥对——私钥入 CI（`TAURI_SIGNING_PRIVATE_KEY[/PASSWORD]`），公钥填 `client/src-tauri/tauri.conf.json` `plugins.updater.pubkey`（为空时壳自动禁用更新并打启动提示，不阻塞发布）。
 
 ## 7. 已知遗留（TODO）
 
-- [ ] BBW 自有镜像（bbw-app/bbw-media/bbw-update-src）随 `server/` 落地构建；distroless 镜像内需内置 `/healthprobe`（compose 健康检查依赖）。
+- [ ] BBW 自有镜像（bbw-app/bbw-update-src）随 `server/` 落地构建；distroless 镜像内需内置 `/healthprobe`（compose 健康检查依赖）。bbw-media 已由 livekit-server 官方镜像顶替（D17）。
 - [ ] 第三方镜像建议在 CI 追加 `@sha256` digest 双重钉死（当前为版本号钉死）。
 - [ ] pgvector / zhparser 需自建 postgres 镜像预装（13 篇）；官方镜像占位。
 - [ ] 备份生产化：pgBackRest/WAL-G → MinIO `bbw-backup` 桶（独立凭据、WORM 30 天）；当前为 pg_dump + pg_basebackup 占位。

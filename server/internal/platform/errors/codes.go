@@ -24,6 +24,7 @@ const (
 	CodeAuthBrowserLoginExpired Code = 1010 // 浏览器登录请求过期/已使用
 	CodeAuthBrowserLoginDenied  Code = 1011 // 浏览器端已拒绝
 	CodeAuthConfirmMismatch     Code = 1012 // 确认码不匹配
+	CodeAuthOBOKillswitch    Code = 1013 // Agent 平台总闸（killswitch：OBO 签发/网关请求拒）
 	CodeAuthCodeInvalidDevice   Code = 1013 // code 已使用或非发起设备
 	CodeAuthSetupDone           Code = 1014 // 系统已初始化（setup 引导已关闭）
 )
@@ -63,6 +64,7 @@ const (
 	CodeIMDraftTooLong      Code = 3020 // 草稿超限
 	CodeIMMergeForwardLimit Code = 3021 // 合并转发超限
 	CodeIMFavoriteLimit     Code = 3022 // 收藏数量超限
+	CodeIMPinnedLimit       Code = 3023 // 置顶数量超限（OQ-B06：30 个拒绝+提示）
 )
 
 // ───────────────────────── 4xxx 文件（07 篇） ─────────────────────────
@@ -134,6 +136,7 @@ const (
 	CodeDocVersion404     Code = 6013 // 版本不存在
 	CodeDocAdminLocked    Code = 6014 // 管理员锁定
 	CodeDocRenameConflict Code = 6015 // 重命名冲突
+	CodeDocFolderNotEmpty Code = 6016 // 文件夹非空（删除/移动目标校验）
 )
 
 // ───────────────────────── 7xxx 知识库（11 篇） ─────────────────────────

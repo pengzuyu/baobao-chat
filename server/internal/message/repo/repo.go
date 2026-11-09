@@ -86,6 +86,8 @@ type Repo interface {
 	UserConvState(ctx context.Context, userID, convID int64) (UserConvState, error)
 	// SetUserConvState upsert（按字段覆盖由 service 层合并后全量写）
 	SetUserConvState(ctx context.Context, userID, convID int64, s UserConvState) error
+	// CountPinned 用户当前置顶会话数（置顶上限校验，OQ-B06）
+	CountPinned(ctx context.Context, userID int64) (int, error)
 
 	// ── 群管理（D03 §3.5/§3.6/§4.1 INT-IM-15~19；§6.1 表）──
 
@@ -291,4 +293,24 @@ type StatsReader interface {
 	CountActiveConvsSince(ctx context.Context, tenantID int64, since time.Time) (int64, error)
 	// CountMsgsSince 消息数（ts ≥ since，含已撤回/编辑——发送口径）
 	CountMsgsSince(ctx context.Context, tenantID int64, since time.Time) (int64, error)
+}
+
+// ── 用户通知偏好（0030 / D12）──
+
+// NotifyPref 用户通知偏好行（无行=全默认：双开+off）
+type NotifyPref struct {
+	UserID        int64
+	TenantID      int64
+	MsgNotify     bool
+	MentionNotify bool
+	DndRange      string // off|work-night|all-day
+	UpdatedAt     time.Time
+}
+
+// NotifyPrefRepo 偏好仓储
+type NotifyPrefRepo interface {
+	// GetNotifyPref（无行返回默认零值行，nil=nil 语义由 service 归一）
+	GetNotifyPref(ctx context.Context, tenantID, userID int64) (*NotifyPref, error)
+	// SetNotifyPref upsert（本人行）
+	SetNotifyPref(ctx context.Context, p NotifyPref) error
 }

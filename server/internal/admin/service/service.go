@@ -64,6 +64,8 @@ type Options struct {
 	AgentUsage func(tenantID int64) []AgentUsageRow
 	// KBSpaces KB 空间总览闭包（PAD-10；main 注入 kb repo 全量空间+文档数；nil=空列表）
 	KBSpaces func() []KBSpaceClosure
+	// KBGovern KB 治理写闭包（D8；main 注 kb 域——archived 即刻生效于检索/浏览）
+	KBGovern func(ctx context.Context, tenantID, spaceID int64, archive bool, del bool) error
 
 	// Now 时钟注入（测试用）
 	Now func() time.Time
@@ -85,6 +87,7 @@ type Service struct {
 	store   adminrepo.Repo
 	roles   adminrepo.RoleRepo   // 角色管理（PAD-08；nil=未装配）
 	notices adminrepo.NoticeRepo // 平台公告（PAD-15；nil=未装配）
+	toolPolicies adminrepo.ToolPolicyRepo // Agent 工具策略（D7；nil=未装配→快照恒 default）
 	opts    Options
 
 	agentKill   bool // Agent 平台总闸（PAD-14；内存态——持久化随策略域阶段二，登记）
@@ -96,9 +99,9 @@ func (s *Service) internal(msg string) error { return errx.New(errx.CodeInternal
 
 // New 构造（依赖注入，D02 §3；users=管理写通道，reader=读取通道——org 模块同一
 // Service 实现；roles 可为 nil=阶段一未装配形态）
-func New(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo.Repo, roles adminrepo.RoleRepo, notices adminrepo.NoticeRepo, opts Options) *Service {
+func New(users orgapi.UserAdminReader, reader orgapi.UserReader, store adminrepo.Repo, roles adminrepo.RoleRepo, notices adminrepo.NoticeRepo, toolPolicies adminrepo.ToolPolicyRepo, opts Options) *Service {
 	opts.fillDefaults()
-	return &Service{users: users, same: reader, store: store, roles: roles, notices: notices, opts: opts}
+	return &Service{users: users, same: reader, store: store, roles: roles, notices: notices, toolPolicies: toolPolicies, opts: opts}
 }
 
 var _ adminapi.AdminService = (*Service)(nil)
@@ -334,14 +337,139 @@ func defaultAgentPolicy() map[string]any {
 	}
 }
 
-// AgentPolicy agent 工具策略只读快照（内存/PG 未建表均为默认；表存在则读）
-func (s *Service) AgentPolicy(_ context.Context, _ int64) (*adminapi.AgentPolicySnapshot, error) {
-	return &adminapi.AgentPolicySnapshot{
-		Version:   1,
+// AgentPolicy 工具策略快照（default + 行覆盖合成；无行=source "default"）
+func (s *Service) AgentPolicy(ctx context.Context, tenantID int64) (*adminapi.AgentPolicySnapshot, error) {
+	policy := defaultAgentPolicy()
+	snap := &adminapi.AgentPolicySnapshot{
+		Version: 1,
 		UpdatedAt: s.opts.Now().UTC().Format(time.RFC3339),
-		Source:    "default",
-		Policy:    defaultAgentPolicy(),
-	}, nil
+		Source:  "default",
+		Policy:  policy,
+	}
+	if s.toolPolicies == nil {
+		return snap, nil
+	}
+	rows, err := s.toolPolicies.ListToolPolicies(ctx, tenantID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	if len(rows) == 0 {
+		return snap, nil
+	}
+	// 合成：builtin_tools/app_namespace_tools 开关覆盖 + risk_override 合并
+	builtin, _ := policy["builtin_tools"].(map[string]bool)
+	appNS, _ := policy["app_namespace_tools"].(map[string]bool)
+	risk, _ := policy["risk_override"].(map[string]any)
+	if builtin == nil {
+		builtin = map[string]bool{}
+	}
+	if appNS == nil {
+		appNS = map[string]bool{}
+	}
+	if risk == nil {
+		risk = map[string]any{}
+	}
+	dtoRows := make([]adminapi.AgentToolPolicyRow, 0, len(rows))
+	for _, r := range rows {
+		dtoRows = append(dtoRows, adminapi.AgentToolPolicyRow{
+			Subject: r.Subject, Allowed: r.Allowed,
+			RiskOverride: r.RiskOverride, Config: r.Config,
+			UpdatedBy: strconv.FormatInt(r.UpdatedBy, 10),
+			UpdatedAt: r.UpdatedAt.UTC().Format(time.RFC3339),
+		})
+		if strings.HasPrefix(r.Subject, "app:") {
+			appNS[r.Subject] = r.Allowed
+		} else {
+			builtin[r.Subject] = r.Allowed
+		}
+		if o := strings.TrimSpace(r.RiskOverride); o != "" && o != "{}" {
+			var m map[string]any
+			if json.Unmarshal([]byte(o), &m) == nil {
+				for k, v := range m {
+					risk[k] = v
+				}
+			}
+		}
+	}
+	policy["builtin_tools"] = builtin
+	policy["app_namespace_tools"] = appNS
+	policy["risk_override"] = risk
+	last := rows[len(rows)-1]
+	snap.Source = "table"
+	snap.UpdatedAt = last.UpdatedAt.UTC().Format(time.RFC3339)
+	snap.Rows = dtoRows
+	return snap, nil
+}
+
+// UpdateAgentToolPolicy 行级 upsert（D7；subject 白名单字符校验防注入形态）
+func (s *Service) UpdateAgentToolPolicy(ctx context.Context, tenantID, updatedBy int64, req adminapi.AgentToolPolicyReq) (*adminapi.AgentPolicySnapshot, error) {
+	if s.toolPolicies == nil {
+		return nil, errx.New(errx.CodeInternal, "工具策略存储未装配")
+	}
+	subject := strings.TrimSpace(req.Subject)
+	if subject == "" || len(subject) > 128 {
+		return nil, errx.New(errx.CodeBadRequest, "subject 非空 ≤128 字符")
+	}
+	for _, ch := range subject {
+		if !(ch == ':' || ch == '*' || ch == '_' || ch == '-' || ch == '.' ||
+			(ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) {
+			return nil, errx.New(errx.CodeBadRequest, "subject 仅允许字母数字与 : * _ - .")
+		}
+	}
+	if req.Allowed == nil {
+		return nil, errx.New(errx.CodeBadRequest, "allowed 必填")
+	}
+	// risk_override/config 须为合法 JSON 对象（空串=保持既有/缺省 "{}"）
+	validateJSONObject := func(s string, field string, keep bool) (string, error) {
+		v := strings.TrimSpace(s)
+		if v == "" {
+			if keep {
+				return "", nil // 空=保持（Upsert 前读旧行由调用方语义——简化：空→"{}"）
+			}
+			return "{}", nil
+		}
+		var probe map[string]any
+		if json.Unmarshal([]byte(v), &probe) != nil {
+			return "", errx.New(errx.CodeBadRequest, field+" 须为 JSON 对象")
+		}
+		return v, nil
+	}
+	risk, err := validateJSONObject(req.RiskOverride, "risk_override", true)
+	if err != nil {
+		return nil, err
+	}
+	if risk == "" {
+		risk = "{}"
+	}
+	cfg, err := validateJSONObject(req.Config, "config", true)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == "" {
+		cfg = "{}"
+	}
+	if _, err := s.toolPolicies.UpsertToolPolicy(ctx, adminrepo.ToolPolicy{
+		TenantID: tenantID, Subject: subject, Allowed: *req.Allowed,
+		RiskOverride: risk, Config: cfg, UpdatedBy: updatedBy,
+	}); err != nil {
+		return nil, errx.From(err)
+	}
+	// agent.policy.updated 热更事件随 Agent 域消费方接线（阶段二，09 §5.2 登记）
+	return s.AgentPolicy(ctx, tenantID)
+}
+
+// DeleteAgentToolPolicy 删行回落默认
+func (s *Service) DeleteAgentToolPolicy(ctx context.Context, tenantID int64, subject string) (*adminapi.AgentPolicySnapshot, error) {
+	if s.toolPolicies == nil {
+		return nil, errx.New(errx.CodeInternal, "工具策略存储未装配")
+	}
+	if err := s.toolPolicies.DeleteToolPolicy(ctx, tenantID, strings.TrimSpace(subject)); err != nil {
+		if err == adminrepo.ErrToolPolicyNotFound {
+			return nil, errx.New(errx.CodeNotFound, "策略行不存在")
+		}
+		return nil, errx.From(err)
+	}
+	return s.AgentPolicy(ctx, tenantID)
 }
 
 // ── 敏感词（CRUD + 热更）──
@@ -681,9 +809,22 @@ func (s *Service) DeleteRole(ctx context.Context, tenantID, operatorID, roleID i
 	return s.audit(ctx, tenantID, operatorID, "role.delete", "", map[string]any{"role_id": roleID})
 }
 
-func (s *Service) GrantRole(ctx context.Context, tenantID, operatorID, userID, roleID int64) error {
+func (s *Service) GrantRole(ctx context.Context, tenantID, operatorID, userID, roleID int64, scopeType int, scopeDeptID int64) error {
 	if s.roles == nil {
 		return s.internal("角色管理未装配")
+	}
+	// scope 校验（D10）：四档；2/3 须部门 ID；1/4 不携部门
+	if scopeType == 0 {
+		scopeType = 4
+	}
+	if scopeType < 1 || scopeType > 4 {
+		return errx.New(errx.CodeBadRequest, "scope_type 合法值：1(本人) 2(本部门) 3(本部门及以下) 4(全租户)")
+	}
+	if (scopeType == 2 || scopeType == 3) && scopeDeptID <= 0 {
+		return errx.New(errx.CodeBadRequest, "scope_type 2/3 须携带 scope_dept_id")
+	}
+	if scopeType == 1 || scopeType == 4 {
+		scopeDeptID = 0
 	}
 	// 存在性校验（RBAC 阶段二补齐——防孤儿授权行：user_role 无 FK）
 	if u, err := s.same.GetUser(ctx, userID); err != nil || u == nil || u.TenantID != tenantID {
@@ -703,6 +844,7 @@ func (s *Service) GrantRole(ctx context.Context, tenantID, operatorID, userID, r
 	}
 	if err := s.roles.InsertUserRole(ctx, adminrepo.UserRole{
 		TenantID: tenantID, UserID: userID, RoleID: roleID,
+		ScopeType: scopeType, ScopeDeptID: scopeDeptID,
 	}); err != nil {
 		if err == adminrepo.ErrDupGrant {
 			return errx.New(errx.CodeBadRequest, "该用户已拥有此角色")
@@ -710,7 +852,7 @@ func (s *Service) GrantRole(ctx context.Context, tenantID, operatorID, userID, r
 		return s.internal("授权失败")
 	}
 	s.notifyPermChanged(tenantID, userID)
-	return s.audit(ctx, tenantID, operatorID, "role.grant", "", map[string]any{"user_id": userID, "role_id": roleID})
+	return s.audit(ctx, tenantID, operatorID, "role.grant", "", map[string]any{"user_id": userID, "role_id": roleID, "scope_type": scopeType, "scope_dept_id": scopeDeptID})
 }
 
 func (s *Service) RevokeRole(ctx context.Context, tenantID, operatorID, grantID int64) error {
@@ -842,7 +984,7 @@ func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int
 				row.Reason = "用户创建通道未装配"
 				break
 			}
-			// 初始口令 = 工号 + 固定盐后缀（首登强制改密阶段二接 03 篇 §5；HashPassword 闭包注入）
+			// 初始口令 = 工号 + 固定盐后缀（首登强制改密已接：must_change_password 置位；HashPassword 闭包注入）
 			hash := ""
 			if s.opts.HashPassword != nil {
 				if h, herr := s.opts.HashPassword(row.Empno + "!BBW"); herr == nil {
@@ -854,6 +996,7 @@ func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int
 				DisplayName: row.Name, Email: strings.TrimSpace(r.Email),
 				PasswordHash: hash, Status: orgapi.UserStatusActive,
 				Scopes: []string{"im:message:send"}, // 新用户基础权限（角色化随 RBAC 收口）
+				MustChangePassword: true,            // D11：初始口令=工号+!BBW，首登强制改密
 			}); cerr != nil {
 				row.Reason = "创建失败：" + cerr.Error()
 			} else {
@@ -947,6 +1090,7 @@ func (s *Service) AgentKillOn() bool {
 type KBSpaceClosure struct {
 	ID, OwnerID, DocCount, Quota, Used int64
 	Type, Name                         string
+	Status    string
 }
 
 func (s *Service) ListKBSpaces(_ context.Context, _ int64) ([]adminapi.KBSpaceRow, error) {
@@ -961,12 +1105,28 @@ func (s *Service) ListKBSpaces(_ context.Context, _ int64) ([]adminapi.KBSpaceRo
 			owner = u.DisplayName
 		}
 		out = append(out, adminapi.KBSpaceRow{
-			ID: r.ID, Type: r.Type, Name: r.Name,
+			ID: r.ID, Type: r.Type, Name: r.Name, Status: r.Status,
 			OwnerID: r.OwnerID, OwnerName: owner,
 			DocCount: r.DocCount, QuotaBytes: r.Quota, UsedBytes: r.Used,
 		})
 	}
 	return out, nil
+}
+
+// SetKBSpaceStatus 停用/启用（D8；闭包 nil=治理未装配）
+func (s *Service) SetKBSpaceStatus(ctx context.Context, tenantID, spaceID int64, archived bool) error {
+	if s.opts.KBGovern == nil {
+		return errx.New(errx.CodeInternal, "KB 治理未装配")
+	}
+	return s.opts.KBGovern(ctx, tenantID, spaceID, archived, false)
+}
+
+// DeleteKBSpace 删除（级联；personal 7010 由 kb 域拒）
+func (s *Service) DeleteKBSpace(ctx context.Context, tenantID, spaceID int64) error {
+	if s.opts.KBGovern == nil {
+		return errx.New(errx.CodeInternal, "KB 治理未装配")
+	}
+	return s.opts.KBGovern(ctx, tenantID, spaceID, false, true)
 }
 
 /* ── 离职交接（PAD-07；禁用全链复用 SetUserStatus 副作用——踢线+令牌吊销） ── */

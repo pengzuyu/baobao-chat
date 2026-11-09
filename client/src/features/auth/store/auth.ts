@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { setTokenProvider, setUnauthorizedHandler, ApiError } from '../../../shared/api/http';
-import { apiLogin, apiMyPermissions, apiRefresh, type AuthUser, type LoginResult } from '../api/auth';
+import { apiChangePassword, apiLogin, apiMyPermissions, apiRefresh, type AuthUser, type LoginResult } from '../api/auth';
 
 type LoginStatus = 'idle' | 'submitting' | 'locked';
 
@@ -24,6 +24,8 @@ interface AuthState {
   lockUntil: number;
 
   login: (account: string, password: string) => Promise<void>;
+  /** 首登/自助改密（D11）：成功后清 user.must_change_pwd */
+  changePassword: (oldPwd: string, newPwd: string) => Promise<void>;
   logout: () => void;
   clearError: () => void;
   /** 重拉权限摘要（perm.changed 推送后；导航显隐实时收窄，03 篇 §4） */
@@ -95,6 +97,12 @@ export const useAuthStore = create<AuthState>((set) => ({
         set({ loginStatus: 'idle', error: apiError });
       }
     }
+  },
+
+  changePassword: async (oldPwd, newPwd) => {
+    await apiChangePassword(oldPwd, newPwd);
+    const u = useAuthStore.getState().user;
+    if (u) set({ user: { ...u, must_change_pwd: false } });
   },
 
   logout: () => {

@@ -46,7 +46,7 @@ export function AgentGovernancePage() {
 
   const toggleKill = async () => {
     const next = !kill;
-    if (next && !window.confirm('确认开启 Agent 平台总闸？开启后生效路径阶段二接入 OBO 签发闸门（当前为治理标记位）')) return;
+    if (next && !window.confirm('确认开启 Agent 平台总闸？开启后 OBO 签发即刻拒绝（1013）、网关侧 Agent 请求 503——双点拦截（D9）')) return;
     setBusy('kill');
     setError(null);
     try {
@@ -69,7 +69,7 @@ export function AgentGovernancePage() {
           onClick={() => void toggleKill()}
           data-testid="agent-killswitch-btn"
         >
-          <Power size={14} /> 总闸：{kill ? '已拉起（紧急停止）' : '运行中'}
+          <Power size={14} /> 总闸：{kill ? '已拉起（紧急停止：OBO 签发拒 1013 + 网关 503）' : '运行中'}
         </button>
       </div>
       {error ? <div className="admin-page__error">{error}</div> : null}

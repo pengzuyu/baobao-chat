@@ -2,7 +2,8 @@
  * PAG-13/14/15 专家库页（D14 §4）：公司库/个人库双栏卡片 + 编辑器弹窗
  * （manifest YAML 发布，个人命名空间校验提示）+ 详情抽屉（manifest 预览/
  * 下架/删除）。PAG-16 协作图/PAG-17 摘要卡=Agent 会话产物视图，随
- * agent_* 接线阶段二登记。
+ * D17：「用此专家开会话」入口——建工作台会话（mode=ask + manifest model 直达引用；
+ * persona/skills 注入随宿主 expert_id 参数阶段二，登记）。
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Building2, Download, Pencil, Plus, Sparkles, Trash2, User, X } from 'lucide-react';
@@ -10,6 +11,8 @@ import { Button } from '../../../shared/ui/Button';
 import { StateView } from '../../../shared/ui/StateView';
 import * as api from '../api/expert';
 import type { EcoExpert } from '../model/types';
+import { useNavigate } from 'react-router-dom';
+import { useAgentStore } from '../../agent/store/agent';
 
 const BLANK_MANIFEST = `id: usr.1001.my-expert
 type: local
@@ -31,6 +34,24 @@ export function ExpertLibraryPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [detail, setDetail] = useState<EcoExpert | null>(null);
   const [detailManifest, setDetailManifest] = useState('');
+  const navigate = useNavigate();
+  /** D17：建工作台会话并跳转（model 取 manifest 直达引用行；persona 注入随 expert_id 阶段二） */
+  const [starting, setStarting] = useState(false);
+  const startExpertSession = async () => {
+    if (starting || !detail) return;
+    setStarting(true);
+    try {
+      // manifest 的 model: 行 → 直达引用原样透传（如 p:3:glm-4.7 或档位别名）
+      const manifest = await api.downloadManifest(detail.id).catch(() => '');
+      const modelLine = manifest.split('\n').find((l) => /^\s*model:\s*\S+/.test(l));
+      const model = modelLine ? modelLine.replace(/^\s*model:\s*/, '').trim() : undefined;
+      await useAgentStore.getState().startSession('ask', model);
+      const sid = useAgentStore.getState().activeSessionId;
+      if (sid) navigate(`/agent/s/${sid}`);
+    } finally {
+      setStarting(false);
+    }
+  };
   const [reloadKey, setReloadKey] = useState(0);
 
   const reload = useCallback(async () => {
@@ -136,9 +157,16 @@ export function ExpertLibraryPage() {
               <h4>定义包（manifest）</h4>
               <pre className="exp-detail__manifest">{detailManifest}</pre>
               <p className="exp-detail__tip">
-                Agent Runtime 启动时经 BBW_RT_EXPERTS_URL 自动同步本库（D14 §5 分发）；
-                「新建会话」入口随 agent_* 宿主接线阶段二。
+                Agent Runtime 启动时经 BBW_RT_EXPERTS_URL 自动同步本库（D14 §5 分发）。
               </p>
+              <button
+                type="button"
+                className="btn btn--primary exp-detail__start"
+                data-testid="expert-start-session"
+                onClick={() => void startExpertSession()}
+              >
+                用此专家开会话
+              </button>
             </div>
           </aside>
         </div>

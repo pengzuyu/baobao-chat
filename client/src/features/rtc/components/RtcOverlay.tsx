@@ -29,6 +29,10 @@ export interface RtcAuthSource {
 
 export function RtcOverlay({ auth }: { auth: RtcAuthSource }) {
   const toast = useRtcStore((s) => s.toast);
+  // 通话中来电等待条（INT-RTC-16：仅 toast 形态，不弹窗不响铃）
+  const callWaiting = useRtcStore((s) => s.callWaiting);
+  const answerWaiting = useRtcStore((s) => s.answerWaiting);
+  const dismissWaiting = useRtcStore((s) => s.dismissWaiting);
   const clearToast = useRtcStore((s) => s.clearToast);
   // auth 源固化（组合层可能传内联对象——重渲染不触发 bus 重绑/事件窗口）
   const authRef = useRef(auth);
@@ -121,6 +125,19 @@ export function RtcOverlay({ auth }: { auth: RtcAuthSource }) {
     <>
       <CallWindow />
       <IncomingCallModal openMeeting={openMeeting} />
+      {callWaiting ? (
+        <div className="rtc-toast rtc-call-waiting" data-testid="rtc-call-waiting" role="alert">
+          <span>
+            {callWaiting.caller.name} 来电（{callWaiting.call_type === 'video' ? '视频' : '音频'}）
+          </span>
+          <button type="button" onClick={() => void dismissWaiting()}>
+            拒接
+          </button>
+          <button type="button" className="rtc-call-waiting__answer" onClick={() => void answerWaiting()}>
+            挂断并接听
+          </button>
+        </div>
+      ) : null}
       {toast ? (
         <div className="rtc-toast" data-testid="rtc-toast">
           {toast.text}

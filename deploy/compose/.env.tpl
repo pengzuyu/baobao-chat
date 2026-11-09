@@ -27,7 +27,7 @@ BBW_IMAGE_TAG=0.1.0
 # Helm values app.replicaCount 对齐，默认 2=滚动升级+单实例冗余，16 篇 §3.1）
 BBW_APP_REPLICAS=2
 # 启用的 profiles 组合（compose 原生变量；helm 侧对应 modules.*）：
-#   core(必选，全栈：app/nginx-lb/依赖) media docs ops mail——按站点形态叠加；
+#   core(必选，全栈：app/nginx-lb/依赖) media ops mail——按站点形态叠加；
 #   deps=开发依赖子组（dev-up.sh 用，不起 app 容器）；测试全栈保持 core 即可
 COMPOSE_PROFILES=core
 # 迁移目录（golang-migrate，按域分目录；D02 §7）。首次初始化时挂载进 app-init。
@@ -42,10 +42,10 @@ BBW_UPDATE_CHANNEL=stable                     # helm: config.updateChannel（sta
 BBW_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318   # helm: config.otelEndpoint
 
 # -----------------------------------------------------------------------------
-# 2. 模块启停（helm: modules.*；compose 侧 media/docs/mail 由 profiles 控制）
+# 2. 模块启停（helm: modules.*；compose 侧 media/mail 由 profiles 控制）
 # -----------------------------------------------------------------------------
 # bbw-server 为模块化单体，--enable 控制启用域（D02 §2；auth/org/message 不可关闭）
-BBW_APP_MODULES=auth,org,message,file,doc,kb,eco,admin,audit,notify,aigw
+BBW_APP_MODULES=auth,org,message,file,kb,eco,admin,audit,notify,aigw
 
 # -----------------------------------------------------------------------------
 # 3. PostgreSQL（helm: secrets.dbDsn → Secret bbw-db；只读副本 DSN 走 secrets.dbReadDsn）
@@ -97,7 +97,6 @@ BBW_TLS_CA_FILE=/etc/nginx/certs/ca.crt
 # -----------------------------------------------------------------------------
 BBW_FEATURE_AGENT=true        # helm: features.agent   （AI Agent 工作台）
 BBW_FEATURE_KB=true           # helm: features.kb      （知识库）
-BBW_FEATURE_DOC=true          # helm: features.doc     （在线文档：同时须启用 docs profile）
 BBW_FEATURE_RTC=true          # helm: features.rtc     （音视频：同时须启用 media profile）
 BBW_FEATURE_AI=true           # helm: features.ai      （ai-gateway）
 BBW_FEATURE_MAIL=false        # helm: features.mail    （邮件：同时须启用 mail profile，22 篇）
@@ -109,15 +108,24 @@ BBW_AI_UPSTREAM_BASE_URL=     # 如 http://vllm.internal:8000/v1；空=aigw 仅�
 BBW_AI_UPSTREAM_API_KEY=      # helm: secrets.aiUpstreamApiKey（经 KMS/信封解密后注入，§5.3）
 
 # -----------------------------------------------------------------------------
-# 9. 文档协作 OnlyOffice（helm: onlyoffice.* / secrets.onlyofficeJwtSecret；docs profile）
 # -----------------------------------------------------------------------------
-ONLYOFFICE_JWT_SECRET=onlyoffice_change_me   # helm: secrets.onlyofficeJwtSecret ★上线必改
-
+# 10. 音视频 LiveKit 统一媒体面（helm: media.* / secrets.livekitApi*；media profile）
+#     D17 拍板：1v1/群一致走 SFU，livekit-server 顶替 bbw-media 占位与 coturn
+#     （TURN 由 livekit 内嵌 3478/udp 提供，历史 BBW_TURN_* 键随 coturn 退役）。
 # -----------------------------------------------------------------------------
-# 10. 音视频 media / coturn（helm: media.* / coturn.* / secrets.turnSecret；media profile）
-# -----------------------------------------------------------------------------
-BBW_TURN_PUBLIC_HOST=turn.example.internal   # helm: coturn.publicHost（跨园区兜底才启用）
-BBW_TURN_SECRET=turn_change_me               # helm: secrets.turnSecret（静态共享密钥）★上线必改
+# media 容器镜像（官方源国内拉取慢时可指内网 Harbor，经 docker pull 代理源再 tag push）
+BBW_LIVEKIT_IMAGE=livekit/livekit-server:v1.8.4   # helm: media.image
+# BBW_LIVEKIT_IMAGE=172.16.105.109:30003/pengzuyu/livekit-server:v1.8.4
+# 客户端连接地址：经 nginx /rtc/ 反代（wss://<域名>/rtc，SDK 会再拼 /rtc → 实际
+# /rtc/rtc，nginx 已预置 rewrite 去前缀）或直连 wss://<host>:7880。
+# 留空注释 = compose 按 BBW_PUBLIC_DOMAIN 自动拼 wss://<域名>/rtc
+# BBW_LIVEKIT_URL=wss://bbw.example.internal/rtc    # helm: config.livekitUrl
+# API key 三元组与 app 侧同源（签发/验签一致才进房）；密钥不得含冒号（LIVEKIT_KEYS
+# 以 "key: secret" 冒号分隔）
+BBW_LIVEKIT_API_KEY=bbwdev                        # helm: secrets.livekitApiKey
+BBW_LIVEKIT_API_SECRET=bbw-livekit-secret-change-me   # helm: secrets.livekitApiSecret ★上线必改
+# 可选：ICE servers 覆盖（JSON，空=服务端默认；跨园区网络才需要）
+BBW_LIVEKIT_ICE=                                  # helm: config.livekitIce
 # media UDP 端口段独占：40000-50100（16 篇 §3.1/§3.2；compose 侧直接发布该段）
 BBW_MEDIA_RTC_MIN_PORT=40000
 BBW_MEDIA_RTC_MAX_PORT=50100

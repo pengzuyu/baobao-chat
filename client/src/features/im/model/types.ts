@@ -13,7 +13,6 @@ export type MsgType =
   | 'audio_clip'
   | 'sticker'
   | 'video'
-  | 'doc_card'
   | 'agent_card'
   | 'merge_forward'
   | 'system'
@@ -47,16 +46,6 @@ export interface FileMessageBody {
   poster_file_id?: string;
 }
 
-/**
- * 文档卡片消息体（D05 阶段一：doc_card 简版——doc_id+标题+版本号快照；
- * 在线编辑状态/协作头像/摘要预览阶段二，06 §4.8）
- */
-export interface DocCardBody {
-  doc_id: string;
-  title?: string;
-  version?: number;
-}
-
 /** 合并转发消息体（PIM-10/PIM-11，D03 §3.2）：服务端 merge 落库 shape
  * {title,count,items[{sender_id,sender_name,type,digest,origin_conv,origin_seq}]} */
 export interface MergeForwardBody {
@@ -65,13 +54,12 @@ export interface MergeForwardBody {
   items?: MergeItem[];
 }
 
-/** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；call_card 为通话卡片体（D04）；doc_card 为文档卡片体（D05）；全集见 D03 §6.3） */
+/** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；call_card 为通话卡片体（D04）；全集见 D03 §6.3） */
 export type MessageBody =
   | { text: string }
   | FileMessageBody
   | SystemBody
   | CallCardBody
-  | DocCardBody
   | MergeForwardBody
   | Record<string, never>;
 

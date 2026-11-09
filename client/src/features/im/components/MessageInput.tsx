@@ -3,7 +3,7 @@
  * - Enter 发送 / Shift+Enter 换行（D01 §9）
  * - 引用回复条（INT-IM-04）：replyTo 悬浮于输入框上，可关闭
  * - 编辑态（INT-IM-02）：原 bubble 文本转入输入框，Enter 提交 PATCH
- * - 正在输入（INT-IM-11）：输入事件 2.5s 节流发 msg.typing（stop 不发，静默）
+ * - 正在输入（INT-IM-11）：输入事件 2.5s 节流发 msg.typing（stop 不发，静默；群聊默认关，OQ-B03）
  * - @提及（INT-IM-24）：输入 @ 触发成员过滤面板（参与者取自已加载消息的去重发送者）
  * - 草稿存 feature store（500ms 防抖 PATCH state 多端同步，INT-IM-10）
  */
@@ -30,6 +30,8 @@ function voiceExtOf(mime: string): string {
 
 interface MessageInputProps {
   convId: string;
+  /** 正在输入上报（INT-IM-11）：群聊默认关（OQ-B03 拍板——大群 typing 广播收益低、扰动高），单聊保持 2.5s 节流 */
+  typingEnabled?: boolean;
   /** 广播群普通成员等只读场景（PIM-04：仅发布者可发言） */
   disabled?: boolean;
   disabledHint?: string;
@@ -57,6 +59,7 @@ interface MessageInputProps {
 
 export function MessageInput({
   convId,
+  typingEnabled = true,
   disabled = false,
   disabledHint,
   draft,
@@ -122,8 +125,9 @@ export function MessageInput({
     setTimeout(() => setSending(false), 300); // 乐观更新即时上屏，此处仅做按钮态节流
   };
 
-  /** typing 节流 2.5s（INT-IM-11；stop 不发） */
+  /** typing 节流 2.5s（INT-IM-11；stop 不发）；群聊 typingEnabled=false 不上报（OQ-B03） */
   const maybeTyping = () => {
+    if (!typingEnabled) return;
     const now = Date.now();
     if (now - lastTypingAt.current >= 2500) {
       lastTypingAt.current = now;

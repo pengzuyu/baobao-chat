@@ -678,3 +678,44 @@ func TestListReceiptPanel(t *testing.T) {
 		t.Fatalf("不存在的 seq 应 9002, got %v", err)
 	}
 }
+
+// TestListReceiptPanelTruncated OQ-B04：参与成员 >200 已读面板仅计数不展开名单
+//（参与口径=在群成员且非发送者；200 恰不截断、201 截断两边界）
+func TestListReceiptPanelTruncated(t *testing.T) {
+	svc, r, _ := seedFixture(t, Options{})
+	ctx := context.Background()
+
+	// conv1 参与=10002+199 新成员=200（发送者 alice 不计）→ 恰不截断
+	for i := 0; i < 199; i++ {
+		_ = r.AddMember(ctx, messagerepo.Member{ConvID: 1, UserID: int64(20001 + i), Role: messageapi.MemberMember})
+	}
+	if _, err := svc.Send(ctx, 10001, textPayload(1, "big-1", "big group")); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	p, err := svc.ListReceiptPanel(ctx, 10001, 1, 1)
+	if err != nil {
+		t.Fatalf("panel 200: %v", err)
+	}
+	if p.Truncated {
+		t.Fatalf("参与 200 恰不截断: %+v", p)
+	}
+	if len(p.Unread) != 200 || p.UnreadCount != 200 {
+		t.Fatalf("200 参与应全未读名单: len=%d count=%d", len(p.Unread), p.UnreadCount)
+	}
+
+	// 再入 1 人 → 参与 201 > 200 → 截断：名单置空、计数保留
+	_ = r.AddMember(ctx, messagerepo.Member{ConvID: 1, UserID: 29999, Role: messageapi.MemberMember})
+	p, err = svc.ListReceiptPanel(ctx, 10001, 1, 1)
+	if err != nil {
+		t.Fatalf("panel 201: %v", err)
+	}
+	if !p.Truncated {
+		t.Fatalf("参与 201 应截断: %+v", p)
+	}
+	if len(p.Read) != 0 || len(p.Unread) != 0 {
+		t.Fatalf("截断后名单应空: read=%d unread=%d", len(p.Read), len(p.Unread))
+	}
+	if p.ReadCount != 0 || p.UnreadCount != 201 {
+		t.Fatalf("截断保留计数: read=%d unread=%d", p.ReadCount, p.UnreadCount)
+	}
+}

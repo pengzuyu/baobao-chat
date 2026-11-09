@@ -68,6 +68,26 @@ type AgentPolicySnapshot struct {
 	UpdatedAt string         `json:"updated_at"`
 	Source    string         `json:"source"` // "default" | "table"
 	Policy    map[string]any `json:"policy"`
+	// 行级覆盖明细（source=table 时携带；编辑器数据源——D7）
+	Rows []AgentToolPolicyRow `json:"rows,omitempty"`
+}
+
+// AgentToolPolicyRow agent_tool_policy 行（编辑器/写接口口径）
+type AgentToolPolicyRow struct {
+	Subject      string `json:"subject"`       // 工具名/命名空间（app:ns:*）
+	Allowed      bool   `json:"allowed"`
+	RiskOverride string `json:"risk_override"` // JSON（"{}"=矩阵默认）
+	Config       string `json:"config"`        // JSON 扩展配置
+	UpdatedBy    string `json:"updated_by"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+// AgentToolPolicyReq PUT /admin/policies/agent/tools
+type AgentToolPolicyReq struct {
+	Subject      string `json:"subject"`
+	Allowed      *bool  `json:"allowed"` // 指针：显式传 false 合法
+	RiskOverride string `json:"risk_override"` // 空=保持；"{}"=清空覆盖
+	Config       string `json:"config"`
 }
 
 // SensitiveWord 敏感词行（迁移 0006 sensitive_word）
@@ -217,6 +237,7 @@ type KBSpaceRow struct {
 	ID         int64  `json:"id,string"`
 	Type       string `json:"type"` // personal|dept|company
 	Name       string `json:"name"`
+	Status     string `json:"status"` // active|archived（D8 治理态）
 	OwnerID    int64  `json:"owner_id,string"`
 	OwnerName  string `json:"owner_name"`
 	DocCount   int64  `json:"doc_count"`
@@ -231,12 +252,18 @@ type AdminService interface {
 	OffboardUser(ctx context.Context, tenantID, operatorID, userID int64) error
 	// ── KB 治理（PAD-10；admin:kb:govern——v0.1 只读总览，空间停用/删除随 D07 敏感治理阶段二）──
 	ListKBSpaces(ctx context.Context, tenantID int64) ([]KBSpaceRow, error)
+	// SetKBSpaceStatus KB 空间停用/启用（D8 治理；闭包转 kb 域）
+	SetKBSpaceStatus(ctx context.Context, tenantID, spaceID int64, archived bool) error
+	// DeleteKBSpace KB 空间删除（级联；personal 7010）
+	DeleteKBSpace(ctx context.Context, tenantID, spaceID int64) error
 	// ── Agent 治理（PAD-14；admin:agent:revoke / platform:agent:killswitch）──
 	ListAgentUsers(ctx context.Context, tenantID int64) ([]AgentUserRow, error)
 	// RevokeAgentAccess 吊销该用户 Agent 通道（OBO/refresh 全失效+踢线）
 	RevokeAgentAccess(ctx context.Context, tenantID, operatorID, userID int64) error
 	// AgentKillswitch 平台总闸（true=紧急停止；生效路径阶段二接 OBO 签发闸门，登记）
 	AgentKillswitch(ctx context.Context, tenantID, operatorID int64, on bool) (bool, error)
+	// AgentKillOn 总闸状态读（main 装配消费：auth OBO 签发 + aigw 每请求双点）
+	AgentKillOn() bool
 	// ── 批量导入（PAD-06；v0.1 同步 ≤100 行/次，admin_task 异步化阶段二登记）──
 	BatchImportUsers(ctx context.Context, tenantID, operatorID int64, rows []ImportUserRow) (*ImportResult, error)
 	// ── 平台公告（PAD-15；admin:notice:publish）──
@@ -247,7 +274,9 @@ type AdminService interface {
 	CreateRole(ctx context.Context, tenantID, operatorID int64, name, description string, permissions []string) (*RoleDTO, error)
 	UpdateRole(ctx context.Context, tenantID, operatorID, roleID int64, name, description string, permissions []string) error
 	DeleteRole(ctx context.Context, tenantID, operatorID, roleID int64) error
-	GrantRole(ctx context.Context, tenantID, operatorID, userID, roleID int64) error
+	// GrantRole 授予（D10：scope 四档透传——1 本人 2 本部门 3 本部门及以下 4 全租户；
+	// 2/3 须 deptID>0；权限判定引擎按 scope 收敛随 S5 判定链接线）
+	GrantRole(ctx context.Context, tenantID, operatorID, userID, roleID int64, scopeType int, scopeDeptID int64) error
 	RevokeRole(ctx context.Context, tenantID, operatorID, grantID int64) error
 	ListUserGrants(ctx context.Context, tenantID, userID int64) ([]GrantDTO, error)
 	// IsAdmin 管理员判定 v0.2（有效权限点 admin:*/platform:* / 应急白名单；03 篇 §4）
@@ -264,6 +293,10 @@ type AdminService interface {
 	SetUserStatus(ctx context.Context, tenantID, operatorID, targetUserID int64, status int) (*AdminUser, error)
 	// AgentPolicy agent 工具策略只读快照
 	AgentPolicy(ctx context.Context, tenantID int64) (*AgentPolicySnapshot, error)
+	// UpdateAgentToolPolicy 行级 upsert（D7：快照 source 切 table；热更事件随 Agent 域阶段二）
+	UpdateAgentToolPolicy(ctx context.Context, tenantID, updatedBy int64, req AgentToolPolicyReq) (*AgentPolicySnapshot, error)
+	// DeleteAgentToolPolicy 删行回落默认（subject 不存在 9002）
+	DeleteAgentToolPolicy(ctx context.Context, tenantID int64, subject string) (*AgentPolicySnapshot, error)
 	// ListSensitiveWords 敏感词分页
 	ListSensitiveWords(ctx context.Context, tenantID int64, cursor, limit int64) (*WordPage, error)
 	// AddSensitiveWord 新增敏感词（默认 mode=1 拦截；UK 冲突→9001）+审计

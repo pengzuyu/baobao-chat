@@ -57,15 +57,6 @@ media:
     minReplicas: 3
     maxReplicas: 6
 
-onlyoffice:
-  replicas: 4                          # §3.3：400–600 会话（4C8G×4–6）
-  autoscaling:
-    enabled: true
-    minReplicas: 4
-    maxReplicas: 6
-  pdb:
-    enabled: true
-
 # 外部组件容量（§3.3 大档基线）：
 #   PG 主+2 读副本 16C32G：shared_buffers 8G、池 200、消息表按月分区+索引膨胀监控
 #   Redis 哨兵 3×4G（热 key 监控）；MinIO 4+ 节点 40TB（EC，跨站点复制可选）

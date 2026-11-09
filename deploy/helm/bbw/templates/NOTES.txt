@@ -6,9 +6,6 @@
 1. 入口
 {{- if .Values.ingress.enabled }}
    · 主入口 https://{{ .Values.ingress.hosts.api }}（/api /ws{{ if .Values.modules.media }} /rtc{{ end }}）
-{{- if .Values.modules.docs }}
-   · 文档编辑 https://{{ .Values.ingress.hosts.office }}
-{{- end }}
    · TLS Secret：{{ .Values.ingress.tls.secretName }}（内部 CA 签发；客户端 pinning 根 CA，15 篇 §3.1）
 {{- else }}
    · ingress.enabled=false：请自行暴露 {{ include "bbw.fullname" . }}-gateway:80

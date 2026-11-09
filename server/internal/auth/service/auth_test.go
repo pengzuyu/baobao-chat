@@ -102,7 +102,9 @@ func newFixture(t *testing.T, mutate func(o *Options)) *fixture {
 	signer.SetClock(now) // 签发与校验共用同一假时钟
 	tokMem := authrepo.NewMemory()
 
-	opts := Options{Now: now}
+	opts := Options{Now: now, UserSetPassword: func(ctx context.Context, tenantID, userID int64, hash string) error {
+		return orgMem.SetPassword(ctx, tenantID, userID, hash)
+	}}
 	if mutate != nil {
 		mutate(&opts)
 	}
@@ -313,4 +315,54 @@ func TestVerify(t *testing.T) {
 	if _, err := f.svc.Verify(context.Background(), "junk"); err == nil {
 		t.Fatal("垃圾令牌应拒绝")
 	}
+}
+
+// OBO 平台总闸（D9）：killswitch on → 1013 拒签；off 正常
+func TestIssueOBOKillswitch(t *testing.T) {
+	kill := false
+	f := newFixture(t, func(o *Options) {
+		o.AgentKillOn = func() bool { return kill }
+	})
+	ctx := context.Background()
+
+	kill = true
+	if _, err := f.svc.IssueOBO(ctx, 10001, authapi.OBOReq{AgentSessionID: "as-k"}); errx.From(err).Code != errx.CodeAuthOBOKillswitch {
+		t.Fatalf("总闸 on 应 1013: %v", err)
+	}
+	kill = false
+	if _, err := f.svc.IssueOBO(ctx, 10001, authapi.OBOReq{AgentSessionID: "as-k", Scope: []string{}}); err != nil {
+		t.Fatalf("总闸 off 应正常签发: %v", err)
+	}
+}
+
+// TestChangePassword D11：旧密码错 1001/规则校验/成功清 must_change
+func TestChangePassword(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx := context.Background()
+
+	// alice 初始密码 right-pass（fixture 种子；uid=10001）
+	// 旧密码错 → 1001
+	if err := f.svc.ChangePassword(ctx, 1, 10001, "wrong", "NewPass123"); errx.From(err).Code != errx.CodeAuthPasswordWrong {
+		t.Fatalf("旧密码错应 1001: %v", err)
+	}
+	// 规则：短密码 9001
+	if err := f.svc.ChangePassword(ctx, 1, 10001, "right-pass", "Ab1"); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("短密码应 9001: %v", err)
+	}
+	// 规则：与旧相同 9001
+	if err := f.svc.ChangePassword(ctx, 1, 10001, "right-pass", "right-pass"); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("同旧密码应 9001: %v", err)
+	}
+	// 成功：改密后新密码可登录、旧密码不可
+	if err := f.svc.ChangePassword(ctx, 1, 10001, "right-pass", "NewPass123"); err != nil {
+		t.Fatalf("改密: %v", err)
+	}
+	if _, err := f.svc.Login(ctx, authapi.LoginReq{TenantID: 1, Username: "alice", Password: "right-pass"}); err == nil {
+		t.Fatal("旧密码不应再可登录")
+	}
+	pair, err := f.svc.Login(ctx, authapi.LoginReq{TenantID: 1, Username: "alice", Password: "NewPass123"})
+	if err != nil {
+		t.Fatalf("新密码登录: %v", err)
+	}
+	_ = pair
 }

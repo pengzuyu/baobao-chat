@@ -1,8 +1,8 @@
 /**
  * 分享外链解析页（D06 §4.4；路由 /s/:code，登录态访问——企业内不匿名）：
- * - 进入即解析：无密码 → 4011 need_pwd 二段式（密码输入重解析）
- * - 命中 → 文件卡片 + 剩余次数 + [下载]（一次性票据 120s 流式回放）
- * - 终态错误：4010 过期 / 4012 次数尽 / 4005 已取消或不存在（不可重试）
+ * - 文件分享 → 文件卡片 + 剩余次数 + [下载]（一次性票据 120s 流式回放）
+ * - 进入即解析：无密码 → need_pwd 二段式（密码输入重解析）
+ * - 终态错误：4010/4012/4005（不可重试）
  * - mock 模式无服务端——给占位说明
  */
 
@@ -34,9 +34,10 @@ export function ShareResolvePage() {
         setState({ kind: 'done', view });
       } catch (e) {
         if (e instanceof ApiError) {
+          const deadCodes = [4010, 4012, 4005, 4013];
           if (e.code === 4011 && !pwd) {
             setState({ kind: 'need-pwd' }); // 二段式：首次未携带密码
-          } else if (e.code === 4010 || e.code === 4012 || e.code === 4005 || e.code === 4013) {
+          } else if (deadCodes.includes(e.code)) {
             setState({ kind: 'dead', code: e.code });
           } else {
             setState({ kind: 'retryable', text: getErrorText(e.code) });

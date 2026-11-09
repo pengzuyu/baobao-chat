@@ -31,20 +31,19 @@ type Repo interface {
 	CountUsers(ctx context.Context, tenantID int64) (int64, error)
 	// SetUserStatus 启用/禁用（orgapi.UserStatus*）；行不存在返回 ErrUserNotFound
 	SetUserStatus(ctx context.Context, id int64, status int) error
+	// SetPassword 改密+清首登标志（D11；hash 由 auth 域闭包生成）
+	SetPassword(ctx context.Context, tenantID, userID int64, passwordHash string) error
 
 	// ── user_dept 最小读写（03 §5；写侧管理面随 PAD-07 交接阶段二——
 	// 本组方法供 ACL dept 展开/resource_acl 判定链接线）──
 	// AttachUser 挂部门（is_primary 首挂自动置真；重复挂=幂等 no-op）
 	AttachUser(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error
 	// ListUserDepts 用户部门集（含 primary 标记；无挂载=空集）
-	ListUserDepts(ctx context.Context, tenantID, userID int64) ([]UserDeptRow, error)
-}
-
-// UserDeptRow user_dept 行
-type UserDeptRow struct {
-	UserID    int64
-	DeptID    int64
-	IsPrimary bool
+	ListUserDepts(ctx context.Context, tenantID, userID int64) ([]orgapi.UserDeptRow, error)
+	// DetachUser 卸挂（卸 primary → 剩余最小 dept_id 接任；D10）
+	DetachUser(ctx context.Context, tenantID, userID, deptID int64) error
+	// ListDeptUsers 部门成员集（D10；组织树页面成员区）
+	ListDeptUsers(ctx context.Context, tenantID, deptID int64) ([]orgapi.UserDeptRow, error)
 }
 
 // Memory 内存实现（阶段一：无 PG 依赖跑通全链路）
@@ -305,18 +304,70 @@ func (m *Memory) AttachUser(_ context.Context, _, userID, deptID int64, isPrimar
 	return nil
 }
 
-// ListUserDepts 用户部门集
-func (m *Memory) ListUserDepts(_ context.Context, _, userID int64) ([]UserDeptRow, error) {
+// DetachUser 卸挂（D10；primary 卸载 → 剩余最小 dept_id 接任）
+func (m *Memory) DetachUser(_ context.Context, _, userID, deptID int64) error {
+	m.udMu.Lock()
+	defer m.udMu.Unlock()
+	if _, ok := m.userDept[udKey{userID, deptID}]; !ok {
+		return nil // 幂等
+	}
+	delete(m.userDept, udKey{userID, deptID})
+	if m.udPrimary[userID] == deptID {
+		delete(m.udPrimary, userID)
+		next := int64(0)
+		for k := range m.userDept {
+			if k.UserID == userID && (next == 0 || k.DeptID < next) {
+				next = k.DeptID
+			}
+		}
+		if next != 0 {
+			m.udPrimary[userID] = next
+		}
+	}
+	return nil
+}
+
+// ListDeptUsers 部门成员集（D10）
+func (m *Memory) ListDeptUsers(_ context.Context, _, deptID int64) ([]orgapi.UserDeptRow, error) {
 	m.udMu.RLock()
 	defer m.udMu.RUnlock()
-	out := []UserDeptRow{}
+	out := []orgapi.UserDeptRow{}
+	for k := range m.userDept {
+		if k.DeptID == deptID {
+			out = append(out, orgapi.UserDeptRow{
+				UserID: k.UserID, DeptID: deptID, IsPrimary: m.udPrimary[k.UserID] == deptID,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UserID < out[j].UserID })
+	return out, nil
+}
+
+// ListUserDepts 用户部门集
+func (m *Memory) ListUserDepts(_ context.Context, _, userID int64) ([]orgapi.UserDeptRow, error) {
+	m.udMu.RLock()
+	defer m.udMu.RUnlock()
+	out := []orgapi.UserDeptRow{}
 	for k := range m.userDept {
 		if k.UserID == userID {
-			out = append(out, UserDeptRow{
+			out = append(out, orgapi.UserDeptRow{
 				UserID: userID, DeptID: k.DeptID, IsPrimary: m.udPrimary[userID] == k.DeptID,
 			})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].DeptID < out[j].DeptID })
 	return out, nil
+}
+
+// SetPassword 改密+清首登标志（D11）
+func (m *Memory) SetPassword(_ context.Context, _, userID int64, passwordHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.byID[userID]
+	if !ok {
+		return orgapi.ErrUserNotFound
+	}
+	u.PasswordHash = passwordHash
+	u.MustChangePassword = false
+	return nil
 }

@@ -1,6 +1,7 @@
 /**
- * PIM-09 通知中心（D03 §3.9，路由 /im/notifications）：
- * - 分组 tab：全部 / @我 / 回复我 / 审批 / 公告 / Agent 完成（预留置灰——服务端无 agent 域事件源，登记）
+ * 全局通知中心（OQ-B07 上移：路由 /notifications——doc/kb/agent 审批复用同一中心；
+ * kind 分组随各域通知源接入扩展，PIM-09 D03 §3.9 原始设计）：
+ * - 分组 tab：全部 / @我 / 回复我 / 审批 / 公告 / Agent 完成（事件源已接：/notify/agent-tasks）
  * - 列表项：kind 图标 + 标题 + digest + ×N 合并计数（同会话 10s 窗口聚合）+ 时间 + 未读点
  * - 点击路由（D03 §3.9 点击路由表）：mention/reply → 会话定位 seq 闪烁（复用 pendingLocate）；
  *   apply → 会话（审批卡在会话内，PIM-06）；announcement → 全文弹层（简版 Modal）
@@ -133,7 +134,7 @@ export function NotificationCenterPage() {
   return (
     <div className="notif-page" data-testid="notif-page">
       <header className="notif-page__header">
-        <Button variant="text" onClick={() => navigate('/im')} aria-label="返回消息">
+        <Button variant="text" onClick={() => navigate(-1)} aria-label="返回">
           <ArrowLeft size={16} />
         </Button>
         <h1 className="notif-page__title">

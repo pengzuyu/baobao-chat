@@ -24,6 +24,8 @@ services:
     environment:
       BBW_JWT_SECRET: ${BBW_JWT_SECRET:?先 cp .env.tpl .env 并填入 32+ 字节随机串}
       BBW_CORS_ORIGINS: ${BBW_CORS_ORIGINS:-http://localhost:5173,http://tauri.localhost,tauri://localhost}
+      # 与主栈同口径默认关种子：空系统走 /setup 向导建首个管理员（否则恒 initialized:true）
+      BBW_SEED_DEMO: ${BBW_SEED_DEMO:-0}
     ports:
       - "127.0.0.1:8080:8080"   # ★仅回环发布：frp launcher 之外无人可达（路径 A 入口）
     cap_drop: [ALL]

@@ -2,12 +2,13 @@
  * 设置 · 通用（D01 §4.2）：
  * - 主题三态（浅色/深色/跟随系统）——全设置页族中本阶段唯一真实生效的设置，
  *   经 shared/store/theme 持久化（UI 偏好，localStorage bbw-theme）
- * - 语言/启动项为界面骨架（标注后续接入）
+ * - 语言三态真实生效（E12：zh-CN/en/system——切换即时生效，antd 内置文案联动）
  */
 
 import { Check, Languages, Monitor, Moon, Sun } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useThemeStore, type ThemeMode } from '../../../shared/store/theme';
+import { useI18nStore } from '../../../shared/i18n';
 
 /** 主题三选卡片（带迷你预览：左导航条 + 内容块示意） */
 function ThemeCard({ mode, label, icon: Icon, active, onSelect }: { mode: ThemeMode; label: string; icon: LucideIcon; active: boolean; onSelect: () => void }) {
@@ -29,6 +30,9 @@ function ThemeCard({ mode, label, icon: Icon, active, onSelect }: { mode: ThemeM
 }
 
 export function GeneralSettingsPage() {
+  // E12：语言偏好（三态；切换即时生效——设置页与导航文案走 t()，antd 走 ConfigProvider）
+  const pref = useI18nStore((s) => s.pref);
+  const setPref = useI18nStore((s) => s.setPref);
   const mode = useThemeStore((s) => s.mode);
   const resolved = useThemeStore((s) => s.resolved);
   const setMode = useThemeStore((s) => s.setMode);
@@ -51,14 +55,23 @@ export function GeneralSettingsPage() {
         </div>
       </div>
 
-      <div className="settings-card settings-card--static">
+      <div className="settings-card">
         <div className="settings-card__head">
           <div className="settings-card__name">
             <Languages size={14} /> 语言
           </div>
-          <div className="settings-card__value">简体中文</div>
+          <select
+            className="gm-select"
+            value={pref}
+            onChange={(e) => setPref(e.target.value as 'zh-CN' | 'en' | 'system')}
+            data-testid="locale-select"
+          >
+            <option value="zh-CN">简体中文</option>
+            <option value="en">English</option>
+            <option value="system">跟随系统 / System</option>
+          </select>
         </div>
-        <div className="settings-card__desc">多语言支持在国际化阶段接入（shared/i18n，D01 §12.1）</div>
+        <div className="settings-card__desc">切换即时生效（界面文案 + antd 组件内置文案）；英文覆盖范围渐入，未覆盖处回退中文</div>
       </div>
     </div>
   );

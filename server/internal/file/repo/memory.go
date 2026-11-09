@@ -72,8 +72,8 @@ func (m *Memory) SoftDelete(ctx context.Context, id int64, at time.Time) error {
 	return nil
 }
 
-// MarkSent source→message + conv_id 回填
-func (m *Memory) MarkSent(ctx context.Context, id int64, convID int64) error {
+// MarkSent source→message + conv_id/msg_seq 回填
+func (m *Memory) MarkSent(_ context.Context, id int64, convID int64, msgSeq int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	f, ok := m.rows[id]
@@ -82,7 +82,21 @@ func (m *Memory) MarkSent(ctx context.Context, id int64, convID int64) error {
 	}
 	f.Source = SourceMessage
 	f.ConvID = convID
+	f.MsgSeq = msgSeq
 	m.rows[id] = f
+	return nil
+}
+
+// MarkRecalledByMsg 锚点消息撤回联动（OQ-B24；无匹配行=no-op 幂等）
+func (m *Memory) MarkRecalledByMsg(_ context.Context, convID int64, msgSeq int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, f := range m.rows {
+		if f.ConvID == convID && f.MsgSeq == msgSeq {
+			f.Recalled = true
+			m.rows[id] = f
+		}
+	}
 	return nil
 }
 

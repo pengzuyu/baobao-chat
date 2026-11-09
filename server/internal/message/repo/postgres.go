@@ -348,6 +348,14 @@ func (p *Postgres) SetUserConvState(ctx context.Context, userID, convID int64, s
 	return err
 }
 
+// CountPinned 用户当前置顶数（OQ-B06 上限校验）
+func (p *Postgres) CountPinned(ctx context.Context, userID int64) (int, error) {
+	var n int
+	err := p.pool.QueryRow(ctx,
+		`SELECT count(*) FROM user_conv_state WHERE user_id=$1 AND pinned`, userID).Scan(&n)
+	return n, err
+}
+
 // ListMessagesLatest 最新 N 条（order=-seq 语义）：倒序取 N 再升序返回（D03 API-IM-04）
 func (p *Postgres) ListMessagesLatest(ctx context.Context, convID int64, limit int) ([]messageapi.Message, error) {
 	if limit <= 0 || limit > 100 {

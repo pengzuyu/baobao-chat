@@ -13,9 +13,8 @@
 //	   全体在群成员（操作者除外）kind=announcement。
 //	④ agent_done：宿主上报 REST（ReportAgentTask，14 篇 §3.3 OQ-C32 定稿）——run 终态
 //	   以用户 OBO token POST /notify/agent-tasks 上报；本服务落卡（kind=agent_done）+
-//	   发布 TopicAgentTaskDone（gateway 跨端推 agent.task.completed；bot Outgoing 订阅
-//	   20 篇 §4.3③ 阶段三接入，接口位已留）。cancelled 不落卡（用户主动取消无提醒价值），
-//	   仅推 WS 事件供其它端刷新 run 面板。
+//	   发布 TopicAgentTaskDone（gateway 跨端推 agent.task.completed）。cancelled 不落卡
+//	   （用户主动取消无提醒价值），仅推 WS 事件供其它端刷新 run 面板。
 //
 // 聚合（生成侧）：同 (user, kind, conv_id) 10s 窗口内未读行 → 不新增行，原行 count+1、
 // digest 更新（"×N"渲染）；窗口由 Options.Now 注入时钟判定（可测）。
@@ -326,4 +325,43 @@ func (s *Service) ReportAgentTask(ctx context.Context, userID int64, p messageap
 		})
 		return nil
 	})
+}
+
+// ── 用户通知偏好（0030 / D12：设置页服务端驱动）──
+
+// GetNotifyPref 偏好读取（无行归一默认：双开+off；tenant 归属校验）
+func (s *Service) GetNotifyPref(ctx context.Context, tenantID, userID int64) (*messageapi.NotifyPrefDTO, error) {
+	if s.opts.NotifyPrefs == nil {
+		return nil, errx.New(errx.CodeInternal, "通知偏好存储未装配")
+	}
+	p, err := s.opts.NotifyPrefs.GetNotifyPref(ctx, tenantID, userID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	dto := &messageapi.NotifyPrefDTO{MsgNotify: true, MentionNotify: true, DndRange: "off"}
+	if p != nil {
+		dto.MsgNotify = p.MsgNotify
+		dto.MentionNotify = p.MentionNotify
+		dto.DndRange = p.DndRange
+	}
+	return dto, nil
+}
+
+// SetNotifyPref 偏好 upsert（dnd 合法集校验）
+func (s *Service) SetNotifyPref(ctx context.Context, tenantID, userID int64, dto messageapi.NotifyPrefDTO) (*messageapi.NotifyPrefDTO, error) {
+	if s.opts.NotifyPrefs == nil {
+		return nil, errx.New(errx.CodeInternal, "通知偏好存储未装配")
+	}
+	switch dto.DndRange {
+	case "off", "work-night", "all-day":
+	default:
+		return nil, errx.New(errx.CodeBadRequest, "dnd_range 合法值：off|work-night|all-day")
+	}
+	if err := s.opts.NotifyPrefs.SetNotifyPref(ctx, messagerepo.NotifyPref{
+		UserID: userID, TenantID: tenantID,
+		MsgNotify: dto.MsgNotify, MentionNotify: dto.MentionNotify, DndRange: dto.DndRange,
+	}); err != nil {
+		return nil, errx.From(err)
+	}
+	return s.GetNotifyPref(ctx, tenantID, userID)
 }

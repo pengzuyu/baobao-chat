@@ -2,10 +2,12 @@
  * /rtc 最近通话页（D04 PRTC-06 阶段一务实版）：
  * 阶段一不建通话记录 REST（GET /api/v1/calls 登记）——"最近通话"由消息流内
  * call_card 过滤派生（拉会话列表 → 各会话最新消息页 → 过滤 call_card 归并倒序）。
+ * 「隐藏」=仅本端视图删除（OQ-B18 拍板：服务端按租户审计策略保留，文案明示）。
  */
 
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { PhoneCall } from 'lucide-react';
+import { EyeOff, PhoneCall } from 'lucide-react';
 import { http } from '../../../shared/api/http';
 import { emit } from '../../../shared/bus';
 import { Avatar } from '../../../shared/ui/Avatar';
@@ -32,6 +34,26 @@ interface RawMessage {
   type: string;
   ts: number;
   body: CallCardBody;
+}
+
+/** 本端隐藏的通话记录 msgId 集（OQ-B18：仅本地视图删除，不触服务端） */
+const HIDDEN_CALLS_KEY = 'bbw.rtc.hidden-calls';
+
+function loadHidden(): Set<string> {
+  try {
+    const raw = localStorage.getItem(HIDDEN_CALLS_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveHidden(ids: Set<string>): void {
+  try {
+    localStorage.setItem(HIDDEN_CALLS_KEY, JSON.stringify([...ids]));
+  } catch {
+    // 私隐模式/配额：静默（下次会话恢复显示）
+  }
 }
 
 /** 拉最近通话：convs → 每会话最新 50 条过滤 call_card（演示规模直拉；正式版换 API-RTC-02） */
@@ -65,7 +87,20 @@ export function RecentCallsPage() {
     queryFn: () => fetchRecentCalls(myUid),
     enabled: !USE_MOCK && !!myUid,
   });
-  const rows = data ?? [];
+  // 本端隐藏集（OQ-B18）：仅视图删除——服务端按租户审计策略保留记录
+  const [hidden, setHidden] = useState<Set<string>>(() => loadHidden());
+  useEffect(() => {
+    saveHidden(hidden);
+  }, [hidden]);
+  const rows = (data ?? []).filter((r) => !hidden.has(r.msgId));
+
+  const hideRow = (msgId: string) => {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      next.add(msgId);
+      return next;
+    });
+  };
 
   return (
     <div className="rtc-recent-page">
@@ -108,6 +143,15 @@ export function RecentCallsPage() {
                   onRecall={(video) => emit('im:invoke-call', { convId: r.convId, video })}
                 />
               </div>
+              <button
+                type="button"
+                className="rtc-recent-page__hide icon-btn"
+                title="隐藏本条（仅本端生效，服务端按审计策略保留通话记录）"
+                aria-label="隐藏本条通话记录"
+                onClick={() => hideRow(r.msgId)}
+              >
+                <EyeOff size={14} />
+              </button>
             </div>
           ))
         )}
@@ -115,7 +159,8 @@ export function RecentCallsPage() {
 
       <footer className="rtc-recent-page__foot">
         <PhoneCall size={14} />
-        通话记录来自会话消息流（call_card）；服务端通话态为内存注册表，重启后以消息流为准
+        通话记录来自会话消息流（call_card）；服务端通话态为内存注册表，重启后以消息流为准。
+        「隐藏」仅从本端列表移除，服务端按租户审计策略保留通话记录（OQ-B18）
       </footer>
     </div>
   );

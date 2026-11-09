@@ -82,3 +82,51 @@ func TestUserDeptAttachAndList(t *testing.T) {
 		t.Fatal("无挂载=空集")
 	}
 }
+
+// TestUserDeptDetachAndDeptUsers D10：卸挂 primary 重选/成员列表
+func TestUserDeptDetachAndDeptUsers(t *testing.T) {
+	m := NewMemory()
+	ctx := context.Background()
+
+	d1, _ := m.CreateDept(ctx, 1, 0, "研发部", 0)
+	d2, _ := m.CreateDept(ctx, 1, 0, "测试部", 0)
+
+	// alice 挂两部门（研发 primary）
+	if err := m.AttachUser(ctx, 1, 10001, d1.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AttachUser(ctx, 1, 10001, d2.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	// bob 仅研发
+	if err := m.AttachUser(ctx, 1, 10002, d1.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// 成员列表：研发=[alice primary, bob primary]
+	rows, err := m.ListDeptUsers(ctx, 1, d1.ID)
+	if err != nil || len(rows) != 2 || !rows[0].IsPrimary || rows[0].UserID != 10001 {
+		t.Fatalf("研发成员不符: %v %+v", err, rows)
+	}
+
+	// 卸 alice 研发（primary）→ 测试部接任 primary
+	if err := m.DetachUser(ctx, 1, 10001, d1.ID); err != nil {
+		t.Fatal(err)
+	}
+	depts, _ := m.ListUserDepts(ctx, 1, 10001)
+	if len(depts) != 1 || depts[0].DeptID != d2.ID || !depts[0].IsPrimary {
+		t.Fatalf("primary 应重选测试部: %+v", depts)
+	}
+	// 卸尽 → 无 primary 残留
+	if err := m.DetachUser(ctx, 1, 10001, d2.ID); err != nil {
+		t.Fatal(err)
+	}
+	depts, _ = m.ListUserDepts(ctx, 1, 10001)
+	if len(depts) != 0 {
+		t.Fatalf("卸尽应空: %+v", depts)
+	}
+	// 幂等：再卸不存在 no-op
+	if err := m.DetachUser(ctx, 1, 10001, d1.ID); err != nil {
+		t.Fatalf("幂等卸挂: %v", err)
+	}
+}

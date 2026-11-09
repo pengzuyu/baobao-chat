@@ -32,10 +32,6 @@ media:
     enabled: true
     maxReplicas: 4
 
-onlyoffice:
-  replicas: 2                          # §3.3：~150 会话（4C8G×2）
-  pdb:
-    enabled: true
 
 # 外部组件容量（§3.3 中档基线，由 Operator/独立 release 落地）：
 #   PG 主从 4C16G：shared_buffers 4G、池 100、读走副本

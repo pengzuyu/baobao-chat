@@ -12,20 +12,21 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { BrainCircuit, CornerDownRight, FolderPlus, Plus, RefreshCw, Search, Upload } from 'lucide-react';
+import { BrainCircuit, CornerDownRight, FolderPlus, Plus, RefreshCw, Search, Upload, ShieldCheck, ListChecks } from 'lucide-react';
 import { formatListTime } from '../../../shared/utils/time';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { fetchChunksAround, fetchDoc, queryKb } from '../api/kb';
-import { useChunks, useCreateDir, useCreateSpace, useIngest, useNodes, useOutline, useReingest, useSpaces } from '../api/hooks';
+import { useChunks, useCreateDir, useCreateSpace, useIngest, useJobs, useNodes, useOutline, useReingest, useSpaces } from '../api/hooks';
 import { uploadFile } from '../../im/api/files';
 import { HighlightText } from '../components/HighlightText';
+import { GrantModal } from '../components/GrantModal';
 import { IngestBadge } from '../components/IngestBadge';
 import type { KbChunk, KbDoc, KbQueryHit, KbSpace } from '../model/types';
 
-/** 空间分组顺序与标题（dept 阶段二——列表透出但标注未接入） */
+/** 空间分组顺序与标题（dept 已可用：v0.1 治理者建+授权管理放行部门/用户，部门树默认授权随 D10 挂人——D5 收口） */
 const GROUPS: Array<{ type: KbSpace['space_type']; label: string }> = [
   { type: 'personal', label: '个人空间' },
   { type: 'dept', label: '部门空间' },
@@ -43,6 +44,7 @@ export function KbPage() {
   const spacesQuery = useSpaces();
   const createSpace = useCreateSpace();
   const [selectedSpace, setSelectedSpace] = useState<string | null>(null);
+  const [grantOpen, setGrantOpen] = useState(false);
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [newSpaceName, setNewSpaceName] = useState('');
   const [newSpaceType, setNewSpaceType] = useState<KbSpace['space_type']>('company');
@@ -67,6 +69,11 @@ export function KbPage() {
   const chunksQuery = useChunks(detailDoc?.id ?? null);
   const outlineQuery = useOutline(detailDoc?.id ?? null);
   const reingest = useReingest();
+  // 摄入任务面板（D6：useJobs 启用——空间级 processing/failed 两流；面板开才拉）
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const processingQ = useJobs(selectedSpace, 'processing');
+  const failedQ = useJobs(selectedSpace, 'failed');
+  const jobCount = (processingQ.data?.length ?? 0) + (failedQ.data?.length ?? 0);
   const detailBodyRef = useRef<HTMLDivElement>(null);
   const connStatus = useConnectionStore((s) => s.status);
 
@@ -168,9 +175,14 @@ export function KbPage() {
         <aside className="kb-spaces" data-testid="kb-spaces">
           <div className="kb-spaces__head">
             <span>空间</span>
-            <button type="button" className="kb-link-btn" onClick={() => setNewSpaceOpen((v) => !v)} data-testid="kb-new-space-btn">
-              <Plus size={13} /> 新建空间
-            </button>
+            <span className="kb-spaces__ops">
+              <button type="button" className="kb-link-btn" onClick={() => setGrantOpen(true)} data-testid="kb-grant-btn" title="当前空间授权管理">
+                <ShieldCheck size={13} /> 授权
+              </button>
+              <button type="button" className="kb-link-btn" onClick={() => setNewSpaceOpen((v) => !v)} data-testid="kb-new-space-btn">
+                <Plus size={13} /> 新建空间
+              </button>
+            </span>
           </div>
           {newSpaceOpen ? (
             <div className="kb-spaces__create">
@@ -239,6 +251,7 @@ export function KbPage() {
               error={search.error}
               items={search.data?.items ?? []}
               degraded={search.data?.degraded ?? []}
+              filteredHint={search.data?.filtered_hint ?? ''}
               tookMs={search.data?.took_ms ?? 0}
               expanded={expanded}
               onToggleExpand={async (hit) => {
@@ -284,6 +297,9 @@ export function KbPage() {
                         <FolderPlus size={13} /> 新建目录
                       </Button>
                     </div>
+                    <Button variant="secondary" onClick={() => setJobsOpen((v) => !v)} data-testid="kb-jobs-btn" title="摄入任务（进行中/失败可重试）">
+                      <ListChecks size={13} /> 任务{jobCount > 0 ? `（${jobCount}）` : ''}
+                    </Button>
                     <Button onClick={() => setUploadOpen(true)} data-testid="kb-upload-btn">
                       <Upload size={13} /> 上传
                     </Button>
@@ -291,6 +307,39 @@ export function KbPage() {
                 ) : null}
               </div>
               {dirError ? <div className="kb-inline-error" data-testid="kb-dir-error">{dirError}</div> : null}
+
+              {jobsOpen ? (
+                <div className="kb-jobs" data-testid="kb-jobs-panel">
+                  <div className="kb-jobs__head">摄入任务（同步返回即终态；失败可重试——D07 摄入状态机异步化随阶段二）</div>
+                  {processingQ.isPending || failedQ.isPending ? (
+                    <div className="kb-jobs__row">加载中…</div>
+                  ) : jobCount === 0 ? (
+                    <div className="kb-jobs__row kb-jobs__row--empty">暂无进行中/失败任务</div>
+                  ) : (
+                    <>
+                      {(processingQ.data ?? []).map((d) => (
+                        <div key={d.id} className="kb-jobs__row">
+                          <IngestBadge status={d.status} version={d.version} />
+                          <span className="kb-jobs__title">{d.title}</span>
+                          <span className="kb-jobs__meta">{formatListTime(d.updated_at)}</span>
+                        </div>
+                      ))}
+                      {(failedQ.data ?? []).map((d) => (
+                        <div key={d.id} className="kb-jobs__row kb-jobs__row--failed">
+                          <IngestBadge status={d.status} version={d.version} />
+                          <span className="kb-jobs__title">{d.title}</span>
+                          <span className="kb-jobs__meta" title={d.error_msg ?? ''}>
+                            {d.error_msg ? d.error_msg.slice(0, 60) : '摄入失败'}
+                          </span>
+                          <Button variant="secondary" onClick={() => reingest.mutate(d.id, { onSuccess: () => { void processingQ.refetch(); void failedQ.refetch(); } })} loading={reingest.isPending && reingest.variables === d.id}>
+                            重试
+                          </Button>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              ) : null}
 
               {docsState !== 'ok' ? (
                 <StateView
@@ -362,6 +411,14 @@ export function KbPage() {
           bodyRef={detailBodyRef}
         />
       ) : null}
+
+      {grantOpen && selectedSpace ? (
+        <GrantModal
+          spaceId={selectedSpace}
+          spaceName={spaces.find((s) => s.id === selectedSpace)?.name ?? selectedSpace}
+          onClose={() => setGrantOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -374,6 +431,7 @@ function SearchPanel(props: {
   error: unknown;
   items: KbQueryHit[];
   degraded: string[];
+  filteredHint: string;
   tookMs: number;
   expanded: Record<string, boolean>;
   aroundMap: Record<string, KbChunk[]>;
@@ -382,7 +440,7 @@ function SearchPanel(props: {
   onRetry: () => void;
   onExit: () => void;
 }) {
-  const { keyword, items, degraded, tookMs } = props;
+  const { keyword, items, degraded, tookMs, filteredHint } = props;
   const state: ViewState | 'ok' = props.isPending
     ? 'loading'
     : props.isError
@@ -403,6 +461,9 @@ function SearchPanel(props: {
       {degraded.includes('vector') ? (
         <div className="kb-degraded-bar">语义检索暂不可用，已切换关键词模式</div>
       ) : null}
+        {filteredHint ? (
+          <div className="kb-filtered-hint" data-testid="kb-filtered-hint">⚠ {filteredHint}（部分空间因策略不可见，结果可能不完整）</div>
+        ) : null}
       {state !== 'ok' ? (
         <StateView
           state={state}

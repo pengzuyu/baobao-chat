@@ -26,15 +26,14 @@ serviceAccount:
 
 # ---------------------------------------------------------------------------
 # 模块启停（compose 侧等价物 = profiles + BBW_APP_MODULES，§3.4 映射表）
-#   auth/org/message 不可关闭；media/docs/mail 为 infra 开关（对应 compose
-#   media/docs/mail profile），控制 media / onlyoffice 组件是否渲染
+#   auth/org/message 不可关闭；media/mail 为 infra 开关（对应 compose
+#   media/mail profile），控制 media 组件是否渲染
 # ---------------------------------------------------------------------------
 modules:
   auth: true
   org: true
   message: true
   file: true
-  doc: true
   kb: true
   eco: true
   admin: true
@@ -42,7 +41,6 @@ modules:
   notify: true
   aigw: true
   media: true          # ↔ compose media profile（deployment-media）
-  docs: true           # ↔ compose docs profile（deployment-onlyoffice）
   mail: false          # ↔ compose mail profile（22 篇；独立组件组，本 chart 未含模板）
 
 # ---------------------------------------------------------------------------
@@ -51,7 +49,6 @@ modules:
 features:                              # compose: BBW_FEATURE_*
   agent: true
   kb: true
-  doc: true
   rtc: true
   ai: true
   mail: false
@@ -63,6 +60,8 @@ config:
   logLevel: info                       # compose: BBW_LOG_LEVEL
   updateChannel: stable                # compose: BBW_UPDATE_CHANNEL
   otelEndpoint: http://otel-collector.observability.svc.cluster.local:4318   # compose: BBW_OTEL_EXPORTER_OTLP_ENDPOINT
+  livekitUrl: ""                       # compose: BBW_LIVEKIT_URL（空=按 global.domain 拼 wss://<域名>/rtc，D17）
+  livekitIce: ""                       # compose: BBW_LIVEKIT_ICE（JSON；空=服务端默认）
 
 # ---------------------------------------------------------------------------
 # 外部组件（§3.2：PG=CNPG Operator/StatefulSet，Redis=哨兵 StatefulSet，
@@ -91,8 +90,8 @@ secrets:
   s3SecretKey: CHANGE_ME               # compose: BBW_S3_SECRET_KEY
   aiUpstreamApiKey: ""                 # compose: BBW_AI_UPSTREAM_API_KEY
   jwtSecret: bbw_jwt_change_me_0123456789abcdef0123456789abcdef   # compose: BBW_JWT_SECRET ★上线必改（≥32 字节；空回退开发默认密钥）
-  onlyofficeJwtSecret: CHANGE_ME       # compose: ONLYOFFICE_JWT_SECRET
-  turnSecret: CHANGE_ME                # compose: BBW_TURN_SECRET
+  livekitApiKey: bbwdev                # compose: BBW_LIVEKIT_API_KEY（签发/验签一致才进房；密钥勿含冒号）
+  livekitApiSecret: bbw-livekit-secret-change-me   # compose: BBW_LIVEKIT_API_SECRET ★上线必改
 
 # ---------------------------------------------------------------------------
 # app：模块化单体 bbw-server（D02 §2；--enable 由 modules.* 推导）
@@ -158,14 +157,18 @@ gateway:
     enabled: true
 
 # ---------------------------------------------------------------------------
-# media：mediasoup SFU（§3.2：hostNetwork + UDP 40000-50100 独占 + 节点污点隔离）
+# media：LiveKit 统一媒体面（D17：1v1/群一致走 SFU；§3.2：hostNetwork +
+# UDP 40000-50100 独占 + 节点污点隔离。coturn 退役——TURN 由 livekit 内嵌）
 # ---------------------------------------------------------------------------
 media:
   replicas: 1
-  signalingPort: 8082                  # compose: 8082
+  image: livekit/livekit-server:v1.8.4   # compose: BBW_LIVEKIT_IMAGE（内网 Harbor 可覆盖）
+  signalingPort: 7880                  # compose: LIVEKIT_PORT（tcp 信令；wss 经 Ingress /rtc/）
+  turnUdpPort: 3478                    # 内嵌 TURN（D17 §3.1；TLS 5349 视证书情况后定）
   rtcMinPort: 40000                    # compose: BBW_MEDIA_RTC_MIN_PORT
   rtcMaxPort: 50100                    # compose: BBW_MEDIA_RTC_MAX_PORT
   hostNetwork: true                    # UDP 段直接绑宿主网络（§3.2 硬约束）
+  webhookPath: /api/v1/rtc/webhook     # participant_joined/left/room_finished → app（D17）
   resources:
     requests:
       cpu: "2"
@@ -187,31 +190,6 @@ media:
   tolerations: []                      # 例：[{key: bbw/media, operator: Exists, effect: NoSchedule}]
 
 # ---------------------------------------------------------------------------
-# onlyoffice：Document Server + WOPI（§3.2：与 doc 同机房、会话粘滞）
-# ---------------------------------------------------------------------------
-onlyoffice:
-  replicas: 1
-  port: 80
-  sessionAffinity: ClientIP            # 会话粘滞（§3.2 约束）
-  resources:                           # §3.3：~50 并发会话 4C8G×1
-    requests:
-      cpu: "2"
-      memory: 4Gi
-    limits:
-      cpu: "4"
-      memory: 8Gi
-  autoscaling:
-    enabled: false                     # §3.2：并发编辑会话数
-    minReplicas: 1
-    maxReplicas: 2
-    sessionsMetric:
-      name: bbw_wopi_sessions
-      averageValue: "40"
-  pdb:
-    enabled: false
-    minAvailable: 1
-
-# ---------------------------------------------------------------------------
 # Ingress / TLS（15 篇 §3.1 企业 CA；16 篇 §4.7 双证书轮换）
 # ---------------------------------------------------------------------------
 ingress:
@@ -219,7 +197,6 @@ ingress:
   className: nginx
   hosts:
     api: bbw.example.internal          # 主入口：/api /ws /rtc /update
-    office: office.bbw.example.internal  # OnlyOffice 编辑器（docs 模块）
   tls:
     enabled: true
     secretName: bbw-tls                # 证书由内部 CA 签发后注入（或 cert-manager）

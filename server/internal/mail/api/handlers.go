@@ -15,8 +15,8 @@ import (
 	"github.com/baobaowork/server/internal/platform/httpx"
 )
 
-// RegisterRoutes 用户面路由（22 §6.1；阶段一裁剪：reply/forward-im/drafts/
-// cancel-send 随共享邮箱与 mail_card 阶段二）
+// RegisterRoutes 用户面路由（22 §6.1；reply/forward-im/cancel-send 随 mail_card
+// 阶段二；drafts D16 已接）
 func RegisterRoutes(mux *http.ServeMux, authed func(http.HandlerFunc) http.Handler, svc *mailservice.Service) {
 	mux.Handle("GET /api/v1/mail/summary", authed(handleSummary(svc)))
 	mux.Handle("GET /api/v1/mail/messages", authed(handleListMessages(svc)))
@@ -35,6 +35,9 @@ func RegisterRoutes(mux *http.ServeMux, authed func(http.HandlerFunc) http.Handl
 	mux.Handle("GET /api/v1/mail/shared", authed(handleSharedList(svc)))
 	mux.Handle("GET /api/v1/mail/shared/{mid}/messages", authed(handleSharedMessages(svc)))
 	mux.Handle("POST /api/v1/mail/shared/{mid}/messages", authed(handleSendAsShared(svc)))
+	// 草稿（D16/22 §3.5：存续写+发送清理）
+	mux.Handle("POST /api/v1/mail/drafts", authed(handleSaveDraft(svc)))
+	mux.Handle("DELETE /api/v1/mail/drafts/{id}", authed(handleDiscardDraft(svc)))
 }
 
 // RegisterAdminRoutes 治理面路由（PAD-16 最小集：域/邮箱治理；
@@ -337,5 +340,31 @@ func handleAdminCreateShared(svc *mailservice.Service) http.HandlerFunc {
 		}
 		mb, err := svc.AdminCreateSharedMailbox(r.Context(), tenantOf(r), body.LocalPart, body.GovernDept)
 		respond(w, r, mb, err)
+	}
+}
+
+// handleSaveDraft POST /mail/drafts（D16：{to,cc,subject,body,attachments?,draft_id?}→{id}）
+func handleSaveDraft(svc *mailservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			mailservice.SendReq
+			DraftID int64 `json:"draft_id,string"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		id, err := svc.SaveDraft(r.Context(), tenantOf(r), actorOf(r), req.SendReq, req.DraftID)
+		respond(w, r, map[string]string{"id": strconv.FormatInt(id, 10)}, err)
+	}
+}
+
+// handleDiscardDraft DELETE /mail/drafts/{id}（发送成功后清理；幂等）
+func handleDiscardDraft(svc *mailservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := pathID(w, r, "id")
+		if !ok {
+			return
+		}
+		respond(w, r, map[string]bool{"ok": true}, svc.DiscardDraft(r.Context(), tenantOf(r), actorOf(r), id))
 	}
 }

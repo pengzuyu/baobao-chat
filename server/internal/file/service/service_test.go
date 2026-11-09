@@ -316,7 +316,7 @@ func TestCheckSendableAndMarkSent(t *testing.T) {
 		t.Fatalf("不存在应拒 4005, got %v", err)
 	}
 	// MarkSent 后 source=message：非 owner 亦可发（转发复用路径）
-	if err := svc.MarkSent(ctx, fid, 1); err != nil {
+	if err := svc.MarkSent(ctx, fid, 1, 5); err != nil {
 		t.Fatalf("MarkSent: %v", err)
 	}
 	if err := svc.CheckSendable(ctx, 10002, fid); err != nil {
@@ -334,12 +334,44 @@ func TestCheckSendableAndMarkSent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.MarkSent(ctx, mustI64(t, r2.ID), 7); err != nil {
+	if err := svc.MarkSent(ctx, mustI64(t, r2.ID), 7, 42); err != nil {
 		t.Fatal(err)
 	}
 	items, err := svc.repo.ListByConv(ctx, 1, 7)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("ListByConv 不符: %v %+v", err, items)
+	}
+	if items[0].MsgSeq != 42 || items[0].Recalled {
+		t.Fatalf("锚点回填不符: %+v", items[0])
+	}
+}
+
+// TestMsgRecalledAnchor OQ-B24：锚点消息撤回——文件保留、recalled 置灰、下载不受限
+func TestMsgRecalledAnchor(t *testing.T) {
+	svc, _, _ := newSvc(t, nil)
+	ctx := context.Background()
+	res, err := svc.Upload(ctx, 1, 10001, "r.txt", "text/plain", 0, strings.NewReader("r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fid := mustI64(t, res.ID)
+	if err := svc.MarkSent(ctx, fid, 3, 11); err != nil {
+		t.Fatal(err)
+	}
+	// 撤回联动（main 订阅 msg.recalled → OnMsgRecalled）
+	if err := svc.OnMsgRecalled(ctx, 3, 11); err != nil {
+		t.Fatalf("OnMsgRecalled: %v", err)
+	}
+	items, err := svc.repo.ListByConv(ctx, 1, 3)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("撤回后文件应保留: %v %+v", err, items)
+	}
+	if !items[0].Recalled || items[0].MsgSeq != 11 {
+		t.Fatalf("recalled 标记不符: %+v", items[0])
+	}
+	// 无匹配 (conv,seq) 幂等 no-op
+	if err := svc.OnMsgRecalled(ctx, 3, 999); err != nil {
+		t.Fatalf("无匹配应 no-op: %v", err)
 	}
 }
 

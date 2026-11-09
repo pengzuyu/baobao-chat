@@ -27,15 +27,15 @@ import (
 	adminapi "github.com/baobaowork/server/internal/admin/api"
 	adminrepo "github.com/baobaowork/server/internal/admin/repo"
 	adminservice "github.com/baobaowork/server/internal/admin/service"
+	agentbackup "github.com/baobaowork/server/internal/agentbackup"
+	agentbackupapi "github.com/baobaowork/server/internal/agentbackup/api"
+	agentbackuprepo "github.com/baobaowork/server/internal/agentbackup/repo"
+	agentbackupservice "github.com/baobaowork/server/internal/agentbackup/service"
 	"github.com/baobaowork/server/internal/aigw"
 	"github.com/baobaowork/server/internal/auth"
 	"github.com/baobaowork/server/internal/auth/api"
 	"github.com/baobaowork/server/internal/auth/repo"
 	"github.com/baobaowork/server/internal/auth/service"
-	"github.com/baobaowork/server/internal/doc"
-	docapi "github.com/baobaowork/server/internal/doc/api"
-	docrepo "github.com/baobaowork/server/internal/doc/repo"
-	docservice "github.com/baobaowork/server/internal/doc/service"
 	"github.com/baobaowork/server/internal/eco"
 	ecoapi "github.com/baobaowork/server/internal/eco/api"
 	ecorepo "github.com/baobaowork/server/internal/eco/repo"
@@ -159,8 +159,19 @@ func main() {
 		return roleStore.PermissionPointsOf(ctx, tenantID, userID)
 	}
 	orgMod := org.NewModule(orgRepo)
+	// agentKillOn 平台总闸（D9）：adminSvc 装配于后段——var 前置声明，auth/aigw
+	// 两处闭包捕获引用，adminSvc 就绪后回填即双点生效（OBO 签发 + 网关每请求）
+	var agentKillOn func() bool
 	authMod := auth.NewModule(orgMod.API(), signer, cfg, tokenRepo, deviceRepo, attemptRepo,
-		func(o *authservice.Options) { o.ScopesOf = scopesOf })
+		func(o *authservice.Options) {
+			o.ScopesOf = scopesOf
+			// OBO 签发总闸（D9）：killswitch on → 1013 拒签（闭包捕获 var，adminSvc 装配后回填）
+			o.AgentKillOn = func() bool { return agentKillOn != nil && agentKillOn() }
+			// 改密落库（D11：orgRepo 直调——users 只读通道外的写路径经闭包）
+			o.UserSetPassword = func(ctx context.Context, tenantID, userID int64, hash string) error {
+				return orgRepo.SetPassword(ctx, tenantID, userID, hash)
+			}
+		})
 
 	// 文件域（D06 阶段一+阶段二 server 侧）：本地磁盘存储 + 一次性票据下载 +
 	// 分片上传会话（check 秒传/uploads/PATCH 分片/complete）+ 分享外链；
@@ -187,6 +198,13 @@ func main() {
 		},
 	}, fileRepo, fileShares, fileTransfers, fileStore)
 	fileSvc := fileMod.API()
+	// OQ-B24：锚点消息撤回联动（文件保留、群文件页签锚点置灰；尽力而为不影响撤回主流程）
+	bus.Subscribe(eventbus.TopicMsgRecalled, func(ctx context.Context, evt eventbus.Event) error {
+		if e, ok := evt.Payload.(messageapi.MsgRecalledEvent); ok {
+			_ = fileSvc.OnMsgRecalled(ctx, e.Message.ConvID, e.Message.Seq)
+		}
+		return nil
+	})
 
 	// 管理域仓储先行（D10 阶段一务实版）：敏感词库热更闭包需在 message 装配前就绪
 	// （词库权威源属 admin 域，message 域 3005 校验经闭包实时读，D02 §4 跨域不引包）
@@ -204,11 +222,28 @@ func main() {
 	} else {
 		stickerStore = stickerrepo.NewMemory()
 	}
+	// Agent 会话云端备份（08 篇 §6.3/OQ-B09：端侧加密零知识，密文 v0.1 本地盘）
+	var agentBackupStore agentbackuprepo.Repo
+	if pgPool != nil {
+		agentBackupStore = agentbackuprepo.NewPostgres(pgPool)
+	} else {
+		agentBackupStore = agentbackuprepo.NewMemory()
+	}
+	agentBackupSvc := agentbackup.NewModule(agentbackupservice.Options{}, agentBackupStore).API()
+
 	stickerSvc := stickerservice.New(stickerservice.Options{
 		FileCheck: fileSvc.CheckSendable, // 上传者 owner 口径与 file 消息一致
 	}, stickerStore)
 
+	// 通知偏好仓储（0030/D12；PG 优先，内存回退）
+	var notifyPrefs messagerepo.NotifyPrefRepo
+	if pgPool != nil {
+		notifyPrefs = messagerepo.NewNotifyPrefPostgres(pgPool)
+	} else {
+		notifyPrefs = messagerepo.NewNotifyPrefMemory()
+	}
 	msgMod := message.NewModule(msgRepo, bus, messageservice.Options{
+		NotifyPrefs: notifyPrefs,
 		// 发送人名称解析：闭包经 org 仓查询（跨模块不引 org 包，D02 §4 依赖规则）
 		NameOf: func(id int64) string {
 			if u, err := orgRepo.GetUser(context.Background(), id); err == nil && u != nil {
@@ -337,6 +372,8 @@ func main() {
 	}
 	mux.Handle("POST /api/v1/auth/obo/token", authed(handleOBO(authAPI)))
 	mux.Handle("POST /api/v1/auth/logout", authed(handleLogout(authAPI)))
+	// 改密（D11：旧密码校验+清首登强制标志）
+	mux.Handle("POST /api/v1/me/password", authed(handleChangePassword(authAPI)))
 	mux.Handle("GET /api/v1/me", authed(handleMe))
 
 	// 表情包（0022 个人集；公共集治理走 /admin/stickers/*）
@@ -345,6 +382,13 @@ func main() {
 	mux.Handle("POST /api/v1/stickers/items", authed(handleStickerAddItem(stickerSvc, false)))
 	mux.Handle("DELETE /api/v1/stickers/items/{id}", authed(handleStickerRemoveItem(stickerSvc, false)))
 	mux.Handle("DELETE /api/v1/stickers/sets/{id}", authed(handleStickerRemoveSet(stickerSvc, false)))
+
+	// Agent 会话云端备份（08 篇 §6.3；blob 下载免鉴权——票据一次性 120s，密文零知识）
+	mux.Handle("POST /api/v1/agent/sessions/backups", authed(handleAgentBackupCreate(agentBackupSvc)))
+	mux.Handle("GET /api/v1/agent/sessions/backups", authed(handleAgentBackupList(agentBackupSvc)))
+	mux.Handle("POST /api/v1/agent/sessions/backups/{id}/restore-ticket", authed(handleAgentBackupTicket(agentBackupSvc)))
+	mux.Handle("DELETE /api/v1/agent/sessions/backups/{id}", authed(handleAgentBackupDelete(agentBackupSvc)))
+	mux.HandleFunc("GET /api/v1/agent/sessions/backups/blob/{ticket}", handleAgentBackupBlob(agentBackupSvc))
 
 	// 消息 REST（04 篇 §6.1 摘要：会话列表 + 历史拉取；其余走 WS）
 	mux.Handle("GET /api/v1/convs", authed(handleListConvs(msgMod.API())))
@@ -360,7 +404,6 @@ func main() {
 	mux.Handle("PATCH /api/v1/convs/{id}/state", authed(handleConvState(msgMod.API())))
 	// 增量同步（API-IM-01：登录/重连补投）
 	mux.Handle("GET /api/v1/sync", authed(handleSync(msgMod.API())))
-
 	// rtc 媒体面 REST（D17 §3：config 下发 + 进房凭证；webhook 为 livekit 回调
 	// ——公开路由，Authorization JWT 验签在 handler 内做（与用户 JWT 体系无关））
 	mux.Handle("GET /api/v1/rtc/config", authed(handleRtcConfig(rtcMod.API())))
@@ -382,6 +425,9 @@ func main() {
 	mux.Handle("GET /api/v1/notifications/unread_count", authed(handleUnreadNotificationCount(msgMod.API())))
 	// Agent 任务终态上报（14 篇 §3.3 OQ-C32：宿主 OBO token 上报 → 落卡+跨端推送）
 	mux.Handle("POST /api/v1/notify/agent-tasks", authed(handleReportAgentTask(msgMod.API())))
+	// 用户通知偏好（D12：设置页服务端驱动）
+	mux.Handle("GET /api/v1/me/notify-pref", authed(handleNotifyPrefGet(msgMod.API())))
+	mux.Handle("PATCH /api/v1/me/notify-pref", authed(handleNotifyPrefSet(msgMod.API())))
 
 	// 文件 REST（D06 阶段一+阶段二 server 侧：multipart 直传/一次性票据下载/
 	// 我的文件/软删 + check 秒传/分片会话/complete + 分享外链）
@@ -410,7 +456,7 @@ func main() {
 	// AI 网关（docs/19 §6：OpenAI 兼容入口；独立鉴权链——JWT/OBO/开发令牌，不走 /api/v1 authed）
 	aigwMod := aigw.NewModule(pgPool, func(token string) (*authjwt.Claims, error) {
 		return authAPI.Verify(context.Background(), token)
-	})
+	}, func() bool { return agentKillOn != nil && agentKillOn() })
 	mux.HandleFunc("POST /v1/chat/completions", aigwMod.Gateway.HandleChat)
 	mux.HandleFunc("POST /v1/embeddings", aigwMod.Gateway.HandleEmbeddings)
 
@@ -446,9 +492,22 @@ func main() {
 	}
 	// ACL 查询闭包（aclSvc 装配于后段——前置函数变量+运行期回填，mailAPI 同款）
 	aclResolve := func(ctx context.Context, spaceID, userID int64) int { return 0 }
+	kbACLGrant := func(ctx context.Context, spaceID int64, gt int, target int64, perm int, grantedBy int64, expMs int64) (int64, int64, error) {
+		return 0, 0, errx.New(errx.CodeInternal, "授权管理未装配")
+	}
+	kbACLList := func(ctx context.Context, spaceID int64) ([]kbservice.ACLGrantRow, error) {
+		return nil, errx.New(errx.CodeInternal, "授权管理未装配")
+	}
+	kbACLRevoke := func(ctx context.Context, spaceID, grantID int64) error {
+		return errx.New(errx.CodeInternal, "授权管理未装配")
+	}
 	kbMod := kb.NewModule(kbservice.Options{
-		ACLPerm:  aclResolve,
-		Embedder: kbEmbed,
+		ACLPerm: aclResolve,
+		// 授权管理三操作（治理者入口 /kb/spaces/{id}/grants；aclSvc 装配于后段回填）
+		ACLGrant:      kbACLGrant,
+		ACLListGrants: kbACLList,
+		ACLRevoke:     kbACLRevoke,
+		Embedder:      kbEmbed,
 		// 文件来源摄入：经 file 域票据通道取内容（IssueTicket 校验 owner/成员 →
 		// Download 一次性票据回放流；跨模块不引 file 包，D02 §4 依赖规则）
 		OpenFile: func(ctx context.Context, tenantID, userID, fileID int64) (kbservice.FileSource, error) {
@@ -473,31 +532,6 @@ func main() {
 	}, kbRepo)
 	kbSvc := kbMod.API()
 
-	// 文档中心域（D05 阶段一务实版）：纯 markdown 原生文档（无 WOPI/OnlyOffice），
-	// doc_file/doc_version 两表；v0.1 全 owner 私有（scope 恒 personal，ACL 阶段二）
-	var docRepo docrepo.Repo
-	if pgPool != nil {
-		docRepo = docrepo.NewPostgres(pgPool)
-	} else {
-		docRepo = docrepo.NewMemory()
-	}
-	docMod := doc.NewModule(docservice.Options{}, docRepo)
-	docSvc := docMod.API()
-
-	// 文档中心 REST（D05 §5.1 阶段一务实版 11 项；WOPI session/preview/import/
-	// permissions/templates/move/audit/彻底删除阶段二，登记见 docs 裁剪表）
-	mux.Handle("GET /api/v1/doc/files", authed(handleDocListFiles(docSvc)))
-	mux.Handle("POST /api/v1/doc/files", authed(handleDocCreateFile(docSvc)))
-	mux.Handle("GET /api/v1/doc/files/{id}", authed(handleDocGetFile(docSvc)))
-	mux.Handle("PATCH /api/v1/doc/files/{id}", authed(handleDocRenameFile(docSvc)))
-	mux.Handle("DELETE /api/v1/doc/files/{id}", authed(handleDocTrashFile(docSvc)))
-	mux.Handle("PUT /api/v1/doc/files/{id}/content", authed(handleDocSaveContent(docSvc)))
-	mux.Handle("GET /api/v1/doc/files/{id}/versions", authed(handleDocListVersions(docSvc)))
-	mux.Handle("POST /api/v1/doc/files/{id}/versions/{v}/restore", authed(handleDocRestoreVersion(docSvc)))
-	mux.Handle("GET /api/v1/doc/trash", authed(handleDocListTrash(docSvc)))
-	mux.Handle("POST /api/v1/doc/trash/{id}/restore", authed(handleDocRestoreFromTrash(docSvc)))
-	mux.Handle("POST /api/v1/doc/files/{id}/share", authed(handleDocShare(docSvc)))
-
 	// 知识库 REST（D07 §5.1 阶段一务实版 10 项；摄入同步返回，jobs 为 docs 简版）
 	mux.Handle("GET /api/v1/kb/spaces", authed(handleKBListSpaces(kbSvc)))
 	mux.Handle("POST /api/v1/kb/spaces", authed(handleKBCreateSpace(kbSvc)))
@@ -509,6 +543,10 @@ func main() {
 	mux.Handle("POST /api/v1/kb/docs/{id}/reingest", authed(handleKBReingest(kbSvc)))
 	mux.Handle("POST /api/v1/kb/query", authed(handleKBQuery(kbSvc)))
 	mux.Handle("GET /api/v1/kb/jobs", authed(handleKBJobs(kbSvc)))
+	// 空间授权管理（11 §6 / D07 PKB-06；治理者入口——区别于 /admin/acl 平台管理员）
+	mux.Handle("GET /api/v1/kb/spaces/{id}/grants", authed(handleKBListGrants(kbSvc)))
+	mux.Handle("POST /api/v1/kb/spaces/{id}/grants", authed(handleKBAddGrant(kbSvc)))
+	mux.Handle("DELETE /api/v1/kb/spaces/{id}/grants/{gid}", authed(handleKBRemoveGrant(kbSvc)))
 
 	// mailAPI 前置声明（mcpgw 闭包捕获引用；mail 模块装配于后段，调用在运行期完成）
 	var mailAPI *mailservice.Service
@@ -516,7 +554,7 @@ func main() {
 	// ── MCP 网关供给层（D14 §6 裁决 2026-11-07）：公司域工具包成 MCP server
 	// 暴露，Runtime bbrt-mcp 连接期 initialize+tools/list 发现（mcp.corp.* 命名
 	// 空间），tools/call 携带 OBO 逐请求传播（三层身份：连接/主体/归因）；
-	// kb_query+doc_read（OQ-B26 试点）+ im_send/file_upload（09 篇 §3.1 全量）。
+	// kb_query（OQ-B26 试点）+ im_send/file_upload（09 篇 §3.1 全量）；doc_read 已随 doc 域移除。
 	// 独立鉴权链（Bearer=用户 JWT/OBO，同 aigw 口径），不走 /api/v1 authed ──
 	mcpgwMod := mcpgw.NewModule(mcpgw.Options{
 		Verify: func(_ context.Context, token string) (*authjwt.Claims, error) {
@@ -525,9 +563,6 @@ func main() {
 		// 跨域闭包（D02 §4：mcpgw 不横向依赖 kb/doc 包；数据过滤在域服务=防线三）
 		KBQuery: func(ctx context.Context, tenantID, uid int64, spaceIDs []string, keyword string, topK int) (any, error) {
 			return kbSvc.Query(ctx, tenantID, uid, spaceIDs, keyword, topK)
-		},
-		DocRead: func(ctx context.Context, tenantID, uid, docID int64) (any, error) {
-			return docSvc.GetFile(ctx, tenantID, uid, docID)
 		},
 		// im_send：以发起用户身份走消息主干（成员/敏感词/频率校验在 message 域；
 		// 幂等键 mcp- 前缀与 REST 客户端段隔离）
@@ -641,6 +676,13 @@ func main() {
 	}
 	adminOpts.HashPassword = authservice.HashPassword
 	// KB 空间总览（PAD-10）：kb repo 全量空间（绕过用户可见性）+ 逐空间文档计数
+	// KB 治理写闭包（D8）：archived 即刻生效于检索/浏览（canRead 挡）；del 级联删
+	adminOpts.KBGovern = func(ctx context.Context, tenantID, spaceID int64, archive, del bool) error {
+		if del {
+			return kbSvc.GovernDeleteSpace(ctx, tenantID, spaceID)
+		}
+		return kbSvc.GovernSetSpaceStatus(ctx, tenantID, spaceID, archive)
+	}
 	adminOpts.KBSpaces = func() []adminservice.KBSpaceClosure {
 		spaces, err := kbRepo.ListSpaces(context.Background(), 1)
 		if err != nil {
@@ -656,6 +698,7 @@ func main() {
 			out = append(out, adminservice.KBSpaceClosure{
 				ID: sp.ID, OwnerID: sp.OwnerID, DocCount: n,
 				Quota: sp.QuotaBytes, Used: sp.UsedBytes, Type: sp.SpaceType, Name: sp.Name,
+				Status: sp.Status,
 			})
 		}
 		return out
@@ -710,8 +753,17 @@ func main() {
 		}
 		return msgMod.API().BroadcastNotice(ctx, tenantID, title, digest, ids)
 	}
-	adminMod := admin.NewModule(orgAdmin, orgMod.API(), adminStore, roleStore, noticeStore, adminOpts)
+	// Agent 工具策略存储（D7；PG 优先，内存回退）
+	var toolPolicyStore adminrepo.ToolPolicyRepo
+	if pgPool != nil {
+		toolPolicyStore = adminrepo.NewPostgresToolPolicies(pgPool)
+	} else {
+		toolPolicyStore = adminrepo.NewToolPolicyMemory()
+	}
+	adminMod := admin.NewModule(orgAdmin, orgMod.API(), adminStore, roleStore, noticeStore, adminOpts, toolPolicyStore)
 	adminSvc := adminMod.API()
+	// D9 回填：平台总闸双点（auth OBO 签发 + aigw 每请求）
+	agentKillOn = adminSvc.AgentKillOn
 	// 管理路由守卫（RBAC 阶段二）：auth → tenant → per-route 权限点判定。
 	// 查库口径（有效权限点 = users 行内 ∪ role/user_role 聚合，03 篇 §4）——
 	// 撤权即时生效；缺权限点 2001 CodePermPointDenied（2xxx→403）。
@@ -764,6 +816,9 @@ func main() {
 	mux.Handle("POST /api/v1/admin/users/{id}/disable", requirePerm("admin:user:manage")(handleAdminUserStatus(adminSvc, orgapi.UserStatusDisabled)))
 	mux.Handle("POST /api/v1/admin/users/{id}/enable", requirePerm("admin:user:manage")(handleAdminUserStatus(adminSvc, orgapi.UserStatusActive)))
 	mux.Handle("GET /api/v1/admin/policies/agent", requirePerm("admin:policy:manage")(handleAdminAgentPolicy(adminSvc)))
+	// Agent 工具策略行级编辑（D7：PUT upsert/DELETE 回落默认；热更事件随 Agent 域阶段二）
+	mux.Handle("PUT /api/v1/admin/policies/agent/tools", requirePerm("admin:policy:manage")(handleAdminUpdateToolPolicy(adminSvc)))
+	mux.Handle("DELETE /api/v1/admin/policies/agent/tools/{subject}", requirePerm("admin:policy:manage")(handleAdminDeleteToolPolicy(adminSvc)))
 	mux.Handle("GET /api/v1/admin/policies/sensitive-words", requirePerm("admin:policy:manage")(handleAdminListWords(adminSvc)))
 	mux.Handle("POST /api/v1/admin/policies/sensitive-words", requirePerm("admin:policy:manage")(handleAdminAddWord(adminSvc)))
 	mux.Handle("DELETE /api/v1/admin/policies/sensitive-words/{id}", requirePerm("admin:policy:manage")(handleAdminDeleteWord(adminSvc)))
@@ -821,8 +876,16 @@ func main() {
 	mux.Handle("POST /api/v1/admin/org/depts", requirePerm("admin:org:manage")(handleDeptCreate(orgRepo)))
 	mux.Handle("PATCH /api/v1/admin/org/depts/{id}", requirePerm("admin:org:manage")(handleDeptRename(orgRepo)))
 	mux.Handle("DELETE /api/v1/admin/org/depts/{id}", requirePerm("admin:org:manage")(handleDeptDelete(orgRepo)))
+	// 部门成员管理（D10：user_dept 挂/卸/查——OrgTreePage 成员区）
+	mux.Handle("GET /api/v1/admin/org/depts/{id}/members", requirePerm("admin:org:manage")(handleDeptMembers(orgRepo, orgMod.API())))
+	mux.Handle("POST /api/v1/admin/org/depts/{id}/members", requirePerm("admin:org:manage")(handleDeptAttach(orgRepo)))
+	mux.Handle("DELETE /api/v1/admin/org/depts/{id}/members/{uid}", requirePerm("admin:org:manage")(handleDeptDetach(orgRepo)))
 	// KB 治理（PAD-10；v0.1 只读总览）
 	mux.Handle("GET /api/v1/admin/kb/spaces", requirePerm("admin:kb:govern")(handleAdminKBSpaces(adminSvc)))
+	// KB 治理写操作（D8：停用/启用/删除；OQ-D10 deny 语义的 v0.1 落点=停用+过滤提示）
+	mux.Handle("POST /api/v1/admin/kb/spaces/{id}/archive", requirePerm("admin:kb:govern")(handleAdminKBArchive(adminSvc)))
+	mux.Handle("POST /api/v1/admin/kb/spaces/{id}/activate", requirePerm("admin:kb:govern")(handleAdminKBActivate(adminSvc)))
+	mux.Handle("DELETE /api/v1/admin/kb/spaces/{id}", requirePerm("admin:kb:govern")(handleAdminKBDelete(adminSvc)))
 	// 离职交接（PAD-07）
 	mux.Handle("POST /api/v1/admin/users/{id}/offboard", requirePerm("admin:user:offboard")(handleAdminOffboard(adminSvc)))
 
@@ -830,8 +893,9 @@ func main() {
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
 
 	// ── 资源级 ACL（03 §4.4 第三层）：统一授权模型 + 管理 REST ──
-	// dept/role 展开闭包：role 接 admin RoleRepo（user_role 表）；dept 展
-	// 开随 user_dept 查询接线（org 域暂无按用户查部门——未注入=dept 层跳过，登记）
+	// dept/role 展开闭包：role 接 admin RoleRepo（user_role 表）；dept 展开
+	// 接 orgRepo.ListUserDepts（user_dept 表）——部门授权（grant_type=2）对部门
+	// 成员实时生效（D4/D5：kb dept 空间经授权管理放行，部门树默认授权随 D10 挂人）
 	// mailACL 共享邮箱资源权限（aclSvc 装配于后段——声明前置+装配后回填）
 	var mailACL = func(ctx context.Context, resourceType, resourceID string, userID int64) int { return 0 }
 	var aclRepo orgacl.Repo
@@ -872,6 +936,45 @@ func main() {
 	aclResolve = func(ctx context.Context, spaceID, userID int64) int {
 		return aclSvc.Resolve(ctx, 1, "kb.space", strconv.FormatInt(spaceID, 10), userID)
 	}
+	// kb 空间授权管理回填（resource_acl 统一存储，11 §5；resourceID=spaceID 字符串化）
+	kbResource := func(spaceID int64) string { return strconv.FormatInt(spaceID, 10) }
+	kbACLGrant = func(ctx context.Context, spaceID int64, gt int, target int64, perm int, grantedBy int64, expMs int64) (int64, int64, error) {
+		var expires time.Time
+		if expMs > 0 {
+			expires = time.UnixMilli(expMs)
+		}
+		e, err := aclSvc.Grant(ctx, orgacl.Entry{
+			TenantID: 1, ResourceType: "kb.space", ResourceID: kbResource(spaceID),
+			GrantType: gt, GrantTarget: target, Perm: perm, GrantedBy: grantedBy, ExpiresAt: expires,
+		})
+		if err != nil {
+			return 0, 0, err
+		}
+		return e.ID, e.CreatedAt.UnixMilli(), nil
+	}
+	kbACLList = func(ctx context.Context, spaceID int64) ([]kbservice.ACLGrantRow, error) {
+		entries, err := aclSvc.ListGrants(ctx, 1, orgacl.EntryFilter{
+			ResourceType: "kb.space", ResourceID: kbResource(spaceID),
+		})
+		if err != nil {
+			return nil, err
+		}
+		rows := make([]kbservice.ACLGrantRow, 0, len(entries))
+		for _, e := range entries {
+			r := kbservice.ACLGrantRow{
+				GrantID: e.ID, GrantType: e.GrantType, GrantTarget: e.GrantTarget,
+				Perm: e.Perm, GrantedBy: e.GrantedBy, CreatedAtMs: e.CreatedAt.UnixMilli(),
+			}
+			if !e.ExpiresAt.IsZero() {
+				r.ExpiresAtMs = e.ExpiresAt.UnixMilli()
+			}
+			rows = append(rows, r)
+		}
+		return rows, nil
+	}
+	kbACLRevoke = func(ctx context.Context, spaceID, grantID int64) error {
+		return aclSvc.Revoke(ctx, 1, grantID)
+	}
 	mux.Handle("GET /api/v1/admin/acl", requireAnyAdmin(handleACLList(aclSvc)))
 	mux.Handle("POST /api/v1/admin/acl", requireAnyAdmin(handleACLGrant(aclSvc)))
 	mux.Handle("DELETE /api/v1/admin/acl/{id}", requireAnyAdmin(handleACLRevoke(aclSvc)))
@@ -885,7 +988,25 @@ func main() {
 	} else {
 		ecoRepoInst = ecorepo.NewMemory()
 	}
-	ecoMod := eco.NewModule(ecoRepoInst)
+	var ecoAppStore ecorepo.AppRepo
+	if pgPool != nil {
+		ecoAppStore = ecorepo.NewPostgresApps(pgPool)
+	} else {
+		ecoAppStore = ecorepo.NewAppMemory()
+	}
+	var ecoRollouts ecorepo.RolloutRepo
+	if pgPool != nil {
+		ecoRollouts = ecorepo.NewPostgresRollout(pgPool)
+	} else {
+		ecoRollouts = ecorepo.NewRolloutMemory()
+	}
+	var ecoSkills ecorepo.SkillRepo
+	if pgPool != nil {
+		ecoSkills = ecorepo.NewPostgresSkills(pgPool)
+	} else {
+		ecoSkills = ecorepo.NewSkillMemory()
+	}
+	ecoMod := eco.NewModule(ecoRepoInst, ecoAppStore, ecoRollouts, ecoSkills)
 	ecoapi.RegisterUserRoutes(mux, authed, ecoMod.API())
 	ecoapi.RegisterPublicRoutes(mux, ecoMod.API())
 	ecoapi.RegisterAdminRoutes(mux, requirePerm("admin:app:publish"), ecoMod.API())
@@ -2678,285 +2799,6 @@ func envCSV(key string) []string {
 	return out
 }
 
-// ── 文档中心 REST 壳（D05 阶段一务实版：薄壳 → docSvc → 统一响应包）──
-
-// docActor 文档域请求方（tenant + uid；v0.1 全 owner 私有）
-func docActor(r *http.Request) (int64, int64, error) {
-	uid, err := uidFrom(r)
-	if err != nil {
-		return 0, 0, err
-	}
-	return httpx.TenantID(r.Context()), uid, nil
-}
-
-// docIDFrom 路径文档 ID 解析
-func docIDFrom(r *http.Request) (int64, error) { return pathID(r, "id") }
-
-// handleDocListFiles 列表+名称模糊（API-DOC-03 务实版：owner 私有视图；
-// ?q= 模糊 ?cursor= 键集翻页 "<ms>-<id>" ?limit=）
-func handleDocListFiles(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		q := r.URL.Query()
-		limit, _ := strconv.Atoi(q.Get("limit"))
-		resp, err := svc.ListFiles(r.Context(), tenant, uid, q.Get("q"), q.Get("cursor"), limit)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, resp)
-	}
-}
-
-// handleDocCreateFile 新建 markdown 文档（API-DOC-01 务实版：{title}，建 v1 空白文档；
-// type/template_id/folder_id 不收——纯 markdown+无模板库，阶段二）
-func handleDocCreateFile(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		var req struct {
-			Title string `json:"title"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		doc, err := svc.CreateFile(r.Context(), tenant, uid, req.Title)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, doc)
-	}
-}
-
-// handleDocGetFile 元数据+当前正文（API-DOC-04 务实版；v0.1 无 perm/presence 摘要）
-func handleDocGetFile(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		docID, err := docIDFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		doc, err := svc.GetFile(r.Context(), tenant, uid, docID)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, doc)
-	}
-}
-
-// handleDocRenameFile 重命名（API-DOC-05 务实版：{title}；6015 同名）
-func handleDocRenameFile(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		docID, err := docIDFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		var req struct {
-			Title string `json:"title"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		doc, err := svc.RenameFile(r.Context(), tenant, uid, docID, req.Title)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, doc)
-	}
-}
-
-// handleDocTrashFile 移入回收站（API-DOC-07 务实版：purge_at=+30d 保留期）
-func handleDocTrashFile(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		docID, err := docIDFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		doc, err := svc.TrashFile(r.Context(), tenant, uid, docID)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, doc)
-	}
-}
-
-// handleDocSaveContent 乐观锁保存正文（PUT content {content_md, base_version}；
-// 基线落后 → 6004 版本冲突；成功 manual 快照 version+1 + 冗余正文回写）
-func handleDocSaveContent(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		docID, err := docIDFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		var req struct {
-			ContentMD   string `json:"content_md"`
-			BaseVersion int64  `json:"base_version"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		resp, err := svc.SaveContent(r.Context(), tenant, uid, docID, req.BaseVersion, req.ContentMD)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, resp)
-	}
-}
-
-// handleDocListVersions 版本时间线（API-DOC-21 务实版：cursor 倒序；v0.1 无大小/备注）
-func handleDocListVersions(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		docID, err := docIDFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		q := r.URL.Query()
-		limit, _ := strconv.Atoi(q.Get("limit"))
-		resp, err := svc.ListVersions(r.Context(), tenant, uid, docID, q.Get("cursor"), limit)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, resp)
-	}
-}
-
-// handleDocRestoreVersion 恢复目标版本（API-DOC-22 务实版：version+1 snapshot=restore，
-// 正文回写；6013 目标不存在）
-func handleDocRestoreVersion(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		docID, err := docIDFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		version, err := strconv.Atoi(r.PathValue("v"))
-		if err != nil || version <= 0 {
-			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "目标版本号非法"))
-			return
-		}
-		resp, err := svc.RestoreVersion(r.Context(), tenant, uid, docID, version)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, resp)
-	}
-}
-
-// handleDocListTrash 回收站列表（API-DOC-27 务实版：owner 私有 + 过期行过滤）
-func handleDocListTrash(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		q := r.URL.Query()
-		limit, _ := strconv.Atoi(q.Get("limit"))
-		resp, err := svc.ListTrash(r.Context(), tenant, uid, q.Get("cursor"), limit)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, resp)
-	}
-}
-
-// handleDocRestoreFromTrash 回收站恢复（API-DOC-28 务实版：同名冲突加" (恢复)"后缀）
-func handleDocRestoreFromTrash(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		docID, err := docIDFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		resp, err := svc.RestoreFromTrash(r.Context(), tenant, uid, docID)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, resp)
-	}
-}
-
-// handleDocShare 分享占位（API-DOC-12 务实版：share_id+7d+假 URL；
-// 外链解析页/doc_share 落库阶段二，登记）
-func handleDocShare(svc docapi.DocService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := docActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		docID, err := docIDFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		resp, err := svc.Share(r.Context(), tenant, uid, docID)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, resp)
-	}
-}
-
 // ── 文件 REST 壳（D06 阶段二：分片会话 + 分享外链） ──
 
 // handleFileCheck 秒传预检（策略再校验；命中直接可发消息）
@@ -3313,13 +3155,15 @@ func handleAdminGrantRole(svc adminapi.AdminService) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			RoleID int64 `json:"role_id"`
+			RoleID      int64 `json:"role_id"`
+			ScopeType   int   `json:"scope_type"`    // 1 本人 2 本部门 3 本部门及以下 4 全租户（缺省 4）
+			ScopeDeptID int64 `json:"scope_dept_id"` // 2/3 必填
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			httpx.Fail(w, r, err)
 			return
 		}
-		if err := svc.GrantRole(r.Context(), httpx.TenantID(r.Context()), op, uid, req.RoleID); err != nil {
+		if err := svc.GrantRole(r.Context(), httpx.TenantID(r.Context()), op, uid, req.RoleID, req.ScopeType, req.ScopeDeptID); err != nil {
 			httpx.Fail(w, r, err)
 			return
 		}
@@ -3669,5 +3513,419 @@ func handleAdminOffboard(svc adminapi.AdminService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, nil)
+	}
+}
+
+// ── Agent 会话云端备份 REST 壳（08 篇 §6.3；OQ-B09 端侧加密零知识）──
+
+// maxAgentBackupBody 创建请求体上限（密文 32MB 的 base64≈42.7MB + JSON 结构/转义裕量→48MB；
+// 解码后密文再由 service 层 32MB 精确校验）
+const maxAgentBackupBody = 48 << 20
+
+// agentBackupCreateReq data=base64 密文（端侧 AES-256-GCM；服务端不解析）
+type agentBackupCreateReq struct {
+	LocalSessionID string `json:"local_session_id"`
+	Title          string `json:"title"`
+	EncAlg         string `json:"enc_alg"`
+	KeyEnvelope    string `json:"key_envelope"`
+	Data           []byte `json:"data"`
+}
+
+func handleAgentBackupCreate(svc agentbackupapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		// 密文体最大 32MB：不走 decodeJSON（1MB 上限），放宽读（36MB 含 base64 膨胀裕量）
+		var req agentBackupCreateReq
+		body, rerr := io.ReadAll(io.LimitReader(r.Body, maxAgentBackupBody+1))
+		if rerr != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "请求体读取失败"))
+			return
+		}
+		if len(body) > maxAgentBackupBody {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "请求体超限"))
+			return
+		}
+		if uerr := json.Unmarshal(body, &req); uerr != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "请求体非法"))
+			return
+		}
+		dto, err := svc.Create(r.Context(), httpx.TenantID(r.Context()), uid, agentbackupapi.CreatePayload{
+			LocalSessionID: req.LocalSessionID, Title: req.Title,
+			EncAlg: req.EncAlg, KeyEnvelope: req.KeyEnvelope, Data: req.Data,
+		}, r.Header.Get("Idempotency-Key"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, dto)
+	}
+}
+
+func handleAgentBackupList(svc agentbackupapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		items, err := svc.List(r.Context(), httpx.TenantID(r.Context()), uid)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items})
+	}
+}
+
+func handleAgentBackupTicket(svc agentbackupapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "备份 ID 非法"))
+			return
+		}
+		dto, err := svc.IssueRestoreTicket(r.Context(), httpx.TenantID(r.Context()), uid, id)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, dto)
+	}
+}
+
+func handleAgentBackupDelete(svc agentbackupapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "备份 ID 非法"))
+			return
+		}
+		if err := svc.Delete(r.Context(), httpx.TenantID(r.Context()), uid, id); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true})
+	}
+}
+
+// handleAgentBackupBlob 票据消费下载（免鉴权：一次性 120s；密文零知识无泄露面）
+func handleAgentBackupBlob(svc agentbackupapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		blob, err := svc.ReadTicket(r.Context(), r.PathValue("ticket"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("X-Backup-Key-Envelope", blob.Row.KeyEnvelope)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(blob.Data)
+	}
+}
+
+// ── kb 空间授权管理 REST 壳（11 §6 / D07 PKB-06）──
+
+func handleKBListGrants(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		spaceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || spaceID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "空间 ID 非法"))
+			return
+		}
+		rows, err := svc.ListGrants(r.Context(), httpx.TenantID(r.Context()), uid, spaceID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": rows})
+	}
+}
+
+func handleKBAddGrant(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		spaceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || spaceID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "空间 ID 非法"))
+			return
+		}
+		var req kbapi.GrantReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		row, err := svc.AddGrant(r.Context(), httpx.TenantID(r.Context()), uid, spaceID, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, row)
+	}
+}
+
+func handleKBRemoveGrant(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		spaceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || spaceID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "空间 ID 非法"))
+			return
+		}
+		gid, err := strconv.ParseInt(r.PathValue("gid"), 10, 64)
+		if err != nil || gid <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "授权行 ID 非法"))
+			return
+		}
+		if err := svc.RemoveGrant(r.Context(), httpx.TenantID(r.Context()), uid, spaceID, gid); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true})
+	}
+}
+
+// ── Agent 工具策略编辑 REST 壳（D7）──
+
+func handleAdminUpdateToolPolicy(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req adminapi.AgentToolPolicyReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		uid, aerr := adminActor(r)
+		if aerr != nil {
+			httpx.Fail(w, r, aerr)
+			return
+		}
+		snap, err := svc.UpdateAgentToolPolicy(r.Context(), httpx.TenantID(r.Context()), uid, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, snap)
+	}
+}
+
+func handleAdminDeleteToolPolicy(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		snap, err := svc.DeleteAgentToolPolicy(r.Context(), httpx.TenantID(r.Context()), r.PathValue("subject"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, snap)
+	}
+}
+
+// ── KB 治理写操作 REST 壳（D8）──
+
+func handleAdminKBArchive(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.SetKBSpaceStatus(r.Context(), httpx.TenantID(r.Context()), id, true); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true, "status": "archived"})
+	}
+}
+
+func handleAdminKBActivate(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.SetKBSpaceStatus(r.Context(), httpx.TenantID(r.Context()), id, false); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true, "status": "active"})
+	}
+}
+
+func handleAdminKBDelete(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.DeleteKBSpace(r.Context(), httpx.TenantID(r.Context()), id); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true})
+	}
+}
+
+// ── 部门成员管理 REST 壳（D10：user_dept 挂/卸/查）──
+
+func handleDeptMembers(m orgapi.DeptMembershipReaderWriter, users orgapi.UserReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		deptID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		rows, err := m.ListDeptUsers(r.Context(), httpx.TenantID(r.Context()), deptID)
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeInternal, "成员读取失败"))
+			return
+		}
+		items := make([]map[string]any, 0, len(rows))
+		for _, u := range rows {
+			name := ""
+			if u2, uerr := users.GetUser(r.Context(), u.UserID); uerr == nil && u2 != nil {
+				name = u2.DisplayName
+			}
+			items = append(items, map[string]any{
+				"user_id":    strconv.FormatInt(u.UserID, 10),
+				"name":       name,
+				"is_primary": u.IsPrimary,
+			})
+		}
+		httpx.OK(w, r, map[string]any{"items": items})
+	}
+}
+
+func handleDeptAttach(m orgapi.DeptMembershipReaderWriter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		deptID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			UserID    string `json:"user_id"`
+			IsPrimary bool   `json:"is_primary"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		uid, err := strconv.ParseInt(req.UserID, 10, 64)
+		if err != nil || uid <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "user_id 非法"))
+			return
+		}
+		if err := m.AttachUser(r.Context(), httpx.TenantID(r.Context()), uid, deptID, req.IsPrimary); err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "挂靠失败（部门或用户不存在）"))
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true})
+	}
+}
+
+func handleDeptDetach(m orgapi.DeptMembershipReaderWriter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		deptID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		uid, err := pathID(r, "uid")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := m.DetachUser(r.Context(), httpx.TenantID(r.Context()), uid, deptID); err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeInternal, "卸挂失败"))
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true})
+	}
+}
+
+// handleChangePassword POST /me/password（D11：首登强制改密/自助改密同通道）
+func handleChangePassword(svc authapi.AuthService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req authapi.ChangePwdReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.ChangePassword(r.Context(), httpx.TenantID(r.Context()), uid, req.OldPassword, req.NewPassword); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true})
+	}
+}
+
+// ── 通知偏好 REST 壳（D12）──
+
+func handleNotifyPrefGet(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		dto, err := svc.GetNotifyPref(r.Context(), httpx.TenantID(r.Context()), uid)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, dto)
+	}
+}
+
+func handleNotifyPrefSet(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req messageapi.NotifyPrefDTO
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		dto, err := svc.SetNotifyPref(r.Context(), httpx.TenantID(r.Context()), uid, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, dto)
 	}
 }

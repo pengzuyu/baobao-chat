@@ -15,6 +15,7 @@ import (
 	adminrepo "github.com/baobaowork/server/internal/admin/repo"
 	"github.com/baobaowork/server/internal/org/api"
 	orgrepo "github.com/baobaowork/server/internal/org/repo"
+	errx "github.com/baobaowork/server/internal/platform/errors"
 )
 
 // effectCounter 写副作用记录（断言禁用即踢线/吊销语义）
@@ -55,7 +56,7 @@ func newFixture(adminAccounts []string) (*Service, *orgrepo.Memory, adminrepo.Re
 	fx := &effectCounter{aliceID: alice.ID, bobID: bob.ID}
 	roles := adminrepo.NewMemoryRoles()
 	_, _ = roles.InsertRole(ctx, adminrepo.Role{TenantID: 1, Name: "管理员", IsBuiltin: true, Permissions: []string{"admin"}})
-	svc := New(orgRepo, orgRepo, store, roles, adminrepo.NewMemoryNotices(), Options{
+	svc := New(orgRepo, orgRepo, store, roles, adminrepo.NewMemoryNotices(), adminrepo.NewToolPolicyMemory(), Options{
 		ScopesOf: roles.PermissionPointsOf, // RBAC 阶段二：与 main 装配同口径（角色聚合）
 		CreateUser: func(ctx context.Context, u orgapi.User) (orgapi.User, error) {
 			return orgRepo.CreateUser(ctx, u)
@@ -294,10 +295,10 @@ func TestRoleEditorCRUDAndGrants(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	// 授权/重复授权/列表
-	if err := svc.GrantRole(ctx, 1, aliceID, fx.bobID, r1.ID); err != nil {
+	if err := svc.GrantRole(ctx, 1, aliceID, fx.bobID, r1.ID, 4, 0); err != nil {
 		t.Fatalf("grant: %v", err)
 	}
-	if err := svc.GrantRole(ctx, 1, aliceID, fx.bobID, r1.ID); err == nil {
+	if err := svc.GrantRole(ctx, 1, aliceID, fx.bobID, r1.ID, 4, 0); err == nil {
 		t.Fatal("重复授权应拒")
 	}
 	grants, err := svc.ListUserGrants(ctx, 1, fx.bobID)
@@ -348,7 +349,7 @@ func TestPublishNotice(t *testing.T) {
 	ctx := context.Background()
 	// 广播闭包观测（重建 service 注入闭包——opts 为值语义）
 	var gotTitle, gotDigest string
-	withBC := New(orgRepo, orgRepo, store, adminrepo.NewMemoryRoles(), adminrepo.NewMemoryNotices(), Options{
+	withBC := New(orgRepo, orgRepo, store, adminrepo.NewMemoryRoles(), adminrepo.NewMemoryNotices(), adminrepo.NewToolPolicyMemory(), Options{
 		BroadcastNotice: func(_ context.Context, _ int64, title, digest string) int {
 			gotTitle, gotDigest = title, digest
 			return 2
@@ -396,9 +397,13 @@ func TestBatchImportUsers(t *testing.T) {
 	if res.Created != 2 || res.Failed != 4 || len(res.Rows) != 6 {
 		t.Fatalf("结果: %+v", res)
 	}
-	// 创建可登录（工号命中）
-	if u, err := orgRepo.GetUserByLogin(ctx, 1, "u1"); err != nil || u == nil || u.DisplayName != "张三" {
-		t.Fatalf("u1: %v %+v", err, u)
+	// 创建可登录（工号命中）+ 首登强制改密置位（D11）
+	u1, u1err := orgRepo.GetUserByLogin(ctx, 1, "u1")
+	if u1err != nil || u1 == nil || u1.DisplayName != "张三" {
+		t.Fatalf("u1: %v %+v", u1err, u1)
+	}
+	if !u1.MustChangePassword {
+		t.Fatalf("导入用户应置首登强制改密: %+v", u1)
 	}
 	// 超量拒绝
 	big := make([]adminapi.ImportUserRow, 101)
@@ -488,7 +493,7 @@ func TestRBACPermAggregation(t *testing.T) {
 	}
 
 	// 授权 → 聚合生效 + perm.changed 单播（fixture NotifyUser 记录到 fx.notified）
-	if err := svc.GrantRole(ctx, 1, fx.aliceID, fx.bobID, hr.ID); err != nil {
+	if err := svc.GrantRole(ctx, 1, fx.aliceID, fx.bobID, hr.ID, 4, 0); err != nil {
 		t.Fatalf("grant: %v", err)
 	}
 	if fx.notified[fx.bobID] != "perm.changed" {
@@ -532,7 +537,7 @@ func TestRBACPermAggregation(t *testing.T) {
 	// 角色权限点变更 → 持有者收推送（UpdateRole 路径）
 	_ = orgRepo // 夹具用户与角色共存
 	perm2, _ := svc.CreateRole(ctx, 1, fx.aliceID, "临时角色", "", []string{"admin:audit:read"})
-	_ = svc.GrantRole(ctx, 1, fx.aliceID, fx.bobID, perm2.ID)
+	_ = svc.GrantRole(ctx, 1, fx.aliceID, fx.bobID, perm2.ID, 4, 0)
 	delete(fx.notified, fx.bobID)
 	if err := svc.UpdateRole(ctx, 1, fx.aliceID, perm2.ID, "临时角色", "", []string{"admin:usage:read"}); err != nil {
 		t.Fatalf("update: %v", err)
@@ -542,5 +547,39 @@ func TestRBACPermAggregation(t *testing.T) {
 	}
 	if !svc.HasPerm(ctx, 1, fx.bobID, "admin:usage:read") || svc.HasPerm(ctx, 1, fx.bobID, "admin:audit:read") {
 		t.Fatal("角色变更后权限应随新权限集")
+	}
+}
+
+// TestGrantRoleScope D10：scope 四档透传 + 非法值拒
+func TestGrantRoleScope(t *testing.T) {
+	orgRepo := orgrepo.NewMemory()
+	store := adminrepo.NewMemory()
+	roles := adminrepo.NewMemoryRoles()
+	svc := New(orgRepo, orgRepo, store, roles, adminrepo.NewMemoryNotices(), adminrepo.NewToolPolicyMemory(), Options{})
+	ctx := context.Background()
+
+	uid, _ := orgRepo.CreateUser(context.Background(), orgapi.User{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "u-scope", DisplayName: "Scope"})
+	role, _ := roles.InsertRole(context.Background(), adminrepo.Role{TenantID: 1, Name: "scope-role", IsBuiltin: false})
+
+	// 2 档缺部门 → 9001
+	if err := svc.GrantRole(ctx, 1, 1, uid.ID, role.ID, 2, 0); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("2 档缺部门应 9001: %v", err)
+	}
+	// 3 档带部门 → 行 scope 落库
+	if err := svc.GrantRole(ctx, 1, 1, uid.ID, role.ID, 3, 77); err != nil {
+		t.Fatalf("3 档授权: %v", err)
+	}
+	grants, _ := roles.ListUserRoles(ctx, 1, uid.ID)
+	if len(grants) != 1 || grants[0].ScopeType != 3 || grants[0].ScopeDeptID != 77 {
+		t.Fatalf("scope 落库不符: %+v", grants)
+	}
+	// 缺省 → 4 全租户
+	uid2, _ := orgRepo.CreateUser(context.Background(), orgapi.User{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "u-scope2", DisplayName: "S2"})
+	if err := svc.GrantRole(ctx, 1, 1, uid2.ID, role.ID, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	g2, _ := roles.ListUserRoles(ctx, 1, uid2.ID)
+	if g2[0].ScopeType != 4 {
+		t.Fatalf("缺省应 4: %+v", g2[0])
 	}
 }

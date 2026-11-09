@@ -32,6 +32,8 @@ type LoginUser struct {
 	UID   string   `json:"uid"`
 	Name  string   `json:"name"`
 	Perms []string `json:"perms"`
+	// 首登强制改密（0029/D11）：导入用户置位——前端登录二步改密表单
+	MustChangePwd bool `json:"must_change_pwd,omitempty"`
 }
 
 // RefreshReq 刷新请求（一次性轮换）
@@ -62,4 +64,12 @@ type AuthService interface {
 	Logout(ctx context.Context, userID int64, did string, all bool) error
 	IssueOBO(ctx context.Context, actorUserID int64, req OBOReq) (string, error)
 	Verify(ctx context.Context, token string) (*authjwt.Claims, error) // gateway/httpx 装配用
+	// ChangePassword 改密（D11：旧密码校验→更新 hash→清 must_change）
+	ChangePassword(ctx context.Context, tenantID, userID int64, oldPwd, newPwd string) error
+}
+
+// ChangePwdReq POST /me/password
+type ChangePwdReq struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
 }

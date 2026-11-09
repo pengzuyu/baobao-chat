@@ -66,6 +66,8 @@ interface RtcState {
 
   call: ActiveCall | null;
   incoming: RtcRingingPayload | null;
+  /** 通话中来电等待条（INT-RTC-16：仅 toast 不弹窗不响铃；[拒接][挂断并接听]） */
+  callWaiting: RtcRingingPayload | null;
   /** 会议网格投影（engine 驱动；本端恒在首位） */
   participants: EngineParticipant[];
   micOn: boolean;
@@ -83,6 +85,10 @@ interface RtcState {
   joinCall: (callId: string, convId: string, callType: RtcCallType, caller: { uid: string; name: string }) => Promise<void>;
   /** 接听来电（1v1） */
   acceptIncoming: () => Promise<void>;
+  /** 通话中来电：挂断当前并接听新呼（INT-RTC-16/OQ-C06：accept 带 bye_call_id 原子帧） */
+  answerWaiting: () => Promise<void>;
+  /** 通话中来电：拒接（回 busy）并收起等待条 */
+  dismissWaiting: () => void;
   /** 拒接来电（1v1） */
   rejectIncoming: () => void;
   /** 挂断/取消（按当前态路由 cancel/bye） */
@@ -187,6 +193,7 @@ export const useRtcStore = create<RtcState>((set, get) => {
 
     call: null,
     incoming: null,
+    callWaiting: null,
     participants: [],
     micOn: false,
     camOn: false,
@@ -253,6 +260,27 @@ export const useRtcStore = create<RtcState>((set, get) => {
         return;
       }
       beginCallee(inc.call_id, inc.conv_id, inc.call_type, { uid: inc.caller.id, name: inc.caller.name });
+    },
+
+    answerWaiting: async () => {
+      const { callWaiting, call } = get();
+      if (!callWaiting) return;
+      set({ callWaiting: null });
+      // 挂旧接新一帧原子完成（服务端 bye_call_id）；旧通话 media/状态由服务端 rtc.state 推送收尾
+      try {
+        await rtcAccept(callWaiting.call_id, true, get().myDid, call?.callId);
+      } catch {
+        set({ toast: { text: '接听失败：通话已结束', at: Date.now() } });
+        return;
+      }
+      beginCallee(callWaiting.call_id, callWaiting.conv_id, callWaiting.call_type, { uid: callWaiting.caller.id, name: callWaiting.caller.name });
+    },
+
+    dismissWaiting: () => {
+      const { callWaiting } = get();
+      if (!callWaiting) return;
+      set({ callWaiting: null });
+      void rtcReject(callWaiting.call_id, 'busy').catch(() => undefined);
     },
 
     bootstrapHandoff: async (h) => {
@@ -341,16 +369,32 @@ export const useRtcStore = create<RtcState>((set, get) => {
 
     applyRinging: (p) => {
       const { call, incoming } = get();
-      if (call || incoming) {
-        // 单设备单活动通话：1v1 自动回 busy；群呼静默忽略（不打扰进行中通话）
-        if (!p.group && !call) void rtcReject(p.call_id, 'busy').catch(() => undefined);
+      if (call) {
+        // 通话中来电（INT-RTC-16）：1v1 → 等待条（拒接/挂断并接听）；群呼静默忽略
+        if (!p.group) set({ callWaiting: p });
+        return;
+      }
+      if (incoming) {
+        // 来电弹窗已占用：1v1 新呼自动回 busy；群呼静默忽略
+        if (!p.group) void rtcReject(p.call_id, 'busy').catch(() => undefined);
         return;
       }
       set({ incoming: p });
     },
 
     applyState: (p) => {
-      const { call, incoming } = get();
+      const { call, incoming, callWaiting } = get();
+      // 通话中来电等待条终态（INT-RTC-16）：主叫取消/超时/他端接听 → 收起等待条
+      if (callWaiting && callWaiting.call_id === p.call_id) {
+        if (p.kind === 'ended') {
+          set({ callWaiting: null, toast: { text: p.reason === 'canceled' ? '对方已取消' : '未接听', at: Date.now() } });
+          return;
+        }
+        if (p.kind === 'answered_elsewhere' && p.did !== get().myDid) {
+          set({ callWaiting: null, toast: { text: '已在其他设备接听', at: Date.now() } });
+          return;
+        }
+      }
       // 来电侧终态：canceled/timeout 收起来电弹窗（未接场景）
       if (incoming && incoming.call_id === p.call_id && p.kind === 'ended') {
         set({ incoming: null, toast: { text: p.reason === 'canceled' ? '对方已取消' : '未接听', at: Date.now() } });
@@ -394,7 +438,7 @@ export const useRtcStore = create<RtcState>((set, get) => {
       if (endedTimer) clearTimeout(endedTimer);
       endedTimer = null;
       teardownEngine();
-      set({ call: null, incoming: null });
+      set({ callWaiting: null, call: null, incoming: null });
     },
   };
 });

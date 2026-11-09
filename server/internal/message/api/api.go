@@ -278,6 +278,9 @@ type MessageService interface {
 	MarkNotificationsRead(ctx context.Context, userID int64, p NotificationReadPayload) error
 	// UnreadNotificationCount 未读计数（红点数据源；端内 99+ 封顶）
 	UnreadNotificationCount(ctx context.Context, userID int64) (*UnreadCountResult, error)
+	// ── 通知偏好（0030/D12）──
+	GetNotifyPref(ctx context.Context, tenantID, userID int64) (*NotifyPrefDTO, error)
+	SetNotifyPref(ctx context.Context, tenantID, userID int64, p NotifyPrefDTO) (*NotifyPrefDTO, error)
 	// ReportAgentTask Agent 任务终态上报（宿主→notify 域，OQ-C32 事件源④）：
 	// 幂等（run_id+status）→ 通知中心落卡（kind=agent_done）+ 发布 agent.task.completed
 	ReportAgentTask(ctx context.Context, userID int64, p AgentTaskReportPayload) error
@@ -596,11 +599,16 @@ type ReceiptMemberDTO struct {
 	DisplayName string `json:"displayName"`
 }
 
-// ReceiptPanelDTO 已读/未读分组（API-IM-06；seq=被查询消息 seq）
+// ReceiptPanelDTO 已读/未读分组（API-IM-06；seq=被查询消息 seq）。
+// Truncated=大群仅计数口径（OQ-B04 拍板：参与成员 >200 不展开名单，
+// Read/Unread 置空、以 ReadCount/UnreadCount 呈现；计数恒填便于 tab 展示）
 type ReceiptPanelDTO struct {
-	Seq    int64              `json:"seq"`
-	Read   []ReceiptMemberDTO `json:"read"`
-	Unread []ReceiptMemberDTO `json:"unread"`
+	Seq         int64              `json:"seq"`
+	Truncated   bool               `json:"truncated"`
+	ReadCount   int                `json:"readCount"`
+	UnreadCount int                `json:"unreadCount"`
+	Read        []ReceiptMemberDTO `json:"read"`
+	Unread      []ReceiptMemberDTO `json:"unread"`
 }
 
 // ConvDetailDTO 会话详情（API-IM-03：conversation 全字段 + group_setting + my + 成员概要）
@@ -821,4 +829,11 @@ type AgentTaskReportPayload struct {
 type AgentTaskEvent struct {
 	UserID int64
 	Task   AgentTaskReportPayload
+}
+
+// NotifyPrefDTO 用户通知偏好（设置页驱动；默认双开+off）
+type NotifyPrefDTO struct {
+	MsgNotify     bool   `json:"msg_notify"`
+	MentionNotify bool   `json:"mention_notify"`
+	DndRange      string `json:"dnd_range"` // off|work-night|all-day
 }

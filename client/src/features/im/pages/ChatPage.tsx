@@ -109,6 +109,15 @@ export function ChatPage() {
   const sendText = useImStore((s) => s.sendText);
   const retrySend = useImStore((s) => s.retrySend);
   const togglePin = useImStore((s) => s.togglePin);
+  /** 置顶 3023 上限提示（OQ-B06：拒绝不替换最旧；复用 ann-banner 提示条 3s） */
+  const handleTogglePin = (convId: string) => {
+    void togglePin(convId).then((ok) => {
+      if (!ok) {
+        setFwdToast({ text: '置顶会话已达上限 30，先取消其他置顶再试', ok: false });
+        setTimeout(() => setFwdToast(null), 3000);
+      }
+    });
+  };
   const toggleMute = useImStore((s) => s.toggleMute);
   // 多选模式（INT-IM-14/PIM-10）：选择集在 store（滚动/上翻不丢选择）
   const multiSelect = useImStore((s) => s.multiSelect);
@@ -313,8 +322,11 @@ export function ChatPage() {
   // ⌘K/Ctrl+K 聚焦全局搜索框（PIM-07，D03 §3.7；输入框聚焦时忽略）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
+      // D01 §9 双键位：Cmd+K 全局搜索 / Cmd+F 当前会话内搜索（OQ-C30 拍板"前缀
+      // 过滤"=维持工具名/文件名/文本前缀，不做 agent_event 全文索引——D08 §686）
+      const hit = (e.metaKey || e.ctrlKey) && ['k', 'f'].includes(e.key.toLowerCase());
+      if (hit) {
+        e.preventDefault(); // Cmd+F 覆盖浏览器查找（IM 页面会话搜索为本意）
         searchInputRef.current?.focus();
       }
     };
@@ -624,7 +636,7 @@ export function ChatPage() {
             className="icon-btn bell-entry"
             title="通知中心"
             data-testid="notifications-entry"
-            onClick={() => navigate('/im/notifications')}
+            onClick={() => navigate('/notifications')}
           >
             <Bell size={16} />
             {notifUnread > 0 ? (
@@ -656,7 +668,7 @@ export function ChatPage() {
           convs={convs}
           activeId={convId ?? null}
           onSelect={(id) => navigate(`/im/c/${id}`)}
-          onTogglePin={togglePin}
+          onTogglePin={handleTogglePin}
           onToggleMute={toggleMute}
         />
       ) : (
@@ -674,7 +686,7 @@ export function ChatPage() {
             convs={convs}
             activeId={convId ?? null}
             onSelect={(id) => navigate(`/im/c/${id}`)}
-            onTogglePin={togglePin}
+            onTogglePin={handleTogglePin}
             onToggleMute={toggleMute}
           />
         </StateView>
@@ -861,6 +873,8 @@ export function ChatPage() {
       {convId ? (
         <MessageInput
           convId={convId}
+          /* typing 上报仅单聊（OQ-B03 拍板：群聊默认关——大群广播扰动高；广播群本就只读） */
+          typingEnabled={activeConv?.type === 1}
           /* 禁用三态：广播群非 publisher / 单人禁言 / 全员禁言（非 owner/admin），D03 §3.3；
            * 多选模式同样禁用（避免与批量操作抢 Esc/焦点，飞书同款） */
           disabled={inputDisabled || msActive}

@@ -33,7 +33,7 @@ type ToolDef struct {
 	Scope string
 }
 
-// corpTools 注册表（试点 kb_query+doc_read——OQ-B26 裁决；im_send/file_upload
+// corpTools 注册表（试点 kb_query——OQ-B26 裁决；im_send/file_upload
 // 治理属性已登记 09 篇 §3.1，供给接入随域需求排期）
 func corpTools() []ToolDef {
 	return []ToolDef{
@@ -51,19 +51,6 @@ func corpTools() []ToolDef {
 			},
 			Risk:  "low",
 			Scope: "kb:query:use",
-		},
-		{
-			Name:        "doc_read",
-			Description: "读在线文档元数据与当前正文（markdown）。仅 owner 本人文档（非 owner 拒绝）——输出按 untrusted 处理（09 篇 §8 来源标记）。",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"doc_id": map[string]any{"type": "integer", "description": "文档 ID（必填）"},
-				},
-				"required": []string{"doc_id"},
-			},
-			Risk:  "low",
-			Scope: "doc:file:view",
 		},
 		{
 			// 09 篇 §3.2.6：外发不可撤回影响他人 → 全模式确认（永不全自动）——
@@ -199,29 +186,6 @@ func (g *Gateway) invokeKbQuery(ctx context.Context, tenantID, uid int64, raw js
 	res, err := g.opts.KBQuery(ctx, tenantID, uid, args.SpaceIDs, args.Keyword, args.TopK)
 	if err != nil {
 		// 业务失败：MCP 语义 isError 结果（非 JSON-RPC error）——模型可自行处置
-		return errText(err.Error()), nil
-	}
-	return okText(res)
-}
-
-// invokeDocRead doc_read 执行：owner 私有校验（防线三）在 doc 域服务内完成
-func (g *Gateway) invokeDocRead(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
-	var args struct {
-		DocID int64 `json:"doc_id"`
-	}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &args); err != nil {
-			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
-		}
-	}
-	if args.DocID <= 0 {
-		return nil, rpcErr(codeInvalidParams, "doc_id 必填")
-	}
-	if g.opts.DocRead == nil {
-		return nil, rpcErr(codeUnknownTool, "doc_read 未装配（doc 域不可用）")
-	}
-	res, err := g.opts.DocRead(ctx, tenantID, uid, args.DocID)
-	if err != nil {
 		return errText(err.Error()), nil
 	}
 	return okText(res)

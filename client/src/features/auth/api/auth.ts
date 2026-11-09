@@ -14,6 +14,8 @@ export interface AuthUser {
   avatar?: string;
   /** 权限点列表（admin:* 等显隐判定，03 篇） */
   perms: string[];
+  /** 首登强制改密（D11：导入用户置位——登录页二步改密表单） */
+  must_change_pwd?: boolean;
 }
 
 export interface LoginResult {
@@ -106,4 +108,13 @@ export async function apiMyPermissions(): Promise<string[]> {
   if (USE_MOCK) return ['im:*', 'doc:read', 'kb:read'];
   const data = await http.get<{ perms: string[] }>('/me/permissions');
   return data.perms;
+}
+
+/** 修改密码（D11：登录态；旧密码校验 → 清 must_change；1001 旧密码错/9001 规则） */
+export async function apiChangePassword(oldPassword: string, newPassword: string): Promise<void> {
+  if (USE_MOCK) {
+    await delay(300);
+    return;
+  }
+  await http.post('/me/password', { old_password: oldPassword, new_password: newPassword });
 }

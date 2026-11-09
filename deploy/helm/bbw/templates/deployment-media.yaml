@@ -1,7 +1,10 @@
 {{/*
-media（mediasoup SFU）Deployment —— §3.2 硬约束：
+media（LiveKit 统一媒体面，D17）Deployment —— §3.2 硬约束不变：
 hostNetwork + UDP 40000–50100 端口段独占 + 节点污点隔离；
-每节点固定可配端口范围（§3.3）。缩容/驱逐须先通话避让（§4.5）。
+缩容/驱逐须先通话避让（§4.5）。D17 拍板：1v1/群一致走 LiveKit SFU
+（livekit-server 顶替旧 bbw-media mediasoup 占位；coturn 退役，TURN 内嵌）。
+信令 7880/tcp 经 Ingress /rtc/（子路径 rewrite 验证项同 compose，D17 §9-2）；
+webhook 回调 app 同步 CallRegistry（participant_joined/left/room_finished）。
 */}}
 {{- if .Values.modules.media }}
 apiVersion: apps/v1
@@ -33,10 +36,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       # UDP 40000-50100 段无法以 containerPort 区间声明：hostNetwork 下由
-      # bbw-media worker 直接绑宿主端口（§3.2 “hostNetwork + 端口段独占”）
+      # livekit-server 直接绑宿主端口（§3.2 “hostNetwork + 端口段独占”）
       hostNetwork: {{ .Values.media.hostNetwork }}
       dnsPolicy: ClusterFirstWithHostNet
-      # 内核依赖（§3.4 ubuntu 基镜像）：允许上调 UDP 缓冲
+      # WebRTC 内核依赖：允许上调 UDP 缓冲（livekit 官方建议同款参数）
       securityContext:
         sysctls:
           - name: net.core.rmem_max
@@ -44,54 +47,61 @@ spec:
           - name: net.core.wmem_max
             value: "16777216"
       containers:
-        - name: bbw-media
-          image: {{ include "bbw.image" (dict "root" $ "repo" "bbw-media") }}
+        - name: livekit-server
+          # 非自有镜像（docker hub livekit/livekit-server），不走 bbw.image 统一坐标；
+          # 内网经 BBW_LIVEKIT_IMAGE→media.image 覆盖为 Harbor 地址
+          image: {{ .Values.media.image }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
-          securityContext:
-            # mediasoup worker 绑定低延迟/端口段需要的能力
-            capabilities:
-              add: ["NET_BIND_SERVICE", "IPC_LOCK"]
           env:
-            - name: TZ
-              value: {{ .Values.global.timezone | quote }}
-            - name: BBW_MEDIA_RTC_MIN_PORT
+            - name: LIVEKIT_PORT
+              value: {{ .Values.media.signalingPort | quote }}
+            # API key 三元组与 app 侧 BBW_LIVEKIT_* 同源（livekitKeys 为 Secret 内
+            # 预拼的 "key: secret" 形态；多实例口径前=单实例，D17 §9-5）
+            - name: LIVEKIT_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbw.secretName.app" . }}
+                  key: livekitKeys
+            - name: LIVEKIT_RTC_PORT_RANGE_START
               value: {{ .Values.media.rtcMinPort | quote }}
-            - name: BBW_MEDIA_RTC_MAX_PORT
+            - name: LIVEKIT_RTC_PORT_RANGE_END
               value: {{ .Values.media.rtcMaxPort | quote }}
-            - name: BBW_DB_DSN
+            # 内嵌 TURN（coturn 退役；TLS 5349 视证书情况后定，D17 §3.1）
+            - name: LIVEKIT_TURN_ENABLED
+              value: "true"
+            - name: LIVEKIT_TURN_UDP_PORT
+              value: {{ .Values.media.turnUdpPort | quote }}
+            # webhook → app（Authorization JWT 验签，与 LIVEKIT_KEYS 同源）
+            - name: LIVEKIT_WEBHOOK_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.db" . }}
-                  key: dbDsn
-            - name: BBW_S3_ACCESS_KEY
+                  name: {{ include "bbw.secretName.app" . }}
+                  key: livekitApiKey
+            - name: LIVEKIT_WEBHOOK_API_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.s3" . }}
-                  key: s3AccessKey
-            - name: BBW_S3_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "bbw.secretName.s3" . }}
-                  key: s3SecretKey
-          envFrom:
-            - configMapRef:
-                name: {{ include "bbw.fullname" . }}-config
+                  name: {{ include "bbw.secretName.app" . }}
+                  key: livekitApiSecret
+            - name: LIVEKIT_WEBHOOK_URLS
+              value: {{ printf "http://%s-app:80%s" (include "bbw.fullname" .) .Values.media.webhookPath | quote }}
           ports:
-            - name: signaling        # 8082 控制面/信令（§3.4）
+            - name: signaling        # 7880 tcp 信令（wss 经 Ingress /rtc/）
               containerPort: {{ .Values.media.signalingPort }}
               protocol: TCP
-            # UDP 40000-50100 经 hostNetwork 直通（见上注）
+            - name: turn-udp         # 内嵌 TURN（UDP 段 40000-50100 经 hostNetwork 直通，见上注）
+              containerPort: {{ .Values.media.turnUdpPort }}
+              protocol: UDP
+          # livekit-server 为 scratch 基镜像（无 shell/http 探针端点），信令端口
+          # TCP 直探（kubelet 发起，无需容器内进程配合）
           livenessProbe:
-            httpGet:
-              path: /healthz
+            tcpSocket:
               port: signaling
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
           readinessProbe:
-            httpGet:
-              path: /healthz
+            tcpSocket:
               port: signaling
             initialDelaySeconds: 5
             periodSeconds: 10

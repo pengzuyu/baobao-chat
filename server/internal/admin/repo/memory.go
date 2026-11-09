@@ -388,3 +388,56 @@ func (s *noticeStore) ListNotices(_ context.Context, tenantID int64, cursor int6
 	}
 	return out, more, nil
 }
+
+// ── Agent 工具策略（0028；内存版）──
+
+// ToolPolicyMemory 工具策略内存仓储（独立构造——Service 单独持有，装配与 PG 对齐）
+type ToolPolicyMemory struct {
+	nextID int64
+	rows   map[string]ToolPolicy // "tenant:subject" → 行
+}
+
+// NewToolPolicyMemory 构造
+func NewToolPolicyMemory() *ToolPolicyMemory {
+	return &ToolPolicyMemory{rows: map[string]ToolPolicy{}}
+}
+
+func toolPolicyKey(tenantID int64, subject string) string {
+	return strconv.FormatInt(tenantID, 10) + ":" + subject
+}
+
+// UpsertToolPolicy 插入/更新
+func (m *ToolPolicyMemory) UpsertToolPolicy(_ context.Context, p ToolPolicy) (ToolPolicy, error) {
+	key := toolPolicyKey(p.TenantID, p.Subject)
+	if ex, ok := m.rows[key]; ok {
+		p.ID = ex.ID
+		p.UpdatedAt = ex.UpdatedAt
+	} else {
+		m.nextID++
+		p.ID = m.nextID
+	}
+	m.rows[key] = p
+	return p, nil
+}
+
+// ListToolPolicies 租户全量行
+func (m *ToolPolicyMemory) ListToolPolicies(_ context.Context, tenantID int64) ([]ToolPolicy, error) {
+	out := []ToolPolicy{}
+	for _, r := range m.rows {
+		if r.TenantID == tenantID {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Subject < out[j].Subject })
+	return out, nil
+}
+
+// DeleteToolPolicy 删行
+func (m *ToolPolicyMemory) DeleteToolPolicy(_ context.Context, tenantID int64, subject string) error {
+	key := toolPolicyKey(tenantID, subject)
+	if _, ok := m.rows[key]; !ok {
+		return ErrToolPolicyNotFound
+	}
+	delete(m.rows, key)
+	return nil
+}

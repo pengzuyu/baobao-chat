@@ -77,7 +77,7 @@ cat <<'EOF'
       cd server && BBW_DB_DSN='postgres://bbw:bbw_change_me@127.0.0.1:5432/bbw?sslmode=disable' \
         BBW_REDIS_ADDR=127.0.0.1:6379 BBW_S3_ENDPOINT=http://127.0.0.1:9000 \
         BBW_S3_ACCESS_KEY=bbw_minio_change_me BBW_S3_SECRET_KEY=bbw_minio_secret_change_me \
-        go run ./cmd/bbw-server --enable auth,org,message,file,doc,kb,eco,admin,audit,notify,aigw
+        go run ./cmd/bbw-server --enable auth,org,message,file,kb,eco,admin,audit,notify,aigw
 
   · 前端（client/）：        make client-dev     （首次先 make client-install）
   · Agent Runtime（agent/）： make agent-build

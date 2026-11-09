@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { getErrorText } from '../../../shared/api/http';
 import { Avatar } from '../../../shared/ui/Avatar';
-import { fetchReceiptPanel, type ReceiptPanelRow } from '../api/im';
+import { fetchReceiptPanel, type ReceiptPanel } from '../api/im';
 
 interface ReadReceiptModalProps {
   convId: string;
@@ -17,7 +17,7 @@ interface ReadReceiptModalProps {
 
 export function ReadReceiptModal({ convId, seq, onClose }: ReadReceiptModalProps) {
   const [tab, setTab] = useState<'read' | 'unread'>('read');
-  const [rows, setRows] = useState<{ read: ReceiptPanelRow[]; unread: ReceiptPanelRow[] } | null>(null);
+  const [rows, setRows] = useState<ReceiptPanel | null>(null);
   const [errorText, setErrorText] = useState('');
 
   useEffect(() => {
@@ -57,20 +57,28 @@ export function ReadReceiptModal({ convId, seq, onClose }: ReadReceiptModalProps
             className={`receipt-modal__tab${tab === 'read' ? ' receipt-modal__tab--active' : ''}`}
             onClick={() => setTab('read')}
           >
-            已读 {rows ? rows.read.length : '…'}
+            已读 {rows ? rows.readCount : '…'}
           </button>
           <button
             type="button"
             className={`receipt-modal__tab${tab === 'unread' ? ' receipt-modal__tab--active' : ''}`}
             onClick={() => setTab('unread')}
           >
-            未读 {rows ? rows.unread.length : '…'}
+            未读 {rows ? rows.unreadCount : '…'}
           </button>
         </div>
         <div className="receipt-modal__list">
           {errorText ? <div className="receipt-modal__empty">{errorText}</div> : null}
           {!errorText && !rows ? <div className="receipt-modal__empty">加载中…</div> : null}
-          {!errorText && rows && list.length === 0 ? (
+          {!errorText && rows?.truncated ? (
+            /* 大群仅计数（OQ-B04）：>200 人群不展开名单 */
+            <div className="receipt-modal__empty">
+              已读 {rows.readCount} 人 · 未读 {rows.unreadCount} 人
+              <br />
+              超过 200 人的群不展示已读明细
+            </div>
+          ) : null}
+          {!errorText && rows && !rows.truncated && list.length === 0 ? (
             <div className="receipt-modal__empty">{tab === 'read' ? '暂无已读' : '全部已读 🎉'}</div>
           ) : null}
           {list.map((m) => (

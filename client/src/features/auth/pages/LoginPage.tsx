@@ -1,6 +1,8 @@
 /**
  * 认证页 Pxx-AUTH（D01 §3 认证窗 420×560）：
  * 账号口令表单；1007 错误锁定倒计时展示；错误文案按错误码映射（D01 §11）。
+ * D11：登录命中 must_change_pwd（导入用户初始口令）→ 二步改密表单
+ * （token 已发但被本页拦截，改密成功才放行进应用）。
  */
 
 import { useEffect, useState } from 'react';
@@ -44,6 +46,64 @@ export function LoginPage() {
       alive = false;
     };
   }, []);
+
+  // 首登强制改密（D11）：token 已发但拦截在本页——改密成功才放行
+  const user = useAuthStore((s) => s.user);
+  const changePassword = useAuthStore((s) => s.changePassword);
+  const [oldPwd, setOldPwd] = useState('');
+  const [newPwd, setNewPwd] = useState('');
+  const [newPwd2, setNewPwd2] = useState('');
+  const [pwdBusy, setPwdBusy] = useState(false);
+  const [pwdError, setPwdError] = useState('');
+
+  if (token && user?.must_change_pwd) {
+    const submitChange = () => {
+      if (newPwd.length < 8) {
+        setPwdError('新密码至少 8 位（含字母与数字）');
+        return;
+      }
+      if (newPwd !== newPwd2) {
+        setPwdError('两次输入的新密码不一致');
+        return;
+      }
+      setPwdBusy(true);
+      setPwdError('');
+      void changePassword(oldPwd, newPwd)
+        .catch((e) => setPwdError(e instanceof Error ? e.message : '改密失败，请重试'))
+        .finally(() => setPwdBusy(false));
+    };
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <div className="login-card__brand">
+            <Logo size={44} />
+            <div className="login-card__title">首次登录 · 修改密码</div>
+            <div className="login-card__sub">初始口令为临时口令，请设置新密码后进入</div>
+          </div>
+          <Form layout="vertical" className="login-card__form">
+            <Form.Item label="当前口令（初始口令）">
+              <Input.Password value={oldPwd} onChange={(e) => setOldPwd(e.target.value)} size="large" autoFocus />
+            </Form.Item>
+            <Form.Item label="新密码（≥8 位，含字母与数字）">
+              <Input.Password value={newPwd} onChange={(e) => setNewPwd(e.target.value)} size="large" />
+            </Form.Item>
+            <Form.Item label="确认新密码">
+              <Input.Password
+                value={newPwd2}
+                onChange={(e) => setNewPwd2(e.target.value)}
+                size="large"
+                onKeyDown={(e) => e.key === 'Enter' && oldPwd && newPwd && submitChange()}
+              />
+            </Form.Item>
+            {pwdError ? <div className="login-card__error" data-testid="must-change-error">{pwdError}</div> : null}
+            <Button block size="large" className="login-card__submit" loading={pwdBusy} disabled={!oldPwd || !newPwd || !newPwd2} onClick={submitChange} data-testid="must-change-submit">
+              设置新密码并进入
+            </Button>
+          </Form>
+        </div>
+      </div>
+    );
+  }
 
   // 已登录（含登录成功）→ 回默认落点 /im
   if (token) return <Navigate to="/im" replace />;

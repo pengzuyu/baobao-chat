@@ -39,6 +39,9 @@ export function RolesPage() {
   const [busy, setBusy] = useState(false);
   // 授权管理（按 uid 查询）
   const [grantUid, setGrantUid] = useState('');
+  // D10：数据范围四档（授予时携带；2/3 需部门 ID）
+  const [scopeType, setScopeType] = useState(4);
+  const [scopeDeptId, setScopeDeptId] = useState('');
   const [grants, setGrants] = useState<AdminGrant[] | null>(null);
 
   const reload = useCallback(async () => {
@@ -217,6 +220,9 @@ export function RolesPage() {
               grants.map((g) => (
                 <div className="admin-grants__row" key={g.id}>
                   <span>{g.role_name}</span>
+                  <span className="tag">
+                    {(g.scope_type ?? 4) === 1 ? '本人' : (g.scope_type ?? 4) === 2 ? `本部门#${g.scope_dept_id ?? ''}` : (g.scope_type ?? 4) === 3 ? `本部门及以下#${g.scope_dept_id ?? ''}` : '全租户'}
+                  </span>
                   <button type="button" className="btn btn--sm btn--danger" onClick={() => void doRevoke(g.id)}>
                     收回
                   </button>
@@ -234,6 +240,27 @@ export function RolesPage() {
                   </option>
                 ))}
               </select>
+              <select
+                className="gm-select"
+                data-testid="grant-scope-select"
+                value={scopeType}
+                onChange={(e) => setScopeType(Number(e.target.value))}
+                title="数据范围（D12 §S5；权限判定按范围收敛随引擎接线）"
+              >
+                <option value={4}>范围：全租户</option>
+                <option value={1}>范围：本人</option>
+                <option value={2}>范围：本部门</option>
+                <option value={3}>范围：本部门及以下</option>
+              </select>
+              {scopeType === 2 || scopeType === 3 ? (
+                <input
+                  className="gm-input"
+                  data-testid="grant-scope-dept"
+                  placeholder="部门 ID"
+                  value={scopeDeptId}
+                  onChange={(e) => setScopeDeptId(e.target.value)}
+                />
+              ) : null}
               <button
                 type="button"
                 className="btn btn--sm btn--primary"

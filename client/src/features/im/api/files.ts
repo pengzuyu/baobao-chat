@@ -39,6 +39,10 @@ export interface MyFileItem {
   height?: number;
   source: 'upload' | 'message';
   convId?: string;
+  /** 消息锚点（群文件定位消息跳转依据；0/缺省=未关联，OQ-B24） */
+  msgSeq?: number;
+  /** 锚点消息已撤回：文件保留可下载，锚点置灰不可跳转（OQ-B24） */
+  recalled?: boolean;
   createdAt: number;
 }
 

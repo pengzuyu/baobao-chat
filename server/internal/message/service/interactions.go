@@ -196,6 +196,9 @@ func (s *Service) Typing(ctx context.Context, userID int64, p messageapi.TypingP
 	return nil
 }
 
+// maxPinnedConvs 单用户置顶会话上限（OQ-B06 拍板：超限拒绝+提示，不自动替换最旧）
+const maxPinnedConvs = 30
+
 // UpdateConvState 置顶/免打扰/草稿（D03 API-IM-13）：按字段覆盖，多端经 conv.updated(kind=state) 同步。
 func (s *Service) UpdateConvState(ctx context.Context, userID, convID int64, patch messageapi.ConvStatePatch) (*messageapi.ConvStateResult, error) {
 	if _, err := s.repo.GetConversation(ctx, convID); err != nil {
@@ -210,6 +213,17 @@ func (s *Service) UpdateConvState(ctx context.Context, userID, convID int64, pat
 	}
 	next := cur
 	if patch.Pinned != nil {
+		// 置顶上限 30（OQ-B06 拍板：拒绝+提示，不替换最旧）：新置顶且已达上限 → 3023；
+		// 取消置顶/重复置顶不计数
+		if *patch.Pinned && !cur.Pinned {
+			n, err := s.repo.CountPinned(ctx, userID)
+			if err != nil {
+				return nil, errx.From(err)
+			}
+			if n >= maxPinnedConvs {
+				return nil, errx.New(errx.CodeIMPinnedLimit, "置顶会话已达上限 30")
+			}
+		}
 		next.Pinned = *patch.Pinned
 	}
 	if patch.Mute != nil {

@@ -24,6 +24,25 @@ type SpaceDTO struct {
 	CreatedAt  int64  `json:"created_at"` // ms
 }
 
+// GrantRow 空间授权行（resource_acl 投影；治理角色折叠映射 11 §2.4：
+// perm 4=owner|admin（治理者，admin 标记 v0.1 不分档登记）/3=contributor/1=reader）
+type GrantRow struct {
+	ID          string `json:"id"`
+	GrantType   int    `json:"grant_type"`  // 1 user 2 dept
+	GrantTarget string `json:"grant_target"` // user_id/dept_id
+	Perm        int    `json:"perm"`          // 1 viewer 3 editor 4 owner
+	GrantedBy   string `json:"granted_by"`
+	ExpiresAt   int64  `json:"expires_at"` // ms；0=永久
+	CreatedAt   int64  `json:"created_at"` // ms
+}
+
+type GrantReq struct {
+	GrantType   int    `json:"grant_type"`   // 1 user 2 dept（3 role/4 tenant 随角色体系阶段二）
+	GrantTarget string `json:"grant_target"` // 目标 ID
+	Perm        int    `json:"perm"`         // 1 reader 3 contributor 4 owner/admin
+	ExpiresAtMs int64  `json:"expires_at_ms"` // 0=永久
+}
+
 // NodeDTO 目录（nodes 列表/新建）
 type NodeDTO struct {
 	ID        string `json:"id"`
@@ -96,6 +115,8 @@ type QueryResp struct {
 	Items    []QueryHit `json:"items"`
 	TookMs   int64      `json:"took_ms"`
 	Degraded []string   `json:"degraded,omitempty"` // vector=向量路降级（仅关键词）
+	// OQ-D10：可见集<全集时的合规提示（"部分结果被策略隐藏"；空=无隐藏）
+	FilteredHint string `json:"filtered_hint,omitempty"`
 }
 
 // KBService 知识库域服务接口（main REST 壳依赖）
@@ -125,6 +146,13 @@ type KBService interface {
 	ChunksAround(ctx context.Context, tenantID, userID, docID int64, seq int) ([]ChunkDTO, error)
 	// ListJobs jobs 简版（docs 按 status 列表代，API-KB-15 降级形态）
 	ListJobs(ctx context.Context, tenantID, userID, spaceID int64, status string) ([]DocDTO, error)
+	// ── 治理写操作（D8；权限守卫在 admin:kb:govern 路由层）──
+	GovernSetSpaceStatus(ctx context.Context, tenantID, spaceID int64, archived bool) error
+	GovernDeleteSpace(ctx context.Context, tenantID, spaceID int64) error
+	// ── 空间授权管理（11 §6 / D07 PKB-06；治理者=owner_id 或 ACL perm≥4）──
+	ListGrants(ctx context.Context, tenantID, userID, spaceID int64) ([]GrantRow, error)
+	AddGrant(ctx context.Context, tenantID, userID, spaceID int64, req GrantReq) (*GrantRow, error)
+	RemoveGrant(ctx context.Context, tenantID, userID, spaceID, grantID int64) error
 	// Query 检索：权限前置过滤（可见空间集注入两路 WHERE）→ 向量余弦 + 关键词 ILIKE
 	// → RRF 融合（k=60）→ 高亮区间
 	Query(ctx context.Context, tenantID, userID int64, spaceIDs []string, keyword string, topK int) (*QueryResp, error)

@@ -48,11 +48,29 @@ type Options struct {
 	Now                func() time.Time
 	Embedder           EmbedFn
 	OpenFile           FileOpener
+	// DocText 文档中心正文读取（E6：doc→kb 同步；跨域闭包——main 注 doc 域 GetFile
+	// 取 title+content_md；nil=通道未装配 9004）
+	DocText func(ctx context.Context, tenantID, userID, docID int64) (title, contentMD string, err error)
 	// ACLPerm 资源级 ACL 查询（03 §4.4；kb.space 资源键——nil 或返回 0=
 	// 无显式授权，回落 v0.1 三级空间基线；ACL 命中=显式授权超集：可放宽
 	// 如 dept 空间授部门 viewer）。返回值：0 none / 1 viewer / 2
 	// commenter / 3 editor / 4 owner（org/acl Perm 语义，闭包传 int 解耦）
 	ACLPerm func(ctx context.Context, spaceID, userID int64) int
+	// ── 授权管理通道（11 §6 grants 三操作；main 经 aclSvc 装配，跨域不引包）──
+	ACLGrant func(ctx context.Context, spaceID int64, grantType int, grantTarget int64, perm int, grantedBy int64, expiresAtMs int64) (grantID int64, createdAtMs int64, err error)
+	ACLListGrants func(ctx context.Context, spaceID int64) ([]ACLGrantRow, error)
+	ACLRevoke func(ctx context.Context, spaceID, grantID int64) error
+}
+
+// ACLGrantRow 授权行投影（ACLListGrants 返回；与 api.GrantRow 字段对齐，int ID 形态）
+type ACLGrantRow struct {
+	GrantID     int64
+	GrantType   int
+	GrantTarget int64
+	Perm        int
+	GrantedBy   int64
+	ExpiresAtMs int64 // 0=永久
+	CreatedAtMs int64
 }
 
 func (o *Options) fillDefaults() {
@@ -599,6 +617,12 @@ func (s *Service) Query(ctx context.Context, tenantID, userID int64, spaceIDs []
 			visible = append(visible, sp)
 		}
 	}
+	// OQ-D10 合规提示：可见集 < 全集 = 存在被策略隐藏的空间（未授权/停用/敏感），
+	// 检索范围不含它们——结果可能不完整（文案过合规，不做逐条 deny 归因）
+	hiddenHint := ""
+	if len(visible) < len(all) {
+		hiddenHint = "部分结果被策略隐藏"
+	}
 	// 请求指定空间 → 交集；指定空间不可见 → 7002（不做静默剔除，防空间名探测歧义）
 	targets := visible
 	if len(spaceIDs) > 0 {
@@ -628,7 +652,7 @@ func (s *Service) Query(ctx context.Context, tenantID, userID int64, spaceIDs []
 		spaceTypeOf[sp.ID] = sp.SpaceType
 	}
 
-	resp := &kbapi.QueryResp{Items: []kbapi.QueryHit{}, Degraded: []string{}}
+	resp := &kbapi.QueryResp{Items: []kbapi.QueryHit{}, Degraded: []string{}, FilteredHint: hiddenHint}
 	if len(targetIDs) == 0 {
 		resp.TookMs = msSince(start, s.opts.Now())
 		return resp, nil
@@ -921,6 +945,9 @@ func defaultTitle(content string) string {
 // 可放宽基线（如 dept 空间授部门 viewer，11 §2.1）；无授权回落
 // v0.1 基线（personal 本人/company 全员/dept 治理者）
 func (s *Service) canRead(ctx context.Context, sp kbrepo.Space, userID int64) bool {
+	if sp.Status != "active" {
+		return false // 治理停用（archived）：检索/浏览/详情全挡（D8）
+	}
 	if s.opts.ACLPerm != nil && s.opts.ACLPerm(ctx, sp.ID, userID) >= 1 { // viewer
 		return true
 	}
@@ -1037,4 +1064,189 @@ func msSince(start, end time.Time) int64 {
 		return 0
 	}
 	return ms
+}
+
+// ── 空间授权管理（11 §6 / D07 PKB-06）──
+
+// isGovernor 治理者判定：space.owner_id 或 ACL perm≥4（owner/admin 折叠；11 §2.4）
+func (s *Service) isGovernor(ctx context.Context, sp kbrepo.Space, userID int64) bool {
+	if sp.OwnerID == userID {
+		return true
+	}
+	return s.opts.ACLPerm != nil && s.opts.ACLPerm(ctx, sp.ID, userID) >= 4
+}
+
+// mustGovernor 治理者校验（7003 语义：无权不暴露空间细节）
+func (s *Service) mustGovernor(ctx context.Context, userID, spaceID int64) (*kbrepo.Space, error) {
+	sp, err := s.repo.GetSpace(ctx, spaceID)
+	if err != nil {
+		return nil, errx.New(errx.CodeKBSpaceNotFound, "空间不存在")
+	}
+	if !s.isGovernor(ctx, *sp, userID) {
+		return nil, errx.New(errx.CodeKBQueryDenied, "仅空间治理者可管理授权")
+	}
+	return sp, nil
+}
+
+// ListGrants 授权列表（resource_acl 投影；含过期行——展示层标灰，清理随阶段二任务）
+func (s *Service) ListGrants(ctx context.Context, tenantID, userID, spaceID int64) ([]kbapi.GrantRow, error) {
+	if _, err := s.mustGovernor(ctx, userID, spaceID); err != nil {
+		return nil, err
+	}
+	if s.opts.ACLListGrants == nil {
+		return nil, errx.New(errx.CodeInternal, "授权管理未装配")
+	}
+	rows, err := s.opts.ACLListGrants(ctx, spaceID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	out := make([]kbapi.GrantRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, kbapi.GrantRow{
+			ID: strconv.FormatInt(r.GrantID, 10),
+			GrantType: r.GrantType, GrantTarget: strconv.FormatInt(r.GrantTarget, 10),
+			Perm: r.Perm, GrantedBy: strconv.FormatInt(r.GrantedBy, 10),
+			ExpiresAt: r.ExpiresAtMs, CreatedAt: r.CreatedAtMs,
+		})
+	}
+	return out, nil
+}
+
+// AddGrant 添加授权（治理者；perm 合法集 1/3/4——治理角色折叠映射 11 §2.4）
+func (s *Service) AddGrant(ctx context.Context, tenantID, userID, spaceID int64, req kbapi.GrantReq) (*kbapi.GrantRow, error) {
+	if _, err := s.mustGovernor(ctx, userID, spaceID); err != nil {
+		return nil, err
+	}
+	if s.opts.ACLGrant == nil {
+		return nil, errx.New(errx.CodeInternal, "授权管理未装配")
+	}
+	if req.GrantType != 1 && req.GrantType != 2 {
+		return nil, errx.New(errx.CodeBadRequest, "grant_type 合法值：1(user) 2(dept)")
+	}
+	if req.Perm != 1 && req.Perm != 3 && req.Perm != 4 {
+		return nil, errx.New(errx.CodeBadRequest, "perm 合法值：1(reader) 3(contributor) 4(owner/admin)")
+	}
+	target, err := strconv.ParseInt(strings.TrimSpace(req.GrantTarget), 10, 64)
+	if err != nil || target <= 0 {
+		return nil, errx.New(errx.CodeBadRequest, "grant_target 须为正整数 ID")
+	}
+	var expiresMs int64
+	if req.ExpiresAtMs > 0 {
+		if req.ExpiresAtMs <= s.opts.Now().UnixMilli() {
+			return nil, errx.New(errx.CodeBadRequest, "expires_at 须晚于当前")
+		}
+		expiresMs = req.ExpiresAtMs
+	}
+	grantID, createdAt, err := s.opts.ACLGrant(ctx, spaceID, req.GrantType, target, req.Perm, userID, expiresMs)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	row := &kbapi.GrantRow{
+		ID: strconv.FormatInt(grantID, 10), GrantType: req.GrantType,
+		GrantTarget: req.GrantTarget, Perm: req.Perm,
+		GrantedBy: strconv.FormatInt(userID, 10), CreatedAt: createdAt,
+	}
+	if expiresMs > 0 {
+		row.ExpiresAt = expiresMs
+	}
+	return row, nil
+}
+
+// RemoveGrant 撤销授权（治理者；owner_id 为治理锚点恒在——移除 ACL 行不破坏治理）
+func (s *Service) RemoveGrant(ctx context.Context, tenantID, userID, spaceID, grantID int64) error {
+	if _, err := s.mustGovernor(ctx, userID, spaceID); err != nil {
+		return err
+	}
+	if s.opts.ACLRevoke == nil {
+		return errx.New(errx.CodeInternal, "授权管理未装配")
+	}
+	if err := s.opts.ACLRevoke(ctx, spaceID, grantID); err != nil {
+		return errx.From(err)
+	}
+	return nil
+}
+
+// ── KB 治理写操作（D8；admin 域闭包转调——权限守卫在 admin:kb:govern 路由层）──
+
+// GovernSetSpaceStatus 停用/启用（archived 空间 canRead 全挡：检索/浏览即刻不可见）
+func (s *Service) GovernSetSpaceStatus(ctx context.Context, tenantID, spaceID int64, archived bool) error {
+	status := "active"
+	if archived {
+		status = "archived"
+	}
+	if err := s.repo.SetSpaceStatus(ctx, tenantID, spaceID, status); err != nil {
+		return errx.New(errx.CodeKBSpaceNotFound, "空间不存在")
+	}
+	return nil
+}
+
+// GovernDeleteSpace 删除空间（级联 chunk/doc/node；personal 不可删 7010——11 §2.1）
+func (s *Service) GovernDeleteSpace(ctx context.Context, tenantID, spaceID int64) error {
+	sp, err := s.repo.GetSpace(ctx, spaceID)
+	if err != nil || sp.TenantID != tenantID {
+		return errx.New(errx.CodeKBSpaceNotFound, "空间不存在")
+	}
+	if sp.SpaceType == kbrepo.SpacePersonal {
+		return errx.New(errx.CodeKBPersonalProtected, "个人空间不可删除（7010）")
+	}
+	if err := s.repo.DeleteSpace(ctx, tenantID, spaceID); err != nil {
+		return errx.From(err)
+	}
+	return nil
+}
+
+// ── 内容来源通道（E6 / 11 篇 §3.1：doc 同步 + IM 转存）──
+
+// IngestFromDoc 文档中心同步（INT-KB-06）：读 doc 当前正文（含版本）摄入个人空间；
+// 源更新策略=手动重摄入（11 §7.7 默认；自动跟随随阶段二）
+func (s *Service) IngestFromDoc(ctx context.Context, tenantID, userID int64, spaceID, docID int64) (*kbapi.DocDTO, error) {
+	if s.opts.DocText == nil {
+		return nil, errx.New(errx.CodeInternal, "文档同步通道未装配")
+	}
+	title, content, err := s.opts.DocText(ctx, tenantID, userID, docID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil, errx.New(errx.CodeBadRequest, "文档正文为空，无可摄入内容")
+	}
+	return s.ingestExternal(ctx, tenantID, userID, spaceID, title, content, kbrepo.SourceDoc, strconv.FormatInt(docID, 10), "md")
+}
+
+// IngestFromIM IM 消息转存（11 §3.1 来源⑤简版：文本消息直存；卡片/文件消息转
+// 存随 IM 侧菜单扩展——v0.1 文本通道，登记）
+func (s *Service) IngestFromIM(ctx context.Context, tenantID, userID int64, spaceID int64, msgID int64, title, text string) (*kbapi.DocDTO, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errx.New(errx.CodeBadRequest, "消息文本为空")
+	}
+	if title == "" {
+		title = "IM 消息 " + strconv.FormatInt(msgID, 10)
+	}
+	return s.ingestExternal(ctx, tenantID, userID, spaceID, title, text, kbrepo.SourceIM, strconv.FormatInt(msgID, 10), "txt")
+}
+
+// ingestExternal 外部来源摄入公共段：写入权限校验（getSpaceFor write）+管线复用
+func (s *Service) ingestExternal(ctx context.Context, tenantID, userID, spaceID int64, title, content, sourceType, sourceRef, ext string) (*kbapi.DocDTO, error) {
+	if _, err := s.getSpaceFor(ctx, userID, spaceID, true); err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > s.opts.MaxDocBytes {
+		return nil, errx.New(errx.CodeKBDocTooLarge, "文档超大拒入，请拆分后同步")
+	}
+	// source 字段经 IngestDoc 的 title/format/text 通道写入后回填（repo 层 UpdateSource）
+	dto, err := s.IngestDoc(ctx, tenantID, userID, spaceID, 0, title, ext2format(ext), content, 0)
+	if err != nil {
+		return nil, err
+	}
+	if docID, perr := strconv.ParseInt(dto.ID, 10, 64); perr == nil {
+		_ = s.repo.SetDocSource(ctx, tenantID, docID, sourceType, sourceRef)
+	}
+	return dto, nil
+}
+
+func ext2format(ext string) string {
+	if ext == "md" {
+		return "markdown"
+	}
+	return "text"
 }

@@ -53,6 +53,8 @@ const FILTERS: { key: string; label: string }[] = [
 
 export function MailPage() {
   const [folder, setFolder] = useState('inbox');
+  // 草稿续写初值（D16）
+  const [draftInit, setDraftInit] = useState<{ id: string; to: string; cc: string; subject: string; body: string } | null>(null);
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
@@ -100,6 +102,18 @@ export function MailPage() {
     : 0;
 
   const openMessage = (m: MailMessage) => {
+    // 草稿箱行点击=续写（D16）：携带原 draft_id 重开写信窗（发送/另存后清理）
+    if (folder === 'drafts') {
+      setDraftInit({
+        id: m.id,
+        to: m.to_addrs.join(', '),
+        cc: m.cc_addrs.join(', '),
+        subject: m.subject,
+        body: m.body ?? m.snippet ?? '',
+      });
+      setComposeOpen(true);
+      return;
+    }
     setSelected(m.id);
     if ((m.flags & 1) === 0) markRead.mutate(m.id);
   };
@@ -268,11 +282,18 @@ export function MailPage() {
 
       {composeOpen && (
         <ComposeModal
-          onClose={() => setComposeOpen(false)}
+          onClose={() => {
+            setComposeOpen(false);
+            setDraftInit(null);
+          }}
           onSend={(req) => send.mutateAsync(req)}
           onSendAs={(mailboxId, req) => sendAs.mutateAsync({ mailboxId, req })}
           sharedOwnerBoxes={shared.data ?? []}
           replyTo={replyTo}
+          draftInit={draftInit}
+          onDraftSaved={() => {
+            void mineQuery.refetch();
+          }}
         />
       )}
       {settingsOpen && (

@@ -59,16 +59,6 @@ export const qk = {
   auth: {
     session: ['auth', 'session'] as const,
   },
-  doc: {
-    /** 文档列表 ['doc','files',q,cursor]（D05；写操作后前缀 ['doc','files'] 失效） */
-    files: (q: string = '', cursor: string = ''): QueryKeyRO => ['doc', 'files', q, cursor],
-    /** 文档详情（含当前正文）['doc','file',id]（保存/恢复/重命名后失效） */
-    file: (docId: string): QueryKeyRO => ['doc', 'file', docId],
-    /** 版本时间线 ['doc','versions',id]（保存/恢复后失效） */
-    versions: (docId: string): QueryKeyRO => ['doc', 'versions', docId],
-    /** 回收站 ['doc','trash']（软删/恢复后失效） */
-    trash: ['doc', 'trash'] as const,
-  },
   kb: {
     /** 空间列表 ['kb','spaces',type]（D07；摄入/重摄入后失效 ['kb','spaces'] 前缀） */
     spaces: (type: string = 'all'): QueryKeyRO => ['kb', 'spaces', type],

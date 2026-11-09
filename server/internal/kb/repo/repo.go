@@ -32,6 +32,8 @@ const (
 const (
 	SourceText     = "text"
 	SourceFile     = "file"
+	SourceDoc      = "doc" // 文档中心同步（E6）
+	SourceIM       = "im"  // IM 消息转存（E6）
 	SourceMarkdown = "markdown"
 )
 
@@ -79,7 +81,7 @@ type Doc struct {
 	SpaceID    int64
 	NodeID     int64 // 0=空间根
 	Title      string
-	SourceType string // text|file|markdown
+	SourceType string // text|file|markdown|doc|im（11 §3.1 五来源；doc=文档中心同步 im=消息转存 E6）
 	SourceRef  string // file 来源=file_id
 	Ext        string
 	Size       int64
@@ -131,6 +133,10 @@ type Repo interface {
 	GetPersonal(ctx context.Context, tenantID, userID int64) (*Space, error)
 	GetSpace(ctx context.Context, id int64) (*Space, error)
 	ListSpaces(ctx context.Context, tenantID int64) ([]Space, error)
+	// SetSpaceStatus 治理停用/启用（status: active|archived；D8）
+	SetSpaceStatus(ctx context.Context, tenantID, spaceID int64, status string) error
+	// DeleteSpace 级联删除（chunk/doc/node/space 四表；D8——personal 由 service 拒 7010）
+	DeleteSpace(ctx context.Context, tenantID, spaceID int64) error
 
 	// ── 目录 ──
 	// CreateNode 新建目录；同父同名冲突（uq_kb_node_sibling）→ ErrDupNode
@@ -141,6 +147,8 @@ type Repo interface {
 
 	// ── 文档 ──
 	CreateDoc(ctx context.Context, d Doc) (Doc, error)
+	// SetDocSource 回填来源标记（E6 外部通道：doc 同步/IM 转存）
+	SetDocSource(ctx context.Context, tenantID, docID int64, sourceType, sourceRef string) error
 	GetDoc(ctx context.Context, id int64) (*Doc, error)
 	// FailDoc 摄入失败落状态（status=failed + error_msg；version 不动）
 	FailDoc(ctx context.Context, docID int64, errMsg string, now time.Time) error

@@ -53,7 +53,7 @@ server-run: dev-up ## 本地运行 bbw-server（依赖 compose core，DSN 指向
 	  cd server && BBW_DB_DSN='postgres://bbw:bbw_change_me@127.0.0.1:5432/bbw?sslmode=disable' \
 	    BBW_REDIS_ADDR=127.0.0.1:6379 BBW_S3_ENDPOINT=http://127.0.0.1:9000 \
 	    BBW_S3_ACCESS_KEY=bbw_minio_change_me BBW_S3_SECRET_KEY=bbw_minio_secret_change_me \
-	    go run ./cmd/bbw-server --enable auth,org,message,file,doc,kb,eco,admin,audit,notify,aigw; \
+	    go run ./cmd/bbw-server --enable auth,org,message,file,kb,eco,admin,audit,notify,aigw; \
 	  else echo "[make] server/ 尚未创建（设计阶段），跳过"; fi
 
 .PHONY: server-image
@@ -93,6 +93,10 @@ client-typecheck: ## 前端类型检查（npm run typecheck，若定义）
 .PHONY: agent-build
 agent-build: ## 编译 Agent Runtime（cargo build）
 	@if [ -d agent ]; then cd agent && cargo build; else echo "[make] agent/ 尚未创建（设计阶段），跳过"; fi
+
+.PHONY: agent-sidecar
+agent-sidecar: ## bbrt 落位 src-tauri/binaries/bbrt-<triple>（externalBin 打包前置；仅 Unix——Windows 侧 bbrt 编不过不随包，脚本内报错说明）
+	@bash scripts/prepare-bbrt-sidecar.sh
 
 # ---------------------------------------------------------------------------
 # 测试与静态检查（聚合三栈）

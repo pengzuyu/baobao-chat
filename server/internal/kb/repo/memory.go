@@ -445,3 +445,58 @@ func (m *Memory) CountDocs(_ context.Context, tenantID int64) (int64, error) {
 	}
 	return n, nil
 }
+
+// SetSpaceStatus 治理停用/启用（内存版）
+func (m *Memory) SetSpaceStatus(_ context.Context, tenantID, spaceID int64, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sp, ok := m.spaces[spaceID]
+	if !ok || sp.TenantID != tenantID {
+		return ErrNotFound
+	}
+	sp.Status = status
+	m.spaces[spaceID] = sp
+	return nil
+}
+
+// DeleteSpace 级联删除（内存版：chunk/doc/node/space + bySpace 索引）
+func (m *Memory) DeleteSpace(_ context.Context, tenantID, spaceID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sp, ok := m.spaces[spaceID]
+	if !ok || sp.TenantID != tenantID {
+		return ErrNotFound
+	}
+	delete(m.spaces, spaceID)
+	delete(m.bySpace, spaceID)
+	for id, n := range m.nodes {
+		if n.SpaceID == spaceID {
+			delete(m.nodes, id)
+		}
+	}
+	for id, d := range m.docs {
+		if d.SpaceID == spaceID {
+			delete(m.docs, id)
+		}
+	}
+	for id, c := range m.chunks {
+		if c.SpaceID == spaceID {
+			delete(m.chunks, id)
+		}
+	}
+	return nil
+}
+
+// SetDocSource 回填来源标记（E6）
+func (m *Memory) SetDocSource(_ context.Context, _, docID int64, sourceType, sourceRef string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.docs[docID]
+	if !ok {
+		return ErrNotFound
+	}
+	d.SourceType = sourceType
+	d.SourceRef = sourceRef
+	m.docs[docID] = d
+	return nil
+}

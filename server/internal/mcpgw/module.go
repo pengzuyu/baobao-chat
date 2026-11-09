@@ -19,8 +19,9 @@
 // 治理解耦：风险级经 tools/list annotations["x-bbw-risk"] 声明（客户端默认"中"），
 // OBO scope 最小化在本层验签后校验（防线二），客户端九步管线 gate/审批照常执行。
 //
-// 工具范围（OQ-B26 试点 kb_query+doc_read 已落；im_send/file_upload 治理属性
-// 登记于 09 篇 §3.1，供给随本层补齐——Runtime 零改动即自动发现）。
+// 工具范围（OQ-B26 试点 kb_query 已落；im_send/file_upload 治理属性
+// 登记于 09 篇 §3.1，供给随本层补齐——Runtime 零改动即自动发现。
+// doc_read 已随文档中心域移除（2026-11 瘦身）。
 package mcpgw
 
 import (
@@ -50,8 +51,6 @@ type Options struct {
 	Verify func(ctx context.Context, token string) (*authjwt.Claims, error)
 	// KBQuery 知识库混合检索（kb 域注入：空间可见性按 uid 前置过滤=防线三）
 	KBQuery func(ctx context.Context, tenantID, uid int64, spaceIDs []string, keyword string, topK int) (any, error)
-	// DocRead 在线文档读取（doc 域注入：owner 私有校验在域服务=防线三）
-	DocRead func(ctx context.Context, tenantID, uid, docID int64) (any, error)
 	// ImSend 消息发送（message 域注入：成员资格/敏感词/频率校验在域服务）
 	ImSend func(ctx context.Context, tenantID, uid, convID int64, msgType string, body json.RawMessage) (any, error)
 	// FileUpload 文件上传（file 域注入：b64 已解码为流；去重/限长在域服务）

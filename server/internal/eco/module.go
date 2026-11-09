@@ -12,8 +12,8 @@ type Module struct {
 }
 
 // NewModule 装配（main 调用）
-func NewModule(r ecorepo.Repo) *Module {
-	return &Module{svc: ecoservice.New(r)}
+func NewModule(r ecorepo.Repo, apps ecorepo.AppRepo, rollouts ecorepo.RolloutRepo, skills ecorepo.SkillRepo) *Module {
+	return &Module{svc: ecoservice.New(r, apps, rollouts, skills)}
 }
 
 // API 域服务

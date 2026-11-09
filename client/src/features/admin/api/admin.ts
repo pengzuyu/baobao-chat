@@ -100,6 +100,34 @@ export async function fetchAgentPolicy(): Promise<AgentPolicySnapshot> {
   return http.get<AgentPolicySnapshot>('/admin/policies/agent');
 }
 
+/** 工具策略行（agent_tool_policy；编辑器数据源） */
+export interface AgentToolPolicyRow {
+  subject: string;
+  allowed: boolean;
+  risk_override: string;
+  config: string;
+  updated_by: string;
+  updated_at: string;
+}
+
+/** 行级 upsert（allowed 显式传 false 合法）；返回合成快照 */
+export async function updateAgentToolPolicy(req: { subject: string; allowed: boolean; risk_override?: string; config?: string }): Promise<AgentPolicySnapshot> {
+  if (USE_MOCK) {
+    await delay(200);
+    return { version: 1, updated_at: new Date().toISOString(), source: 'table', policy: {}, rows: [{ subject: req.subject, allowed: req.allowed, risk_override: req.risk_override ?? '{}', config: req.config ?? '{}', updated_by: 'u-1', updated_at: new Date().toISOString() }] };
+  }
+  return http.put<AgentPolicySnapshot>('/admin/policies/agent/tools', req);
+}
+
+/** 删行回落默认 */
+export async function deleteAgentToolPolicy(subject: string): Promise<AgentPolicySnapshot> {
+  if (USE_MOCK) {
+    await delay(150);
+    return { version: 1, updated_at: new Date().toISOString(), source: 'default', policy: {}, rows: [] };
+  }
+  return http.delete<AgentPolicySnapshot>(`/admin/policies/agent/tools/${encodeURIComponent(subject)}`);
+}
+
 /** 敏感词分页列表 */
 export async function fetchWords(params: { cursor?: string; limit?: number } = {}): Promise<WordPage> {
   if (USE_MOCK) {
@@ -211,6 +239,8 @@ export interface AdminGrant {
   user_id: string;
   role_id: string;
   role_name: string;
+  scope_type?: number; // D10：1 本人 2 本部门 3 本部门及以下 4 全租户（缺省 4）
+  scope_dept_id?: number;
   created_at: number;
 }
 
@@ -244,9 +274,9 @@ export async function fetchUserGrants(userId: string): Promise<AdminGrant[]> {
   return data.items;
 }
 
-export async function grantRole(userId: string, roleId: string): Promise<void> {
+export async function grantRole(userId: string, roleId: string, scopeType: number = 4, scopeDeptId: number = 0): Promise<void> {
   if (USE_MOCK) return;
-  await http.post(`/admin/users/${encodeURIComponent(userId)}/grants`, { role_id: Number(roleId) });
+  await http.post(`/admin/users/${encodeURIComponent(userId)}/grants`, { role_id: Number(roleId), scope_type: scopeType, scope_dept_id: scopeDeptId });
 }
 
 export async function revokeRole(grantId: string): Promise<void> {
@@ -451,11 +481,30 @@ export interface KBSpaceRow {
   id: string;
   type: 'personal' | 'dept' | 'company';
   name: string;
+  status?: 'active' | 'archived';
   owner_id: string;
   owner_name: string;
   doc_count: number;
   quota_bytes: number;
   used_bytes: number;
+}
+
+/** 停用/启用空间（D8：停用即刻生效——检索/浏览对全员不可见） */
+export async function setKBSpaceStatus(id: string, archived: boolean): Promise<void> {
+  if (USE_MOCK) {
+    await delay(200);
+    return;
+  }
+  await http.post(`/admin/kb/spaces/${encodeURIComponent(id)}/${archived ? 'archive' : 'activate'}`, {});
+}
+
+/** 删除空间（级联；personal 7010） */
+export async function deleteKBSpace(id: string): Promise<void> {
+  if (USE_MOCK) {
+    await delay(200);
+    return;
+  }
+  await http.delete(`/admin/kb/spaces/${encodeURIComponent(id)}`);
 }
 
 export async function fetchKBSpaces(): Promise<KBSpaceRow[]> {
@@ -530,4 +579,44 @@ export async function putAIRoutes(items: AIRouteRule[]): Promise<AIRouteRule[]> 
   if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
   const data = await http.put<{ items: AIRouteRule[] }>('/admin/ai/routes', { items });
   return data.items;
+}
+
+// ── 部门成员管理（D10：user_dept 挂/卸/查）──
+
+/** 部门成员行 */
+export interface DeptMemberRow {
+  user_id: string;
+  name: string;
+  is_primary: boolean;
+}
+
+/** 部门成员列表 */
+export async function fetchDeptMembers(deptId: string): Promise<DeptMemberRow[]> {
+  if (USE_MOCK) {
+    await delay(150);
+    return [
+      { user_id: '10001', name: 'Alice（mock）', is_primary: true },
+      { user_id: '10002', name: 'Bob（mock）', is_primary: false },
+    ];
+  }
+  const data = await http.get<{ items: DeptMemberRow[] }>(`/admin/org/depts/${encodeURIComponent(deptId)}/members`);
+  return data.items ?? [];
+}
+
+/** 挂部门（首挂/显式 is_primary） */
+export async function attachDeptMember(deptId: string, userId: string, isPrimary: boolean): Promise<void> {
+  if (USE_MOCK) {
+    await delay(150);
+    return;
+  }
+  await http.post(`/admin/org/depts/${encodeURIComponent(deptId)}/members`, { user_id: userId, is_primary: isPrimary });
+}
+
+/** 卸挂 */
+export async function detachDeptMember(deptId: string, userId: string): Promise<void> {
+  if (USE_MOCK) {
+    await delay(120);
+    return;
+  }
+  await http.delete(`/admin/org/depts/${encodeURIComponent(deptId)}/members/${encodeURIComponent(userId)}`);
 }

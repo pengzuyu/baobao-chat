@@ -57,12 +57,12 @@ bbw.image：统一镜像坐标（同一组镜像=compose 共用，§3.4）
 {{/*
 bbw.app.enabledModules：由 values.modules.* 推导 bbw-server --enable 参数
 （§3.4 等价映射：compose profiles / BBW_APP_MODULES ↔ Helm values.modules.*；
-media/docs/mail 为 infra 开关不进入 --enable，由独立 Deployment 承载）
+media/mail 为 infra 开关不进入 --enable，由独立 Deployment 承载）
 */}}
 {{- define "bbw.app.enabledModules" -}}
 {{- $mods := list -}}
 {{- range $k, $v := .Values.modules -}}
-{{- if and $v (ne $k "media") (ne $k "docs") (ne $k "mail") -}}
+{{- if and $v (ne $k "media") (ne $k "mail") -}}
 {{- $mods = append $mods $k -}}
 {{- end -}}
 {{- end -}}

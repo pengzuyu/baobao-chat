@@ -32,11 +32,21 @@ type Gateway struct {
 	quota    *Quota
 	meter    *Meter
 	devToken string // BBW_AIGW_DEV_TOKEN：开发/联调通道（空=禁用）
+	// agentKillOn 平台总闸（D9：on → OBO 请求 503 拒；nil=未装配）
+	agentKillOn func() bool
 }
 
 // NewGateway 装配（module.go 调用）
-func NewGateway(verify func(token string) (*authjwt.Claims, error), router *Router, limiter *Limiter, quota *Quota, meter *Meter, devToken string) *Gateway {
-	return &Gateway{verify: verify, router: router, limiter: limiter, quota: quota, meter: meter, devToken: devToken}
+func NewGateway(verify func(token string) (*authjwt.Claims, error), router *Router, limiter *Limiter, quota *Quota, meter *Meter, devToken string, agentKillOn func() bool) *Gateway {
+	return &Gateway{verify: verify, router: router, limiter: limiter, quota: quota, meter: meter, devToken: devToken, agentKillOn: agentKillOn}
+}
+
+// oboGate OBO 请求总闸（D9）：killswitch on → 503（非 OBO 请求不受影响）
+func (g *Gateway) oboGate(who *Claims) error {
+	if who.IsOBO && g.agentKillOn != nil && g.agentKillOn() {
+		return errx.New(errx.CodeAuthOBOKillswitch, "Agent 平台总闸已拉下（紧急停止）")
+	}
+	return nil
 }
 
 // auth 提取并校验身份（§6.1：Bearer；开发令牌映射 dev 身份）
@@ -88,6 +98,10 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 	who, err := g.auth(r)
 	if err != nil {
 		writeErr(w, http.StatusUnauthorized, int(errx.From(err).Code), "鉴权失败", 0)
+		return
+	}
+	if gerr := g.oboGate(who); gerr != nil {
+		writeErr(w, http.StatusServiceUnavailable, int(errx.From(gerr).Code), gerr.Error(), 30)
 		return
 	}
 	var req ChatRequest
@@ -212,6 +226,10 @@ func (g *Gateway) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	who, err := g.auth(r)
 	if err != nil {
 		writeErr(w, http.StatusUnauthorized, int(errx.From(err).Code), "鉴权失败", 0)
+		return
+	}
+	if gerr := g.oboGate(who); gerr != nil {
+		writeErr(w, http.StatusServiceUnavailable, int(errx.From(gerr).Code), gerr.Error(), 30)
 		return
 	}
 	var req struct {

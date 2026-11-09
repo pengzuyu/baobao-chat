@@ -21,6 +21,8 @@ type Options struct {
 	MonthlyTokens int64  // BBW_AIGW_MONTHLY_TOKENS：月度 token 配额（0=不限）
 	RatePerMin    float64
 	Burst         float64
+	// AgentKillOn 平台总闸（D9；main 注入 admin 域——on 时 OBO 请求 503）
+	AgentKillOn func() bool
 }
 
 func loadOptions() Options {
@@ -70,8 +72,9 @@ func (s pgxHourSink) ExecUpsert(ctx context.Context, dim MeterDim, hour time.Tim
 
 // NewModule 装配（pool 可空 → 计量仅内存、无表驱动注册表；verify 为 auth 域校验函数，
 // 可为 nil=仅开发令牌通道）
-func NewModule(pool *pgxpool.Pool, verify func(token string) (*authjwt.Claims, error)) *Module {
+func NewModule(pool *pgxpool.Pool, verify func(token string) (*authjwt.Claims, error), agentKillOn func() bool) *Module {
 	opts := loadOptions()
+	opts.AgentKillOn = agentKillOn
 	mock := NewMockProvider(1, "mock-echo")
 	upstream := envLoadOpenAICompat()
 	router := NewRouter(mock, upstream)
@@ -98,6 +101,6 @@ func NewModule(pool *pgxpool.Pool, verify func(token string) (*authjwt.Claims, e
 			}
 		}
 	}
-	gw := NewGateway(verify, router, NewLimiter(opts.RatePerMin, opts.Burst), NewQuota(opts.MonthlyTokens), meter, opts.DevToken)
+	gw := NewGateway(verify, router, NewLimiter(opts.RatePerMin, opts.Burst), NewQuota(opts.MonthlyTokens), meter, opts.DevToken, opts.AgentKillOn)
 	return &Module{Gateway: gw, Router: router, Registry: reg, Meter: meter, Quota: nil}
 }

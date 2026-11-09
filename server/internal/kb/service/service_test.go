@@ -6,9 +6,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	kbapi "github.com/baobaowork/server/internal/kb/api"
 	kbrepo "github.com/baobaowork/server/internal/kb/repo"
 	errx "github.com/baobaowork/server/internal/platform/errors"
 )
@@ -517,4 +520,163 @@ func setACL(rule map[int64]map[int64]int, spaceID, uid int64, perm int) {
 		rule[spaceID] = map[int64]int{}
 	}
 	rule[spaceID][uid] = perm
+}
+
+// TestKBGrants D4：空间授权管理——治理者校验/添加/列表/撤销 + canRead 放宽生效
+func TestKBGrants(t *testing.T) {
+	// ACL 闭包 mock：内存授权表 + Resolve 按 grant_type 展开（user 直配/dept 简化为空）
+	grants := map[int64]ACLGrantRow{} // grantID → 行
+	nextID := int64(1)
+	permOf := map[int64]int{} // userID → perm（AddGrant user 授权后回填，模拟 Resolve）
+	o := Options{Now: func() time.Time { return time.Now() }}
+	o.ACLPerm = func(_ context.Context, spaceID, userID int64) int {
+		_ = spaceID
+		return permOf[userID]
+	}
+	o.ACLGrant = func(_ context.Context, spaceID int64, gt int, target int64, perm int, grantedBy int64, expMs int64) (int64, int64, error) {
+		id := nextID
+		nextID++
+		grants[id] = ACLGrantRow{
+			GrantID: id, GrantType: gt, GrantTarget: target, Perm: perm,
+			GrantedBy: grantedBy, ExpiresAtMs: expMs, CreatedAtMs: time.Now().UnixMilli(),
+		}
+		if gt == 1 { // user 授权回填 Resolve 视图（dept 展开属 org/acl 职责，此处不模拟）
+			permOf[target] = perm
+		}
+		return id, time.Now().UnixMilli(), nil
+	}
+	o.ACLListGrants = func(_ context.Context, spaceID int64) ([]ACLGrantRow, error) {
+		_ = spaceID
+		out := make([]ACLGrantRow, 0, len(grants))
+		for _, g := range grants {
+			out = append(out, g)
+		}
+		return out, nil
+	}
+	o.ACLRevoke = func(_ context.Context, spaceID, grantID int64) error {
+		if _, ok := grants[grantID]; !ok {
+			return kbrepo.ErrNotFound
+		}
+		delete(grants, grantID)
+		return nil
+	}
+	svc := newTestService(t, o)
+	ctx := context.Background()
+
+	// bob 建部门空间（owner=bob）；建一篇文档
+	sp, err := svc.CreateSpace(ctx, 1, bob, "dept", "研发部知识库")
+	if err != nil {
+		t.Fatalf("建空间: %v", err)
+	}
+	spaceID, _ := strconv.ParseInt(sp.ID, 10, 64)
+	if _, err := svc.IngestDoc(ctx, 1, bob, spaceID, 0, "规范", "md", "# 规范\n内容", 0); err != nil {
+		t.Fatalf("摄入: %v", err)
+	}
+
+	// 非治理者（alice）管理 → 7002 拒
+	if _, err := svc.ListGrants(ctx, 1, alice, spaceID); errx.From(err).Code != errx.CodeKBQueryDenied {
+		t.Fatalf("非治理者列表应 7002: %v", err)
+	}
+	// bob 授 alice contributor（perm 3）→ alice 可读可写（canRead/canWrite 放宽）
+	row, err := svc.AddGrant(ctx, 1, bob, spaceID, kbapi.GrantReq{GrantType: 1, GrantTarget: "1001", Perm: 3})
+	if err != nil {
+		t.Fatalf("授权: %v", err)
+	}
+	if _, err := svc.ListNodes(ctx, 1, alice, spaceID, 0); err != nil {
+		t.Fatalf("alice 授权后应可浏览: %v", err)
+	}
+	if _, err := svc.IngestDoc(ctx, 1, alice, spaceID, 0, "alice 的文档", "md", "# a", 0); err != nil {
+		t.Fatalf("contributor 应可摄入: %v", err)
+	}
+	// perm 非法集 → 9001
+	if _, err := svc.AddGrant(ctx, 1, bob, spaceID, kbapi.GrantReq{GrantType: 1, GrantTarget: "1001", Perm: 2}); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("perm=2 应 9001: %v", err)
+	}
+	// 列表含 alice 行；撤销后 alice 失去写权（permOf 回滚由 Resolve 视图模拟——
+	// mock 不联动，改验证 ACLRevoke 路径 + 列表为空）
+	rows, err := svc.ListGrants(ctx, 1, bob, spaceID)
+	if err != nil || len(rows) != 1 || rows[0].GrantTarget != "1001" || rows[0].Perm != 3 {
+		t.Fatalf("授权列表不符: %v %+v", err, rows)
+	}
+	gid, _ := strconv.ParseInt(row.ID, 10, 64)
+	if err := svc.RemoveGrant(ctx, 1, bob, spaceID, gid); err != nil {
+		t.Fatalf("撤销: %v", err)
+	}
+	rows, _ = svc.ListGrants(ctx, 1, bob, spaceID)
+	if len(rows) != 0 {
+		t.Fatalf("撤销后列表应空: %+v", rows)
+	}
+}
+
+// TestKBGovernance D8：空间停用即刻生效（检索/浏览挡）/启用恢复/级联删除/personal 7010/
+// filtered_hint（OQ-D10：他人不可见空间存在 → 检索提示"部分结果被策略隐藏"）
+func TestKBGovernance(t *testing.T) {
+	o := Options{Embedder: fakeTopical(map[string]int{"规范": 0})}
+	svc := newTestService(t, o)
+	ctx := context.Background()
+
+	// bob 建公司空间 + 摄入；alice 建个人空间（对 bob 不可见）
+	sp, err := svc.CreateSpace(ctx, 1, bob, "company", "治理空间")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spaceID, _ := strconv.ParseInt(sp.ID, 10, 64)
+	if _, err := svc.IngestDoc(ctx, 1, bob, spaceID, 0, "安全规范", "md", "# 安全规范\n规范内容", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateSpace(ctx, 1, alice, "personal", "alice 私有"); err != nil {
+		t.Fatal(err)
+	}
+
+	// filtered_hint：bob 检索时存在不可见空间（alice 个人空间）→ 提示
+	res, err := svc.Query(ctx, 1, bob, nil, "规范", 5)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if res.FilteredHint != "部分结果被策略隐藏" {
+		t.Fatalf("filtered_hint 应提示: %q", res.FilteredHint)
+	}
+
+	// 停用：即刻生效（canRead 挡——浏览 7002；检索 targets 不含该空间）
+	if err := svc.GovernSetSpaceStatus(ctx, 1, spaceID, true); err != nil {
+		t.Fatalf("停用: %v", err)
+	}
+	if _, err := svc.ListNodes(ctx, 1, bob, spaceID, 0); errx.From(err).Code != errx.CodeKBSpaceArchived {
+		t.Fatalf("停用后浏览应 7013（归档专用码）: %v", err)
+	}
+	res2, err := svc.Query(ctx, 1, bob, nil, "规范", 5)
+	if err != nil || len(res2.Items) != 0 {
+		t.Fatalf("停用后检索不应命中: %v %+v", err, res2.Items)
+	}
+	// 指定停用空间检索 → 7002（不可见语义一致）
+	sidStr := strconv.FormatInt(spaceID, 10)
+	if _, err := svc.Query(ctx, 1, bob, []string{sidStr}, "规范", 5); errx.From(err).Code != errx.CodeKBQueryDenied {
+		t.Fatalf("指定停用空间应 7002: %v", err)
+	}
+
+	// 启用恢复
+	if err := svc.GovernSetSpaceStatus(ctx, 1, spaceID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ListNodes(ctx, 1, bob, spaceID, 0); err != nil {
+		t.Fatalf("启用后应可浏览: %v", err)
+	}
+
+	// 级联删除：空间消失
+	if err := svc.GovernDeleteSpace(ctx, 1, spaceID); err != nil {
+		t.Fatalf("删除: %v", err)
+	}
+	if _, err := svc.ListNodes(ctx, 1, bob, spaceID, 0); errx.From(err).Code != errx.CodeKBSpaceNotFound {
+		t.Fatalf("删除后应 7001: %v", err)
+	}
+
+	// personal 不可删 7010
+	personal, err := svc.CreateSpace(ctx, 1, alice, "personal", "p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.ParseInt(personal.ID, 10, 64)
+	if err := svc.GovernDeleteSpace(ctx, 1, pid); errx.From(err).Code != errx.CodeKBPersonalProtected {
+		t.Fatalf("personal 删除应 7010: %v", err)
+	}
 }

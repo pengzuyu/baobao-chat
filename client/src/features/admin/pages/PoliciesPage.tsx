@@ -1,12 +1,13 @@
 /**
  * PAD-09 策略中心（D10 阶段一务实版，路由 /admin/policies）两 tab：
- * - Agent 工具策略：只读 JSON 快照（v0.1 恒默认策略；agent_tool_policy 表阶段二）
+ * - Agent 工具策略：行级编辑（D7：agent_tool_policy upsert/删行回落默认）+ 合成快照 JSON
  * - 敏感词库：分页列表 + 新增（word/category）+ 删除；写后消息域 3005 即时生效
  * - 六态：两 tab 独立 loading/empty/error；offline 只读（禁写）；forbidden 2003；
  *   degraded（新增冲突 9001 等写失败行内提示）
  */
 
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Bot, Plus, ShieldAlert, Trash2 } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
@@ -14,6 +15,7 @@ import { SkeletonBlock, SkeletonList } from '../../../shared/ui/Skeleton';
 import { StateView, type ViewStateOrOk } from '../../../shared/ui/StateView';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { useAddWord, useAgentPolicy, useDeleteWord, useWords } from '../api/hooks';
+import { deleteAgentToolPolicy, updateAgentToolPolicy } from '../api/admin';
 
 type TabKey = 'agent' | 'words';
 
@@ -38,10 +40,24 @@ export function PoliciesPage() {
   );
 }
 
-/** Agent 工具策略只读快照面板 */
+/** 默认内置工具集（09 §5.2 defaultAgentPolicy 口径；编辑器首屏四行） */
+const BUILTIN_SUBJECTS: Array<{ subject: string; label: string; defAllowed: boolean }> = [
+  { subject: 'fs_read', label: '文件读取（fs_read）', defAllowed: true },
+  { subject: 'fs_write', label: '文件写入（fs_write）', defAllowed: true },
+  { subject: 'shell_exec', label: '命令执行（shell_exec）', defAllowed: false },
+  { subject: 'http_fetch', label: '外网请求（http_fetch）', defAllowed: false },
+];
+
+/** Agent 工具策略面板（D7：行级编辑 + 快照 JSON） */
 function AgentPolicyPanel() {
   const query = useAgentPolicy();
   const connStatus = useConnectionStore((s) => s.status);
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [errText, setErrText] = useState('');
+  const [newSubject, setNewSubject] = useState('');
+  const [showJson, setShowJson] = useState(false);
+
   const state: ViewStateOrOk = query.isPending
     ? 'loading'
     : query.isError
@@ -52,6 +68,32 @@ function AgentPolicyPanel() {
         ? 'offline'
         : 'ok';
 
+  const rows = query.data?.rows ?? [];
+  const rowOf = (subject: string) => rows.find((r) => r.subject === subject);
+  const extraRows = rows.filter((r) => !BUILTIN_SUBJECTS.some((b) => b.subject === r.subject));
+
+  const apply = (p: Promise<unknown>, key: string) => {
+    setBusy(key);
+    setErrText('');
+    void p
+      .then(() => qc.invalidateQueries({ queryKey: ['admin', 'policy', 'agent'] }))
+      .catch((e) => setErrText(e instanceof ApiError ? getErrorText(e.code) : '操作失败'))
+      .finally(() => setBusy(null));
+  };
+
+  const toggle = (subject: string, defAllowed: boolean) => {
+    const cur = rowOf(subject);
+    const next = cur ? !cur.allowed : !defAllowed; // 无行=默认态 → 切为反向（落表）
+    apply(updateAgentToolPolicy({ subject, allowed: next }), subject);
+  };
+
+  const addSubject = () => {
+    const s = newSubject.trim();
+    if (!s) return;
+    apply(updateAgentToolPolicy({ subject: s, allowed: true }), s);
+    setNewSubject('');
+  };
+
   return (
     <StateView
       state={state}
@@ -61,16 +103,91 @@ function AgentPolicyPanel() {
       onRetry={() => void query.refetch()}
       forbiddenText="需要 admin:policy:manage 权限"
     >
-      <section className="admin-panel">
+      <section className="admin-panel" data-testid="admin-agent-policy-editor">
         <div className="admin-panel__title">
-          agent_tool_policy 快照
+          agent_tool_policy
           <span className="admin-tag">{query.data?.source === 'table' ? '表数据' : '默认策略'}</span>
           <span className="admin-panel__meta">version {query.data?.version} · {query.data ? new Date(query.data.updated_at).toLocaleString('zh-CN') : ''}</span>
+          <Button variant="secondary" onClick={() => setShowJson((v) => !v)} data-testid="admin-policy-json-toggle">
+            {showJson ? '收起快照 JSON' : '查看快照 JSON'}
+          </Button>
         </div>
-        <pre className="admin-json" data-testid="admin-agent-policy-json">
-          {JSON.stringify(query.data?.policy ?? {}, null, 2)}
-        </pre>
-        <div className="admin-panel__note">v0.1 只读展示（阶段二 agent_tool_policy 表落地后开放编辑与 agent.policy.updated 热更）</div>
+
+        {errText ? <div className="admin-inline-error" data-testid="admin-policy-error">{errText}</div> : null}
+
+        <div className="admin-policy-rows">
+          {BUILTIN_SUBJECTS.map((b) => {
+            const row = rowOf(b.subject);
+            const allowed = row ? row.allowed : b.defAllowed;
+            return (
+              <div key={b.subject} className="admin-policy-row" data-testid={`admin-policy-row-${b.subject}`}>
+                <span className="admin-policy-row__name">
+                  {b.label}
+                  {row ? <span className="admin-tag">已覆盖</span> : null}
+                </span>
+                <label className="admin-policy-row__switch">
+                  <input
+                    type="checkbox"
+                    checked={allowed}
+                    disabled={busy === b.subject || connStatus === 'offline'}
+                    onChange={() => toggle(b.subject, b.defAllowed)}
+                    data-testid={`admin-policy-toggle-${b.subject}`}
+                  />
+                  {allowed ? '允许' : '禁用'}
+                </label>
+                {row ? (
+                  <Button variant="secondary" disabled={busy === b.subject} onClick={() => apply(deleteAgentToolPolicy(b.subject), b.subject)} title="删行回落默认">
+                    恢复默认
+                  </Button>
+                ) : null}
+              </div>
+            );
+          })}
+          {extraRows.map((r) => (
+            <div key={r.subject} className="admin-policy-row" data-testid={`admin-policy-row-${r.subject}`}>
+              <span className="admin-policy-row__name">
+                {r.subject}
+                <span className="admin-tag">自定义</span>
+              </span>
+              <label className="admin-policy-row__switch">
+                <input
+                  type="checkbox"
+                  checked={r.allowed}
+                  disabled={busy === r.subject}
+                  onChange={() => toggle(r.subject, true)}
+                />
+                {r.allowed ? '允许' : '禁用'}
+              </label>
+              <Button variant="secondary" disabled={busy === r.subject} onClick={() => apply(deleteAgentToolPolicy(r.subject), r.subject)}>
+                恢复默认
+              </Button>
+            </div>
+          ))}
+        </div>
+
+        <div className="admin-policy-add">
+          <input
+            placeholder="自定义 subject（如 app:crm:*）"
+            value={newSubject}
+            onChange={(e) => setNewSubject(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addSubject()}
+            data-testid="admin-policy-new-subject"
+          />
+          <Button onClick={addSubject} loading={!!newSubject.trim() && busy === newSubject.trim()} data-testid="admin-policy-add-btn">
+            添加授权行
+          </Button>
+        </div>
+
+        <div className="admin-panel__note">
+          判定链（09 §4）：租户策略(本表) → 用户权限点 → 模式×工具矩阵 → 三级记忆 → untrusted 强制确认。
+          热更事件 agent.policy.updated 与 bbrt 工具门面下发随 Agent 域阶段二接线。
+        </div>
+
+        {showJson ? (
+          <pre className="admin-json" data-testid="admin-agent-policy-json">
+            {JSON.stringify(query.data?.policy ?? {}, null, 2)}
+          </pre>
+        ) : null}
       </section>
     </StateView>
   );

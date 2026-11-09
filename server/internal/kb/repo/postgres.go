@@ -703,3 +703,52 @@ func (p *Postgres) CountDocs(ctx context.Context, tenantID int64) (int64, error)
 		`SELECT count(*) FROM kb_doc WHERE tenant_id=$1`, tenantID).Scan(&n)
 	return n, err
 }
+
+// SetSpaceStatus 治理停用/启用（D8）
+func (p *Postgres) SetSpaceStatus(ctx context.Context, tenantID, spaceID int64, status string) error {
+	tag, err := p.pool.Exec(ctx,
+		`UPDATE kb_space SET status=$3 WHERE id=$1 AND tenant_id=$2`, spaceID, tenantID, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteSpace 级联删除（D8：无外键则显式四表删——迁移 0009 无 FK 约束，保守显式）
+func (p *Postgres) DeleteSpace(ctx context.Context, tenantID, spaceID int64) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, table := range []string{"kb_chunk", "kb_doc", "kb_node"} {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE space_id=$1 AND tenant_id=$2`, spaceID, tenantID); err != nil {
+			return err
+		}
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM kb_space WHERE id=$1 AND tenant_id=$2`, spaceID, tenantID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
+
+// SetDocSource 回填来源标记（E6）
+func (p *Postgres) SetDocSource(ctx context.Context, tenantID, docID int64, sourceType, sourceRef string) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE kb_doc SET source_type=$3, source_ref=$4 WHERE id=$1 AND tenant_id=$2`,
+		docID, tenantID, sourceType, sourceRef)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

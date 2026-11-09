@@ -17,6 +17,7 @@ import (
 	"github.com/baobaowork/server/internal/org/api"
 	"github.com/baobaowork/server/internal/platform/authjwt"
 	errx "github.com/baobaowork/server/internal/platform/errors"
+	"unicode"
 )
 
 // Options 可调参数（装配期注入，测试可覆盖时钟）
@@ -32,6 +33,12 @@ type Options struct {
 	// users 行内 Scopes（内存种子/最小装配）；聚合失败同样退回不阻断登录（登记）。
 	ScopesOf func(ctx context.Context, tenantID, userID int64) ([]string, error)
 	Now      func() time.Time
+	// AgentKillOn 平台总闸读（D9；main 注入 admin 域 AgentKillOn——nil=闸门未装配，
+	// killswitch on 时 OBO 签发拒 1013；网关侧每请求同闸，双点拦截）
+	AgentKillOn func() bool
+	// UserSetPassword 改密落库（D11；main 注 orgRepo.SetPassword——users 为只读
+	// UserReader 接口，写通道经闭包避免拓宽 New 签名）
+	UserSetPassword func(ctx context.Context, tenantID, userID int64, passwordHash string) error
 }
 
 func (o *Options) fillDefaults() {
@@ -194,7 +201,7 @@ func (s *Service) issuePair(ctx context.Context, u *orgapi.User, deviceID int64,
 
 // toLoginUser org 用户 → 登录返回体（uid 字符串化；perms=有效权限点口径）
 func toLoginUser(u *orgapi.User, scopes []string) *authapi.LoginUser {
-	return &authapi.LoginUser{UID: strconv.FormatInt(u.ID, 10), Name: u.DisplayName, Perms: scopes}
+	return &authapi.LoginUser{UID: strconv.FormatInt(u.ID, 10), Name: u.DisplayName, Perms: scopes, MustChangePwd: u.MustChangePassword}
 }
 
 // Refresh 一次性轮换：旧值换新值；旧值再现=疑似被盗 → 全设备下线（03 篇 §2.2）
@@ -277,6 +284,10 @@ func (s *Service) IssueOBO(ctx context.Context, actorUserID int64, req authapi.O
 	if req.AgentSessionID == "" {
 		return "", errx.New(errx.CodeBadRequest, "agent_session_id 必填")
 	}
+	// 平台总闸（D9）：killswitch on → 拒新签发（1013；网关侧对存量 OBO 同拦）
+	if s.opts.AgentKillOn != nil && s.opts.AgentKillOn() {
+		return "", errx.New(errx.CodeAuthOBOKillswitch, "Agent 平台总闸已拉下（紧急停止）")
+	}
 	u, err := s.users.GetUser(ctx, actorUserID)
 	if err != nil {
 		return "", errx.New(errx.CodeNotFound, "用户不存在")
@@ -311,4 +322,45 @@ func (s *Service) IssueOBO(ctx context.Context, actorUserID int64, req authapi.O
 // Verify 令牌校验（gateway/中间件装配）
 func (s *Service) Verify(_ context.Context, token string) (*authjwt.Claims, error) {
 	return s.signer.Parse(token)
+}
+
+// ChangePassword 改密（D11：旧密码校验 → 新密码规则 → 更新 hash + 清首登标志）
+func (s *Service) ChangePassword(ctx context.Context, tenantID, userID int64, oldPwd, newPwd string) error {
+	if oldPwd == "" || newPwd == "" {
+		return errx.New(errx.CodeBadRequest, "新旧密码必填")
+	}
+	// 新密码规则（03 篇 §5：≥8 位且含字母与数字；不得与旧密码相同）
+	if len(newPwd) < 8 || newPwd == oldPwd {
+		return errx.New(errx.CodeBadRequest, "新密码至少 8 位且不得与旧密码相同")
+	}
+	hasLetter, hasDigit := false, false
+	for _, r := range newPwd {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+		if unicode.IsDigit(r) {
+			hasDigit = true
+		}
+	}
+	if !hasLetter || !hasDigit {
+		return errx.New(errx.CodeBadRequest, "新密码须同时包含字母与数字")
+	}
+	u, err := s.users.GetUser(ctx, userID)
+	if err != nil || u == nil || u.TenantID != tenantID {
+		return errx.New(errx.CodeNotFound, "用户不存在")
+	}
+	if !VerifyPassword(u.PasswordHash, oldPwd) {
+		return errx.New(errx.CodeAuthPasswordWrong, "旧密码错误")
+	}
+	hash, err := HashPassword(newPwd)
+	if err != nil {
+		return errx.New(errx.CodeInternal, "密码哈希失败")
+	}
+	if s.opts.UserSetPassword == nil {
+		return errx.New(errx.CodeInternal, "改密通道未装配")
+	}
+	if err := s.opts.UserSetPassword(ctx, tenantID, userID, hash); err != nil {
+		return errx.From(err)
+	}
+	return nil
 }

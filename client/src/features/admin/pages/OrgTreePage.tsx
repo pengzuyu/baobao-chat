@@ -1,13 +1,23 @@
 /**
  * 组织树管理（D10 PAD-04 / D12 §3）：树形展示（物化路径 title）+ 新增子部门
- * + 行内改名 + 删除（有子拒——服务端保护）。用户挂部门（user_dept）与
- * "本部门及以下"范围授权随 D12 阶段二（路径前缀匹配基建已备）。
+ * + 行内改名 + 删除（有子拒——服务端保护）。D10 落地：部门成员区
+ * （user_dept 挂/卸/主部门标记）；范围授权入口在「角色」页（scope 四档）。
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, FolderTree, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderTree, Plus, Trash2, Users } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
-import { createDept, deleteDept, fetchDeptTree, renameDept, type DeptNode } from '../api/admin';
+import {
+  attachDeptMember,
+  createDept,
+  deleteDept,
+  detachDeptMember,
+  fetchDeptMembers,
+  fetchDeptTree,
+  renameDept,
+  type DeptMemberRow,
+  type DeptNode,
+} from '../api/admin';
 
 function DeptRow({ node, depth, onChanged, onError }: {
   node: DeptNode;
@@ -20,6 +30,46 @@ function DeptRow({ node, depth, onChanged, onError }: {
   const [newName, setNewName] = useState('');
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(node.name);
+  // 成员区（D10：user_dept 挂/卸；懒加载）
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [members, setMembers] = useState<DeptMemberRow[] | null>(null);
+  const [attachUid, setAttachUid] = useState('');
+  const [attachPrimary, setAttachPrimary] = useState(false);
+
+  const loadMembers = useCallback(async () => {
+    try {
+      setMembers(await fetchDeptMembers(node.id));
+    } catch {
+      setMembers([]);
+      onError('成员读取失败');
+    }
+  }, [node.id, onError]);
+
+  useEffect(() => {
+    if (membersOpen && members === null) void loadMembers();
+  }, [membersOpen, members, loadMembers]);
+
+  const attach = async () => {
+    const uid = attachUid.trim();
+    if (!uid) return;
+    try {
+      await attachDeptMember(node.id, uid, attachPrimary);
+      setAttachUid('');
+      await loadMembers();
+    } catch (e) {
+      onError(e instanceof ApiError ? getErrorText(e.code) : '挂靠失败（用户不存在？）');
+    }
+  };
+
+  const detach = async (uid: string, uname: string) => {
+    if (!window.confirm(`将 ${uname || uid} 移出「${node.name}」？`)) return;
+    try {
+      await detachDeptMember(node.id, uid);
+      await loadMembers();
+    } catch {
+      onError('卸挂失败');
+    }
+  };
 
   const add = async () => {
     try {
@@ -72,6 +122,9 @@ function DeptRow({ node, depth, onChanged, onError }: {
           </span>
         )}
         <span className="org-node__ops">
+          <button type="button" className="btn btn--sm" onClick={() => setMembersOpen(!membersOpen)} data-testid={`org-members-btn-${node.id}`} title="成员管理（挂/卸）">
+            <Users size={12} />
+          </button>
           <button type="button" className="btn btn--sm" onClick={() => setAdding(!adding)} title="新增子部门">
             <Plus size={12} />
           </button>
@@ -91,6 +144,45 @@ function DeptRow({ node, depth, onChanged, onError }: {
           <button type="button" className="btn btn--sm btn--primary" disabled={!newName.trim()} onClick={() => void add()}>
             创建
           </button>
+        </div>
+      ) : null}
+      {membersOpen ? (
+        <div className="org-members" style={{ marginLeft: 26 }} data-testid={`org-members-${node.id}`}>
+          <div className="org-members__head">成员（{members === null ? '…' : members.length}；主部门=钉钉式主属）</div>
+          {members === null ? (
+            <div className="org-members__hint">加载中…</div>
+          ) : members.length === 0 ? (
+            <div className="org-members__hint">暂无成员</div>
+          ) : (
+            members.map((m) => (
+              <div key={m.user_id} className="org-members__row" data-testid="org-member-row">
+                <span className="org-members__name">
+                  {m.name || m.user_id}
+                  {m.is_primary ? <span className="tag tag--builtin">主部门</span> : null}
+                </span>
+                <span className="org-members__uid">{m.user_id}</span>
+                <button type="button" className="btn btn--sm btn--danger" onClick={() => void detach(m.user_id, m.name)}>
+                  移出
+                </button>
+              </div>
+            ))
+          )}
+          <div className="org-members__add">
+            <input
+              className="bbw-input"
+              placeholder="用户 ID"
+              value={attachUid}
+              onChange={(e) => setAttachUid(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && void attach()}
+              data-testid={`org-attach-uid-${node.id}`}
+            />
+            <label className="org-members__primary">
+              <input type="checkbox" checked={attachPrimary} onChange={(e) => setAttachPrimary(e.target.checked)} /> 设为主部门
+            </label>
+            <button type="button" className="btn btn--sm btn--primary" disabled={!attachUid.trim()} onClick={() => void attach()}>
+              挂入
+            </button>
+          </div>
         </div>
       ) : null}
       {open && hasChildren

@@ -17,7 +17,8 @@ import (
 	"time"
 
 	"github.com/baobaowork/server/internal/message/api"
-	"github.com/baobaowork/server/internal/message/repo"
+	messagerepo "github.com/baobaowork/server/internal/message/repo"
+	errx "github.com/baobaowork/server/internal/platform/errors"
 	"github.com/baobaowork/server/internal/platform/eventbus"
 )
 
@@ -541,12 +542,39 @@ func TestReportAgentTask(t *testing.T) {
 
 	// 枚举校验
 	for _, bad := range []messageapi.AgentTaskReportPayload{
-		{Kind: "delegate", Status: "done"},                         // 缺 run_id
-		{RunID: "r-9", Kind: "bogus", Status: "done"},              // 非法 kind
-		{RunID: "r-9", Kind: "probe", Status: "interrupted"},       // 非法 status（终态三枚举外）
+		{Kind: "delegate", Status: "done"},                   // 缺 run_id
+		{RunID: "r-9", Kind: "bogus", Status: "done"},        // 非法 kind
+		{RunID: "r-9", Kind: "probe", Status: "interrupted"}, // 非法 status（终态三枚举外）
 	} {
 		if err := svc.ReportAgentTask(ctx, 10001, bad); err == nil {
 			t.Fatalf("非法上报应报错: %+v", bad)
 		}
+	}
+}
+
+// TestNotifyPref D12：默认归一（无行双开+off）/upsert 回读/dnd 非法拒
+func TestNotifyPref(t *testing.T) {
+	svc, _, _ := seedFixture(t, Options{NotifyPrefs: messagerepo.NewNotifyPrefMemory()})
+	ctx := context.Background()
+
+	// 无行 → 默认
+	p, err := svc.GetNotifyPref(ctx, 1, 10001)
+	if err != nil || !p.MsgNotify || !p.MentionNotify || p.DndRange != "off" {
+		t.Fatalf("默认偏好不符: %v %+v", err, p)
+	}
+	// upsert 关消息通知+夜间免打扰
+	p2, err := svc.SetNotifyPref(ctx, 1, 10001, messageapi.NotifyPrefDTO{
+		MsgNotify: false, MentionNotify: true, DndRange: "work-night",
+	})
+	if err != nil || p2.MsgNotify || !p2.MentionNotify || p2.DndRange != "work-night" {
+		t.Fatalf("upsert 回读不符: %v %+v", err, p2)
+	}
+	p3, _ := svc.GetNotifyPref(ctx, 1, 10001)
+	if p3.MsgNotify || p3.DndRange != "work-night" {
+		t.Fatalf("持久化不符: %+v", p3)
+	}
+	// dnd 非法 → 9001
+	if _, err := svc.SetNotifyPref(ctx, 1, 10001, messageapi.NotifyPrefDTO{DndRange: "bad"}); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("非法 dnd 应 9001: %v", err)
 	}
 }

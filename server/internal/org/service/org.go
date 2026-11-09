@@ -46,3 +46,8 @@ func (s *Service) CountUsers(ctx context.Context, tenantID int64) (int64, error)
 func (s *Service) SetUserStatus(ctx context.Context, id int64, status int) error {
 	return s.repo.SetUserStatus(ctx, id, status)
 }
+
+// SetPassword 改密+清首登标志（D11；hash 由 auth 域闭包生成，透传仓储）
+func (s *Service) SetPassword(ctx context.Context, tenantID, userID int64, passwordHash string) error {
+	return s.repo.SetPassword(ctx, tenantID, userID, passwordHash)
+}

@@ -27,8 +27,9 @@ export function rtcCancel(callId: string): Promise<void> {
 }
 
 /** 被叫接听/拒答（answer=false 视同拒接） */
-export function rtcAccept(callId: string, answer: boolean, did: string): Promise<void> {
-  return wsClient.request('rtc.accept', { call_id: callId, answer, did });
+export function rtcAccept(callId: string, answer: boolean, did: string, byeCallId?: string): Promise<void> {
+  // bye_call_id=挂断并接听（OQ-C06 服务端原子化：单帧先 bye 旧通话再 accept，无竞态）
+  return wsClient.request('rtc.accept', { call_id: callId, answer, did, bye_call_id: byeCallId });
 }
 
 /** 被叫拒接 */

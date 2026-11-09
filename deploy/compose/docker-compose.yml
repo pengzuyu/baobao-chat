@@ -7,7 +7,6 @@
 #     deps   开发依赖子组（core 去掉 app/nginx-lb：宿主直跑 server 的开发流；
 #            dev-up.sh 用此组——不起 app 容器、不占宿主 80/443）
 #     media  音视频：livekit-server(D17 统一媒体面：7880 tcp + UDP 40000-50100 独占 + 内嵌 TURN 3478)
-#     docs   文档协作：onlyoffice(WOPI)
 #     ops    可观测栈：prometheus / grafana / otel-collector / alertmanager
 #     mail   邮件栈（22 篇，可选）：stalwart 占位（或替换 docker-mailserver 组件组）
 #   ★ 所有组均需显式启用，例如：docker compose --profile core up -d
@@ -50,7 +49,6 @@ x-bbw-env: &bbw-env
   BBW_UPDATE_CHANNEL: ${BBW_UPDATE_CHANNEL:-stable}
   BBW_FEATURE_AGENT: ${BBW_FEATURE_AGENT:-true}
   BBW_FEATURE_KB: ${BBW_FEATURE_KB:-true}
-  BBW_FEATURE_DOC: ${BBW_FEATURE_DOC:-true}
   BBW_FEATURE_RTC: ${BBW_FEATURE_RTC:-true}
   BBW_FEATURE_AI: ${BBW_FEATURE_AI:-true}
   BBW_FEATURE_MAIL: ${BBW_FEATURE_MAIL:-false}
@@ -78,7 +76,6 @@ services:
     ports:
       - "80:80"
       - "443:443"      # https/wss 主入口（客户端 + Web 管理台）
-      - "8443:8443"    # OnlyOffice 编辑器独立 TLS 入口（docs profile）
     volumes:
       # 证书目录：volumes/certs/tls.crt|tls.key|ca.crt（15 篇 §3.1；开发自签见 scripts/dev-up.sh）
       - ./volumes/certs:/etc/nginx/certs:ro
@@ -105,7 +102,7 @@ services:
     profiles: [core]
     restart: unless-stopped
     logging: *default-logging
-    command: ["--enable", "${BBW_APP_MODULES:-auth,org,message,file,doc,kb,eco,admin,audit,notify,aigw}"]
+    command: ["--enable", "${BBW_APP_MODULES:-auth,org,message,file,kb,eco,admin,audit,notify,aigw}"]
     environment: *bbw-env
     volumes:
       - bbw-data:/data          # 文件域本地盘（BBW_DATA_DIR=/data；对象存储阶段二替换）
@@ -319,30 +316,6 @@ services:
   # ===========================================================================
 
   # ===========================================================================
-  # onlyoffice（docs profile）：Document Server + WOPI（06 篇）
-  # 正式流量经 nginx-lb:8443 TLS 入口；JWT 鉴权与 app 侧共享密钥
-  # ===========================================================================
-  onlyoffice:
-    image: onlyoffice/documentserver:8.2.2
-    profiles: [docs]
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      JWT_ENABLED: "true"
-      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-onlyoffice_change_me}
-    volumes:
-      - onlyoffice-data:/var/www/onlyoffice/Data
-      - onlyoffice-log:/var/log/onlyoffice
-    ports:
-      - "127.0.0.1:8088:80"    # 仅本机调试；正式走 nginx-lb 8443
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/healthcheck"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
-
-  # ===========================================================================
   # 可观测栈（ops profile）：prometheus / grafana / otel-collector / alertmanager
   # 指标清单与告警规则见 16 篇 §6；K8s 形态为独立监控 namespace（§3.2）
   # ===========================================================================
@@ -455,8 +428,6 @@ volumes:
   redis-data:
   minio-data:         # 对象存储（单节点 2TB 档，§3.3）
   updates-data:       # 客户端更新静态文件
-  onlyoffice-data:
-  onlyoffice-log:
   prometheus-data:
   grafana-data:
   mail-data:
@@ -482,9 +453,7 @@ configs:
         map $$http_upgrade $$connection_upgrade {
           default upgrade;
           ''      close;
-        }
-
-        # Docker 内嵌 DNS：可选 profile（media/onlyoffice）缺席时，变量 proxy_pass
+        # Docker 内嵌 DNS：可选 profile（media）缺席时，变量 proxy_pass
         # 走此处运行期解析（失败→502 降级），避免 nginx 启动期静态解析直接 fatal
         resolver 127.0.0.11 valid=10s ipv6=off;
 
@@ -538,9 +507,13 @@ configs:
           }
 
           # 通话媒体面 wss（D17：LiveKit 7880；media profile 未启用时运行期解析
-          # 失败→502，客户端降级；变量 proxy_pass 经 resolver 运行期解析）
+          # 失败→502，客户端降级；变量 proxy_pass 经 resolver 运行期解析）。
+          # LiveKit JS SDK 在 BBW_LIVEKIT_URL（wss://<域名>/rtc）后固定再拼 /rtc
+          # → 实际请求 /rtc/rtc，而 livekit-server 期望 /rtc：去外层前缀透传
+          # （D17 §9-2 预判项；验证不通的兜底=BBW_LIVEKIT_URL 改直连 wss://<host>:7880）
           location /rtc/ {
             set $$media_upstream media:7880;
+            rewrite ^/rtc/(.*)$$ /$$1 break;
             proxy_pass http://$$media_upstream;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $$http_upgrade;
@@ -554,21 +527,6 @@ configs:
           }
         }
 
-        # OnlyOffice 独立 TLS 入口（docs profile；与主站同证书统一终止。
-        # onlyoffice 属可选 profile：变量 proxy_pass 运行期解析，缺席时 502 不 fatal）
-        server {
-          listen 8443 ssl;
-          http2 on;
-          server_name _;
-          ssl_certificate     /etc/nginx/certs/tls.crt;
-          ssl_certificate_key /etc/nginx/certs/tls.key;
-          location / {
-            set $$oo_upstream onlyoffice:80;
-            proxy_pass http://$$oo_upstream;
-            proxy_set_header Host $$host;
-            proxy_set_header X-Forwarded-Proto https;
-          }
-        }
       }
 
   prometheus-conf:

@@ -85,7 +85,7 @@ type Role struct {
 	CreatedAt   time.Time
 }
 
-// UserRole 授权行（scope 阶段一恒全租户 1——部门范围授权随 D12 组织树阶段二，登记）
+// UserRole 授权行（scope 四档透传——D10；缺省 4 全租户）
 type UserRole struct {
 	ID        int64
 	TenantID  int64
@@ -93,7 +93,11 @@ type UserRole struct {
 	RoleID    int64
 	RoleName  string // 联查冗余（列表展示）
 	UserName  string // 联查冗余
-	CreatedAt time.Time
+	// 数据范围（0001 DDL；D10 透传：1 本人 2 本部门 3 本部门及以下 4 全租户；
+	// 2/3 须 ScopeDeptID>0；缺省 4=全租户与 v0.1 行为兼容）
+	ScopeType   int
+	ScopeDeptID int64
+	CreatedAt   time.Time
 }
 
 // RoleRepo 角色管理仓储（admin 域独立接口，同 ShareRepo/TransferRepo 惯例）
@@ -153,3 +157,30 @@ type NoticeRepo interface {
 
 // ErrNoticeNone 公告不存在 sentinel
 var ErrNoticeNone = errors.New("adminrepo: notice not found")
+
+// ── Agent 工具策略（迁移 0028；行级 subject 粒度，09 §5.2）──
+
+// ErrToolPolicyNotFound 工具策略行不存在（删行回落默认场景）
+var ErrToolPolicyNotFound = errors.New("adminrepo: tool policy not found")
+
+// ToolPolicy agent_tool_policy 行
+type ToolPolicy struct {
+	ID           int64
+	TenantID     int64
+	Subject      string // 工具名/命名空间（app:ns:*）
+	Allowed      bool
+	RiskOverride string // JSON（空对象=不覆盖矩阵默认）
+	Config       string // JSON 工具级扩展配置
+	UpdatedBy    int64
+	UpdatedAt    time.Time
+}
+
+// ToolPolicyRepo 工具策略仓储
+type ToolPolicyRepo interface {
+	// UpsertToolPolicy 插入/更新（UK(tenant,subject) 冲突=覆盖 allowed/risk/config）
+	UpsertToolPolicy(ctx context.Context, p ToolPolicy) (ToolPolicy, error)
+	// ListToolPolicies 租户全量行（subject 序）
+	ListToolPolicies(ctx context.Context, tenantID int64) ([]ToolPolicy, error)
+	// DeleteToolPolicy 删行（回落默认策略；不存在 ErrNotFound）
+	DeleteToolPolicy(ctx context.Context, tenantID int64, subject string) error
+}

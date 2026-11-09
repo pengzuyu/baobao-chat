@@ -19,6 +19,10 @@ import (
 	"github.com/baobaowork/server/internal/platform/eventbus"
 )
 
+// receiptPanelMemberLimit 已读回执面板展开名单的参与成员上限（OQ-B04 拍板：
+// >200 人群已读"仅计数不展开名单"——大群名单查询/渲染/扰动成本高）
+const receiptPanelMemberLimit = 200
+
 // hasMentionAll mentions 是否含 @全体（Send 的 mention_all_policy 校验用）
 func hasMentionAll(ms []messageapi.Mention) bool {
 	for _, m := range ms {
@@ -956,10 +960,17 @@ func (s *Service) ListReceiptPanel(ctx context.Context, userID, convID, seq int6
 		}
 		row := messageapi.ReceiptMemberDTO{UID: strconv.FormatInt(mm.UserID, 10), DisplayName: s.nameOf(mm.UserID)}
 		if readMap[mm.UserID] {
+			dto.ReadCount++
 			dto.Read = append(dto.Read, row)
 		} else {
+			dto.UnreadCount++
 			dto.Unread = append(dto.Unread, row)
 		}
+	}
+	// 大群仅计数（OQ-B04）：参与成员 >200 不展开名单——置空列表，前端以计数卡呈现
+	if dto.ReadCount+dto.UnreadCount > receiptPanelMemberLimit {
+		dto.Truncated = true
+		dto.Read, dto.Unread = nil, nil
 	}
 	return dto, nil
 }

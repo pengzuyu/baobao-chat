@@ -37,11 +37,22 @@ export interface CursorPage<T> {
 }
 
 /** Agent 工具策略只读快照（v0.1 恒默认策略） */
+/** 工具策略行（agent_tool_policy 行级覆盖；D7 编辑器数据源） */
+export interface AgentToolPolicyRow {
+  subject: string;
+  allowed: boolean;
+  risk_override: string;
+  config: string;
+  updated_by: string;
+  updated_at: string;
+}
+
 export interface AgentPolicySnapshot {
   version: number;
   updated_at: string;
   source: 'default' | 'table';
   policy: Record<string, unknown>;
+  rows?: AgentToolPolicyRow[];
 }
 
 /** 敏感词行（0006 表；mode v0.1 恒 1=拦截） */

@@ -399,14 +399,22 @@ func (p *PostgresRoles) InsertUserRole(ctx context.Context, ur UserRole) error {
 		return ErrDupGrant
 	}
 	var id int64
-	// scope 阶段一恒 1（全租户；部门范围授权随 D12 组织树阶段二，登记）
 	if id, err = bbwpg.AllocID(ctx, tx, 9123, "user_role"); err != nil {
 		return err
 	}
+	// scope 透传（D10）：缺省 4=全租户（与 v0.1 行为兼容）；2/3 携 scope_dept_id
+	scopeType := ur.ScopeType
+	if scopeType == 0 {
+		scopeType = 4
+	}
+	var scopeDept any
+	if ur.ScopeDeptID > 0 {
+		scopeDept = ur.ScopeDeptID
+	}
 	if _, err = tx.Exec(ctx, `
-		INSERT INTO user_role (id, tenant_id, user_id, role_id, scope_type, created_at)
-		VALUES ($1,$2,$3,$4,1, now())`,
-		id, ur.TenantID, ur.UserID, ur.RoleID); err != nil {
+		INSERT INTO user_role (id, tenant_id, user_id, role_id, scope_type, scope_dept_id, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6, now())`,
+		id, ur.TenantID, ur.UserID, ur.RoleID, scopeType, scopeDept); err != nil {
 		if isDupPGErr(err) {
 			return ErrDupGrant
 		}
@@ -428,7 +436,8 @@ func (p *PostgresRoles) DeleteUserRole(ctx context.Context, tenantID, id int64) 
 
 func (p *PostgresRoles) ListUserRoles(ctx context.Context, tenantID int64, userID int64) ([]UserRole, error) {
 	rows, err := p.pool.Query(ctx, `
-		SELECT ur.id, ur.tenant_id, ur.user_id, ur.role_id, COALESCE(r.name,''), ur.created_at
+		SELECT ur.id, ur.tenant_id, ur.user_id, ur.role_id, COALESCE(r.name,''),
+			COALESCE(ur.scope_type,4), COALESCE(ur.scope_dept_id,0), ur.created_at
 		FROM user_role ur LEFT JOIN role r ON r.id = ur.role_id AND r.tenant_id = ur.tenant_id
 		WHERE ur.tenant_id=$1 AND ur.user_id=$2 ORDER BY ur.id`, tenantID, userID)
 	if err != nil {
@@ -438,7 +447,8 @@ func (p *PostgresRoles) ListUserRoles(ctx context.Context, tenantID int64, userI
 	out := []UserRole{}
 	for rows.Next() {
 		var g UserRole
-		if err := rows.Scan(&g.ID, &g.TenantID, &g.UserID, &g.RoleID, &g.RoleName, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.TenantID, &g.UserID, &g.RoleID, &g.RoleName,
+			&g.ScopeType, &g.ScopeDeptID, &g.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -567,4 +577,80 @@ func (p *PostgresNotices) ListNotices(ctx context.Context, tenantID int64, curso
 		out = out[:limit]
 	}
 	return out, more, rows.Err()
+}
+
+// ── Agent 工具策略（0028；PG 版 lock 9133——admin 9114/9115、eco 9131、agentbackup 9132 已占）──
+
+const lockKeyToolPolicy int64 = 9133
+
+// ToolPolicyPostgres 工具策略 PG 仓储
+type ToolPolicyPostgres struct{ pool *pgxpool.Pool }
+
+var _ ToolPolicyRepo = (*ToolPolicyPostgres)(nil)
+
+// NewPostgresToolPolicies 构造
+func NewPostgresToolPolicies(pool *pgxpool.Pool) ToolPolicyRepo {
+	return &ToolPolicyPostgres{pool: pool}
+}
+
+// UpsertToolPolicy 插入/更新（UK 冲突=覆盖）
+func (p *ToolPolicyPostgres) UpsertToolPolicy(ctx context.Context, tp ToolPolicy) (ToolPolicy, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return ToolPolicy{}, err
+	}
+	defer tx.Rollback(ctx)
+	if tp.ID == 0 {
+		if tp.ID, err = bbwpg.AllocID(ctx, tx, lockKeyToolPolicy, "agent_tool_policy"); err != nil {
+			return ToolPolicy{}, err
+		}
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO agent_tool_policy (id, tenant_id, subject, allowed, risk_override, config, updated_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (tenant_id, subject) DO UPDATE
+			SET allowed=$4, risk_override=$5, config=$6, updated_by=$7, updated_at=now()
+		RETURNING id, updated_at`,
+		tp.ID, tp.TenantID, tp.Subject, tp.Allowed, tp.RiskOverride, tp.Config, tp.UpdatedBy).
+		Scan(&tp.ID, &tp.UpdatedAt)
+	if err != nil {
+		return ToolPolicy{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ToolPolicy{}, err
+	}
+	return tp, nil
+}
+
+// ListToolPolicies 租户全量行
+func (p *ToolPolicyPostgres) ListToolPolicies(ctx context.Context, tenantID int64) ([]ToolPolicy, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, tenant_id, subject, allowed, risk_override, config, updated_by, updated_at
+		FROM agent_tool_policy WHERE tenant_id=$1 ORDER BY subject`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ToolPolicy{}
+	for rows.Next() {
+		var tp ToolPolicy
+		if err := rows.Scan(&tp.ID, &tp.TenantID, &tp.Subject, &tp.Allowed, &tp.RiskOverride, &tp.Config, &tp.UpdatedBy, &tp.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, tp)
+	}
+	return out, rows.Err()
+}
+
+// DeleteToolPolicy 删行
+func (p *ToolPolicyPostgres) DeleteToolPolicy(ctx context.Context, tenantID int64, subject string) error {
+	tag, err := p.pool.Exec(ctx,
+		`DELETE FROM agent_tool_policy WHERE tenant_id=$1 AND subject=$2`, tenantID, subject)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrToolPolicyNotFound
+	}
+	return nil
 }

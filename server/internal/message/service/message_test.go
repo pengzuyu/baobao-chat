@@ -326,7 +326,7 @@ func TestSendFileMessageValidation(t *testing.T) {
 			}
 			return nil
 		},
-		FileMarkSent: func(ctx context.Context, fileID int64, convID int64) error {
+		FileMarkSent: func(ctx context.Context, fileID int64, convID int64, msgSeq int64) error {
 			marked = append(marked, fileID)
 			return nil
 		},

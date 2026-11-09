@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -127,7 +127,9 @@ impl Shared {
         }
         let now = now_ms();
         let mut sessions = self.sessions.lock().unwrap();
-        let Some(row) = sessions.iter_mut().find(|s| s.id == sid) else { return };
+        let Some(row) = sessions.iter_mut().find(|s| s.id == sid) else {
+            return;
+        };
         row.updated_at = now;
         match msg_type {
             "session.state" => {
@@ -169,11 +171,17 @@ pub struct AgentHost {
 impl AgentHost {
     pub fn new(data_dir: PathBuf, emit: EventSink) -> Self {
         let bin = resolve_bbrt_bin();
-        let gateway = std::env::var("BBW_RT_GATEWAY").unwrap_or_else(|_| "http://127.0.0.1:8090".into());
+        let gateway =
+            std::env::var("BBW_RT_GATEWAY").unwrap_or_else(|_| "http://127.0.0.1:8090".into());
         let static_token = std::env::var("BBW_RT_TOKEN").ok().filter(|t| !t.is_empty());
         Self {
             shared: Arc::new(Shared {
-                proc: Mutex::new(ProcState { child: None, stdin: None, pending: HashMap::new(), ready: false }),
+                proc: Mutex::new(ProcState {
+                    child: None,
+                    stdin: None,
+                    pending: HashMap::new(),
+                    ready: false,
+                }),
                 sessions: Mutex::new(Vec::new()),
                 token: Mutex::new(None),
                 halted: AtomicBool::new(false),
@@ -194,7 +202,14 @@ impl AgentHost {
 
     /// 会话列表快照（updated_at 倒序；FE 期望 snake_case 行）
     pub fn list_sessions(&self) -> Vec<Value> {
-        let mut rows: Vec<Value> = self.shared.sessions.lock().unwrap().iter().map(|s| s.to_row()).collect();
+        let mut rows: Vec<Value> = self
+            .shared
+            .sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|s| s.to_row())
+            .collect();
         rows.sort_by(|a, b| b["updated_at"].as_i64().cmp(&a["updated_at"].as_i64()));
         rows
     }
@@ -202,7 +217,10 @@ impl AgentHost {
     /// 登录/刷新成功后下发 token（exp 毫秒 → 协议秒）
     pub fn set_token(&self, token: String, exp_ms: i64) -> Result<(), String> {
         *self.shared.token.lock().unwrap() = Some((token.clone(), (exp_ms / 1000).max(0) as u64));
-        self.fire("obo.token", json!({ "token": token, "exp": exp_ms / 1000, "scopes": [] }))
+        self.fire(
+            "obo.token",
+            json!({ "token": token, "exp": exp_ms / 1000, "scopes": [] }),
+        )
     }
 
     // ---- 生命周期 ----
@@ -253,7 +271,10 @@ impl AgentHost {
         }
         std::fs::create_dir_all(&self.data_dir).map_err(|e| format!("数据目录创建失败: {e}"))?;
         if !self.bin.exists() {
-            return Err(format!("bbrt 二进制不存在（{}）；先 cargo build -p bbrt 或设 BBW_RT_BIN", self.bin.display()));
+            return Err(format!(
+                "bbrt 二进制不存在（{}）；先 cargo build -p bbrt 或设 BBW_RT_BIN",
+                self.bin.display()
+            ));
         }
         let mut child = Command::new(&self.bin)
             .env("BBW_RT_DATA_DIR", &self.data_dir)
@@ -309,7 +330,9 @@ impl AgentHost {
             }
             // EOF：Runtime 退出——标记 down + 壳自产 runtime.state（前端未知类型忽略）
             shared.mark_down();
-            emit(json!({ "type": "runtime.state", "session_id": null, "state": "down", "reason": "process-exited" }));
+            emit(
+                json!({ "type": "runtime.state", "session_id": null, "state": "down", "reason": "process-exited" }),
+            );
         });
         Ok(ready_rx) // runtime.ready 由 ensure_running 在 initialize 发出后等待
     }
@@ -323,7 +346,12 @@ impl AgentHost {
     fn request_inner(&self, msg_type: &str, payload: Value) -> Result<Value, String> {
         let id = format!("h-{}", self.seq.fetch_add(1, Ordering::SeqCst) + 1);
         let (tx, rx): (mpsc::Sender<Value>, Receiver<Value>) = mpsc::channel();
-        self.shared.proc.lock().unwrap().pending.insert(id.clone(), tx);
+        self.shared
+            .proc
+            .lock()
+            .unwrap()
+            .pending
+            .insert(id.clone(), tx);
         if let Err(e) = self.write_envelope(&id, msg_type, &payload) {
             self.shared.proc.lock().unwrap().pending.remove(&id);
             return Err(e);
@@ -355,13 +383,22 @@ impl AgentHost {
         line.push('\n');
         let mut p = self.shared.proc.lock().unwrap();
         match p.stdin.as_mut() {
-            Some(stdin) => stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush()).map_err(|e| format!("写入 Runtime 失败: {e}")),
+            Some(stdin) => stdin
+                .write_all(line.as_bytes())
+                .and_then(|_| stdin.flush())
+                .map_err(|e| format!("写入 Runtime 失败: {e}")),
             None => Err("Runtime 未运行".into()),
         }
     }
 
     /// 新建会话（协议口径：sessionId 由宿主生成传入）
-    pub fn start_session(&self, workspace: &str, mode: &str, model_policy: &str, model: Option<&str>) -> Result<String, String> {
+    pub fn start_session(
+        &self,
+        workspace: &str,
+        mode: &str,
+        model_policy: &str,
+        model: Option<&str>,
+    ) -> Result<String, String> {
         self.ensure_running()?;
         let n = self.seq_session.fetch_add(1, Ordering::SeqCst) + 1;
         let sid = format!("sess-{}-{}", now_ms(), n);
@@ -401,7 +438,14 @@ impl AgentHost {
     /// 权限模式本地切换（协议缺口：HostToRuntime 无 mode 设置消息，登记）
     pub fn set_mode(&self, session_id: &str, mode: &str) {
         let now = now_ms();
-        if let Some(row) = self.shared.sessions.lock().unwrap().iter_mut().find(|s| s.id == session_id) {
+        if let Some(row) = self
+            .shared
+            .sessions
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|s| s.id == session_id)
+        {
             row.mode = mode.to_string();
             row.updated_at = now;
         }
@@ -410,7 +454,11 @@ impl AgentHost {
     /// 紧急停止：杀 Runtime + 未决 REQ 全部失败（D09 §4.6）
     pub fn emergency_stop(&self) -> Value {
         let mut p = self.shared.proc.lock().unwrap();
-        let killed = if p.child.as_mut().is_some_and(|c| c.kill().is_ok()) { 1u64 } else { 0 };
+        let killed = if p.child.as_mut().is_some_and(|c| c.kill().is_ok()) {
+            1u64
+        } else {
+            0
+        };
         let cancelled = p.pending.len() as u64;
         p.child = None;
         p.stdin = None;
@@ -422,22 +470,47 @@ impl AgentHost {
 }
 
 fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
-/// bbrt 二进制解析：BBW_RT_BIN → workspace 内 target/{debug,release} → bundle binaries/
+/// bbrt 二进制解析：BBW_RT_BIN → 生产 exe 同目录 sidecar（externalBin 命名
+/// bbrt-<target-triple>[.exe]）→ workspace 内 target/{debug,release} → bundle binaries/
 fn resolve_bbrt_bin() -> PathBuf {
     if let Ok(p) = std::env::var("BBW_RT_BIN") {
         return PathBuf::from(p);
     }
+    // 生产：Tauri externalBin 把 sidecar 随 main exe 同目录分发（macOS/Linux 包；
+    // Windows 侧 bbrt 编不过不随包，走 dev 路径后由 exists 检查给出引导）
+    if let Ok(exe) = std::env::current_exe() {
+        let sidecar = exe
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(sidecar_file_name());
+        if sidecar.exists() {
+            return sidecar;
+        }
+    }
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // client/src-tauri
-    for rel in ["../../agent/target/debug/bbrt", "../../agent/target/release/bbrt", "binaries/bbrt"] {
+    for rel in [
+        "../../agent/target/debug/bbrt",
+        "../../agent/target/release/bbrt",
+        "binaries/bbrt",
+    ] {
         let p = manifest.join(rel);
         if p.exists() {
             return p;
         }
     }
     manifest.join("../../agent/target/debug/bbrt")
+}
+
+/// externalBin 打包产物名（build.rs 注入 triple；Windows 再补 .exe 后缀）
+fn sidecar_file_name() -> String {
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    format!("bbrt-{}{}", env!("BBW_TARGET_TRIPLE"), ext)
 }
 
 /// UNT payload 键名归一（协议 camelCase → FE agent://event 期望 snake_case；
@@ -500,7 +573,10 @@ mod tests {
 
     #[test]
     fn normalize_event_type_and_risk() {
-        let out = normalize_event("permission.request", json!({ "sessionId": "s1", "risk": "medium" }));
+        let out = normalize_event(
+            "permission.request",
+            json!({ "sessionId": "s1", "risk": "medium" }),
+        );
         assert_eq!(out["type"], "permission.request");
         assert_eq!(out["session_id"], "s1");
         assert_eq!(out["risk"], "mid");
@@ -516,13 +592,38 @@ mod tests {
         assert_eq!(camel_to_snake("replayedEvents"), "replayed_events");
     }
 
+    #[test]
+    fn sidecar_file_name_matches_externalbin_convention() {
+        // Tauri externalBin 打包命名：bbrt-<target-triple>[.exe]（非 Windows 无后缀）
+        let name = sidecar_file_name();
+        assert!(name.starts_with("bbrt-"), "缺 triple 前缀: {name}");
+        if cfg!(windows) {
+            assert!(name.ends_with(".exe"), "Windows sidecar 须 .exe: {name}");
+            assert!(name.len() > "bbrt-.exe".len(), "triple 为空: {name}");
+        } else {
+            assert!(!name.contains('.'), "Unix sidecar 不带后缀: {name}");
+            assert!(name.len() > "bbrt-".len(), "triple 为空: {name}");
+        }
+    }
+
     fn shared_with_starting_session() -> (Arc<Shared>, String) {
         let shared = Arc::new(Shared {
-            proc: Mutex::new(ProcState { child: None, stdin: None, pending: HashMap::new(), ready: false }),
+            proc: Mutex::new(ProcState {
+                child: None,
+                stdin: None,
+                pending: HashMap::new(),
+                ready: false,
+            }),
             sessions: Mutex::new(vec![SessionCache {
-                id: "s1".into(), title: "会话 1".into(), workspace: "~/code".into(),
-                mode: "ask".into(), model_policy: "auto".into(), model_override: None,
-                status: "starting".into(), created_at: 0, updated_at: 0,
+                id: "s1".into(),
+                title: "会话 1".into(),
+                workspace: "~/code".into(),
+                mode: "ask".into(),
+                model_policy: "auto".into(),
+                model_override: None,
+                status: "starting".into(),
+                created_at: 0,
+                updated_at: 0,
             }]),
             token: Mutex::new(None),
             halted: AtomicBool::new(false),
@@ -534,14 +635,20 @@ mod tests {
     fn session_ready_flips_cache_to_idle() {
         // RT 建会话只发 session.ready（无 starting→idle 迁移事件）——缓存必须翻 idle
         let (shared, sid) = shared_with_starting_session();
-        shared.apply_session_event("session.ready", &json!({ "sessionId": sid, "restored": false }));
+        shared.apply_session_event(
+            "session.ready",
+            &json!({ "sessionId": sid, "restored": false }),
+        );
         assert_eq!(shared.sessions.lock().unwrap()[0].status, "idle");
     }
 
     #[test]
     fn session_ready_for_unknown_session_ignored() {
         let (shared, _) = shared_with_starting_session();
-        shared.apply_session_event("session.ready", &json!({ "sessionId": "ghost", "restored": false }));
+        shared.apply_session_event(
+            "session.ready",
+            &json!({ "sessionId": "ghost", "restored": false }),
+        );
         assert_eq!(shared.sessions.lock().unwrap()[0].status, "starting");
     }
 }

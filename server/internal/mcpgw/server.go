@@ -135,9 +135,6 @@ func (g *Gateway) handleCall(r *http.Request, claims *authjwt.Claims, params jso
 	case "kb_query":
 		res, err := g.invokeKbQuery(r.Context(), tenant, uid, p.Arguments)
 		return res, err
-	case "doc_read":
-		res, err := g.invokeDocRead(r.Context(), tenant, uid, p.Arguments)
-		return res, err
 	case "im_send":
 		res, err := g.invokeImSend(r.Context(), tenant, uid, p.Arguments)
 		return res, err

@@ -22,6 +22,7 @@ import {
   type AIDefaultSetting,
 } from '../api/ai';
 import { PROVIDER_PRESETS, type AIProvider } from '../../admin/model/types';
+import { CloudBackupCard } from '../components/CloudBackupCard';
 
 export function AgentSettingsPage() {
   return (
@@ -30,6 +31,7 @@ export function AgentSettingsPage() {
 
       <DefaultModelCard />
       <MyProvidersCard />
+      <CloudBackupCard />
 
       <div className="settings-card">
         <div className="settings-row">

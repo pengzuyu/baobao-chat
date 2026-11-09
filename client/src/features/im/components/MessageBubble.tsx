@@ -46,7 +46,6 @@ import { EmojiPicker } from './EmojiPicker';
 import { hasAnyMsgAction, msgActionsVisible } from './stream/msgActions';
 import type { MenuAnchor } from './stream/MsgContextMenu';
 import type {
-  DocCardBody,
   FileMessageBody,
   MemberRole,
   Mention,
@@ -69,8 +68,6 @@ export function mergeTypeIcon(type: string) {
       return <Mic size={13} />;
     case 'video':
       return <Video size={13} />;
-    case 'doc_card':
-      return <FileText size={13} />;
     case 'agent_card':
       return <Bot size={13} />;
     case 'merge_forward':
@@ -326,35 +323,6 @@ function MergeForwardCard({ message, onOpen }: { message: Message; onOpen?: (m: 
         {items.length > 3 ? `共 ${items.length} 条，` : ''}点击查看详情
       </div>
     </div>
-  );
-}
-
-/** 文档卡片（D05 阶段一简版）：doc_card 消息体渲染——图标/标题/版本徽标 + 点击进 /doc/:id
- * （在线编辑状态点/协作头像/摘要预览阶段二，06 §4.8 全量口径） */
-function DocCard({ body }: { body: DocCardBody }) {
-  const navigate = useNavigate();
-  return (
-    <button
-      type="button"
-      className="doc-card"
-      data-testid="doc-card"
-      title="打开文档"
-      onClick={(e) => {
-        e.stopPropagation();
-        navigate(`/doc/${body.doc_id}`);
-      }}
-    >
-      <div className="doc-card__icon">
-        <FileText size={20} />
-      </div>
-      <div className="doc-card__meta">
-        <div className="doc-card__name">{body.title ?? '文档'}</div>
-        <div className="doc-card__hint">
-          markdown 文档
-          {body.version !== undefined ? ` · v${body.version}` : ''} · 点击打开
-        </div>
-      </div>
-    </button>
   );
 }
 
@@ -874,9 +842,6 @@ export function MessageBubble({
   // 通话卡片（D04 §4.5 call_card：方向/状态/时长/再次呼叫；组件在 shared，回拨经 bus 转发 rtc）
   const isCallCard = message.type === 'call_card';
   const callBody = isCallCard && 'call_id' in message.body ? (message.body as CallCardBody) : null;
-  // 文档卡片（D05 §4.8 doc_card 简版：标题+版本，点击 → /doc/:id）
-  const isDocCard = message.type === 'doc_card';
-  const docBody = isDocCard && 'doc_id' in message.body ? (message.body as DocCardBody) : null;
   // file/image body 窄化（D06：{file_id,...}；服务端透传）
   const fileBody = (isImage || isFile) && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
   // 编辑/撤回显隐不再在此判——悬浮条瘦身（快捷 emoji+回复+⋯），条件项全部移入
@@ -951,10 +916,6 @@ export function MessageBubble({
                 onRecall={(video) => emit('im:invoke-call', { convId: message.convId, video })}
                 onJoin={() => emit('rtc:join-call', { callId: callBody.call_id, convId: message.convId, video: callBody.call_type === 'video' })}
               />
-            </span>
-          ) : isDocCard && docBody ? (
-            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
-              <DocCard body={docBody} />
             </span>
           ) : (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>

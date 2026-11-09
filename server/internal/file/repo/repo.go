@@ -44,6 +44,8 @@ type File struct {
 	Height      int
 	Source      string // upload / message
 	ConvID      int64  // 随消息发送后回填；0=未关联
+	MsgSeq      int64  // 消息锚点（群文件"定位消息"，OQ-B24）；0=未关联
+	Recalled    bool   // 锚点消息已撤回（文件保留、锚点置灰，OQ-B24）
 	ScanStatus  int
 	CreatedAt   time.Time
 	DeletedAt   time.Time // 零值=未删
@@ -63,8 +65,10 @@ type Repo interface {
 	GetBySHA(ctx context.Context, tenantID int64, sha256 string) (*File, error)
 	// SoftDelete 软删（deleted_at=at；行不存在返回 ErrNotFound）
 	SoftDelete(ctx context.Context, id int64, at time.Time) error
-	// MarkSent 随消息发送后回填 source='message' + conv_id（转发复用判定依据）
-	MarkSent(ctx context.Context, id int64, convID int64) error
+	// MarkSent 随消息发送后回填 source='message' + conv_id/msg_seq（锚点，OQ-B24）
+	MarkSent(ctx context.Context, id int64, convID int64, msgSeq int64) error
+	// MarkRecalledByMsg 锚点消息撤回联动（OQ-B24：文件保留、recalled 置灰锚点；无匹配=no-op）
+	MarkRecalledByMsg(ctx context.Context, convID int64, msgSeq int64) error
 	// ListByUser 我的文件（未软删，created_at 倒序；v0.1 全量不分页，cursor 阶段二）
 	ListByUser(ctx context.Context, tenantID, userID int64) ([]File, error)
 	// ListByConv 会话文件聚合（未软删，created_at 倒序；群文件页签预留）

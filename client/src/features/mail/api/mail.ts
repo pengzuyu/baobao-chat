@@ -232,3 +232,22 @@ const mockSharedMessages = (mailboxId: string): MailMessage[] =>
   mailboxId === '201'
     ? [mockMessage('sm1', 'customer@ext.example', '产品咨询', '请问私有化部署的最低配置？', 40)]
     : [];
+
+/** 存草稿（D16：draft_id>0=更新，返回新 id） */
+export async function saveDraft(req: SendMailReq & { draft_id?: string }): Promise<{ id: string }> {
+  if (USE_MOCK) {
+    await delay(150);
+    return { id: `draft-${Date.now()}` };
+  }
+  return http.post<{ id: string }>('/mail/drafts', req);
+}
+
+/** 发送成功后清理草稿（幂等） */
+export async function discardDraft(id: string): Promise<void> {
+  if (USE_MOCK) return;
+  await http.delete(`/mail/drafts/${encodeURIComponent(id)}`);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

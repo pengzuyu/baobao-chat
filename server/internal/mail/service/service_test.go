@@ -95,10 +95,14 @@ func codeOf(t *testing.T, err error) int {
 }
 
 func addr(u int64) string {
-	if u == alice {
-		return "E100001@corp.company.internal"
+	suffix := "3" // carol=10003 及其余用户
+	switch u {
+	case alice:
+		suffix = "1"
+	case bob:
+		suffix = "2"
 	}
-	return "E100002@corp.company.internal"
+	return "E10000" + suffix + "@corp.company.internal"
 }
 
 // 懒开户：首次 summary 建 employee_no@默认域 + 六文件夹；幂等
@@ -591,5 +595,130 @@ func TestSharedMailboxACL(t *testing.T) {
 	lb, _ := svc.SharedMailboxes(ctx, 1, bob)
 	if lb[0].Unread != 1 {
 		t.Fatalf("共享未读：%+v", lb)
+	}
+}
+
+// TestAutoForward D16：收件人设 auto_forward → 副本投递到转发邮箱；链路封顶一层防环
+func TestAutoForward(t *testing.T) {
+	const carol = int64(10003)
+	repo := mailrepo.NewMemory()
+	svc := New(repo, mailSvcOptions(repo))
+	ctx := context.Background()
+	// 三方开户：alice（发件）、bob（设转发→carol）、carol（转发目标）
+	if _, err := svc.Summary(ctx, 1, alice); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Summary(ctx, 1, bob); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Summary(ctx, 1, carol); err != nil {
+		t.Fatal(err)
+	}
+	bobMB, err := repo.GetMailboxByOwner(ctx, 1, bob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := bobMB.Settings
+	set.AutoForward = addr(carol)
+	if err := repo.UpdateSettings(ctx, 1, bobMB.ID, set); err != nil {
+		t.Fatal(err)
+	}
+	// alice → bob：carol 收到转发副本（Fwd: 前缀）
+	if _, err := svc.SendMessage(ctx, 1, alice, SendReq{
+		To: []string{addr(bob)}, Subject: "转发测试", Body: "正文",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	carolMB, _ := repo.GetMailboxByOwner(ctx, 1, carol)
+	msgs, err := repo.ListMessages(ctx, carolMB.ID, mustFolderID(t, repo, carolMB.ID, "inbox"), 0, 20, "")
+	if err != nil || len(msgs) != 1 || msgs[0].Subject != "Fwd: 转发测试" {
+		t.Fatalf("转发副本不符: %v %+v", err, msgs)
+	}
+	// 防环：carol 也设转发回 bob——转发副本（InReplyTo=auto-fwd）不再二次转发
+	setC := carolMB.Settings
+	setC.AutoForward = addr(bob)
+	_ = repo.UpdateSettings(ctx, 1, carolMB.ID, setC)
+	bobMB2, _ := repo.GetMailboxByOwner(ctx, 1, bob)
+	inboxBob := mustFolderID(t, repo, bobMB2.ID, "inbox")
+	msgsBob, _ := repo.ListMessages(ctx, bobMB2.ID, inboxBob, 0, 20, "")
+	if len(msgsBob) != 1 { // 原件 1 封；若未防环 bob 会收到 carol 的二次转发
+		t.Fatalf("防环失效（bob 应仅原件 1 封）: %+v", msgsBob)
+	}
+}
+
+// TestDrafts D16：存草稿（drafts folder+FlagDraft）/更新（旧行入 trash）/发送清理
+func TestDrafts(t *testing.T) {
+	repo := mailrepo.NewMemory()
+	svc := New(repo, mailSvcOptions(repo))
+	ctx := context.Background()
+	if _, err := svc.Summary(ctx, 1, alice); err != nil {
+		t.Fatal(err)
+	}
+	mb, _ := repo.GetMailboxByOwner(ctx, 1, alice)
+	draftsID := mustFolderID(t, repo, mb.ID, "drafts")
+	trashID := mustFolderID(t, repo, mb.ID, "trash")
+
+	id1, err := svc.SaveDraft(ctx, 1, alice, SendReq{To: []string{addr(bob)}, Subject: "草稿v1", Body: "一稿"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dm, _ := repo.GetMessage(ctx, 1, id1)
+	if dm.FolderID != draftsID || dm.Flags&mailrepo.FlagDraft == 0 {
+		t.Fatalf("草稿行不符: %+v", dm)
+	}
+	// 更新：旧行 trash、新行 drafts
+	id2, err := svc.SaveDraft(ctx, 1, alice, SendReq{To: []string{addr(bob)}, Subject: "草稿v2", Body: "二稿"}, id1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _ := repo.GetMessage(ctx, 1, id1)
+	if old.FolderID != trashID {
+		t.Fatalf("旧草稿应入 trash: %+v", old)
+	}
+	// 发送清理：草稿 v2 移 trash
+	if err := svc.DiscardDraft(ctx, 1, alice, id2); err != nil {
+		t.Fatal(err)
+	}
+	cur, _ := repo.GetMessage(ctx, 1, id2)
+	if cur.FolderID != trashID {
+		t.Fatalf("发送后草稿应入 trash: %+v", cur)
+	}
+}
+
+func mustFolderID(t *testing.T, repo mailrepo.Repo, mailboxID int64, name string) int64 {
+	t.Helper()
+	folders, err := repo.ListFolders(context.Background(), mailboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range folders {
+		if f.Name == name {
+			return f.ID
+		}
+	}
+	t.Fatalf("folder %s not found", name)
+	return 0
+}
+
+// mailSvcOptions 测试 Options（newSvc 同款构造，repo 参数化供直读断言）
+func mailSvcOptions(repo mailrepo.Repo) Options {
+	clk := &fakeClock{now: time.UnixMilli(1760000000000)}
+	return Options{
+		DefaultDomain: "corp.company.internal",
+		UserEmployeeNo: func(_, uid int64) (string, error) {
+			return "E10000" + func() string {
+				switch uid {
+				case alice:
+					return "1"
+				case bob:
+					return "2"
+				default:
+					return "3"
+				}
+			}(), nil
+		},
+		HashPwd:   authservice.HashPassword,
+		VerifyPwd: authservice.VerifyPassword,
+		Now:       clk.Now,
 	}
 }

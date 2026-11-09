@@ -21,7 +21,10 @@ data:
   # 特性开关（BBW_FEATURE_* ↔ values.features.*；租户级灰度走 feature_flag 表，§5.3）
   BBW_FEATURE_AGENT: {{ .Values.features.agent | quote | lower }}
   BBW_FEATURE_KB: {{ .Values.features.kb | quote | lower }}
-  BBW_FEATURE_DOC: {{ .Values.features.doc | quote | lower }}
   BBW_FEATURE_RTC: {{ .Values.features.rtc | quote | lower }}
   BBW_FEATURE_AI: {{ .Values.features.ai | quote | lower }}
   BBW_FEATURE_MAIL: {{ .Values.features.mail | quote | lower }}
+  # LiveKit 统一媒体面（D17：URL 为客户端连接地址——经 Ingress /rtc/ 或直连；
+  # 空则按域名拼 wss://<域名>/rtc，与 compose 默认回退一致）
+  BBW_LIVEKIT_URL: {{ .Values.config.livekitUrl | default (printf "wss://%s/rtc" .Values.global.domain) | quote }}
+  BBW_LIVEKIT_ICE: {{ .Values.config.livekitIce | quote }}

@@ -23,16 +23,18 @@ const (
 
 // User 用户实体（口令哈希仅 auth 域消费；其余模块不得读取）
 type User struct {
-	ID           int64    `json:"id"`
-	TenantID     int64    `json:"tenant_id"`
-	Type         int      `json:"type"`
-	EmployeeNo   string   `json:"employee_no"`
-	DisplayName  string   `json:"display_name"`
-	Email        string   `json:"email,omitempty"`
-	Phone        string   `json:"phone,omitempty"`
-	PasswordHash string   `json:"-"` // 不序列化外泄
-	Status       int      `json:"status"`
-	Scopes       []string `json:"scopes,omitempty"` // RBAC 权限点摘要（03 篇 §4.1）
+	ID           int64  `json:"id"`
+	TenantID     int64  `json:"tenant_id"`
+	Type         int    `json:"type"`
+	EmployeeNo   string `json:"employee_no"`
+	DisplayName  string `json:"display_name"`
+	Email        string `json:"email,omitempty"`
+	Phone        string `json:"phone,omitempty"`
+	PasswordHash string `json:"-"` // 不序列化外泄
+	// 首登强制改密（0029/D11）：批量导入用户置位；me/登录链路透出，改密成功清位
+	MustChangePassword bool     `json:"must_change_password,omitempty"`
+	Status             int      `json:"status"`
+	Scopes             []string `json:"scopes,omitempty"` // RBAC 权限点摘要（03 篇 §4.1）
 }
 
 // Dept 部门（树 + 物化路径，03 篇 §3.1；阶段一仅定义占位）
@@ -80,6 +82,8 @@ type UserAdminReader interface {
 	CountUsers(ctx context.Context, tenantID int64) (int64, error)
 	// SetUserStatus 启用/禁用（UserStatus*）；不存在返回 ErrUserNotFound
 	SetUserStatus(ctx context.Context, id int64, status int) error
+	// SetPassword 改密+清首登标志（D11；hash 由 auth 域闭包生成）
+	SetPassword(ctx context.Context, tenantID, userID int64, passwordHash string) error
 }
 
 // ── 组织树（D10 PAD-04 / D12 §3；物化路径 /1/7/23/ 前缀匹配"本部门及以下"） ──
@@ -104,6 +108,26 @@ type DeptTreeReaderWriter interface {
 	RenameDept(ctx context.Context, tenantID, deptID int64, name string) error
 	// DeleteDept 删除（有子部门或挂人拒——先清后删，D12 §3 生命周期）
 	DeleteDept(ctx context.Context, tenantID, deptID int64) error
+}
+
+// DeptMembershipReaderWriter 部门成员管理（D10：user_dept 挂/卸/查；
+// admin 组织树页面经闭包消费，org repo 实现）
+type DeptMembershipReaderWriter interface {
+	// AttachUser 挂部门（UK 幂等；首挂自动 primary）
+	AttachUser(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error
+	// DetachUser 卸挂（卸 primary → 剩余最小 dept_id 接任，无剩余清空）
+	DetachUser(ctx context.Context, tenantID, userID, deptID int64) error
+	// ListDeptUsers 部门成员集（含 primary 标记；空部门=空集）
+	ListDeptUsers(ctx context.Context, tenantID, deptID int64) ([]UserDeptRow, error)
+	// ListUserDepts 用户部门集
+	ListUserDepts(ctx context.Context, tenantID, userID int64) ([]UserDeptRow, error)
+}
+
+// UserDeptRow user_dept 行投影（orgapi 口径）
+type UserDeptRow struct {
+	UserID    int64
+	DeptID    int64
+	IsPrimary bool
 }
 
 // ErrDeptNotFound / ErrDeptNotEmpty / ErrDeptName 部门域 sentinel

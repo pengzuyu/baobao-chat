@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	authjwt "github.com/baobaowork/server/internal/platform/authjwt"
 )
 
 func newTestGateway(quotaLimit int64, devToken string) (*Gateway, *Meter, *Quota) {
@@ -16,7 +18,7 @@ func newTestGateway(quotaLimit int64, devToken string) (*Gateway, *Meter, *Quota
 	router := NewRouter(mock, nil)
 	meter := NewMeter(nil)
 	quota := NewQuota(quotaLimit)
-	gw := NewGateway(nil, router, NewLimiter(600, 600), quota, meter, devToken) // 限流放大避免误触
+	gw := NewGateway(nil, router, NewLimiter(600, 600), quota, meter, devToken, nil) // 限流放大避免误触
 	return gw, meter, quota
 }
 
@@ -124,7 +126,7 @@ func TestAuthRequired(t *testing.T) {
 
 func TestRateLimit8050(t *testing.T) {
 	mock := NewMockProvider(1, "m")
-	gw := NewGateway(nil, NewRouter(mock, nil), NewLimiter(6, 2), NewQuota(0), NewMeter(nil), "dev")
+	gw := NewGateway(nil, NewRouter(mock, nil), NewLimiter(6, 2), NewQuota(0), NewMeter(nil), "dev", nil)
 	for i := 0; i < 3; i++ { // burst=2：第 3 次应拒绝
 		rec := postChat(gw, `{"model":"bbw-fast","messages":[{"role":"user","content":"hi"}]}`, "dev")
 		if i < 2 && rec.Code != 200 {
@@ -232,5 +234,49 @@ func TestMockEmbedSemanticSimilarity(t *testing.T) {
 	a1b := vecs2[0]
 	if cos(a1, a1b) < 0.999 {
 		t.Fatalf("同文本应同向量: %f", cos(a1, a1b))
+	}
+}
+
+// TestOBOGateKillswitch D9：平台总闸 on → OBO 请求 503（1013）；非 OBO（dev/直连）不受影响
+func TestOBOGateKillswitch(t *testing.T) {
+	mock := NewMockProvider(1, "mock-echo")
+	quota := NewQuota(0)
+	meter := NewMeter(nil)
+	on := false
+	gw := NewGateway(nil, NewRouter(mock, nil), NewLimiter(600, 600), quota, meter, "dev", func() bool { return on })
+
+	body := `{"model":"strong","messages":[{"role":"user","content":"hi"}]}`
+
+	// 非 OBO（dev 令牌）：总闸 on 也放行
+	on = true
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dev")
+	rec := httptest.NewRecorder()
+	gw.HandleChat(rec, req)
+	if rec.Code == http.StatusServiceUnavailable {
+		t.Fatalf("非 OBO 请求不应被总闸拦: %d", rec.Code)
+	}
+
+	// OBO 请求：verify 返回带 Actor 的 claims → IsOBO；总闸 on → 503+1013
+	gwOBO := NewGateway(func(token string) (*authjwt.Claims, error) {
+		return &authjwt.Claims{Subject: "1001", TenantID: 1, Actor: &authjwt.Actor{AgentSessionID: "sess-1"}}, nil
+	}, NewRouter(mock, nil), NewLimiter(600, 600), quota, meter, "", func() bool { return on })
+	req2 := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req2.Header.Set("Authorization", "Bearer obo-token")
+	rec2 := httptest.NewRecorder()
+	gwOBO.HandleChat(rec2, req2)
+	if rec2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("OBO 请求总闸应 503: %d %s", rec2.Code, rec2.Body.String())
+	}
+	if !strings.Contains(rec2.Body.String(), "1013") {
+		t.Fatalf("错误体应含 1013: %s", rec2.Body.String())
+	}
+
+	// 总闸 off → 放行
+	on = false
+	rec3 := httptest.NewRecorder()
+	gwOBO.HandleChat(rec3, req2)
+	if rec3.Code == http.StatusServiceUnavailable {
+		t.Fatalf("总闸 off 不应拦: %d", rec3.Code)
 	}
 }

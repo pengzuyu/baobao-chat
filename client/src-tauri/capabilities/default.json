@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "主窗口默认能力集：invoke 白名单（D01 §12.3，命令均需在此授权后才可被前端调用）；meeting-* 为 D17 独立会议窗口（动态创建，仅需核心能力）",
   "windows": ["main", "meeting-*"],
-  "permissions": ["core:default", "opener:default", "notification:default"]
+  "permissions": ["core:default", "opener:default", "notification:default", "updater:default", "dialog:default"]
 }

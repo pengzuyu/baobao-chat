@@ -273,8 +273,13 @@ func (s *Service) CheckSendable(ctx context.Context, senderID int64, fileID int6
 }
 
 // MarkSent 随消息发送后回填 source='message'+conv_id（尽力而为：失败不影响消息发送）
-func (s *Service) MarkSent(ctx context.Context, fileID int64, convID int64) error {
-	return s.repo.MarkSent(ctx, fileID, convID)
+func (s *Service) MarkSent(ctx context.Context, fileID int64, convID int64, msgSeq int64) error {
+	return s.repo.MarkSent(ctx, fileID, convID, msgSeq)
+}
+
+// OnMsgRecalled 锚点消息撤回联动（OQ-B24：文件保留、锚点置灰；main 订阅 msg.recalled 注入）
+func (s *Service) OnMsgRecalled(ctx context.Context, convID int64, msgSeq int64) error {
+	return s.repo.MarkRecalledByMsg(ctx, convID, msgSeq)
 }
 
 // getLive 取未软删行（4005 不存在 / 4013 已删除）
@@ -352,5 +357,7 @@ func toDTO(f filerepo.File) fileapi.FileDTO {
 	if f.ConvID > 0 {
 		dto.ConvID = strconv.FormatInt(f.ConvID, 10)
 	}
+	dto.MsgSeq = f.MsgSeq
+	dto.Recalled = f.Recalled
 	return dto
 }

@@ -35,9 +35,32 @@ fn win_minimize(window: tauri::Window) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // updater 条件注册（16 篇 §5.1）：plugins.updater.pubkey 未填（signer 密钥未生成）
+    // 时禁用自动更新而非启动失败——正式密钥由 CI 注入后 conf 填公钥即启用
+    let context = tauri::generate_context!();
+    let updater_pubkey = context
+        .config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|v| v.get("pubkey"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        // 目录/文件选择（D13）
+        .plugin(tauri_plugin_dialog::init());
+    if updater_pubkey.is_empty() {
+        eprintln!(
+            "[bbw] updater 未配置签名公钥（tauri.conf.json plugins.updater.pubkey），自动更新禁用；\
+             npm run tauri signer generate 生成密钥后填入启用（16 篇 §5.1）"
+        );
+    } else {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder
         .setup(|app| {
             // Agent 宿主桥：数据目录={appData}/agent-runtime；事件泵→WebView（agent://event）
             let handle = app.handle().clone();
@@ -83,6 +106,6 @@ pub fn run() {
             meeting_window::meeting_start_window,
             meeting_window::meeting_take_handoff
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("Tauri 应用启动失败");
 }

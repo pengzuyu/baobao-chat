@@ -169,6 +169,46 @@ func TestTypingRoutesToOthers(t *testing.T) {
 	}
 }
 
+// TestPinnedLimit OQ-B06：置顶 30 上限——第 31 个新置顶 3023 拒绝；取消置顶不受限
+func TestPinnedLimit(t *testing.T) {
+	svc, r, _ := seedFixture(t, Options{})
+	ctx := context.Background()
+
+	// fixture 的 conv1 未置顶——本测试自造 30 个置顶会话占满名额
+	pin := true
+	var firstPinned int64
+	for i := 2; i <= 31; i++ {
+		c, err := r.CreateConversation(ctx, messagerepo.Conversation{TenantID: 1, Type: messageapi.ConvSingle, Name: fmt.Sprintf("p%d", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = r.AddMember(ctx, messagerepo.Member{ConvID: c.ID, UserID: 10001, Role: messageapi.MemberMember})
+		if _, err := svc.UpdateConvState(ctx, 10001, c.ID, messageapi.ConvStatePatch{Pinned: &pin}); err != nil {
+			t.Fatalf("置顶 %d: %v", i, err)
+		}
+		if firstPinned == 0 {
+			firstPinned = c.ID
+		}
+	}
+	// 第 31 个新置顶 → 3023
+	big, err := r.CreateConversation(ctx, messagerepo.Conversation{TenantID: 1, Type: messageapi.ConvSingle, Name: "p31"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.AddMember(ctx, messagerepo.Member{ConvID: big.ID, UserID: 10001, Role: messageapi.MemberMember})
+	if _, err := svc.UpdateConvState(ctx, 10001, big.ID, messageapi.ConvStatePatch{Pinned: &pin}); errx.From(err).Code != errx.CodeIMPinnedLimit {
+		t.Fatalf("第 31 个置顶应 3023: %v", err)
+	}
+	// 取消一个后可再置顶
+	unpin := false
+	if _, err := svc.UpdateConvState(ctx, 10001, firstPinned, messageapi.ConvStatePatch{Pinned: &unpin}); err != nil {
+		t.Fatalf("取消置顶: %v", err)
+	}
+	if _, err := svc.UpdateConvState(ctx, 10001, big.ID, messageapi.ConvStatePatch{Pinned: &pin}); err != nil {
+		t.Fatalf("释放名额后置顶应通过: %v", err)
+	}
+}
+
 func TestConvStatePatchAndDraftGuard(t *testing.T) {
 	svc, _, _ := seedFixture(t, Options{})
 	ctx := context.Background()
@@ -177,6 +217,10 @@ func TestConvStatePatchAndDraftGuard(t *testing.T) {
 	st, err := svc.UpdateConvState(ctx, 10001, 1, messageapi.ConvStatePatch{Pinned: &pin})
 	if err != nil || !st.Pinned {
 		t.Fatalf("pin: %v %+v", err, st)
+	}
+	// 重复置顶幂等（已在置顶不计入增量）
+	if _, err := svc.UpdateConvState(ctx, 10001, 1, messageapi.ConvStatePatch{Pinned: &pin}); err != nil {
+		t.Fatalf("重复置顶应幂等: %v", err)
 	}
 	// 草稿超限 3020
 	long := strings.Repeat("草", 2001)

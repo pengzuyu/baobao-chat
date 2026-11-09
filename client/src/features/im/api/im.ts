@@ -170,16 +170,23 @@ export interface ReceiptPanelRow {
   displayName: string;
 }
 
+/** 已读回执面板响应（truncated=大群仅计数口径，OQ-B04：参与成员 >200 名单置空） */
+export interface ReceiptPanel {
+  seq: number;
+  truncated: boolean;
+  readCount: number;
+  unreadCount: number;
+  read: ReceiptPanelRow[];
+  unread: ReceiptPanelRow[];
+}
+
 /** 已读回执面板（API-IM-06：seq 的已读/未读分组；群聊尾标点击拉取） */
-export async function fetchReceiptPanel(convId: string, seq: number): Promise<{ read: ReceiptPanelRow[]; unread: ReceiptPanelRow[] }> {
+export async function fetchReceiptPanel(convId: string, seq: number): Promise<ReceiptPanel> {
   if (USE_MOCK) {
     await delay(200);
-    return { read: [], unread: [] };
+    return { seq, truncated: false, readCount: 0, unreadCount: 0, read: [], unread: [] };
   }
-  const data = await http.get<{ seq: number; read: ReceiptPanelRow[]; unread: ReceiptPanelRow[] }>(
-    `/convs/${encodeURIComponent(convId)}/receipts?seq=${seq}`,
-  );
-  return { read: data.read, unread: data.unread };
+  return http.get<ReceiptPanel>(`/convs/${encodeURIComponent(convId)}/receipts?seq=${seq}`);
 }
 
 /** 正在输入（WS msg.typing，瞬时：不重试不落库，TTL 5s；ack 为空） */

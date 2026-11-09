@@ -19,7 +19,9 @@ persona: |
 source: personal
 `
 
-func newSvc() *Service { return New(ecorepo.NewMemory()) }
+func newSvc() *Service {
+	return New(ecorepo.NewMemory(), ecorepo.NewAppMemory(), ecorepo.NewRolloutMemory(), ecorepo.NewSkillMemory())
+}
 
 // 发布→清单瘦身→下载原文
 func TestPublishListDownload(t *testing.T) {

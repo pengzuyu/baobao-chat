@@ -525,6 +525,24 @@ func (s *Service) internalSend(ctx context.Context, tenantID, userID int64, from
 		}
 		_ = s.repo.AddUsage(ctx, tenantID, dst.ID, size)
 		resp.Delivered = append(resp.Delivered, addr)
+		// 自动转发（D16/22 §3.6）：收件人 settings.auto_forward 非空 → 副本投递
+		// 到转发地址邮箱。防环：InReplyTo 携 auto-fwd 标记的链路封顶一层；
+		// 转发地址即本人/不可投邮箱 → 静默跳过（转发是增益不阻断主投递）
+		if fwd := dst.Settings.AutoForward; fwd != "" && req.InReplyTo != autoFwdMarker {
+			if fwdMB, ferr := s.repo.GetMailboxByAddress(ctx, tenantID, fwd); ferr == nil &&
+				fwdMB.Status == 1 && fwdMB.ID != dst.ID {
+				if fwdInbox, fiErr := s.folderID(ctx, fwdMB.ID, "inbox"); fiErr == nil {
+					_, _ = s.repo.InsertMessage(ctx, mailrepo.Message{
+						TenantID: tenantID, MailboxID: fwdMB.ID, FolderID: fwdInbox,
+						MessageID: newMessageID(s.opts.Now()), InReplyTo: autoFwdMarker,
+						FromAddr: fromAddr, ToAddrs: []string{fwd},
+						Subject: "Fwd: " + req.Subject, Snippet: snippet, Body: req.Body,
+						HasAttachment: len(req.Attachments) > 0, Attachments: req.Attachments,
+						Flags: 0, Size: size, ReceivedAt: s.opts.Now(),
+					})
+				}
+			}
+		}
 		// mail.new（kind=new：角标数据源；IM 横幅提醒随规则引擎阶段二）
 		if s.opts.PushMail != nil {
 			s.opts.PushMail(dst.OwnerUserID, map[string]any{
@@ -792,4 +810,59 @@ func (s *Service) SendAsShared(ctx context.Context, tenantID, userID, mailboxID 
 		return nil, aerr // 发起者本人邮箱须活跃（sent 副本归本人）
 	}
 	return s.internalSend(ctx, tenantID, userID, mb.Address, req)
+}
+
+// autoFwdMarker 自动转发链路标记（InReplyTo 携带=已转发一层，封顶防环；D16）
+const autoFwdMarker = "bbw-auto-fwd"
+
+// ── 草稿（D16/22 §3.5：drafts folder 存续写；发送时清理）──
+
+// SaveDraft 存草稿（draftID>0=更新：旧行移 trash 再插新行；返回新草稿 ID）
+func (s *Service) SaveDraft(ctx context.Context, tenantID, userID int64, req SendReq, draftID int64) (int64, error) {
+	mb, err := s.mustActiveMailbox(ctx, tenantID, userID)
+	if err != nil {
+		return 0, err
+	}
+	drafts, err := s.folderID(ctx, mb.ID, "drafts")
+	if err != nil {
+		return 0, errx.New(errx.CodeMailFolderError, "草稿箱不可用")
+	}
+	if draftID > 0 {
+		// 更新语义：旧行入垃圾箱（保留历史可追溯；物理清理随阶段二）
+		_ = s.repo.MoveMessage(ctx, tenantID, draftID, func() int64 {
+			if trash, terr := s.folderID(ctx, mb.ID, "trash"); terr == nil {
+				return trash
+			}
+			return drafts
+		}())
+	}
+	attachBytes := int64(0)
+	for _, a := range req.Attachments {
+		attachBytes += a.Size
+	}
+	msg, err := s.repo.InsertMessage(ctx, mailrepo.Message{
+		TenantID: tenantID, MailboxID: mb.ID, FolderID: drafts,
+		MessageID: newMessageID(s.opts.Now()),
+		FromAddr: mb.Address, ToAddrs: req.To, CcAddrs: req.Cc,
+		Subject: req.Subject, Snippet: truncateRunes(req.Body, snippetRunes), Body: req.Body,
+		HasAttachment: len(req.Attachments) > 0, Attachments: req.Attachments,
+		Flags: mailrepo.FlagDraft, Size: int64(len(req.Body)) + attachBytes, ReceivedAt: s.opts.Now(),
+	})
+	if err != nil {
+		return 0, errx.New(errx.CodeMailSendFailed, "草稿保存失败")
+	}
+	return msg.ID, nil
+}
+
+// DiscardDraft 发送成功后清理草稿（旧行移 trash；不存在静默——草稿可能已另存新版）
+func (s *Service) DiscardDraft(ctx context.Context, tenantID, userID, draftID int64) error {
+	mb, err := s.mustActiveMailbox(ctx, tenantID, userID)
+	if err != nil {
+		return err
+	}
+	trash, err := s.folderID(ctx, mb.ID, "trash")
+	if err != nil {
+		return errx.New(errx.CodeMailFolderError, "垃圾箱不可用")
+	}
+	return s.repo.MoveMessage(ctx, tenantID, draftID, trash)
 }

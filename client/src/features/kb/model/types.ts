@@ -96,4 +96,5 @@ export interface KbQueryResp {
   items: KbQueryHit[];
   took_ms: number;
   degraded?: string[]; // 'vector'=向量路降级（仅关键词）
+  filtered_hint?: string; // OQ-D10 合规提示："部分结果被策略隐藏"（存在不可见空间时）
 }

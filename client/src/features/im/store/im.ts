@@ -8,6 +8,7 @@
 import { create } from 'zustand';
 import { emit } from '../../../shared/bus';
 import { wsClient } from '../../../shared/api/ws';
+import { ApiError } from '../../../shared/api/http';
 import { sendTextMessage, updateConvState as apiUpdateConvState } from '../api/im';
 import { systemMessageText } from '../pages/systemMessageRegistry';
 // 本地持久化（写穿/outbox）——与 ../api/local 互引为运行时环（函数体引用，模块初始化无环序依赖）
@@ -75,7 +76,8 @@ interface ImState {
   mergeConvDetail: (convId: string, patch: Partial<Conversation>) => void;
 
   /** 会话态（置顶/免打扰）：乐观更新 + PATCH（INT-IM-07） */
-  togglePin: (convId: string) => void;
+  /** 置顶切换：3023 上限拒绝回滚并返回 false（OQ-B06 提示）；网络错误保持乐观本地态 */
+  togglePin: (convId: string) => Promise<boolean>;
   toggleMute: (convId: string) => void;
 
   /** 发送文本（乐观更新；replyToSeq 携带引用；mentions 含 @全体） */
@@ -425,13 +427,27 @@ export const useImStore = create<ImState>((set, get) => ({
       convs: s.convs.map((c) => (c.id === convId ? { ...c, ...patch } : c)),
     })),
 
-  togglePin: (convId) => {
+  togglePin: async (convId) => {
     const cur = get().convs.find((c) => c.id === convId);
-    const next = !cur?.my?.pinned;
+    const prev = !!cur?.my?.pinned;
+    const next = !prev;
     set((s) => ({
       convs: s.convs.map((c) => (c.id === convId ? { ...c, my: { ...c.my!, pinned: next } } : c)),
     }));
-    void apiUpdateConvState(convId, { pinned: next }).catch(() => undefined);
+    try {
+      await apiUpdateConvState(convId, { pinned: next });
+      return true;
+    } catch (err) {
+      // 3023 置顶上限（OQ-B06）：服务端明确拒绝——回滚乐观翻转并提示；
+      // 其他错误（网络/离线）保持本地态，下次列表拉取自然对齐
+      if (err instanceof ApiError && err.code === 3023) {
+        set((s) => ({
+          convs: s.convs.map((c) => (c.id === convId ? { ...c, my: { ...c.my!, pinned: prev } } : c)),
+        }));
+        return false;
+      }
+      return true;
+    }
   },
 
   toggleMute: (convId) => {
@@ -629,8 +645,6 @@ export function digestOf(msg: Message): string {
       return '[表情]';
     case 'video':
       return '[视频]';
-    case 'doc_card':
-      return '[文档]';
     case 'agent_card':
       return '[卡片]';
     case 'merge_forward':

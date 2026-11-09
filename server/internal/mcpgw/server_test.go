@@ -23,7 +23,6 @@ type fixture struct {
 	gw        *Gateway
 	signer    *authjwt.Signer
 	kbArgs    []map[string]any // KBQuery 闭包收到的调用参数
-	docCalls  []int64          // DocRead 闭包收到的 docID
 	imSends   []map[string]any // ImSend 闭包收到的参数
 	upLoads   []map[string]any // FileUpload 闭包收到的参数
 	audits    []AuditEntry
@@ -43,10 +42,6 @@ func newFixture(t *testing.T) *fixture {
 				"tenant": tenantID, "uid": uid, "space_ids": spaceIDs, "keyword": keyword, "top_k": topK,
 			})
 			return map[string]any{"items": []map[string]any{{"doc_id": "d1", "title": "架构"}}, "took_ms": 3}, nil
-		},
-		DocRead: func(_ context.Context, tenantID, uid, docID int64) (any, error) {
-			f.docCalls = append(f.docCalls, docID)
-			return map[string]any{"id": "12", "title": "周报", "content_md": "# 周", "owner_id": "7"}, nil
 		},
 		ImSend: func(_ context.Context, tenantID, uid, convID int64, msgType string, body json.RawMessage) (any, error) {
 			f.imSends = append(f.imSends, map[string]any{
@@ -162,12 +157,12 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 	tok := f.mint(t, "7", false)
 	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`, tok)
 	tools := decode(t, rec)["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 6 {
-		t.Fatalf("供给应为 6 工具（kb_query/doc_read/im_send/file_upload/mail_read/mail_send）: %d 项", len(tools))
+	if len(tools) != 5 {
+		t.Fatalf("供给应为 5 工具（kb_query/im_send/file_upload/mail_read/mail_send）: %d 项", len(tools))
 	}
 	// 风险级与 09 篇 §3.1 权威表逐项对齐（客户端 gate 按此分档）
 	want := map[string]string{
-		"kb_query": "low", "doc_read": "low", "im_send": "high", "file_upload": "medium",
+		"kb_query": "low", "im_send": "high", "file_upload": "medium",
 		"mail_read": "low", "mail_send": "high",
 	}
 	got := map[string]string{}
@@ -246,50 +241,6 @@ func TestCallNoTokenRejected(t *testing.T) {
 	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"kb_query","arguments":{"keyword":"x"}}}`, "")
 	if code := errCode(t, decode(t, rec)); code != codeUnauthorized {
 		t.Fatalf("应 -32001，得到 %v", code)
-	}
-}
-
-func TestCallDocReadHappyPathAndScope(t *testing.T) {
-	f := newFixture(t)
-	tok := f.mint(t, "7", false)
-	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"doc_read","arguments":{"doc_id":12}}}`, tok)
-	res := decode(t, rec)["result"].(map[string]any)
-	if res["isError"] == true {
-		t.Fatalf("应成功: %v", res)
-	}
-	if !strings.Contains(res["content"].([]any)[0].(map[string]any)["text"].(string), "content_md") {
-		t.Fatal("doc_read 应回正文")
-	}
-	if len(f.docCalls) != 1 || f.docCalls[0] != 12 {
-		t.Fatalf("DocRead 参数: %v", f.docCalls)
-	}
-	// OBO 缺 doc:file:view → 防线二拒绝
-	obo := f.mint(t, "9", true, "kb:query:use")
-	body := `{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"doc_read","arguments":{"doc_id":12},"_meta":{"bbwObo":"` + obo + `"}}}`
-	if code := errCode(t, decode(t, post(t, f.gw, body, ""))); code != codeScopeDenied {
-		t.Fatalf("OBO 缺 doc:file:view 应 -32002，得到 %v", code)
-	}
-	// doc_id 非法
-	bad := `{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"doc_read","arguments":{"doc_id":0}}}`
-	if code := errCode(t, decode(t, post(t, f.gw, bad, tok))); code != codeInvalidParams {
-		t.Fatalf("doc_id 缺失应 -32602，得到 %v", code)
-	}
-}
-
-func TestCallDocReadBusinessErrorIsToolResult(t *testing.T) {
-	// 非 owner → doc 域 6005 业务失败（isError 结果，模型可读原因）
-	f := newFixture(t)
-	f.gw.opts.DocRead = func(context.Context, int64, int64, int64) (any, error) {
-		return nil, context.DeadlineExceeded
-	}
-	tok := f.mint(t, "7", false)
-	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"doc_read","arguments":{"doc_id":99}}}`, tok)
-	res := decode(t, rec)["result"].(map[string]any)
-	if res["isError"] != true {
-		t.Fatalf("业务失败应 isError=true: %v", res)
-	}
-	if f.audits[0].OK || f.audits[0].Tool != "doc_read" || f.audits[0].ErrCode != "tool_error" {
-		t.Fatalf("审计应记 doc_read 业务失败: %+v", f.audits)
 	}
 }
 

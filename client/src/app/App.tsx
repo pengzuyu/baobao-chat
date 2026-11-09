@@ -10,9 +10,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../features/auth/store/auth';
 import { LoginPage } from '../features/auth/pages/LoginPage';
 import { SetupPage } from '../features/auth/pages/SetupPage';
-import { DocCenterPage } from '../features/doc/pages/DocCenterPage';
-import { DocEditorPage } from '../features/doc/pages/DocEditorPage';
-import { DocTrashPage } from '../features/doc/pages/DocTrashPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
 import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
@@ -21,6 +18,7 @@ import { KbPage } from '../features/kb/pages/KbPage';
 import { MailPage } from '../features/mail/pages/MailPage';
 import { MeetingPage } from '../features/meeting/pages/MeetingPage';
 import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
+import { AppStorePage } from '../features/eco/pages/AppStorePage';
 import { useImStore } from '../features/im/store/im';
 import { useRtcStore } from '../features/rtc/store/rtcStore';
 import { RtcOverlay } from '../features/rtc/components/RtcOverlay';
@@ -32,6 +30,8 @@ import { useAgentStore } from '../features/agent/store/agent';
 import { isLocallyReported, notifyAgentDone } from '../features/agent/bridge/notify';
 import { AdminLayout } from '../features/admin/pages/AdminLayout';
 import { DashboardPage } from '../features/admin/pages/DashboardPage';
+import { EcoAppsPage } from '../features/admin/pages/EcoAppsPage';
+import { SkillsPage } from '../features/admin/pages/SkillsPage';
 import { UsersPage } from '../features/admin/pages/UsersPage';
 import { RolesPage } from '../features/admin/pages/RolesPage';
 import { NoticesPage } from '../features/admin/pages/NoticesPage';
@@ -48,11 +48,14 @@ import { resolveWsBase, wsClient } from '../shared/api/ws';
 import { bindWsToConnectionStore, useConnectionStore } from '../shared/store/connection';
 import { MainLayout } from './MainLayout';
 import { SettingsLayout } from '../features/settings/pages/SettingsLayout';
+import { ShortcutSettingsPage } from '../features/settings/pages/ShortcutSettingsPage';
 import { GeneralSettingsPage } from '../features/settings/pages/GeneralSettingsPage';
 import { NotificationSettingsPage } from '../features/settings/pages/NotificationSettingsPage';
 import { TransferSettingsPage } from '../features/settings/pages/TransferSettingsPage';
 import { AgentSettingsPage } from '../features/settings/pages/AgentSettingsPage';
 import { AboutPage } from '../features/settings/pages/AboutPage';
+import { sendSystemNotification } from '../features/agent/bridge/notify';
+import { message as antdMessage } from 'antd';
 
 /** WS 基址：显式 VITE_WS_BASE > 同源推导自 VITE_API_BASE（统一入口路径分流，见 ws.ts） */
 const WS_BASE: string = resolveWsBase();
@@ -62,8 +65,11 @@ const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
 /** 认证门卫：无凭据强制跳 /auth（D01 §4.2）；通过后挂全局通话浮层（D04） */
 function RequireAuth({ children }: { children: ReactNode }) {
   const token = useAuthStore((s) => s.token);
+  const mustChangePwd = useAuthStore((s) => !!s.user?.must_change_pwd);
   const location = useLocation();
   if (!token) return <Navigate to="/auth" replace state={{ from: location.pathname }} />;
+  // 首登强制改密（D11）：token 已发但未改密——全部业务路由拦回 /auth 二步表单
+  if (mustChangePwd) return <Navigate to="/auth" replace />;
   return (
     <>
       {children}
@@ -82,6 +88,42 @@ function RequireAuth({ children }: { children: ReactNode }) {
 }
 
 /** WS 连接生命周期与全局绑定（装配副作用集中于此） */
+/**
+ * 紧急停止全局键（E7/OQ-C30：⌘⇧. 主窗任意路由可触发；主窗 toast+系统通知
+ * 双通道多屏提示——系统通知覆盖主窗不在前台/最小化场景）。
+ */
+function useEmergencyStopHotkey(): void {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // ⌘⇧. / Ctrl+Shift+.（09 篇 INT-AG-12；period 在 mac 中文输入法下 key 值兼容 '。'）
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === '.' || e.key === '。')) {
+        e.preventDefault();
+        const { emergencyStop } = useAgentStore.getState();
+        emergencyStop();
+        // 多屏提示（OQ-C30）：主窗 toast + 系统通知（免打扰不拦——紧急语义优先于偏好闸门）
+        window.dispatchEvent(new CustomEvent('bbw:toast', { detail: '已触发紧急停止：Agent 进程终止、未决审批作废' }));
+        void sendSystemNotification('BaobaoWork · 紧急停止', 'Agent 进程已终止，未决审批已作废');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+}
+
+/** 全局轻提示（bbw:toast CustomEvent → antd message；E7 紧急停止等主窗提示） */
+function useGlobalToast(): void {
+  const [api, contextHolder] = antdMessage.useMessage();
+  useEffect(() => {
+    const onToast = (e: Event) => {
+      api.warning((e as CustomEvent<string>).detail);
+    };
+    window.addEventListener('bbw:toast', onToast);
+    return () => window.removeEventListener('bbw:toast', onToast);
+  }, [api]);
+  // 挂到路由树外层（render 里消费 contextHolder）
+  (window as unknown as { __bbwToastHolder?: unknown }).__bbwToastHolder = contextHolder;
+}
+
 function useWsLifecycle(): void {
   const token = useAuthStore((s) => s.token);
   const user = useAuthStore((s) => s.user);
@@ -159,9 +201,12 @@ function useWsLifecycle(): void {
 
 export function App() {
   useWsLifecycle();
+  useEmergencyStopHotkey();
+  useGlobalToast();
 
   return (
     <BrowserRouter>
+      {(window as unknown as { __bbwToastHolder?: React.ReactNode }).__bbwToastHolder}
       <Routes>
         <Route path="/auth" element={<LoginPage />} />
         {/* 初始化向导（16 篇 §2.2 Web 化）：空系统引导首个管理员；已初始化自动回 /auth */}
@@ -188,14 +233,12 @@ export function App() {
         <Route path="/im/c/:convId" element={<ChatPage />} />
         {/* 我的收藏（PIM-08，D03 §3.8） */}
         <Route path="/im/favorites" element={<FavoritesPage />} />
-        {/* 通知中心（PIM-09，D03 §3.9） */}
-        <Route path="/im/notifications" element={<NotificationCenterPage />} />
+        {/* 全局通知中心（OQ-B07 上移：/notifications——IM/kb/agent 审批复用同一中心， */}
+        {/* kind 分组随域接入扩展；旧 /im/notifications 兼容跳转） */}
+        <Route path="/notifications" element={<NotificationCenterPage />} />
+        <Route path="/im/notifications" element={<Navigate to="/notifications" replace />} />
         {/* 通话域（D04 阶段一务实版）：最近通话（call_card 消息流派生）+ 全局通话浮层在 RequireAuth 挂载 */}
         <Route path="/rtc" element={<RecentCallsPage />} />
-        {/* 文档中心（D05 阶段一务实版）：列表/编辑器（markdown+乐观锁+版本时间线）/回收站 */}
-        <Route path="/doc" element={<DocCenterPage />} />
-        <Route path="/doc/trash" element={<DocTrashPage />} />
-        <Route path="/doc/:docId" element={<DocEditorPage />} />
         {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
         <Route path="/kb" element={<KbPage />} />
         {/* 邮箱（22 篇 MAI-01~04：三栏/写信/设置/搜索） */}
@@ -204,6 +247,8 @@ export function App() {
         <Route path="/meetings" element={<MeetingPage />} />
         {/* 专家库（D14 PAG-13~15：公司/个人库/编辑器；协作图视图随 agent_* 接线） */}
         <Route path="/experts" element={<ExpertLibraryPage />} />
+        {/* 应用商店（E1/D09 PEC-07：catalog 差异+安装） */}
+        <Route path="/apps" element={<AppStorePage />} />
         {/* Agent 工作台域（D08）：PAG-01/02/03 工作台 + PAG-11 记忆 + 日报 */}
         <Route path="/agent" element={<AgentWorkbenchPage />} />
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />
@@ -223,6 +268,8 @@ export function App() {
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="ai-providers" element={<AiProvidersPage />} />
           <Route path="stickers" element={<StickersPage />} />
+          <Route path="eco-apps" element={<EcoAppsPage />} />
+          <Route path="skills" element={<SkillsPage />} />
           <Route path="usage" element={<UsagePage />} />
           <Route path="audit" element={<AuditPage />} />
         </Route>
@@ -232,6 +279,7 @@ export function App() {
           <Route path="general" element={<GeneralSettingsPage />} />
           <Route path="notification" element={<NotificationSettingsPage />} />
           <Route path="transfer" element={<TransferSettingsPage />} />
+          <Route path="shortcuts" element={<ShortcutSettingsPage />} />
           <Route path="agent" element={<AgentSettingsPage />} />
           <Route path="about" element={<AboutPage />} />
         </Route>

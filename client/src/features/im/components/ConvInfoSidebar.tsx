@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { FileText, Hash, Megaphone, ScrollText, Settings2, Shield, Tag, Users, VolumeX, X } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { Button } from '../../../shared/ui/Button';
@@ -25,6 +26,7 @@ import {
   memberRole,
 } from '../api/im';
 import { downloadUrl, fetchConvFiles, getDownloadTicket, type MyFileItem } from '../api/files';
+import { useImStore } from '../store/im';
 import { formatMuteUntil } from '../pages/systemMessageRegistry';
 import type { Conversation, ConversationMember, MemberRole } from '../model/types';
 
@@ -516,6 +518,15 @@ function ConvFilesTab({ convId }: { convId: string }) {
   const [items, setItems] = useState<MyFileItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const setPendingLocate = useImStore((s) => s.setPendingLocate);
+
+  /** 定位到原消息（OQ-B24：已撤回锚点置灰不可跳转；与收藏/搜索跳转共用 pendingLocate） */
+  const locate = (f: MyFileItem) => {
+    if (!f.msgSeq || f.recalled) return;
+    setPendingLocate({ convId, seq: f.msgSeq });
+    navigate(`/im/c/${convId}`);
+  };
 
   const reload = useCallback(async () => {
     setError(null);
@@ -565,6 +576,15 @@ function ConvFilesTab({ convId }: { convId: string }) {
                 </span>
               </div>
               <div className="gm-member__ops">
+                <button
+                  type="button"
+                  className="gm-op-btn"
+                  disabled={!f.msgSeq || f.recalled}
+                  title={f.recalled ? '消息已撤回，无法定位' : f.msgSeq ? '定位到消息' : '未关联消息'}
+                  onClick={() => locate(f)}
+                >
+                  定位
+                </button>
                 <button
                   type="button"
                   className="gm-op-btn"

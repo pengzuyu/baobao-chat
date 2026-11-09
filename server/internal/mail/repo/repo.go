@@ -18,6 +18,7 @@ var (
 const (
 	FlagSeen    int16 = 1 << 0 // seen
 	FlagFlagged int16 = 1 << 1 // 星标
+	FlagDraft  int16 = 1 << 2 // 草稿（D16：drafts folder 行标记）
 )
 
 // 系统文件夹（开户即 seed；22 §5 mail_folder_meta.type）

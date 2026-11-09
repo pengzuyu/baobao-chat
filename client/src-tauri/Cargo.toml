@@ -19,6 +19,10 @@ tauri = { version = "2", features = [] }
 # 外链一律走系统浏览器（D01 §10），Tauri 2 官方 opener 插件
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
+# 目录/文件选择对话框（D13 传输设置下载目录；@tauri-apps/plugin-dialog 前端对应）
+tauri-plugin-dialog = "2"
+# 自动更新（16 篇 §5.1：ed25519 签名 manifest + /update/ 静态源；pubkey 未配置时禁用）
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

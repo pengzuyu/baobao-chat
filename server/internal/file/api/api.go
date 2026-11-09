@@ -125,6 +125,8 @@ type FileDTO struct {
 	Height      int    `json:"height,omitempty"`
 	Source      string `json:"source"`           // upload / message
 	ConvID      string `json:"convId,omitempty"` // 随消息发送后回填
+	MsgSeq      int64  `json:"msgSeq,omitempty"` // 消息锚点（群文件定位消息，OQ-B24）
+	Recalled    bool   `json:"recalled"`         // 锚点消息已撤回（锚点置灰，文件保留）
 	CreatedAt   int64  `json:"createdAt"`        // ms
 }
 
@@ -144,8 +146,10 @@ type FileService interface {
 	SoftDelete(ctx context.Context, tenantID, userID int64, fileID int64) error
 	// CheckSendable msg.send type=file/image 校验：存在(4005)/未删(4013)/sender 为 owner 或 source=message(2003)
 	CheckSendable(ctx context.Context, senderID int64, fileID int64) error
-	// MarkSent 随消息发送后回填 source='message'+conv_id（message 域调用；尽力而为）
-	MarkSent(ctx context.Context, fileID int64, convID int64) error
+	// MarkSent 随消息发送回填 source/conv_id/msg_seq（msg_seq=群文件锚点，OQ-B24）
+	MarkSent(ctx context.Context, fileID int64, convID int64, msgSeq int64) error
+	// OnMsgRecalled 锚点消息撤回联动（OQ-B24：文件保留、recalled 置灰；尽力而为）
+	OnMsgRecalled(ctx context.Context, convID int64, msgSeq int64) error
 
 	// ── 分片上传会话（07 §4.1 ④⑤⑥⑦ 本地盘形态：PATCH 直传，无预签名） ──
 	// Check 秒传预检（策略再校验：大小/黑名单不因预检豁免）

@@ -168,3 +168,51 @@ function mockChunks(): Array<{ seq: number; heading_path: string; content: strin
     { seq: 2, heading_path: '登录安全规范', content: '连续失败则强制重新登录，并在审计日志中登记。', token_count: 22 },
   ];
 }
+
+// ── 空间授权管理（11 §6 / D07 PKB-06；治理角色折叠映射：perm 4=owner/admin、3=contributor、1=reader）──
+
+/** 授权行（resource_acl 投影） */
+export interface KbGrantRow {
+  id: string;
+  grant_type: number; // 1 user 2 dept
+  grant_target: string;
+  perm: number; // 1 reader 3 contributor 4 owner/admin
+  granted_by: string;
+  expires_at: number; // ms；0=永久
+  created_at: number; // ms
+}
+
+/** 授权列表（治理者） */
+export async function fetchSpaceGrants(spaceId: string): Promise<KbGrantRow[]> {
+  if (USE_MOCK) {
+    await delay(150);
+    return [
+      { id: 'g1', grant_type: 1, grant_target: 'u-1002', perm: 3, granted_by: 'u-1001', expires_at: 0, created_at: Date.now() - 86400_000 },
+      { id: 'g2', grant_type: 2, grant_target: '9', perm: 1, granted_by: 'u-1001', expires_at: Date.now() + 30 * 86400_000, created_at: Date.now() - 3600_000 },
+    ];
+  }
+  const data = await http.get<{ items: KbGrantRow[] }>(`/kb/spaces/${encodeURIComponent(spaceId)}/grants`);
+  return data.items ?? [];
+}
+
+/** 添加授权（治理者；7002 非治理者/9001 参数非法） */
+export async function addSpaceGrant(spaceId: string, req: { grant_type: number; grant_target: string; perm: number; expires_at_ms?: number }): Promise<KbGrantRow> {
+  if (USE_MOCK) {
+    await delay(150);
+    return { id: `g${Date.now()}`, grant_type: req.grant_type, grant_target: req.grant_target, perm: req.perm, granted_by: 'u-1001', expires_at: req.expires_at_ms ?? 0, created_at: Date.now() };
+  }
+  return http.post<KbGrantRow>(`/kb/spaces/${encodeURIComponent(spaceId)}/grants`, req);
+}
+
+/** 撤销授权 */
+export async function removeSpaceGrant(spaceId: string, grantId: string): Promise<void> {
+  if (USE_MOCK) {
+    await delay(120);
+    return;
+  }
+  await http.delete(`/kb/spaces/${encodeURIComponent(spaceId)}/grants/${encodeURIComponent(grantId)}`);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

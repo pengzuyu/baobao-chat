@@ -30,12 +30,12 @@ func NewPostgres(pool *pgxpool.Pool) Repo { return &Postgres{pool: pool} }
 
 // userCols 列清单（可空列 COALESCE 兜底，避免扫描 NULL 报错）
 const userCols = `id, tenant_id, type, employee_no, display_name,
-	COALESCE(email,''), COALESCE(phone,''), COALESCE(password_hash,''), status`
+	COALESCE(email,''), COALESCE(phone,''), COALESCE(password_hash,''), status, must_change_password`
 
 func scanUser(row pgx.Row) (*orgapi.User, error) {
 	var u orgapi.User
 	if err := row.Scan(&u.ID, &u.TenantID, &u.Type, &u.EmployeeNo, &u.DisplayName,
-		&u.Email, &u.Phone, &u.PasswordHash, &u.Status); err != nil {
+		&u.Email, &u.Phone, &u.PasswordHash, &u.Status, &u.MustChangePassword); err != nil {
 		return nil, err
 	}
 	// Scopes 不落库：权限点归属 role/user_role 表（03 篇 §4），阶段二接 RBAC 查询拼装（TODO）
@@ -56,9 +56,9 @@ func (p *Postgres) CreateUser(ctx context.Context, u orgapi.User) (orgapi.User, 
 		}
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO users (id, tenant_id, type, employee_no, display_name, email, phone, password_hash, status)
-		VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8,$9)`,
-		u.ID, u.TenantID, u.Type, u.EmployeeNo, u.DisplayName, u.Email, u.Phone, u.PasswordHash, u.Status); err != nil {
+		INSERT INTO users (id, tenant_id, type, employee_no, display_name, email, phone, password_hash, status, must_change_password)
+		VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8,$9,$10)`,
+		u.ID, u.TenantID, u.Type, u.EmployeeNo, u.DisplayName, u.Email, u.Phone, u.PasswordHash, u.Status, u.MustChangePassword); err != nil {
 		return orgapi.User{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -283,20 +283,84 @@ func (p *Postgres) AttachUser(ctx context.Context, tenantID, userID, deptID int6
 }
 
 // ListUserDepts 用户部门集
-func (p *Postgres) ListUserDepts(ctx context.Context, tenantID, userID int64) ([]UserDeptRow, error) {
+func (p *Postgres) ListUserDepts(ctx context.Context, tenantID, userID int64) ([]orgapi.UserDeptRow, error) {
 	rows, err := p.pool.Query(ctx, `
 		SELECT user_id, dept_id, is_primary FROM user_dept WHERE user_id=$1 ORDER BY dept_id`, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []UserDeptRow{}
+	out := []orgapi.UserDeptRow{}
 	for rows.Next() {
-		var r UserDeptRow
+		var r orgapi.UserDeptRow
 		if err := rows.Scan(&r.UserID, &r.DeptID, &r.IsPrimary); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// DetachUser 卸挂（D10；primary 卸载 → 剩余最小 dept_id 接任，与 Memory 语义一致）
+func (p *Postgres) DetachUser(ctx context.Context, tenantID, userID, deptID int64) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var wasPrimary bool
+	err = tx.QueryRow(ctx,
+		`SELECT is_primary FROM user_dept WHERE user_id=$1 AND dept_id=$2`, userID, deptID).
+		Scan(&wasPrimary)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return tx.Commit(ctx) // 幂等：未挂载
+		}
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM user_dept WHERE user_id=$1 AND dept_id=$2`, userID, deptID); err != nil {
+		return err
+	}
+	if wasPrimary {
+		if _, err := tx.Exec(ctx, `
+			UPDATE user_dept SET is_primary=true
+			WHERE user_id=$1 AND dept_id=(SELECT MIN(dept_id) FROM user_dept WHERE user_id=$1)`,
+			userID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// ListDeptUsers 部门成员集（含 primary 标记，D10）
+func (p *Postgres) ListDeptUsers(ctx context.Context, tenantID, deptID int64) ([]orgapi.UserDeptRow, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT user_id, dept_id, is_primary FROM user_dept WHERE dept_id=$1 ORDER BY user_id`, deptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []orgapi.UserDeptRow{}
+	for rows.Next() {
+		var r orgapi.UserDeptRow
+		if err := rows.Scan(&r.UserID, &r.DeptID, &r.IsPrimary); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SetPassword 改密+清首登标志（D11；0029）
+func (p *Postgres) SetPassword(ctx context.Context, tenantID, userID int64, passwordHash string) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE users SET password_hash=$3, must_change_password=FALSE, updated_at=now()
+		WHERE tenant_id=$1 AND id=$2`, tenantID, userID, passwordHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return orgapi.ErrUserNotFound
+	}
+	return nil
 }

@@ -31,7 +31,7 @@ func NewPostgres(pool *pgxpool.Pool) Repo { return &Postgres{pool: pool} }
 const fileCols = `id, tenant_id, owner_id, name, COALESCE(ext,''), size,
 	COALESCE(content_type,'application/octet-stream'), sha256,
 	COALESCE(width,0), COALESCE(height,0), source, COALESCE(conv_id,0), scan_status,
-	created_at, deleted_at`
+	COALESCE(msg_seq,0), COALESCE(recalled,false), created_at, deleted_at`
 
 func scanFile(row pgx.Row) (*File, error) {
 	var (
@@ -40,7 +40,7 @@ func scanFile(row pgx.Row) (*File, error) {
 	)
 	if err := row.Scan(&f.ID, &f.TenantID, &f.OwnerID, &f.Name, &f.Ext, &f.Size,
 		&f.ContentType, &f.SHA256, &f.Width, &f.Height, &f.Source, &f.ConvID, &f.ScanStatus,
-		&f.CreatedAt, &deleted); err != nil {
+		&f.MsgSeq, &f.Recalled, &f.CreatedAt, &deleted); err != nil {
 		return nil, err
 	}
 	if deleted != nil {
@@ -134,11 +134,11 @@ func (p *Postgres) SoftDelete(ctx context.Context, id int64, at time.Time) error
 	return nil
 }
 
-// MarkSent source→message + conv_id 回填（未软删行；行不存在返回 ErrNotFound）
-func (p *Postgres) MarkSent(ctx context.Context, id int64, convID int64) error {
+// MarkSent source→message + conv_id/msg_seq 回填（未软删行；行不存在返回 ErrNotFound）
+func (p *Postgres) MarkSent(ctx context.Context, id int64, convID int64, msgSeq int64) error {
 	ct, err := p.pool.Exec(ctx,
-		`UPDATE file SET source = $2, conv_id = $3 WHERE id = $1 AND deleted_at IS NULL`,
-		id, SourceMessage, convID)
+		`UPDATE file SET source = $2, conv_id = $3, msg_seq = $4 WHERE id = $1 AND deleted_at IS NULL`,
+		id, SourceMessage, convID, msgSeq)
 	if err != nil {
 		return err
 	}
@@ -146,6 +146,14 @@ func (p *Postgres) MarkSent(ctx context.Context, id int64, convID int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// MarkRecalledByMsg 锚点消息撤回联动（OQ-B24：文件保留、recalled=true；无匹配行=no-op）
+func (p *Postgres) MarkRecalledByMsg(ctx context.Context, convID int64, msgSeq int64) error {
+	_, err := p.pool.Exec(ctx,
+		`UPDATE file SET recalled = true WHERE conv_id = $1 AND msg_seq = $2 AND deleted_at IS NULL`,
+		convID, msgSeq)
+	return err
 }
 
 // ListByUser 我的文件（未软删，created_at 倒序；v0.1 全量 Top500 兜底，cursor 阶段二）

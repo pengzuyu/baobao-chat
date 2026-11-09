@@ -20,6 +20,9 @@ import (
 
 // Options 策略参数（租户策略热更接入点：admin_policy → policy.updated，D02 §8）
 type Options struct {
+	// NotifyPrefs 用户通知偏好仓储（0030/D12；nil=设置页读写 9004）
+	NotifyPrefs messagerepo.NotifyPrefRepo
+
 	MaxTextRunes   int                   // text 上限（默认 5000，04 篇 §1.2）
 	MaxDraftRunes  int                   // 草稿上限（默认 2000，3020）
 	SensitiveWords []string              // 敏感词（阶段二：租户词库缓存 + 变更热更，04 篇 §7.3）
@@ -55,8 +58,8 @@ type Options struct {
 	// sender 为 owner 或 source=message(2003)。main 注入 file 域闭包（D02 §4 跨域不引包）；
 	// nil=未装配文件域时跳过校验（text-only 部署可裁剪）
 	FileCheck func(ctx context.Context, senderID int64, fileID int64) error
-	// 发送成功后回填 file.source='message'+conv_id（尽力而为：失败不影响消息）
-	FileMarkSent func(ctx context.Context, fileID int64, convID int64) error
+	// 发送成功后回填 file.source='message'+conv_id+msg_seq 锚点（尽力而为：失败不影响消息）
+	FileMarkSent func(ctx context.Context, fileID int64, convID int64, msgSeq int64) error
 
 	// ── 表情包消息（0022 sticker）──
 	// msg.send type=sticker 时校验 body.sticker_id 可见性（个人集 owner=sender /
@@ -426,7 +429,7 @@ func (s *Service) Send(ctx context.Context, senderID int64, p messageapi.SendPay
 	})
 	// ⑧ 文件消息回填（D06：source='message'+conv_id；尽力而为，失败不影响已落库消息）
 	if fileID > 0 && s.opts.FileMarkSent != nil {
-		_ = s.opts.FileMarkSent(ctx, fileID, convID)
+		_ = s.opts.FileMarkSent(ctx, fileID, convID, msg.Seq)
 	}
 	return &messageapi.SendResult{MsgID: msg.ID, Seq: msg.Seq, TS: msg.TS}, nil
 }

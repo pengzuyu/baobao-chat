@@ -262,6 +262,19 @@ func (m *Memory) SetUserConvState(_ context.Context, userID, convID int64, s Use
 	return nil
 }
 
+// CountPinned 用户当前置顶数（内存版：states 扫描；OQ-B06 上限校验）
+func (m *Memory) CountPinned(_ context.Context, userID int64) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, s := range m.states[userID] {
+		if s.Pinned {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // ListMessagesLatest 最新 N 条：尾取 N 后反转（msgs 按 seq 有序）
 func (m *Memory) ListMessagesLatest(_ context.Context, convID int64, limit int) ([]messageapi.Message, error) {
 	m.mu.Lock()
