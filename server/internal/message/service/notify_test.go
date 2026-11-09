@@ -461,3 +461,92 @@ func TestNotifyListPaging(t *testing.T) {
 		t.Fatalf("应按 id 倒序: %d vs %d", a, b)
 	}
 }
+
+// ── Agent 任务终态上报（④号事件源，14 篇 §3.3 OQ-C32：落卡+跨端事件+幂等+cancelled 不落卡）──
+func TestReportAgentTask(t *testing.T) {
+	svc, _, bus, clk := seedNotifyFixture(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	var tasks []messageapi.AgentTaskEvent
+	bus.Subscribe(eventbus.TopicAgentTaskDone, func(_ context.Context, evt eventbus.Event) error {
+		if e, ok := evt.Payload.(messageapi.AgentTaskEvent); ok {
+			mu.Lock()
+			tasks = append(tasks, e)
+			mu.Unlock()
+		}
+		return nil
+	})
+
+	// done：落卡 + 发事件
+	if err := svc.ReportAgentTask(ctx, 10001, messageapi.AgentTaskReportPayload{
+		RunID: "r-1", Kind: "delegate", Status: "done", SessionID: "s-1",
+		Title: "修复登录超时", Summary: "改了 auth.go 重试逻辑", ChangedFilesCount: 2, OriginDID: "did-A",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items := listFor(t, svc, 10001, "agent_done", false)
+	if len(items) != 1 || items[0].Title != "任务「修复登录超时」已完成" ||
+		items[0].Digest != "改了 auth.go 重试逻辑" {
+		t.Fatalf("done 应落 kind=agent_done 卡: %+v", items)
+	}
+	mu.Lock()
+	if len(tasks) != 1 || tasks[0].Task.RunID != "r-1" || tasks[0].UserID != 10001 || tasks[0].Task.OriginDID != "did-A" {
+		t.Fatalf("应发布 1 条 agent.task.completed: %+v", tasks)
+	}
+	mu.Unlock()
+
+	// 幂等：同 run_id+status 重报 → 不新增行、不再发事件（宿主重试安全）
+	if err := svc.ReportAgentTask(ctx, 10001, messageapi.AgentTaskReportPayload{
+		RunID: "r-1", Kind: "delegate", Status: "done", SessionID: "s-1", Title: "修复登录超时",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(listFor(t, svc, 10001, "agent_done", false)); got != 1 {
+		t.Fatalf("重报不应新增落卡, got %d", got)
+	}
+	mu.Lock()
+	if len(tasks) != 1 {
+		t.Fatalf("重报不应重复发事件, got %d", len(tasks))
+	}
+	mu.Unlock()
+
+	// 同 run 不同终态（重试竞态后到 cancelled）→ 允许各自一次
+	if err := svc.ReportAgentTask(ctx, 10001, messageapi.AgentTaskReportPayload{
+		RunID: "r-1", Kind: "delegate", Status: "cancelled", SessionID: "s-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// cancelled：只发事件、不落卡
+	if got := len(listFor(t, svc, 10001, "agent_done", false)); got != 1 {
+		t.Fatalf("cancelled 不应落卡, got %d", got)
+	}
+	mu.Lock()
+	if len(tasks) != 2 || tasks[1].Task.Status != "cancelled" {
+		t.Fatalf("cancelled 应仍发跨端事件: %+v", tasks)
+	}
+	mu.Unlock()
+
+	// 10s 窗口内第二个 run done → 聚合 count=2（"×N"渲染依据）
+	if err := svc.ReportAgentTask(ctx, 10001, messageapi.AgentTaskReportPayload{
+		RunID: "r-2", Kind: "expert", Status: "failed", SessionID: "s-2", Title: "代码评审",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items = listFor(t, svc, 10001, "agent_done", false)
+	if len(items) != 1 || items[0].Count != 2 {
+		t.Fatalf("窗口内多 run 应合并 count=2: %+v", items)
+	}
+	clk.Advance(11 * time.Second)
+
+	// 枚举校验
+	for _, bad := range []messageapi.AgentTaskReportPayload{
+		{Kind: "delegate", Status: "done"},                         // 缺 run_id
+		{RunID: "r-9", Kind: "bogus", Status: "done"},              // 非法 kind
+		{RunID: "r-9", Kind: "probe", Status: "interrupted"},       // 非法 status（终态三枚举外）
+	} {
+		if err := svc.ReportAgentTask(ctx, 10001, bad); err == nil {
+			t.Fatalf("非法上报应报错: %+v", bad)
+		}
+	}
+}

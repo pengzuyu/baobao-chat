@@ -380,6 +380,8 @@ func main() {
 	mux.Handle("GET /api/v1/notifications", authed(handleListNotifications(msgMod.API())))
 	mux.Handle("POST /api/v1/notifications/read", authed(handleNotificationsRead(msgMod.API())))
 	mux.Handle("GET /api/v1/notifications/unread_count", authed(handleUnreadNotificationCount(msgMod.API())))
+	// Agent 任务终态上报（14 篇 §3.3 OQ-C32：宿主 OBO token 上报 → 落卡+跨端推送）
+	mux.Handle("POST /api/v1/notify/agent-tasks", authed(handleReportAgentTask(msgMod.API())))
 
 	// 文件 REST（D06 阶段一+阶段二 server 侧：multipart 直传/一次性票据下载/
 	// 我的文件/软删 + check 秒传/分片会话/complete + 分享外链）
@@ -1801,6 +1803,28 @@ func handleUnreadNotificationCount(svc messageapi.MessageService) http.HandlerFu
 			return
 		}
 		httpx.OK(w, r, res)
+	}
+}
+
+// handleReportAgentTask Agent 任务终态上报（14 篇 §3.3，OQ-C32：宿主→notify 域；
+// uid 恒取 token sub，body 不接受越权指定接收人；幂等键 run_id+status，重试安全）
+func handleReportAgentTask(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req messageapi.AgentTaskReportPayload
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if err := svc.ReportAgentTask(r.Context(), uid, req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{})
 	}
 }
 

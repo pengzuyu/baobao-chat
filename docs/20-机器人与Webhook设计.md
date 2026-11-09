@@ -185,7 +185,7 @@ conversation(群) ── conversation_member(role=bot 的 bot 成员) ── mes
 
 | 环节 | 设计 |
 |---|---|
-| 事件源（本期） | ① `msg.created`：指定群的全部消息或**过滤词命中**或**仅 @该 bot**（三选一模式）② 审批结果：12 篇审批工单办结（通过/拒绝/撤回）③ agent 任务完成：委派任务终态（成功/失败，17 篇 delegate_task 终态触发） |
+| 事件源（本期） | ① `msg.created`：指定群的全部消息或**过滤词命中**或**仅 @该 bot**（三选一模式）② 审批结果：12 篇审批工单办结（通过/拒绝/撤回）③ agent 任务完成：**`agent.task.completed`**——宿主上报 notify 域生成（14 篇 §3.3；委派/专家 run 终态，字段对齐 D16 agent_run 快照；原 17 篇 delegate_task 触发口径由本事件取代） |
 | 订阅配置 | bot_webhook(direction=out) 的 `targets.event_types[]` + 源范围（conv_ids / 全租户审批 / 指定用户 Agent 任务）；事件订阅不存在（webhook 已删/停用）→ 投递记录 3033 |
 | 投递协议 | HTTP POST 回调 URL，body 为事件信封 `{event, bot_id, ts, data}`；头 `X-BBW-Timestamp` + `X-BBW-Signature`（同 §4.2 算法，secret 为 out 方向独立 secret） |
 | 重试 | 目标返回 非 2xx/超时(10s) → 重试队列按 **1min/5min/15min** 退避，共 4 次尝试 |

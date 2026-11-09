@@ -32,6 +32,7 @@ const (
 	TopicUserUpdated     = "user.updated"          // org → gateway/message
 	TopicUserDeptChanged = "user.dept_changed"     // org → gateway/message
 	TopicTenantStatus    = "tenant.status.changed" // admin → gateway/各域
+	TopicAgentTaskDone   = "agent.task.completed"  // message(宿主上报 REST /notify/agent-tasks，OQ-C32) → gateway(跨端推 agent.task.completed；payload 带 origin_did 端侧自滤)
 )
 
 // Event 事件信封；ID 用于订阅方幂等去重（至少一次语义下的重复投递是常态）

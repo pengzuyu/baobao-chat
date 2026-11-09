@@ -30,7 +30,7 @@ const KIND_TABS: Array<{ value: NotificationKind | 'all'; label: string; disable
   { value: 'reply', label: '回复我' },
   { value: 'apply', label: '审批' },
   { value: 'announcement', label: '公告' },
-  { value: 'agent_done', label: 'Agent 完成', disabled: true }, // 预留：agent 域事件源未接，登记
+  { value: 'agent_done', label: 'Agent 完成' }, // 事件源已接：宿主上报 /notify/agent-tasks（14 篇 §3.3 OQ-C32）
 ];
 
 const KIND_ICON: Record<NotificationKind, typeof AtSign> = {
@@ -96,6 +96,11 @@ export function NotificationCenterPage() {
       // 未读项点击即读（单条；失败不阻断路由）
       void markNotificationsRead({ ids: [item.id] }).then(invalidateNotifications);
     }
+    if (item.kind === 'agent_done') {
+      // Agent 任务终态（14 篇 §3.3 OQ-C32）：跳工作台 run 面板（conv 关联为 0，非会话派生）
+      navigate('/agent');
+      return;
+    }
     if (!item.convId) return;
     switch (item.kind) {
       case 'mention':
@@ -121,7 +126,7 @@ export function NotificationCenterPage() {
         break;
       }
       default:
-        break; // agent_done 预留
+        break;
     }
   };
 

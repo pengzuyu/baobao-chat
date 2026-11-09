@@ -154,6 +154,20 @@ func New(hub *Hub, bus eventbus.Bus, msgs messageapi.MessageService, verify Toke
 			return nil
 		})
 	})
+	// Agent 任务终态（14 篇 §3.3，OQ-C32）：宿主上报 notify 域 → 跨端推
+	// agent.task.completed 给该 user 全部在线设备（本机已由 Tauri 本地通知触达，
+	// payload 带 origin_did 端侧自滤防双响；同 run 终态唯一，端侧按 run_id 幂等去重）
+	bus.Subscribe(eventbus.TopicAgentTaskDone, func(ctx context.Context, evt eventbus.Event) error {
+		return g.dedup.Once(evt.ID, func() error {
+			e, ok := evt.Payload.(messageapi.AgentTaskEvent)
+			if !ok {
+				log.Printf("[gateway] agent.task.completed payload 类型异常: %T", evt.Payload)
+				return nil
+			}
+			g.hub.PushToUsers([]int64{e.UserID}, NewPush("agent.task.completed", e.Task))
+			return nil
+		})
+	})
 	// 会话事件（topic=conv.updated）：按 payload 类型分发——
 	//   · ConvStateEvent：kind=state（置顶/免打扰/草稿），仅推本人多端（D03 §10-1）
 	//   · ConvUpdatedEvent：kind=meta/member/setting/status/announcement，快照+members_delta

@@ -28,6 +28,8 @@ import { RecentCallsPage } from '../features/rtc/pages/RecentCallsPage';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
 import { AgentReportsPage } from '../features/agent/pages/AgentReportsPage';
+import { useAgentStore } from '../features/agent/store/agent';
+import { isLocallyReported, notifyAgentDone } from '../features/agent/bridge/notify';
 import { AdminLayout } from '../features/admin/pages/AdminLayout';
 import { DashboardPage } from '../features/admin/pages/DashboardPage';
 import { UsersPage } from '../features/admin/pages/UsersPage';
@@ -106,6 +108,24 @@ function useWsLifecycle(): void {
     const offNotification = wsClient.on('notification.new', () => {
       void queryClient.invalidateQueries({ queryKey: ['im', 'notifications'] });
     });
+    // Agent 任务终态跨端通知（14 篇 §3.3 OQ-C32）：其它端上报的 run 完成 →
+    // 系统通知触达；本端刚上报过的 run 自滤（本地通知已负责，防双响）。
+    // 工作台在 /agent 时顺带刷新 run 面板（后台完成的 run 跨端也实时可见）
+    const offAgentTask = wsClient.on('agent.task.completed', (raw) => {
+      const t = raw as {
+        run_id: string; kind: string; status: string; session_id: string;
+        title?: string; summary?: string;
+      };
+      if (isLocallyReported(t.run_id)) return;
+      const outcome = t.status === 'failed' ? '失败' : '完成';
+      void notifyAgentDone(
+        `任务${outcome}${t.title ? `：${t.title}` : ''}`,
+        (t.summary ?? t.run_id).slice(0, 80),
+      );
+      if (window.location.pathname.startsWith('/agent')) {
+        useAgentStore.getState().loadRuns(t.session_id);
+      }
+    });
     // 权限实时生效（03 篇 §4）：授权/收回/角色变更 → perm.changed → 重拉 /me/permissions
     // 更新 auth store（管理入口与模块树显隐即时收窄；进行中操作由服务端守卫 2001 拒绝）
     const offPermChanged = wsClient.on('perm.changed', () => {
@@ -115,6 +135,7 @@ function useWsLifecycle(): void {
       wsClient.onResync = null;
       wsClient.onAuthError = null;
       offNotification();
+      offAgentTask();
       offPermChanged();
     };
   }, [logout, queryClient, refreshPerms]);

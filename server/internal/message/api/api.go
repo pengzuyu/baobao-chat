@@ -278,6 +278,9 @@ type MessageService interface {
 	MarkNotificationsRead(ctx context.Context, userID int64, p NotificationReadPayload) error
 	// UnreadNotificationCount 未读计数（红点数据源；端内 99+ 封顶）
 	UnreadNotificationCount(ctx context.Context, userID int64) (*UnreadCountResult, error)
+	// ReportAgentTask Agent 任务终态上报（宿主→notify 域，OQ-C32 事件源④）：
+	// 幂等（run_id+status）→ 通知中心落卡（kind=agent_done）+ 发布 agent.task.completed
+	ReportAgentTask(ctx context.Context, userID int64, p AgentTaskReportPayload) error
 
 	// ── 通话卡片（D04 阶段一：rtc 域经注入调用；通话记录=消息流，服务端不建表）──
 
@@ -741,7 +744,7 @@ const (
 	NotifyKindMention      = "mention"      // msg.new mentions 命中（含 all 全员）
 	NotifyKindReply        = "reply"        // reply_to_seq 指向本人消息
 	NotifyKindApply        = "apply"        // conv.apply 推 owner/admin（PIM-06 审批卡）
-	NotifyKindAgentDone    = "agent_done"   // agent 域完成事件（服务端无事件源，建表预留，登记不做）
+	NotifyKindAgentDone    = "agent_done"   // agent 任务终态（宿主上报 POST /notify/agent-tasks 生成，OQ-C32/14 篇 §3.3）
 	NotifyKindAnnouncement = "announcement" // notice.broadcast / 群公告变更
 )
 
@@ -793,4 +796,29 @@ type NotificationPushPayload struct {
 type NotificationEvent struct {
 	UserID int64
 	Push   NotificationPushPayload
+}
+
+// ── Agent 任务终态上报（14 篇 §3.3，OQ-C32：宿主→notify 域，跨端通知事件源）──
+
+// AgentTaskReportPayload POST /notify/agent-tasks 请求体（snake，字段对齐 D16 agent_run 终态快照；
+// 上报以用户 OBO token 鉴权，UserID 恒取 token sub——body 不接受越权指定接收人）
+type AgentTaskReportPayload struct {
+	RunID             string `json:"run_id"`                        // r-{seq}（幂等键）
+	Kind              string `json:"kind"`                          // probe | expert | team | delegate
+	Status            string `json:"status"`                        // done | failed | cancelled
+	SessionID         string `json:"session_id"`                    // 父会话
+	ParentRunID       string `json:"parent_run_id,omitempty"`       // 父 run（链路展示用）
+	DefRef            string `json:"def_ref,omitempty"`             // builtin.probe / {expertId}@{ver} / backend:{type}
+	Title             string `json:"title"`                         // 任务标题（通知标题用）
+	Summary           string `json:"summary,omitempty"`             // 结果摘要截断
+	ChangedFilesCount int    `json:"changed_files_count,omitempty"` // 变更文件数（展示用，不含内容）
+	ETAActualMS       int64  `json:"eta_actual_ms,omitempty"`       // 实际耗时
+	OriginDID         string `json:"origin_did,omitempty"`          // 上报设备（推送侧端过滤自己，防双响）
+}
+
+// AgentTaskEvent topic=agent.task.completed 事件负载（notify → gateway 推给该 user 全部在线设备；
+// 同 run 终态唯一，端侧按 run_id 幂等去重）
+type AgentTaskEvent struct {
+	UserID int64
+	Task   AgentTaskReportPayload
 }

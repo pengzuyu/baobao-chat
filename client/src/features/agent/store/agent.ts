@@ -8,7 +8,7 @@
 
 import { create } from 'zustand';
 import { getAgentBridge } from '../bridge';
-import { notifyAgentDone, workbenchVisible } from '../bridge/notify';
+import { notifyAgentDone, reportAgentTask, workbenchVisible } from '../bridge/notify';
 import type {
   AgentEvent,
   AgentReport,
@@ -635,6 +635,34 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         .listReports()
         .then((reports) => set({ reports }))
         .catch(() => undefined);
+    }
+    // 跨端终态上报（14 篇 §3.3 OQ-C32）：run 终态 → notify 域落卡 + agent.task.completed
+    // 推其它在线设备（本端经 markReportedRun 自滤防双响；尽力而为不阻塞事件泵）
+    if (event.type === 'delegateEnd') {
+      const card = (useAgentStore.getState().streams[event.sessionId] ?? []).find(
+        (it) => it.kind === 'delegate' && it.runId === event.runId,
+      );
+      void reportAgentTask({
+        run_id: event.runId,
+        kind: 'delegate',
+        status: event.exitCode === 0 ? 'done' : 'failed',
+        session_id: event.sessionId,
+        title: card?.kind === 'delegate' ? `委派（${card.backend}）` : '委派任务',
+        summary: event.summary.slice(0, 80),
+        changed_files_count: event.changedFiles.length,
+      });
+    } else if (event.type === 'subagentEvent' && (event.phase === 'done' || event.phase === 'fail')) {
+      const card = (useAgentStore.getState().streams[event.sessionId] ?? []).find(
+        (it) => it.kind === 'subagent' && it.runId === event.runId,
+      );
+      void reportAgentTask({
+        run_id: event.runId,
+        kind: 'probe',
+        status: event.phase === 'done' ? 'done' : 'failed',
+        session_id: event.sessionId,
+        title: card?.kind === 'subagent' ? card.taskDigest : undefined,
+        summary: event.summary?.slice(0, 80),
+      });
     }
     // 本地完成通知（D16 本地环：工作台不可见时弹系统通知；跨端待服务端）
     if (!workbenchVisible()) {

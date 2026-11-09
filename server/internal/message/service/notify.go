@@ -11,7 +11,11 @@
 //	   阶段二 NATS 拆分时补 TopicConvApply）。
 //	③ announcement.changed / broadcast.published：group.UpdateConvSetting 内直调 →
 //	   全体在群成员（操作者除外）kind=announcement。
-//	④ agent_done：服务端无 agent 域事件源——kind 建表预留，登记不做。
+//	④ agent_done：宿主上报 REST（ReportAgentTask，14 篇 §3.3 OQ-C32 定稿）——run 终态
+//	   以用户 OBO token POST /notify/agent-tasks 上报；本服务落卡（kind=agent_done）+
+//	   发布 TopicAgentTaskDone（gateway 跨端推 agent.task.completed；bot Outgoing 订阅
+//	   20 篇 §4.3③ 阶段三接入，接口位已留）。cancelled 不落卡（用户主动取消无提醒价值），
+//	   仅推 WS 事件供其它端刷新 run 面板。
 //
 // 聚合（生成侧）：同 (user, kind, conv_id) 10s 窗口内未读行 → 不新增行，原行 count+1、
 // digest 更新（"×N"渲染）；窗口由 Options.Now 注入时钟判定（可测）。
@@ -279,4 +283,47 @@ func (s *Service) BroadcastNotice(ctx context.Context, _ int64, title, digest st
 		n++
 	}
 	return n
+}
+
+// agentTaskKinds / agentTaskStatuses D16 agent_run 终态枚举（上报校验）
+var (
+	agentTaskKinds   = map[string]bool{"probe": true, "expert": true, "team": true, "delegate": true}
+	agentTaskStatus  = map[string]bool{"done": true, "failed": true, "cancelled": true}
+	agentTaskOutcome = map[string]string{"done": "已完成", "failed": "失败", "cancelled": "已取消"}
+)
+
+// ReportAgentTask ④号事件源：宿主上报 Agent 任务终态（14 篇 §3.3，OQ-C32）。
+// 幂等键 run_id+status（宿主重试/事件总线重投不重复落卡）→
+//   · done/failed：通知中心落卡（kind=agent_done，10s 聚合窗口内多 run 合并"×N"）
+//     + notification.new 推送；
+//   · cancelled：不落卡（用户主动取消无提醒价值），仅跨端 WS 事件刷新 run 面板；
+//   · 全部终态：发布 TopicAgentTaskDone（gateway 推 agent.task.completed 给该 user
+//     全部在线设备，payload 带 origin_did 由端侧自滤防双响）。
+// 上报属尽力而为通道：宿主本地重试 3 次后放弃（14 篇 §3.3），服务端失败不回调宿主。
+func (s *Service) ReportAgentTask(ctx context.Context, userID int64, p messageapi.AgentTaskReportPayload) error {
+	if p.RunID == "" {
+		return errx.New(errx.CodeBadRequest, "run_id 必填")
+	}
+	if !agentTaskKinds[p.Kind] {
+		return errx.New(errx.CodeBadRequest, "kind 应为 probe/expert/team/delegate")
+	}
+	if !agentTaskStatus[p.Status] {
+		return errx.New(errx.CodeBadRequest, "status 应为 done/failed/cancelled")
+	}
+	return s.notifyDedup.Once("agent-task:"+p.RunID+":"+p.Status, func() error {
+		if p.Status == "done" || p.Status == "failed" {
+			title := p.Title
+			if title == "" {
+				title = p.Kind
+			}
+			digest := truncateRunes(p.Summary, 60)
+			// conv/msg 关联为 0：Agent 任务非会话派生，点击路由到 Agent 工作台 run 面板（端内处理）
+			s.notifyEmitRaw(ctx, userID, messageapi.NotifyKindAgentDone, 0, 0, 0,
+				"任务「"+title+"」"+agentTaskOutcome[p.Status], digest)
+		}
+		_ = s.bus.Publish(ctx, eventbus.TopicAgentTaskDone, messageapi.AgentTaskEvent{
+			UserID: userID, Task: p,
+		})
+		return nil
+	})
 }
