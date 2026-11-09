@@ -1,9 +1,18 @@
 // BaobaoWork 客户端 Rust 壳（Tauri 2）
 //
-// 职责规划（02 篇 §2，阶段一仅落骨架）：
-// - 持有 WSS/REST 连接（UI 重载不断线）、本地 SQLite 缓存与 outbox
+// 职责规划（02 篇 §2）：
+// - 持有 WSS/REST 连接（UI 重载不断线）、本地 SQLite 缓存与 outbox（阶段二）
+// - Agent 宿主桥：拉起 bbrt sidecar + IPC 命令层 + 事件泵（08 篇 §3.1/D11 §3）
 // - 窗口/托盘/文件系统等本地能力（命令命名 `模块_动作`，D01 §12.3）
-// 当前环境无 Rust 工具链：本文件按 Tauri 2 正确写法落盘，待 cargo 就绪后 `npm run tauri dev` 验证。
+
+pub mod agent_bridge;
+pub mod agent_commands;
+
+use std::sync::Arc;
+
+use tauri::{Emitter, Manager};
+
+use agent_bridge::AgentHost;
 
 /// 打开外部链接：一律走系统浏览器，禁止 WebView 内打开外域（D01 §10）
 #[tauri::command]
@@ -27,10 +36,41 @@ fn win_minimize(window: tauri::Window) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // Agent 宿主桥：数据目录={appData}/agent-runtime；事件泵→WebView（agent://event）
+            let handle = app.handle().clone();
+            let data_dir = handle
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("app_data_dir 不可用: {e}"))?
+                .join("agent-runtime");
+            let emit = Arc::new(move |payload: serde_json::Value| {
+                // 派发失败（无窗口监听）不影响桥运行
+                let _ = handle.emit("agent://event", payload);
+            });
+            app.manage(AgentHost::new(data_dir, emit));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             sys_open_url,
             http_get_stub,
-            win_minimize
+            win_minimize,
+            agent_commands::session_list,
+            agent_commands::agent_start_session,
+            agent_commands::agent_input,
+            agent_commands::agent_switch_model,
+            agent_commands::agent_set_mode,
+            agent_commands::agent_pause,
+            agent_commands::agent_resume,
+            agent_commands::agent_stop,
+            agent_commands::agent_emergency_stop,
+            agent_commands::agent_approve,
+            agent_commands::agent_reject,
+            agent_commands::memory_list,
+            agent_commands::memory_delete,
+            agent_commands::report_list,
+            agent_commands::report_get,
+            agent_commands::auth_set_token
         ])
         .run(tauri::generate_context!())
         .expect("Tauri 应用启动失败");

@@ -5,6 +5,7 @@
  */
 
 import { create } from 'zustand';
+import { invoke } from '@tauri-apps/api/core';
 import { setTokenProvider, setUnauthorizedHandler, ApiError } from '../../../shared/api/http';
 import { apiLogin, apiMyPermissions, apiRefresh, type AuthUser, type LoginResult } from '../api/auth';
 
@@ -50,6 +51,10 @@ function scheduleSilentRefresh(getState: () => AuthState): void {
 }
 
 function applyLogin(result: LoginResult) {
+  // Tauri 宿主同步 token（→ obo.token 下发 Runtime；浏览器环境为 no-op）
+  if (result.accessToken && isTauriHost()) {
+    void invoke('auth_set_token', { token: result.accessToken, expiresAt: result.expiresAt }).catch(() => undefined);
+  }
   return {
     token: result.accessToken,
     refreshToken: result.refreshToken ?? null,
@@ -59,6 +64,11 @@ function applyLogin(result: LoginResult) {
     error: null,
     lockUntil: 0,
   };
+}
+
+/** Tauri WebView 探测（与 agent bridge/index.ts 同口径的轻量版，避免跨 feature 依赖） */
+function isTauriHost(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
