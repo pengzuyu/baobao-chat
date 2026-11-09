@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"encoding/json"
 	"flag"
 	"io"
@@ -293,8 +294,9 @@ func main() {
 
 	// setup 初始化向导（16 篇 §2.2 Web 化主通道）：空租户免认证引导首个管理员；
 	// 建户即关（租户内有任何用户 → bootstrap 永久 1014）。CLI bootstrap 降级为兜底
+	setupGate := newSetupGate(pgPool)
 	mux.HandleFunc("GET /api/v1/setup/status", handleSetupStatus(orgRepo))
-	mux.HandleFunc("POST /api/v1/setup/bootstrap", handleSetupBootstrap(orgRepo, roleStore))
+	mux.HandleFunc("POST /api/v1/setup/bootstrap", handleSetupBootstrap(orgRepo, roleStore, setupGate))
 
 	// 受保护路由：auth → tenant（D02 §6 链尾两环）
 	authed := func(h http.HandlerFunc) http.Handler {
@@ -965,11 +967,49 @@ func handleSetupStatus(orgs orgrepo.Repo) http.HandlerFunc {
 	}
 }
 
+// setupAdvisoryKey 初始化引导互斥的 advisory lock 键（"bbwsetup" ASCII hex，正 int64）
+const setupAdvisoryKey int64 = 0x6262777365747570
+
+// setupGate 初始化引导互斥：收两笔并发 bootstrap 在 CountUsers 空检查的双写
+// 窗口内同时建户。进程内 sync.Mutex 收同实例 goroutine 并发；PG 模式叠加会话级
+// advisory lock 收跨实例并发（compose app×2）；持有连接的进程崩溃时 PG 随会话
+// 断开自动释放，无死锁悬挂。
+type setupGate struct {
+	mu   sync.Mutex
+	pool *pgxpool.Pool // nil=内存模式（单实例，进程内锁已足）
+}
+
+func newSetupGate(pool *pgxpool.Pool) *setupGate { return &setupGate{pool: pool} }
+
+// Lock 获取互斥，返回解锁函数。advisory unlock 用独立 ctx：请求 ctx 已取消也
+// 必须释放，否则连接带锁归还池，后续初始化请求全部排队悬挂。
+func (g *setupGate) Lock(ctx context.Context) (func(), error) {
+	g.mu.Lock()
+	if g.pool == nil {
+		return func() { g.mu.Unlock() }, nil
+	}
+	conn, err := g.pool.Acquire(ctx)
+	if err != nil {
+		g.mu.Unlock()
+		return nil, err
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", setupAdvisoryKey); err != nil {
+		conn.Release()
+		g.mu.Unlock()
+		return nil, err
+	}
+	return func() {
+		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", setupAdvisoryKey)
+		conn.Release()
+		g.mu.Unlock()
+	}, nil
+}
+
 // handleSetupBootstrap 建首个管理员（仅空租户可用）。与 CLI bootstrap 同链路：
 // 建户 → 挂内置「管理员」角色；前端成功后自动走 /auth/login 进系统。
-// 并发竞态：两笔不同工号同窗到达可能均建成（毫秒级窗口，内网可达者才可能）；
-// 同工号由 UK(tenant,empno) 兜底拒绝——登记为已知窗口，阶段二加租户级初始化锁
-func handleSetupBootstrap(orgs orgrepo.Repo, roles adminrepo.RoleRepo) http.HandlerFunc {
+// 并发互斥：setupGate（进程内 + advisory lock）包住"空检查→建户"全程；
+// 同工号另有 UK(tenant,empno) 兜底
+func handleSetupBootstrap(orgs orgrepo.Repo, roles adminrepo.RoleRepo, gate *setupGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req setupBootstrapReq
 		if err := decodeJSON(r, &req); err != nil {
@@ -991,6 +1031,12 @@ func handleSetupBootstrap(orgs orgrepo.Repo, roles adminrepo.RoleRepo) http.Hand
 			return
 		}
 		ctx := r.Context()
+		unlock, err := gate.Lock(ctx)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		defer unlock()
 		n, err := orgs.CountUsers(ctx, bbwpg.DefaultTenantID)
 		if err != nil {
 			httpx.Fail(w, r, err)
