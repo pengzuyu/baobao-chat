@@ -14,6 +14,21 @@ import { ApiError, getErrorText } from './http';
 
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * WS 基址解析（同源推导，2026-11-09 拍板固定域名方案的配套）：
+ * 显式 VITE_WS_BASE > 从 VITE_API_BASE 推导 > 本地 dev 默认。
+ * 推导规则：去 /api/v1 后缀 → http(s)→ws(s) → 拼 /ws/connect。
+ * 前提=统一入口路径分流（网关 /api 与 /ws 同域名，16 篇部署形态）；
+ * 未来 WS 独立域名时显式配 VITE_WS_BASE 覆盖（逃生口），或演进为服务端下发端点。
+ */
+export function resolveWsBase(): string {
+  const explicit = import.meta.env.VITE_WS_BASE as string | undefined;
+  if (explicit) return explicit;
+  const api = (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:8080/api/v1';
+  const origin = api.replace(/\/api\/v1\/?$/, '').replace(/\/+$/, '');
+  return origin.replace(/^http/, 'ws') + '/ws/connect';
+}
+
 export type WsStatus = 'idle' | 'connecting' | 'online' | 'offline';
 
 /** 客户端→服务端请求信封（需服务端 ack） */

@@ -42,7 +42,7 @@ import { AiProvidersPage } from '../features/admin/pages/AiProvidersPage';
 import { StickersPage } from '../features/admin/pages/StickersPage';
 import { UsagePage } from '../features/admin/pages/UsagePage';
 import { AuditPage } from '../features/admin/pages/AuditPage';
-import { wsClient } from '../shared/api/ws';
+import { resolveWsBase, wsClient } from '../shared/api/ws';
 import { bindWsToConnectionStore, useConnectionStore } from '../shared/store/connection';
 import { MainLayout } from './MainLayout';
 import { SettingsLayout } from '../features/settings/pages/SettingsLayout';
@@ -52,7 +52,8 @@ import { TransferSettingsPage } from '../features/settings/pages/TransferSetting
 import { AgentSettingsPage } from '../features/settings/pages/AgentSettingsPage';
 import { AboutPage } from '../features/settings/pages/AboutPage';
 
-const WS_BASE: string = import.meta.env.VITE_WS_BASE ?? 'ws://localhost:8080/ws/connect';
+/** WS 基址：显式 VITE_WS_BASE > 同源推导自 VITE_API_BASE（统一入口路径分流，见 ws.ts） */
+const WS_BASE: string = resolveWsBase();
 /** mock 模式（无后端联调）默认开启：REST/WS 走 features 各模块 api 层内置桩数据 */
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
 
