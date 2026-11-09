@@ -6,8 +6,25 @@
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { qk } from '../../../shared/api/keys';
-import { addWord, deleteWord, fetchAgentPolicy, fetchAudit, fetchDashboard, fetchUsage, fetchUsers, fetchWords, patchUserStatus, postUserStatus } from './admin';
-import type { AdminUserStatus } from '../model/types';
+import {
+  addWord,
+  createAIProvider,
+  deleteAIProvider,
+  deleteWord,
+  fetchAgentPolicy,
+  fetchAIProviders,
+  fetchAIRoutes,
+  fetchAudit,
+  fetchDashboard,
+  fetchUsage,
+  fetchUsers,
+  fetchWords,
+  patchUserStatus,
+  postUserStatus,
+  putAIRoutes,
+  updateAIProvider,
+} from './admin';
+import type { AdminUserStatus, AIProviderInput, AIRouteRule } from '../model/types';
 
 /** 仪表盘（PAD-02：60s 轮询） */
 export function useDashboard() {
@@ -111,5 +128,54 @@ export function useAudit() {
     queryFn: ({ pageParam }) => fetchAudit({ cursor: pageParam || undefined }),
     initialPageParam: '',
     getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
+  });
+}
+
+/* ── AI 供应商治理（0023）── */
+
+/** 公司级供应商列表 */
+export function useAIProviders() {
+  return useQuery({ queryKey: qk.admin.aiProviders, queryFn: () => fetchAIProviders() });
+}
+
+/** 创建/更新/删除（成功后失效供应商与路由——删引用方需路由重算） */
+export function useSaveAIProvider() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id?: string; input: AIProviderInput }) =>
+      id ? updateAIProvider(id, input) : createAIProvider(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin', 'aiProviders'] });
+      void qc.invalidateQueries({ queryKey: ['admin', 'aiRoutes'] });
+      void qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
+    },
+  });
+}
+
+export function useDeleteAIProvider() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteAIProvider(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin', 'aiProviders'] });
+      void qc.invalidateQueries({ queryKey: ['admin', 'aiRoutes'] });
+      void qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
+    },
+  });
+}
+
+/** fast/strong 默认路由（主备） */
+export function useAIRoutes() {
+  return useQuery({ queryKey: qk.admin.aiRoutes, queryFn: fetchAIRoutes });
+}
+
+export function usePutAIRoutes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (items: AIRouteRule[]) => putAIRoutes(items),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin', 'aiRoutes'] });
+      void qc.invalidateQueries({ queryKey: ['admin', 'audit'] });
+    },
   });
 }

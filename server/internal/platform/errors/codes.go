@@ -191,9 +191,12 @@ const (
 	CodeEcoDownloadBad     Code = 8045 // 包下载校验失败
 	CodeEcoOfflineRevoked  Code = 8046 // 离线撤销状态过期
 
-	CodeAIGWRatelimited     Code = 8050 // AI 网关限流
-	CodeAIGWProviderDown    Code = 8051 // 供应商不可用（含熔断中）
-	CodeAIGWRouteNotDefined Code = 8052 // 路由档位未配置
+	CodeAIGWRatelimited       Code = 8050 // AI 网关限流
+	CodeAIGWProviderDown      Code = 8051 // 供应商不可用（含熔断中）
+	CodeAIGWRouteNotDefined   Code = 8052 // 路由档位未配置
+	CodeAIGWProviderNotFound  Code = 8053 // 引用的供应商不存在或已停用（p: 引用解析失败）
+	CodeAIGWProviderForbidden Code = 8054 // 越权引用（非公司级且非本人供应商）
+	CodeAIGWModelNotAllowed   Code = 8055 // 模型不在该供应商清单内
 )
 
 // ───────────────────────── 9xxx 通用/邮件（12/22 篇） ─────────────────────────

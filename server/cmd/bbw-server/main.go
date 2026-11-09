@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"sync"
 	"encoding/json"
 	"flag"
 	"io"
@@ -17,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -753,6 +753,28 @@ func main() {
 	mux.Handle("POST /api/v1/admin/stickers/sets/{id}/items", requirePerm("admin:policy:manage")(handleStickerAddItem(stickerSvc, true)))
 	mux.Handle("PATCH /api/v1/admin/stickers/sets/{id}/status", requirePerm("admin:policy:manage")(handleStickerSetStatus(stickerSvc)))
 	mux.Handle("DELETE /api/v1/admin/stickers/sets/{id}", requirePerm("admin:policy:manage")(handleStickerRemoveSet(stickerSvc, true)))
+	// AI 供应商治理（0023 多供应商：公司级 CRUD/探活 + fast/strong 默认路由主备；19 篇 §6.5 v0.1 子集）。
+	// Registry 仅 PG 模式存在（内存模式无表驱动，路由不挂）
+	if aigwReg := aigwMod.Registry; aigwReg != nil {
+		mux.Handle("GET /api/v1/admin/ai/providers", requirePerm("admin:policy:manage")(handleAIProviderList(aigwReg, "corp")))
+		mux.Handle("POST /api/v1/admin/ai/providers", requirePerm("admin:policy:manage")(handleAIProviderCreate(aigwReg, false)))
+		mux.Handle("POST /api/v1/admin/ai/providers/probe", requirePerm("admin:policy:manage")(handleAIProviderProbeRaw()))
+		mux.Handle("PATCH /api/v1/admin/ai/providers/{id}", requirePerm("admin:policy:manage")(handleAIProviderUpdate(aigwReg, false)))
+		mux.Handle("DELETE /api/v1/admin/ai/providers/{id}", requirePerm("admin:policy:manage")(handleAIProviderDelete(aigwReg, false)))
+		mux.Handle("POST /api/v1/admin/ai/providers/{id}/probe", requirePerm("admin:policy:manage")(handleAIProviderProbeByID(aigwReg, false)))
+		mux.Handle("GET /api/v1/admin/ai/routes", requirePerm("admin:policy:manage")(handleAIRoutesGet(aigwReg)))
+		mux.Handle("PUT /api/v1/admin/ai/routes", requirePerm("admin:policy:manage")(handleAIRoutesPut(aigwReg)))
+		// 用户侧：公司级只读（设置页下拉）+ 个人 BYOK CRUD/探活 + 个人设置（ai_default）
+		mux.Handle("GET /api/v1/ai/providers/shared", authed(handleAIProviderList(aigwReg, "shared")))
+		mux.Handle("GET /api/v1/me/ai/providers", authed(handleAIProviderList(aigwReg, "mine")))
+		mux.Handle("POST /api/v1/me/ai/providers", authed(handleAIProviderCreate(aigwReg, true)))
+		mux.Handle("POST /api/v1/me/ai/providers/probe", authed(handleAIProviderProbeRaw()))
+		mux.Handle("PATCH /api/v1/me/ai/providers/{id}", authed(handleAIProviderUpdate(aigwReg, true)))
+		mux.Handle("DELETE /api/v1/me/ai/providers/{id}", authed(handleAIProviderDelete(aigwReg, true)))
+		mux.Handle("POST /api/v1/me/ai/providers/{id}/probe", authed(handleAIProviderProbeByID(aigwReg, true)))
+		mux.Handle("GET /api/v1/me/settings", authed(handleMeSettingsGet(pgPool)))
+		mux.Handle("PATCH /api/v1/me/settings", authed(handleMeSettingsPatch(pgPool, aigwReg)))
+	}
 	mux.Handle("GET /api/v1/admin/usage/summary", requirePerm("admin:usage:read")(handleAdminUsage(adminSvc)))
 	mux.Handle("GET /api/v1/admin/audit", requirePerm("admin:audit:read")(handleAdminAudit(adminSvc)))
 	// 角色与授权（PAD-08 角色编辑器）

@@ -73,6 +73,9 @@ var ecoExpertSQL string
 //go:embed 0021_meeting_recurrence.sql
 var meetingRecurrenceSQL string
 
+//go:embed 0023_ai_provider_registry.sql
+var aiProviderRegistrySQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: initSQL},
@@ -113,4 +116,8 @@ var List = []Migration{
 	{Version: 20, Name: "0020_eco_expert", Probe: "", SQL: ecoExpertSQL},
 	// 0021：meeting 扩列（ADD IF NOT EXISTS 幂等）+ meeting_recurrence 建表（21 §4.2 周期会）
 	{Version: 21, Name: "0021_meeting_recurrence", Probe: "", SQL: meetingRecurrenceSQL},
+	// 0023：ai_provider 扩列（owner/models）+ users.settings（ADD IF NOT EXISTS 幂等；
+	// Probe 必须留空——ai_provider 表 0003 即存在，探测会误判已应用而漏执行 ALTER；
+	// 0022_sticker 走外部通道/另有归属，不在本兜底注册表内）
+	{Version: 23, Name: "0023_ai_provider_registry", Probe: "", SQL: aiProviderRegistrySQL},
 }

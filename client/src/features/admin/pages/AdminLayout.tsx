@@ -6,7 +6,7 @@
  */
 
 import { NavLink, Outlet } from 'react-router-dom';
-import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, ScrollText, ShieldCheck, SmilePlus, UserCog, Users, Zap } from 'lucide-react';
+import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Users, Zap } from 'lucide-react';
 
 const TABS = [
   { to: '/admin', icon: Gauge, label: '仪表盘', end: true },
@@ -17,6 +17,7 @@ const TABS = [
   { to: '/admin/notices', icon: Megaphone, label: '公告' },
   { to: '/admin/agent', icon: Bot, label: 'Agent' },
   { to: '/admin/kb', icon: BookOpen, label: '知识库' },
+  { to: '/admin/ai-providers', icon: Sparkles, label: 'AI 供应商' },
   { to: '/admin/policies', icon: ShieldCheck, label: '策略' },
   { to: '/admin/stickers', icon: SmilePlus, label: '表情集' },
   { to: '/admin/usage', icon: Zap, label: '用量' },

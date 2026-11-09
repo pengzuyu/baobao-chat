@@ -38,6 +38,7 @@ import { AgentGovernancePage } from '../features/admin/pages/AgentGovernancePage
 import { OrgTreePage } from '../features/admin/pages/OrgTreePage';
 import { KbGovernancePage } from '../features/admin/pages/KbGovernancePage';
 import { PoliciesPage } from '../features/admin/pages/PoliciesPage';
+import { AiProvidersPage } from '../features/admin/pages/AiProvidersPage';
 import { StickersPage } from '../features/admin/pages/StickersPage';
 import { UsagePage } from '../features/admin/pages/UsagePage';
 import { AuditPage } from '../features/admin/pages/AuditPage';
@@ -189,6 +190,7 @@ export function App() {
           <Route path="org" element={<OrgTreePage />} />
           <Route path="kb" element={<KbGovernancePage />} />
           <Route path="policies" element={<PoliciesPage />} />
+          <Route path="ai-providers" element={<AiProvidersPage />} />
           <Route path="stickers" element={<StickersPage />} />
           <Route path="usage" element={<UsagePage />} />
           <Route path="audit" element={<AuditPage />} />

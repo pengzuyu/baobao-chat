@@ -94,21 +94,17 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, 9001, "请求体非法", 0)
 		return
 	}
-	// 档位判定（§3.2：只允许别名；具体模型名 9001、未知别名 8052）
+	// model 解析（§3.2 引用扩展，0023）：档位别名（表驱动路由，env/mock 兜底）或
+	// p:<id>:<model> 直达引用（公司级或本人供应商 + 清单内校验，8053/8054/8055）
 	alias := req.Model
-	if alias == "" {
-		writeErr(w, http.StatusBadRequest, 9001, "model 必填", 0)
+	if alias == AliasEmbed { // chat 入口不接受 embed 档（维持既有口径）
+		writeErr(w, http.StatusNotFound, 8052, "路由档位未配置: "+alias, 0)
 		return
 	}
-	switch alias {
-	case AliasFast, AliasStrong:
-	default:
-		// 判定口径：bbw- 前缀的未知别名=路由缺失 8052；其余视作具体模型名=绕过路由 9001（§3.2）
-		if strings.HasPrefix(alias, "bbw-") {
-			writeErr(w, http.StatusNotFound, 8052, "路由档位未配置: "+alias, 0)
-		} else {
-			writeErr(w, http.StatusBadRequest, 9001, "model 仅允许档位别名（bbw-fast/bbw-strong）", 0)
-		}
+	candidates, rerr := g.router.ResolveFor(who.TenantID, uidOf(who), alias)
+	if rerr != nil {
+		e := errx.From(rerr)
+		writeErr(w, resolveStatus(e.Code), int(e.Code), e.Msg, 0)
 		return
 	}
 	// 限流（8050 + Retry-After）
@@ -123,25 +119,37 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	candidates, ok := g.router.Route(alias)
-	if !ok || len(candidates) == 0 {
-		writeErr(w, http.StatusNotFound, 8052, "路由档位未配置: "+alias, 0)
-		return
-	}
-
 	scene := headerOr(r, "X-BBW-Scene", "chat")
 	session := r.Header.Get("X-BBW-Agent-Session")
-	dim := MeterDim{Tenant: who.TenantID, User: uidOf(who), Svc: svcSubject(who), Session: session, Scene: scene, Tier: tierOf(alias)}
+	dim := MeterDim{Tenant: who.TenantID, User: uidOf(who), Svc: svcSubject(who), Session: session, Scene: scene, Tier: tierLabel(alias)}
 
-	// 供应商链（§4.4：逐候选；全部失败 8051）
+	// 供应商链（§4.4：逐候选降级——以「首帧产出或错误」为选定依据：StreamChat 异步，
+	// 连接失败/上游 5xx 在首帧前经 Err+close 暴露，此时切下一候选；全尽 8051(503)。
+	// 候选命中后将具体模型名注入请求。TTFB 无超时（上游 hang=请求挂起，客户端超时兜底；
+	// per-candidate TTFB 超时阶段二，19 篇 §4.2 熔断配套）
 	var res *ProviderResult
+	var replay string
+	hasReplay := false
 	for _, c := range candidates {
-		res = c.Provider.StreamChat(r.Context(), &req)
-		if res.Err == nil {
-			dim.Provider = c.Provider.ID()
-			break
+		creq := req
+		if c.Model != "" {
+			creq.Model = c.Model
 		}
+		r2 := c.Provider.StreamChat(r.Context(), &creq)
+		f, ok := <-r2.Frames // 阻塞至首帧/关闭（goroutine 内先置 Err 再 close，happens-before）
 		dim.Provider = c.Provider.ID()
+		if !ok && r2.Err != nil {
+			continue // 本候选失败 → 降级下一候选
+		}
+		res = r2
+		if ok {
+			replay, hasReplay = f, true
+		}
+		break
+	}
+	if res == nil {
+		writeErr(w, http.StatusServiceUnavailable, 8051, "供应商不可用（全部候选失败）", 0)
+		return
 	}
 	// SSE 回传（§6.2：透传帧 → X-BBW-Usage 终帧 → [DONE]）
 	flusher, _ := w.(http.Flusher)
@@ -152,9 +160,9 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	var usage *UsageOpenAI
 	failed := false
-	for frame := range res.Frames {
+	emit := func(frame string) {
 		if frame == "[DONE]" {
-			continue // 终止符由网关统一补发
+			return // 终止符由网关统一补发
 		}
 		if u := usageOfFrame(frame); u != nil {
 			usage = u
@@ -163,6 +171,12 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		if flusher != nil {
 			flusher.Flush()
 		}
+	}
+	if hasReplay {
+		emit(replay) // 选定候选时已取出的首帧
+	}
+	for frame := range res.Frames {
+		emit(frame)
 	}
 	if res.Err != nil {
 		// 流中失败：状态码已 200 不可改——以错误帧收束（调用方按断流/8051 语义处理）
@@ -180,7 +194,7 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		"request_id":        r.Header.Get("Idempotency-Key"),
 		"prompt_tokens":     usage.PromptTokens,
 		"completion_tokens": usage.CompletionTokens,
-		"tier":              tierOf(alias),
+		"tier":              tierLabel(alias),
 	})
 	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", usageFrame)
 	if flusher != nil {
@@ -260,6 +274,26 @@ func headerOr(r *http.Request, k, def string) string {
 		return v
 	}
 	return def
+}
+
+// resolveStatus 网关解析类错误码 → HTTP 状态（8053 不存在 404 · 8054 越权 403 · 8055/9001 参数 400 · 8052 路由 404）
+func resolveStatus(code errx.Code) int {
+	switch code {
+	case errx.CodeAIGWProviderForbidden:
+		return http.StatusForbidden
+	case errx.CodeAIGWProviderNotFound, errx.CodeAIGWRouteNotDefined:
+		return http.StatusNotFound
+	default:
+		return http.StatusBadRequest
+	}
+}
+
+// tierLabel 计量/终帧的档位标注：别名→档位名；p: 直达引用→direct
+func tierLabel(model string) string {
+	if strings.HasPrefix(model, RefPrefix) {
+		return "direct"
+	}
+	return tierOf(model)
 }
 
 func svcSubject(c *Claims) string {

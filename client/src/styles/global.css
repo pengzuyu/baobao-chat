@@ -8717,3 +8717,12 @@ body {
 .exp-editor__yaml:focus { border-color: var(--bbw-primary, #165dff); }
 .exp-editor__err { color: var(--bbw-danger, #f53f3f); font-size: 12px; margin: 0; }
 .exp-editor__foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--bbw-line, #e5e6eb); }
+
+/* AI 供应商治理（0023）：模型清单 chips 区 */
+.admin-provider-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  align-items: center;
+}

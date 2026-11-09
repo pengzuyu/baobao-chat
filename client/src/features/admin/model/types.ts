@@ -104,3 +104,44 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'policy.sensitive_word.add': '新增敏感词',
   'policy.sensitive_word.delete': '删除敏感词',
 };
+
+/** AI 供应商模型清单项（ai_provider.models；id=上游真实模型名） */
+export interface AIProviderModel {
+  id: string;
+  label?: string;
+}
+
+/** AI 供应商行（0023；公司级管理视角；keyMask=****last4） */
+export interface AIProvider {
+  id: string;
+  name: string;
+  kind: string;
+  baseUrl: string;
+  keyMask: string;
+  ownerId?: string;
+  models: AIProviderModel[];
+  status: 1 | 2;
+}
+
+/** 路由候选（fast/strong 主备；priority 小者先） */
+export interface AIRouteCandidate {
+  providerId: string;
+  model: string;
+  priority: number;
+}
+
+/** 一条 active 路由 */
+export interface AIRouteRule {
+  tier: 'fast' | 'strong';
+  candidates: AIRouteCandidate[];
+}
+
+/** 供应商创建/更新入参（更新时 apiKey 留空=保留） */
+export interface AIProviderInput {
+  name: string;
+  kind?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  models?: AIProviderModel[];
+  status?: number;
+}

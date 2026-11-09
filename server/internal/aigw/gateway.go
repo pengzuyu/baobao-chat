@@ -1,37 +1,54 @@
-// 路由层与控制面（docs/19 §3.3/§4.2/§4.6/§6.7）：
-// 档位别名 → 候选供应商序列；入口令牌桶（8050）；月度 token 配额（8005）；
+// 路由层与控制面（docs/19 §3.2/§3.3/§4.2/§4.6/§6.7）：
+// 档位别名 → 候选供应商序列；p: 直达引用解析（0023 多供应商）；
+// 入口令牌桶（8050）；月度 token 配额（8005）；
 // 计量内存累加 + 小时表 upsert（表见迁移 0003，DB 缺席时仅内存）。
 package aigw
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	errx "github.com/baobaowork/server/internal/platform/errors"
 )
 
-// 档位别名（§3.2：调用方只允许别名；具体模型名 9001、未知别名 8052）
+// 档位别名（§3.2：调用方只允许别名或 p: 引用；具体模型名 9001、未知别名 8052）
 const (
 	AliasFast   = "bbw-fast"
 	AliasStrong = "bbw-strong"
 	AliasEmbed  = "bbw-embed"
+	// RefPrefix 直达引用前缀：p:<provider_id>:<model>（0023 表驱动多供应商）
+	RefPrefix = "p:"
 )
 
-// Candidate 候选（§3.3 版本化路由表条目；v0.1 单版本环境装配）
+// Candidate 候选（§3.3 版本化路由表条目；表驱动/环境兜底两装配共用）
 type Candidate struct {
 	Provider Provider
-	Priority int // 小者先
+	Model    string // 该候选上游具体模型名（空=provider 自行按档位映射，env 兜底装配路径）
+	Priority int    // 小者先
 }
 
-// Router 档位路由（默认表；租户覆盖/灰度/熔断状态机阶段二接 Redis §7.6）
+// providerEntry 表驱动供应商登记项（p: 引用解析的元数据面）
+type providerEntry struct {
+	prov   Provider
+	owner  *int64 // nil=公司级（全员可用其下模型）；非 nil=个人 BYOK（仅 owner）
+	tenant *int64 // nil=平台级（任意租户）；否则须与调用方租户一致
+	models []ModelDef
+}
+
+// Router 档位路由 + 直达引用（默认表；租户覆盖/灰度/熔断状态机阶段二接 Redis §7.6）
 type Router struct {
-	mu   sync.RWMutex
-	tier map[string][]Candidate // fast/strong/embed
+	mu        sync.RWMutex
+	tier      map[string][]Candidate   // fast/strong/embed
+	providers map[int64]*providerEntry // 表驱动池（registry.Reload 装配；env/mock 装配不进池）
 }
 
 // NewRouter 装配：mock 恒可用；上游经环境注入后按优先级排前（§3.3 私有/直连优先原则不适用 v0.1，取"真实上游优先于 mock"）
 func NewRouter(mock Provider, upstream *OpenAICompatProvider) *Router {
-	r := &Router{tier: map[string][]Candidate{}}
+	r := &Router{tier: map[string][]Candidate{}, providers: map[int64]*providerEntry{}}
 	chat := []Candidate{{Provider: mock, Priority: 10}}
 	if upstream != nil && upstream.Cfg.Models["strong"] != "" {
 		chat = append([]Candidate{{Provider: upstream, Priority: 1}}, chat...)
@@ -52,6 +69,77 @@ func (r *Router) Route(alias string) ([]Candidate, bool) {
 	defer r.mu.RUnlock()
 	c, ok := r.tier[tierOf(alias)]
 	return c, ok
+}
+
+// SetTier 表驱动装配：替换档位候选（registry.Reload 调用；embed 档不走表，恒 mock/env）
+func (r *Router) SetTier(tier string, cands []Candidate) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tier[tier] = cands
+}
+
+// SetProviders 表驱动装配：整体替换供应商池（registry.Reload 调用）
+func (r *Router) SetProviders(entries map[int64]*providerEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.providers = entries
+}
+
+// EntryOf 供应商池查询（me/settings 校验与 DTO 组装共用；不存在返回 nil）
+func (r *Router) EntryOf(id int64) *providerEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.providers[id]
+}
+
+// ResolveFor model 解析统一入口（§3.2 引用扩展，0023）：
+//
+//	bbw-fast/bbw-strong → 档位路由（表驱动 active 路由，无则 env/mock 兜底装配）
+//	p:<id>:<model>      → 直达引用：存在且启用（8053）→ 公司级或本人（8054）→ 清单内（8055）
+//	其余                → 8052（bbw- 未知别名）/ 9001（具体模型名绕过路由）
+func (r *Router) ResolveFor(tenant, uid int64, model string) ([]Candidate, error) {
+	if model == "" {
+		return nil, errx.New(errx.CodeBadRequest, "model 必填")
+	}
+	if model == AliasFast || model == AliasStrong {
+		r.mu.RLock()
+		c, ok := r.tier[tierOf(model)]
+		r.mu.RUnlock()
+		if !ok || len(c) == 0 {
+			return nil, errx.New(errx.CodeAIGWRouteNotDefined, "路由档位未配置: "+model)
+		}
+		return c, nil
+	}
+	if !strings.HasPrefix(model, RefPrefix) {
+		if strings.HasPrefix(model, "bbw-") {
+			return nil, errx.New(errx.CodeAIGWRouteNotDefined, "路由档位未配置: "+model)
+		}
+		return nil, errx.New(errx.CodeBadRequest, "model 仅允许档位别名（bbw-fast/bbw-strong）或直达引用（p:<供应商ID>:<模型>）")
+	}
+	parts := strings.SplitN(model, ":", 3)
+	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
+		return nil, errx.New(errx.CodeBadRequest, "直达引用格式: p:<供应商ID>:<模型>")
+	}
+	pid, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || pid <= 0 {
+		return nil, errx.New(errx.CodeBadRequest, "直达引用的供应商ID须为正整数")
+	}
+	r.mu.RLock()
+	e := r.providers[pid]
+	r.mu.RUnlock()
+	if e == nil || (e.tenant != nil && *e.tenant != tenant) {
+		// 跨租户/不存在/已停用同判 8053（防探测）
+		return nil, errx.New(errx.CodeAIGWProviderNotFound, "供应商不存在或已停用: "+parts[1])
+	}
+	if e.owner != nil && *e.owner != uid {
+		return nil, errx.New(errx.CodeAIGWProviderForbidden, "无权引用该供应商（非公司级且非本人）")
+	}
+	for _, m := range e.models {
+		if m.ID == parts[2] {
+			return []Candidate{{Provider: e.prov, Model: parts[2]}}, nil
+		}
+	}
+	return nil, errx.New(errx.CodeAIGWModelNotAllowed, "模型不在该供应商清单内: "+parts[2])
 }
 
 // ---- 入口限流（§4.1-②：租户×用户令牌桶，8050 附 Retry-After）----

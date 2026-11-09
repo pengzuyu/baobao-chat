@@ -19,6 +19,9 @@ import type {
   CursorPage,
   UsageSummary,
   WordPage,
+  AIProvider,
+  AIProviderInput,
+  AIRouteRule,
 } from '../model/types';
 
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
@@ -471,4 +474,60 @@ export async function fetchKBSpaces(): Promise<KBSpaceRow[]> {
 export async function offboardUser(userId: string): Promise<void> {
   if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持离职交接');
   await http.post(`/admin/users/${encodeURIComponent(userId)}/offboard`);
+}
+
+/* ── AI 供应商治理（0023 多供应商；19 篇 §6.5 v0.1 子集） ── */
+
+/** 公司级供应商列表（含停用；scope=shared 为启用中只读） */
+export async function fetchAIProviders(scope: 'corp' | 'shared' = 'corp'): Promise<AIProvider[]> {
+  if (USE_MOCK) return [];
+  const path = scope === 'corp' ? '/admin/ai/providers' : '/ai/providers/shared';
+  const data = await http.get<{ items: AIProvider[] }>(path);
+  return data.items;
+}
+
+/** 创建公司级供应商（密钥服务端 KMS 加密落库） */
+export async function createAIProvider(input: AIProviderInput): Promise<AIProvider> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
+  return http.post<AIProvider>('/admin/ai/providers', input);
+}
+
+/** 更新供应商（apiKey 留空=保留原密钥） */
+export async function updateAIProvider(id: string, input: AIProviderInput): Promise<AIProvider> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
+  return http.patch<AIProvider>(`/admin/ai/providers/${encodeURIComponent(id)}`, input);
+}
+
+/** 删除供应商（被默认路由引用时服务端拒绝，先改路由） */
+export async function deleteAIProvider(id: string): Promise<void> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
+  await http.delete(`/admin/ai/providers/${encodeURIComponent(id)}`);
+}
+
+/** 探活已建供应商（GET 上游 /models，返回可用模型 id 列表） */
+export async function probeAIProvider(id: string): Promise<string[]> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
+  const data = await http.post<{ models: string[] }>(`/admin/ai/providers/${encodeURIComponent(id)}/probe`);
+  return data.models;
+}
+
+/** 探活未落库的 base+key（创建表单"测试连通/拉取模型"） */
+export async function probeAIProviderRaw(baseUrl: string, apiKey: string): Promise<string[]> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
+  const data = await http.post<{ models: string[] }>('/admin/ai/providers/probe', { baseUrl, apiKey });
+  return data.models;
+}
+
+/** 当前 fast/strong active 路由 */
+export async function fetchAIRoutes(): Promise<AIRouteRule[]> {
+  if (USE_MOCK) return [];
+  const data = await http.get<{ items: AIRouteRule[] }>('/admin/ai/routes');
+  return data.items;
+}
+
+/** 整表替换路由（主备降级：candidates 按 priority 逐个尝试） */
+export async function putAIRoutes(items: AIRouteRule[]): Promise<AIRouteRule[]> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
+  const data = await http.put<{ items: AIRouteRule[] }>('/admin/ai/routes', { items });
+  return data.items;
 }

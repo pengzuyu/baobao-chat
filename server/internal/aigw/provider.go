@@ -261,16 +261,22 @@ func (p *OpenAICompatProvider) Name() string { return p.NameOf }
 // Kind 适配类型
 func (p *OpenAICompatProvider) Kind() string { return "openai_compatible" }
 
-// StreamChat 透传（model 换上游实名；流式逐帧回传；非流式转单帧）
+// StreamChat 透传（model 换上游实名；流式逐帧回传；非流式转单帧）。
+// model 两形态（0023）：bbw- 档位别名=env 兜底装配路径（Cfg.Models 档位映射）；
+// 其余=表驱动路径的具体模型名（handler/路由已按清单校验），直接透传上游。
 func (p *OpenAICompatProvider) StreamChat(ctx context.Context, req *ChatRequest) *ProviderResult {
 	frames := make(chan string, 32)
 	res := &ProviderResult{Frames: frames}
 	go func() {
 		defer close(frames)
-		upstream, ok := p.Cfg.Models[tierOf(req.Model)]
-		if !ok {
-			res.Err = fmt.Errorf("上游未配置档位 %s", req.Model)
-			return
+		upstream := req.Model
+		if strings.HasPrefix(req.Model, "bbw-") {
+			var ok bool
+			upstream, ok = p.Cfg.Models[tierOf(req.Model)]
+			if !ok {
+				res.Err = fmt.Errorf("上游未配置档位 %s", req.Model)
+				return
+			}
 		}
 		body := map[string]any{"model": upstream, "messages": req.Messages, "stream": true}
 		if len(req.Tools) > 0 {
