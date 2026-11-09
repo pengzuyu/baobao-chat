@@ -78,6 +78,8 @@ interface AgentState {
   sessions: AgentSessionMeta[];
   sessionsLoading: boolean;
   sessionsError: string | null;
+  /** 新建会话失败提示（bbrt 缺失/超时/超限；下次成功即清） */
+  createError: string | null;
   activeSessionId: string | null;
 
   /** sessionId → 事件流（按序追加） */
@@ -198,6 +200,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   sessions: [],
   sessionsLoading: false,
   sessionsError: null,
+  createError: null,
   activeSessionId: null,
 
   streams: {},
@@ -246,6 +249,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // model=用户默认模型的直达引用（settings.ai_default 解析，0023；缺省=档位别名）
     const meta = await bridge.startSession('~/code/bbw-server', mode, model);
     set((s) => ({
+      createError: null,
       sessions: [meta, ...s.sessions],
       activeSessionId: meta.id,
       modelBySession: { ...s.modelBySession, [meta.id]: { policy: meta.modelPolicy, override: meta.modelOverride } },

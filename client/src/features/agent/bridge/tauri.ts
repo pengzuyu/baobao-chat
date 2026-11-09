@@ -301,6 +301,10 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         state: str(raw.state) as SessionStatus,
         reason: str(raw.reason) || undefined,
       };
+    // RT 建会话只发 session.ready（内部即 Idle，无 starting→idle 迁移事件）；
+    // 映射为 stateChanged idle 解禁输入区（壳缓存同步翻 idle）
+    case 'session.ready':
+      return { type: 'stateChanged', sessionId: sid, state: 'idle' };
     case 'session.ended':
       return { type: 'sessionEnded', sessionId: sid, summary: str(raw.summary) };
     case 'tool.call':

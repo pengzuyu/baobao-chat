@@ -2640,6 +2640,17 @@ body {
   color: var(--bbw-primary);
 }
 
+/* 新建会话失败提示（列表顶部红条；下次成功即清） */
+.agent-create-error {
+  margin: var(--bbw-space-2) var(--bbw-space-3) 0;
+  padding: 6px 10px;
+  border-radius: var(--bbw-radius-control, 6px);
+  background: rgba(229, 72, 77, 0.08);
+  border: 1px solid rgba(229, 72, 77, 0.25);
+  color: var(--bbw-danger, #e5484d);
+  font-size: var(--bbw-font-12);
+}
+
 .agent-sessions__body {
   flex: 1;
   overflow-y: auto;

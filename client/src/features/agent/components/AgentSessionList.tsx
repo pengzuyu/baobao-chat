@@ -36,11 +36,13 @@ interface AgentSessionListProps {
   sessions: AgentSessionMeta[];
   activeId: string | null;
   bridgeKind: 'mock' | 'tauri';
+  /** 新建会话失败提示（bbrt 缺失/超时/超限；成功后清除） */
+  createError?: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
 }
 
-export function AgentSessionList({ sessions, activeId, bridgeKind, onSelect, onCreate }: AgentSessionListProps) {
+export function AgentSessionList({ sessions, activeId, bridgeKind, createError, onSelect, onCreate }: AgentSessionListProps) {
   const navigate = useNavigate();
   return (
     <>
@@ -51,6 +53,11 @@ export function AgentSessionList({ sessions, activeId, bridgeKind, onSelect, onC
           新会话
         </button>
       </div>
+      {createError ? (
+        <div className="agent-create-error" role="alert">
+          {createError}
+        </div>
+      ) : null}
       <div className="agent-sessions__body">
         {sessions.map((s) => (
           <button

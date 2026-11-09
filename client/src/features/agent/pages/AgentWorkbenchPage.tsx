@@ -56,6 +56,7 @@ export function AgentWorkbenchPage() {
   const sessions = useAgentStore((s) => s.sessions);
   const sessionsLoading = useAgentStore((s) => s.sessionsLoading);
   const sessionsError = useAgentStore((s) => s.sessionsError);
+  const createError = useAgentStore((s) => s.createError);
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
   const selectSession = useAgentStore((s) => s.selectSession);
   const streams = useAgentStore((s) => s.streams);
@@ -205,6 +206,10 @@ export function AgentWorkbenchPage() {
       .then(() => {
         const sid = useAgentStore.getState().activeSessionId;
         if (sid) navigate(`/agent/s/${sid}`);
+      })
+      .catch((err: unknown) => {
+        // bbrt 缺失/握手超时/RT 错误回执（如 8001 活跃会话超限）——列表顶部提示
+        useAgentStore.setState({ createError: err instanceof Error ? err.message : String(err) });
       });
   };
   const handleRespond = (d: PermissionDecision) => {
@@ -257,6 +262,7 @@ export function AgentWorkbenchPage() {
       sessions={sessions}
       activeId={activeSessionId}
       bridgeKind={bridgeKind}
+      createError={createError}
       onSelect={handleSelect}
       onCreate={handleCreate}
     />

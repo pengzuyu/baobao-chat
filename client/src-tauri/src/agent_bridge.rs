@@ -135,6 +135,11 @@ impl Shared {
                     row.status = st.to_string();
                 }
             }
+            // RT 建会话即 Idle、只发 session.ready（无 starting→idle 迁移事件）：
+            // 缓存须在此翻 idle，否则列表永久"启动中"（mock 桥自补 idle 曾掩盖此缺口）
+            "session.ready" => {
+                row.status = "idle".into();
+            }
             "model.switched" => {
                 if let Some(to) = pre["to"].as_str() {
                     row.model_policy = to.to_string();
@@ -376,7 +381,20 @@ impl AgentHost {
             "sessionId": sid, "workspace": workspace, "mode": mode,
             "modelPolicy": model_policy, "model": model, "skills": [],
         });
-        self.request("session.start", payload)?;
+        // REQ 失败（超时/握手）或 RT 错误回执（type=error，如 8001 活跃会话超限）
+        // 都须回滚缓存行——否则列表留永久 starting 幽灵行且白占 RT 名额
+        let rep = match self.request("session.start", payload) {
+            Ok(v) => v,
+            Err(e) => {
+                self.shared.sessions.lock().unwrap().retain(|s| s.id != sid);
+                return Err(e);
+            }
+        };
+        if rep["type"] == "error" {
+            self.shared.sessions.lock().unwrap().retain(|s| s.id != sid);
+            let msg = rep["message"].as_str().unwrap_or("runtime error");
+            return Err(format!("会话创建失败：{msg}"));
+        }
         Ok(sid)
     }
 
@@ -496,5 +514,34 @@ mod tests {
         assert_eq!(camel_to_snake("id"), "id");
         assert_eq!(camel_to_snake("modelPolicy"), "model_policy");
         assert_eq!(camel_to_snake("replayedEvents"), "replayed_events");
+    }
+
+    fn shared_with_starting_session() -> (Arc<Shared>, String) {
+        let shared = Arc::new(Shared {
+            proc: Mutex::new(ProcState { child: None, stdin: None, pending: HashMap::new(), ready: false }),
+            sessions: Mutex::new(vec![SessionCache {
+                id: "s1".into(), title: "会话 1".into(), workspace: "~/code".into(),
+                mode: "ask".into(), model_policy: "auto".into(), model_override: None,
+                status: "starting".into(), created_at: 0, updated_at: 0,
+            }]),
+            token: Mutex::new(None),
+            halted: AtomicBool::new(false),
+        });
+        (shared, "s1".into())
+    }
+
+    #[test]
+    fn session_ready_flips_cache_to_idle() {
+        // RT 建会话只发 session.ready（无 starting→idle 迁移事件）——缓存必须翻 idle
+        let (shared, sid) = shared_with_starting_session();
+        shared.apply_session_event("session.ready", &json!({ "sessionId": sid, "restored": false }));
+        assert_eq!(shared.sessions.lock().unwrap()[0].status, "idle");
+    }
+
+    #[test]
+    fn session_ready_for_unknown_session_ignored() {
+        let (shared, _) = shared_with_starting_session();
+        shared.apply_session_event("session.ready", &json!({ "sessionId": "ghost", "restored": false }));
+        assert_eq!(shared.sessions.lock().unwrap()[0].status, "starting");
     }
 }
