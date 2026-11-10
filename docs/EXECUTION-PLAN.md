@@ -5,6 +5,12 @@
 >
 > **用法**：从 A 批起自上而下逐项做；每项完成后跑 `make verify`（四栈门禁+冒烟），
 > 涉及服务端存储的加跑 `make verify-server-pg`；完成打 `[x]` 并注日期。
+>
+> **⚠ 2026-11-10 瘦身二阶段（产品范围收口）**：音视频通话（rtc/LiveKit）、会议（meeting）
+> 域与文件分享外链整体移除；主打收口「Agent + Agent 插件 + 本地 claude code/zcode 委派 + 日常聊天」。
+> 随之关闭：B1-B4 全部（LiveKit 镜入 Harbor/nginx /rtc/ 真机/getDisplayMedia/frp 回归——对象已不存在；
+> frp 随移动端+外网接入正式关闭）、E3 双人审批、E8 提示注入闸门实测、E9 会议纪要、E10 20k 压测。
+> 孤儿表清理见迁移 0035；删除前快照 `backup/full-suite-20261109`。
 
 ---
 
@@ -33,10 +39,10 @@
 
 | # | 事项 | 说明 | 验收 | 状态 |
 |---|---|---|---|---|
-| B1 | livekit 镜像入 Harbor | `docker pull docker.1ms.run/livekit/livekit-server:v1.8.4` → tag `172.16.105.109:30003/pengzuyu/livekit-server:v1.8.4` → push；`.env` 设 `BBW_LIVEKIT_IMAGE`（同 pgvector 经验） | compose 主栈拉起 livekit 健康 | [ ] 本机已 pull+tag（2026-11-09）；Harbor 当前不可达，内网恢复后 `docker push 172.16.105.109:30003/pengzuyu/livekit-server:v1.8.4` + `.env` 设 `BBW_LIVEKIT_IMAGE` |
-| B2 | nginx `/rtc/` 反代真机验证 | **必须在 compose 主栈部署机验证，不能走 frp（UDP/ICE 过不了）**；探测：curl 带 WS Upgrade 打 `/rtc/rtc?access_token=x`——101=通 / 401=路由通 / 404=路径 / 502=media 未起 | 真机通话建立成功 | [ ] |
-| B3 | WKWebView getDisplayMedia 真机测试 | 需 Mac/iOS 真机；社区已知大概率不支持 → 确认 P1 Tauri 原生捕获兜底路径（代码已有降级提示）；无 Mac 可标记不阻塞 | 真机结论记录进 D17；不支撑则降级提示可见 | [ ] |
-| B4 | frp 隧道指向切换 + 双端回归 | `deploy/frp/docker-compose.yml`（已有未提交修改）樱花隧道 18311312 指向切换；双端 alice/bob 对话+群通话 E2E | 双端消息/通话/文件全通 | [ ] |
+| B1 | livekit 镜像入 Harbor | ~~随 rtc 域移除关闭（2026-11-10）~~ | — | [x] 关闭（rtc 域移除） |
+| B2 | nginx `/rtc/` 反代真机验证 | ~~随 rtc 域移除关闭（/rtc/ 路由已撤）~~ | — | [x] 关闭（rtc 域移除） |
+| B3 | WKWebView getDisplayMedia 真机测试 | ~~随 rtc/meeting 域移除关闭（屏幕共享不再存在）~~ | — | [x] 关闭（rtc 域移除） |
+| B4 | frp 隧道指向切换 + 双端回归 | ~~随外网接入正式关闭（2026-11-10，移动端+外网方向不再挂账）~~ | — | [x] 关闭（外网接入关闭） |
 
 ## 批次 C：🟡 P1 裁决落地（阶段一开发期内定，小项为主）
 
@@ -136,7 +142,7 @@
 | **E1 验收记录（2026-11-09）**：迁移 0031（eco_app/version/install 三表+RLS）；AppRepo 双实现（lock 9135；版本线/发布/安装 upsert）；service app.go（注册校验 app_id/semver/manifest JSON→首版 draft / 版本线 / Publish 直发+current_version / Delist / **Catalog 差异**（install/upgrade/noop/revoke 四态+manifest 随发）/ Install 锚定发布版 / MyInstalls）；路由 admin 6（admin:app:publish）+ user 4；eco Service 加 apps 字段（New 扩参）。前端 features/eco 首建（AppStorePage catalog 卡流四态+安装/升级/卸载；MainLayout「应用」入口）+ admin EcoAppsPage（登记表单/版本线追加发布/下架）；测试 TestEcoAppLifecycle 全链。**登记**：C 档审批/灰度/签名链→E2/E3；app.updated/revoked WS 推送+tools.reload 热加载随宿主命令阶段二。client tsc/build ✓、Go 测试待 CI。
 | E2 | 灰度体系：canary 百分比+白名单豁免（OQ-B13） | 依赖 E1 | [x] 2026-11-09（确定性放量 uid%100<pct+白名单 100% 豁免；Catalog 收敛+Install 闸门） |
 | **E2 验收记录（2026-11-09）**：迁移 0032（eco_rollout：UK(tenant,app)+canary 0-100 CHECK+whitelist JSON+RLS）；RolloutRepo 双实现（Upsert ON CONFLICT/Get 无行 nil）；service SetRollout（pct/白名单 ≤1000/版本归属校验）+GetRollout（无行=100 全量默认）+**inRollout 判定**（白名单 100% 豁免→uid%100<pct 确定性，无抖动）；**Catalog 收敛**（未入灰度未装=不透出防探测、未入灰度已装=noop 保持不推升级、入灰度=install/upgrade 照常）+**InstallApp 闸门**（防直调绕过 9002）；PUT/GET /admin/eco/apps/{id}/rollout；EcoAppsPage 版本行[灰度]面板（canary %+白名单 uid 列表，读改存）；测试 TestEcoRollout（pct 非法/跨应用版本 9001/灰度内外/白名单豁免/0% 已装保持 noop/全量恢复）。client tsc/build ✓。
-| E3 | 版本回滚 C 档双人审批（OQ-B12） | 依赖 E1 | [ ] |
+| E3 | 版本回滚 C 档双人审批（OQ-B12） | ~~关闭（2026-11-10 范围收口：单人直发维持 v0.1 形态）~~ | — | [x] 关闭 |
 | E4 | 技能市场（租户内）+预置技能安装 | 00§8 阶段三/四 | [x] 2026-11-09（市场+三档策略落地；预置技能包内容随运营录入；多版本线/回滚随 E3） |
 | **E4 验收记录（2026-11-09）**：迁移 0034（eco_skill：skill_id UK+policy 三档+manifest 覆盖式版本+RLS；eco_skill_install UK(user,skill)）；SkillRepo 双实现（lock 9137）；service（发布校验 skill_id/semver/policy→draft 即上架 / UpdateSkill 覆盖升版 / **SkillCatalog**（published+安装态+升级 manifest 下发）/ InstallSkill 锚定发布版 / **UninstallSkill force 档拒**（10 §4.5 强制技能不可自卸）/ MySkills）；路由 admin 4+user 4；测试 TestSkillMarket（非法三态 9001/重复 9001/force 卸载拒/升级 manifest/下架消失/我的安装集）。前端 admin SkillsPage（发布表单三档下拉/覆盖升版/下架）+ /apps 商店**双 tab**（SkillTab：force 徽标+卸载按钮按 policy 隐藏——服务端同拒兜底）；eco Service/New/NewModule 四参（E1/E2 测试 ctor 对齐）。**登记**：admin:skill:publish 字典入册收紧守卫；多版本线与回滚 C 档随 E3；预置技能包（运营内容）随上线录入；tools.reload 随宿主阶段二。client tsc/build ✓、Go 测试待 CI。
 | E5 | MCP 二期试点（kb_query+doc_read 只读工具，OQ-B26） | D14 | [x] 核实已落地（2026-11-09 全链核查——mcpgw 一期实现时已含试点两工具，计划状态陈旧；见下注记） |
@@ -144,9 +150,9 @@
 | E6 | 个人知识库 | 00§8 阶段三 | [ ] |
 | E7 | 内嵌卡增强：20 轮上限/Cmd+F 前缀索引/紧急停止主窗+系统 toast（OQ-C30） | D08 | [x] 2026-11-09（Cmd+F+紧急停止多屏落地；20 轮随内嵌卡本体——D08 阶段二，登记） |
 | **E7 验收记录（2026-11-09）**：**Cmd+F**——ChatPage 键位别名（Cmd+K 全局/Cmd+F 会话内同面板，preventDefault 覆盖浏览器查找）；OQ-C30"前缀过滤"=裁决维持工具名/文件名/文本前缀过滤、不做 agent_event 全文索引（D08 §686 开放问题就此收口）。**紧急停止多屏**——App 壳层 `useEmergencyStopHotkey`：⌘⇧./Ctrl+Shift+.（含中文输入法'。'兼容）任意路由触发 agent store emergencyStop → 主窗 toast（antd message 经 bbw:toast CustomEvent）+ 系统通知（notify.ts 抽通用 `sendSystemNotification`，notifyAgentDone 改偏好闸门+委托复用；紧急语义优先于 D12 免打扰闸门——不 currentPref 拦截）双通道（覆盖最小化/他屏场景）。**20 轮上限**——内嵌卡本体未实现（C5 同口径），随 D08 内嵌卡阶段二。client tsc/build ✓。
-| E8 | 提示注入小模型闸门 A/B 实测（OQ-D06）；AppLocker/WDAC 模板（OQ-D11） | 15/D13 | [ ] |
-| E9 | 会议纪要等深度 AI 场景 | 00§8 阶段四 | [ ] |
-| E10 | 20k 用户规模压测优化 | 00§8 阶段四 | [ ] |
+| E8 | 提示注入小模型闸门 A/B 实测（OQ-D06）；AppLocker/WDAC 模板（OQ-D11） | ~~关闭（2026-11-10 范围收口）~~ | — | [x] 关闭 |
+| E9 | 会议纪要等深度 AI 场景 | ~~随会议域移除关闭~~ | — | [x] 关闭（meeting 域移除） |
+| E10 | 20k 用户规模压测优化 | ~~关闭（小团队定位，暂不做规模压测）~~ | — | [x] 关闭 |
 | E11 | 开放 API（复用 20 篇 Outgoing 订阅框架，G8） | 00§8 阶段四 | ~~已移除~~ 2026-11 瘦身：bot 域（Outgoing Webhook 底座）随文档中心一并移除，验收记录见 git 历史 |
 | **E12 验收记录（2026-11-09）**：`shared/i18n`（**零运行时依赖**——字典即模块，装包克制）：locale 三态 zh-CN（默认）/en/system（navigator.language 解析），localStorage('bbw-locale') 持久化（主题同款口径）；`t(key, params)` 键 `域.页面.键`（D01 §12.1），en 缺键回退 zh-CN 再回退 key（开发期可见缺译）；zustand store 响应式（切换触发消费组件重渲）。接线：GeneralSettingsPage 语言卡真实化（三态 select 即时生效）；**antd ConfigProvider locale 联动**（zh_CN/en_US——组件内置文案随切）；SettingsLayout 六 tab + MainLayout 导航（含 /notifications 项恢复）走 t()——切换立即可见；字典 v0.1 覆盖设置页族/导航/登录骨架键（全量文案迁移随阶段二渐入，登记）。client tsc/build ✓。
 | E12 | i18n 接入（语言切换真实生效） | 设置中心 | [x] 2026-11-09（shared/i18n 零依赖字典；zh/en/system 三态即时生效） |
@@ -158,5 +164,5 @@
 - `make verify`：四栈硬门禁（server build/vet/gofmt/test + client + agent + deploy）+ 启动冒烟，CI 同源——**每项收尾必跑**
 - `make verify-server-pg`：PG 集成门禁（RLS/契约测试）——涉及迁移/存储的项（C6/C9/D4/D7/D10 等）
 - `make test`：三栈聚合测试
-- `scripts/e2e/`：`agent-interop.sh` / `kb-pipeline.sh` / `mcpgw-smoke.sh` / `rtc-stage1`——对应域改动的 E2E（doc-stage1 已随 doc 域移除）
-- 双端 alice/bob 回归：frp 实验台（B4 起）
+- `scripts/e2e/`：`agent-interop.sh` / `kb-pipeline.sh` / `mcpgw-smoke.sh`——对应域改动的 E2E（doc-stage1 已随 doc 域移除；rtc-stage1 已随 rtc 域移除）
+- 双端 alice/bob 回归：~~frp 实验台（随外网接入关闭）~~ 本机双实例

@@ -285,12 +285,6 @@ type MessageService interface {
 	// 幂等（run_id+status）→ 通知中心落卡（kind=agent_done）+ 发布 agent.task.completed
 	ReportAgentTask(ctx context.Context, userID int64, p AgentTaskReportPayload) error
 
-	// ── 通话卡片（D04 阶段一：rtc 域经注入调用；通话记录=消息流，服务端不建表）──
-
-	// SendCallCard invite 时落 type=call_card 消息（sender=主叫；client_msg_id 幂等）→ 返回 msg_id 回链
-	SendCallCard(ctx context.Context, senderID, convID int64, clientMsgID string, body json.RawMessage) (int64, error)
-	// UpdateCallCard 结束时 PATCH body（status=ended{duration,reason}）→ 复用 msg.updated 扇出
-	UpdateCallCard(ctx context.Context, msgID int64, body json.RawMessage) error
 	// BroadcastNotice 平台公告广播（PAD-15；admin 域经 main 闭包调用——
 	// kind=announcement 系统公告分组，通知中心全员可见；返回成功落行数）
 	BroadcastNotice(ctx context.Context, tenantID int64, title, digest string, userIDs []int64) int

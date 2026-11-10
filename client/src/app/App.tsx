@@ -13,16 +13,11 @@ import { SetupPage } from '../features/auth/pages/SetupPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
 import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
-import { ShareResolvePage } from '../features/im/pages/ShareResolvePage';
 import { KbPage } from '../features/kb/pages/KbPage';
 import { MailPage } from '../features/mail/pages/MailPage';
-import { MeetingPage } from '../features/meeting/pages/MeetingPage';
 import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
 import { AppStorePage } from '../features/eco/pages/AppStorePage';
 import { useImStore } from '../features/im/store/im';
-import { useRtcStore } from '../features/rtc/store/rtcStore';
-import { RtcOverlay } from '../features/rtc/components/RtcOverlay';
-import { RecentCallsPage } from '../features/rtc/pages/RecentCallsPage';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
 import { AgentReportsPage } from '../features/agent/pages/AgentReportsPage';
@@ -62,7 +57,7 @@ const WS_BASE: string = resolveWsBase();
 /** mock 模式（无后端联调）默认开启：REST/WS 走 features 各模块 api 层内置桩数据 */
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
 
-/** 认证门卫：无凭据强制跳 /auth（D01 §4.2）；通过后挂全局通话浮层（D04） */
+/** 认证门卫：无凭据强制跳 /auth（D01 §4.2） */
 function RequireAuth({ children }: { children: ReactNode }) {
   const token = useAuthStore((s) => s.token);
   const mustChangePwd = useAuthStore((s) => !!s.user?.must_change_pwd);
@@ -70,21 +65,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
   if (!token) return <Navigate to="/auth" replace state={{ from: location.pathname }} />;
   // 首登强制改密（D11）：token 已发但未改密——全部业务路由拦回 /auth 二步表单
   if (mustChangePwd) return <Navigate to="/auth" replace />;
-  return (
-    <>
-      {children}
-      {/* D17 §4：auth 源经组合层下发（Tauri 宿主下拉起独立会议窗口的 handoff 载荷用） */}
-      <RtcOverlay
-        auth={{
-          getToken: () => useAuthStore.getState().token,
-          getRefreshToken: () => useAuthStore.getState().refreshToken,
-          getExpiresAt: () => useAuthStore.getState().expiresAt ?? 0,
-          getUid: () => useAuthStore.getState().user?.uid ?? '',
-          getDisplayName: () => useAuthStore.getState().user?.name ?? '',
-        }}
-      />
-    </>
-  );
+  return <>{children}</>;
 }
 
 /** WS 连接生命周期与全局绑定（装配副作用集中于此） */
@@ -130,15 +111,12 @@ function useWsLifecycle(): void {
   const logout = useAuthStore((s) => s.logout);
   const refreshPerms = useAuthStore((s) => s.refreshPerms);
   const setMyUid = useImStore((s) => s.setMyUid);
-  const setRtcUid = useRtcStore((s) => s.setMyUid);
   const queryClient = useQueryClient();
 
   // 组合层注入：IM 判定"己方消息"用（features 间禁止横向 import，D01 §12.2）
-  // rtc 同口径注入（对端解析/bus 回拨发起判定方向，D04）
   useEffect(() => {
     setMyUid(user?.uid ?? '');
-    setRtcUid(user?.uid ?? '');
-  }, [user, setMyUid, setRtcUid]);
+  }, [user, setMyUid]);
 
   useEffect(() => {
     bindWsToConnectionStore();
@@ -211,15 +189,6 @@ export function App() {
         <Route path="/auth" element={<LoginPage />} />
         {/* 初始化向导（16 篇 §2.2 Web 化）：空系统引导首个管理员；已初始化自动回 /auth */}
         <Route path="/setup" element={<SetupPage />} />
-        {/* 分享外链解析（D06 §4.4：登录态访问——企业内不匿名；独立轻页面不走主布局） */}
-        <Route
-          path="/s/:code"
-          element={
-            <RequireAuth>
-              <ShareResolvePage />
-            </RequireAuth>
-          }
-        />
       <Route
         element={
           <RequireAuth>
@@ -237,14 +206,10 @@ export function App() {
         {/* kind 分组随域接入扩展；旧 /im/notifications 兼容跳转） */}
         <Route path="/notifications" element={<NotificationCenterPage />} />
         <Route path="/im/notifications" element={<Navigate to="/notifications" replace />} />
-        {/* 通话域（D04 阶段一务实版）：最近通话（call_card 消息流派生）+ 全局通话浮层在 RequireAuth 挂载 */}
-        <Route path="/rtc" element={<RecentCallsPage />} />
         {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
         <Route path="/kb" element={<KbPage />} />
         {/* 邮箱（22 篇 MAI-01~04：三栏/写信/设置/搜索） */}
         <Route path="/mail" element={<MailPage />} />
-        {/* 会议（21 篇 PMT-01~03：周日历/预约/详情；会中侧栏与纪要随 ASR） */}
-        <Route path="/meetings" element={<MeetingPage />} />
         {/* 专家库（D14 PAG-13~15：公司/个人库/编辑器；协作图视图随 agent_* 接线） */}
         <Route path="/experts" element={<ExpertLibraryPage />} />
         {/* 应用商店（E1/D09 PEC-07：catalog 差异+安装） */}

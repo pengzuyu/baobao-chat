@@ -31,7 +31,8 @@ build/
 coverage/
 src-tauri/target/
 src-tauri/gen/
-src-tauri/binaries/        # externalBin 产物（make agent-sidecar 生成，不入 git）
+# externalBin 产物（make agent-sidecar 生成，不入 git；路径+行内注释双错修正 2026-11-10）
+client/src-tauri/binaries/
 
 # ---- server（Go，D02）----
 bin/

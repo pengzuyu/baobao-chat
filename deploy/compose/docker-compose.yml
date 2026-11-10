@@ -6,7 +6,6 @@
 #     core   核心链路：nginx-lb / app×2 / pg16 / redis7 / minio / update-src / 初始化
 #     deps   开发依赖子组（core 去掉 app/nginx-lb：宿主直跑 server 的开发流；
 #            dev-up.sh 用此组——不起 app 容器、不占宿主 80/443）
-#     media  音视频：livekit-server(D17 统一媒体面：7880 tcp + UDP 40000-50100 独占 + 内嵌 TURN 3478)
 #     ops    可观测栈：prometheus / grafana / otel-collector / alertmanager
 #     mail   邮件栈（22 篇，可选）：stalwart 占位（或替换 docker-mailserver 组件组）
 #   ★ 所有组均需显式启用，例如：docker compose --profile core up -d
@@ -49,18 +48,10 @@ x-bbw-env: &bbw-env
   BBW_UPDATE_CHANNEL: ${BBW_UPDATE_CHANNEL:-stable}
   BBW_FEATURE_AGENT: ${BBW_FEATURE_AGENT:-true}
   BBW_FEATURE_KB: ${BBW_FEATURE_KB:-true}
-  BBW_FEATURE_RTC: ${BBW_FEATURE_RTC:-true}
   BBW_FEATURE_AI: ${BBW_FEATURE_AI:-true}
   BBW_FEATURE_MAIL: ${BBW_FEATURE_MAIL:-false}
   BBW_AI_UPSTREAM_BASE_URL: ${BBW_AI_UPSTREAM_BASE_URL:-}
   BBW_AI_UPSTREAM_API_KEY: ${BBW_AI_UPSTREAM_API_KEY:-}
-  # ── LiveKit 统一媒体面（D17：三项齐备才启用 token 签发；与 media 服务同源）──
-  # URL=客户端连接地址：经 nginx /rtc/（wss://<域名>/rtc）或直连 wss://<host>:7880；
-  # 密钥不得含冒号（LIVEKIT_KEYS 以 "key: secret" 冒号分隔）
-  BBW_LIVEKIT_URL: ${BBW_LIVEKIT_URL:-wss://${BBW_PUBLIC_DOMAIN:-bbw.example.internal}/rtc}
-  BBW_LIVEKIT_API_KEY: ${BBW_LIVEKIT_API_KEY:-bbwdev}
-  BBW_LIVEKIT_API_SECRET: ${BBW_LIVEKIT_API_SECRET:-bbw-livekit-secret-change-me}
-  BBW_LIVEKIT_ICE: ${BBW_LIVEKIT_ICE:-}
 
 services:
   # ===========================================================================
@@ -277,45 +268,6 @@ services:
       start_period: 10s
 
   # ===========================================================================
-  # media（media profile）：LiveKit 统一媒体面（D17 拍板：1v1/群一致走 SFU，
-  # 替换原 bbw-media 占位镜像）。7880 tcp 信令（wss 经 nginx /rtc/ 或直连）+
-  # 40000-50100/udp 媒体段 + 内嵌 TURN 3478/udp（coturn 容器随之退役，D17 §3.1）。
-  # webhook 回调 app 同步 CallRegistry（participant_joined/left/room_finished）。
-  # 镜像为 scratch 基（无 shell/curl）故无 healthcheck——探活经客户端 /rtc/config
-  # 或容器日志；生产提示：万级端口映射对 iptables 有压力，Linux 下建议改
-  # network_mode: host（与 pg/redis 经宿主机 127.0.0.1 端口互通）。
-  # 子路径反代可行性为 D17 §9-2 验证项：/rtc/ 不通时 BBW_LIVEKIT_URL 改
-  # wss://<host>:7880 直连（7880 已映射宿主）。
-  # ===========================================================================
-  media:
-    image: ${BBW_LIVEKIT_IMAGE:-livekit/livekit-server:v1.8.4}
-    profiles: [media]
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      LIVEKIT_PORT: "7880"
-      # API key 三元组与 app 侧 BBW_LIVEKIT_* 同源（签发/验签一致才进房；密钥勿含冒号）
-      LIVEKIT_KEYS: "${BBW_LIVEKIT_API_KEY:-bbwdev}: ${BBW_LIVEKIT_API_SECRET:-bbw-livekit-secret-change-me}"
-      LIVEKIT_RTC_PORT_RANGE_START: "${BBW_MEDIA_RTC_MIN_PORT:-40000}"
-      LIVEKIT_RTC_PORT_RANGE_END: "${BBW_MEDIA_RTC_MAX_PORT:-50100}"
-      # 内嵌 TURN（coturn 退役；TLS 5349 视证书情况后定，D17 §3.1）
-      LIVEKIT_TURN_ENABLED: "true"
-      LIVEKIT_TURN_UDP_PORT: "3478"
-      # webhook → app（Authorization JWT 验签；多实例口径前=单实例，D17 §9-5）
-      LIVEKIT_WEBHOOK_API_KEY: ${BBW_LIVEKIT_API_KEY:-bbwdev}
-      LIVEKIT_WEBHOOK_API_SECRET: ${BBW_LIVEKIT_API_SECRET:-bbw-livekit-secret-change-me}
-      LIVEKIT_WEBHOOK_URLS: "http://app:8080/api/v1/rtc/webhook"
-    ports:
-      - "7880:7880"
-      - "3478:3478/udp"
-      - "${BBW_MEDIA_RTC_MIN_PORT:-40000}-${BBW_MEDIA_RTC_MAX_PORT:-50100}:${BBW_MEDIA_RTC_MIN_PORT:-40000}-${BBW_MEDIA_RTC_MAX_PORT:-50100}/udp"
-
-  # ===========================================================================
-  # coturn：已退役（D17 §3.1 拍板——TURN 由 livekit 内嵌提供，3478/udp 随 media
-  # 容器同段映射）；历史配置见 git（deploy/compose 检索 coturn）。
-  # ===========================================================================
-
-  # ===========================================================================
   # 可观测栈（ops profile）：prometheus / grafana / otel-collector / alertmanager
   # 指标清单与告警规则见 16 篇 §6；K8s 形态为独立监控 namespace（§3.2）
   # ===========================================================================
@@ -453,9 +405,7 @@ configs:
         map $$http_upgrade $$connection_upgrade {
           default upgrade;
           ''      close;
-        # Docker 内嵌 DNS：可选 profile（media）缺席时，变量 proxy_pass
-        # 走此处运行期解析（失败→502 降级），避免 nginx 启动期静态解析直接 fatal
-        resolver 127.0.0.11 valid=10s ipv6=off;
+        }
 
         upstream bbw_app {
           ip_hash;                                  # WSS 会话保持（见上）
@@ -506,21 +456,6 @@ configs:
             proxy_send_timeout 300s;
           }
 
-          # 通话媒体面 wss（D17：LiveKit 7880；media profile 未启用时运行期解析
-          # 失败→502，客户端降级；变量 proxy_pass 经 resolver 运行期解析）。
-          # LiveKit JS SDK 在 BBW_LIVEKIT_URL（wss://<域名>/rtc）后固定再拼 /rtc
-          # → 实际请求 /rtc/rtc，而 livekit-server 期望 /rtc：去外层前缀透传
-          # （D17 §9-2 预判项；验证不通的兜底=BBW_LIVEKIT_URL 改直连 wss://<host>:7880）
-          location /rtc/ {
-            set $$media_upstream media:7880;
-            rewrite ^/rtc/(.*)$$ /$$1 break;
-            proxy_pass http://$$media_upstream;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $$http_upgrade;
-            proxy_set_header Connection $$connection_upgrade;
-            proxy_read_timeout 120s;
-          }
-
           # 客户端更新源（manifest + 安装包，16 篇 §5.1）
           location /update/ {
             proxy_pass http://bbw_update/;
@@ -543,10 +478,6 @@ configs:
           metrics_path: /metrics
           static_configs:
             - targets: ["app:8080"]
-        # media profile 未启用时该项 DOWN 属预期
-        - job_name: bbw-media
-          static_configs:
-            - targets: ["media:8082"]
         - job_name: otel-collector
           static_configs:
             - targets: ["otel-collector:8889"]

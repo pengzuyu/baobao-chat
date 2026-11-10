@@ -9,10 +9,6 @@ declare module '../../shared/bus' {
     'im:unread-changed': { total: number; mention: number };
     /** 打开图片查看器 → files(D06) */
     'im:preview-image': { fileId: string; convId: string };
-    /** 打开协作文档 → doc(D05) */
-    'im:open-doc': { docId: string };
-    /** 发起通话 → rtc(D04) */
-    'im:invoke-call': { convId: string; video: boolean; group?: boolean };
   }
 }
 

@@ -28,7 +28,7 @@ func newUploadFixture(t *testing.T) *Service {
 		MaxUploadBytes: 8 << 20,
 		TicketTTL:      time.Minute,
 		Now:            func() time.Time { return now },
-	}, filerepo.NewMemory(), filerepo.NewMemoryShares(), filerepo.NewMemoryTransfers(), filestore.NewLocal(dir))
+	}, filerepo.NewMemory(), filerepo.NewMemoryTransfers(), filestore.NewLocal(dir))
 }
 
 func shaOf(b []byte) string {
@@ -183,79 +183,6 @@ func TestUploadSessionValidation(t *testing.T) {
 	}
 }
 
-// 分享三要素矩阵：密码 4011（缺/错）→ 命中计数+票据可下载 → 次数尽 4012 →
-// 时限过期 4010 → revoke 4005 → 非 owner 创建 2003
-func TestShareLifecycleMatrix(t *testing.T) {
-	svc := newUploadFixture(t)
-	ctx := context.Background()
-	up, err := svc.Upload(ctx, 1, 7, "共享.pdf", "application/pdf", 0, strings.NewReader("pdf-bytes"))
-	if err != nil {
-		t.Fatalf("upload: %v", err)
-	}
-	fileID := 0
-	for _, c := range up.ID {
-		fileID = fileID*10 + int(c-'0')
-	}
-
-	// 非 owner 创建 → 2003
-	if _, err := svc.Share(ctx, 1, 8, int64(fileID), fileapi.ShareReq{ExpireMode: 1}); codeOf(t, err) != errx.CodePermACLDenied {
-		t.Fatal("非 owner 应 2003")
-	}
-	// 次数型 + 密码
-	sh, err := svc.Share(ctx, 1, 7, int64(fileID), fileapi.ShareReq{ExpireMode: 3, MaxTimes: 2, Password: "pw-1"})
-	if err != nil || sh.Code == "" {
-		t.Fatalf("share: %v %+v", err, sh)
-	}
-	// 无密码访问 → 4011（need_pwd）
-	if _, err := svc.ResolveShare(ctx, 1, 9, sh.Code, ""); codeOf(t, err) != errx.CodeFileSharePwdWrong {
-		t.Fatal("缺密码应 4011")
-	}
-	// 错密码 → 4011
-	if _, err := svc.ResolveShare(ctx, 1, 9, sh.Code, "bad"); codeOf(t, err) != errx.CodeFileSharePwdWrong {
-		t.Fatal("错密码应 4011")
-	}
-	// 正确密码 ×2 → 命中（计数/票据可用）
-	for i := 0; i < 2; i++ {
-		view, err := svc.ResolveShare(ctx, 1, 9, sh.Code, "pw-1")
-		if err != nil {
-			t.Fatalf("resolve#%d: %v", i+1, err)
-		}
-		if view.UsedTimes != i+1 || view.Ticket.URL == "" {
-			t.Fatalf("view#%d: %+v", i+1, view)
-		}
-	}
-	// 次数尽 → 4012
-	if _, err := svc.ResolveShare(ctx, 1, 9, sh.Code, "pw-1"); codeOf(t, err) != errx.CodeFileShareExhausted {
-		t.Fatal("次数尽应 4012")
-	}
-	// 时限型：过期 4010（时钟不可拨——直接建已过期 share 经仓库注入）
-	past := time.Now().Add(-time.Hour).UnixMilli()
-	sh2, err := svc.Share(ctx, 1, 7, int64(fileID), fileapi.ShareReq{ExpireMode: 2, ExpiresAt: past + 3*3600*1000})
-	if err != nil {
-		t.Fatalf("share2: %v", err)
-	}
-	// svc 固定时钟=1760000000000ms≈2025-10-09；ExpiresAt 用相对 past+3h 仍构造为过去→由直接入库绕过校验
-	_ = sh2
-	// revoke → 解析 4005
-	sh3, err := svc.Share(ctx, 1, 7, int64(fileID), fileapi.ShareReq{ExpireMode: 1})
-	if err != nil {
-		t.Fatalf("share3: %v", err)
-	}
-	if err := svc.RevokeShare(ctx, 1, 7, sh3.Code); err != nil {
-		t.Fatalf("revoke: %v", err)
-	}
-	if _, err := svc.ResolveShare(ctx, 1, 9, sh3.Code, ""); codeOf(t, err) != errx.CodeFileNotFound {
-		t.Fatal("revoke 后应 4005 口径")
-	}
-	// 非创建者 revoke → 4005（DisableShare 判 creator 不匹配）
-	sh4, _ := svc.Share(ctx, 1, 7, int64(fileID), fileapi.ShareReq{ExpireMode: 1})
-	if err := svc.RevokeShare(ctx, 1, 8, sh4.Code); codeOf(t, err) != errx.CodeFileNotFound {
-		t.Fatal("非创建者 revoke 应拒")
-	}
-}
-
-// 传输记录镜像（07 §5）：分片全程状态轨迹（queued→transferring/resuming→done
-// 回填 file_id）+ multipart 终态行 + 下载行 + direction 过滤 + 4006 failed
 func TestTransferRecordMirror(t *testing.T) {
 	svc := newUploadFixture(t)
 	ctx := context.Background()

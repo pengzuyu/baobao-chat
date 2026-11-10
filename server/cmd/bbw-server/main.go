@@ -54,10 +54,6 @@ import (
 	mailrepo "github.com/baobaowork/server/internal/mail/repo"
 	mailservice "github.com/baobaowork/server/internal/mail/service"
 	"github.com/baobaowork/server/internal/mcpgw"
-	"github.com/baobaowork/server/internal/meeting"
-	meetingapi "github.com/baobaowork/server/internal/meeting/api"
-	meetingrepo "github.com/baobaowork/server/internal/meeting/repo"
-	meetingservice "github.com/baobaowork/server/internal/meeting/service"
 	"github.com/baobaowork/server/internal/message"
 	"github.com/baobaowork/server/internal/message/api"
 	"github.com/baobaowork/server/internal/message/repo"
@@ -72,8 +68,6 @@ import (
 	"github.com/baobaowork/server/internal/platform/eventbus"
 	"github.com/baobaowork/server/internal/platform/httpx"
 	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
-	"github.com/baobaowork/server/internal/rtc"
-	rtcapi "github.com/baobaowork/server/internal/rtc/api"
 	stickerapi "github.com/baobaowork/server/internal/sticker/api"
 	stickerrepo "github.com/baobaowork/server/internal/sticker/repo"
 	stickerservice "github.com/baobaowork/server/internal/sticker/service"
@@ -175,19 +169,16 @@ func main() {
 		})
 
 	// 文件域（D06 阶段一+阶段二 server 侧）：本地磁盘存储 + 一次性票据下载 +
-	// 分片上传会话（check 秒传/uploads/PATCH 分片/complete）+ 分享外链；
+	// 分片上传会话（check 秒传/uploads/PATCH 分片/complete）；
 	// 会话成员判定经闭包查 message 仓（跨模块不引 message 包，D02 §4 依赖规则）
 	fileStore := filestore.NewLocal(envOr("BBW_DATA_DIR", "./data"))
 	var fileRepo filerepo.Repo
-	var fileShares filerepo.ShareRepo
 	var fileTransfers filerepo.TransferRepo
 	if pgPool != nil {
 		fileRepo = filerepo.NewPostgres(pgPool)
-		fileShares = filerepo.NewPostgresShares(pgPool)
 		fileTransfers = filerepo.NewPostgresTransfers(pgPool)
 	} else {
 		fileRepo = filerepo.NewMemory()
-		fileShares = filerepo.NewMemoryShares()
 		fileTransfers = filerepo.NewMemoryTransfers()
 	}
 	fileMod := file.NewModule(fileservice.Options{
@@ -197,7 +188,7 @@ func main() {
 			m, err := msgRepo.MemberOf(ctx, convID, userID)
 			return err == nil && m != nil && m.Status == 1
 		},
-	}, fileRepo, fileShares, fileTransfers, fileStore)
+	}, fileRepo, fileTransfers, fileStore)
 	fileSvc := fileMod.API()
 	// OQ-B24：锚点消息撤回联动（文件保留、群文件页签锚点置灰；尽力而为不影响撤回主流程）
 	bus.Subscribe(eventbus.TopicMsgRecalled, func(ctx context.Context, evt eventbus.Event) error {
@@ -295,46 +286,6 @@ func main() {
 	}
 	gw := gateway.New(hub, bus, msgMod.API(), wsVerify, cfg.WSHeartbeat)
 
-	// ── rtc 通话域（D04 阶段一务实版）：服务端纯信令 + call_card 落流 ──
-	// 推送经 hub 扇出（进程内直调 rtc service，无需 eventbus——通话推送瞬态无落库语义，登记）；
-	// 通话记录=IM 流内 call_card 消息，服务端不建表（CallRegistry 内存态）；权限 rtc:call:start
-	// v0.1 无权限点字典缺省放行（03 篇登记后接入）。
-	rtcMod := rtc.NewModule(gateway.RtcPusher{Hub: hub}, rtcCardSink{msgs: msgMod.API()}, rtc.Options{
-		// 会话/成员校验经 message 仓闭包（跨模块不引 message 包，D02 §4 依赖规则）
-		IsConvActive: func(ctx context.Context, convID int64) bool {
-			c, err := msgRepo.GetConversation(ctx, convID)
-			return err == nil && c != nil && c.Status == messageapi.ConvActive
-		},
-		// 群呼全员 ringing 目标集（D04 阶段二 join 模式）
-		ConvMembersOf: func(ctx context.Context, convID int64) []int64 {
-			ids, err := msgRepo.MembersOf(ctx, convID)
-			if err != nil {
-				return nil
-			}
-			return ids
-		},
-		// 被叫忙放行（OQ-C06 配套：端侧收 ringing 自动回 busy / bye_call_id 挂旧接新）
-		AllowBusyCallee: true,
-		IsConvMember: func(ctx context.Context, convID, userID int64) bool {
-			m, err := msgRepo.MemberOf(ctx, convID, userID)
-			return err == nil && m != nil && m.Status == 1
-		},
-		NameOf: func(id int64) string {
-			if u, err := orgRepo.GetUser(context.Background(), id); err == nil && u != nil {
-				return u.DisplayName
-			}
-			return ""
-		},
-		// LiveKit 统一媒体面（D17：BBW_LIVEKIT_* 三项齐备启用；未配置=无媒体降级信令照走）
-		LK: rtc.LiveKitParams{
-			URL:        os.Getenv("BBW_LIVEKIT_URL"),
-			APIKey:     os.Getenv("BBW_LIVEKIT_API_KEY"),
-			APISecret:  os.Getenv("BBW_LIVEKIT_API_SECRET"),
-			ICEServers: envCSV("BBW_LIVEKIT_ICE"),
-		},
-	})
-	gw.MountRTC(rtcMod.API())
-
 	if cfg.SeedDemoData {
 		seedDemo(orgRepo, msgRepo)
 	}
@@ -405,15 +356,6 @@ func main() {
 	mux.Handle("PATCH /api/v1/convs/{id}/state", authed(handleConvState(msgMod.API())))
 	// 增量同步（API-IM-01：登录/重连补投）
 	mux.Handle("GET /api/v1/sync", authed(handleSync(msgMod.API())))
-	// rtc 媒体面 REST（D17 §3：config 下发 + 进房凭证；webhook 为 livekit 回调
-	// ——公开路由，Authorization JWT 验签在 handler 内做（与用户 JWT 体系无关））
-	mux.Handle("GET /api/v1/rtc/config", authed(handleRtcConfig(rtcMod.API())))
-	mux.Handle("GET /api/v1/calls/{id}/token", authed(handleCallToken(rtcMod.API())))
-	mux.HandleFunc("POST /api/v1/rtc/webhook", handleRtcWebhook(rtcMod.API(), rtc.LiveKitParams{
-		URL:       os.Getenv("BBW_LIVEKIT_URL"),
-		APIKey:    os.Getenv("BBW_LIVEKIT_API_KEY"),
-		APISecret: os.Getenv("BBW_LIVEKIT_API_SECRET"),
-	}))
 	// 收藏（D03 §3.8 PIM-08；API-IM-10/11）
 	mux.Handle("POST /api/v1/messages/{id}/favorite", authed(handleFavoriteMessage(msgMod.API())))
 	mux.Handle("DELETE /api/v1/messages/{id}/favorite", authed(handleUnfavoriteMessage(msgMod.API())))
@@ -448,9 +390,6 @@ func main() {
 	mux.Handle("PATCH /api/v1/files/uploads/{id}/{no}", authed(handleFileUploadPart(fileSvc)))
 	mux.Handle("POST /api/v1/files/uploads/{id}/complete", authed(handleFileUploadComplete(fileSvc)))
 	// 分享外链（07 §4.4：访问仍需登录——authed；dl 票据即下载凭证）
-	mux.Handle("POST /api/v1/files/{id}/share", authed(handleFileShare(fileSvc)))
-	mux.Handle("GET /api/v1/files/s/{code}", authed(handleFileShareResolve(fileSvc)))
-	mux.Handle("DELETE /api/v1/files/s/{code}", authed(handleFileShareRevoke(fileSvc)))
 	// dl 不挂鉴权中间件——票据即凭证（120s 一次性；4014 失效/复用）
 	mux.HandleFunc("GET /api/v1/files/dl", handleFileDownload(fileSvc))
 
@@ -1020,23 +959,6 @@ func main() {
 	ecoapi.RegisterPublicRoutes(mux, ecoMod.API())
 	ecoapi.RegisterAdminRoutes(mux, requirePerm("admin:app:publish"), ecoMod.API())
 
-	// ── 会议域（21 篇阶段一务实版）：预约/日历/RSVP/忙闲 ──
-	// 媒体/信令复用 rtc（入会=join 模式群通话，call_id=meeting_no 约定）；
-	// 推送经 hub 直推 meeting.*（瞬态，rtc 同款）
-	var meetingRepoInst meetingrepo.Repo
-	if pgPool != nil {
-		meetingRepoInst = meetingrepo.NewPostgres(pgPool)
-	} else {
-		meetingRepoInst = meetingrepo.NewMemory()
-	}
-	meetPush := gateway.RtcPusher{Hub: hub}
-	meetingMod := meeting.NewModule(meetingservice.Options{
-		PushMeet: func(userID int64, typ string, payload any) {
-			meetPush.PushRTC([]int64{userID}, typ, payload)
-		},
-	}, meetingRepoInst)
-	meetingapi.RegisterRoutes(mux, authed, meetingMod.API())
-
 	// ── 邮件域（22 篇阶段一务实版）：内域收发 + 治理 REST ──
 	// 邮件栈=进程内直投（docker-mailserver/auth-bridge/路径②随阶段二）；
 	// 懒开户="登录即有邮箱"（user.offboarded 联动随 D02 消费方阶段二）；
@@ -1047,7 +969,7 @@ func main() {
 	} else {
 		mailRepoInst = mailrepo.NewMemory()
 	}
-	mailPush := gateway.RtcPusher{Hub: hub} // mail.new 直推（瞬态不经 eventbus，rtc 同款）
+	mailPush := gateway.UserPusher{Hub: hub} // mail.new 直推（瞬态不经 eventbus）
 	mailMod := mail.NewModule(mailservice.Options{
 		DefaultDomain: envOr("BBW_MAIL_DOMAIN", "corp.company.internal"),
 		// 懒开户寻址：employee_no@默认域（22 §4.1 命名策略）
@@ -1070,7 +992,7 @@ func main() {
 		HashPwd:   authservice.HashPassword,
 		VerifyPwd: authservice.VerifyPassword,
 		PushMail: func(userID int64, payload any) {
-			mailPush.PushRTC([]int64{userID}, "mail.new", payload)
+			mailPush.PushUsers([]int64{userID}, "mail.new", payload)
 		},
 		// 共享邮箱 ACL（mail.shared；前置函数变量+装配后回填——kb 同款）
 		ACLPerm: func(ctx context.Context, resourceType, resourceID string, userID int64) int {
@@ -2738,78 +2660,6 @@ func handleAdminAudit(svc adminapi.AdminService) http.HandlerFunc {
 	}
 }
 
-// ── rtc 域适配器（D04 阶段一追加）──
-
-// rtcCardSink rtc.CardSink → message 服务适配：call_card 落流/回写
-// （SendCard 参数序与 MessageService.SendCallCard 对齐；错误静默——卡片为辅链路不阻断信令）
-type rtcCardSink struct{ msgs messageapi.MessageService }
-
-// SendCard invite 时落卡（幂等键 callcard-<call_id>）→ 回链 msg_id
-func (a rtcCardSink) SendCard(ctx context.Context, senderID, convID int64, clientMsgID string, body json.RawMessage) int64 {
-	id, _ := a.msgs.SendCallCard(ctx, senderID, convID, clientMsgID, body)
-	return id
-}
-
-// FinishCard 结束时 PATCH body（status=ended{duration,reason}）→ 复用 msg.updated 扇出
-func (a rtcCardSink) FinishCard(ctx context.Context, msgID int64, body json.RawMessage) {
-	_ = a.msgs.UpdateCallCard(ctx, msgID, body)
-}
-
-// ── rtc 媒体面 REST 壳（D17 §3.2/3.3：薄壳 → rtc service）──
-
-// handleRtcConfig GET /api/v1/rtc/config：livekit_url + ICE 运行时下发（固定域名终态=客户端零写死）
-func handleRtcConfig(svc rtcapi.RTCService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		httpx.OK(w, r, svc.MediaConfig())
-	}
-}
-
-// handleCallToken GET /api/v1/calls/{id}/token?did=：LiveKit 进房凭证（JWT identity=uid:did）
-func handleCallToken(svc rtcapi.RTCService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		uid, err := uidFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		ack, err := svc.JoinToken(r.Context(), uid, r.PathValue("id"), r.URL.Query().Get("did"))
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, ack)
-	}
-}
-
-// handleRtcWebhook POST /api/v1/rtc/webhook：livekit 事件回调（participant_joined/left、
-// room_finished）——Authorization 头为 livekit API key 签发的 JWT，验签后才交给 service
-func handleRtcWebhook(svc rtcapi.RTCService, lk rtc.LiveKitParams) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var ev rtcapi.WebhookEvent
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&ev); err != nil {
-			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "webhook 载荷非法"))
-			return
-		}
-		if err := lk.VerifyWebhook(r.Header.Get("Authorization"), time.Now()); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		svc.HandleWebhook(r.Context(), &ev)
-		httpx.OK(w, r, map[string]string{"status": "ok"})
-	}
-}
-
-// envCSV 逗号分隔环境变量（空项剔除；BBW_LIVEKIT_ICE 用）
-func envCSV(key string) []string {
-	var out []string
-	for _, v := range strings.Split(os.Getenv(key), ",") {
-		if v = strings.TrimSpace(v); v != "" {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
 // ── 文件 REST 壳（D06 阶段二：分片会话 + 分享外链） ──
 
 // handleFileCheck 秒传预检（策略再校验；命中直接可发消息）
@@ -2912,66 +2762,6 @@ func handleFileUploadComplete(svc fileapi.FileService) http.HandlerFunc {
 	}
 }
 
-// handleFileShare 创建分享（owner only；code 一次性返回）
-func handleFileShare(svc fileapi.FileService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		uid, err := uidFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		fileID, err := pathID(r, "id")
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		var req fileapi.ShareReq
-		if err := decodeJSON(r, &req); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		res, err := svc.Share(r.Context(), httpx.TenantID(r.Context()), uid, fileID, req)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, res)
-	}
-}
-
-// handleFileShareResolve 外链解析（登录态；密码经 ?password=；命中计数+发票据）
-func handleFileShareResolve(svc fileapi.FileService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		uid, err := uidFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		res, err := svc.ResolveShare(r.Context(), httpx.TenantID(r.Context()), uid,
-			r.PathValue("code"), r.URL.Query().Get("password"))
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, res)
-	}
-}
-
-// handleFileShareRevoke 取消分享（creator only；链接即刻失效）
-func handleFileShareRevoke(svc fileapi.FileService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		uid, err := uidFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		if err := svc.RevokeShare(r.Context(), httpx.TenantID(r.Context()), uid, r.PathValue("code")); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, nil)
-	}
-}
 
 // handleFileConvFiles 会话文件聚合（群文件页签；成员判定在 service）
 func handleFileConvFiles(svc fileapi.FileService) http.HandlerFunc {
@@ -3027,9 +2817,9 @@ func seedBuiltinRoles(store adminrepo.RoleRepo) {
 				"admin:role:manage", "admin:role:assign", "admin:app:publish",
 				"admin:policy:manage", "admin:audit:read", "admin:audit:export",
 				"admin:usage:read", "admin:kb:govern", "admin:agent:revoke",
-				"admin:notice:publish", "admin:meeting:policy", "admin:mail:govern"}},
+				"admin:notice:publish", "admin:mail:govern"}},
 		{Name: "部门管理员", Description: "部门用户/群/知识库管理（内置；⚠ 数据范围收敛随 D12 组织树阶段二——当前授权即全租户生效，谨慎授予）", IsBuiltin: true,
-			Permissions: []string{"im:group:manage", "im:group:create_broadcast", "rtc:meeting:schedule",
+			Permissions: []string{"im:group:manage", "im:group:create_broadcast",
 				"kb:space:create", "kb:space:admin", "kb:doc:sensitive",
 				"admin:org:manage", "admin:user:manage", "admin:usage:read", "admin:kb:govern"}},
 		{Name: "审计合规员", Description: "只读审计与导出（内置）", IsBuiltin: true,

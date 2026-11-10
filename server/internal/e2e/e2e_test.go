@@ -49,7 +49,6 @@ import (
 	"github.com/baobaowork/server/internal/platform/eventbus"
 	"github.com/baobaowork/server/internal/platform/httpx"
 	"github.com/baobaowork/server/internal/platform/ws"
-	"github.com/baobaowork/server/internal/rtc"
 )
 
 // ---------------------------------------------------------------------------
@@ -111,19 +110,6 @@ func newServer(t *testing.T) *testServer {
 
 	hub := gateway.NewHub()
 	gw := gateway.New(hub, bus, msgSvc, authSvc.Verify, 90*time.Second)
-	// RTC 信令域挂载（D04 阶段一）：hub 推送 + message 卡片落流 + 闭包跨域校验
-	rtcMod := rtc.NewModule(gateway.RtcPusher{Hub: hub}, rtcCardSink{msgs: msgSvc}, rtc.Options{
-		IsConvActive: func(ctx context.Context, convID int64) bool {
-			_, err := msgRepo.GetConversation(ctx, convID)
-			return err == nil
-		},
-		IsConvMember: func(ctx context.Context, convID, userID int64) bool {
-			m, _ := msgRepo.MemberOf(ctx, convID, userID)
-			return m != nil && m.Status == 1
-		},
-		NameOf: func(id int64) string { return map[int64]string{alice.ID: "Alice", bob.ID: "Bob"}[id] },
-	})
-	gw.MountRTC(rtcMod.API())
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", http.HandlerFunc(gw.ServeWS))
@@ -550,101 +536,6 @@ func createGroupAck(t *testing.T, w *wsClient, s *testServer) string {
 }
 
 // ---------------------------------------------------------------------------
-// S8 通话信令流（D04 阶段一）：invite→ringing→accept→(signal)→bye→ended+call_card
-// ---------------------------------------------------------------------------
-
-func TestE2ERtcSignaling(t *testing.T) {
-	s := newServer(t)
-	alice := s.dial(t, "alice")
-	bob := s.dial(t, "bob")
-	convID := "1"
-
-	// 主叫发起（call_id 客户端生成=幂等键）
-	callID := "e2e-call-1"
-	invID := alice.send("rtc.call.invite", map[string]any{
-		"call_id": callID, "conv_id": convID,
-		"callee_id": fmt.Sprintf("%d", s.bobID), "call_type": "audio",
-	})
-	if ack := alice.awaitAck(invID); ack.Code != 0 {
-		t.Fatalf("invite code=%d payload=%s", ack.Code, ack.Payload)
-	}
-	// 被叫收 ringing
-	bob.until("rtc.ringing", func(p json.RawMessage) bool {
-		return bytes.Contains(p, []byte(`"call_id":"`+callID+`"`)) &&
-			bytes.Contains(p, []byte(fmt.Sprintf(`"id":"%d"`, s.aliceID)))
-	}, 3*time.Second)
-	// 主叫收 connecting 前的 ringing 态推送
-	alice.until("rtc.state", func(p json.RawMessage) bool {
-		return bytes.Contains(p, []byte(`"kind":"ringing"`))
-	}, 3*time.Second)
-
-	// 会话中已有通话 → 二拨 5009
-	inv2ID := alice.send("rtc.call.invite", map[string]any{
-		"call_id": "e2e-call-2", "conv_id": convID,
-		"callee_id": fmt.Sprintf("%d", s.bobID), "call_type": "audio",
-	})
-	if ack := alice.awaitAck(inv2ID); ack.Code != 5009 {
-		t.Fatalf("二拨应 5009，got code=%d payload=%s", ack.Code, ack.Payload)
-	}
-
-	// 被叫接听（answer=true）→ 双端 connecting；signal 透传一帧 → connected
-	accID := bob.send("rtc.accept", map[string]any{"call_id": callID, "answer": true, "did": bob.did})
-	if ack := bob.awaitAck(accID); ack.Code != 0 {
-		t.Fatalf("accept code=%d payload=%s", ack.Code, ack.Payload)
-	}
-	alice.until("rtc.state", func(p json.RawMessage) bool {
-		return bytes.Contains(p, []byte(`"kind":"connecting"`))
-	}, 3*time.Second)
-	sigID := alice.send("rtc.signal", map[string]any{
-		"call_id": callID, "data": map[string]any{"type": "offer", "sdp": "e2e-sdp"},
-	})
-	if ack := alice.awaitAck(sigID); ack.Code != 0 {
-		t.Fatalf("signal code=%d payload=%s", ack.Code, ack.Payload)
-	}
-	bob.until("rtc.signal", func(p json.RawMessage) bool {
-		return bytes.Contains(p, []byte(`"sdp":"e2e-sdp"`))
-	}, 3*time.Second)
-	// connected（accept 后首帧 signal 近似 ICE 完成）
-	alice.until("rtc.state", func(p json.RawMessage) bool {
-		return bytes.Contains(p, []byte(`"kind":"connected"`))
-	}, 3*time.Second)
-
-	// 挂断 → 双端 ended(bye) + call_card 落流
-	byeID := bob.send("rtc.bye", map[string]any{"call_id": callID})
-	if ack := bob.awaitAck(byeID); ack.Code != 0 {
-		t.Fatalf("bye code=%d payload=%s", ack.Code, ack.Payload)
-	}
-	alice.until("rtc.state", func(p json.RawMessage) bool {
-		return bytes.Contains(p, []byte(`"kind":"ended"`)) && bytes.Contains(p, []byte(`"reason":"bye"`))
-	}, 3*time.Second)
-	// 卡片回写走 msg.updated（invite 时已建卡，此时 PATCH body→status=ended）
-	alice.until("msg.updated", func(p json.RawMessage) bool {
-		return bytes.Contains(p, []byte(`"e2e-call-1"`)) && bytes.Contains(p, []byte(`"ended"`))
-	}, 3*time.Second)
-
-	// 通话已结束 → 再 bye 5010
-	bye2ID := alice.send("rtc.bye", map[string]any{"call_id": callID})
-	if ack := alice.awaitAck(bye2ID); ack.Code != 5010 {
-		t.Fatalf("重复 bye 应 5010，got code=%d payload=%s", ack.Code, ack.Payload)
-	}
-}
-
-// rtcCardSink message 域卡片落流的 e2e 适配（SendCard/FinishCard 在 MessageService 接口上）
-type rtcCardSink struct{ msgs messageapi.MessageService }
-
-func (k rtcCardSink) SendCard(ctx context.Context, senderID, convID int64, clientMsgID string, body json.RawMessage) int64 {
-	id, err := k.msgs.SendCallCard(ctx, senderID, convID, clientMsgID, body)
-	if err != nil {
-		return 0
-	}
-	return id
-}
-
-func (k rtcCardSink) FinishCard(ctx context.Context, msgID int64, body json.RawMessage) {
-	_ = k.msgs.UpdateCallCard(ctx, msgID, body)
-}
-
-// ---------------------------------------------------------------------------
 // S12 在线状态（D03 §5.3）：上下线转变广播 / pres.set 自报态 / 断线清 typing
 // ---------------------------------------------------------------------------
 
@@ -691,7 +582,7 @@ func (s *testServer) withRest(t *testing.T) {
 			m, _ := s.msgRepo.MemberOf(ctx, convID, userID)
 			return m != nil && m.Status == 1
 		},
-	}, fileRepo, filerepo.NewMemoryShares(), filerepo.NewMemoryTransfers(), fileStore).API()
+	}, fileRepo, filerepo.NewMemoryTransfers(), fileStore).API()
 
 	mux := s.srv.Config.Handler.(*http.ServeMux)
 	uidOf := func(r *http.Request) int64 { return s.aliceID }

@@ -118,7 +118,7 @@ export async function deleteMyFile(fileId: string): Promise<void> {
 
 /* ────────────────────────────────────────────────────────────
  * D06 阶段二：分片上传会话（check 秒传 → init → PATCH 分片 →
- * 位图断点续传 → complete）+ 分享外链 + 会话文件聚合
+ * 位图断点续传 → complete）+ 会话文件聚合（分享外链随 2026-11 瘦身移除）
  * ──────────────────────────────────────────────────────────── */
 
 /** 秒传预检结果（POST /files/check） */
@@ -146,31 +146,6 @@ export interface UploadStatusResult {
 export interface CompleteResult {
   file_id: string;
   dedup?: boolean;
-}
-
-/** 分享创建结果（POST /files/{id}/share；code 一次性返回） */
-export interface ShareCreateResult {
-  share_id: string;
-  code: string;
-  url: string;
-  expires_at?: number;
-}
-
-/** 分享解析响应（GET /files/s/{code}；命中即计数+1 并附一次性下载票据） */
-export interface ShareView {
-  file: MyFileItem;
-  used_times: number;
-  max_times?: number;
-  need_pwd?: boolean;
-  ticket: DownloadTicket;
-}
-
-/** 分享创建要素（07 §4.4：有效期/次数/密码三选一组合） */
-export interface ShareCreateReq {
-  expire_mode: 1 | 2 | 3; // 1 永不 2 时限 3 次数
-  expires_at?: number; // ms；mode=2 必填
-  max_times?: number; // mode=3 必填
-  password?: string; // 可选
 }
 
 /** 本地 sha256（hex；单文件 ≤20MB 整块计算——流式实现随大文件支持阶段三，登记） */
@@ -317,21 +292,4 @@ export async function fetchConvFiles(convId: string): Promise<MyFileItem[]> {
   if (USE_MOCK) return [];
   const data = await http.get<{ items: MyFileItem[] }>(`/files/convs/${encodeURIComponent(convId)}`);
   return data.items;
-}
-
-/** 创建分享（owner；code 一次性返回） */
-export async function createFileShare(fileId: string, req: ShareCreateReq): Promise<ShareCreateResult> {
-  return http.post<ShareCreateResult>(`/files/${encodeURIComponent(fileId)}/share`, req);
-}
-
-/** 解析分享（密码二段式：首访无密码 → 4011 need_pwd；命中计数+直发票据） */
-export async function resolveFileShare(code: string, password?: string): Promise<ShareView> {
-  const q = password ? `?password=${encodeURIComponent(password)}` : '';
-  return http.get<ShareView>(`/files/s/${encodeURIComponent(code)}${q}`);
-}
-
-/** 取消分享（creator；链接即刻失效） */
-export async function revokeFileShare(code: string): Promise<void> {
-  if (USE_MOCK) return;
-  await http.delete(`/files/s/${encodeURIComponent(code)}`);
 }

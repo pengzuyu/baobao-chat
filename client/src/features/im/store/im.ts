@@ -52,7 +52,7 @@ interface ImState {
 
   /** msg.recall 推送：原地转撤回占位（seq 不断裂，INT-IM-03） */
   applyRecall: (convId: string, msgId: string, operatorId: string) => void;
-  /** msg.updated 推送：编辑原地更新（INT-IM-02；body 泛化——call_card 终态回写同通道，D04） */
+  /** msg.updated 推送：编辑原地更新（INT-IM-02；body 泛化） */
   applyUpdated: (convId: string, msgId: string, body: MessageBody, editedAt: number, editVersion: number) => void;
   /** msg.reaction.new 推送：全量快照幂等合并（INT-IM-23） */
   applyReactions: (convId: string, msgId: string, reactions: Record<string, string[]>) => void;
@@ -649,8 +649,6 @@ export function digestOf(msg: Message): string {
       return '[卡片]';
     case 'merge_forward':
       return '[合并转发]';
-    case 'call_card':
-      return '[通话]';
     case 'system':
       // PIM-12：系统消息摘要直接取模板文案（如"张三 邀请 李四 加入群聊"）
       return 'kind' in msg.body && msg.body.kind ? systemMessageText(msg.body as SystemBody) : '群通知';

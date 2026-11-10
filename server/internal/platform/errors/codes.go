@@ -78,46 +78,14 @@ const (
 	CodeFilePartMissing     Code = 4007 // 分片缺失
 	CodeFileUploadExpired   Code = 4008 // 上传会话过期
 	CodeFileSizeLimit       Code = 4009 // 超单文件上限
-	CodeFileShareExpired    Code = 4010 // 分享过期
-	CodeFileSharePwdWrong   Code = 4011 // 分享密码错误
-	CodeFileShareExhausted  Code = 4012 // 分享次数用尽
 	CodeFileDeleted         Code = 4013 // 文件已删除
 	CodeFileTicketInvalid   Code = 4014 // 下载票据失效
 	CodeFileScanning        Code = 4015 // 扫描中暂不可打开
 )
 
-// ───────────────────────── 5xxx RTC/会议（05/21 篇） ─────────────────────────
-const (
-	CodeRTCRoomNotFound      Code = 5001 // 房间不存在
-	CodeRTCMemberLimit       Code = 5002 // 人数上限
-	CodeRTCMediaNodeDown     Code = 5003 // 媒体节点不可用
-	CodeRTCPeerBusy          Code = 5004 // 对方忙
-	CodeRTCICEFailed         Code = 5005 // ICE 失败
-	CodeRTCMediaParamInvalid Code = 5006 // 媒体参数非法
-	CodeRTCScreenShareDenied Code = 5007 // 屏幕共享被拒
-	CodeRTCDeviceUnavailable Code = 5008 // 设备不可用
-	CodeRTCDuplicateCall     Code = 5009 // 重复呼叫
-	CodeRTCCallEnded         Code = 5010 // 通话已结束
-	CodeRTCNotCallMember     Code = 5011 // 非通话成员
-	CodeRTCCallPolicyDenied  Code = 5012 // 通话被策略禁用
-
-	CodeMeetingNotFound          Code = 5020 // 会议不存在
-	CodeMeetingNotParticipant    Code = 5021 // 非参与者
-	CodeMeetingScheduleConflict  Code = 5022 // 忙闲冲突（警告级）
-	CodeMeetingRecurrenceInvalid Code = 5023 // 周期规则非法
-	CodeMeetingEnded             Code = 5024 // 会议已结束
-	CodeMeetingConcurrencyLimit  Code = 5025 // 并发上限
-	CodeMeetingRecordingDenied   Code = 5026 // 录制被禁
-	CodeMeetingLocked            Code = 5027 // 会议锁定
-	CodeMeetingWaitingRoomClosed Code = 5028 // 等候室未开放
-	CodeMeetingNotHost           Code = 5029 // 非主持人操作
-	CodeMeetingMinutesNotReady   Code = 5030 // 纪要未就绪
-	CodeMeetingTranscribeDown    Code = 5031 // 转写不可用
-	CodeMeetingMinutesLocked     Code = 5032 // 纪要已锁定
-	CodeMeetingMaterialLimit     Code = 5033 // 材料超限
-	CodeMeetingCodeInvalid       Code = 5034 // 会议号失效
-	CodeMeetingGuestDenied       Code = 5035 // 访客被禁
-)
+// 4010-4012 分享外链错误码随文件分享移除（2026-11 产品瘦身二阶段）；
+// 5xxx RTC/会议错误码段随 rtc/meeting 域整体移除（同上）。
+// 编号段均保留不复用（14 篇协议废弃口径与已部署客户端兼容）。
 
 // ───────────────────────── 6xxx 文档（06 篇） ─────────────────────────
 const (

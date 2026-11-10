@@ -13,7 +13,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowDownToLine,
@@ -27,7 +26,6 @@ import {
   Mic,
   MoreHorizontal,
   Pause,
-  Phone,
   Play,
   RotateCcw,
   SmilePlus,
@@ -36,8 +34,6 @@ import {
 import { Avatar } from '../../../shared/ui/Avatar';
 import { getErrorText } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
-import { CallCard, type CallCardBody } from '../../../shared/components/CallCard';
-import { emit } from '../../../shared/bus';
 import { digestOf } from '../store/im';
 import { systemMessageText } from '../pages/systemMessageRegistry';
 import { downloadUrl, getDownloadTicket } from '../api/files';
@@ -72,8 +68,6 @@ export function mergeTypeIcon(type: string) {
       return <Bot size={13} />;
     case 'merge_forward':
       return <ListOrdered size={13} />;
-    case 'call_card':
-      return <Phone size={13} />;
     default:
       return null; // text：无类型图标，直接展示文本 digest
   }
@@ -839,9 +833,6 @@ export function MessageBubble({
   // 视频卡片（04 §1.2 第 8 类：body {file_id,poster_file_id,duration_ms,...}）
   const isVideo = message.type === 'video';
   const videoBody = isVideo && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
-  // 通话卡片（D04 §4.5 call_card：方向/状态/时长/再次呼叫；组件在 shared，回拨经 bus 转发 rtc）
-  const isCallCard = message.type === 'call_card';
-  const callBody = isCallCard && 'call_id' in message.body ? (message.body as CallCardBody) : null;
   // file/image body 窄化（D06：{file_id,...}；服务端透传）
   const fileBody = (isImage || isFile) && 'file_id' in message.body ? (message.body as FileMessageBody) : null;
   // 编辑/撤回显隐不再在此判——悬浮条瘦身（快捷 emoji+回复+⋯），条件项全部移入
@@ -908,15 +899,6 @@ export function MessageBubble({
             <StickerCard body={stickerBody} />
           ) : isVideo && videoBody ? (
             <VideoCard body={videoBody} />
-          ) : isCallCard && callBody ? (
-            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
-              <CallCard
-                body={callBody}
-                mine={mine}
-                onRecall={(video) => emit('im:invoke-call', { convId: message.convId, video })}
-                onJoin={() => emit('rtc:join-call', { callId: callBody.call_id, convId: message.convId, video: callBody.call_type === 'video' })}
-              />
-            </span>
           ) : (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
               <div className="file-card">

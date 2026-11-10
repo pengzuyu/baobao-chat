@@ -1,6 +1,8 @@
 # BaobaoWork 设计文档库
 
-公司内部多 Agent 协作工具（**聊天 · 文件 · 邮件 · 会议 · 专家 Agent · 三层知识检索**）的**设计阶段文档库**。当前为 v0.1。
+公司内部多 Agent 协作工具（**聊天 · 文件 · 邮件 · 知识库 · 专家 Agent · Agent 插件 · 本地 claude code/zcode 委派**）的**设计阶段文档库**。当前为 v0.1。
+
+> **⚠ 2026-11 瘦身二阶段**：音视频通话（rtc/LiveKit）、会议（meeting）与文件分享外链已移除；快照 `backup/full-suite-20261109`。
 
 > **2026-11 瘦身注记**：文档中心（doc 域）与 Webhook 机器人（bot 域）已随代码移除——产品定位聚焦 Agent；生态应用/技能（eco 域）保留（Agent 运行时的专家库与技能供给通道）。被删域的专属设计文档（06/20/D05）已删除，受影响篇章顶部有注记；删除前完整快照见 git 分支 `backup/full-suite-20261109`。
 
@@ -11,7 +13,7 @@
 | # | 文档 | 内容 |
 |---|---|---|
 | 00 | [产品总体设计说明书](docs/00-产品总体设计说明书.md) | 定位、角色、功能全景、P0 设计原则、术语表、里程碑、文档导航 |
-| 01 | [技术选型说明](docs/01-技术选型说明.md) | Tauri 2 / React / Rust Agent Runtime / Go / PG / livekit 选型与理由、备选与风险 |
+| 01 | [技术选型说明](docs/01-技术选型说明.md) | Tauri 2 / React / Rust Agent Runtime / Go / PG 选型与理由、备选与风险（livekit 已随瘦身移除） |
 | 02 | [系统总体架构](docs/02-系统总体架构.md) | 客户端进程模型、服务清单、7 条关键链路时序、失败域与降级、部署拓扑 |
 | 03 | [身份认证与权限体系](docs/03-身份认证与权限体系.md) | 登录/SSO/令牌、多租户与组织树、RBAC+数据范围+资源 ACL、**Agent OBO（以用户身份）机制** |
 | 14 | [通信协议设计](docs/14-通信协议设计.md) | WSS 信封、事件目录、seq 游标同步、REST 规范、错误码分段 |
@@ -21,7 +23,6 @@
 | # | 文档 | 内容 |
 |---|---|---|
 | 04 | [IM 即时通讯设计](docs/04-IM即时通讯设计.md) | 私聊/群聊、消息生命周期、多端同步、搜索、通知 |
-| 05 | [音视频通话设计](docs/05-音视频通话设计.md) | WebRTC/SFU、信令与通话状态机、弱网降级 |
 | 07 | [文件与图片传输设计](docs/07-文件与图片传输设计.md) | 分片/断点/秒传、缩略图、查看器、传输管理器 |
 | 08 | [AI Agent 总体设计](docs/08-AI-Agent总体设计.md) | 自研 Agent 循环、上下文工程、工作区/检查点、子任务 |
 | 09 | [AI Agent 工具与安全设计](docs/09-AI-Agent工具与安全设计.md) | 工具目录、权限模式（ask/auto-edit/full-auto）、沙箱、审计、提示注入防御 |
@@ -30,7 +31,6 @@
 | 12 | [管理后台设计](docs/12-管理后台设计.md) | 租户/组织/角色/策略/应用/审计的管理交互 |
 | 17 | [本地编码智能体协作设计](docs/17-本地编码智能体协作设计.md) | 委派 Claude Code/zcode 等本地编码智能体执行编码、适配器与权限审计 |
 | 19 | [AI 网关设计](docs/19-AI网关设计.md) | 模型流量唯一出入口：路由表/熔断降级/计量配额/脱敏 |
-| 21 | [会议设计](docs/21-会议设计.md) | 预约/周期会、日历、AI 纪要（复用 05 篇媒体底座） |
 | 22 | [邮件设计](docs/22-邮件设计.md) | 自建私有化邮件栈（组件化+统一身份 SSO）、双运行模式 |
 
 ### 横切篇
@@ -47,7 +47,7 @@
 概要设计之上的一层：页面（区块级）、交互（事件级）、接口（字段级）、模型（DDL 级）、响应式与六态、模块划分（文件级）。入口：[docs/detail/README.md](docs/detail/README.md)。
 
 - 公共规范：D01 客户端设计系统/断点/六态/工程结构 · D02 服务端模块划分/事件总线
-- 模块篇：D03 IM · D04 通话 · D06 文件图片 · D07 知识库 · D08 Agent 工作台 · D09 生态技能 · D10 管理后台 · D12 身份与组织域（多租户/角色/部门/用户 + 浏览器一键登录）
+- 模块篇：D03 IM · D06 文件图片 · D07 知识库 · D08 Agent 工作台 · D09 生态技能 · D10 管理后台 · D12 身份与组织域（多租户/角色/部门/用户 + 浏览器一键登录）（D04 通话/D17 群通话已随瘦身移除）
 - 专题篇：D11 Runtime 内部（crate/状态机/stdio 全协议/沙箱管线） · D13 变更控制模式（三档）与无 Docker 沙箱（bwrap/Seatbelt/JobObject） · D14 专家 Agent 与 Team Graph 多智能体协作（对齐 dsh 生态）
 
 ## 推荐阅读路径
@@ -66,7 +66,6 @@
 Agent    Rust sidecar（自研循环，stdio JSONL，OpenAI 兼容流式）
 服务端   Go 模块化单体（gateway/auth/org/message/file/kb/
          app-registry/admin/audit/notify/ai-gateway）
-媒体     WebRTC + livekit SFU
 数据     PostgreSQL 16（pgvector + zhparser + 按月分区）· Redis 7 · MinIO
 AI       ai-gateway（模型无关）→ GLM / Qwen / DeepSeek / vLLM 私有化
 交付     客户端内网自动更新（签名+灰度）；服务端 docker-compose / K8s

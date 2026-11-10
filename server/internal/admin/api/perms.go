@@ -1,7 +1,7 @@
 // perms.go —— 权限点字典（RBAC 阶段二）。
-// 权威清单：D12 §2.4（53 项）+ 12 篇 §6.3 补充 admin:notice:publish + 21/22 篇
-// meeting/mail 域 5 项，共 59 项。服务端内嵌（D02 §10），经
-// GET /api/v1/admin/perm-points 下发；前端不硬编码（D10 PAD-08）。
+// 权威清单：D12 §2.4 + 12 篇 §6.3 admin:notice:publish + 22 篇 mail 域 2 项；
+// rtc/meeting 域 5 项与 file:share:create 随 2026-11 产品瘦身二阶段移除。
+// 服务端内嵌（D02 §10），经 GET /api/v1/admin/perm-points 下发；前端不硬编码（D10 PAD-08）。
 // 新增权限点必须先在 D12 §2.4 与 03 篇 §4.1 登记（14 篇同款规则）。
 package adminapi
 
@@ -36,14 +36,8 @@ var permDictionary = []PermGroup{
 		{"im:group:create_broadcast", "im", "创建全员/部门广播群"},
 		{"im:broadcast:publish", "im", "广播群发帖（publisher）"},
 	}},
-	{"rtc", "音视频", []PermPoint{
-		{"rtc:call:start", "rtc", "发起通话"},
-		{"rtc:meeting:schedule", "rtc", "预约会议"},
-		{"rtc:record:start", "rtc", "开启录制（阶段四预留）"},
-	}},
 	{"file", "文件", []PermPoint{
 		{"file:upload", "file", "上传文件"},
-		{"file:share:create", "file", "创建文件分享"},
 		{"file:manage_all", "file", "管理全域文件"},
 	}},
 	{"kb", "知识库", []PermPoint{
@@ -63,9 +57,6 @@ var permDictionary = []PermGroup{
 		{"agent:app:install", "agent", "安装生态应用"},
 		{"agent:delegate:use", "agent", "使用本地委派（D17）"},
 	}},
-	{"meeting", "会议", []PermPoint{
-		{"meeting:minutes:manage", "meeting", "管理会议纪要（21 篇）"},
-	}},
 	{"mail", "邮件", []PermPoint{
 		{"mail:use", "mail", "使用邮箱（22 篇）"},
 		{"mail:agent_tool", "mail", "Agent 邮件工具（默认关，22 篇）"},
@@ -84,7 +75,6 @@ var permDictionary = []PermGroup{
 		{"admin:kb:govern", "admin", "知识库治理"},
 		{"admin:agent:revoke", "admin", "吊销 Agent 会话"},
 		{"admin:notice:publish", "admin", "租户公告发布（12 篇 §6.3）"},
-		{"admin:meeting:policy", "admin", "会议策略（21 篇）"},
 		{"admin:mail:govern", "admin", "邮件域治理（22 篇）"},
 	}},
 	{"platform", "平台运营", []PermPoint{
@@ -112,7 +102,7 @@ func init() {
 
 // PermPoints 字典文档（只读快照；version 随字典内容演进手动 +1）
 func PermPoints() PermPointsDoc {
-	return PermPointsDoc{Version: 1, Total: permDocTotal, Groups: permDictionary}
+	return PermPointsDoc{Version: 2, Total: permDocTotal, Groups: permDictionary}
 }
 
 // KnownPermPoint 权限点是否在权威字典内（角色保存校验用）

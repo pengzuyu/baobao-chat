@@ -59,7 +59,7 @@ func newSvc(t *testing.T, mut func(*Options)) (*Service, *nowSeq, string) {
 	if mut != nil {
 		mut(&opts)
 	}
-	svc := New(opts, filerepo.NewMemory(), filerepo.NewMemoryShares(), filerepo.NewMemoryTransfers(), filestore.NewLocal(dir))
+	svc := New(opts, filerepo.NewMemory(), filerepo.NewMemoryTransfers(), filestore.NewLocal(dir))
 	return svc, clock, dir
 }
 

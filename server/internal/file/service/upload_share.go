@@ -1,12 +1,11 @@
-// 分片上传会话与分享外链（D06 阶段二 server 侧；07 §4.1/§4.4）。
+// 分片上传会话（D06 阶段二 server 侧；07 §4.1）。
 // 会话为服务端内存态 + staging 落盘（对象存储化时落 upload 会话表，登记）；
-// 分享外链落 file_share 表（迁移 0013），访问仍需登录（企业内不匿名）。
+// 分享外链已随 2026-11 产品瘦身移除（file_share 表废弃由 0035 清理）。
 package fileservice
 
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -268,135 +267,4 @@ func (s *Service) persistUploaded(ctx context.Context, tenantID, ownerID int64,
 		return nil, errx.From(err)
 	}
 	return toUploadResult(f, false), nil
-}
-
-// ── 分享外链 ──
-
-// Share 创建（owner only；code 12 字节 hex 随机不可枚举）
-func (s *Service) Share(ctx context.Context, tenantID, userID int64, fileID int64, req fileapi.ShareReq) (*fileapi.ShareResult, error) {
-	if s.shares == nil {
-		return nil, errx.New(errx.CodeInternal, "分享未装配")
-	}
-	f, err := s.getLive(ctx, fileID)
-	if err != nil {
-		return nil, err
-	}
-	if f.TenantID != tenantID || f.OwnerID != userID {
-		return nil, errx.New(errx.CodePermACLDenied, "仅 owner 可分享")
-	}
-	switch req.ExpireMode {
-	case filerepo.ShareExpireNever, filerepo.ShareExpireAt, filerepo.ShareExpireTimes:
-	default:
-		return nil, errx.New(errx.CodeBadRequest, "expire_mode ∈ 1 永不/2 时限/3 次数")
-	}
-	if req.Password != "" && len(req.Password) > 64 {
-		return nil, errx.New(errx.CodeBadRequest, "密码 ≤64 字")
-	}
-	sh := filerepo.Share{
-		TenantID: tenantID, FileID: fileID, CreatorID: userID,
-		ExpireMode: req.ExpireMode, MaxTimes: req.MaxTimes,
-		Status: filerepo.ShareActive, CreatedAt: s.opts.Now(),
-	}
-	if req.ExpireMode == filerepo.ShareExpireAt {
-		if req.ExpiresAt <= sh.CreatedAt.UnixMilli() {
-			return nil, errx.New(errx.CodeBadRequest, "expires_at 须晚于当前")
-		}
-		sh.ExpiresAt = time.UnixMilli(req.ExpiresAt)
-	}
-	if req.ExpireMode == filerepo.ShareExpireTimes {
-		if req.MaxTimes < 1 || req.MaxTimes > 10000 {
-			return nil, errx.New(errx.CodeBadRequest, "max_times 1–10000")
-		}
-	}
-	if req.Password != "" {
-		sh.PasswordHash = s.hashSharePwd(req.Password)
-	}
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		return nil, errx.New(errx.CodeInternal, "code 生成失败")
-	}
-	sh.Code = hex.EncodeToString(b)
-	inserted, err := s.shares.InsertShare(ctx, sh)
-	if err != nil {
-		return nil, errx.From(err)
-	}
-	out := &fileapi.ShareResult{
-		ShareID: strconv.FormatInt(inserted.ID, 10),
-		Code:    inserted.Code,
-		URL:     "/api/v1/files/s/" + inserted.Code,
-	}
-	if !inserted.ExpiresAt.IsZero() {
-		out.ExpiresAt = inserted.ExpiresAt.UnixMilli()
-	}
-	return out, nil
-}
-
-// ResolveShare 解析：状态/有效期(4010)/次数(4012)/密码(4011) → 命中计数+直发票据
-func (s *Service) ResolveShare(ctx context.Context, tenantID, userID int64, code, password string) (*fileapi.ShareView, error) {
-	if s.shares == nil {
-		return nil, errx.New(errx.CodeInternal, "分享未装配")
-	}
-	if code == "" {
-		return nil, errx.New(errx.CodeBadRequest, "code 必填")
-	}
-	sh, err := s.shares.GetShareByCode(ctx, tenantID, code)
-	if err != nil || sh.Status != filerepo.ShareActive {
-		return nil, errx.New(errx.CodeFileNotFound, "分享不存在或已取消")
-	}
-	now := s.opts.Now()
-	if sh.ExpireMode == filerepo.ShareExpireAt && now.After(sh.ExpiresAt) {
-		return nil, errx.New(errx.CodeFileShareExpired, "分享已过期")
-	}
-	if sh.ExpireMode == filerepo.ShareExpireTimes && sh.UsedTimes >= sh.MaxTimes {
-		return nil, errx.New(errx.CodeFileShareExhausted, "分享次数已用尽")
-	}
-	if sh.PasswordHash != "" {
-		if password == "" {
-			// 密码未携带：4011 + need_pwd 提示（解析页二段式输入）
-			v := &fileapi.ShareView{NeedPwd: true}
-			return v, errx.New(errx.CodeFileSharePwdWrong, "需要密码")
-		}
-		if s.hashSharePwd(password) != sh.PasswordHash {
-			return nil, errx.New(errx.CodeFileSharePwdWrong, "密码错误")
-		}
-	}
-	f, err := s.getLive(ctx, sh.FileID)
-	if err != nil {
-		return nil, err // 文件被删：4013（链接仍占次数校验前的失败，不计数）
-	}
-	// 命中：计数 + 一次性下载票据（share 通道直发——访问者非 owner/成员）
-	if err := s.shares.IncShareUsed(ctx, sh.ID); err != nil {
-		return nil, errx.From(err)
-	}
-	ticket, err := s.issueTicketFor(ctx, f, userID) // share 通道票据绑定访问者（一次性）
-	if err != nil {
-		return nil, err
-	}
-	view := &fileapi.ShareView{File: toDTO(*f), UsedTimes: sh.UsedTimes + 1, Ticket: *ticket}
-	if sh.ExpireMode == filerepo.ShareExpireTimes {
-		view.MaxTimes = sh.MaxTimes
-	}
-	return view, nil
-}
-
-// RevokeShare 取消（creator only；链接即刻失效）
-func (s *Service) RevokeShare(ctx context.Context, tenantID, userID int64, code string) error {
-	if s.shares == nil {
-		return errx.New(errx.CodeInternal, "分享未装配")
-	}
-	sh, err := s.shares.GetShareByCode(ctx, tenantID, code)
-	if err != nil {
-		return errx.New(errx.CodeFileNotFound, "分享不存在")
-	}
-	if err := s.shares.DisableShare(ctx, tenantID, sh.ID, userID); err != nil {
-		return errx.New(errx.CodeFileNotFound, "分享不存在或非创建者")
-	}
-	return nil
-}
-
-// hashSharePwd 密码摘要（v0.1 sha256(pwd+code 盐)——分享密码非账号口令，
-// 强度口径登记：bcrypt 化随 auth 域闭包注入阶段三统一）
-func (s *Service) hashSharePwd(pwd string) string {
-	sum := sha256.Sum256([]byte("bbw-share:" + pwd))
-	return hex.EncodeToString(sum[:])
 }

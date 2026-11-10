@@ -97,7 +97,6 @@ BBW_TLS_CA_FILE=/etc/nginx/certs/ca.crt
 # -----------------------------------------------------------------------------
 BBW_FEATURE_AGENT=true        # helm: features.agent   （AI Agent 工作台）
 BBW_FEATURE_KB=true           # helm: features.kb      （知识库）
-BBW_FEATURE_RTC=true          # helm: features.rtc     （音视频：同时须启用 media profile）
 BBW_FEATURE_AI=true           # helm: features.ai      （ai-gateway）
 BBW_FEATURE_MAIL=false        # helm: features.mail    （邮件：同时须启用 mail profile，22 篇）
 
@@ -106,29 +105,6 @@ BBW_FEATURE_MAIL=false        # helm: features.mail    （邮件：同时须启�
 # -----------------------------------------------------------------------------
 BBW_AI_UPSTREAM_BASE_URL=     # 如 http://vllm.internal:8000/v1；空=aigw 仅代理已注册路由
 BBW_AI_UPSTREAM_API_KEY=      # helm: secrets.aiUpstreamApiKey（经 KMS/信封解密后注入，§5.3）
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# 10. 音视频 LiveKit 统一媒体面（helm: media.* / secrets.livekitApi*；media profile）
-#     D17 拍板：1v1/群一致走 SFU，livekit-server 顶替 bbw-media 占位与 coturn
-#     （TURN 由 livekit 内嵌 3478/udp 提供，历史 BBW_TURN_* 键随 coturn 退役）。
-# -----------------------------------------------------------------------------
-# media 容器镜像（官方源国内拉取慢时可指内网 Harbor，经 docker pull 代理源再 tag push）
-BBW_LIVEKIT_IMAGE=livekit/livekit-server:v1.8.4   # helm: media.image
-# BBW_LIVEKIT_IMAGE=172.16.105.109:30003/pengzuyu/livekit-server:v1.8.4
-# 客户端连接地址：经 nginx /rtc/ 反代（wss://<域名>/rtc，SDK 会再拼 /rtc → 实际
-# /rtc/rtc，nginx 已预置 rewrite 去前缀）或直连 wss://<host>:7880。
-# 留空注释 = compose 按 BBW_PUBLIC_DOMAIN 自动拼 wss://<域名>/rtc
-# BBW_LIVEKIT_URL=wss://bbw.example.internal/rtc    # helm: config.livekitUrl
-# API key 三元组与 app 侧同源（签发/验签一致才进房）；密钥不得含冒号（LIVEKIT_KEYS
-# 以 "key: secret" 冒号分隔）
-BBW_LIVEKIT_API_KEY=bbwdev                        # helm: secrets.livekitApiKey
-BBW_LIVEKIT_API_SECRET=bbw-livekit-secret-change-me   # helm: secrets.livekitApiSecret ★上线必改
-# 可选：ICE servers 覆盖（JSON，空=服务端默认；跨园区网络才需要）
-BBW_LIVEKIT_ICE=                                  # helm: config.livekitIce
-# media UDP 端口段独占：40000-50100（16 篇 §3.1/§3.2；compose 侧直接发布该段）
-BBW_MEDIA_RTC_MIN_PORT=40000
-BBW_MEDIA_RTC_MAX_PORT=50100
 
 # -----------------------------------------------------------------------------
 # 11. 首次初始化（helm: jobs.adminBootstrap.*；16 篇 §2.2 初始化工具）

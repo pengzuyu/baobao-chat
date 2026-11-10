@@ -31,10 +31,8 @@ docker compose --profile core --profile media up -d          # 或显式多组
 
 | 端口 | 协议 | 服务 | 方向 | 备注 |
 |---|---|---|---|---|
-| 443 | tcp | nginx-lb | 客户端 → 服务器 | https/wss 主入口（REST `/api/`、WS `/ws/`、更新源 `/update/`、信令 `/rtc/`） |
+| 443 | tcp | nginx-lb | 客户端 → 服务器 | https/wss 主入口（REST `/api/`、WS `/ws/`、更新源 `/update/`） |
 | 80 | tcp | nginx-lb | 客户端 → 服务器 | 仅 301 跳转 + `/healthz` |
-| 7880 | tcp | media | 客户端 → 服务器 | LiveKit 信令 wss（D17，media 组；经 nginx /rtc/ 或直连） |
-| 3478 | udp | media | 客户端 → 服务器 | LiveKit 内嵌 TURN（D17；coturn 已退役） |
 | 40000–50100 | **udp** | media | 客户端 ↔ 服务器 | SRTP 媒体段，**独占**（media 组） |
 | 3478 | udp+tcp | coturn | 客户端 → 服务器 | TURN/STUN 兜底（media 组，跨园区才启用） |
 | 5349 | tcp | coturn | 客户端 → 服务器 | TURN/TLS |
@@ -46,7 +44,6 @@ docker compose --profile core --profile media up -d          # 或显式多组
 | 源 | → 目标:端口 | 协议 | 用途 |
 |---|---|---|---|
 | 客户端网段 | VM:443 | tcp | 主入口 |
-| 客户端网段 | VM:7880, 3478/udp, 40000-50100/udp | tcp/udp | 通话信令与媒体（D17 LiveKit，media 组） |
 | 跨园区网段 | VM:3478, 5349 | udp/tcp | TURN 兜底（按需） |
 | 外部邮件服务器 | VM:25 | tcp | 入站邮件（mail 组） |
 | VM → 内部 Registry | 443 | tcp | 拉取 bbw-* 镜像 |
@@ -89,7 +86,7 @@ docker compose --profile core --profile media up -d          # 或显式多组
 
 ## 7. 已知遗留（TODO）
 
-- [ ] BBW 自有镜像（bbw-app/bbw-update-src）随 `server/` 落地构建；distroless 镜像内需内置 `/healthprobe`（compose 健康检查依赖）。bbw-media 已由 livekit-server 官方镜像顶替（D17）。
+- [ ] BBW 自有镜像（bbw-app/bbw-update-src）随 `server/` 落地构建；distroless 镜像内需内置 `/healthprobe`（compose 健康检查依赖）。
 - [ ] 第三方镜像建议在 CI 追加 `@sha256` digest 双重钉死（当前为版本号钉死）。
 - [ ] pgvector / zhparser 需自建 postgres 镜像预装（13 篇）；官方镜像占位。
 - [ ] 备份生产化：pgBackRest/WAL-G → MinIO `bbw-backup` 桶（独立凭据、WORM 30 天）；当前为 pg_dump + pg_basebackup 占位。

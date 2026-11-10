@@ -2,8 +2,6 @@
  * IM 核心类型（D03 §6.3 子集；正式版与服务端 schema 同源生成，14 篇 §8）。
  */
 
-import type { CallCardBody } from '../../../shared/components/CallCard';
-
 export type ConvType = 1 | 2 | 3; // 1 单聊 / 2 群聊 / 3 广播群
 
 export type MsgType =
@@ -15,8 +13,7 @@ export type MsgType =
   | 'video'
   | 'agent_card'
   | 'merge_forward'
-  | 'system'
-  | 'call_card';
+  | 'system';
 
 export type MsgLocalState = 'sending' | 'sent' | 'failed'; // 乐观更新本地态（S1 状态机）
 
@@ -54,12 +51,11 @@ export interface MergeForwardBody {
   items?: MergeItem[];
 }
 
-/** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；call_card 为通话卡片体（D04）；全集见 D03 §6.3） */
+/** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；全集见 D03 §6.3；call_card 随 rtc 域瘦身移除） */
 export type MessageBody =
   | { text: string }
   | FileMessageBody
   | SystemBody
-  | CallCardBody
   | MergeForwardBody
   | Record<string, never>;
 
@@ -193,7 +189,7 @@ export interface MsgUpdatedPayload {
   msg_id: string;
   conv_id: string;
   seq: number;
-  /** 编辑后的 body（text 编辑={text}；call_card 终态回写={call_id,...}——服务端同一通道，D04） */
+  /** 编辑后的 body（text 编辑={text}；服务端同一通道） */
   body: MessageBody;
   edited_at: number;
   edit_version: number;

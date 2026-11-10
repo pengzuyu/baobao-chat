@@ -1,6 +1,6 @@
 // Package fileapi 文件域对外接口与 DTO（D06 阶段一+阶段二 server 侧）。
 // v0.2 落地：check 秒传预检 / 分片上传会话（uploads 初始化/PATCH 分片/
-// complete 合并校验）/ 分享外链（share 出 code、/s/{code} 登录态解析）。
+// complete 合并校验）。分享外链（/s/{code}）随 2026-11 产品瘦身二阶段移除。
 // 仍裁剪登记：对象存储预签名直传（本地盘 PATCH 直传形态）、传输管理器
 // /transfers、restore、/files/{id} 元数据端点。
 package fileapi
@@ -89,31 +89,6 @@ type CompleteResult struct {
 	Dedup  bool   `json:"dedup,omitempty"` // 合并期间同 sha 已存在 → 复用
 }
 
-// ShareReq POST /files/{id}/share（三要素：有效期/次数/密码）
-type ShareReq struct {
-	ExpireMode int    `json:"expire_mode"` // 1 永不 2 时限 3 次数
-	ExpiresAt  int64  `json:"expires_at"`  // ms；mode=2 必填
-	MaxTimes   int    `json:"max_times"`   // mode=3 必填（1–10000）
-	Password   string `json:"password"`    // 可选；空=无密码
-}
-
-// ShareResult 分享创建响应（code 一次性返回；解析页 URL 由端侧拼）
-type ShareResult struct {
-	ShareID   string `json:"share_id"`
-	Code      string `json:"code"`
-	URL       string `json:"url"`                  // /api/v1/files/s/{code}（登录态访问）
-	ExpiresAt int64  `json:"expires_at,omitempty"` // ms
-}
-
-// ShareView GET /files/s/{code} 解析响应（命中即计数 +1；下载走内嵌票据）
-type ShareView struct {
-	File      FileDTO      `json:"file"`
-	UsedTimes int          `json:"used_times"`
-	MaxTimes  int          `json:"max_times,omitempty"`
-	NeedPwd   bool         `json:"need_pwd,omitempty"` // 密码错时提示（4011 伴随返回）
-	Ticket    TicketResult `json:"ticket"`             // 一次性下载票据（share 通道直发）
-}
-
 // FileDTO GET /files/me 列表项
 type FileDTO struct {
 	ID          string `json:"id"`
@@ -162,14 +137,6 @@ type FileService interface {
 	UploadPart(ctx context.Context, tenantID, userID int64, uploadID string, no int, r io.Reader) error
 	// CompleteUpload 合并+整体 sha 校验（不一致 4006 作废）→ 落位去重建行
 	CompleteUpload(ctx context.Context, tenantID, userID int64, uploadID string) (*CompleteResult, error)
-
-	// ── 分享外链（07 §4.4：访问仍需登录；命中校验有效期/次数/密码 4010/4012/4011） ──
-	// Share 创建（owner only；code 一次性返回）
-	Share(ctx context.Context, tenantID, userID int64, fileID int64, req ShareReq) (*ShareResult, error)
-	// ResolveShare 解析（密码可空；命中 used_times+1 并直发下载票据）
-	ResolveShare(ctx context.Context, tenantID, userID int64, code, password string) (*ShareView, error)
-	// RevokeShare 取消分享（creator only；链接即刻失效）
-	RevokeShare(ctx context.Context, tenantID, userID int64, code string) error
 
 	// ListTransfers 本人传输记录（07 §5 跨端镜像；direction 0=全部）
 	ListTransfers(ctx context.Context, tenantID, userID int64, direction int, limit int) ([]TransferDTO, error)

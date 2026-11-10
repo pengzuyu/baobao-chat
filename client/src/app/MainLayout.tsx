@@ -1,6 +1,6 @@
 /**
  * 主窗布局（D01 §4/§5.1）：
- * - 左侧 56px 图标导航栏（品牌 Logo + 消息/通话/文档/知识库/Agent/管理 + 头像菜单）
+ * - 左侧 56px 图标导航栏（品牌 Logo + 消息/通知/知识库/邮件/Agent/专家/管理 + 头像菜单）
  * - 顶部连接状态横幅（六态 offline/degraded 全局落点，D01 §7）
  * - 内容区 <Outlet/>：路由切换不销毁 IM 的 WSS 连接与未读状态
  */
@@ -8,7 +8,7 @@
 import { useMemo } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Dropdown, type MenuProps } from 'antd';
-import { Bell, Bot, BrainCircuit, CalendarDays, Gauge, Mail, MessageCircle, Phone, Sparkles } from 'lucide-react';
+import { Bell, Bot, BrainCircuit, Gauge, Mail, MessageCircle, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
@@ -31,10 +31,8 @@ function useNavItems(): NavItem[] {
   return [
   { to: '/im', icon: MessageCircle, label: t('nav.im') },
   { to: '/notifications', icon: Bell, label: t('nav.notification') },
-  { to: '/rtc', icon: Phone, label: t('nav.rtc') },
   { to: '/kb', icon: BrainCircuit, label: t('nav.kb') },
   { to: '/mail', icon: Mail, label: t('nav.mail') },
-  { to: '/meetings', icon: CalendarDays, label: t('nav.meetings') },
   { to: '/agent', icon: Bot, label: t('nav.agent') },
   { to: '/experts', icon: Sparkles, label: t('nav.experts') },
   ];
@@ -90,7 +88,6 @@ export function MainLayout() {
       },
       { key: 'settings', label: '设置' },
       { key: 'about', label: '关于' },
-      { key: 'lock', label: '锁屏' },
       { type: 'divider' },
       { key: 'logout', label: '退出登录', danger: true },
     ],
@@ -111,7 +108,6 @@ export function MainLayout() {
         logout();
         navigate('/auth', { replace: true });
       }
-      // TODO：锁屏（cred_lock_screen 等经 Tauri IPC）
     },
   };
 

@@ -7,7 +7,6 @@
 
 pub mod agent_bridge;
 pub mod agent_commands;
-pub mod meeting_window;
 
 use std::sync::Arc;
 
@@ -74,8 +73,6 @@ pub fn run() {
                 let _ = handle.emit("agent://event", payload);
             });
             app.manage(AgentHost::new(data_dir, emit));
-            // 会议窗口宿主（D17 §4）：交接信箱取走即焚，token 不落盘
-            app.manage(meeting_window::MeetingHost::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -102,9 +99,7 @@ pub fn run() {
             agent_commands::memory_delete,
             agent_commands::report_list,
             agent_commands::report_get,
-            agent_commands::auth_set_token,
-            meeting_window::meeting_start_window,
-            meeting_window::meeting_take_handoff
+            agent_commands::auth_set_token
         ])
         .run(context)
         .expect("Tauri 应用启动失败");

@@ -78,17 +78,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "bbw.secretName.app" . }}
                   key: jwtSecret
-            # LiveKit 统一媒体面（D17：token 签发三元组，与 media 容器同源）
-            - name: BBW_LIVEKIT_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "bbw.secretName.app" . }}
-                  key: livekitApiKey
-            - name: BBW_LIVEKIT_API_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "bbw.secretName.app" . }}
-                  key: livekitApiSecret
           envFrom:
             - configMapRef:
                 name: {{ include "bbw.fullname" . }}-config

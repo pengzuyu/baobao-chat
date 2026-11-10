@@ -35,7 +35,7 @@ esac
 TRIPLE="${BBW_BBRT_TRIPLE:-$(rustc -vV | sed -n 's/^host: //p')}"
 [ -n "$TRIPLE" ] || { echo "[prepare-bbrt-sidecar] 无法探测 host triple（rustc -vV）" >&2; exit 1; }
 
-echo "[prepare-bbrt-sidecar] cargo build -p bbrt --$PROFILE（triple=$TRIPLE）"
+echo "[prepare-bbrt-sidecar] cargo build -p bbrt --${PROFILE}（triple=${TRIPLE}）"
 (cd "$AGENT_DIR" && cargo build -p bbrt --"$PROFILE")
 
 BIN="$AGENT_DIR/target/$PROFILE/bbrt"

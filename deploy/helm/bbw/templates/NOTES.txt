@@ -5,7 +5,7 @@
 
 1. 入口
 {{- if .Values.ingress.enabled }}
-   · 主入口 https://{{ .Values.ingress.hosts.api }}（/api /ws{{ if .Values.modules.media }} /rtc{{ end }}）
+   · 主入口 https://{{ .Values.ingress.hosts.api }}（/api /ws）
    · TLS Secret：{{ .Values.ingress.tls.secretName }}（内部 CA 签发；客户端 pinning 根 CA，15 篇 §3.1）
 {{- else }}
    · ingress.enabled=false：请自行暴露 {{ include "bbw.fullname" . }}-gateway:80
@@ -35,8 +35,3 @@
    · helm upgrade --install {{ .Release.Name }} . -f values[-mid|-large].yaml -n {{ .Release.Namespace }}
    · 回滚：helm rollback {{ .Release.Name }} -n {{ .Release.Namespace }}（迁移向后兼容承诺，§4.4）
 
-{{- if .Values.modules.media }}
-5. media 注意（§3.2/§4.5）
-   · hostNetwork + UDP {{ .Values.media.rtcMinPort }}-{{ .Values.media.rtcMaxPort }} 独占：
-     驱逐/缩容前确认通话避让窗口（draining → 通话结束不迁 → 下线）
-{{- end }}
