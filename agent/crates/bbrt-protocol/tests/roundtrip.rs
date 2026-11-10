@@ -8,10 +8,10 @@ use std::io::Cursor;
 use bbrt_protocol::{
     read_message, write_message, Blocked, BriefContextItem, CheckpointReason, CodecError,
     CompactionPhase, DailyStatsLite, Decision, DelegateEventKind, EndReason, Envelope, FileChange,
-    GrantScope, HostToRuntime, MemoryListItem, ModelPolicy, ModelSwitchReason, PermissionMode,
-    Preview, ProtocolError, RenewReason, ReportListItem, ReviewDecision, RiskLevel, RuntimeToHost,
-    SessionState, StreamChannel, SubagentPhase, SubagentResult, TaskBrief, ToolSource,
-    ToolsReloadReason, Usage, PROTOCOL_VERSION,
+    GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy, ModelSwitchReason,
+    PermissionMode, Preview, ProtocolError, RenewReason, ReportListItem, ReviewDecision, RiskLevel,
+    RuntimeToHost, SessionState, StreamChannel, SubagentPhase, SubagentResult, TaskBrief,
+    ToolSource, ToolsReloadReason, Usage, PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -115,8 +115,14 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
         HostToRuntime::Ping,
         HostToRuntime::Pong,
         // D15 §2.4/§3.3 追加
-        HostToRuntime::MemoryList { limit: Some(7) },
+        HostToRuntime::MemoryList {
+            limit: Some(7),
+            scope: None,
+            workspace_path: None,
+        },
         HostToRuntime::MemoryDelete {
+            scope: None,
+            workspace_path: None,
             name: "gitee-remote".into(),
         },
         HostToRuntime::ReportList { limit: None },
@@ -290,6 +296,8 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             title: "Gitee 远端".into(),
             memory_type: "knowledge".into(),
             updated: true,
+            scope: None,
+            workspace_name: None,
         },
         RuntimeToHost::MemoryEvicted {
             session_id: None,
@@ -314,6 +322,8 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
                 memory_type: "knowledge".into(),
                 updated_at: 1_790_000_000_000,
                 hook: "记住.*远端".into(),
+                scope: None,
+                workspace_name: None,
             }],
         },
         RuntimeToHost::MemoryDeleteResult { ok: true },
@@ -670,6 +680,8 @@ fn golden_d15_memory_and_report_messages() {
             title: "Gitee 远端".into(),
             memory_type: "knowledge".into(),
             updated: false,
+            scope: None,
+            workspace_name: None,
         },
         json!({
             "type":"memory.saved","sessionId":"sess-1","name":"gitee-remote",
@@ -713,15 +725,25 @@ fn golden_d15_memory_and_report_messages() {
     );
     // 宿主→RT 三个 REQ：limit 可缺省
     golden(
-        &HostToRuntime::MemoryList { limit: Some(7) },
+        &HostToRuntime::MemoryList {
+            limit: Some(7),
+            scope: None,
+            workspace_path: None,
+        },
         json!({"type":"memory.list","limit":7}),
     );
     golden(
-        &HostToRuntime::MemoryList { limit: None },
+        &HostToRuntime::MemoryList {
+            limit: None,
+            scope: None,
+            workspace_path: None,
+        },
         json!({"type":"memory.list"}),
     );
     golden(
         &HostToRuntime::MemoryDelete {
+            scope: None,
+            workspace_path: None,
             name: "gitee-remote".into(),
         },
         json!({"type":"memory.delete","name":"gitee-remote"}),
@@ -740,6 +762,8 @@ fn golden_d15_memory_and_report_messages() {
                 memory_type: "knowledge".into(),
                 updated_at: 1_790_000_000_000,
                 hook: "记住.*远端".into(),
+                scope: None,
+                workspace_name: None,
             }],
         },
         json!({
@@ -779,6 +803,8 @@ fn golden_d15_memory_and_report_messages() {
         title: "Gitee 远端".into(),
         memory_type: "knowledge".into(),
         updated: true,
+        scope: None,
+        workspace_name: None,
     };
     let env = Envelope::wrap(PROTOCOL_VERSION, "r-1", &saved).expect("wrap");
     assert_eq!(env.msg_type, "memory.saved");
@@ -1006,4 +1032,124 @@ enum TransitionProbe {
         from: SessionState,
         to: SessionState,
     },
+}
+
+// ---------------------------------------------------------------------------
+// D19 项目/日常双区协议增量：workspace 三 REQ + session.list + memory 作用域
+// ---------------------------------------------------------------------------
+
+#[test]
+fn golden_d19_workspace_and_session_list_messages() {
+    use bbrt_protocol::{MemoryScope, SessionListItem, WorkspaceItem};
+
+    let item = WorkspaceItem {
+        id: "ws-1790000000-0".into(),
+        path: "/Users/me/code/baobao-work".into(),
+        name: "baobao-work".into(),
+        is_repo: true,
+        trusted: true,
+        last_opened_at: 1_790_000_000_000,
+        created_at: 1_780_000_000_000,
+    };
+    golden(
+        &HostToRuntime::WorkspaceRegister {
+            path: "/Users/me/code/baobao-work".into(),
+            name: None,
+        },
+        json!({"type":"workspace.register","path":"/Users/me/code/baobao-work"}),
+    );
+    golden(
+        &HostToRuntime::WorkspaceList,
+        json!({"type":"workspace.list"}),
+    );
+    golden(
+        &HostToRuntime::WorkspaceForget { id: "ws-1".into() },
+        json!({"type":"workspace.forget","id":"ws-1"}),
+    );
+    golden(
+        &HostToRuntime::SessionList { limit: Some(50) },
+        json!({"type":"session.list","limit":50}),
+    );
+    golden(
+        &RuntimeToHost::WorkspaceRegistered { item: item.clone() },
+        json!({
+            "type":"workspace.registered",
+            "item":{"id":"ws-1790000000-0","path":"/Users/me/code/baobao-work","name":"baobao-work",
+                    "isRepo":true,"trusted":true,"lastOpenedAt":1790000000000i64,"createdAt":1780000000000i64}
+        }),
+    );
+    golden(
+        &RuntimeToHost::WorkspaceListed { items: vec![item] },
+        json!({
+            "type":"workspace.listed",
+            "items":[{"id":"ws-1790000000-0","path":"/Users/me/code/baobao-work","name":"baobao-work",
+                      "isRepo":true,"trusted":true,"lastOpenedAt":1790000000000i64,"createdAt":1780000000000i64}]
+        }),
+    );
+    golden(
+        &RuntimeToHost::WorkspaceForgot { ok: true },
+        json!({"type":"workspace.forgot","ok":true}),
+    );
+    golden(
+        &RuntimeToHost::SessionListed {
+            items: vec![SessionListItem {
+                id: "sess-1".into(),
+                title: "会话 1".into(),
+                workspace: "/Users/me/code/baobao-work".into(),
+                mode: "ask".into(),
+                model_policy: "auto".into(),
+                model_override: None,
+                status: "ended".into(),
+                created_at: 1_780_000_000_000,
+                updated_at: 1_790_000_000_000,
+                ended_at: Some(1_790_000_000_500),
+                summary: Some("收口".into()),
+            }],
+        },
+        json!({
+            "type":"session.listed",
+            "items":[{"id":"sess-1","title":"会话 1","workspace":"/Users/me/code/baobao-work",
+                      "mode":"ask","modelPolicy":"auto","status":"ended",
+                      "createdAt":1780000000000i64,"updatedAt":1790000000000i64,
+                      "endedAt":1790000000500i64,"summary":"收口"}]
+        }),
+    );
+}
+
+#[test]
+fn golden_d19_memory_scope_fields() {
+    // memory.list 带 scope=project + workspacePath；条目带 scope/workspaceName
+    golden(
+        &HostToRuntime::MemoryList {
+            limit: None,
+            scope: Some(MemoryScope::Project),
+            workspace_path: Some("/Users/me/code/baobao-work".into()),
+        },
+        json!({"type":"memory.list","scope":"project","workspacePath":"/Users/me/code/baobao-work"}),
+    );
+    golden(
+        &HostToRuntime::MemoryDelete {
+            scope: Some(MemoryScope::Project),
+            workspace_path: Some("/Users/me/code/baobao-work".into()),
+            name: "端口-8090".into(),
+        },
+        json!({"type":"memory.delete","scope":"project","workspacePath":"/Users/me/code/baobao-work","name":"端口-8090"}),
+    );
+    // memory.saved 项目作用域
+    golden(
+        &RuntimeToHost::MemorySaved {
+            session_id: "sess-1".into(),
+            name: "端口-8090".into(),
+            title: "端口 8090 约定".into(),
+            memory_type: "project".into(),
+            updated: false,
+            scope: Some(MemoryScope::Project),
+            workspace_name: Some("baobao-work-72ab07a9e501bc35".into()),
+        },
+        json!({
+            "type":"memory.saved","sessionId":"sess-1","name":"端口-8090",
+            "title":"端口 8090 约定","memoryType":"project","updated":false,
+            "scope":"project","workspaceName":"baobao-work-72ab07a9e501bc35"
+        }),
+    );
 }

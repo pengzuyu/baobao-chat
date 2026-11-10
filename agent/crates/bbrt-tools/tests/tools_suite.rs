@@ -990,3 +990,193 @@ fn mcp_dispatch_degrades_to_8002() {
         other => panic!("未连接 server 的 mcp 调用应 8002 拒绝: {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// D19 按会话路由沙箱（项目隔离 + 日常拒绝 + memory 分级）
+// ---------------------------------------------------------------------------
+
+fn call_in(name: &str, args: serde_json::Value, session: &str) -> ToolInvocation {
+    ToolInvocation {
+        call_id: "c-d19".into(),
+        name: name.into(),
+        args_json: serde_json::to_string(&args).unwrap(),
+        session_id: session.into(),
+    }
+}
+
+/// 会话表装配（sess-a→项目A、sess-daily→日常）
+fn ws_registry(a: &Path) -> bbrt_session::SessionWorkspaces {
+    let reg = bbrt_session::SessionWorkspaces::new();
+    reg.set("sess-a", Some(a.to_path_buf()));
+    reg.set("sess-daily", None);
+    reg
+}
+
+/// A 项目会话写 A 目录成功；写 B 项目目录被 8020 拦（预检）且不落盘。
+#[test]
+fn d19_项目会话沙箱根只认本项目() {
+    let proj_a = tempfile::tempdir().expect("proj a");
+    let proj_b = tempfile::tempdir().expect("proj b");
+    let sink = Arc::new(MemoryViolationSink::new());
+    let mut cfg = ToolsConfig::new(proj_a.path()); // 兜底根=A（真实装配=sidecar cwd）
+    cfg.policy = Some(ToolPolicy::default());
+    cfg.violation_sink = Some(sink.clone());
+    cfg.session_workspaces = Some(ws_registry(proj_a.path()));
+    let ex = PipelineExecutor::new(Arc::new(cfg));
+
+    // A 内写：成功
+    let inside = proj_a.path().join("src/main.rs");
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "write_file",
+            serde_json::json!({
+                "path": inside.to_string_lossy(), "content": "fn main() {}"
+            }),
+            "sess-a",
+        ),
+    ));
+    assert!(inside.exists(), "A 内写应成功");
+
+    // B 内写：8020 + 不落盘 + violation
+    let outside = proj_b.path().join("pwn.txt");
+    let (code, msg) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "write_file",
+            serde_json::json!({
+                "path": outside.to_string_lossy(), "content": "x"
+            }),
+            "sess-a",
+        ),
+    ));
+    assert_eq!(code, 8020);
+    assert!(!outside.exists(), "B 项目目录不应被写入");
+    assert!(
+        msg.contains("8020") || msg.contains("越界") || msg.contains("白名单"),
+        "{msg}"
+    );
+}
+
+/// 日常会话（无目录）：workspace 类工具整体 8020 拒绝（专用文案）。
+#[test]
+fn d19_日常会话workspace类工具拒绝() {
+    let ws = tempfile::tempdir().expect("ws");
+    let sink = Arc::new(MemoryViolationSink::new());
+    let mut cfg = ToolsConfig::new(ws.path());
+    cfg.policy = Some(ToolPolicy::default());
+    cfg.violation_sink = Some(sink.clone());
+    cfg.session_workspaces = Some(ws_registry(ws.path()));
+    let ex = PipelineExecutor::new(Arc::new(cfg));
+
+    for tool in ["read_file", "run_command", "git_status", "search_files"] {
+        let args = match tool {
+            "run_command" => serde_json::json!({"command": "echo hi"}),
+            _ => serde_json::json!({"path": "/etc/hostname"}),
+        };
+        let (code, msg) =
+            blocked_code(ex.execute(PermissionMode::Ask, &call_in(tool, args, "sess-daily")));
+        assert_eq!(code, 8020, "{tool} 日常会话应 8020");
+        assert!(
+            msg.contains("日常对话"),
+            "{tool} 拒绝文案应指向日常对话: {msg}"
+        );
+    }
+    assert!(sink.has_code(8020), "violation 应记录日常拦截");
+}
+
+/// memory_save 分级：项目会话 project 类落项目分区、user 类落用户级；
+/// 日常会话一律用户级。
+#[test]
+fn d19_memory_save按会话作用域分级() {
+    let data = tempfile::tempdir().expect("memory data");
+    let proj = tempfile::tempdir().expect("proj");
+    let engine = Arc::new(
+        bbrt_memory::MemoryEngine::open(data.path(), Arc::new(bbrt_memory::SystemClock)).unwrap(),
+    );
+    let mut cfg = ToolsConfig::new(proj.path());
+    cfg.policy = Some(ToolPolicy::default());
+    cfg.memory = Some(engine.clone());
+    cfg.session_workspaces = Some(ws_registry(proj.path()));
+    let ex = PipelineExecutor::new(Arc::new(cfg));
+
+    // 项目会话：project 类 → 项目分区
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_save",
+            serde_json::json!({
+                "title": "构建端口 8090", "type": "project", "body": "服务端口固定 8090"
+            }),
+            "sess-a",
+        ),
+    ));
+    // 项目会话：user 类 → 用户级
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_save",
+            serde_json::json!({
+                "title": "偏好中文", "type": "user", "body": "回答用中文"
+            }),
+            "sess-a",
+        ),
+    ));
+    // 日常会话：project 类回落用户级
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_save",
+            serde_json::json!({
+                "title": "临时事实", "type": "project", "body": "日常会话记录的事实"
+            }),
+            "sess-daily",
+        ),
+    ));
+
+    let proj_titles: Vec<String> = engine
+        .list_scoped(Some(proj.path()))
+        .iter()
+        .map(|m| m.title.clone())
+        .collect();
+    assert_eq!(
+        proj_titles,
+        ["构建端口 8090"],
+        "项目分区应只有 project 类条目"
+    );
+    let mut user_titles: Vec<String> = engine
+        .list_scoped(None)
+        .iter()
+        .map(|m| m.title.clone())
+        .collect();
+    user_titles.sort();
+    assert_eq!(
+        user_titles,
+        ["临时事实", "偏好中文"],
+        "用户级=user 类 + 日常回落的 project 类"
+    );
+}
+
+/// run_command 的 cwd 同样受会话沙箱根约束（A 会话 cd B → 8020）。
+#[test]
+fn d19_项目会话cwd越界8020() {
+    let proj_a = tempfile::tempdir().expect("a");
+    let proj_b = tempfile::tempdir().expect("b");
+    let mut cfg = ToolsConfig::new(proj_a.path());
+    cfg.policy = Some(ToolPolicy::default());
+    cfg.session_workspaces = Some(ws_registry(proj_a.path()));
+    let ex = PipelineExecutor::new(Arc::new(cfg));
+    let (code, msg) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "run_command",
+            serde_json::json!({
+                "command": "echo x > escape.txt",
+                "cwd": proj_b.path().join("sub").to_string_lossy()
+            }),
+            "sess-a",
+        ),
+    ));
+    assert_eq!(code, 8020);
+    assert!(msg.contains("cwd"), "应指明 cwd 越界: {msg}");
+}

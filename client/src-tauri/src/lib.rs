@@ -99,7 +99,10 @@ pub fn run() {
             agent_commands::memory_delete,
             agent_commands::report_list,
             agent_commands::report_get,
-            agent_commands::auth_set_token
+            agent_commands::auth_set_token,
+            agent_commands::workspace_register,
+            agent_commands::workspace_list,
+            agent_commands::workspace_forget
         ])
         .run(context)
         .expect("Tauri 应用启动失败");

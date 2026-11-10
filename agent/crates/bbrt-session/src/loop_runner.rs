@@ -302,6 +302,26 @@ pub struct SessionRunner {
     pub delegate_hub: Option<Arc<crate::delegate_bg::DelegateHub>>,
 }
 
+impl SessionRunner {
+    /// D19 会话工作目录（空串=日常对话 → None）
+    pub fn ws_path(&self) -> Option<&std::path::Path> {
+        if self.workspace.is_empty() {
+            None
+        } else {
+            Some(std::path::Path::new(&self.workspace))
+        }
+    }
+
+    /// D19 [项目] 行：项目会话=目录；日常=无目录标注
+    fn project_line(&self) -> String {
+        if self.workspace.is_empty() {
+            "日常对话（无工作目录）".to_string()
+        } else {
+            format!("workspace: {}", self.workspace)
+        }
+    }
+}
+
 /// 一轮 turn 的产物（manager 记账用）
 #[derive(Debug, Default)]
 pub struct TurnReport {
@@ -570,11 +590,12 @@ impl SessionRunner {
             }
         }
 
-        // 记忆召回注入（D15 §2.3：按当前消息精排——条目少全量、多则 Top-K 关键词档）
+        // 记忆召回注入（D15 §2.3 按消息精排；D19 分级——项目会话注
+        // [用户记忆]+[项目记忆] 两段、日常仅用户段）
         let memory_index = deps
             .memory
             .as_ref()
-            .map(|m| m.knowledge().recall_for(user_text).unwrap_or_default())
+            .map(|m| m.recall_scoped(self.ws_path(), user_text))
             .unwrap_or_default();
 
         self.history.push(Round::User {
@@ -682,7 +703,7 @@ impl SessionRunner {
                 AssembleParts {
                     system: SYSTEM_PROMPT,
                     skills: &skills_text,
-                    project: &format!("workspace: {}", self.workspace),
+                    project: &self.project_line(),
                     memory_index: &memory_index,
                     history: &self.history,
                     tool_results: &self.tool_results,
@@ -868,7 +889,8 @@ impl SessionRunner {
                                     session: self.session_id.clone(),
                                     links: vec![],
                                 };
-                                if let Ok(outcome) = m.save_memory(&input) {
+                                // D19：工具教训属于会话工作场景——项目会话落项目分区
+                                if let Ok(outcome) = m.save_memory_scoped(self.ws_path(), &input) {
                                     emit_memory_saved(deps, &self.session_id, &outcome);
                                 }
                             }
@@ -1063,6 +1085,15 @@ impl SessionRunner {
         masked: &str,
         _risk: &str,
     ) -> ToolOutcome {
+        // D19：委派=本地编码智能体，必须有工作目录——日常会话直接拒绝
+        if self.workspace.is_empty() {
+            return ToolOutcome::Blocked {
+                code: 8020,
+                summary:
+                    "日常对话未绑定工作目录，coding.delegate 不可用（请在项目会话中委派编码任务）"
+                        .into(),
+            };
+        }
         let Some(delegator) = deps.delegator.clone() else {
             return ToolOutcome::Blocked {
                 code: 8030,
@@ -1460,8 +1491,9 @@ impl SessionRunner {
                 duration_ms: 0,
             });
             // W3 会话结束提炼（D15 §2.2）：在日报重算前落盘——当日日报的
-            // memory_saved 计数即含提炼条目（§3.2 交叉印证）；失败静默不阻塞收口
-            let saved = distill_memories(deps, &self.session_id, &self.history);
+            // memory_saved 计数即含提炼条目（§3.2 交叉印证）；失败静默不阻塞收口。
+            // D19：按条目类型分级——user→用户级，其余有目录落项目分区
+            let saved = distill_memories(deps, &self.session_id, self.ws_path(), &self.history);
             if saved > 0 {
                 deps.wal.append(
                     &self.session_id,
@@ -1505,8 +1537,8 @@ impl SessionRunner {
     }
 }
 
-/// 系统提示（08 篇行为规格 + D15 §2.2 W1 记忆使用规范；技能注入阶段二）
-pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoWork 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n长期记忆（memory_save 工具，跨会话生效）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。";
+/// 系统提示（08 篇行为规格 + D15 §2.2 W1 记忆使用规范 + D19 分级；技能注入阶段二）
+pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoWork 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n长期记忆（memory_save 工具，跨会话生效；自动按作用域分区）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 作用域（自动路由，无需指定）：user 类存用户级（所有会话可见）；project/feedback/reference 类在项目会话中存该项目专属分区，在日常对话中存用户级。[记忆]区含[用户记忆]与[项目记忆]两段时，项目段仅对本项目会话生效。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。";
 
 /// 组装结果 → 模型消息序列（system/记忆/项目 → history → 工具结果）
 fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {
@@ -1891,9 +1923,27 @@ const DISTILL_MAX_ITEMS: usize = 3;
 /// W3 会话转录总量上限（字符；超出截断，保尾部最近的轮次）
 const DISTILL_TRANSCRIPT_MAX_CHARS: usize = 8_000;
 
+/// D19 记忆作用域路由：user 类（身份/偏好）恒用户级；
+/// project/feedback/reference 类随会话工作目录落项目分区（日常会话回落用户级）
+fn route_scope<'a>(
+    ws: Option<&'a std::path::Path>,
+    mtype: bbrt_memory::MemoryType,
+) -> Option<&'a std::path::Path> {
+    match mtype {
+        bbrt_memory::MemoryType::User => None,
+        _ => ws,
+    }
+}
+
 /// W3：会话结束把"决策/偏好/教训"提炼成长期记忆。模型失败、输出不可解析、
 /// 条目非法（空标题/未知类型）一律静默跳过——绝不阻塞会话收口。返回落盘条数。
-fn distill_memories(deps: &LoopDeps, session_id: &str, history: &[Round]) -> usize {
+/// D19：条目按类型分级（user→用户级；其余随会话目录落项目分区）。
+fn distill_memories(
+    deps: &LoopDeps,
+    session_id: &str,
+    ws: Option<&std::path::Path>,
+    history: &[Round],
+) -> usize {
     let Some(m) = deps.memory.as_ref() else {
         return 0;
     };
@@ -1905,8 +1955,9 @@ fn distill_memories(deps: &LoopDeps, session_id: &str, history: &[Round]) -> usi
     if transcript.is_empty() {
         return 0;
     }
-    // 已有索引喂给模型防重复（取头 60 行控提示长度；save 侧同题去重兜底）
-    let existing = m.knowledge().recall().unwrap_or_default();
+    // 已有索引喂给模型防重复（取头 60 行控提示长度；save 侧同题去重兜底）。
+    // D19：项目会话喂用户+项目两域索引
+    let existing = m.recall_scoped(ws, "");
     let existing_head: String = existing.lines().take(60).collect::<Vec<_>>().join("\n");
     let system = format!(
         "从会话记录提炼值得跨会话记住的长期事实。只输出 JSON 数组（最多 {DISTILL_MAX_ITEMS} 条，\
@@ -1933,7 +1984,7 @@ fn distill_memories(deps: &LoopDeps, session_id: &str, history: &[Round]) -> usi
             session: session_id.to_string(),
             links: vec![],
         };
-        if let Ok(outcome) = m.save_memory(&input) {
+        if let Ok(outcome) = m.save_memory_scoped(route_scope(ws, input.mtype), &input) {
             emit_memory_saved(deps, session_id, &outcome);
             saved += 1;
         }
@@ -2029,12 +2080,23 @@ fn emit_memory_saved(deps: &LoopDeps, session_id: &str, outcome: &bbrt_memory::S
         bbrt_memory::MemoryType::Feedback => "feedback",
         bbrt_memory::MemoryType::Reference => "reference",
     };
+    // D19 作用域透传（user 域省略字段=旧口径兼容）
+    let (scope, workspace_name) = if outcome.saved.scope == "project" {
+        (
+            Some("project".to_string()),
+            outcome.saved.workspace_name.clone(),
+        )
+    } else {
+        (None, None)
+    };
     emit(deps, session_id, |id| SessionEvent::MemorySaved {
         session_id: id,
         name: outcome.saved.name.clone(),
         title: outcome.saved.title.clone(),
         memory_type: type_str.to_string(),
         updated: outcome.saved.updated,
+        scope,
+        workspace_name,
     });
     for ev in &outcome.evicted {
         emit(deps, session_id, |id| SessionEvent::MemoryEvicted {

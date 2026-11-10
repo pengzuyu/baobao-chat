@@ -119,21 +119,32 @@ pub struct ProbeCtx {
     pub hub: Option<Arc<DelegateHub>>,
 }
 
-/// 与主 to_chat_messages 同构的 system 组装（[技能]/[项目]/[记忆] 三段）
+/// 与主 to_chat_messages 同构的 system 组装（[技能]/[项目]/[记忆] 三段；
+/// D19：记忆召回随主会话工作区分级——项目会话注用户+项目两段）
 fn probe_system(ctx: &ProbeCtx, task: &str) -> String {
     let skills_text = {
         let idx = ctx.skills.lock().unwrap_or_else(|p| p.into_inner());
         let matched = idx.match_for(task);
         idx.render(&matched)
     };
+    let ws = if ctx.workspace.is_empty() {
+        None
+    } else {
+        Some(std::path::Path::new(&ctx.workspace))
+    };
     let memory_index = ctx
         .memory
         .as_ref()
-        .and_then(|m| m.knowledge().recall_for(task).ok())
+        .map(|m| m.recall_scoped(ws, task))
         .unwrap_or_default();
+    let project_line = if ctx.workspace.is_empty() {
+        "日常对话（无工作目录）".to_string()
+    } else {
+        format!("workspace: {}", ctx.workspace)
+    };
     format!(
-        "{}\n\n[技能]\n{}\n\n[项目]\nworkspace: {}\n\n[记忆]\n{}",
-        ctx.system, skills_text, ctx.workspace, memory_index
+        "{}\n\n[技能]\n{}\n\n[项目]\n{}\n\n[记忆]\n{}",
+        ctx.system, skills_text, project_line, memory_index
     )
 }
 

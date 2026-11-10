@@ -1,5 +1,8 @@
 # D15 - Agent 记忆双轨与日报详细设计
 
+> **D19 落地注记（2026-11-10）**：知识记忆已分级——用户级维持 {dataDir}/agent/memory/；项目级新增 {dataDir}/agent/memory/projects/<目录名-哈希>/ 分区（scope_key）。写入按类型路由：user 类→用户级，project/feedback/reference 类随会话工作目录落项目分区（日常回落用户级）；召回注入 [用户记忆]+[项目记忆] 两段；memory.list/delete 增 scope/workspacePath 参数、memory.saved 事件带 scope。本篇 §2.1「每用户一个扁平目录」口径由 D19 修订。
+
+
 | 项 | 内容 |
 |---|---|
 | 文档版本 | v0.2（v0.1 基础上：W1 引导语落实、W2② 接线、W3 提炼落地、召回 Top-K 关键词档；用户需求"像 ZCode 一样自动保存记忆 + 日常总结（主动轨/被动轨），skill 进化不做"） |

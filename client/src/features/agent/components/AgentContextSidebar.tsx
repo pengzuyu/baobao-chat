@@ -56,7 +56,7 @@ export function AgentContextSidebar({ session, model, checkpoints, memories, usa
         <div className="agent-side__title">会话信息</div>
         <dl className="agent-side__kv">
           <dt>工作区</dt>
-          <dd title={session.workspace}>{session.workspace}</dd>
+          <dd title={session.workspace || '日常对话（无工作目录）'}>{session.workspace || '日常对话 · 无工作目录'}</dd>
           <dt>状态</dt>
           <dd>{SESSION_STATUS_LABELS[session.status]}</dd>
           <dt>权限模式</dt>

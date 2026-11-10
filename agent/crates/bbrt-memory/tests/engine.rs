@@ -252,13 +252,36 @@ fn memory_saved_payload_roundtrip_camel_case() {
         title: "端口 8090 约定".into(),
         r#type: MemoryType::Project,
         updated: true,
+        scope: "user".into(),
+        workspace_name: None,
     };
     let json = serde_json::to_string(&ev).unwrap();
     assert_eq!(
         json,
-        r#"{"sessionId":"sess-1","name":"端口-8090-约定","title":"端口 8090 约定","type":"project","updated":true}"#
+        r#"{"sessionId":"sess-1","name":"端口-8090-约定","title":"端口 8090 约定","type":"project","updated":true,"scope":"user"}"#
     );
     assert_eq!(serde_json::from_str::<MemorySavedEvent>(&json).unwrap(), ev);
+
+    // D19 项目作用域：workspaceName 携带分区名；scope 缺省反序列化回落 user
+    let proj = MemorySavedEvent {
+        scope: "project".into(),
+        workspace_name: Some("baobao-work-72ab07a9e501bc35".into()),
+        ..ev.clone()
+    };
+    let proj_json = serde_json::to_string(&proj).unwrap();
+    assert!(proj_json.contains(r#""scope":"project""#));
+    assert!(proj_json.contains(r#""workspaceName":"baobao-work-72ab07a9e501bc35""#));
+    assert_eq!(
+        serde_json::from_str::<MemorySavedEvent>(&proj_json).unwrap(),
+        proj
+    );
+    let legacy = r#"{"sessionId":"s","name":"n","title":"t","type":"user","updated":false}"#;
+    assert_eq!(
+        serde_json::from_str::<MemorySavedEvent>(legacy)
+            .unwrap()
+            .scope,
+        "user"
+    );
 }
 
 #[test]

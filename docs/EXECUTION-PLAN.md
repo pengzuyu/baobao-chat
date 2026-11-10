@@ -180,3 +180,23 @@
 | F3 | 活动卡组件 | AgentActivityCard（流式/思考折叠/工具行/审批 Modal/追问/失败重试/实时计时/idle 折叠）——UI 按 D18 §3.4 对齐 change-my-life（仅效果）+ store streams 直读 | 发起者端全流程可视可交互 | [x] 2026-11-10（AgentProcessCard shared 纯展示：ThinkingCollapse 呼吸+自动收起/工具行/终态摘要条；审批 antd Modal+记忆三档；MarkdownText 移 shared 供 im/agent 共用） |
 | F4 | 落流卡与同步 | msg.send(agent_card) 首阶段落流+阶段边界 PATCH 更新；MessageBubble 渲染落流卡+[在我端继续] | 接收端分步看到卡长出；终态收起 | [x] 2026-11-10（stagesSignature 变化驱动 land/patch、终态收口后 onRetire 退场；落流失败不阻断本地（sig 回退下界重试）；digest=结论首行；刷新恢复=映射中会话运行中则重挂活动卡） |
 | F5 | 升级与通知 | 「转到工作台」文本注入新建会话；agent_done 通知链随 embedded 会话复用 | 卡片结论带入新工作台会话 | [x] 2026-11-10（升级/在我端继续均走 createSession+sendTextTo 注入结论与来源 ≤4000 字；agent_done=普通会话子任务通知链天然复用零改动） |
+
+## 批次 G：Agent 项目/日常双区 + 记忆分级 + 工作台过程显示（D19，2026-11-10 实施完成）
+
+> 定案：session.start workspace 空串=日常/非空=项目（realpath 归一）；项目登记接线 agent_workspace（修 workspace_id 悬空）；
+> 沙箱按会话路由（修全局 "." 占位：项目会话各自沙箱根、日常 workspace 类工具 8020 拒绝）；
+> 记忆分级（memory/projects/<目录名-哈希> 分区+类型驱动路由+两段召回）；session.list 持久恢复（修宿主重启列表清零）；
+> 过程显示对齐 change-my-life（思考卡流式展开/工具组汇总条/自动折叠/已用时）。服务端零改动。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|---|---|---|---|
+| G1 | 协议增量 | workspace.register/list/forget + session.list 四对 REQ/RES + memory scope 字段 + golden 契约 | wire 契约锁定（golden_d19_*）；旧宿主兼容（scope 缺省=user） | [x] 2026-11-10（envelope.rs+lib 导出；cargo test bbrt-protocol 绿） |
+| G2 | agent_workspace 接线 | manager.start realpath 归一+upsert+workspace_id 回填；store list/remove/list_with_workspace | session.start 带目录后 agent_session.workspace_id 有值；同目录重开不换身份 | [x] 2026-11-10（bbrt-store 33 例绿） |
+| G3 | 沙箱按会话路由 | SessionWorkspaces 共享表；session_env 克隆覆写+policy 缓存；日常 8020 拒绝；coding.delegate 日常拒；兜底根置空 | A 项目会话写 B 目录=预检 8020+Seatbelt 双拦；日常文件/命令/git/search/委派全拒 | [x] 2026-11-10（tools_suite d19_* 四专项 42 例绿） |
+| G4 | 记忆分级 | memory/projects 分区+scope_key；save/list/delete/recall/get scoped；类型驱动路由（user→用户级，其余随会话目录）；召回两段 | 项目会话召回含[用户记忆]+[项目记忆]两段；分区互不串；日常仅用户段 | [x] 2026-11-10（bbrt-memory 全绿：隔离/别名归一/两段召回/LRU 继承） |
+| G5 | 会话列表持久恢复 | 壳 session_list=bbrt session.list（camel→snake）+宿主缓存叠加；RT 不可用回落缓存 | 宿主重启后工作台会话列表恢复（含项目归组）；活跃状态实时 | [x] 2026-11-10（agent_bridge.rs list_sessions 换源；cargo check 绿；真机验收待做） |
+| G6 | 工作台双区 UI | 左栏两分区（项目可折叠内嵌会话+日常平铺）；「+ 日常对话」「打开项目」（plugin-dialog）；header 副标题口径；记忆页作用域页签+项目下拉 | 新建日常=无目录会话；打开项目=登记+项目会话；记忆页可切两域 | [x] 2026-11-10（AgentSessionList 重写+WorkbenchPage 双入口+MemoryPage 页签；tsc/vite build 绿） |
+| G7 | 过程显示对齐 | ReasoningCollapse 重写（流式强制展开+呼吸+过渡+自动收起）；ToolGroup 连续归组汇总条；ToolCard 自动展开/折叠；TypingState 已用时 | 思考流式自动展开、结束自动收一行；工具组运行中展开、完成折叠；全程已用时实时 | [x] 2026-11-10（组件层完成；真机动效验收待做） |
+| G8 | IM 内嵌联动 | embedded workspace=最近项目会话（跳过日常），无则日常 | D18 实测行为不变（最近工作台会话通常即项目会话） | [x] 2026-11-10（ChatPage agentFlow 取值改 find(x=>x.workspace)） |
+| G9 | 文档 | D19 新篇+D08/D11/D15 落地注记+索引 | 设计口径可追溯 | [x] 2026-11-10 |
+| G10 | 真机验收 | 日常拒绝文案/项目会话文件落正确目录/双分区记忆/重启恢复/过程卡动效 | 用户真机走查 | [ ] 待验收（随用户未提交 WIP 一并验收提交） |

@@ -138,15 +138,21 @@ fn run() -> Result<(), String> {
     }
 
     // 技能索引（10 篇 §4.5）：扫描 {dataDir}/eco/skills/*/SKILL.md；
-    // tools.reload{reason:skill} 热重载（宿主安装/更新/卸载技能包后触发）
+    // tools.reload{reason:skill} 热重载（宿主安装/更新/卸载技能包后调用）
     let skills_index = Arc::new(Mutex::new(bbrt_session::SkillIndex::scan(
         &data_dir.join("eco/skills"),
     )));
+    // D19 会话工作区表（manager 与 tools 管线共享：start/end 维护，
+    // 工具执行按会话解析沙箱根）
+    let session_workspaces = bbrt_session::SessionWorkspaces::new();
     let tools = Arc::new(bbrt_tools::PipelineExecutor::new(bbrt_tools::ToolsConfig {
-        workspace: PathBuf::from("."),
+        // D19：兜底根置空=未登记会话一切读写被拒（安全失败方向）；真实会话
+        // 恒经 session_workspaces 表路由到各自项目目录（修旧全局 "." 占位缺口）
+        workspace: PathBuf::new(),
         launcher: None, // detect() 探测（Seatbelt/Baseline + 降级徽标）
         memory: Some(memory.clone()),
         mcp: (!mcp_configs.is_empty()).then(|| Arc::new(mcp_client)),
+        session_workspaces: Some(session_workspaces.clone()),
         ..Default::default()
     }));
     let obo_for_model = Arc::clone(&obo);
@@ -201,7 +207,9 @@ fn run() -> Result<(), String> {
         experts: Some(caster),
         budget: Default::default(),
     };
-    let mgr = Arc::new(SessionManager::new(deps, Some(store.clone())));
+    let mut mgr_build = SessionManager::new(deps, Some(store.clone()));
+    mgr_build.workspaces = session_workspaces;
+    let mgr = Arc::new(mgr_build);
 
     // ── stdio：StdioTransport 双工（写共用全局 stdout）──
     let mut transport = StdioTransport::new(StdioDuplex {
@@ -476,29 +484,147 @@ fn dispatch(
                 summary: String::new(),
             })
         }
-        HostToRuntime::MemoryList { .. } => Some(RuntimeToHost::MemoryListResult {
-            items: memory
-                .knowledge()
-                .list()
-                .into_iter()
-                .map(|e| bbrt_protocol::MemoryListItem {
-                    name: e.name,
-                    title: e.title,
-                    memory_type: match e.mtype {
-                        bbrt_memory::MemoryType::User => "user".into(),
-                        bbrt_memory::MemoryType::Project => "project".into(),
-                        bbrt_memory::MemoryType::Feedback => "feedback".into(),
-                        bbrt_memory::MemoryType::Reference => "reference".into(),
+        HostToRuntime::MemoryList {
+            scope,
+            workspace_path,
+            ..
+        } => {
+            // D19 作用域列表：缺省/User=用户级（旧口径兼容）；Project+路径=该项目
+            // 分区；Project 无路径=全部分区合并（workspace_name=分区名）
+            let mem_items = |entries: Vec<bbrt_memory::MemorySummary>,
+                             scope_tag: Option<bbrt_protocol::MemoryScope>,
+                             ws_name: Option<String>| {
+                entries
+                    .into_iter()
+                    .map(|e| bbrt_protocol::MemoryListItem {
+                        name: e.name,
+                        title: e.title,
+                        memory_type: match e.mtype {
+                            bbrt_memory::MemoryType::User => "user".into(),
+                            bbrt_memory::MemoryType::Project => "project".into(),
+                            bbrt_memory::MemoryType::Feedback => "feedback".into(),
+                            bbrt_memory::MemoryType::Reference => "reference".into(),
+                        },
+                        // MemorySummary.updated_at 为 RFC3339 字符串；协议要毫秒——解析失败回 0（展示层兜底）
+                        updated_at: chrono_free_ms(&e.updated_at),
+                        hook: e.hook,
+                        scope: scope_tag,
+                        workspace_name: ws_name.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let items = match scope {
+                Some(bbrt_protocol::MemoryScope::Project) => match workspace_path.as_deref() {
+                    Some(p) if !p.is_empty() => {
+                        let path = std::path::PathBuf::from(p);
+                        let key =
+                            bbrt_memory::scope_key(&std::fs::canonicalize(&path).unwrap_or(path));
+                        mem_items(
+                            memory.list_scoped(Some(std::path::Path::new(p))),
+                            Some(bbrt_protocol::MemoryScope::Project),
+                            Some(key),
+                        )
+                    }
+                    _ => memory
+                        .list_project_partitions()
+                        .into_iter()
+                        .flat_map(|(key, entries)| {
+                            mem_items(
+                                entries,
+                                Some(bbrt_protocol::MemoryScope::Project),
+                                Some(key),
+                            )
+                        })
+                        .collect(),
+                },
+                _ => mem_items(memory.list_scoped(None), None, None),
+            };
+            Some(RuntimeToHost::MemoryListResult { items })
+        }
+        HostToRuntime::MemoryDelete {
+            name,
+            scope,
+            workspace_path,
+        } => Some(RuntimeToHost::MemoryDeleteResult {
+            ok: memory
+                .delete_scoped(
+                    match scope {
+                        Some(bbrt_protocol::MemoryScope::Project) => {
+                            workspace_path.as_deref().map(std::path::Path::new)
+                        }
+                        _ => None,
                     },
-                    // MemorySummary.updated_at 为 RFC3339 字符串；协议要毫秒——解析失败回 0（展示层兜底）
-                    updated_at: chrono_free_ms(&e.updated_at),
-                    hook: e.hook,
+                    &name,
+                )
+                .unwrap_or(false),
+        }),
+        // ── D19 项目/日常双区 ──
+        HostToRuntime::WorkspaceRegister { path, name } => {
+            // realpath 归一 upsert（同目录重复打开不换身份）；登记后取全行回执
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let real = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
+            let registered = store.lock().ok().and_then(|s| {
+                bbrt_session::register_workspace(&s, &real.to_string_lossy(), name.as_deref(), now);
+                s.get_workspace_by_path(&real.to_string_lossy())
+                    .ok()
+                    .flatten()
+            });
+            match registered {
+                Some(w) => Some(RuntimeToHost::WorkspaceRegistered { item: ws_item(&w) }),
+                None => Some(RuntimeToHost::Error {
+                    code: 8002,
+                    message: format!("项目登记失败（存储不可用）: {path}"),
+                    fatal: false,
+                    session_id: None,
+                }),
+            }
+        }
+        HostToRuntime::WorkspaceList => {
+            let items = store
+                .lock()
+                .ok()
+                .and_then(|s| s.list_workspaces().ok())
+                .unwrap_or_default()
+                .iter()
+                .map(ws_item)
+                .collect();
+            Some(RuntimeToHost::WorkspaceListed { items })
+        }
+        HostToRuntime::WorkspaceForget { id } => {
+            let ok = store
+                .lock()
+                .ok()
+                .and_then(|s| s.remove_workspace(&id).ok())
+                .unwrap_or(false);
+            Some(RuntimeToHost::WorkspaceForgot { ok })
+        }
+        HostToRuntime::SessionList { limit } => {
+            // D19 持久会话列表（宿主重启恢复数据源；活跃状态由宿主缓存叠加）
+            let items = store
+                .lock()
+                .ok()
+                .and_then(|s| s.list_sessions_with_workspace(limit.unwrap_or(50)).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| bbrt_protocol::SessionListItem {
+                    id: r.id,
+                    title: r.title,
+                    workspace: r.workspace,
+                    mode: r.mode,
+                    model_policy: r.model_policy,
+                    model_override: r.model_override,
+                    status: r.status,
+                    created_at: r.created_at,
+                    updated_at: r.updated_at,
+                    ended_at: r.ended_at,
+                    summary: r.summary,
                 })
-                .collect(),
-        }),
-        HostToRuntime::MemoryDelete { name } => Some(RuntimeToHost::MemoryDeleteResult {
-            ok: memory.knowledge().delete(&name).unwrap_or(false),
-        }),
+                .collect();
+            Some(RuntimeToHost::SessionListed { items })
+        }
         HostToRuntime::ReportList { limit } => Some(RuntimeToHost::ReportListResult {
             // reports 目录统计扫描（D15 §3.3；日期倒序，损坏文件跳过）
             items: memory
@@ -759,6 +885,19 @@ fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
             Some(bbrt_mcp::McpServerConfig { name, transport })
         })
         .collect()
+}
+
+/// D19 agent_workspace 行 → 协议 WorkspaceItem 投影（extra_dirs 不透出）
+fn ws_item(w: &bbrt_store::Workspace) -> bbrt_protocol::WorkspaceItem {
+    bbrt_protocol::WorkspaceItem {
+        id: w.id.clone(),
+        path: w.path.clone(),
+        name: w.name.clone(),
+        is_repo: w.is_repo,
+        trusted: w.trusted,
+        last_opened_at: w.last_opened_at,
+        created_at: w.created_at,
+    }
 }
 
 /// RFC3339 → 毫秒（无 chrono：手解 YYYY-MM-DDTHH:MM:SS[.fff](Z|+08:00) 简化形）

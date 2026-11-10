@@ -66,7 +66,7 @@ export interface RunInfo {
   endedAt?: number;
 }
 
-/** 知识记忆条目（D15 §2.1：一文件一事实 + MEMORY.md 索引行） */
+/** 知识记忆条目（D15 §2.1：一文件一事实 + MEMORY.md 索引行；D19 增作用域） */
 export interface MemoryEntry {
   /** slug（文件名），删除即 memory.delete(name) */
   name: string;
@@ -78,6 +78,23 @@ export interface MemoryEntry {
   updatedAt: number;
   /** 产生该记忆的会话 */
   sessionId: string;
+  /** D19 作用域（缺省 user=旧口径兼容） */
+  scope?: 'user' | 'project';
+  /** D19 项目分区名（scope=project 时；目录名-路径短哈希） */
+  workspaceName?: string;
+}
+
+/** D19 项目（agent_workspace 投影；workspace.list/register 数据形状） */
+export interface AgentWorkspaceInfo {
+  /** ws-<ms>-<n> */
+  id: string;
+  /** realpath（唯一身份锚点） */
+  path: string;
+  name: string;
+  isRepo: boolean;
+  trusted: boolean;
+  lastOpenedAt: number;
+  createdAt: number;
 }
 
 /** 日报统计概览（D15 §3.3 report.daily stats） */
@@ -163,7 +180,7 @@ export type AgentEvent =
       decision: 'allow' | 'deny' | 'cancelled';
       scope?: GrantScope;
     }
-  | { type: 'memorySaved'; sessionId: string; name: string; title: string; memoryType: MemoryType; updated: boolean }
+  | { type: 'memorySaved'; sessionId: string; name: string; title: string; memoryType: MemoryType; updated: boolean; scope?: 'user' | 'project'; workspaceName?: string }
   | { type: 'reportDaily'; date: string; path: string; stats: ReportStats }
   | { type: 'sessionEnded'; sessionId: string; summary: string }
   | { type: 'checkpointCreated'; sessionId: string; checkpointId: string; filesChanged: string[]; reason: string }
@@ -240,10 +257,17 @@ export interface AgentBridge {
   /** 委派审查结论（agent_delegate_review；delegate.end 到达后出现审查卡） */
   reviewDelegate(runId: string, accept: boolean): Promise<void>;
 
-  /** 知识记忆列表（D15 §2.4 memory.list） */
-  listMemories(): Promise<MemoryEntry[]>;
-  /** 删除知识记忆（D15 §2.4 memory.delete；PAG-11 撤销） */
-  deleteMemory(name: string): Promise<void>;
+  /** 知识记忆列表（D15 §2.4 memory.list；D19 作用域过滤：scope=project 需给项目路径） */
+  listMemories(scope?: 'user' | 'project', workspacePath?: string): Promise<MemoryEntry[]>;
+  /** 删除知识记忆（D15 §2.4 memory.delete；PAG-11 撤销；D19 作用域参数） */
+  deleteMemory(name: string, scope?: 'user' | 'project', workspacePath?: string): Promise<void>;
+
+  /** D19 项目登记（workspace.register：realpath upsert，同目录重复打开不换身份） */
+  registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo>;
+  /** D19 项目列表（workspace.list；last_opened_at 倒序） */
+  listWorkspaces(): Promise<AgentWorkspaceInfo[]>;
+  /** D19 项目移除登记（workspace.forget；只删登记，不动会话/记忆分区） */
+  forgetWorkspace(id: string): Promise<void>;
 
   /** 日报列表（D15 §3.3 report.list + 报告正文） */
   listReports(): Promise<AgentReport[]>;

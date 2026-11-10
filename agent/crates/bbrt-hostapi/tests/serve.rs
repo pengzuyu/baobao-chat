@@ -54,9 +54,11 @@ impl RuntimeHandler for TestHandler {
                     memory_type: "knowledge".into(),
                     updated_at: 1_790_000_000_000,
                     hook: "记住.*远端".into(),
+                    scope: None,
+                    workspace_name: None,
                 }],
             }),
-            HostToRuntime::MemoryDelete { name } => Some(RuntimeToHost::MemoryDeleteResult {
+            HostToRuntime::MemoryDelete { name, .. } => Some(RuntimeToHost::MemoryDeleteResult {
                 ok: name != "missing",
             }),
             HostToRuntime::ReportList { .. } => Some(RuntimeToHost::ReportListResult {
@@ -441,7 +443,11 @@ fn d15_memory_and_report_requests_get_paired_replies() {
         &Envelope::wrap(
             PROTOCOL_VERSION,
             "h-m1",
-            &HostToRuntime::MemoryList { limit: Some(7) },
+            &HostToRuntime::MemoryList {
+                limit: Some(7),
+                scope: None,
+                workspace_path: None,
+            },
         )
         .unwrap(),
     );
@@ -460,6 +466,8 @@ fn d15_memory_and_report_requests_get_paired_replies() {
             PROTOCOL_VERSION,
             "h-m2",
             &HostToRuntime::MemoryDelete {
+                scope: None,
+                workspace_path: None,
                 name: "gitee-remote".into(),
             },
         )

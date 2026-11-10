@@ -13,6 +13,7 @@ import type {
   AgentEvent,
   AgentReport,
   AgentSessionMeta,
+  AgentWorkspaceInfo,
   RunInfo,
   GrantScope,
   MemoryEntry,
@@ -96,6 +97,14 @@ interface AgentState {
   memories: MemoryEntry[];
   memoriesLoading: boolean;
   memoriesError: string | null;
+  /** D19 当前记忆视图作用域（记忆页页签驱动；user=用户级 / project=项目级） */
+  memoryScope: 'user' | 'project';
+  /** D19 项目记忆视图的当前项目路径（scope=project 时有效） */
+  memoryWorkspacePath: string | null;
+
+  /** D19 项目登记表（workspace.list；last_opened_at 倒序） */
+  workspaces: AgentWorkspaceInfo[];
+  workspacesLoading: boolean;
 
   reports: AgentReport[];
   reportsLoading: boolean;
@@ -128,7 +137,15 @@ interface AgentState {
   setMode: (mode: PermissionMode) => void;
   /** 会话内切换模型（model=直达引用；缺省=档位；回执 modelSwitched 事件驱动 UI） */
   switchModel: (to: 'fast' | 'strong' | 'auto', model?: string) => void;
-  deleteMemory: (name: string) => Promise<void>;
+  deleteMemory: (name: string, scope?: 'user' | 'project', workspacePath?: string) => Promise<void>;
+  /** D19 切换记忆视图作用域并拉取（记忆页页签；project 需项目路径） */
+  loadMemories: (scope?: 'user' | 'project', workspacePath?: string | null) => Promise<void>;
+  /** D19 拉取项目登记表 */
+  loadWorkspaces: () => Promise<void>;
+  /** D19 登记项目（workspace.register：realpath upsert；返回登记行） */
+  registerProject: (path: string, name?: string) => Promise<AgentWorkspaceInfo>;
+  /** D19 移除项目登记（只删登记，不动会话/记忆分区） */
+  forgetProject: (id: string) => Promise<void>;
   /** 拉取会话 run 记录（D16 §3.1 run 面板） */
   loadRuns: (sessionId: string) => void;
   /** 事件唯一入口（reducer 式分发；包一层便于桥接入） */
@@ -166,8 +183,6 @@ function patchDelegateCard(
   }));
 }
 
-/** 演示默认工作区（D08 §5.1；正式版走 workspace_pick） */
-const DEFAULT_WORKSPACE = '~/code/bbw-server';
 
 function touchSession(sessions: AgentSessionMeta[], sessionId: string, patch: Partial<AgentSessionMeta>): AgentSessionMeta[] {
   return sessions.map((s) => (s.id === sessionId ? { ...s, ...patch, updatedAt: Date.now() } : s));
@@ -218,6 +233,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   memories: [],
   memoriesLoading: false,
+  memoryScope: 'user',
+  memoryWorkspacePath: null,
+  workspaces: [],
+  workspacesLoading: false,
   memoriesError: null,
 
   reports: [],
@@ -247,14 +266,17 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       .listReports()
       .then((reports) => set({ reports, reportsLoading: false }))
       .catch((err: unknown) => set({ reportsLoading: false, reportsError: err instanceof Error ? err.message : '日报加载失败' }));
+    // D19 项目登记表（左栏项目区数据源；失败静默——会话 workspace 路径兜底展示）
+    void get().loadWorkspaces();
   },
 
   selectSession: (sessionId) => set({ activeSessionId: sessionId }),
 
   createSession: async (opts) => {
-    // 演示默认工作区（正式版走 workspace_pick 系统选择器 + 信任确认，D08 §5.1）；
+    // D19：workspace 缺省=日常对话（空串，无工作目录——文件/命令类工具不可用，
+    // 记忆恒用户级）；项目会话由 openProject 传入目录。
     // model=用户默认模型的直达引用（settings.ai_default 解析，0023；缺省=档位别名）
-    const meta = await bridge.startSession(opts?.workspace ?? DEFAULT_WORKSPACE, opts?.mode ?? 'ask', opts?.model);
+    const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? 'ask', opts?.model);
     set((s) => ({
       createError: null,
       sessions: [meta, ...s.sessions],
@@ -375,10 +397,45 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     void bridge.switchModel(sid, to, model).catch(() => undefined);
   },
 
-  deleteMemory: async (name) => {
-    // 乐观移除 + 桥删除（PAG-11 撤销，即时生效）
+  deleteMemory: async (name, scope, workspacePath) => {
+    // 乐观移除 + 桥删除（PAG-11 撤销，即时生效；D19 作用域参数随当前视图）
+    const effScope = scope ?? get().memoryScope;
+    const effPath = workspacePath ?? get().memoryWorkspacePath;
     set((s) => ({ memories: s.memories.filter((m) => m.name !== name) }));
-    await bridge.deleteMemory(name).catch(() => undefined);
+    await bridge.deleteMemory(name, effScope, effPath ?? undefined).catch(() => undefined);
+  },
+
+  loadMemories: async (scope, workspacePath) => {
+    const effScope = scope ?? get().memoryScope;
+    const effPath = workspacePath === undefined ? get().memoryWorkspacePath : workspacePath;
+    set({ memoriesLoading: true, memoriesError: null, memoryScope: effScope, memoryWorkspacePath: effPath ?? null });
+    await bridge
+      .listMemories(effScope, effPath ?? undefined)
+      .then((memories) => set({ memories, memoriesLoading: false }))
+      .catch((err: unknown) =>
+        set({ memoriesLoading: false, memoriesError: err instanceof Error ? err.message : '记忆加载失败' }),
+      );
+  },
+
+  loadWorkspaces: async () => {
+    set({ workspacesLoading: true });
+    await bridge
+      .listWorkspaces()
+      .then((workspaces) => set({ workspaces, workspacesLoading: false }))
+      .catch(() => set({ workspacesLoading: false }));
+  },
+
+  registerProject: async (path, name) => {
+    const item = await bridge.registerWorkspace(path, name);
+    set((s) => ({
+      workspaces: [item, ...s.workspaces.filter((w) => w.id !== item.id)].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt),
+    }));
+    return item;
+  },
+
+  forgetProject: async (id) => {
+    set((s) => ({ workspaces: s.workspaces.filter((w) => w.id !== id) }));
+    await bridge.forgetWorkspace(id).catch(() => undefined);
   },
 
   loadRuns: (sessionId) => {

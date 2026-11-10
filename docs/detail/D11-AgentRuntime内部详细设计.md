@@ -1,5 +1,8 @@
 # D11 - Agent Runtime 内部详细设计（Rust 运行时）
 
+> **D19 落地注记（2026-11-10）**：§4 消息表追加 workspace.register/listed、workspace.list/listed、workspace.forget/forgot、session.list/listed 四对（含 golden 契约）；session.start workspace 空串=日常对话；memory.list/delete 增 scope/workspacePath、memory.saved 增 scope/workspaceName。§11 agent_workspace 表已接线：session.start 带目录自动 upsert+回填 workspace_id（修悬空缺口）；工具沙箱根按会话解析（SessionWorkspaces 共享表，修全局 '.' 占位）。
+
+
 > **⚠ 2026-11 瘦身注记**：文档中心（doc）与 Webhook 机器人（bot）域已移除——本文涉及 doc/bot 的章节（功能项、表结构、事件、错误码、部署组件等）已作废，以代码现状与 14 篇协议注册表的"已废弃"标记为准。生态应用/技能（eco）保留（Agent 运行时供给通道）。删除前快照：git 分支 `backup/full-suite-20261109`。
 
 | 项 | 内容 |

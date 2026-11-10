@@ -33,9 +33,12 @@ use crate::registry::ToolRegistry;
 /// journal 字符串事件回调类型（file.changed 等；bin 侧转 ActivityEvent 喂被动轨）
 pub(crate) type JournalHook = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// 执行环境（PipelineExecutor 构造期从 ToolsConfig 派生，全部工具共享）
+/// 执行环境（PipelineExecutor 构造期从 ToolsConfig 派成，全部工具共享；
+/// D19 按会话克隆覆写 workspace/path_policy——多项目会话各自沙箱根互不串门）
+#[derive(Clone)]
 pub(crate) struct ExecEnv {
-    /// 工作区根（规范路径；命令 cwd 默认值）
+    /// 工作区根（规范路径；命令 cwd 默认值）。D19：会话路由后=该项目目录；
+    /// 日常会话的 workspace 类工具在 pipeline 层先拦（8020 专用文案）
     pub workspace: PathBuf,
     /// 路径策略（工作区根 + 例外可写；敏感拒读 8026/越界 8020/软链逃逸 8024）
     pub path_policy: PathPolicy,

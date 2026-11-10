@@ -200,9 +200,12 @@ impl AgentHost {
         &self.data_dir
     }
 
-    /// 会话列表快照（updated_at 倒序；FE 期望 snake_case 行）
+    /// 会话列表快照（updated_at 倒序；FE 期望 snake_case 行）。
+    /// D19 起数据源=RT 持久列表（session.list，agent_session JOIN agent_workspace，
+    /// 宿主重启可恢复）+ 宿主缓存叠加（活跃状态/本地模型切换最新）；
+    /// RT 拉起失败/请求失败回落纯缓存（旧行为）。
     pub fn list_sessions(&self) -> Vec<Value> {
-        let mut rows: Vec<Value> = self
+        let cache_rows: Vec<Value> = self
             .shared
             .sessions
             .lock()
@@ -210,8 +213,48 @@ impl AgentHost {
             .iter()
             .map(|s| s.to_row())
             .collect();
+        // 持久列表（camelCase → snake_case 归一供 FE mapSession）
+        let durable: Vec<Value> = self
+            .ensure_running()
+            .ok()
+            .and_then(|_| self.request("session.list", json!({ "limit": 200 })).ok())
+            .and_then(|rep| rep["items"].as_array().cloned())
+            .map(|items| items.iter().map(camel_to_snake_session).collect())
+            .unwrap_or_default();
+        // 缓存行优先；持久行只补缓存没有的（历史会话）
+        let cache_ids: Vec<String> = cache_rows
+            .iter()
+            .filter_map(|r| r["id"].as_str().map(str::to_string))
+            .collect();
+        let mut rows = cache_rows;
+        rows.extend(durable.into_iter().filter(|r| {
+            r["id"]
+                .as_str()
+                .map_or(true, |id| !cache_ids.contains(&id.to_string()))
+        }));
         rows.sort_by(|a, b| b["updated_at"].as_i64().cmp(&a["updated_at"].as_i64()));
         rows
+    }
+
+    /// D19 项目登记（workspace.register → workspace.registered）
+    pub fn register_workspace(&self, path: &str, name: Option<&str>) -> Result<Value, String> {
+        self.ensure_running()?;
+        let rep = self.request("workspace.register", json!({ "path": path, "name": name }))?;
+        Ok(rep["item"].clone())
+    }
+
+    /// D19 项目列表（workspace.list → workspace.listed）
+    pub fn list_workspaces(&self) -> Result<Vec<Value>, String> {
+        self.ensure_running()?;
+        let rep = self.request("workspace.list", json!({}))?;
+        Ok(rep["items"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// D19 项目移除登记（workspace.forget → workspace.forgot{ok}）
+    pub fn forget_workspace(&self, id: &str) -> Result<bool, String> {
+        self.ensure_running()?;
+        let rep = self.request("workspace.forget", json!({ "id": id }))?;
+        Ok(rep["ok"].as_bool().unwrap_or(false))
     }
 
     /// 登录/刷新成功后下发 token（exp 毫秒 → 协议秒）
@@ -489,6 +532,25 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+/// D19 session.list 持久行 camelCase → FE snake_case（mapSession 口径）：
+/// modelPolicy→model_policy 等五个复合键重命名，其余原样透传
+fn camel_to_snake_session(row: &Value) -> Value {
+    let mut out = row.clone();
+    for (from, to) in [
+        ("modelPolicy", "model_policy"),
+        ("modelOverride", "model_override"),
+        ("createdAt", "created_at"),
+        ("updatedAt", "updated_at"),
+        ("endedAt", "ended_at"),
+    ] {
+        if let Some(v) = row.get(from) {
+            out[to] = v.clone();
+        }
+        out.as_object_mut().map(|m| m.remove(from));
+    }
+    out
 }
 
 /// bbrt 二进制解析：BBW_RT_BIN → 生产 exe 同目录 sidecar（externalBin 命名

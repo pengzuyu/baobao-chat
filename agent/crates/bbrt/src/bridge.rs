@@ -290,12 +290,20 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             title,
             memory_type,
             updated,
+            scope,
+            workspace_name,
         } => RuntimeToHost::MemorySaved {
             session_id: session_id.clone(),
             name: name.clone(),
             title: title.clone(),
             memory_type: memory_type.clone(),
             updated: *updated,
+            // D19 作用域透传（"project" → 枚举；user 省略=旧口径兼容）
+            scope: scope.as_deref().map(|s| match s {
+                "project" => bbrt_protocol::MemoryScope::Project,
+                _ => bbrt_protocol::MemoryScope::User,
+            }),
+            workspace_name: workspace_name.clone(),
         },
         SessionEvent::MemoryEvicted {
             session_id,

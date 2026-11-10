@@ -44,7 +44,10 @@ pub use loop_runner::{
     EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, SessionRunner,
     TurnReport, MAX_CONSECUTIVE_FAILURES, MAX_STEPS, PERMISSION_TIMEOUT,
 };
-pub use manager::{ManagerError, RestoredSummary, SessionManager, StartParams};
+pub use manager::{
+    register_workspace, ManagerError, RestoredSummary, SessionManager, SessionWorkspaces,
+    StartParams,
+};
 pub use recovery::{recover, InFlightTool, ReplayReport};
 pub use skills::{SkillEntry, SkillIndex};
 pub use state::{

@@ -51,6 +51,10 @@ pub struct ToolsConfig {
     pub mcp: Option<Arc<bbrt_mcp::McpClient>>,
     /// MCP 来源过滤（租户策略 mcp.{server}.* 通配禁用；10 篇 §4.6）
     pub mcp_policy: bbrt_mcp::PolicyFilter,
+    /// D19 会话工作区表（session_id → Some(项目目录)/None(日常)；bin 装配与
+    /// SessionManager 共享同一实例）。None=未装配（单测/嵌入式）→ 全部落
+    /// workspace 兜底根（旧行为）
+    pub session_workspaces: Option<bbrt_session::SessionWorkspaces>,
 }
 
 impl ToolsConfig {
@@ -73,6 +77,7 @@ impl ToolsConfig {
             violation_sink: None,
             mcp: None,
             mcp_policy: bbrt_mcp::PolicyFilter::default(),
+            session_workspaces: None,
         }
     }
 
@@ -117,6 +122,7 @@ impl Default for ToolsConfig {
             violation_sink: None,
             mcp: None,
             mcp_policy: bbrt_mcp::PolicyFilter::default(),
+            session_workspaces: None,
         }
     }
 }

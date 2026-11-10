@@ -108,17 +108,53 @@ pub fn agent_reject(host: Host, request_id: String) -> Result<(), String> {
     )
 }
 
-/// 知识记忆列表（REQ→memory.list.result；条目键名转 snake 供 FE MemoryRow）
+/// 知识记忆列表（REQ→memory.list.result；条目键名转 snake 供 FE MemoryRow）。
+/// D19 作用域参数：scope="project" + workspace_path=项目路径 → 该项目分区
 #[tauri::command]
-pub fn memory_list(host: Host) -> Result<Value, String> {
-    let result = host.request("memory.list", json!({ "limit": 200 }))?;
+pub fn memory_list(
+    host: Host,
+    scope: Option<String>,
+    workspace_path: Option<String>,
+) -> Result<Value, String> {
+    let result = host.request(
+        "memory.list",
+        json!({ "limit": 200, "scope": scope, "workspacePath": workspace_path }),
+    )?;
     Ok(json!({ "items": result["items"].clone() }))
 }
 
+/// 记忆删除（D19 作用域参数同上；缺省=用户级，旧口径兼容）
 #[tauri::command]
-pub fn memory_delete(host: Host, name: String) -> Result<Value, String> {
-    host.request("memory.delete", json!({ "name": name }))?;
+pub fn memory_delete(
+    host: Host,
+    name: String,
+    scope: Option<String>,
+    workspace_path: Option<String>,
+) -> Result<Value, String> {
+    host.request(
+        "memory.delete",
+        json!({ "name": name, "scope": scope, "workspacePath": workspace_path }),
+    )?;
     Ok(json!({ "ok": true }))
+}
+
+/// D19 项目登记（workspace.register → workspace.registered；realpath upsert）
+#[tauri::command]
+pub fn workspace_register(host: Host, path: String, name: Option<String>) -> Result<Value, String> {
+    host.register_workspace(&path, name.as_deref())
+}
+
+/// D19 项目列表（last_opened_at 倒序；camelCase 直出）
+#[tauri::command]
+pub fn workspace_list(host: Host) -> Result<Value, String> {
+    Ok(json!({ "items": host.list_workspaces()? }))
+}
+
+/// D19 项目移除登记（只删登记行；会话/记忆分区不动）
+#[tauri::command]
+pub fn workspace_forget(host: Host, id: String) -> Result<Value, String> {
+    let ok = host.forget_workspace(&id)?;
+    Ok(json!({ "ok": ok }))
 }
 
 /// 日报列表（REQ→report.list.result；stats 键对齐 FE ReportStats）

@@ -266,6 +266,12 @@ pub struct MemoryListItem {
     pub updated_at: u64,
     /// 召回触发特征（W2 启发式正则；无则为空串）
     pub hook: String,
+    /// D19 作用域（缺省 user=旧口径兼容）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<MemoryScope>,
+    /// D19 项目分区名（scope=project 时携带；目录名-路径短哈希）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_name: Option<String>,
 }
 
 /// report.list 回执条目（D15 §3.3：{date, stats}）
@@ -275,6 +281,59 @@ pub struct ReportListItem {
     /// YYYY-MM-DD
     pub date: String,
     pub stats: DailyStatsLite,
+}
+
+// ---------------------------------------------------------------------------
+// D19 项目/日常双区协议增量（会话 workspace 空串=日常；项目登记/查询、
+// 会话持久列表、记忆作用域。嵌套 struct 一律自带 rename_all——既有教训）
+// ---------------------------------------------------------------------------
+
+/// 知识记忆作用域（D19：user=用户级（缺省兼容旧口径）；project=项目级分区）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryScope {
+    User,
+    Project,
+}
+
+/// 项目目录行（D19；agent_workspace 投影。path 为 realpath，业务身份锚点）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceItem {
+    /// ws-<ms>-<n>
+    pub id: String,
+    /// realpath（唯一）
+    pub path: String,
+    pub name: String,
+    /// .git 探测结果
+    pub is_repo: bool,
+    /// 信任确认（D08 §4.4；D19 简化=目录选择动作即显式信任，注册恒 true）
+    pub trusted: bool,
+    pub last_opened_at: i64,
+    pub created_at: i64,
+}
+
+/// 会话列表行（D19；agent_session JOIN agent_workspace。宿主重启后持久恢复数据源）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListItem {
+    pub id: String,
+    pub title: String,
+    /// 工作目录（""=日常对话；未关联 workspace 的历史行同样为 ""）
+    pub workspace: String,
+    pub mode: String,
+    /// fast | strong | auto
+    pub model_policy: String,
+    /// 会话级模型直达引用（p:<provider>:<model>；缺省=档位别名）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +423,9 @@ pub enum HostToRuntime {
     #[serde(rename = "session.start", rename_all = "camelCase")]
     SessionStart {
         session_id: String,
+        /// 工作目录。D19：空串=日常对话（无目录——文件/命令/git/search/委派类工具
+        /// 不可用、记忆恒用户作用域）；非空=项目会话（realpath 归一，自动 upsert
+        /// agent_workspace 并回填 session.workspace_id，工具沙箱根=该目录）
         workspace: String,
         mode: PermissionMode,
         model_policy: ModelPolicy,
@@ -521,16 +583,56 @@ pub enum HostToRuntime {
         /// 条数上限（D15 标注 limit?，可缺省）
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<u32>,
+        /// D19 作用域过滤（缺省=全部两域）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<MemoryScope>,
+        /// D19 项目路径过滤（realpath 精确匹配；scope=project 时可选）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_path: Option<String>,
     },
 
     /// 记忆删除（D15 §2.4；REQ→memory.delete.result{ok}）
     #[serde(rename = "memory.delete", rename_all = "camelCase")]
-    MemoryDelete { name: String },
+    MemoryDelete {
+        name: String,
+        /// D19 作用域（缺省 user=旧口径兼容）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<MemoryScope>,
+        /// D19 项目路径（scope=project 时定位分区）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_path: Option<String>,
+    },
 
     /// 日报列表查询（D15 §3.3；REQ→report.list.result）
     #[serde(rename = "report.list", rename_all = "camelCase")]
     ReportList {
         /// 条数上限（同 memory.list，可缺省）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
+
+    // -- D19 项目/日常双区追加（REQ；成对回执见 RuntimeToHost） --
+    /// 项目目录登记（D19；REQ→workspace.registered。realpath 归一 upsert：
+    /// 同目录重复打开不换身份；name 缺省=目录名；is_repo 由 .git 探测）
+    #[serde(rename = "workspace.register", rename_all = "camelCase")]
+    WorkspaceRegister {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+
+    /// 项目列表（D19；REQ→workspace.listed；last_opened_at 倒序）
+    #[serde(rename = "workspace.list", rename_all = "camelCase")]
+    WorkspaceList,
+
+    /// 项目移除登记（D19；REQ→workspace.forgot{ok}；只删登记行，不动会话/记忆分区）
+    #[serde(rename = "workspace.forget", rename_all = "camelCase")]
+    WorkspaceForget { id: String },
+
+    /// 会话持久列表（D19；REQ→session.listed。agent_session JOIN agent_workspace，
+    /// 宿主重启后恢复会话列表的数据源；活跃状态以宿主缓存叠加为准）
+    #[serde(rename = "session.list", rename_all = "camelCase")]
+    SessionList {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<u32>,
     },
@@ -792,6 +894,12 @@ pub enum RuntimeToHost {
         memory_type: String,
         /// true=同题更新既有条目；false=新建（D15 §2.2）
         updated: bool,
+        /// D19 作用域（缺省 user=旧口径兼容）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<MemoryScope>,
+        /// D19 项目分区名（scope=project 时携带）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_name: Option<String>,
     },
 
     /// 记忆淘汰（D15 §2.4；UNT；reason 目前取值 "capacity"）
@@ -837,6 +945,23 @@ pub enum RuntimeToHost {
         #[serde(default)]
         items: Vec<Value>,
     },
+
+    // -- D19 项目/日常双区回执 --
+    /// workspace.register 回执（D19；登记/更新后的项目行）
+    #[serde(rename = "workspace.registered", rename_all = "camelCase")]
+    WorkspaceRegistered { item: WorkspaceItem },
+
+    /// workspace.list 回执（D19；last_opened_at 倒序）
+    #[serde(rename = "workspace.listed", rename_all = "camelCase")]
+    WorkspaceListed { items: Vec<WorkspaceItem> },
+
+    /// workspace.forget 回执（D19）
+    #[serde(rename = "workspace.forgot", rename_all = "camelCase")]
+    WorkspaceForgot { ok: bool },
+
+    /// session.list 回执（D19；updated_at 倒序）
+    #[serde(rename = "session.listed", rename_all = "camelCase")]
+    SessionListed { items: Vec<SessionListItem> },
 }
 
 // ---------------------------------------------------------------------------

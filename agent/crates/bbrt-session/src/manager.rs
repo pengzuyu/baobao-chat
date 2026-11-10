@@ -17,6 +17,33 @@ use crate::events::{ModelTier, SessionEvent};
 use crate::loop_runner::{LoopDeps, PermissionResponse, SessionRunner};
 use crate::state::SessionState;
 
+/// D19 会话工作区表（bin 装配共享给 tools 管线做按会话沙箱路由）：
+/// session_id → Some(项目目录) / None(日常对话)。克隆共享同一底层表。
+#[derive(Clone, Default)]
+pub struct SessionWorkspaces(std::sync::Arc<Mutex<HashMap<String, Option<std::path::PathBuf>>>>);
+
+impl SessionWorkspaces {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 登记/更新会话工作目录（None=日常）
+    pub fn set(&self, session_id: &str, ws: Option<std::path::PathBuf>) {
+        self.0.lock().unwrap().insert(session_id.to_string(), ws);
+    }
+
+    /// 会话移除（session.end）
+    pub fn remove(&self, session_id: &str) {
+        self.0.lock().unwrap().remove(session_id);
+    }
+
+    /// 查询：None=未登记（工具层回落兜底工作区，兼容无装配测试）；
+    /// Some(None)=日常；Some(Some(path))=项目会话
+    pub fn get(&self, session_id: &str) -> Option<Option<std::path::PathBuf>> {
+        self.0.lock().unwrap().get(session_id).cloned()
+    }
+}
+
 /// 管理错误（bin 映射为 error 协议消息）
 #[derive(Debug, thiserror::Error)]
 pub enum ManagerError {
@@ -71,6 +98,8 @@ pub struct SessionManager {
     delegate_tx: Mutex<HashMap<String, Sender<crate::loop_runner::DelegateHostMsg>>>,
     /// 后台委派中枢（D16 §5：委派直接后台；start 时注入 runner 共享）
     hub: Arc<crate::delegate_bg::DelegateHub>,
+    /// D19 会话工作区表（bin 装配时与 tools 管线共享同一实例；start/end 维护）
+    pub workspaces: SessionWorkspaces,
 }
 
 impl SessionManager {
@@ -82,11 +111,14 @@ impl SessionManager {
             permission_tx: Mutex::new(HashMap::new()),
             delegate_tx: Mutex::new(HashMap::new()),
             hub: Arc::new(crate::delegate_bg::DelegateHub::new()),
+            workspaces: SessionWorkspaces::new(),
         }
     }
 
     /// session.start（D11 §3 #1/#2）：建档 + WAL 起点 + 审批路由 + session.ready
-    /// 启动；Ok 携带恢复摘要（restored/replayed_events，未恢复为 false/0）
+    /// 启动；Ok 携带恢复摘要（restored/replayed_events，未恢复为 false/0）。
+    /// D19：workspace 非空 → realpath 归一 + upsert agent_workspace + 回填
+    /// workspace_id（修 D11 既留缺口）；空串=日常对话（不挂工作区）。
     pub fn start(
         &self,
         session_id: String,
@@ -97,6 +129,35 @@ impl SessionManager {
             return Err(ManagerError::TooManyActive);
         }
         let now = now_ms();
+        // D19 workspace realpath 归一（runner/沙箱/记忆分区/WAL 全链同一规范路径；
+        // 空串=日常对话原样保留）
+        let workspace_real = if p.workspace.is_empty() {
+            String::new()
+        } else {
+            std::fs::canonicalize(&p.workspace)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| p.workspace.clone())
+        };
+        // D19 项目登记（workspace 非空）：realpath 归一后 upsert——
+        // 同目录重复打开不换身份；is_repo=.git 探测；trusted=注册即信任
+        // （目录选择对话框是显式动作，D08 §4.4 精细信任确认登记阶段二）
+        let workspace_id = if workspace_real.is_empty() {
+            None
+        } else {
+            self.store.as_ref().map(|store| {
+                let store = store.lock().unwrap();
+                register_workspace(&store, &workspace_real, None, now as i64)
+            })
+        };
+        // D19 会话工作区表登记（tools 管线按会话路由沙箱；None=日常）
+        self.workspaces.set(
+            &session_id,
+            if workspace_real.is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(&workspace_real))
+            },
+        );
         if let Some(store) = &self.store {
             let store = store.lock().unwrap();
             // 恢复路径：会话行已存在（首启动时落库），改插为更防唯一键冲突
@@ -106,7 +167,7 @@ impl SessionManager {
             }
             let row = SessionRow {
                 id: session_id.clone(),
-                workspace_id: None,
+                workspace_id: workspace_id.clone(),
                 title: p.title.clone(),
                 form: "workbench".into(),
                 mode: match p.mode {
@@ -126,7 +187,10 @@ impl SessionManager {
                 summary: None,
             };
             if is_restore {
-                // 状态已更新，跳过插入（行已存在）
+                // 状态已更新，跳过插入（行已存在）；恢复路径顺带回填最新归属
+                if let Some(ws_id) = &workspace_id {
+                    let _ = store.set_session_workspace(&session_id, Some(ws_id));
+                }
             } else {
                 store
                     .insert_session(&row)
@@ -135,7 +199,7 @@ impl SessionManager {
         }
         let mut runner = SessionRunner::new(
             session_id.clone(),
-            p.workspace.clone(),
+            workspace_real.clone(),
             p.mode,
             p.model_policy,
             p.model_override.clone(),
@@ -154,7 +218,7 @@ impl SessionManager {
         self.deps.wal.append(
             &session_id,
             "session.start",
-            &format!("{{\"workspace\":\"{}\"}}", p.workspace),
+            &format!("{{\"workspace\":\"{}\"}}", workspace_real),
         );
         let (restored, replayed) = match &p.restored {
             Some(rep) if rep.found => (true, rep.replayed_events),
@@ -178,7 +242,7 @@ impl SessionManager {
             Arc::new(ManagedSession {
                 runner: Mutex::new(Some(runner)),
                 state: Mutex::new(SessionState::Idle),
-                workspace: p.workspace.clone(),
+                workspace: workspace_real.clone(),
             }),
         );
         Ok(summary)
@@ -376,6 +440,8 @@ impl SessionManager {
         self.sessions.lock().unwrap().remove(session_id);
         self.permission_tx.lock().unwrap().remove(session_id);
         self.delegate_tx.lock().unwrap().remove(session_id);
+        // D19：会话工作区表同步移除（工具管线不再路由到该会话）
+        self.workspaces.remove(session_id);
         // 后台委派收口（D16 §5：会话结束=本会话全部后台 run 优雅取消；
         // 线程自注销不阻塞收口）
         self.hub.cancel_session(session_id);
@@ -422,4 +488,45 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// 工作区 id 序列（ws-<ms>-<n>；进程内单调）
+static WS_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// D19 工作区登记（协议 workspace.register 与 session.start 自动挂靠共用）：
+/// realpath 归一（别名同身份）→ 查既有行保 id/created_at → upsert。
+/// 返回登记后的 workspace id。name 缺省=目录名；is_repo=.git 探测；
+/// trusted=true（目录选择即显式信任，D08 §4.4 精细确认阶段二）。
+pub fn register_workspace(
+    store: &bbrt_store::Store,
+    path: &str,
+    name: Option<&str>,
+    now: i64,
+) -> String {
+    let raw = std::path::PathBuf::from(path);
+    let real = std::fs::canonicalize(&raw).unwrap_or(raw);
+    let path_str = real.to_string_lossy().into_owned();
+    let default_name = real
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("项目")
+        .to_string();
+    let name = name.map(str::to_string).unwrap_or(default_name);
+    let is_repo = real.join(".git").exists();
+    let existing = store.get_workspace_by_path(&path_str).ok().flatten();
+    let (id, created_at) = existing.map(|w| (w.id, w.created_at)).unwrap_or_else(|| {
+        let seq = WS_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        (format!("ws-{now}-{seq}"), now)
+    });
+    let _ = store.upsert_workspace(&bbrt_store::Workspace {
+        id: id.clone(),
+        path: path_str,
+        name,
+        is_repo,
+        trusted: true,
+        extra_dirs: None,
+        last_opened_at: now,
+        created_at,
+    });
+    id
 }

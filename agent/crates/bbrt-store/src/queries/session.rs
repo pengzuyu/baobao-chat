@@ -202,8 +202,8 @@ impl Store {
         limit: u32,
     ) -> Result<Vec<SessionListRow>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.title, COALESCE(w.path, ''), s.mode, s.status, \
-                    s.created_at, s.updated_at, s.ended_at, s.summary
+            "SELECT s.id, s.title, COALESCE(w.path, ''), s.mode, s.model_policy, s.model_override, \
+                    s.status, s.created_at, s.updated_at, s.ended_at, s.summary
              FROM agent_session s
              LEFT JOIN agent_workspace w ON w.id = s.workspace_id
              ORDER BY s.updated_at DESC LIMIT ?1",
@@ -214,11 +214,13 @@ impl Store {
                 title: row.get(1)?,
                 workspace: row.get(2)?,
                 mode: row.get(3)?,
-                status: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-                ended_at: row.get(7)?,
-                summary: row.get(8)?,
+                model_policy: row.get(4)?,
+                model_override: row.get(5)?,
+                status: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+                ended_at: row.get(9)?,
+                summary: row.get(10)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -248,6 +250,8 @@ pub struct SessionListRow {
     /// 工作目录（""=日常/未关联）
     pub workspace: String,
     pub mode: String,
+    pub model_policy: String,
+    pub model_override: Option<String>,
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -304,11 +308,19 @@ mod tests {
         }
         assert_eq!(store.sweep_interrupted_on_boot().unwrap(), 3);
         for id in ["s-run", "s-wait", "s-pause"] {
-            assert_eq!(store.get_session(id).unwrap().unwrap().status, "error", "{id} 应收口");
+            assert_eq!(
+                store.get_session(id).unwrap().unwrap().status,
+                "error",
+                "{id} 应收口"
+            );
         }
         assert_eq!(store.get_session("s-idle").unwrap().unwrap().status, "idle");
         assert_eq!(store.get_session("s-end").unwrap().unwrap().status, "ended");
-        assert_eq!(store.sweep_interrupted_on_boot().unwrap(), 0, "二次清扫幂等");
+        assert_eq!(
+            store.sweep_interrupted_on_boot().unwrap(),
+            0,
+            "二次清扫幂等"
+        );
     }
 
     /// 状态机走 idle → running → ended：ended_at 只在终态补写且不覆盖。
@@ -426,13 +438,18 @@ mod tests {
         assert_eq!(rows[1].workspace, "", "未关联工作区（日常）应为空串");
 
         // set_session_workspace 回填/解除
-        store.set_session_workspace("sess-daily", Some("ws-1")).unwrap();
+        store
+            .set_session_workspace("sess-daily", Some("ws-1"))
+            .unwrap();
         let again = store.list_sessions_with_workspace(10).unwrap();
         assert!(again.iter().all(|r| r.workspace == "/repo/proj"));
         store.set_session_workspace("sess-daily", None).unwrap();
         let back = store.list_sessions_with_workspace(10).unwrap();
         assert_eq!(
-            back.iter().find(|r| r.id == "sess-daily").unwrap().workspace,
+            back.iter()
+                .find(|r| r.id == "sess-daily")
+                .unwrap()
+                .workspace,
             ""
         );
     }

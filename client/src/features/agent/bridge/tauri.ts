@@ -41,6 +41,7 @@ import type {
   AgentEvent,
   AgentReport,
   AgentSessionMeta,
+  AgentWorkspaceInfo,
   GrantScope,
   MemoryEntry,
   MemoryType,
@@ -81,6 +82,9 @@ interface MemoryRow {
   hook: string;
   updated_at: number;
   session?: string;
+  /** D19 作用域（协议 optional） */
+  scope?: 'user' | 'project';
+  workspaceName?: string;
 }
 
 interface ReportRow {
@@ -100,6 +104,29 @@ function num(v: unknown, fallback = 0): number {
 
 function str(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
+}
+
+/** D19 workspace.list/register 行（协议 camelCase 直出） */
+interface WorkspaceRow {
+  id: string;
+  path: string;
+  name: string;
+  isRepo: boolean;
+  trusted: boolean;
+  lastOpenedAt: number;
+  createdAt: number;
+}
+
+function mapWorkspace(row: WorkspaceRow): AgentWorkspaceInfo {
+  return {
+    id: row.id,
+    path: row.path,
+    name: row.name,
+    isRepo: row.isRepo,
+    trusted: row.trusted,
+    lastOpenedAt: row.lastOpenedAt,
+    createdAt: row.createdAt,
+  };
 }
 
 function mapSession(row: SessionRow): AgentSessionMeta {
@@ -232,8 +259,11 @@ export class TauriAgentBridge implements AgentBridge {
     await invoke('agent_delegate_review', { delegateTaskId: runId, accept });
   }
 
-  async listMemories(): Promise<MemoryEntry[]> {
-    const data = await invoke<{ items: MemoryRow[] }>('memory_list', {});
+  async listMemories(scope?: 'user' | 'project', workspacePath?: string): Promise<MemoryEntry[]> {
+    const data = await invoke<{ items: MemoryRow[] }>('memory_list', {
+      scope: scope ?? null,
+      workspacePath: workspacePath ?? null,
+    });
     return data.items.map((m) => ({
       name: m.name,
       title: m.title,
@@ -241,11 +271,27 @@ export class TauriAgentBridge implements AgentBridge {
       hook: m.hook,
       updatedAt: m.updated_at,
       sessionId: m.session ?? '',
+      scope: m.scope,
+      workspaceName: m.workspaceName,
     }));
   }
 
-  async deleteMemory(name: string): Promise<void> {
-    await invoke('memory_delete', { name });
+  async deleteMemory(name: string, scope?: 'user' | 'project', workspacePath?: string): Promise<void> {
+    await invoke('memory_delete', { name, scope: scope ?? null, workspacePath: workspacePath ?? null });
+  }
+
+  async registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo> {
+    const item = await invoke<WorkspaceRow>('workspace_register', { path, name: name ?? null });
+    return mapWorkspace(item);
+  }
+
+  async listWorkspaces(): Promise<AgentWorkspaceInfo[]> {
+    const data = await invoke<{ items: WorkspaceRow[] }>('workspace_list', {});
+    return data.items.map(mapWorkspace);
+  }
+
+  async forgetWorkspace(id: string): Promise<void> {
+    await invoke('workspace_forget', { id });
   }
 
   async listRuns(sessionId?: string): Promise<RunInfo[]> {
@@ -384,6 +430,9 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         title: str(raw.title),
         memoryType: (str(raw.type) as MemoryType) || 'project',
         updated: raw.updated === true,
+        // D19 作用域（协议 optional；缺省 user）
+        scope: raw.scope === 'project' ? 'project' : 'user',
+        workspaceName: typeof raw.workspaceName === 'string' ? raw.workspaceName : undefined,
       };
     case 'report.daily':
       return {

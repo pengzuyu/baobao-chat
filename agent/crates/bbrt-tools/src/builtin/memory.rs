@@ -17,8 +17,15 @@ use crate::registry::{RiskLevel, ToolDef};
 /// 工具参数/装配错误码（14 篇：8002）
 const CODE_TOOL_ARGS: u32 = 8002;
 
-/// memory_save 实现：title/type/body → SaveInput → MemoryEngine.save_memory
-pub(crate) fn save(env: &ExecEnv, args: &Value, session_id: &str) -> Result<ExecOutput, ToolBlock> {
+/// memory_save 实现：title/type/body → SaveInput → MemoryEngine 分级写入。
+/// D19 作用域路由（pipeline 传入会话工作目录）：user 类→用户级；
+/// project/feedback/reference 类且会话在项目中→该项目分区，日常回落用户级。
+pub(crate) fn save(
+    env: &ExecEnv,
+    args: &Value,
+    session_id: &str,
+    ws: Option<&std::path::Path>,
+) -> Result<ExecOutput, ToolBlock> {
     let title = str_arg(args, "title")
         .ok_or_else(|| deny(CODE_TOOL_ARGS, "memory_save 缺少 title 参数"))?;
     let body = args
@@ -57,17 +64,30 @@ pub(crate) fn save(env: &ExecEnv, args: &Value, session_id: &str) -> Result<Exec
             session: session_id.to_string(),
             links,
         };
-        match engine.save_memory(&input) {
+        // D19 类型路由：user 恒用户级；其余随会话目录落项目分区
+        let scope_ws = match mtype {
+            MemoryType::User => None,
+            _ => ws,
+        };
+        match engine.save_memory_scoped(scope_ws, &input) {
             Ok(outcome) => {
                 let verb = if outcome.saved.updated {
                     "更新"
                 } else {
                     "写入"
                 };
+                let scope_label = if outcome.saved.scope == "project" {
+                    format!(
+                        "，项目分区={}",
+                        outcome.saved.workspace_name.unwrap_or_default()
+                    )
+                } else {
+                    String::new()
+                };
                 Ok(ExecOutput {
                     summary: format!(
-                        "记忆已{verb}：{}（name={}，type={}）",
-                        outcome.saved.title, outcome.saved.name, type_str
+                        "记忆已{verb}：{}（name={}，type={}{}）",
+                        outcome.saved.title, outcome.saved.name, type_str, scope_label
                     ),
                     truncated: false,
                     exit_code: None,

@@ -15,6 +15,7 @@ import type {
   AgentEvent,
   AgentReport,
   AgentSessionMeta,
+  AgentWorkspaceInfo,
   GrantScope,
   MemoryEntry,
   RunInfo,
@@ -118,12 +119,37 @@ function seedSessions(): AgentSessionMeta[] {
     {
       id: 'sess-mock-03',
       title: '周报草稿',
-      workspace: '~/docs/notes',
+      // D19：日常对话（无工作目录——文件/命令类工具不可用）
+      workspace: '',
       mode: 'ask',
       modelPolicy: 'auto',
       status: 'idle',
       createdAt: now - 5 * HOUR,
       updatedAt: now - 3 * HOUR,
+    },
+  ];
+}
+
+/** D19 演示项目登记（workspace.list 口径；path 即身份） */
+function seedWorkspaces(): AgentWorkspaceInfo[] {
+  return [
+    {
+      id: 'ws-mock-01',
+      path: '/Users/demo/code/bbw-server',
+      name: 'bbw-server',
+      isRepo: true,
+      trusted: true,
+      lastOpenedAt: now - 40 * MIN,
+      createdAt: now - 6 * DAY,
+    },
+    {
+      id: 'ws-mock-02',
+      path: '/Users/demo/code/order-svc',
+      name: 'order-svc',
+      isRepo: true,
+      trusted: true,
+      lastOpenedAt: now - DAY - 2 * HOUR,
+      createdAt: now - 20 * DAY,
     },
   ];
 }
@@ -137,6 +163,8 @@ function seedMemories(): MemoryEntry[] {
       hook: '本地联调一律用 8090，避免与网关 8080 冲突',
       updatedAt: now - 2 * DAY,
       sessionId: 'sess-mock-02',
+      scope: 'project',
+      workspaceName: 'bbw-server-3f2a91c04d8e57b1',
     },
     {
       name: 'pref-plan-first',
@@ -145,6 +173,7 @@ function seedMemories(): MemoryEntry[] {
       hook: '较大的改动先给方案要点，确认后再写代码',
       updatedAt: now - 5 * DAY,
       sessionId: 'sess-mock-01',
+      scope: 'user',
     },
     {
       name: 'gitee-remote',
@@ -153,6 +182,8 @@ function seedMemories(): MemoryEntry[] {
       hook: 'push 前确认 remote 指向 gitee.corp，勿用镜像源',
       updatedAt: now - 8 * DAY,
       sessionId: 'sess-mock-03',
+      scope: 'project',
+      workspaceName: 'order-svc-8c1d47f0b2ae6935',
     },
   ];
 }
@@ -213,6 +244,8 @@ export class MockAgentBridge implements AgentBridge {
   private listeners = new Set<(event: AgentEvent) => void>();
   private sessions: AgentSessionMeta[] = seedSessions();
   private memories: MemoryEntry[] = seedMemories();
+  /** D19 项目登记（workspace.list/register/forget 演示数据） */
+  private workspaces: AgentWorkspaceInfo[] = seedWorkspaces();
   private reports: AgentReport[] = seedReports();
   /** sessionId → 已发送轮次（第 2 轮触发审批剧本） */
   private rounds = new Map<string, number>();
@@ -255,6 +288,24 @@ export class MockAgentBridge implements AgentBridge {
   async startSession(workspace: string, mode: PermissionMode, model?: string): Promise<AgentSessionMeta> {
     await delay(200);
     this.sessionSeq += 1;
+    // D19：项目会话自动登记（对齐 bbrt manager.start 的 realpath upsert 行为）
+    if (workspace) {
+      const name = workspace.split('/').filter(Boolean).pop() ?? '项目';
+      const existing = this.workspaces.find((w) => w.path === workspace);
+      if (existing) {
+        existing.lastOpenedAt = Date.now();
+      } else {
+        this.workspaces.unshift({
+          id: `ws-mock-n${Date.now()}`,
+          path: workspace,
+          name,
+          isRepo: true,
+          trusted: true,
+          lastOpenedAt: Date.now(),
+          createdAt: Date.now(),
+        });
+      }
+    }
     const meta: AgentSessionMeta = {
       id: `sess-mock-n${this.sessionSeq}`,
       title: '新会话',
@@ -371,19 +422,69 @@ export class MockAgentBridge implements AgentBridge {
 
   // ---- 记忆 / 日报（D15）----
 
-  async listMemories(): Promise<MemoryEntry[]> {
+  async listMemories(scope?: 'user' | 'project', workspacePath?: string): Promise<MemoryEntry[]> {
     await delay(300);
-    return [...this.memories].sort((a, b) => b.updatedAt - a.updatedAt);
+    // D19 作用域过滤：project+路径 → 该项目分区名匹配；project 无路径 → 全部项目条目
+    let items = [...this.memories];
+    if (scope) {
+      items = items.filter((m) => (m.scope ?? 'user') === scope);
+      if (scope === 'project' && workspacePath) {
+        const name = workspacePath.split('/').filter(Boolean).pop() ?? '';
+        items = items.filter((m) => (m.workspaceName ?? '').startsWith(`${name}-`));
+      }
+    }
+    return items.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async deleteMemory(name: string): Promise<void> {
+  async deleteMemory(name: string, scope?: 'user' | 'project', workspacePath?: string): Promise<void> {
     await delay(150);
-    this.memories = this.memories.filter((m) => m.name !== name);
+    const [list] = await Promise.resolve([await this.listMemories(scope, workspacePath)]);
+    const names = new Set(list.filter((m) => m.name === name).map((m) => m.name));
+    this.memories = this.memories.filter((m) => !(names.has(m.name) && (scope ? (m.scope ?? 'user') === scope : true)));
+  }
+
+  async registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo> {
+    await delay(180);
+    const existing = this.workspaces.find((w) => w.path === path);
+    if (existing) {
+      existing.lastOpenedAt = Date.now();
+      if (name) existing.name = name;
+      return { ...existing };
+    }
+    const item: AgentWorkspaceInfo = {
+      id: `ws-mock-n${Date.now()}`,
+      path,
+      name: name ?? path.split('/').filter(Boolean).pop() ?? '项目',
+      isRepo: true,
+      trusted: true,
+      lastOpenedAt: Date.now(),
+      createdAt: Date.now(),
+    };
+    this.workspaces.unshift(item);
+    return { ...item };
+  }
+
+  async listWorkspaces(): Promise<AgentWorkspaceInfo[]> {
+    await delay(250);
+    return [...this.workspaces].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
+  }
+
+  async forgetWorkspace(id: string): Promise<void> {
+    await delay(150);
+    this.workspaces = this.workspaces.filter((w) => w.id !== id);
   }
 
   async listReports(): Promise<AgentReport[]> {
     await delay(300);
     return [...this.reports].sort((a, b) => (a.date < b.date ? 1 : -1));
+  }
+
+  /** D19 记忆作用域推导：项目会话→project+分区名（演示哈希），日常→user */
+  private memScopeOf(sessionId: string): { scope: 'user' | 'project'; workspaceName?: string } {
+    const ws = this.sessions.find((x) => x.id === sessionId)?.workspace ?? '';
+    if (!ws) return { scope: 'user' };
+    const dir = ws.split('/').filter(Boolean).pop() ?? 'project';
+    return { scope: 'project', workspaceName: `${dir}-3f2a91c04d8e57b1` };
   }
 
   // ---- 剧本 ----
@@ -581,6 +682,7 @@ export class MockAgentBridge implements AgentBridge {
           hook: 'verify_token 需容忍 ±60s 时钟漂移；测试基线 cargo test --lib 12 例',
           updatedAt: Date.now(),
           sessionId: sid,
+          ...this.memScopeOf(sid),
         });
       } else {
         // ---- 阻止分支（用户拒绝 / 120s 超时=拒绝）----
@@ -614,6 +716,7 @@ export class MockAgentBridge implements AgentBridge {
           hook: '用户倾向自行在本地跑全量测试；Why: 保持测试环境一致 How to apply: 会话内只做静态核验',
           updatedAt: Date.now(),
           sessionId: sid,
+          ...this.memScopeOf(sid),
         });
       }
       // 收尾：日报产出（D15 §3.2：session.ended 落地后异步重算当日）+ 会话结束

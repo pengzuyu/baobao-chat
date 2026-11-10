@@ -48,7 +48,26 @@ pub struct PipelineExecutor {
     env: ExecEnv,
     /// MCP client（D11 §2.10：mcp.* 工具执行转发；None=未装配）
     mcp: Option<Arc<bbrt_mcp::McpClient>>,
+    /// D19 按项目根缓存的 PathPolicy（多会话同项目共享；锁保护 rusqlite 式
+    /// 线程安全——这里只是 HashMap 缓存）
+    policies: std::sync::Mutex<
+        std::collections::HashMap<std::path::PathBuf, bbrt_sec::sandbox::path::PathPolicy>,
+    >,
 }
+
+/// D19 workspace 类工具（依赖会话工作目录做沙箱根；日常会话整体不可用）
+const WORKSPACE_BOUND_TOOLS: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "write_file",
+    "edit_file",
+    "search_files",
+    "run_command",
+    "git_status",
+    "git_diff",
+    "git_commit",
+    "git_push",
+];
 
 impl PipelineExecutor {
     /// 标准构造：内置工具注册表 + 配置派生执行环境 + 空授权记忆。
@@ -104,7 +123,56 @@ impl PipelineExecutor {
             rules: DangerRuleSet::builtin(),
             env,
             mcp,
+            policies: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// D19 按项目根取（或建）PathPolicy：根=该项目目录 + 全局例外可写目录。
+    /// 同项目并发会话共享同一策略实例（缓存命中）。
+    fn policy_for(&self, root: &std::path::Path) -> bbrt_sec::sandbox::path::PathPolicy {
+        let mut cache = self.policies.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(p) = cache.get(root) {
+            return p.clone();
+        }
+        let policy = bbrt_sec::sandbox::path::PathPolicy::with_roots(
+            vec![root.to_path_buf()],
+            self.config.extra_writable.clone(),
+        );
+        cache.insert(root.to_path_buf(), policy.clone());
+        policy
+    }
+
+    /// D19 按会话解析执行环境（workspace 类工具用）：
+    /// - 项目会话 → 克隆 env 覆写 workspace/path_policy（沙箱根=该项目目录）；
+    /// - 日常会话 → Err（8020：未绑定工作目录）；
+    /// - 未装配表/未登记会话 → 兜底全局 env（单测/嵌入式旧行为）。
+    fn session_env(&self, session_id: &str) -> Result<ExecEnv, ToolBlock> {
+        let Some(reg) = &self.config.session_workspaces else {
+            return Ok(self.env.clone());
+        };
+        match reg.get(session_id) {
+            None => Ok(self.env.clone()),
+            Some(None) => Err(builtin::deny(
+                bbrt_sec::errors::CODE_SANDBOX_DENIED,
+                "日常对话未绑定工作目录，该工具不可用（请在项目会话中操作文件/命令）",
+            )),
+            Some(Some(ws)) => {
+                let real = std::fs::canonicalize(&ws).unwrap_or_else(|_| ws.clone());
+                let mut env = self.env.clone();
+                env.workspace = real.clone();
+                env.path_policy = self.policy_for(&real);
+                Ok(env)
+            }
+        }
+    }
+
+    /// D19 会话项目目录（memory_save 作用域路由用）：日常/未登记 → None（用户级）
+    fn session_ws_path(&self, session_id: &str) -> Option<std::path::PathBuf> {
+        self.config
+            .session_workspaces
+            .as_ref()
+            .and_then(|reg| reg.get(session_id))
+            .flatten()
     }
 
     /// 替换注册表（bin 注入 app.*/技能合并后的注册表；10 篇 §4.6）
@@ -215,26 +283,47 @@ impl ToolExecutor for PipelineExecutor {
         }
     }
 
-    /// 执行（§6 步骤 5-7：沙箱校验 + 执行 + 脱敏；权限路径由调用方保证）
+    /// 执行（§6 步骤 5-7：沙箱校验 + 执行 + 脱敏；权限路径由调用方保证）。
+    /// D19：workspace 类工具按会话解析执行环境——项目会话沙箱根=该项目目录
+    /// （A 项目会话写 B 项目 → 预检 8020 + Seatbelt 内核双拦），日常会话整体拒绝。
     fn execute(&self, _mode: bbrt_sec::gate::PermissionMode, call: &ToolInvocation) -> ToolOutcome {
         let args = match Self::parse_args(call) {
             Ok(v) => v,
             Err(b) => return blocked(&b),
         };
+        let ws_bound = WORKSPACE_BOUND_TOOLS.contains(&call.name.as_str());
+        let env = if ws_bound {
+            match self.session_env(&call.session_id) {
+                Ok(e) => e,
+                Err(b) => {
+                    self.env.record_violation(
+                        bbrt_sec::sandbox::launcher::ViolationKind::Path,
+                        b.code,
+                        format!("{} 会话未绑定工作目录: {}", call.name, b.message),
+                    );
+                    return blocked(&b);
+                }
+            }
+        } else {
+            self.env.clone()
+        };
         // ⑥ 分发执行（未注册兜底 8002）
         let result: Result<ExecOutput, ToolBlock> = match call.name.as_str() {
-            "read_file" => builtin::fs::read_file(&self.env, &args),
-            "list_dir" => builtin::fs::list_dir(&self.env, &args),
-            "write_file" => builtin::fs::write_file(&self.env, &args),
-            "edit_file" => builtin::fs::edit_file(&self.env, &args),
-            "search_files" => builtin::search::search_files(&self.env, &args),
-            "run_command" => builtin::cmd::run(&self.env, &args),
-            "git_status" => builtin::git::git_status(&self.env, &args),
-            "git_diff" => builtin::git::git_diff(&self.env, &args),
-            "git_commit" => builtin::git::git_commit(&self.env, &args),
-            "git_push" => builtin::git::git_push(&self.env, &args),
-            "http_fetch" => builtin::http::fetch(&self.env, &args),
-            "memory_save" => builtin::memory::save(&self.env, &args, &call.session_id),
+            "read_file" => builtin::fs::read_file(&env, &args),
+            "list_dir" => builtin::fs::list_dir(&env, &args),
+            "write_file" => builtin::fs::write_file(&env, &args),
+            "edit_file" => builtin::fs::edit_file(&env, &args),
+            "search_files" => builtin::search::search_files(&env, &args),
+            "run_command" => builtin::cmd::run(&env, &args),
+            "git_status" => builtin::git::git_status(&env, &args),
+            "git_diff" => builtin::git::git_diff(&env, &args),
+            "git_commit" => builtin::git::git_commit(&env, &args),
+            "git_push" => builtin::git::git_push(&env, &args),
+            "http_fetch" => builtin::http::fetch(&env, &args),
+            "memory_save" => {
+                let ws = self.session_ws_path(&call.session_id);
+                builtin::memory::save(&env, &args, &call.session_id, ws.as_deref())
+            }
             // mcp.{server}.{tool}（D11 §2.10 dispatch_by_source：网关/外部 MCP 工具；
             // OBO 由 McpClient 令牌闭包逐请求注入；断连/未注册 → 8002 标灰语义）
             _ if call.name.starts_with("mcp.") => match &self.mcp {

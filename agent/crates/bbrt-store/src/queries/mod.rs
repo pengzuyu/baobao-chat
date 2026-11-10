@@ -21,6 +21,6 @@ pub use delegate::DelegateTaskRow;
 pub use event::EventRow;
 pub use grant::GrantRow;
 pub use run::RunRow;
-pub use session::SessionRow;
+pub use session::{SessionListRow, SessionRow};
 pub use violation::ViolationRow;
 pub use workspace::Workspace;

@@ -80,6 +80,30 @@ impl Store {
             .map_err(StoreError::from)?;
         Ok(ws)
     }
+
+    /// 全量项目列表（D19 workspace.list；last_opened_at 倒序=最近打开在前）。
+    pub fn list_workspaces(&self) -> Result<Vec<Workspace>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, name, is_repo, trusted, extra_dirs, last_opened_at, created_at
+             FROM agent_workspace ORDER BY last_opened_at DESC",
+        )?;
+        let rows = stmt.query_map([], from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 移除项目登记（D19 workspace.forget；只删登记行——会话行 workspace_id
+    /// 置 NULL（历史会话仍在列表、归入日常展示），记忆分区文件不动）。
+    pub fn remove_workspace(&self, id: &str) -> Result<bool, StoreError> {
+        let n = self.conn.execute(
+            "UPDATE agent_session SET workspace_id = NULL WHERE workspace_id = ?1",
+            params![id],
+        )?;
+        let _ = n; // 解除关联行数不回传（尽力清理）
+        let removed = self
+            .conn
+            .execute("DELETE FROM agent_workspace WHERE id = ?1", params![id])?;
+        Ok(removed > 0)
+    }
 }
 
 #[cfg(test)]
@@ -146,5 +170,48 @@ mod tests {
     fn get_missing_path_returns_none() {
         let (_dir, store) = testutil::open_store();
         assert!(store.get_workspace_by_path("/nope").unwrap().is_none());
+    }
+
+    /// D19 列表按 last_opened_at 倒序（最近打开在前）。
+    #[test]
+    fn list_workspaces_orders_by_last_opened_desc() {
+        let (_dir, store) = testutil::open_store();
+        store
+            .upsert_workspace(&ws("ws-1", "/repo/a", false, 1000))
+            .unwrap();
+        store
+            .upsert_workspace(&ws("ws-2", "/repo/b", false, 3000))
+            .unwrap();
+        store
+            .upsert_workspace(&ws("ws-3", "/repo/c", false, 2000))
+            .unwrap();
+        let ids: Vec<String> = store
+            .list_workspaces()
+            .unwrap()
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        assert_eq!(ids, ["ws-2", "ws-3", "ws-1"]);
+    }
+
+    /// D19 移除登记：删行 + 解除会话关联（会话行保留、workspace_id 置 NULL）。
+    #[test]
+    fn remove_workspace_deletes_row_and_unlinks_sessions() {
+        let (_dir, store) = testutil::open_store();
+        store
+            .upsert_workspace(&ws("ws-1", "/repo/a", false, 1000))
+            .unwrap();
+        let mut s = testutil::sample_session("sess-1");
+        s.workspace_id = Some("ws-1".to_string());
+        store.insert_session(&s).unwrap();
+
+        assert!(store.remove_workspace("ws-1").unwrap());
+        assert!(store.get_workspace_by_path("/repo/a").unwrap().is_none());
+        assert!(store.list_workspaces().unwrap().is_empty());
+        // 会话行保留但归属解除（session.list 归入日常展示）
+        let got = store.get_session("sess-1").unwrap().unwrap();
+        assert_eq!(got.workspace_id, None);
+        // 不存在的 id 返回 false（幂等语义）
+        assert!(!store.remove_workspace("ws-不存在").unwrap());
     }
 }

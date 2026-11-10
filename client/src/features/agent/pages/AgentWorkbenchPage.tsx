@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useNavigate, useParams } from 'react-router-dom';
 import { Dropdown, Modal, type MenuProps } from 'antd';
 import { Pause, Play, PanelRightClose, PanelRightOpen, ShieldCheck, Sparkles, Square } from 'lucide-react';
+import { open as openDirectory } from '@tauri-apps/plugin-dialog';
 import { Button } from '../../../shared/ui/Button';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
@@ -126,6 +127,9 @@ export function AgentWorkbenchPage() {
   const runsBySession = useAgentStore((s) => s.runsBySession);
   const loadRuns = useAgentStore((s) => s.loadRuns);
   const startSession = useAgentStore((s) => s.startSession);
+  const createSession = useAgentStore((s) => s.createSession);
+  const workspaces = useAgentStore((s) => s.workspaces);
+  const registerProject = useAgentStore((s) => s.registerProject);
   const sendText = useAgentStore((s) => s.sendText);
   const respondPermission = useAgentStore((s) => s.respondPermission);
   const pauseActive = useAgentStore((s) => s.pauseActive);
@@ -257,9 +261,9 @@ export function AgentWorkbenchPage() {
     stickBottomRef.current = true;
     navigate(`/agent/s/${id}`);
   };
-  const handleCreate = () => {
+  /** D19 新建日常对话（无工作目录；文件/命令类工具在该会话不可用） */
+  const handleNewDaily = () => {
     const currentMode = activeSession?.mode ?? 'ask';
-    // 新会话模型 = 用户默认（settings.ai_default → p: 引用；未设/失败=档位别名）
     void resolveDefaultModel()
       .then((model) => startSession(currentMode, model))
       .then(() => {
@@ -270,6 +274,38 @@ export function AgentWorkbenchPage() {
         // bbrt 缺失/握手超时/RT 错误回执（如 8001 活跃会话超限）——列表顶部提示
         useAgentStore.setState({ createError: err instanceof Error ? err.message : String(err) });
       });
+  };
+
+  /** D19 打开项目目录：系统目录选择 → workspace.register → 项目会话 */
+  const handleOpenProject = () => {
+    void (async () => {
+      let dir: string | null = null;
+      try {
+        dir = (await openDirectory({ directory: true, multiple: false, title: '选择项目目录（将作为该会话的工作目录与沙箱根）' })) as string | null;
+      } catch {
+        dir = null; // 浏览器演示（mock 桥）无系统对话框
+      }
+      if (!dir) {
+        if (bridgeKind === 'mock') {
+          useAgentStore.setState({ createError: '目录选择需要桌面端（当前为演示桥）：请在 Tauri 宿主中打开项目' });
+        }
+        return;
+      }
+      await openProjectSession(dir);
+    })();
+  };
+
+  /** 登记 + 在项目目录开会话（打开项目/项目行 + 共用） */
+  const openProjectSession = async (path: string) => {
+    const currentMode = activeSession?.mode ?? 'ask';
+    try {
+      await registerProject(path);
+      const model = await resolveDefaultModel();
+      const meta = await createSession({ workspace: path, mode: currentMode as PermissionMode, model });
+      navigate(`/agent/s/${meta.id}`);
+    } catch (err: unknown) {
+      useAgentStore.setState({ createError: err instanceof Error ? err.message : String(err) });
+    }
   };
   const handleRespond = (d: PermissionDecision) => {
     respondPermission(d.requestId, d.decision, d.scope, d.editedArgs);
@@ -319,11 +355,15 @@ export function AgentWorkbenchPage() {
   const sessionListNode = (
     <AgentSessionList
       sessions={sessions}
+      workspaces={workspaces}
       activeId={activeSessionId}
       bridgeKind={bridgeKind}
       createError={createError}
       onSelect={handleSelect}
-      onCreate={handleCreate}
+      onNewDaily={handleNewDaily}
+      onOpenProject={handleOpenProject}
+      onNewProjectSession={(path) => void openProjectSession(path)}
+      onForgetProject={(id) => void useAgentStore.getState().forgetProject(id)}
     />
   );
 
@@ -350,11 +390,11 @@ export function AgentWorkbenchPage() {
               skeleton={<SkeletonList count={6} />}
               error={new Error(sessionsError ?? '会话列表加载失败')}
               onRetry={() => void init()}
-              emptyText="从一个任务开始，或打开一个项目工作区"
+              emptyText="从一个任务开始，或打开一个项目目录"
               emptyAction={
-                <Button onClick={handleCreate}>
+                <Button onClick={handleNewDaily}>
                   <Square size={12} aria-hidden />
-                  新建会话
+                  新建日常对话
                 </Button>
               }
               offlineText="离线中：Agent 会话为本地能力，不受影响"
@@ -370,9 +410,13 @@ export function AgentWorkbenchPage() {
           {activeSession ? (
             <>
               <header className="agent-header">
-                <div className="agent-header__title-wrap" title={activeSession.workspace}>
+                <div className="agent-header__title-wrap" title={activeSession.workspace || '日常对话（无工作目录）'}>
                   <div className="agent-header__title">{activeSession.title}</div>
-                  <div className="agent-header__sub">{activeSession.workspace}</div>
+                  <div className="agent-header__sub">
+                    {activeSession.workspace
+                      ? `${workspaces.find((w) => w.path === activeSession.workspace)?.name ?? activeSession.workspace.split('/').filter(Boolean).pop()} · ${activeSession.workspace}`
+                      : '日常对话 · 无工作目录'}
+                  </div>
                 </div>
                 {/* 模式切换胶囊（PAG-07） */}
                 <Dropdown menu={modeMenu} trigger={['click']}>
@@ -454,7 +498,7 @@ export function AgentWorkbenchPage() {
           ) : streamState === 'loading' ? (
             <StateView state="loading" skeleton={<SkeletonStream count={5} />} />
           ) : (
-            <StateView state="empty" emptyText="从左侧选择或新建一个会话" emptyAction={<Button onClick={handleCreate}>新建会话</Button>} />
+            <StateView state="empty" emptyText="从左侧选择或新建一个会话" emptyAction={<Button onClick={handleNewDaily}>新建日常对话</Button>} />
           )}
         </section>
 

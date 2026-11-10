@@ -1022,18 +1022,24 @@ fn w2_lesson_after_repeated_tool_failures() {
     );
     let _ = runner.run_turn("跑一下构建", &d);
 
-    // 同工具同错连续 ≥2 次 → feedback 教训自动落盘（带 Why/How to apply）
-    let list = mem.knowledge().list();
+    // 同工具同错连续 ≥2 次 → feedback 教训自动落盘（带 Why/How to apply）。
+    // D19：项目会话（/ws）的 feedback 教训落该项目分区，用户级不再出现
+    let ws = std::path::Path::new("/ws");
+    let list = mem.list_scoped(Some(ws));
     assert!(
         list.iter().any(
             |e| e.mtype == bbrt_memory::MemoryType::Feedback && e.title.contains("run_command")
         ),
         "应产出 run_command 教训条目，实际: {list:?}"
     );
+    assert!(
+        mem.knowledge().list().is_empty(),
+        "用户级不应混入项目教训（D19 分级）"
+    );
     let body = list
         .iter()
         .find(|e| e.title.contains("run_command"))
-        .map(|e| mem.knowledge().get(&e.name).unwrap().unwrap().body)
+        .and_then(|e| mem.get_scoped_entry(Some(ws), &e.name))
         .unwrap();
     assert!(body.contains("**Why:**") && body.contains("**How to apply:**"));
     // 协议事件外发

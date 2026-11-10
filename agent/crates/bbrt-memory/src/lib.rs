@@ -120,6 +120,17 @@ pub struct MemorySavedEvent {
     pub r#type: MemoryType,
     /// true = 同题原地更新；false = 新增
     pub updated: bool,
+    /// D19 作用域："user" | "project"（默认 user=旧口径）
+    #[serde(default = "default_scope_user")]
+    pub scope: String,
+    /// D19 项目分区名（scope=project 时携带；scope_key 形如 baobao-work-72ab07a9…）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_name: Option<String>,
+}
+
+/// serde 默认值：作用域 user
+fn default_scope_user() -> String {
+    "user".to_string()
 }
 
 /// `memory.evicted`：容量淘汰上报（UNT；reason=capacity）
@@ -172,18 +183,42 @@ impl Report {
 
 /// 记忆引擎：统一打开 `{dataDir}/agent` 下的 memory / journal / reports 三目录。
 ///
-/// 目录布局（D15 §2.1 / §3.1 / §3.2）：
+/// 目录布局（D15 §2.1 / §3.1 / §3.2；D19 增项目分区）：
 /// ```text
-/// {dataDir}/agent/memory/    MEMORY.md + <slug>.md
-/// {dataDir}/agent/journal/   YYYY-MM-DD.jsonl
-/// {dataDir}/agent/reports/   YYYY-MM-DD.md + YYYY-MM-DD.json
+/// {dataDir}/agent/memory/                 MEMORY.md + <slug>.md（用户级）
+/// {dataDir}/agent/memory/projects/<key>/  项目级分区（key=scope_key(工作目录)）
+/// {dataDir}/agent/journal/                YYYY-MM-DD.jsonl
+/// {dataDir}/agent/reports/                YYYY-MM-DD.md + YYYY-MM-DD.json
 /// ```
-#[derive(Clone)]
+/// MemoryEngine（Clone 为手工实现——见下方 impl）
 pub struct MemoryEngine {
     clock: Arc<dyn Clock>,
     knowledge: KnowledgeStore,
     journal: Journal,
     digest: Digest,
+    /// D19 项目分区根（memory/projects）
+    projects_dir: PathBuf,
+    /// D19 分区缓存（realpath → store；KnowledgeStore=PathBuf+Arc 时钟，克隆廉价）
+    project_stores: Mutex<HashMap<PathBuf, KnowledgeStore>>,
+}
+
+impl Clone for MemoryEngine {
+    /// 手工实现：缓存 Mutex 不 Clone——锁出内层 HashMap 克隆（分区 store 廉价）
+    fn clone(&self) -> Self {
+        let cached = self
+            .project_stores
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        Self {
+            clock: Arc::clone(&self.clock),
+            knowledge: self.knowledge.clone(),
+            journal: self.journal.clone(),
+            digest: self.digest.clone(),
+            projects_dir: self.projects_dir.clone(),
+            project_stores: Mutex::new(cached),
+        }
+    }
 }
 
 impl std::fmt::Debug for MemoryEngine {
@@ -193,8 +228,43 @@ impl std::fmt::Debug for MemoryEngine {
             .field("knowledge", &self.knowledge)
             .field("journal", &self.journal)
             .field("digest", &self.digest)
+            .field("projects_dir", &self.projects_dir)
             .finish()
     }
+}
+
+/// D19 项目分区 key：`<目录名>-<路径 FNV-1a 64 哈希 16hex>`（ZCode 风格）。
+/// 目录名仅保留 [A-Za-z0-9._-]（其余折叠为 -，CJK 项目名退化为纯哈希段仍稳定）；
+/// 同名不同路径靠哈希段区分；调用方先 canonicalize 再取 key（路径别名归一）。
+pub fn scope_key(path: &Path) -> String {
+    let dir_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project");
+    let mut sane = String::new();
+    let mut last_dash = false;
+    for c in dir_name.chars() {
+        if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
+            sane.push(c);
+            last_dash = false;
+        } else if !last_dash {
+            sane.push('-');
+            last_dash = true;
+        }
+    }
+    let sane = sane.trim_matches('-').to_string();
+    let sane = if sane.is_empty() {
+        "project".to_string()
+    } else {
+        sane
+    };
+    // FNV-1a 64
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in path.to_string_lossy().as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{sane}-{hash:016x}")
 }
 
 impl MemoryEngine {
@@ -211,12 +281,34 @@ impl MemoryEngine {
             knowledge,
             journal,
             digest,
+            projects_dir: base.join("memory").join("projects"),
+            project_stores: Mutex::new(HashMap::new()),
         })
     }
 
-    /// 知识记忆存储（主动轨）
+    /// 知识记忆存储（主动轨；用户级根目录）
     pub fn knowledge(&self) -> &KnowledgeStore {
         &self.knowledge
+    }
+
+    /// D19 取（或惰性初始化）项目分区存储。realpath 归一后作为缓存键与
+    /// scope_key 输入（路径别名同分区）。KnowledgeStore 为廉价克隆。
+    pub fn project_store(&self, workspace: &Path) -> io::Result<KnowledgeStore> {
+        let real = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+        let mut cache = self
+            .project_stores
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(store) = cache.get(&real) {
+            return Ok(store.clone());
+        }
+        let store = KnowledgeStore::new(
+            self.projects_dir.join(scope_key(&real)),
+            Arc::clone(&self.clock),
+        )?;
+        store.rebuild_index()?;
+        cache.insert(real, store.clone());
+        Ok(store)
     }
 
     /// 活动日志（被动轨原始层）
@@ -259,9 +351,7 @@ impl MemoryEngine {
             Some(ws) if !ws.as_os_str().is_empty() => {
                 let real = fs::canonicalize(&ws).unwrap_or(ws);
                 let name = scope_key(&real);
-                let store = self
-                    .project_store(&real)
-                    .map_err(MemoryError::Io)?;
+                let store = self.project_store(&real).map_err(MemoryError::Io)?;
                 (store, "project".to_string(), Some(name))
             }
             _ => (self.knowledge.clone(), "user".to_string(), None),
@@ -333,12 +423,21 @@ impl MemoryEngine {
         out
     }
 
+    /// D19 作用域取单条正文（测试/预览用）：Some(workspace) → 项目分区；
+    /// None/空 → 用户级；缺失返回 None。
+    pub fn get_scoped_entry(&self, workspace: Option<&Path>, name: &str) -> Option<String> {
+        let entry = match workspace {
+            Some(ws) if !ws.as_os_str().is_empty() => {
+                let real = fs::canonicalize(ws).unwrap_or_else(|_| ws.to_path_buf());
+                self.project_store(&real).ok()?.get(name).ok().flatten()?
+            }
+            _ => self.knowledge.get(name).ok().flatten()?,
+        };
+        Some(entry.body)
+    }
+
     /// D19 作用域删除：Some(workspace) → 项目分区；None/空 → 用户级。
-    pub fn delete_scoped(
-        &self,
-        workspace: Option<&Path>,
-        name: &str,
-    ) -> Result<bool, MemoryError> {
+    pub fn delete_scoped(&self, workspace: Option<&Path>, name: &str) -> Result<bool, MemoryError> {
         match workspace.map(Path::to_path_buf) {
             Some(ws) if !ws.as_os_str().is_empty() => {
                 let real = fs::canonicalize(&ws).unwrap_or(ws);
@@ -355,37 +454,25 @@ impl MemoryEngine {
     /// - 项目会话 → 用户级 + 项目级两段，带 `[用户记忆]`/`[项目记忆·<分区>]`
     ///   小节头（单段为空则只注另一段；两段皆空 → 空串）。
     pub fn recall_scoped(&self, workspace: Option<&Path>, query: &str) -> String {
-        let user_part = self
-            .knowledge
-            .recall_for(query)
-            .unwrap_or_default();
-        let project_part = match workspace.map(Path::to_path_buf) {
+        let user_part = self.knowledge.recall_for(query).unwrap_or_default();
+        let project = match workspace {
             Some(ws) if !ws.as_os_str().is_empty() => {
-                let real = fs::canonicalize(&ws).unwrap_or(ws);
-                self.project_store(&real)
+                let real = fs::canonicalize(ws).unwrap_or_else(|_| ws.to_path_buf());
+                let key = scope_key(&real);
+                let part = self
+                    .project_store(&real)
                     .ok()
                     .and_then(|s| s.recall_for(query).ok())
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                Some((key, part))
             }
-            _ => String::new(),
+            _ => None,
         };
-        match (user_part.is_empty(), project_part.is_empty()) {
-            (true, true) => String::new(),
-            (false, true) => user_part,
-            (true, false) => {
-                let key = scope_key(
-                    &fs::canonicalize(workspace.unwrap_or_default())
-                        .unwrap_or_else(|_| workspace.unwrap_or_default().to_path_buf()),
-                );
-                format!("[项目记忆·{key}]\n{project_part}")
-            }
-            (false, false) => {
-                let key = scope_key(
-                    &fs::canonicalize(workspace.unwrap_or_default())
-                        .unwrap_or_else(|_| workspace.unwrap_or_default().to_path_buf()),
-                );
-                format!("[用户记忆]\n{user_part}\n\n[项目记忆·{key}]\n{project_part}")
-            }
+        match (&user_part, &project) {
+            (u, None) if u.is_empty() => String::new(),
+            (u, None) => u.clone(),
+            (u, Some((key, p))) if u.is_empty() => format!("[项目记忆·{key}]\n{p}"),
+            (u, Some((key, p))) => format!("[用户记忆]\n{u}\n\n[项目记忆·{key}]\n{p}"),
         }
     }
 
@@ -447,5 +534,173 @@ mod tests {
         clock.set("2026-11-06T00:01:00+08:00", "2026-11-06");
         assert_eq!(clock.now_rfc3339(), "2026-11-06T00:01:00+08:00");
         assert_eq!(clock.today(), "2026-11-06");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// D19 作用域分区测试
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod scoped_tests {
+    use super::*;
+    use std::fs;
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "bbw-mem-scope-{tag}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    fn engine(tag: &str) -> (TempDir, MemoryEngine) {
+        let dir = TempDir::new(tag);
+        let eng = MemoryEngine::open(
+            &dir.0,
+            Arc::new(FixedClock::new("2026-11-10T10:00:00+08:00", "2026-11-10")),
+        )
+        .unwrap();
+        (dir, eng)
+    }
+
+    fn input(title: &str, body: &str) -> SaveInput {
+        SaveInput {
+            title: title.to_string(),
+            body: body.to_string(),
+            mtype: MemoryType::Project,
+            session: "sess-1".to_string(),
+            links: vec![],
+        }
+    }
+
+    /// 分区 key：目录名净化 + 路径哈希；同名不同路径区分、别名归一。
+    #[test]
+    fn scope_key_sanitizes_and_hashes() {
+        let a = scope_key(Path::new("/Users/me/code/baobao-work"));
+        let b = scope_key(Path::new("/Users/other/code/baobao-work"));
+        assert!(a.starts_with("baobao-work-"), "{a}");
+        assert_ne!(a, b, "同名不同路径必须不同 key");
+        // CJK 目录名净化为空 → project 兜底
+        let cjk = scope_key(Path::new("/Users/me/code/宝贝项目"));
+        assert!(cjk.starts_with("project-"), "{cjk}");
+    }
+
+    /// 作用域写入：项目分区与用户级物理隔离；事件带 scope/workspace_name。
+    #[test]
+    fn save_scoped_partitions_user_and_project() {
+        let (dir, eng) = engine("save");
+        let ws = dir.0.join("proj-a");
+        fs::create_dir_all(&ws).unwrap();
+
+        let out = eng
+            .save_memory_scoped(Some(&ws), &input("端口约定", "服务端口 8090"))
+            .unwrap();
+        assert_eq!(out.saved.scope, "project");
+        assert!(out.saved.workspace_name.is_some());
+
+        eng.save_memory(&input("用户偏好", "回答用中文")).unwrap();
+
+        // 用户级不含项目条目；项目分区不含用户条目
+        let user_titles: Vec<String> = eng
+            .list_scoped(None)
+            .iter()
+            .map(|m| m.title.clone())
+            .collect();
+        assert_eq!(user_titles, ["用户偏好"]);
+        let ws_titles: Vec<String> = eng
+            .list_scoped(Some(&ws))
+            .iter()
+            .map(|m| m.title.clone())
+            .collect();
+        assert_eq!(ws_titles, ["端口约定"]);
+        // 分区目录真实落盘在 memory/projects/<key>/
+        let key = out.saved.workspace_name.unwrap();
+        assert!(dir
+            .0
+            .join("agent/memory/projects")
+            .join(&key)
+            .join("MEMORY.md")
+            .exists());
+    }
+
+    /// 同项目不同路径别名（realpath 归一）同分区；不同项目互不可见。
+    #[test]
+    fn project_store_canonicalizes_alias_paths() {
+        let (dir, eng) = engine("alias");
+        let ws = dir.0.join("proj-x");
+        fs::create_dir_all(&ws).unwrap();
+        let alias = dir.0.join("./proj-x/./"); // 词法脏路径 → canonicalize 归一
+        eng.save_memory_scoped(Some(&alias), &input("构建命令", "make check"))
+            .unwrap();
+        let titles: Vec<String> = eng
+            .list_scoped(Some(&ws))
+            .iter()
+            .map(|m| m.title.clone())
+            .collect();
+        assert_eq!(titles, ["构建命令"]);
+    }
+
+    /// 作用域召回：项目会话两段（用户+项目），日常仅用户段。
+    #[test]
+    fn recall_scoped_composes_both_sections() {
+        let (dir, eng) = engine("recall");
+        let ws = dir.0.join("proj-r");
+        fs::create_dir_all(&ws).unwrap();
+        eng.save_memory(&input("用户偏好", "回答用中文")).unwrap();
+        eng.save_memory_scoped(Some(&ws), &input("端口约定", "8090"))
+            .unwrap();
+
+        let daily = eng.recall_scoped(None, "端口");
+        assert!(daily.contains("用户偏好"));
+        assert!(!daily.contains("端口约定"));
+
+        let proj = eng.recall_scoped(Some(&ws), "端口");
+        assert!(proj.contains("[用户记忆]"), "项目会话应含用户段头");
+        assert!(proj.contains("[项目记忆·"), "项目会话应含项目段头");
+        assert!(proj.contains("端口约定"));
+        assert!(proj.contains("用户偏好"));
+    }
+
+    /// 作用域删除互不影响另一域。
+    #[test]
+    fn delete_scoped_is_isolated() {
+        let (dir, eng) = engine("del");
+        let ws = dir.0.join("proj-d");
+        fs::create_dir_all(&ws).unwrap();
+        eng.save_memory(&input("同名条目", "用户级内容")).unwrap();
+        eng.save_memory_scoped(Some(&ws), &input("同名条目", "项目级内容"))
+            .unwrap();
+
+        assert!(eng.delete_scoped(Some(&ws), "同名条目").unwrap());
+        assert!(eng.list_scoped(Some(&ws)).is_empty(), "项目分区应已空");
+        // 用户级仍在
+        assert_eq!(eng.list_scoped(None).len(), 1);
+    }
+
+    /// 全量分区清单：目录名即 key。
+    #[test]
+    fn list_project_partitions_scans_dirs() {
+        let (dir, eng) = engine("parts");
+        let ws = dir.0.join("proj-p");
+        fs::create_dir_all(&ws).unwrap();
+        eng.save_memory_scoped(Some(&ws), &input("事实", "v1"))
+            .unwrap();
+        let parts = eng.list_project_partitions();
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].0.starts_with("proj-p-"));
+        assert_eq!(parts[0].1.len(), 1);
     }
 }

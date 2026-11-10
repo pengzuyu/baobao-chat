@@ -219,8 +219,8 @@ export function ChatPage() {
     let sid = await getEmbeddedSessionId(convId);
     const alive = sid ? useAgentStore.getState().sessions.some((m) => m.id === sid) : false;
     if (!sid || !alive) {
-      // workspace 沿用最近工作台会话（D18 §2；无历史=演示默认，createSession 内兜底）
-      const recent = useAgentStore.getState().sessions[0]?.workspace;
+      // D19：workspace 沿用最近一个「项目」会话的目录（跳过日常会话）；无项目历史=日常对话
+      const recent = useAgentStore.getState().sessions.find((x) => x.workspace)?.workspace ?? '';
       const meta = await useAgentStore.getState().createSession({ workspace: recent, mode: 'ask' });
       sid = meta.id;
       await setEmbeddedSessionId(convId, sid);

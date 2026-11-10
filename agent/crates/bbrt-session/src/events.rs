@@ -142,7 +142,7 @@ pub enum SessionEvent {
     },
     /// session.ended
     SessionEnded { session_id: String, summary: String },
-    /// D15：记忆写入/更新
+    /// D15：记忆写入/更新（D19 增作用域两字段）
     MemorySaved {
         session_id: String,
         name: String,
@@ -150,6 +150,12 @@ pub enum SessionEvent {
         #[serde(rename = "memoryType")]
         memory_type: String,
         updated: bool,
+        /// D19："user" | "project"（缺省 user）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        /// D19 项目分区名（scope=project 时）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_name: Option<String>,
     },
     /// D15：容量淘汰
     MemoryEvicted {
