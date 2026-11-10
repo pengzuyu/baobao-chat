@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { AtSign, Mic, Paperclip, Smile, Square, Trash2, X } from 'lucide-react';
+import { AtSign, Bot, Mic, Paperclip, Smile, Square, Trash2, X } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { sendTyping } from '../api/im';
 import type { Message } from '../model/types';
@@ -55,6 +55,9 @@ interface MessageInputProps {
   onSendVoice?: (file: File, durationMs: number) => void;
   /** 表情包点击即发送（0022 sticker；不传=表情面板无「表情包」页签） */
   onPickSticker?: (item: StickerItem) => void;
+  /** Agent 模式（D18 §3.1）：点亮后本条消息交给内嵌 Agent 处理（不传=不显示入口） */
+  agentMode?: boolean;
+  onToggleAgentMode?: () => void;
 }
 
 export function MessageInput({
@@ -75,6 +78,8 @@ export function MessageInput({
   onPickFile,
   onSendVoice,
   onPickSticker,
+  agentMode,
+  onToggleAgentMode,
 }: MessageInputProps) {
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -329,6 +334,17 @@ export function MessageInput({
       ) : null}
 
       <div className="message-input__tools">
+        {onToggleAgentMode ? (
+          <button
+            className={`tool-btn${agentMode ? ' tool-btn--active' : ''}`}
+            title={agentMode ? 'Agent 模式已开启（点击关闭）' : 'Agent 模式：本条消息交给 AI 处理'}
+            type="button"
+            data-testid="agent-mode-btn"
+            onClick={() => onToggleAgentMode()}
+          >
+            <Bot size={17} />
+          </button>
+        ) : null}
         <button className="tool-btn" title="表情" type="button" onClick={() => setEmojiOpen((v) => !v)}>
           <Smile size={17} />
         </button>

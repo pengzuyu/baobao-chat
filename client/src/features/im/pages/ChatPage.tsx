@@ -42,6 +42,9 @@ import { FileSendPreview } from '../components/FileSendPreview';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from '../components/stream/MsgContextMenu';
 import { MessageInput } from '../components/MessageInput';
+import { AgentActivityCard } from '../components/AgentActivityCard';
+import { getEmbeddedSessionId, setEmbeddedSessionId } from '../agent/embedded';
+import { useAgentStore } from '../../agent/store/agent';
 import { ForwardModal } from '../components/ForwardModal';
 import { ReadReceiptModal } from '../components/ReadReceiptModal';
 import { MultiSelectBar } from '../components/MultiSelectBar';
@@ -189,6 +192,46 @@ export function ChatPage() {
 
   const activeConv = convs.find((c) => c.id === convId) ?? null;
   const messages = convId ? (messagesByConv[convId] ?? []) : [];
+
+  // ── 内嵌 Agent（D18）：Agent 模式开关 + 本会话活动卡（刷新恢复=映射中的会话仍在运行） ──
+  const [agentMode, setAgentMode] = useState(false);
+  const [embeddedActive, setEmbeddedActive] = useState<string | null>(null);
+  useEffect(() => {
+    setAgentMode(false);
+    setEmbeddedActive(null);
+    if (!convId) return;
+    void getEmbeddedSessionId(convId).then((sid) => {
+      if (!sid) return;
+      const meta = useAgentStore.getState().sessions.find((m) => m.id === sid);
+      if (meta && !['error', 'ended', 'paused'].includes(meta.status)) setEmbeddedActive(sid);
+    });
+  }, [convId]);
+
+  /** Agent 流程（D18 §2/§3.1）：问题照常落流为文本消息 + 交本会话 embedded Agent 处理 */
+  const agentFlow = async (rawText: string) => {
+    if (!convId) return;
+    const question = rawText.replace(/^@Agent\s*/, '').trim() || rawText;
+    const store = useAgentStore.getState();
+    await store.init(); // 事件泵订阅（仅 agent 页访问过才会装；幂等）
+    let sid = await getEmbeddedSessionId(convId);
+    const alive = sid ? useAgentStore.getState().sessions.some((m) => m.id === sid) : false;
+    if (!sid || !alive) {
+      // workspace 沿用最近工作台会话（D18 §2；无历史=演示默认，createSession 内兜底）
+      const recent = useAgentStore.getState().sessions[0]?.workspace;
+      const meta = await useAgentStore.getState().createSession({ workspace: recent, mode: 'ask' });
+      sid = meta.id;
+      await setEmbeddedSessionId(convId, sid);
+    }
+    setEmbeddedActive(sid);
+    await useAgentStore.getState().sendTextTo(sid, question);
+  };
+
+  /** 落流卡「在我端继续」（D18 §3.3：注入本卡结论到自己的 embedded 会话——不继承发起者上下文） */
+  const continueAgentCard = (body: { stages?: Array<{ t: string; md?: string }>; sources?: string[] }) => {
+    const conclusion = (body.stages ?? []).filter((st) => st.t === 'conclusion').map((st) => st.md ?? '').join('\n\n');
+    const digest = `【继续聊天中的 Agent 回答】以下是此前的结论，请在此基础上继续：\n${conclusion.slice(0, 4000) || '（无结论）'}${body.sources?.length ? `\n\n来源：${body.sources.join('；')}` : ''}`;
+    void agentFlow(`@Agent ${digest}`);
+  };
 
   // ---- 群详情拉取（PIM-05 数据源 + 输入框禁用判定依据：group_setting/myRole/myMuteUntil）----
   useEffect(() => {
@@ -578,8 +621,11 @@ export function ChatPage() {
       if (idx < 0) continue; // 用户已删掉 @文本：视为放弃提及
       mentions.push({ uid: p.uid, all: false, range: [idx, idx + p.name.length + 1] });
     }
+    // Agent 模式 / @Agent 前缀（D18 §3.1）：问题照常作为文本消息落流，另交 embedded Agent
+    const toAgent = agentMode || /^@Agent(\s|$)/.test(text);
     void sendText(convId, text, replyTo?.seq, mentions.length > 0 ? mentions : undefined);
     setReplyTo(null);
+    if (toAgent) void agentFlow(text);
   };
   const doEditSubmit = (text: string) => {
     if (!editing) return;
@@ -729,6 +775,7 @@ export function ChatPage() {
             myRole={myRole}
             onOpenMsgMenu={openMsgMenu}
             onOpenReceipts={activeConv && activeConv.type !== 1 ? (m) => setReceiptSeq(m.seq) : undefined}
+            onAgentCardContinue={m.type === 'agent_card' ? continueAgentCard : undefined}
             /* 多选：仅已落服务端消息参与（sending/failed 无 msgId，批量操作不可达） */
             multiSelect={
               msActive && m.type !== 'system' && m.status !== 2 && m.msgId
@@ -870,9 +917,17 @@ export function ChatPage() {
         </StateView>
       )}
 
+      {convId && embeddedActive ? (
+        <div className="agent-activity-wrap" data-testid="agent-activity-wrap">
+          <AgentActivityCard convId={convId} sessionId={embeddedActive} onRetire={() => setEmbeddedActive(null)} />
+        </div>
+      ) : null}
+
       {convId ? (
         <MessageInput
           convId={convId}
+          agentMode={agentMode}
+          onToggleAgentMode={() => setAgentMode((v) => !v)}
           /* typing 上报仅单聊（OQ-B03 拍板：群聊默认关——大群广播扰动高；广播群本就只读） */
           typingEnabled={activeConv?.type === 1}
           /* 禁用三态：广播群非 publisher / 单人禁言 / 全员禁言（非 owner/admin），D03 §3.3；

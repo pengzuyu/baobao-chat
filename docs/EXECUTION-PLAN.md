@@ -166,3 +166,17 @@
 - `make test`：三栈聚合测试
 - `scripts/e2e/`：`agent-interop.sh` / `kb-pipeline.sh` / `mcpgw-smoke.sh`——对应域改动的 E2E（doc-stage1 已随 doc 域移除；rtc-stage1 已随 rtc 域移除）
 - 双端 alice/bob 回归：~~frp 实验台（随外网接入关闭）~~ 本机双实例
+
+## 批次 F：IM 内嵌 Agent 卡（D18，2026-11-10 设计定稿）
+
+> 定案：(用户,会话) 一会话常驻；完整过程透明卡（思考/工具/结论）；审批弹框聊天页（OQ-B08 白名单口径作废）；
+> 分阶段更新落流（agent_card + PATCH 更新通道）；升级=文本注入；安全五层登记阶段二，v0.1 复用 agent 既有防线。
+> bbrt/协议/壳桥零改动；服务端仅 message 域 UpdateAgentCard ~80 行；大头在前端 IM。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|---|---|---|---|
+| F1 | 服务端 agent_card 更新通道 | message 域 UpdateAgentCard（service+repo+PATCH /messages/{id}/agent-card+msg.updated 扇出+测试） | 发起者 PATCH 后接收端 msg.updated 收到新 body；非发起者/非 agent_card 拒 | [x] 2026-11-10（agentcard.go+TestUpdateAgentCard 六断言：非本人 3017/非法 JSON 9001/扇出 edit_version 递增/text 拒/不存在 3017） |
+| F2 | 前端触发与映射 | MessageInput Agent 开关+@Agent 前缀检测；conv→sessionId 映射 IndexedDB；workspace 沿用最近会话 | 同群二次 @ 续同一会话；跨群不串 | [x] 2026-11-10（embedded.ts localMeta 映射；agentFlow init 幂等+alive 校验+workspace=recent；agent_store 增 createSession/sendTextTo+respondPermission 改全流扫描 requestId） |
+| F3 | 活动卡组件 | AgentActivityCard（流式/思考折叠/工具行/审批 Modal/追问/失败重试/实时计时/idle 折叠）——UI 按 D18 §3.4 对齐 change-my-life（仅效果）+ store streams 直读 | 发起者端全流程可视可交互 | [x] 2026-11-10（AgentProcessCard shared 纯展示：ThinkingCollapse 呼吸+自动收起/工具行/终态摘要条；审批 antd Modal+记忆三档；MarkdownText 移 shared 供 im/agent 共用） |
+| F4 | 落流卡与同步 | msg.send(agent_card) 首阶段落流+阶段边界 PATCH 更新；MessageBubble 渲染落流卡+[在我端继续] | 接收端分步看到卡长出；终态收起 | [x] 2026-11-10（stagesSignature 变化驱动 land/patch、终态收口后 onRetire 退场；落流失败不阻断本地（sig 回退下界重试）；digest=结论首行；刷新恢复=映射中会话运行中则重挂活动卡） |
+| F5 | 升级与通知 | 「转到工作台」文本注入新建会话；agent_done 通知链随 embedded 会话复用 | 卡片结论带入新工作台会话 | [x] 2026-11-10（升级/在我端继续均走 createSession+sendTextTo 注入结论与来源 ≤4000 字；agent_done=普通会话子任务通知链天然复用零改动） |

@@ -645,8 +645,13 @@ export function digestOf(msg: Message): string {
       return '[表情]';
     case 'video':
       return '[视频]';
-    case 'agent_card':
-      return '[卡片]';
+    case 'agent_card': {
+      // D18：摘要取结论首行（无结论回退通用占位）
+      const stages = 'stages' in msg.body ? (msg.body.stages as Array<{ t: string; md?: string }>) : [];
+      const md = [...stages].reverse().find((st) => st.t === 'conclusion')?.md ?? '';
+      const first = md.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#'));
+      return first ? first.slice(0, 60) : '[Agent 卡片]';
+    }
     case 'merge_forward':
       return '[合并转发]';
     case 'system':

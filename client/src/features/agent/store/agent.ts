@@ -105,6 +105,10 @@ interface AgentState {
   init: () => Promise<void>;
   selectSession: (sessionId: string | null) => void;
   startSession: (mode: PermissionMode, model?: string) => Promise<void>;
+  /** 显式建会话并返回 meta（D18 内嵌卡：不切换 activeSessionId 之外还供 im 侧直接持有引用） */
+  createSession: (opts?: { workspace?: string; mode?: PermissionMode; model?: string }) => Promise<import('../bridge/types').AgentSessionMeta>;
+  /** 定向发送（D18：embedded 会话由 im 侧显式指定 sessionId，不依赖 activeSessionId） */
+  sendTextTo: (sessionId: string, text: string) => Promise<void>;
   sendText: (text: string) => Promise<void>;
   respondPermission: (requestId: string, decision: 'allow' | 'deny', scope?: GrantScope, editedArgs?: Record<string, unknown>) => void;
   /** 确认委派启动（简报卡；乐观置 running，真实状态由 delegate.event 驱动） */
@@ -161,6 +165,9 @@ function patchDelegateCard(
     },
   }));
 }
+
+/** 演示默认工作区（D08 §5.1；正式版走 workspace_pick） */
+const DEFAULT_WORKSPACE = '~/code/bbw-server';
 
 function touchSession(sessions: AgentSessionMeta[], sessionId: string, patch: Partial<AgentSessionMeta>): AgentSessionMeta[] {
   return sessions.map((s) => (s.id === sessionId ? { ...s, ...patch, updatedAt: Date.now() } : s));
@@ -244,16 +251,31 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   selectSession: (sessionId) => set({ activeSessionId: sessionId }),
 
-  startSession: async (mode, model) => {
+  createSession: async (opts) => {
     // 演示默认工作区（正式版走 workspace_pick 系统选择器 + 信任确认，D08 §5.1）；
     // model=用户默认模型的直达引用（settings.ai_default 解析，0023；缺省=档位别名）
-    const meta = await bridge.startSession('~/code/bbw-server', mode, model);
+    const meta = await bridge.startSession(opts?.workspace ?? DEFAULT_WORKSPACE, opts?.mode ?? 'ask', opts?.model);
     set((s) => ({
       createError: null,
       sessions: [meta, ...s.sessions],
       activeSessionId: meta.id,
       modelBySession: { ...s.modelBySession, [meta.id]: { policy: meta.modelPolicy, override: meta.modelOverride } },
     }));
+    return meta;
+  },
+
+  startSession: async (mode, model) => {
+    await get().createSession({ mode, model });
+  },
+
+  sendTextTo: async (sid, text) => {
+    if (!sid || !text.trim()) return;
+    // 乐观上屏（与 sendText 同款；embedded 会话在 im 聊天卡消费，工作台打开时同样可见）
+    set((s) => ({
+      streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now() }] },
+      sessions: touchSession(s.sessions, sid, {}),
+    }));
+    await bridge.sendMessage(sid, text);
   },
 
   sendText: async (text) => {
@@ -273,20 +295,19 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       clearTimeout(timer);
       permTimers.delete(requestId);
     }
-    // 卡片终态先落（权限响应镜像到达后幂等覆盖）
-    const sid = get().activeSessionId;
-    if (sid) {
-      set((s) => ({
-        streams: {
-          ...s.streams,
-          [sid]: (s.streams[sid] ?? []).map((it) =>
-            it.kind === 'permission' && it.request.requestId === requestId && it.outcome === null
-              ? { ...it, outcome: { decision, scope, at: Date.now() } }
-              : it,
-          ),
-        },
-      }));
-    }
+    // 卡片终态先落（权限响应镜像到达后幂等覆盖）；按 requestId 全流扫描——
+    // D18 内嵌卡：embedded 会话往往不是 activeSessionId，不能只写当前会话
+    set((s) => {
+      const next: typeof s.streams = {};
+      for (const [sid, list] of Object.entries(s.streams)) {
+        next[sid] = list.map((it) =>
+          it.kind === 'permission' && it.request.requestId === requestId && it.outcome === null
+            ? { ...it, outcome: { decision, scope, at: Date.now() } }
+            : it,
+        );
+      }
+      return { streams: next };
+    });
     void bridge.respondPermission(requestId, decision, scope, editedArgs).catch(() => undefined);
   },
 

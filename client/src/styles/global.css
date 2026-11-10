@@ -7849,3 +7849,75 @@ body {
   font-size: 11px;
   color: var(--bbw-gray-6, #c2c7cc);
 }
+
+/* ─────────────── 内嵌 Agent 卡（D18 §3.4；效果对齐 change-my-life agent-web） ─────────────── */
+
+/* 活动卡外框（消息流与输入区之间） */
+.agent-activity-wrap { padding: 8px 16px 0; display: flex; flex-direction: column; gap: 6px; }
+
+/* 追问输入行（活动卡下方） */
+.agc-followup { display: flex; gap: 8px; align-items: center; padding: 0 2px; }
+.agc-followup__input { flex: 1; }
+
+/* 过程卡 */
+.agc-card { border: 1px solid var(--bbw-gray-3, #e5e6eb); border-radius: 10px; background: var(--bbw-bg-card, #fff); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.agc-card--running { border-color: var(--bbw-primary, #4080ff); }
+[data-theme='dark'] .agc-card { background: var(--bbw-bg-card, #232529); }
+.agc-card__head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--bbw-text-2, #4e5969); }
+.agc-card__title { font-weight: 600; }
+.agc-card__state { color: var(--bbw-text-3, #86909c); display: inline-flex; align-items: center; gap: 4px; }
+.agc-card__state--done { color: var(--bbw-success, #00b42a); }
+.agc-card__state--failed, .agc-card__state--cancelled { color: var(--bbw-danger, #f53f3f); }
+.agc-card__body { display: flex; flex-direction: column; gap: 6px; }
+.agc-card__actions { display: flex; gap: 8px; padding-top: 4px; border-top: 1px solid var(--bbw-gray-3, #e5e6eb); }
+
+/* 思考卡（流式展开+呼吸；结束自动折叠） */
+.agc-thinking { background: var(--bbw-primary-light, #f0f5ff); border: 1px solid rgba(64, 128, 255, 0.25); border-radius: 8px; overflow: hidden; }
+.agc-thinking__head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 10px; border: none; background: transparent; cursor: pointer; font-size: 12px; color: var(--bbw-primary, #4080ff); }
+.agc-thinking__title { flex: 1; text-align: left; }
+.agc-thinking--streaming .agc-thinking__head { animation: agc-pulse 1.5s ease-in-out infinite; }
+.agc-thinking__body { overflow-y: auto; transition: max-height 0.22s ease; }
+.agc-thinking__text { margin: 0; padding: 0 10px 8px; font-size: 12px; line-height: 1.7; color: var(--bbw-text-3, #86909c); white-space: pre-wrap; word-break: break-word; font-family: inherit; }
+
+/* 工具行 */
+.agc-tool { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--bbw-text-3, #86909c); padding: 4px 8px; background: var(--bbw-gray-1, #f7f8fa); border-radius: 6px; }
+.agc-tool code { font-family: 'SF Mono', 'Fira Code', Consolas, monospace; word-break: break-all; flex: 1; }
+.agc-tool--running code { color: var(--bbw-primary, #4080ff); }
+.agc-tool--fail code { color: var(--bbw-danger, #f53f3f); }
+.agc-tool__ms { color: var(--bbw-text-4, #c9cdd4); flex-shrink: 0; }
+.agc-tool__fail { color: var(--bbw-danger, #f53f3f); flex-shrink: 0; }
+
+/* 结论/来源/光标/计时 */
+.agc-conclusion { font-size: 13px; }
+.agc-conclusion .agent-md__p { margin: 4px 0; }
+.agc-sources { font-size: 12px; color: var(--bbw-text-3, #86909c); display: flex; gap: 6px; flex-wrap: wrap; }
+.agc-sources__item { background: var(--bbw-gray-2, #f2f3f5); border-radius: 4px; padding: 1px 6px; }
+.agc-cursor { display: inline-block; width: 7px; height: 14px; background: var(--bbw-primary, #4080ff); margin-left: 2px; vertical-align: text-bottom; animation: agc-pulse 0.9s steps(2) infinite; }
+.agc-elapsed { color: var(--bbw-text-3, #86909c); }
+
+/* 终态折叠摘要条 */
+.agc-summary-bar { display: flex; align-items: center; gap: 6px; width: 100%; border: none; background: var(--bbw-gray-1, #f7f8fa); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; color: var(--bbw-text-3, #86909c); text-align: left; }
+.agc-collapse-btn { border: none; background: transparent; color: var(--bbw-text-3, #86909c); font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 2px 0; }
+
+/* chevron 旋转 / 旋转加载 / 呼吸动画 */
+.agc-chev { transition: transform 0.2s; color: var(--bbw-text-4, #c9cdd4); }
+.agc-chev--open { transform: rotate(180deg); }
+.agc-spin { animation: agc-rotate 1s linear infinite; }
+@keyframes agc-rotate { to { transform: rotate(360deg); } }
+@keyframes agc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* 操作按钮（重试/转到工作台/在我端继续） */
+.agc-act-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--bbw-gray-3, #e5e6eb); background: var(--bbw-bg-card, #fff); color: var(--bbw-text-2, #4e5969); border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.agc-act-btn:hover { border-color: var(--bbw-primary, #4080ff); color: var(--bbw-primary, #4080ff); }
+
+/* 审批弹框内容 */
+.agc-perm { display: flex; flex-direction: column; gap: 10px; }
+.agc-perm__tool { display: flex; align-items: center; gap: 8px; }
+.agc-perm__tool code { font-size: 13px; }
+.agc-perm__reason { font-size: 12px; color: var(--bbw-text-3, #86909c); }
+.agc-perm__preview { background: var(--bbw-gray-1, #f7f8fa); border-radius: 8px; padding: 8px 10px; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+.agc-perm__scope { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.agc-perm__hint { font-size: 12px; color: var(--bbw-text-4, #c9cdd4); }
+
+/* Agent 模式按钮点亮态（MessageInput tool-btn 扩展） */
+.tool-btn--active { color: var(--bbw-primary, #4080ff); background: var(--bbw-primary-light, #f0f5ff); }

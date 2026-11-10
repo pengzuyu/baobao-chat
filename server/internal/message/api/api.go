@@ -285,6 +285,10 @@ type MessageService interface {
 	// 幂等（run_id+status）→ 通知中心落卡（kind=agent_done）+ 发布 agent.task.completed
 	ReportAgentTask(ctx context.Context, userID int64, p AgentTaskReportPayload) error
 
+	// ── 内嵌 Agent 卡（D18 §4.2：发起者 PATCH 卡片 body，msg.updated 扇出） ──
+	// UpdateAgentCard 阶段更新（仅发起者本人 + type=agent_card 可写；body 不透明透传）
+	UpdateAgentCard(ctx context.Context, userID, msgID int64, body json.RawMessage) error
+
 	// BroadcastNotice 平台公告广播（PAD-15；admin 域经 main 闭包调用——
 	// kind=announcement 系统公告分组，通知中心全员可见；返回成功落行数）
 	BroadcastNotice(ctx context.Context, tenantID int64, title, digest string, userIDs []int64) int

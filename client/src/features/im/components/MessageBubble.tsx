@@ -32,6 +32,7 @@ import {
   Video,
 } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
+import { AgentProcessCard, type AgentCardBody } from '../../../shared/components/AgentProcessCard';
 import { getErrorText } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
 import { digestOf } from '../store/im';
@@ -108,6 +109,8 @@ interface MessageBubbleProps {
   onSelectToggle?: (m: Message) => void;
   /** 打开已读回执面板（API-IM-06：群聊消息尾标点击；单聊不传=尾标不可点） */
   onOpenReceipts?: (m: Message) => void;
+  /** 内嵌 Agent 卡「在我端继续」（D18 §3.3：接收者新建自己的 embedded 会话并注入本卡结论） */
+  onAgentCardContinue?: (body: AgentCardBody) => void;
   /** 打开统一右键菜单（INT-IM-25）：右键/长按 500ms/悬浮条 ⋯ 三入口共用；
    *  system（仅复制）可开、撤回占位不可开——由 hasAnyMsgAction 判定 */
   onOpenMsgMenu?: (m: Message, at: MenuAnchor) => void;
@@ -751,6 +754,7 @@ export function MessageBubble({
   onSelectToggle,
   onOpenMsgMenu,
   onOpenReceipts,
+  onAgentCardContinue,
 }: MessageBubbleProps) {
   /** 完整表情选择器 popover（INT-IM-25：悬浮条「更多表情」真选择器，替换旧固定🎉） */
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
@@ -839,7 +843,12 @@ export function MessageBubble({
   // 统一右键菜单，与菜单共用 msgActionsVisible（INT-IM-25）
   const text = isText && 'text' in message.body ? message.body.text : '';
 
-  /** 回应切换：add/remove 由调用方按 ext.reactions 现态判定（全量快照回收保证一致） */
+  /** agent_card 体窄化（D18 §4.1：kind=embedded_agent 才渲染过程卡；未知 kind 走兜底附件卡） */
+function isAgentCardBody(b: unknown): b is AgentCardBody {
+  return typeof b === 'object' && b !== null && (b as { kind?: string }).kind === 'embedded_agent' && Array.isArray((b as { stages?: unknown }).stages);
+}
+
+/** 回应切换：add/remove 由调用方按 ext.reactions 现态判定（全量快照回收保证一致） */
   const doReact = (emoji: string) => actions?.onReact(message, emoji);
 
   // 多选模式（INT-IM-14）：整行可点切换勾选；气泡内容经 CSS pointer-events:none 收敛交互
@@ -899,6 +908,27 @@ export function MessageBubble({
             <StickerCard body={stickerBody} />
           ) : isVideo && videoBody ? (
             <VideoCard body={videoBody} />
+          ) : message.type === 'agent_card' && isAgentCardBody(message.body) ? (
+            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+              <AgentProcessCard
+                body={message.body as AgentCardBody}
+                testId="agent-card-msg"
+                actions={
+                  onAgentCardContinue ? (
+                    <button
+                      type="button"
+                      className="agc-act-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAgentCardContinue(message.body as AgentCardBody);
+                      }}
+                    >
+                      在我端继续
+                    </button>
+                  ) : undefined
+                }
+              />
+            </span>
           ) : (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
               <div className="file-card">

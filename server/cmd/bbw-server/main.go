@@ -353,6 +353,8 @@ func main() {
 	mux.Handle("POST /api/v1/messages/{id}/recall", authed(handleRecallMessage(msgMod.API())))
 	mux.Handle("PATCH /api/v1/messages/{id}", authed(handleEditMessage(msgMod.API())))
 	mux.Handle("POST /api/v1/messages/forward", authed(handleForward(msgMod.API())))
+	// 内嵌 Agent 卡阶段更新（D18 §4.2：body 不透明透传，仅发起者本人可写）
+	mux.Handle("PATCH /api/v1/messages/{id}/agent-card", authed(handleAgentCardUpdate(msgMod.API())))
 	mux.Handle("PATCH /api/v1/convs/{id}/state", authed(handleConvState(msgMod.API())))
 	// 增量同步（API-IM-01：登录/重连补投）
 	mux.Handle("GET /api/v1/sync", authed(handleSync(msgMod.API())))
@@ -1609,6 +1611,33 @@ func handleEditMessage(svc messageapi.MessageService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, res)
+	}
+}
+
+// handleAgentCardUpdate 内嵌 Agent 卡阶段更新（D18 §4.2：body 原样透传，
+// 读 raw 字节避开 decodeJSON 结构假设——卡片体对服务端不透明）
+func handleAgentCardUpdate(svc messageapi.MessageService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		msgID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || msgID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "消息 ID 非法"))
+			return
+		}
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil || len(raw) == 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "卡片体必填"))
+			return
+		}
+		if err := svc.UpdateAgentCard(r.Context(), uid, msgID, json.RawMessage(raw)); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"updated": true})
 	}
 }
 
