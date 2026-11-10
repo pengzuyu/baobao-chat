@@ -166,6 +166,24 @@ impl Store {
         }
     }
 
+    /// 启动清扫（2026-11-10 内嵌卡真机事故）：进程刚起=一切进行中状态都是
+    /// 上个进程的遗物（running/waiting_*/delegating/paused/starting → error）。
+    /// 否则死会话永远占 UI 与「活跃≤3」名额，且 input/stop 均 NotFound 无法收口。
+    /// 返回清扫行数（idle/ended/error 不动）。
+    pub fn sweep_interrupted_on_boot(&self) -> Result<u32, StoreError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let n = self.conn.execute(
+            "UPDATE agent_session SET status='error', ended_at=?1, updated_at=?1 \
+             WHERE status IN ('starting','running','waiting_permission',\
+             'waiting_review','subagent_fanout','delegating','paused')",
+            params![now],
+        )?;
+        Ok(n as u32)
+    }
+
     /// 活跃会话数：status 不在终态（ended/error）即活跃（首页红点/恢复提示用）。
     pub fn count_active_sessions(&self) -> Result<u32, StoreError> {
         let n: i64 = self.conn.query_row(
@@ -175,6 +193,66 @@ impl Store {
         )?;
         Ok(n as u32)
     }
+
+    /// 会话持久列表 × 工作区路径（D19 session.list 数据源）：
+    /// LEFT JOIN agent_workspace，未关联（日常/历史行）workspace=""。
+    /// updated_at 倒序，limit 截断。
+    pub fn list_sessions_with_workspace(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<SessionListRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.title, COALESCE(w.path, ''), s.mode, s.status, \
+                    s.created_at, s.updated_at, s.ended_at, s.summary
+             FROM agent_session s
+             LEFT JOIN agent_workspace w ON w.id = s.workspace_id
+             ORDER BY s.updated_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(SessionListRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                workspace: row.get(2)?,
+                mode: row.get(3)?,
+                status: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+                ended_at: row.get(7)?,
+                summary: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 回填会话工作区归属（D19：session.start 带目录时挂 workspace_id）
+    pub fn set_session_workspace(
+        &self,
+        id: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE agent_session SET workspace_id = ?2 WHERE id = ?1",
+            params![id, workspace_id],
+        )?;
+        Ok(())
+    }
+}
+
+/// session.list 协议行（D19；agent_session JOIN agent_workspace 投影，
+/// 字段口径对齐 bbrt_protocol::SessionListItem——本结构即其数据源）
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListRow {
+    pub id: String,
+    pub title: String,
+    /// 工作目录（""=日常/未关联）
+    pub workspace: String,
+    pub mode: String,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub ended_at: Option<i64>,
+    pub summary: Option<String>,
 }
 
 #[cfg(test)]
@@ -208,6 +286,29 @@ mod tests {
         let got = store.get_session("sess-1").unwrap().expect("应查到");
         assert_eq!(got, s);
         assert!(store.get_session("sess-不存在").unwrap().is_none());
+    }
+
+    /// 启动清扫：进行中七态全收口 error，idle/ended 不动；幂等（2026-11-10 内嵌卡事故）
+    #[test]
+    fn sweep_interrupted_on_boot_collects_only_active_states() {
+        let (_dir, store) = testutil::open_store();
+        for (id, status) in [
+            ("s-run", "running"),
+            ("s-wait", "waiting_permission"),
+            ("s-pause", "paused"),
+            ("s-idle", "idle"),
+            ("s-end", "ended"),
+        ] {
+            testutil::seed_session(&store, id);
+            store.update_session(id, status, None).unwrap();
+        }
+        assert_eq!(store.sweep_interrupted_on_boot().unwrap(), 3);
+        for id in ["s-run", "s-wait", "s-pause"] {
+            assert_eq!(store.get_session(id).unwrap().unwrap().status, "error", "{id} 应收口");
+        }
+        assert_eq!(store.get_session("s-idle").unwrap().unwrap().status, "idle");
+        assert_eq!(store.get_session("s-end").unwrap().unwrap().status, "ended");
+        assert_eq!(store.sweep_interrupted_on_boot().unwrap(), 0, "二次清扫幂等");
     }
 
     /// 状态机走 idle → running → ended：ended_at 只在终态补写且不覆盖。
@@ -290,5 +391,49 @@ mod tests {
         // error → 恢复活跃
         store.update_session("sess-d", "paused", None).unwrap();
         assert_eq!(store.count_active_sessions().unwrap(), 3);
+    }
+
+    /// D19 持久列表 × 工作区 JOIN：关联行带路径、未关联（日常）workspace=""。
+    #[test]
+    fn list_sessions_with_workspace_joins_and_falls_back_empty() {
+        let (_dir, store) = testutil::open_store();
+        store
+            .upsert_workspace(&crate::Workspace {
+                id: "ws-1".to_string(),
+                path: "/repo/proj".to_string(),
+                name: "proj".to_string(),
+                is_repo: true,
+                trusted: true,
+                extra_dirs: None,
+                last_opened_at: 1000,
+                created_at: 1000,
+            })
+            .unwrap();
+        let mut proj = testutil::sample_session("sess-proj");
+        proj.workspace_id = Some("ws-1".to_string());
+        proj.updated_at = 2000;
+        store.insert_session(&proj).unwrap();
+        let mut daily = testutil::sample_session("sess-daily");
+        daily.updated_at = 1000;
+        store.insert_session(&daily).unwrap();
+
+        let rows = store.list_sessions_with_workspace(10).unwrap();
+        assert_eq!(rows.len(), 2);
+        // updated_at 倒序：proj 在前
+        assert_eq!(rows[0].id, "sess-proj");
+        assert_eq!(rows[0].workspace, "/repo/proj");
+        assert_eq!(rows[1].id, "sess-daily");
+        assert_eq!(rows[1].workspace, "", "未关联工作区（日常）应为空串");
+
+        // set_session_workspace 回填/解除
+        store.set_session_workspace("sess-daily", Some("ws-1")).unwrap();
+        let again = store.list_sessions_with_workspace(10).unwrap();
+        assert!(again.iter().all(|r| r.workspace == "/repo/proj"));
+        store.set_session_workspace("sess-daily", None).unwrap();
+        let back = store.list_sessions_with_workspace(10).unwrap();
+        assert_eq!(
+            back.iter().find(|r| r.id == "sess-daily").unwrap().workspace,
+            ""
+        );
     }
 }

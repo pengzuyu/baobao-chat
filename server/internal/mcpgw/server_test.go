@@ -24,6 +24,7 @@ type fixture struct {
 	signer    *authjwt.Signer
 	kbArgs    []map[string]any // KBQuery 闭包收到的调用参数
 	imSends   []map[string]any // ImSend 闭包收到的参数
+	imHistoryCalls []map[string]any // ImHistory 闭包收到的调用参数
 	upLoads   []map[string]any // FileUpload 闭包收到的参数
 	audits    []AuditEntry
 	mailReads []map[string]any
@@ -48,6 +49,10 @@ func newFixture(t *testing.T) *fixture {
 				"tenant": tenantID, "uid": uid, "conv_id": convID, "msg_type": msgType, "body": string(body),
 			})
 			return map[string]any{"msg_id": 801, "seq": 42}, nil
+		},
+		ImHistory: func(_ context.Context, tenantID, uid, convID int64, limit int) ([]string, error) {
+			f.imHistoryCalls = append(f.imHistoryCalls, map[string]any{"tenant": tenantID, "uid": uid, "conv_id": convID, "limit": limit})
+			return []string{"Alice: 报销流程是什么", "【Agent】(done) 1. 提交入口：OA-报销中心…"}, nil
 		},
 		FileUpload: func(_ context.Context, tenantID, uid int64, name, contentType string, convID int64, r io.Reader) (any, error) {
 			data, _ := io.ReadAll(r)
@@ -157,12 +162,12 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 	tok := f.mint(t, "7", false)
 	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`, tok)
 	tools := decode(t, rec)["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 5 {
-		t.Fatalf("供给应为 5 工具（kb_query/im_send/file_upload/mail_read/mail_send）: %d 项", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("供给应为 6 工具（kb_query/im_send/im_history/file_upload/mail_read/mail_send）: %d 项", len(tools))
 	}
 	// 风险级与 09 篇 §3.1 权威表逐项对齐（客户端 gate 按此分档）
 	want := map[string]string{
-		"kb_query": "low", "im_send": "high", "file_upload": "medium",
+		"kb_query": "low", "im_send": "high", "im_history": "low", "file_upload": "medium",
 		"mail_read": "low", "mail_send": "high",
 	}
 	got := map[string]string{}
@@ -455,5 +460,24 @@ func TestMailSendSupply(t *testing.T) {
 	rec = post(t, f2.gw, body, "")
 	if c := errCode(t, decode(t, rec)); c != -32002 {
 		t.Fatalf("OBO 缺 scope 应 -32002: %v", c)
+	}
+}
+
+// im_history（D18 §3.5 agent 自读上下文）：默认 limit=50 透传、结果行进 text 通道
+func TestCallImHistory(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "9", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"im_history","arguments":{"conv_id":7},"_meta":{"bbwAct":"agent:sess-2"}}}`, tok)
+	res := decode(t, rec)["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("应成功: %v", res)
+	}
+	content := res["content"].([]any)[0].(map[string]any)
+	text := content["text"].(string)
+	if !strings.Contains(text, "报销流程") || !strings.Contains(text, "Agent") {
+		t.Fatalf("im_history 行摘要缺失: %s", text)
+	}
+	if len(f.imHistoryCalls) != 1 || f.imHistoryCalls[0]["limit"] != 50 || f.imHistoryCalls[0]["conv_id"] != int64(7) {
+		t.Fatalf("ImHistory 参数（默认 limit=50）: %+v", f.imHistoryCalls)
 	}
 }

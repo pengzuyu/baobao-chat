@@ -117,6 +117,10 @@ function ProvidersPanel() {
       setFormError('名称与 Base URL 必填');
       return;
     }
+    if (!/^https?:\/\//.test(baseUrl)) {
+      setFormError('Base URL 须以 http:// 或 https:// 开头');
+      return;
+    }
     if (form.models.length === 0) {
       setFormError('至少选择 1 个模型（可先「探测可用模型」拉取清单）');
       return;
@@ -141,7 +145,7 @@ function ProvidersPanel() {
           setForm(emptyForm);
           setEditingKey(false);
         },
-        onError: (err) => setFormError(err instanceof ApiError ? getErrorText(err.code) : '保存失败'),
+        onError: (err) => setFormError(err instanceof ApiError ? err.message : '保存失败'), // 服务端具体报错透传（http.ts 已优先取 message）
       },
     );
   };

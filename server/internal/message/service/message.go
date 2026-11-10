@@ -519,7 +519,7 @@ func (s *Service) ListUserConversations(ctx context.Context, userID int64) ([]me
 			unread = 0
 		}
 		dto := messageapi.ConversationDTO{
-			ID: strconv.FormatInt(c.ID, 10), Type: c.Type, Name: c.Name,
+			ID: strconv.FormatInt(c.ID, 10), Type: c.Type, Name: s.displayConvName(ctx, &c, userID),
 			OwnerID:   strconv.FormatInt(c.OwnerID, 10),
 			LatestSeq: c.LatestSeq, LastMsgTS: c.LastMsgTS, MemberCount: c.MemberCount,
 			Status: c.Status,

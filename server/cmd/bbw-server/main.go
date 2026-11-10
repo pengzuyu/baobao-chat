@@ -527,6 +527,36 @@ func main() {
 			}
 			return map[string]any{"msg_id": res.MsgID, "seq": res.Seq, "ts": res.TS}, nil
 		},
+		// im_history：agent 上下文自读（D18 §3.5 修订）——成员校验经 GetConvDetail
+		// （3019 拒非成员）；行摘要=「名字: 内容」，agent_card 提炼结论首段
+		ImHistory: func(ctx context.Context, tenantID, uid, convID int64, limit int) ([]string, error) {
+			if _, err := msgMod.API().GetConvDetail(ctx, uid, convID); err != nil {
+				return nil, err
+			}
+			msgs, err := msgMod.API().ListMessagesLatest(ctx, convID, limit)
+			if err != nil {
+				return nil, err
+			}
+			lines := make([]string, 0, len(msgs))
+			for _, m := range msgs { // ListMessagesLatest 为倒序——翻成升序贴近阅读
+				switch m.Type {
+				case "text":
+					var b struct{ Text string `json:"text"` }
+					_ = json.Unmarshal(m.Body, &b)
+					lines = append(lines, m.SenderName+": "+truncateRunesForMCP(b.Text, 300))
+				case "agent_card":
+					lines = append(lines, "【Agent】"+agentCardDigestForMCP(m.Body))
+				case "system":
+					// 系统消息对上下文价值低，跳过
+				default:
+					lines = append(lines, m.SenderName+": ["+m.Type+"]")
+				}
+			}
+			for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+				lines[i], lines[j] = lines[j], lines[i]
+			}
+			return lines, nil
+		},
 		// file_upload：b64 已解码为流，直接交 file 域（去重/20MB 上限/软删归域）
 		FileUpload: func(ctx context.Context, tenantID, uid int64, name, contentType string, convID int64, r io.Reader) (any, error) {
 			return fileSvc.Upload(ctx, tenantID, uid, name, contentType, convID, r)
@@ -2831,6 +2861,39 @@ func handleFileTransfers(svc fileapi.FileService) http.HandlerFunc {
 		}
 		httpx.OK(w, r, map[string]any{"items": items})
 	}
+}
+
+// truncateRunesForMCP MCP 通道 rune 截断（im_history 行摘要用）
+func truncateRunesForMCP(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// agentCardDigestForMCP agent_card 体摘要（D18 §4.1 stages 投影：结论首段）
+func agentCardDigestForMCP(body json.RawMessage) string {
+	var c struct {
+		Status string `json:"status"`
+		Stages []struct {
+			T  string `json:"t"`
+			MD string `json:"md"`
+		} `json:"stages"`
+	}
+	if err := json.Unmarshal(body, &c); err != nil {
+		return "[Agent 卡片]"
+	}
+	for i := len(c.Stages) - 1; i >= 0; i-- {
+		if c.Stages[i].T == "conclusion" && c.Stages[i].MD != "" {
+			md := c.Stages[i].MD
+			if len([]rune(md)) > 500 {
+				md = string([]rune(md)[:500]) + "…"
+			}
+			return "(" + c.Status + ") " + md
+		}
+	}
+	return "[Agent 卡片·进行中]"
 }
 
 // seedBuiltinRoles 内置角色（is_builtin：名称/描述锁定，仅可改权限点）

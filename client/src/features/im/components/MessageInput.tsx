@@ -28,6 +28,9 @@ function voiceExtOf(mime: string): string {
   return 'webm';
 }
 
+/** @面板虚拟 Agent 条目 uid（D18 §3.1：@Agent 触发的快捷选择形态） */
+const AGENT_MENTION_UID = '__agent__';
+
 interface MessageInputProps {
   convId: string;
   /** 正在输入上报（INT-IM-11）：群聊默认关（OQ-B03 拍板——大群 typing 广播收益低、扰动高），单聊保持 2.5s 节流 */
@@ -112,7 +115,12 @@ export function MessageInput({
   const mentionList = useMemo(() => {
     if (!mention) return [];
     const q = mention.query.toLowerCase();
-    return mentionCandidates.filter((c) => c.name.toLowerCase().includes(q) || c.uid.includes(q)).slice(0, 6);
+    const members = mentionCandidates
+      .filter((c) => c.name.toLowerCase().includes(q) || c.uid.includes(q))
+      .slice(0, 6);
+    // Agent 快捷条目置顶（D18 §3.1 补全：@面板与 @人同构；命中 agent 前缀即出）
+    if ('agent'.includes(q) || q === '') return [{ uid: AGENT_MENTION_UID, name: 'Agent' }, ...members];
+    return members;
   }, [mention, mentionCandidates]);
 
   const doSend = () => {
@@ -215,25 +223,10 @@ export function MessageInput({
     return () => clearTimeout(t);
   }, [voiceErr]);
 
-  const insertText = (insert: string) => {
-    const ta = taRef.current;
-    if (!ta) return;
-    const start = ta.selectionStart ?? draft.length;
-    const end = ta.selectionEnd ?? draft.length;
-    const next = draft.slice(0, start) + insert + draft.slice(end);
-    onDraftChange(next);
-    requestAnimationFrame(() => {
-      ta.selectionStart = ta.selectionEnd = start + insert.length;
-      ta.focus();
-    });
-  };
-
-  const onChange = (v: string) => {
-    onDraftChange(v);
-    maybeTyping();
-    // @面板探测：光标前最近一个未闭合的 @（INT-IM-24）
-    const pos = taRef.current?.selectionStart ?? v.length;
-    const before = v.slice(0, pos);
+  /** @面板探测（INT-IM-24；全角＠归一）。输入与工具条插入共用——此前仅
+   * textarea onChange 触发，@按钮直插 draft 不弹面板（2026-11-10 真机反馈） */
+  const detectMention = (v: string, cursor: number) => {
+    const before = v.slice(0, cursor).replaceAll('＠', '@');
     const at = before.lastIndexOf('@');
     if (at >= 0 && (at === 0 || /\s/.test(before[at - 1] ?? ' '))) {
       const query = before.slice(at + 1);
@@ -246,6 +239,27 @@ export function MessageInput({
     setMention(null);
   };
 
+  const insertText = (insert: string) => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart ?? draft.length;
+    const end = ta.selectionEnd ?? draft.length;
+    const next = draft.slice(0, start) + insert + draft.slice(end);
+    onDraftChange(next);
+    if (insert.includes('@')) detectMention(next, start + insert.length); // 工具条插入同触发面板
+    requestAnimationFrame(() => {
+      ta.selectionStart = ta.selectionEnd = start + insert.length;
+      ta.focus();
+    });
+  };
+
+  const onChange = (v: string) => {
+    onDraftChange(v);
+    maybeTyping();
+    const pos = taRef.current?.selectionStart ?? v.length;
+    detectMention(v, pos);
+  };
+
   const pickMention = (uid: string, name: string) => {
     if (mention) {
       const pos = taRef.current?.selectionStart ?? draft.length;
@@ -253,7 +267,8 @@ export function MessageInput({
       const after = draft.slice(pos);
       const replaced = `${before.slice(0, mention.start)}@${name} ${after}`;
       onDraftChange(replaced);
-      onMentionPicked?.(uid, name);
+      // Agent 是触发词不是人：插入 @Agent 文本即点亮 Agent 链路，不进 mentions 名单
+      if (uid !== AGENT_MENTION_UID) onMentionPicked?.(uid, name);
       setMention(null);
       requestAnimationFrame(() => {
         const ta = taRef.current;
@@ -418,8 +433,11 @@ export function MessageInput({
               onMouseEnter={() => setMentionIdx(i)}
               onClick={() => pickMention(c.uid, c.name)}
             >
-              <span className="mention-panel__name">{c.name}</span>
-              <span className="mention-panel__uid">{c.uid}</span>
+              <span className="mention-panel__name">
+                {c.uid === AGENT_MENTION_UID ? <Bot size={12} style={{ marginRight: 4, verticalAlign: -1 }} /> : null}
+                {c.name}
+              </span>
+              <span className="mention-panel__uid">{c.uid === AGENT_MENTION_UID ? 'AI 助手' : c.uid}</span>
             </button>
           ))}
         </div>

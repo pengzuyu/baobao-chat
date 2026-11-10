@@ -17,7 +17,7 @@ import { AgentProcessCard, type AgentCardBody } from '../../../shared/components
 import { useAgentStore, type StreamItem } from '../../agent/store/agent';
 import { getAgentBridge } from '../../agent/bridge';
 import type { GrantScope } from '../../agent/bridge/types';
-import { landAgentCard, patchAgentCard, stagesFromStream, stagesSignature } from '../agent/embedded';
+import { agentCardClientMsgId, contextInstruction, landAgentCard, patchAgentCard, stagesFromStream, stagesSignature } from '../agent/embedded';
 
 const RUNNING_STATES = new Set(['starting', 'running', 'waiting_permission', 'waiting_review', 'subagent_fanout', 'delegating']);
 const TERMINAL_STATES = new Set(['error', 'ended']);
@@ -42,6 +42,11 @@ export function AgentActivityCard({ convId, sessionId, onRetire }: Props) {
   const landedMsgRef = useRef<string | null>(null); // 落流 msgId（null=未落流）
   const lastSigRef = useRef('');
   const retiredRef = useRef(false);
+  /** 本轮轮序（首落流时按流内 user 条目数定——一轮问答一张卡） */
+  const roundRef = useRef(0);
+  /** 最近一次事件时间（stream 变化即推进；看门狗判定用） */
+  const lastProgressRef = useRef(Date.now());
+  const [stalled, setStalled] = useState(false);
   const lastUserTextRef = useRef('');
 
   // 最近一条待决审批（waiting 弹框数据源）
@@ -53,52 +58,78 @@ export function AgentActivityCard({ convId, sessionId, onRetire }: Props) {
     return null;
   }, [stream]);
 
-  // 用户消息留底（失败重试重发用）
+  // 用户消息留底（失败重试重发用）+ 事件推进时间戳
   useEffect(() => {
+    lastProgressRef.current = Date.now();
+    setStalled(false);
     const lastUser = [...stream].reverse().find((it) => it.kind === 'user');
     if (lastUser && lastUser.kind === 'user') lastUserTextRef.current = lastUser.text;
   }, [stream]);
+
+  // 无进展看门狗（2026-11-10 真机卡死事故）：busy 且 120s 无任何事件 → 疑似
+  // 卡住提示 + [结束会话] 自愈入口（bbrt 挂起无法靠等待恢复时用户可强制收口）
+  const busy = !!session && RUNNING_STATES.has(session.status);
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => {
+      if (Date.now() - lastProgressRef.current > 120_000) setStalled(true);
+    }, 5000);
+    return () => clearInterval(t);
+  }, [busy]);
+
+  const doForceEnd = () => {
+    void getAgentBridge().endSession(sessionId).catch(() => undefined);
+    onRetire();
+  };
 
   const { stages, sources, rounds } = useMemo(() => stagesFromStream(stream), [stream]);
   const terminal = !!session && (TERMINAL_STATES.has(session.status) || session.endedAt != null);
   /** 会话存活但当前轮结束（idle/paused）：折叠为摘要条待追问，无运行动画 */
   const idle = !!session && !terminal && !RUNNING_STATES.has(session.status);
+
   const failed = session?.status === 'error';
 
-  // 阶段边界 → 落流/更新（D18 §4.2；终态收口后退场）
+  // 阶段边界 → 落流/更新（D18 §4.2；粗粒度签名+互斥锁，终态收口后退场）。
+  // 事故教训（2026-11-10 真机）：细粒度签名（含 md 长度）× 无 in-flight 锁 ×
+  // Date.now() 幂等键 = 每个流式 token 落一张新卡。现口径：签名只看阶段结构，
+  // 落流/更新串行互斥，幂等键会话终身稳定（聚合单卡）。
+  const syncLockRef = useRef(false);
   useEffect(() => {
-    if (stages.length === 0) return; // 首个阶段完成前不落流
-    const sig = stagesSignature(stages) + `#${terminal ? 'T' : 'R'}`;
+    if (stages.length === 0 || syncLockRef.current) return;
+    const sig = `${stagesSignature(stages)}#${terminal ? 'T' : 'R'}#${failed ? 'F' : 'N'}#${idle ? 'I' : 'B'}#${rounds}`;
     if (sig === lastSigRef.current) return;
     lastSigRef.current = sig;
+    syncLockRef.current = true;
     const body: AgentCardBody = {
       kind: 'embedded_agent',
       session_id: sessionId,
-      status: terminal ? (failed ? 'failed' : 'done') : 'running',
+      status: terminal ? (failed ? 'failed' : 'done') : idle ? 'done' : 'running',
       stages,
       sources,
       rounds,
       started_at: startedAtRef.current,
-      ended_at: terminal ? Date.now() : undefined,
+      ended_at: terminal ? Date.now() : idle ? Date.now() : undefined,
     };
     void (async () => {
       try {
         if (!landedMsgRef.current) {
-          landedMsgRef.current = await landAgentCard(convId, `agc-${sessionId}-${Date.now()}`, body);
-        } else if (terminal && !retiredRef.current) {
+          if (!roundRef.current) roundRef.current = stream.filter((it) => it.kind === 'user').length;
+          landedMsgRef.current = await landAgentCard(convId, agentCardClientMsgId(sessionId, roundRef.current), body);
+        } else if ((terminal || idle) && !retiredRef.current) {
           retiredRef.current = true;
           await patchAgentCard(landedMsgRef.current, body);
-          onRetire(); // 终态卡已落流，本地活动卡退场
+          onRetire(); // 本轮已收口（终态/回答完 idle）：消息流终态卡在场，本地活动卡退场
           return;
-        } else {
+        } else if (!terminal && !idle) {
           await patchAgentCard(landedMsgRef.current, body);
         }
       } catch {
-        /* 落流为辅链路：失败不阻断本地体验；下个阶段边界重试（sig 已变） */
-        lastSigRef.current = '';
+        lastSigRef.current = ''; // 落流为辅链路：失败不阻断本地，下个阶段边界重试
+      } finally {
+        syncLockRef.current = false;
       }
     })();
-  }, [stages, sources, rounds, terminal, failed, convId, sessionId, onRetire]);
+  }, [stages, sources, rounds, terminal, failed, idle, convId, sessionId, stream, onRetire]);
 
   // 审批弹框动作
   const [scope, setScope] = useState<GrantScope>('once');
@@ -128,13 +159,12 @@ export function AgentActivityCard({ convId, sessionId, onRetire }: Props) {
     if (lastUserTextRef.current) void sendTextTo(sessionId, lastUserTextRef.current);
   };
 
-  /** F5 转到工作台：新建 workbench 会话 + 文本注入结论与来源（D18 §3.5） */
+  /** F5 转到工作台（D18 §3.5 修订）：新会话不搬运内容——先调 im_history 自读
+   * 本会话记录（含此前 Agent 卡片结论）建立上下文，再继续 */
   const doUpgrade = () => {
-    const conclusion = stages.filter((s) => s.t === 'conclusion').map((s) => s.md ?? '').join('\n\n');
-    const digest = `${conclusion || '（暂无结论）'}${sources.length ? `\n\n来源：${sources.join('；')}` : ''}`;
     void createSession({ mode: 'ask' }).then((meta) => {
       if (!meta) return;
-      return sendTextTo(meta.id, `【从聊天转入】以下是此前对话的结论，请在此基础上继续：\n${digest.slice(0, 4000)}`);
+      return sendTextTo(meta.id, contextInstruction(convId));
     }).then(() => navigate(`/agent/s/${useAgentStore.getState().activeSessionId ?? ''}`));
   };
 
@@ -148,6 +178,14 @@ export function AgentActivityCard({ convId, sessionId, onRetire }: Props) {
         testId="agent-activity-card"
         actions={
           <Space size={4} wrap>
+            {stalled && busy ? (
+              <span className="agc-stalled">
+                ⚠ 120 秒无进展，疑似卡住
+                <button type="button" className="agc-act-btn" onClick={doForceEnd}>
+                  结束会话
+                </button>
+              </span>
+            ) : null}
             {failed ? (
               <button type="button" className="agc-act-btn" onClick={doRetry}>
                 <RefreshCw size={12} /> 重试

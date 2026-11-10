@@ -25,8 +25,10 @@ pub use knowledge::{
     MAX_ENTRIES, RECALL_FULL_ENTRIES, RECALL_TOP_K,
 };
 
+use std::collections::HashMap;
+use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -241,8 +243,30 @@ impl MemoryEngine {
 
     /// W1 写入路径：知识记忆落盘 + journal 记 `memory.saved` + 产出协议事件。
     /// journal 记录失败时返回错误——但记忆文件已落盘，重试安全（同题更新不重复）。
+    /// D19 起为本方法的作用域路由入口（None/空 workspace=用户级）。
     pub fn save_memory(&self, input: &SaveInput) -> Result<SaveOutcome, MemoryError> {
-        let result = self.knowledge.save(input)?;
+        self.save_memory_scoped(None, input)
+    }
+
+    /// D19 W1 作用域写入：Some(workspace) → 项目分区；None/空 → 用户级。
+    /// 两条路径共享 journal（被动轨全局活动统计）与容量/脱敏约束。
+    pub fn save_memory_scoped(
+        &self,
+        workspace: Option<&Path>,
+        input: &SaveInput,
+    ) -> Result<SaveOutcome, MemoryError> {
+        let (store, scope, workspace_name) = match workspace.map(Path::to_path_buf) {
+            Some(ws) if !ws.as_os_str().is_empty() => {
+                let real = fs::canonicalize(&ws).unwrap_or(ws);
+                let name = scope_key(&real);
+                let store = self
+                    .project_store(&real)
+                    .map_err(MemoryError::Io)?;
+                (store, "project".to_string(), Some(name))
+            }
+            _ => (self.knowledge.clone(), "user".to_string(), None),
+        };
+        let result = store.save(input)?;
         self.record(&ActivityEvent::MemorySaved {
             session: input.session.clone(),
             title: result.title.clone(),
@@ -255,6 +279,8 @@ impl MemoryEngine {
                 title: result.title.clone(),
                 r#type: input.mtype,
                 updated: result.updated,
+                scope,
+                workspace_name,
             },
             evicted: result
                 .evicted
@@ -266,6 +292,101 @@ impl MemoryEngine {
                 })
                 .collect(),
         })
+    }
+
+    /// D19 作用域列表：Some(workspace) → 该项目分区条目；None/空 → 用户级条目。
+    pub fn list_scoped(&self, workspace: Option<&Path>) -> Vec<MemorySummary> {
+        match workspace.map(Path::to_path_buf) {
+            Some(ws) if !ws.as_os_str().is_empty() => {
+                let real = fs::canonicalize(&ws).unwrap_or(ws);
+                self.project_store(&real)
+                    .map(|s| s.list())
+                    .unwrap_or_default()
+            }
+            _ => self.knowledge.list(),
+        }
+    }
+
+    /// D19 全部项目分区清单（memory.list scope=project 未指定路径时）：
+    /// 扫 projects/ 一级子目录（目录名即 scope_key），每分区带条目。
+    pub fn list_project_partitions(&self) -> Vec<(String, Vec<MemorySummary>)> {
+        let mut out = Vec::new();
+        let Ok(entries) = fs::read_dir(&self.projects_dir) else {
+            return out;
+        };
+        let mut keys: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        keys.sort();
+        for dir in keys {
+            let Some(key) = dir.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let store = KnowledgeStore::new(&dir, Arc::clone(&self.clock))
+                .map_err(MemoryError::Io)
+                .map(|s| s.list())
+                .unwrap_or_default();
+            out.push((key.to_string(), store));
+        }
+        out
+    }
+
+    /// D19 作用域删除：Some(workspace) → 项目分区；None/空 → 用户级。
+    pub fn delete_scoped(
+        &self,
+        workspace: Option<&Path>,
+        name: &str,
+    ) -> Result<bool, MemoryError> {
+        match workspace.map(Path::to_path_buf) {
+            Some(ws) if !ws.as_os_str().is_empty() => {
+                let real = fs::canonicalize(&ws).unwrap_or(ws);
+                self.project_store(&real)
+                    .map_err(MemoryError::Io)?
+                    .delete(name)
+            }
+            _ => self.knowledge.delete(name),
+        }
+    }
+
+    /// D19 作用域召回（loop_runner [记忆] 块数据源）：
+    /// - 日常（None/空）→ 仅用户级（等价 recall_for）；
+    /// - 项目会话 → 用户级 + 项目级两段，带 `[用户记忆]`/`[项目记忆·<分区>]`
+    ///   小节头（单段为空则只注另一段；两段皆空 → 空串）。
+    pub fn recall_scoped(&self, workspace: Option<&Path>, query: &str) -> String {
+        let user_part = self
+            .knowledge
+            .recall_for(query)
+            .unwrap_or_default();
+        let project_part = match workspace.map(Path::to_path_buf) {
+            Some(ws) if !ws.as_os_str().is_empty() => {
+                let real = fs::canonicalize(&ws).unwrap_or(ws);
+                self.project_store(&real)
+                    .ok()
+                    .and_then(|s| s.recall_for(query).ok())
+                    .unwrap_or_default()
+            }
+            _ => String::new(),
+        };
+        match (user_part.is_empty(), project_part.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => user_part,
+            (true, false) => {
+                let key = scope_key(
+                    &fs::canonicalize(workspace.unwrap_or_default())
+                        .unwrap_or_else(|_| workspace.unwrap_or_default().to_path_buf()),
+                );
+                format!("[项目记忆·{key}]\n{project_part}")
+            }
+            (false, false) => {
+                let key = scope_key(
+                    &fs::canonicalize(workspace.unwrap_or_default())
+                        .unwrap_or_else(|_| workspace.unwrap_or_default().to_path_buf()),
+                );
+                format!("[用户记忆]\n{user_part}\n\n[项目记忆·{key}]\n{project_part}")
+            }
+        }
     }
 
     /// session.ended 落地后的当日日报重算（D15 §3.2 触发 1；幂等覆盖）。

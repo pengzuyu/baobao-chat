@@ -43,7 +43,7 @@ import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from '../components/stream/MsgContextMenu';
 import { MessageInput } from '../components/MessageInput';
 import { AgentActivityCard } from '../components/AgentActivityCard';
-import { getEmbeddedSessionId, setEmbeddedSessionId } from '../agent/embedded';
+import { contextInstruction, getEmbeddedSessionId, setEmbeddedSessionId } from '../agent/embedded';
 import { useAgentStore } from '../../agent/store/agent';
 import { ForwardModal } from '../components/ForwardModal';
 import { ReadReceiptModal } from '../components/ReadReceiptModal';
@@ -203,14 +203,17 @@ export function ChatPage() {
     void getEmbeddedSessionId(convId).then((sid) => {
       if (!sid) return;
       const meta = useAgentStore.getState().sessions.find((m) => m.id === sid);
-      if (meta && !['error', 'ended', 'paused'].includes(meta.status)) setEmbeddedActive(sid);
+      // 仅运行中重挂活动卡（idle=上轮已收卡、不再打扰；新提问自然重开）
+      if (meta && ['starting', 'running', 'waiting_permission', 'waiting_review', 'subagent_fanout', 'delegating'].includes(meta.status)) {
+        setEmbeddedActive(sid);
+      }
     });
   }, [convId]);
 
   /** Agent 流程（D18 §2/§3.1）：问题照常落流为文本消息 + 交本会话 embedded Agent 处理 */
   const agentFlow = async (rawText: string) => {
     if (!convId) return;
-    const question = rawText.replace(/^@Agent\s*/, '').trim() || rawText;
+    const question = rawText.replaceAll('＠', '@').replace(/^@Agent\s*/, '').trim() || rawText;
     const store = useAgentStore.getState();
     await store.init(); // 事件泵订阅（仅 agent 页访问过才会装；幂等）
     let sid = await getEmbeddedSessionId(convId);
@@ -226,11 +229,12 @@ export function ChatPage() {
     await useAgentStore.getState().sendTextTo(sid, question);
   };
 
-  /** 落流卡「在我端继续」（D18 §3.3：注入本卡结论到自己的 embedded 会话——不继承发起者上下文） */
-  const continueAgentCard = (body: { stages?: Array<{ t: string; md?: string }>; sources?: string[] }) => {
-    const conclusion = (body.stages ?? []).filter((st) => st.t === 'conclusion').map((st) => st.md ?? '').join('\n\n');
-    const digest = `【继续聊天中的 Agent 回答】以下是此前的结论，请在此基础上继续：\n${conclusion.slice(0, 4000) || '（无结论）'}${body.sources?.length ? `\n\n来源：${body.sources.join('；')}` : ''}`;
-    void agentFlow(`@Agent ${digest}`);
+  /** 落流卡「在我端继续」（D18 §3.5 修订：不搬运卡片内容——自己的 embedded
+   * 会话先调 im_history 自读会话记录（含此前 Agent 卡片结论）再继续）
+   * 每人只与自己的 agent 对话（2026-11-10 用户裁决原则） */
+  const continueAgentCard = (_body: unknown) => {
+    if (!convId) return;
+    void agentFlow(contextInstruction(convId, activeConv?.name));
   };
 
   // ---- 群详情拉取（PIM-05 数据源 + 输入框禁用判定依据：group_setting/myRole/myMuteUntil）----
@@ -622,7 +626,7 @@ export function ChatPage() {
       mentions.push({ uid: p.uid, all: false, range: [idx, idx + p.name.length + 1] });
     }
     // Agent 模式 / @Agent 前缀（D18 §3.1）：问题照常作为文本消息落流，另交 embedded Agent
-    const toAgent = agentMode || /^@Agent(\s|$)/.test(text);
+    const toAgent = agentMode || /^@Agent([\s　]|$)/.test(text.replaceAll('＠', '@'));
     void sendText(convId, text, replyTo?.seq, mentions.length > 0 ? mentions : undefined);
     setReplyTo(null);
     if (toAgent) void agentFlow(text);

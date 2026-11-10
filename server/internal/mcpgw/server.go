@@ -138,6 +138,9 @@ func (g *Gateway) handleCall(r *http.Request, claims *authjwt.Claims, params jso
 	case "im_send":
 		res, err := g.invokeImSend(r.Context(), tenant, uid, p.Arguments)
 		return res, err
+	case "im_history":
+		res, err := g.invokeImHistory(r.Context(), tenant, uid, p.Arguments)
+		return res, err
 	case "file_upload":
 		res, err := g.invokeFileUpload(r.Context(), tenant, uid, p.Arguments)
 		return res, err

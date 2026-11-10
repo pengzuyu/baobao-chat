@@ -71,6 +71,23 @@ func corpTools() []ToolDef {
 			Scope: "im:message:send",
 		},
 		{
+			// D18 §3.5（2026-11-10 修订）：agent 上下文自读通道——升级/继续不搬
+			// 运卡片内容，agent 持 conv_id 自行读取会话记录（含此前 agent_card
+			// 结论）。低风险只读；成员校验在闭包（防线三）
+			Name:        "im_history",
+			Description: "读取会话最近消息（自读上下文：了解群聊讨论与此前 Agent 回答）。返回按时间升序的摘要行数组；agent_card 提炼为【Agent】结论。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"conv_id": map[string]any{"type": "integer", "description": "会话 ID（必填）"},
+					"limit":   map[string]any{"type": "integer", "description": "条数（默认 50，≤100）"},
+				},
+				"required": []string{"conv_id"},
+			},
+			Risk:  "low",
+			Scope: "",
+		},
+		{
 			// 22 篇 §4.7 mail.read：低风险全模式自动；仅本人邮箱（共享邮箱
 			// ACL 随 resource_acl 接入扩展）；列表摘要瘦身防全文灌上下文
 			Name:        "mail_read",
@@ -242,6 +259,36 @@ func (g *Gateway) invokeImSend(ctx context.Context, tenantID, uid int64, raw jso
 		return errText(err.Error()), nil
 	}
 	return okText(res)
+}
+
+// invokeImHistory im_history 执行：低风险只读；成员校验经闭包（message 域 GetConvDetail）
+func (g *Gateway) invokeImHistory(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		ConvID int64 `json:"conv_id"`
+		Limit  int   `json:"limit"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.ConvID <= 0 {
+		return nil, rpcErr(codeInvalidParams, "conv_id 必填")
+	}
+	if args.Limit <= 0 {
+		args.Limit = 50
+	}
+	if args.Limit > 100 {
+		args.Limit = 100
+	}
+	if g.opts.ImHistory == nil {
+		return nil, rpcErr(codeUnknownTool, "im_history 未装配（message 域不可用）")
+	}
+	lines, err := g.opts.ImHistory(ctx, tenantID, uid, args.ConvID, args.Limit)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(lines)
 }
 
 // invokeFileUpload file_upload 执行：b64 解码后交 file 域（去重/限长/票据=防线三）

@@ -95,21 +95,28 @@ export interface AgentProcessCardProps {
   /** 会话存活但当前轮已结束（活动卡待追问态：折叠摘要条、无运行动画/计时） */
   idle?: boolean;
   startedAt?: number;
+  /** 落流卡孤儿自降级阈值（ms）：body.status=running 且 started_at 超过此值 →
+   * 按「已中断」终态渲染（卡死轮次被杀后消息体永远烙 running，2026-11-10 真机）；
+   * 活动卡（live）不传——真实运行不受影响 */
+  staleAfterMs?: number;
   /** 卡尾操作区（追问/转到工作台/重试/在我端继续——由壳组件注入） */
   actions?: ReactNode;
   testId?: string;
 }
 
-export function AgentProcessCard({ body, live, idle, startedAt, actions, testId }: AgentProcessCardProps) {
-  const running = (live === true || body.status === 'running') && idle !== true;
-  const [expanded, setExpanded] = useState(running); // 运行中默认展开；终态折叠为摘要条
-  useEffect(() => {
-    setExpanded(running);
-  }, [running]);
+export function AgentProcessCard({ body, live, idle, startedAt, actions, testId, staleAfterMs }: AgentProcessCardProps) {
+  // 孤儿降级：非 live 视图的 running 卡超龄 → 视作中断终态（过程折叠+结论常开）
+  const stale =
+    live !== true && staleAfterMs != null && body.status === 'running' &&
+    typeof body.started_at === 'number' && Date.now() - body.started_at > staleAfterMs;
+  const running = (live === true || body.status === 'running') && idle !== true && !stale;
+  // 终态默认「过程折叠」（expanded=展开过程区）；运行中恒展开
+  const [expanded, setExpanded] = useState(false);
 
   const tools = body.stages.filter((s) => s.t === 'tool');
   const conclusion = body.stages.filter((s) => s.t === 'conclusion');
-  const totalSteps = body.stages.length;
+  /** 中间过程（思考+工具）——终态默认折叠区内容（2026-11-10 裁决：结论常开） */
+  const processSteps = body.stages.filter((s) => s.t !== 'conclusion');
   const durSec =
     body.started_at && body.ended_at ? Math.round((body.ended_at - body.started_at) / 1000) : null;
   const lastConclusion = conclusion.length ? conclusion[conclusion.length - 1] : null;
@@ -127,51 +134,75 @@ export function AgentProcessCard({ body, live, idle, startedAt, actions, testId 
         ) : idle ? (
           <span className="agc-card__state agc-card__state--idle">已就绪 · 可追问</span>
         ) : (
-          <span className={`agc-card__state agc-card__state--${body.status}`}>
-            {body.status === 'done' ? '已完成' : body.status === 'failed' ? '失败' : '已取消'}
+          <span className={`agc-card__state agc-card__state--${stale ? 'cancelled' : body.status}`}>
+            {stale ? '已中断' : body.status === 'done' ? '已完成' : body.status === 'failed' ? '失败' : '已取消'}
             {durSec != null ? ` · ${durSec >= 60 ? `${Math.floor(durSec / 60)}分${durSec % 60}秒` : `${durSec}秒`}` : ''}
           </span>
         )}
       </div>
 
-      {/* 终态：折叠摘要条（点击展开） */}
-      {!running && !expanded ? (
-        <button type="button" className="agc-summary-bar" onClick={() => setExpanded(true)} data-testid="agc-summary-bar">
-          <ChevronDown size={12} className="agc-chev" />
-          <Code2 size={12} />
-          <span>
-            {totalSteps} 个过程步骤 · {tools.length} 次工具调用
-            {body.rounds ? ` · ${body.rounds} 轮对话` : ''}
-          </span>
-        </button>
-      ) : (
-        <div className="agc-card__body">
-          {body.stages.map((s, i) =>
-            s.t === 'thinking' ? (
-              <ThinkingCollapse key={i} text={s.digest ?? ''} streaming={running && i === body.stages.length - 1 && !tools.some((t) => t.status === 'running')} />
-            ) : s.t === 'tool' ? (
-              <ToolRow key={i} s={s} />
-            ) : (
-              <div key={i} className="agc-conclusion">
-                <MarkdownText text={s.md ?? ''} />
-                {conclusionStreaming ? <span className="agc-cursor" /> : null}
-              </div>
-            ),
-          )}
-          {body.sources && body.sources.length > 0 ? (
-            <div className="agc-sources">
-              来源：{body.sources.map((src, i) => (
-                <span key={i} className="agc-sources__item">{src}</span>
-              ))}
+      {/* 折叠语义（2026-11-10 用户裁决修正）：终态只折叠中间过程（思考+工具），
+          最终结论常开展示——消息流里一眼看到答案，过程可展开审计 */}
+      {(() => {
+        if (running || idle || expanded) {
+          return (
+            <div className="agc-card__body">
+              {!running && !idle && processSteps.length > 0 ? (
+                <button type="button" className="agc-summary-bar" style={{ marginBottom: 6 }} onClick={() => setExpanded(false)} data-testid="agc-summary-bar">
+                  <ChevronDown size={12} className="agc-chev agc-chev--open" />
+                  <Code2 size={12} />
+                  <span>过程：{processSteps.length} 个步骤 · {tools.length} 次工具调用（点击收起）</span>
+                </button>
+              ) : null}
+              {body.stages.map((s, i) =>
+                s.t === 'thinking' ? (
+                  <ThinkingCollapse key={i} text={s.digest ?? ''} streaming={running && i === body.stages.length - 1 && !tools.some((t) => t.status === 'running')} />
+                ) : s.t === 'tool' ? (
+                  <ToolRow key={i} s={s} />
+                ) : (
+                  <div key={i} className="agc-conclusion">
+                    <MarkdownText text={s.md ?? ''} />
+                    {conclusionStreaming ? <span className="agc-cursor" /> : null}
+                  </div>
+                ),
+              )}
+              {body.sources && body.sources.length > 0 ? (
+                <div className="agc-sources">
+                  来源：{body.sources.map((src, si) => (
+                    <span key={si} className="agc-sources__item">{src}</span>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          ) : null}
-          {!running && expanded ? (
-            <button type="button" className="agc-collapse-btn" onClick={() => setExpanded(false)}>
-              收起 <ChevronDown size={11} className="agc-chev agc-chev--open" />
-            </button>
-          ) : null}
-        </div>
-      )}
+          );
+        }
+        /* 终态默认态：过程折叠条 + 结论常开 */
+        return (
+          <div className="agc-card__body">
+            {processSteps.length > 0 ? (
+              <button type="button" className="agc-summary-bar" style={{ marginBottom: 6 }} onClick={() => setExpanded(true)} data-testid="agc-summary-bar">
+                <ChevronDown size={12} className="agc-chev" />
+                <Code2 size={12} />
+                <span>过程：{processSteps.length} 个步骤 · {tools.length} 次工具调用</span>
+              </button>
+            ) : null}
+            {lastConclusion ? (
+              <div className="agc-conclusion">
+                <MarkdownText text={lastConclusion.md ?? ''} />
+              </div>
+            ) : (
+              <div className="agc-conclusion agc-conclusion--empty">（无结论输出）</div>
+            )}
+            {body.sources && body.sources.length > 0 ? (
+              <div className="agc-sources">
+                来源：{body.sources.map((src, si) => (
+                  <span key={si} className="agc-sources__item">{src}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
+      })()}
       {actions ? <div className="agc-card__actions">{actions}</div> : null}
     </div>
   );

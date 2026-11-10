@@ -10,13 +10,14 @@ import type { AIProvider, AIProviderInput } from '../../admin/model/types';
 
 /** 我的供应商列表（≤5 个/人） */
 export async function fetchMyProviders(): Promise<AIProvider[]> {
-  const data = await http.get<{ items: AIProvider[] }>('/me/ai/providers');
-  return data.items;
+  const data = await http.get<{ items: Array<AIProvider & { id: number | string }> }>('/me/ai/providers');
+  // ProviderDTO.id wire 为数字（TS 口径 string）：fetch 层归一化（同 admin 侧修复）
+  return data.items.map((it) => ({ ...it, id: String(it.id) }));
 }
 
 /** 创建个人供应商（BYOK；仅本人可引用） */
 export async function createMyProvider(input: AIProviderInput): Promise<AIProvider> {
-  return http.post<AIProvider>('/me/ai/providers', input);
+  return http.post<AIProvider & { id: number | string }>('/me/ai/providers', input).then((p) => ({ ...p, id: String(p.id) }));
 }
 
 /** 更新（apiKey 留空=保留） */
@@ -43,8 +44,8 @@ export async function probeMyProviderRaw(baseUrl: string, apiKey: string): Promi
 
 /** 公司级启用中供应商（默认模型下拉：公司+我的合并展示） */
 export async function fetchSharedProviders(): Promise<AIProvider[]> {
-  const data = await http.get<{ items: AIProvider[] }>('/ai/providers/shared');
-  return data.items;
+  const data = await http.get<{ items: Array<AIProvider & { id: number | string }> }>('/ai/providers/shared');
+  return data.items.map((it) => ({ ...it, id: String(it.id) }));
 }
 
 /** ai_default 默认模型选择（users.settings；mode=org 跟随公司默认） */

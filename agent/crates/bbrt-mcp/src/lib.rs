@@ -54,6 +54,8 @@ pub struct McpClient {
     conns: Mutex<HashMap<String, McpConnection>>,
     /// 主体令牌提供者（OboCache 闭包；每次调用现取——逐请求传播）
     tokens: TokenProvider,
+    /// 全量配置（懒重连用：启动失败/无令牌降级的 server，登录后首次使用时补连）
+    configs: Vec<McpServerConfig>,
 }
 
 impl McpClient {
@@ -76,13 +78,39 @@ impl McpClient {
             Self {
                 conns: Mutex::new(conns),
                 tokens,
+                configs: configs.to_vec(),
             },
             results,
         )
     }
 
+    /// 懒补连（2026-11-10 真机事故修复）：启动时 corp 常因用户未登录（无 OBO）
+    /// 而 tools/list 401 降级——此前降级即永久标灰。登录后 tokens 现取有值，
+    /// 在 list_tools/call 入口先补连缺失 server，自愈无需重启。
+    fn ensure_connected(&self) {
+        let mut conns = match self.conns.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let missing: Vec<&McpServerConfig> = self
+            .configs
+            .iter()
+            .filter(|c| !conns.contains_key(&c.name))
+            .collect();
+        for cfg in missing {
+            match McpConnection::connect(cfg, self.tokens.clone()) {
+                Ok(c) => {
+                    eprintln!("[bbrt] MCP server '{}' 懒补连成功", cfg.name);
+                    conns.insert(cfg.name.clone(), c);
+                }
+                Err(_) => return, // 仍无令牌/不可达：保持降级，下次入口再试
+            }
+        }
+    }
+
     /// 聚合发现全部工具（policy 过滤后；供 bbrt-tools 注册表注入）
     pub fn list_tools(&self, policy: &PolicyFilter) -> Vec<ToolEntry> {
+        self.ensure_connected();
         let mut all = vec![];
         if let Ok(mut conns) = self.conns.lock() {
             for (name, conn) in conns.iter_mut() {
@@ -106,6 +134,7 @@ impl McpClient {
         let mut it = full_name.splitn(3, '.');
         match (it.next(), it.next(), it.next()) {
             (Some("mcp"), Some(server), Some(tool)) => {
+                self.ensure_connected();
                 let mut conns = self
                     .conns
                     .lock()
@@ -130,6 +159,7 @@ impl McpClient {
         let mut it = full_name.splitn(3, '.');
         match (it.next(), it.next(), it.next()) {
             (Some("mcp"), Some(server), Some(tool)) => {
+                self.ensure_connected();
                 let mut conns = self
                     .conns
                     .lock()

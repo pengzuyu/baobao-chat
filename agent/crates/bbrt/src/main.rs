@@ -88,6 +88,17 @@ fn run() -> Result<(), String> {
     let store = Arc::new(Mutex::new(
         Store::open(&data_dir.join("runtime.db")).map_err(|e| format!("SQLite 打开失败: {e}"))?,
     ));
+    // 启动清扫：上个进程遗留的进行中会话全部收口为 error（否则占名额且无法操作）
+    {
+        let swept = store
+            .lock()
+            .unwrap()
+            .sweep_interrupted_on_boot()
+            .unwrap_or(0);
+        if swept > 0 {
+            eprintln!("[boot] 清扫上个进程遗留会话 {swept} 个（进行中态→error）");
+        }
+    }
     let memory = Arc::new(
         MemoryEngine::open(&data_dir, Arc::new(bbrt_memory::SystemClock))
             .map_err(|e| format!("记忆引擎打开失败: {e}"))?,

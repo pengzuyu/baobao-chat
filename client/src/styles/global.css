@@ -812,6 +812,7 @@ body {
 
 /* 输入区 */
 .message-input {
+  position: relative; /* @提及面板/表情面板 absolute 锚定基准（缺失则漂到窗口左上，2026-11-10 真机） */
   flex-shrink: 0;
   border-top: 1px solid var(--bbw-gray-3);
   padding: var(--bbw-space-2) var(--bbw-space-3) var(--bbw-space-3);
@@ -7921,3 +7922,48 @@ body {
 
 /* Agent 模式按钮点亮态（MessageInput tool-btn 扩展） */
 .tool-btn--active { color: var(--bbw-primary, #4080ff); background: var(--bbw-primary-light, #f0f5ff); }
+.agc-stalled { font-size: 12px; color: var(--bbw-warning, #d59020); display: inline-flex; align-items: center; gap: 8px; }
+
+/* ============ D19 工作台过程显示对齐（change-my-life agent-web）============ */
+/* 思考卡：流式呼吸 + max-height 过渡（覆盖 D08 旧静态折叠行为；本体常挂载收起=0 高） */
+.agent-row--reasoning--streaming .agent-reasoning__head { animation: agc-pulse 1.5s ease-in-out infinite; color: var(--bbw-primary, #4080ff); }
+.agent-reasoning__body { max-height: 0; overflow-y: auto; transition: max-height 0.22s ease; }
+
+/* 工具调用组汇总条（ToolGroup；视觉口径对齐 ToolCallGroup.vue tg-*） */
+.tool-group { background: var(--bbw-gray-1, #f7f8fa); border-radius: 8px; margin: 4px 0; overflow: hidden; }
+.tool-group__head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 10px; border: none; background: transparent; cursor: pointer; font-size: 12px; color: var(--bbw-text-2, #4e5969); }
+.tool-group__title { flex: 1; text-align: left; }
+.tool-group__chev { transition: transform 0.2s; color: var(--bbw-text-4, #c9cdd4); }
+.tool-group__chev--open { transform: rotate(180deg); }
+.tool-group__icon { color: var(--bbw-text-3, #86909c); flex-shrink: 0; }
+.tool-group--running .tool-group__icon { animation: agc-pulse 1.2s ease-in-out infinite; color: var(--bbw-primary, #4080ff); }
+.tool-group__body { padding: 0 8px 6px; display: flex; flex-direction: column; gap: 6px; }
+.tool-group__body .tool-card { margin: 0; }
+
+/* 运行中已用时（TypingState 扩展） */
+.typing-state__elapsed { font-size: 12px; color: var(--bbw-text-3, #86909c); font-variant-numeric: tabular-nums; }
+
+/* 左栏项目/日常两分区（D19） */
+.agent-proj-section { display: flex; flex-direction: column; min-height: 0; }
+.agent-proj-section__head { display: flex; align-items: center; gap: 4px; padding: 6px 12px 2px; font-size: 11px; color: var(--bbw-text-4, #c9cdd4); text-transform: uppercase; letter-spacing: 0.04em; user-select: none; }
+.agent-proj-section__head button { border: none; background: transparent; color: inherit; cursor: pointer; padding: 2px; display: inline-flex; }
+.agent-proj-group { margin: 0 6px 2px; border-radius: 8px; }
+.agent-proj-group__head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 8px; border: none; background: transparent; cursor: pointer; border-radius: 8px; font-size: 12px; color: var(--bbw-text-2, #4e5969); text-align: left; }
+.agent-proj-group__head:hover { background: var(--bbw-gray-2, #f2f3f5); }
+.agent-proj-group__head--active { background: var(--bbw-primary-light, #f0f5ff); color: var(--bbw-primary, #4080ff); }
+.agent-proj-group__name { font-weight: 600; flex-shrink: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-proj-group__path { color: var(--bbw-text-4, #c9cdd4); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.agent-proj-group__count { color: var(--bbw-text-4, #c9cdd4); font-size: 11px; flex-shrink: 0; }
+.agent-proj-group__acts { display: none; gap: 2px; flex-shrink: 0; }
+.agent-proj-group__head:hover .agent-proj-group__acts { display: inline-flex; }
+.agent-proj-group__act { border: none; background: transparent; color: var(--bbw-text-3, #86909c); cursor: pointer; padding: 2px; border-radius: 4px; display: inline-flex; }
+.agent-proj-group__act:hover { color: var(--bbw-primary, #4080ff); background: var(--bbw-primary-light, #f0f5ff); }
+.agent-proj-group__act--danger:hover { color: var(--bbw-danger, #f53f3f); background: rgba(245, 63, 63, 0.08); }
+.agent-proj-group__sessions { padding: 0 0 0 18px; }
+.agent-proj-group__sessions .agent-session-item { border-radius: 6px; }
+.agent-sessions__newbar { display: flex; gap: 6px; padding: 8px 10px; }
+.agent-sessions__newbar .agent-new-btn { flex: 1; }
+
+/* 记忆作用域页签徽标（AgentMemoryPage D19） */
+.agent-mem-chip--projectscope { background: var(--bbw-primary-light, #f0f5ff); color: var(--bbw-primary, #4080ff); }
+.agent-mem-proj-select { margin-left: auto; }

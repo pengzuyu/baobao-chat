@@ -8,7 +8,7 @@
  * - offline：Agent 不依赖 WSS（D08 §1.3），mock 桥本地照常，仅提示
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Dropdown, Modal, type MenuProps } from 'antd';
 import { Pause, Play, PanelRightClose, PanelRightOpen, ShieldCheck, Sparkles, Square } from 'lucide-react';
@@ -17,6 +17,7 @@ import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { useAgentStore, selectActiveSession, selectPendingPermissions, composerDisabledFor } from '../store/agent';
+import type { StreamItem } from '../store/agent';
 import { AGENT_MODE_OPTIONS, MODEL_TIER_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
 import type { PermissionMode } from '../bridge/types';
 import { fetchMeSettings, fetchMyProviders, fetchSharedProviders, type AIDefaultSetting } from '../../settings/api/ai';
@@ -26,6 +27,7 @@ import { AgentSessionList } from '../components/AgentSessionList';
 import { AgentContextSidebar } from '../components/AgentContextSidebar';
 import { StreamMessage, ReasoningCollapse, UserMessage } from '../components/StreamMessage';
 import { ToolCard } from '../components/ToolCard';
+import { ToolGroup } from '../components/ToolGroup';
 import { PermissionCard, type PermissionDecision } from '../components/PermissionCard';
 import { SubagentCard } from '../components/SubagentCard';
 import { DelegateCard } from '../components/DelegateCard';
@@ -42,6 +44,63 @@ async function resolveDefaultModel(): Promise<string | undefined> {
     /* mock 桥/未登录：回落档位 */
   }
   return undefined;
+}
+
+/**
+ * 会话流渲染（D19：连续 tool 条目归组为 ToolGroup 汇总条，其余条目保序单渲）。
+ * 单条工具不套组条（直接 ToolCard，避免一次点击变两次）。
+ */
+function renderStreamItems(items: StreamItem[], onRespond: (d: PermissionDecision) => void): ReactNode[] {
+  type ToolItem = Extract<StreamItem, { kind: 'tool' }>;
+  const nodes: ReactNode[] = [];
+  let toolRun: ToolItem[] = [];
+  const flushTools = () => {
+    if (toolRun.length === 0) return;
+    if (toolRun.length === 1) {
+      nodes.push(<ToolCard key={toolRun[0].key} item={toolRun[0]} />);
+    } else {
+      nodes.push(<ToolGroup key={`tg-${toolRun[0].key}`} items={toolRun} />);
+    }
+    toolRun = [];
+  };
+  for (const item of items) {
+    if (item.kind === 'tool') {
+      toolRun.push(item);
+      continue;
+    }
+    flushTools();
+    switch (item.kind) {
+      case 'user':
+        nodes.push(<UserMessage key={item.key} text={item.text} />);
+        break;
+      case 'agentText':
+        nodes.push(<StreamMessage key={item.key} text={item.text} streaming={item.streaming} />);
+        break;
+      case 'reasoning':
+        nodes.push(<ReasoningCollapse key={item.key} text={item.text} streaming={item.streaming} />);
+        break;
+      case 'permission':
+        nodes.push(<PermissionCard key={item.key} item={item} onRespond={onRespond} />);
+        break;
+      case 'subagent':
+        nodes.push(<SubagentCard key={item.key} item={item} />);
+        break;
+      case 'delegate':
+        nodes.push(<DelegateCard key={item.key} item={item} />);
+        break;
+      case 'system':
+        nodes.push(
+          <div key={item.key} className="agent-system-row">
+            {item.text}
+          </div>,
+        );
+        break;
+      default:
+        break;
+    }
+  }
+  flushTools();
+  return nodes;
 }
 
 export function AgentWorkbenchPage() {
@@ -270,32 +329,7 @@ export function AgentWorkbenchPage() {
 
   const streamNode = (
     <div className="agent-stream" ref={streamRef} onScroll={onStreamScroll}>
-      {items.map((item) => {
-        switch (item.kind) {
-          case 'user':
-            return <UserMessage key={item.key} text={item.text} />;
-          case 'agentText':
-            return <StreamMessage key={item.key} text={item.text} streaming={item.streaming} />;
-          case 'reasoning':
-            return <ReasoningCollapse key={item.key} text={item.text} streaming={item.streaming} />;
-          case 'tool':
-            return <ToolCard key={item.key} item={item} />;
-          case 'permission':
-            return <PermissionCard key={item.key} item={item} onRespond={handleRespond} />;
-          case 'subagent':
-            return <SubagentCard key={item.key} item={item} />;
-          case 'delegate':
-            return <DelegateCard key={item.key} item={item} />;
-          case 'system':
-            return (
-              <div key={item.key} className="agent-system-row">
-                {item.text}
-              </div>
-            );
-          default:
-            return null;
-        }
-      })}
+      {renderStreamItems(items, handleRespond)}
       {status === 'running' || status === 'starting' || status === 'subagent_fanout' || status === 'delegating' ? (
         <TypingState text={status === 'starting' ? '会话启动中' : 'Agent 正在处理'} />
       ) : null}

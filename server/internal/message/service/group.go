@@ -177,6 +177,26 @@ func (s *Service) publishConvUpdated(ctx context.Context, conv *messagerepo.Conv
 	})
 }
 
+// displayConvName 会话显示名：单聊=对端显示名（微信同款；种子/历史行存的
+// "alice-bob" 双拼名不面向用户），群/广播群=会话名。对端解析失败回落原 Name。
+func (s *Service) displayConvName(ctx context.Context, conv *messagerepo.Conversation, viewerID int64) string {
+	if conv.Type != messageapi.ConvSingle {
+		return conv.Name
+	}
+	ids, err := s.repo.MembersOf(ctx, conv.ID)
+	if err != nil {
+		return conv.Name
+	}
+	for _, id := range ids {
+		if id != viewerID {
+			if n := s.nameOf(id); n != "" {
+				return n
+			}
+		}
+	}
+	return conv.Name
+}
+
 // buildDetail 会话详情组装（API-IM-03：成员概要全量简版 + group_setting + my）
 func (s *Service) buildDetail(ctx context.Context, conv *messagerepo.Conversation, viewerID int64) (*messageapi.ConvDetailDTO, error) {
 	r, _ := s.repo.GetReceipt(ctx, conv.ID, viewerID)
@@ -187,7 +207,7 @@ func (s *Service) buildDetail(ctx context.Context, conv *messagerepo.Conversatio
 	}
 	dto := &messageapi.ConvDetailDTO{
 		ConversationDTO: messageapi.ConversationDTO{
-			ID: strconv.FormatInt(conv.ID, 10), Type: conv.Type, Name: conv.Name,
+			ID: strconv.FormatInt(conv.ID, 10), Type: conv.Type, Name: s.displayConvName(ctx, conv, viewerID),
 			OwnerID:   strconv.FormatInt(conv.OwnerID, 10),
 			LatestSeq: conv.LatestSeq, LastMsgTS: conv.LastMsgTS, MemberCount: conv.MemberCount,
 			Status: conv.Status,

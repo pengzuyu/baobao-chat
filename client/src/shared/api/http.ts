@@ -163,7 +163,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   if (envelope.code !== 0) {
-    const err = new ApiError(envelope.code, getErrorText(envelope.code), {
+    // 服务端 message 优先（具体校验原因如「baseUrl 须以 http(s):// 开头」；
+    // 无 message 回退错误码映射文案），trace_id 随错误带出便于排查
+    const err = new ApiError(envelope.code, envelope.message?.trim() || getErrorText(envelope.code), {
       traceId: envelope.trace_id,
       details: envelope.details,
     });

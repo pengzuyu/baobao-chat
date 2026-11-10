@@ -276,12 +276,27 @@ impl AgentHost {
                 self.bin.display()
             ));
         }
+        // stderr 落盘（append）：Runtime 告警/panic 可观测（2026-11-10 内嵌卡
+        // 卡死排查——inherit 在桌面形态无处可看；stdout 是协议通道不能动）
+        let err_log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.data_dir.join("bbrt.log"));
         let mut child = Command::new(&self.bin)
             .env("BBW_RT_DATA_DIR", &self.data_dir)
             .env("BBW_RT_GATEWAY", &self.gateway)
+            // 公司域 MCP 网关（D18 §3.5：agent 经 im_history 自读会话上下文等
+            // 公司域能力；命名 corp → 工具命名空间 mcp.corp.*）
+            .env(
+                "BBW_RT_MCP_SERVERS",
+                format!("corp={}/mcp/corp", self.gateway.trim_end_matches('/')),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(match err_log {
+                Ok(f) => Stdio::from(f),
+                Err(_) => Stdio::inherit(),
+            })
             .spawn()
             .map_err(|e| format!("bbrt 启动失败: {e}"))?;
         let stdin = child.stdin.take().ok_or("stdin 不可用")?;

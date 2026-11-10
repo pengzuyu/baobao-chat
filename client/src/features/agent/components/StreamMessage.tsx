@@ -7,7 +7,7 @@
  * MarkdownText 已移 shared/components（D18 内嵌卡复用）；本文件 re-export 供日报页等既有消费方。
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bot, ChevronRight } from 'lucide-react';
 import { MarkdownText } from '../../../shared/components/MarkdownText';
 
@@ -37,18 +37,32 @@ export function StreamMessage({ text, streaming = false }: { text: string; strea
   );
 }
 
-/** 思考摘要折叠行（channel=reasoning；默认收起一行，D08 §3.3） */
+/**
+ * 思考折叠卡（channel=reasoning；D19 对齐 change-my-life ThinkingCard 行为）：
+ * - 流式强制展开（头部呼吸动画 + max-height 过渡 + 内部跟底滚动），结束自动收起为一行摘要
+ * - 点击头部可手动切换；streaming 翻转时恢复自动态
+ */
 export function ReasoningCollapse({ text, streaming = false }: { text: string; streaming?: boolean }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(streaming);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setOpen(streaming);
+  }, [streaming]);
+  // 流式跟底（展开态下新增量自动滚到最新）
+  useEffect(() => {
+    if (streaming && open && bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+  }, [text, streaming, open]);
   const digest = text.length > 60 ? `${text.slice(0, 60)}…` : text;
   return (
-    <div className={`agent-row agent-row--reasoning${open ? ' agent-row--reasoning--open' : ''}`}>
+    <div className={`agent-row agent-row--reasoning${open ? ' agent-row--reasoning--open' : ''}${streaming ? ' agent-row--reasoning--streaming' : ''}`}>
       <button type="button" className="agent-reasoning__head" onClick={() => setOpen((v) => !v)}>
         <ChevronRight size={12} className={`agent-reasoning__chev${open ? ' agent-reasoning__chev--open' : ''}`} aria-hidden />
-        <span className="agent-reasoning__label">思考摘要</span>
-        <span className="agent-reasoning__digest">{streaming ? `${digest}（思考中…）` : digest}</span>
+        <span className="agent-reasoning__label">{streaming ? '思考中' : '思考过程'}</span>
+        <span className="agent-reasoning__digest">{digest}</span>
       </button>
-      {open ? <div className="agent-reasoning__body">{text}</div> : null}
+      <div className="agent-reasoning__body" ref={bodyRef} style={{ maxHeight: open ? 300 : 0 }}>
+        {text}
+      </div>
     </div>
   );
 }

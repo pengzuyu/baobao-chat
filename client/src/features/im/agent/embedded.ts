@@ -93,7 +93,27 @@ export function stagesFromStream(items: StreamItem[]): { stages: AgentStage[]; s
   return { stages, sources, rounds: Math.max(1, rounds) };
 }
 
-/** 阶段边界判定：stages 数量或末项内容变化（活动卡 useEffect 依赖） */
+/**
+ * 粗粒度阶段边界签名（活动卡落流/更新的 effect 依赖）：
+ * 只含阶段数/类型/工具名与状态——**不含结论文本长度**（流式 delta 每个 token
+ * 都变，细粒度签名会引发落流风暴，2026-11-10 真机实测事故）。结论 md 只随
+ * 终态 patch 全量带出；思考 digest 同理。
+ */
 export function stagesSignature(stages: AgentStage[]): string {
-  return stages.map((s) => `${s.t}:${s.name ?? ''}:${s.status ?? ''}:${(s.md ?? s.digest ?? s.summary ?? '').length}`).join('|');
+  return stages.map((s) => `${s.t}:${s.name ?? ''}:${s.status ?? ''}`).join('|');
+}
+
+/**
+ * 上下文自读指令（D18 §3.5 2026-11-10 修订）：升级/继续不搬运卡片内容——
+ * agent 拿 conv_id 调 im_history 自读会话记录（含此前 agent_card 结论）。
+ */
+export function contextInstruction(convId: string, convName?: string): string {
+  return `【上下文】请先调用工具 im_history（参数 conv_id=${convId}, limit=50）读取本会话${convName ? `「${convName}」` : ''}的最近消息（其中【Agent】开头的行是此前 AI 的回答），了解讨论上下文后，再继续处理我接下来的请求。`;
+}
+
+/** 轮次幂等键（agc-{sessionId}-r{轮序}）：一轮问答一张卡，轮内追问/重试
+ * 重复 msg.send 被服务端 client_msg_id 幂等去重回原 msgId；下轮提问键不同落新卡
+ * （2026-11-10 口径调整：idle 即收卡，「会话终身一卡」改为「一轮一卡」） */
+export function agentCardClientMsgId(sessionId: string, round: number): string {
+  return `agc-${sessionId}-r${round}`;
 }

@@ -53,6 +53,9 @@ type Options struct {
 	KBQuery func(ctx context.Context, tenantID, uid int64, spaceIDs []string, keyword string, topK int) (any, error)
 	// ImSend 消息发送（message 域注入：成员资格/敏感词/频率校验在域服务）
 	ImSend func(ctx context.Context, tenantID, uid, convID int64, msgType string, body json.RawMessage) (any, error)
+	// ImHistory 会话历史读取（D18 §3.5 修订：agent 持 conv_id 自读上下文——含
+	// agent_card 结论提炼；成员校验+行摘要在闭包内，message 域注入）
+	ImHistory func(ctx context.Context, tenantID, uid, convID int64, limit int) ([]string, error)
 	// FileUpload 文件上传（file 域注入：b64 已解码为流；去重/限长在域服务）
 	FileUpload func(ctx context.Context, tenantID, uid int64, name, contentType string, convID int64, r io.Reader) (any, error)
 	// MailRead 邮件检索/读取（mail 域注入：本人邮箱归属=防线三；22 §4.7）

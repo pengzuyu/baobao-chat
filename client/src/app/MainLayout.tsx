@@ -8,7 +8,7 @@
 import { useEffect, useMemo } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Dropdown, type MenuProps } from 'antd';
-import { Bell, Bot, BrainCircuit, Gauge, Mail, MessageCircle, Sparkles } from 'lucide-react';
+import { Bell, Bot, Boxes, BrainCircuit, Gauge, Mail, MessageCircle, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
@@ -35,6 +35,7 @@ function useNavItems(): NavItem[] {
   { to: '/mail', icon: Mail, label: t('nav.mail') },
   { to: '/agent', icon: Bot, label: t('nav.agent') },
   { to: '/experts', icon: Sparkles, label: t('nav.experts') },
+  { to: '/apps', icon: Boxes, label: '应用' },
   ];
 }
 

@@ -530,20 +530,22 @@ export async function offboardUser(userId: string): Promise<void> {
 export async function fetchAIProviders(scope: 'corp' | 'shared' = 'corp'): Promise<AIProvider[]> {
   if (USE_MOCK) return [];
   const path = scope === 'corp' ? '/admin/ai/providers' : '/ai/providers/shared';
-  const data = await http.get<{ items: AIProvider[] }>(path);
-  return data.items;
+  const data = await http.get<{ items: Array<AIProvider & { id: number | string }> }>(path);
+  // ProviderDTO.id wire 为 int64 数字（TS 口径 string）：fetch 层归一化——否则路由面板
+  // modelsOf 严格相等比对失败、模型下拉恒空（RoleDTO 字符串化先例同款问题）
+  return data.items.map((it) => ({ ...it, id: String(it.id) }));
 }
 
 /** 创建公司级供应商（密钥服务端 KMS 加密落库） */
 export async function createAIProvider(input: AIProviderInput): Promise<AIProvider> {
   if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
-  return http.post<AIProvider>('/admin/ai/providers', input);
+  return http.post<AIProvider>('/admin/ai/providers', input).then((p) => ({ ...p, id: String(p.id) }));
 }
 
 /** 更新供应商（apiKey 留空=保留原密钥） */
 export async function updateAIProvider(id: string, input: AIProviderInput): Promise<AIProvider> {
   if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
-  return http.patch<AIProvider>(`/admin/ai/providers/${encodeURIComponent(id)}`, input);
+  return http.patch<AIProvider>(`/admin/ai/providers/${encodeURIComponent(id)}`, input).then((p) => ({ ...p, id: String(p.id) }));
 }
 
 /** 删除供应商（被默认路由引用时服务端拒绝，先改路由） */
@@ -569,15 +571,20 @@ export async function probeAIProviderRaw(baseUrl: string, apiKey: string): Promi
 /** 当前 fast/strong active 路由 */
 export async function fetchAIRoutes(): Promise<AIRouteRule[]> {
   if (USE_MOCK) return [];
-  const data = await http.get<{ items: AIRouteRule[] }>('/admin/ai/routes');
-  return data.items;
+  const data = await http.get<{ items: Array<AIRouteRule & { candidates: Array<{ providerId: number | string; model: string; priority: number }> }> }>('/admin/ai/routes');
+  // candidates[].providerId wire 为 int64 数字（TS 口径 string）：同供应商 id 归一化
+  return data.items.map((r) => ({ ...r, candidates: r.candidates.map((c) => ({ ...c, providerId: String(c.providerId) })) }));
 }
 
 /** 整表替换路由（主备降级：candidates 按 priority 逐个尝试） */
 export async function putAIRoutes(items: AIRouteRule[]): Promise<AIRouteRule[]> {
   if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持');
-  const data = await http.put<{ items: AIRouteRule[] }>('/admin/ai/routes', { items });
-  return data.items;
+  // 出参归一化同 fetchAIRoutes；入参 providerId 转 number（服务端 int64，string 反序列化 400）
+  const data = await http.put<{ items: Array<AIRouteRule & { candidates: Array<{ providerId: number | string; model: string; priority: number }> }> }>(
+    '/admin/ai/routes',
+    { items: items.map((r) => ({ ...r, candidates: r.candidates.map((c) => ({ ...c, providerId: Number(c.providerId) })) })) },
+  );
+  return data.items.map((r) => ({ ...r, candidates: r.candidates.map((c) => ({ ...c, providerId: String(c.providerId) })) }));
 }
 
 // ── 部门成员管理（D10：user_dept 挂/卸/查）──
