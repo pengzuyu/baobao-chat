@@ -225,7 +225,7 @@ func TestQueryPermissionIsolation(t *testing.T) {
 	if _, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, personalID), 0, "私密笔记", "text", "令牌相关私密内容记录", 0); err != nil {
 		t.Fatal(err)
 	}
-	company, err := svc.CreateSpace(ctx, tenantID, alice, kbrepo.SpaceCompany, "全公司知识库")
+	company, err := svc.CreateSpace(ctx, tenantID, alice, kbrepo.SpaceCompany, "全公司知识库", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +461,7 @@ func TestACLExplicitGrantWidens(t *testing.T) {
 	})
 	ctx := context.Background()
 	// alice（治理者）建 dept 空间并摄入
-	dept, err := svc.CreateSpace(ctx, tenantID, alice, kbrepo.SpaceDept, "研发部知识库")
+	dept, err := svc.CreateSpace(ctx, tenantID, alice, kbrepo.SpaceDept, "研发部知识库", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +564,7 @@ func TestKBGrants(t *testing.T) {
 	ctx := context.Background()
 
 	// bob 建部门空间（owner=bob）；建一篇文档
-	sp, err := svc.CreateSpace(ctx, 1, bob, "dept", "研发部知识库")
+	sp, err := svc.CreateSpace(ctx, 1, bob, "dept", "研发部知识库", 0)
 	if err != nil {
 		t.Fatalf("建空间: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestKBGovernance(t *testing.T) {
 	ctx := context.Background()
 
 	// bob 建公司空间 + 摄入；alice 建个人空间（对 bob 不可见）
-	sp, err := svc.CreateSpace(ctx, 1, bob, "company", "治理空间")
+	sp, err := svc.CreateSpace(ctx, 1, bob, "company", "治理空间", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +624,7 @@ func TestKBGovernance(t *testing.T) {
 	if _, err := svc.IngestDoc(ctx, 1, bob, spaceID, 0, "安全规范", "md", "# 安全规范\n规范内容", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CreateSpace(ctx, 1, alice, "personal", "alice 私有"); err != nil {
+	if _, err := svc.CreateSpace(ctx, 1, alice, "personal", "alice 私有", 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -671,12 +671,115 @@ func TestKBGovernance(t *testing.T) {
 	}
 
 	// personal 不可删 7010
-	personal, err := svc.CreateSpace(ctx, 1, alice, "personal", "p2")
+	personal, err := svc.CreateSpace(ctx, 1, alice, "personal", "p2", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pid, _ := strconv.ParseInt(personal.ID, 10, 64)
 	if err := svc.GovernDeleteSpace(ctx, 1, pid); errx.From(err).Code != errx.CodeKBPersonalProtected {
 		t.Fatalf("personal 删除应 7010: %v", err)
+	}
+}
+
+// TestDeptSpaceAncestorChainVisibility 三层知识检索 dept 可见性（2026-11 收口）：
+// dept 空间挂靠部门 ∈ 用户祖先链并集 → 可见——父部门知识对子部门成员可见、
+// 兄弟部门互不可见、多部门取并集、创建缺省挂主部门、显式越权拒 9001
+func TestDeptSpaceAncestorChainVisibility(t *testing.T) {
+	// 部门树：研发中心(10) → 后端部(11) → 基础架构组(12)；市场部(13)
+	svc := newTestService(t, Options{
+		UserDeptIDsOf: func(_ context.Context, _ int64, userID int64) (map[int64]bool, int64, error) {
+			switch userID {
+			case alice: // alice 挂 研发中心+市场部（主=研发中心）
+				return map[int64]bool{10: true, 13: true}, 10, nil
+			case bob: // bob 挂 基础架构组（深层，主部门）
+				return map[int64]bool{12: true}, 12, nil
+			}
+			return map[int64]bool{}, 0, nil
+		},
+		UserDeptChainOf: func(_ context.Context, _ int64, userID int64) (map[int64]bool, error) {
+			switch userID {
+			case alice:
+				return map[int64]bool{10: true, 13: true}, nil
+			case bob: // 祖先链 12→11→10（深度无关）
+				return map[int64]bool{12: true, 11: true, 10: true}, nil
+			}
+			return map[int64]bool{}, nil
+		},
+	})
+	ctx := context.Background()
+
+	rd, err := svc.CreateSpace(ctx, tenantID, alice, "dept", "研发中心知识库", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rd.DeptID != "10" {
+		t.Fatalf("显式挂靠: %s", rd.DeptID)
+	}
+	mkt, err := svc.CreateSpace(ctx, tenantID, alice, "dept", "市场部知识库", 13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobSp, err := svc.CreateSpace(ctx, tenantID, bob, "dept", "基础架构组知识库", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bobSp.DeptID != "12" {
+		t.Fatalf("缺省应自动挂主部门: %s", bobSp.DeptID)
+	}
+
+	// bob（深层 12）可见：祖先 10 空间 ✓、自己 12 ✓、兄弟 13 ✗
+	spaces, err := svc.ListSpaces(ctx, tenantID, bob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := map[string]bool{}
+	for _, sp := range spaces {
+		has[sp.ID] = true
+	}
+	if !has[rd.ID] || !has[bobSp.ID] {
+		t.Fatalf("bob 应见祖先+自身部门空间: %+v", has)
+	}
+	if has[mkt.ID] {
+		t.Fatal("兄弟部门空间不应可见")
+	}
+	// alice 可见：10 ✓ 13 ✓；下级部门 12 的空间不可见（知识沿树向下流，不向上）
+	spacesAlice, _ := svc.ListSpaces(ctx, tenantID, alice)
+	hasA := map[string]bool{}
+	for _, sp := range spacesAlice {
+		hasA[sp.ID] = true
+	}
+	if !hasA[rd.ID] || !hasA[mkt.ID] || hasA[bobSp.ID] {
+		t.Fatalf("alice 可见集不符（下级部门知识不向上流）: %+v", hasA)
+	}
+
+	// 显式挂靠非本人部门 → 9001
+	if _, err := svc.CreateSpace(ctx, tenantID, bob, "dept", "越权空间", 13); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("越权挂靠应 9001: %v", err)
+	}
+	// 指定不可见空间检索 → 7002（防空间探测，既有语义回归）
+	if _, err := svc.Query(ctx, tenantID, bob, []string{mkt.ID}, "x", 5); errx.From(err).Code != errx.CodeKBQueryDenied {
+		t.Fatalf("不可见空间检索应 7002: %v", err)
+	}
+}
+
+// TestDeptSpaceOwnerFallback 通道未装配/未挂部门：dept 空间回落 OwnerID（兼容旧口径）
+func TestDeptSpaceOwnerFallback(t *testing.T) {
+	svc := newTestService(t, Options{}) // 两个部门闭包均未装配
+	ctx := context.Background()
+	sp, err := svc.CreateSpace(ctx, tenantID, alice, "dept", "旧口径空间", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sp.DeptID != "0" {
+		t.Fatalf("未装配通道缺省不挂靠: %s", sp.DeptID)
+	}
+	spaces, _ := svc.ListSpaces(ctx, tenantID, bob)
+	for _, s := range spaces {
+		if s.ID == sp.ID {
+			t.Fatal("他人不应可见未挂靠的 dept 空间")
+		}
+	}
+	if _, err := svc.CreateSpace(ctx, tenantID, alice, "dept", "显式但无法校验", 9); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("通道未装配显式 dept_id 应 9001: %v", err)
 	}
 }

@@ -22,3 +22,6 @@ func (m *Module) API() orgapi.UserReader { return m.svc }
 
 // AdminAPI 管理端用户管理接口（D10 admin 域消费；依赖规则 D02 §4 只经 api 包）
 func (m *Module) AdminAPI() orgapi.UserAdminReader { return m.svc }
+
+// DeptScopeAPI 部门归属读（kb 三层知识检索经 main 闭包消费；同上依赖规则）
+func (m *Module) DeptScopeAPI() orgapi.DeptScopeReader { return m.svc }

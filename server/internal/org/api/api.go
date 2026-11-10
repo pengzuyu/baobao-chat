@@ -130,6 +130,15 @@ type UserDeptRow struct {
 	IsPrimary bool
 }
 
+// DeptScopeReader 部门归属读（kb 三层知识检索经 main 闭包消费；D02 §4 跨域不引包）
+type DeptScopeReader interface {
+	// UserDeptIDsOf 用户直接所属部门集 + 主部门 ID（primary=0 表示未挂任何部门）
+	UserDeptIDsOf(ctx context.Context, tenantID, userID int64) (ids map[int64]bool, primary int64, err error)
+	// UserDeptChainOf 用户可见部门集 = 直接部门 ∪ 各部门祖先链（深度无关；
+	// kb dept 空间读取口径——父部门知识对子部门成员可见，兄弟互不可见）
+	UserDeptChainOf(ctx context.Context, tenantID, userID int64) (map[int64]bool, error)
+}
+
 // ErrDeptNotFound / ErrDeptNotEmpty / ErrDeptName 部门域 sentinel
 var (
 	ErrDeptNotFound = errors.New("orgapi: dept not found")

@@ -18,6 +18,7 @@ type SpaceDTO struct {
 	SpaceType  string `json:"space_type"` // personal|dept|company
 	Name       string `json:"name"`
 	OwnerID    string `json:"owner_id"`
+	DeptID     string `json:"dept_id"` // dept 空间挂靠部门（"0"=未挂靠，仅创建者可见）
 	QuotaBytes int64  `json:"quota_bytes"`
 	UsedBytes  int64  `json:"used_bytes"`
 	DocCount   int64  `json:"doc_count"`
@@ -28,18 +29,18 @@ type SpaceDTO struct {
 // perm 4=owner|admin（治理者，admin 标记 v0.1 不分档登记）/3=contributor/1=reader）
 type GrantRow struct {
 	ID          string `json:"id"`
-	GrantType   int    `json:"grant_type"`  // 1 user 2 dept
+	GrantType   int    `json:"grant_type"`   // 1 user 2 dept
 	GrantTarget string `json:"grant_target"` // user_id/dept_id
-	Perm        int    `json:"perm"`          // 1 viewer 3 editor 4 owner
+	Perm        int    `json:"perm"`         // 1 viewer 3 editor 4 owner
 	GrantedBy   string `json:"granted_by"`
 	ExpiresAt   int64  `json:"expires_at"` // ms；0=永久
 	CreatedAt   int64  `json:"created_at"` // ms
 }
 
 type GrantReq struct {
-	GrantType   int    `json:"grant_type"`   // 1 user 2 dept（3 role/4 tenant 随角色体系阶段二）
-	GrantTarget string `json:"grant_target"` // 目标 ID
-	Perm        int    `json:"perm"`         // 1 reader 3 contributor 4 owner/admin
+	GrantType   int    `json:"grant_type"`    // 1 user 2 dept（3 role/4 tenant 随角色体系阶段二）
+	GrantTarget string `json:"grant_target"`  // 目标 ID
+	Perm        int    `json:"perm"`          // 1 reader 3 contributor 4 owner/admin
 	ExpiresAtMs int64  `json:"expires_at_ms"` // 0=永久
 }
 
@@ -121,11 +122,12 @@ type QueryResp struct {
 
 // KBService 知识库域服务接口（main REST 壳依赖）
 type KBService interface {
-	// ListSpaces 可见空间列表（个人空间惰性创建；personal 只本人 + company 全员 +
-	// dept 仅治理者——部门树授权阶段二，登记）
+	// ListSpaces 可见空间列表（个人空间惰性创建；三层基线：personal 本人 +
+	// company 全员 + dept 部门祖先链可见——ACL 显式授权超集）
 	ListSpaces(ctx context.Context, tenantID, userID int64) ([]SpaceDTO, error)
-	// CreateSpace 新建空间（dept|company；personal 走惰性创建；v0.1 不校验权限点，登记）
-	CreateSpace(ctx context.Context, tenantID, userID int64, spaceType, name string) (*SpaceDTO, error)
+	// CreateSpace 新建空间（dept|company；personal 走惰性创建；v0.1 不校验权限点，登记）。
+	// deptID：dept 挂靠部门（显式须为本人直接部门 9001；缺省自动挂主部门）
+	CreateSpace(ctx context.Context, tenantID, userID int64, spaceType, name string, deptID int64) (*SpaceDTO, error)
 	// ListNodes 目录懒加载（子目录 + 目录下文档）
 	ListNodes(ctx context.Context, tenantID, userID, spaceID, parentID int64) (*NodeChildren, error)
 	// CreateNode 新建目录（同父同名 7014；>10 层 9001）

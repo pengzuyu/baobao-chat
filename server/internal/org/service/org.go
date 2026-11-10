@@ -19,6 +19,7 @@ func New(r orgrepo.Repo) *Service { return &Service{repo: r} }
 // compile-time 接口断言
 var _ orgapi.UserReader = (*Service)(nil)
 var _ orgapi.UserAdminReader = (*Service)(nil)
+var _ orgapi.DeptScopeReader = (*Service)(nil)
 
 // GetUserByLogin 登录名查用户
 func (s *Service) GetUserByLogin(ctx context.Context, tenantID int64, username string) (*orgapi.User, error) {
@@ -50,4 +51,67 @@ func (s *Service) SetUserStatus(ctx context.Context, id int64, status int) error
 // SetPassword 改密+清首登标志（D11；hash 由 auth 域闭包生成，透传仓储）
 func (s *Service) SetPassword(ctx context.Context, tenantID, userID int64, passwordHash string) error {
 	return s.repo.SetPassword(ctx, tenantID, userID, passwordHash)
+}
+
+// ── 部门归属读（kb 三层知识检索消费；orgapi.DeptScopeReader 实现）──
+
+// UserDeptIDsOf 用户直接所属部门集 + 主部门 ID（primary=0 表示未挂任何部门）
+func (s *Service) UserDeptIDsOf(ctx context.Context, tenantID, userID int64) (map[int64]bool, int64, error) {
+	rows, err := s.repo.ListUserDepts(ctx, tenantID, userID)
+	if err != nil {
+		return nil, 0, err
+	}
+	ids := make(map[int64]bool, len(rows))
+	primary := int64(0)
+	for _, r := range rows {
+		ids[r.DeptID] = true
+		if r.IsPrimary {
+			primary = r.DeptID
+		}
+	}
+	if primary == 0 && len(rows) > 0 {
+		primary = rows[0].DeptID // 无主标记时取首行兜底（数据防御）
+	}
+	return ids, primary, nil
+}
+
+// UserDeptChainOf 用户可见部门集 = 直接部门 ∪ 各部门祖先链（深度无关：
+// 沿 parent 向上取并集；visited 防环兜底脏数据；未挂部门=空集）
+func (s *Service) UserDeptChainOf(ctx context.Context, tenantID, userID int64) (map[int64]bool, error) {
+	direct, _, err := s.UserDeptIDsOf(ctx, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	chain := make(map[int64]bool, len(direct)*2)
+	if len(direct) == 0 {
+		return chain, nil
+	}
+	// ListTree 为嵌套树（根数组+Children）：一次深度遍历展平为 parent 映射
+	parent := make(map[int64]int64)
+	var walk func(n orgapi.DeptNode, parentID int64)
+	walk = func(n orgapi.DeptNode, parentID int64) {
+		if _, dup := parent[n.ID]; dup {
+			return // 重复/环防御：首见即登记
+		}
+		parent[n.ID] = parentID
+		for _, c := range n.Children {
+			walk(c, n.ID)
+		}
+	}
+	tree, err := s.repo.ListTree(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range tree {
+		walk(r, 0)
+	}
+	for d := range direct {
+		cur, visited := d, map[int64]bool{}
+		for cur != 0 && !visited[cur] {
+			visited[cur] = true
+			chain[cur] = true
+			cur = parent[cur] // 未知部门（已删/跨租户）→ 缺项 0 终止
+		}
+	}
+	return chain, nil
 }

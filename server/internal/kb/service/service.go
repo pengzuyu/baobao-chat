@@ -57,9 +57,16 @@ type Options struct {
 	// commenter / 3 editor / 4 owner（org/acl Perm 语义，闭包传 int 解耦）
 	ACLPerm func(ctx context.Context, spaceID, userID int64) int
 	// ── 授权管理通道（11 §6 grants 三操作；main 经 aclSvc 装配，跨域不引包）──
-	ACLGrant func(ctx context.Context, spaceID int64, grantType int, grantTarget int64, perm int, grantedBy int64, expiresAtMs int64) (grantID int64, createdAtMs int64, err error)
+	ACLGrant      func(ctx context.Context, spaceID int64, grantType int, grantTarget int64, perm int, grantedBy int64, expiresAtMs int64) (grantID int64, createdAtMs int64, err error)
 	ACLListGrants func(ctx context.Context, spaceID int64) ([]ACLGrantRow, error)
-	ACLRevoke func(ctx context.Context, spaceID, grantID int64) error
+	ACLRevoke     func(ctx context.Context, spaceID, grantID int64) error
+	// ── 部门归属通道（三层知识检索：公司 ∪ 部门祖先链 ∪ 个人；org 域注入，跨域不引包）──
+	// UserDeptIDsOf 直接部门集+主部门（dept 空间创建挂靠校验；nil=通道未装配，
+	// 显式 dept_id 拒 9001、缺省挂靠回落 DeptID=0 仅创建者可见）
+	UserDeptIDsOf func(ctx context.Context, tenantID, userID int64) (ids map[int64]bool, primary int64, err error)
+	// UserDeptChainOf 可见部门集=直接 ∪ 祖先链（dept 空间 canRead 口径；nil=未装配，
+	// dept 空间回落 OwnerID 兜底——与旧口径一致）
+	UserDeptChainOf func(ctx context.Context, tenantID, userID int64) (map[int64]bool, error)
 }
 
 // ACLGrantRow 授权行投影（ACLListGrants 返回；与 api.GrantRow 字段对齐，int ID 形态）
@@ -128,9 +135,10 @@ func (s *Service) ListSpaces(ctx context.Context, tenantID, userID int64) ([]kba
 	if err != nil {
 		return nil, errx.From(err)
 	}
+	deptChain := s.deptChainOf(ctx, tenantID, userID) // 每请求解析一次祖先链
 	out := make([]kbapi.SpaceDTO, 0, len(all))
 	for _, sp := range all {
-		if !s.canRead(ctx, sp, userID) {
+		if !s.canRead(ctx, sp, userID, deptChain) {
 			continue
 		}
 		docs, err := s.repo.ListDocsBySpace(ctx, tenantID, sp.ID)
@@ -144,8 +152,10 @@ func (s *Service) ListSpaces(ctx context.Context, tenantID, userID int64) ([]kba
 	return out, nil
 }
 
-// CreateSpace 新建（dept|company；personal 惰性创建幂等返回既有）
-func (s *Service) CreateSpace(ctx context.Context, tenantID, userID int64, spaceType, name string) (*kbapi.SpaceDTO, error) {
+// CreateSpace 新建（dept|company；personal 惰性创建幂等返回既有）。
+// deptID：dept 类型空间挂靠部门——显式指定须为本人直接所属部门（9001）；
+// 缺省自动挂靠主部门（primary=0 未挂部门 → DeptID=0 仅创建者可见，兜底登记）
+func (s *Service) CreateSpace(ctx context.Context, tenantID, userID int64, spaceType, name string, deptID int64) (*kbapi.SpaceDTO, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || utf8.RuneCountInString(name) > 64 {
 		return nil, errx.New(errx.CodeBadRequest, "空间名非法（非空 ≤64 字）")
@@ -166,16 +176,44 @@ func (s *Service) CreateSpace(ctx context.Context, tenantID, userID int64, space
 	quota := s.opts.CompanyQuotaBytes
 	if spaceType == kbrepo.SpaceDept {
 		quota = s.opts.DeptQuotaBytes
+		deptID = s.resolveDeptBinding(ctx, tenantID, userID, deptID)
+		if deptID < 0 {
+			return nil, errx.New(errx.CodeBadRequest, "dept_id 须为本人所属部门")
+		}
+	} else {
+		deptID = 0 // company 不挂部门
 	}
 	sp, err := s.repo.CreateSpace(ctx, kbrepo.Space{
 		TenantID: tenantID, SpaceType: spaceType, Name: name, OwnerID: userID,
-		QuotaBytes: quota, Status: "active",
+		DeptID: deptID, QuotaBytes: quota, Status: "active",
 	})
 	if err != nil {
 		return nil, errx.From(err)
 	}
 	dto := toSpaceDTO(sp)
 	return &dto, nil
+}
+
+// resolveDeptBinding dept 空间挂靠部门解析：显式 deptID ∈ 本人直接部门 → 原样；
+// 缺省 → 主部门；显式但非本人部门 → -1（9001）；通道未装配 → 显式拒 / 缺省 0
+func (s *Service) resolveDeptBinding(ctx context.Context, tenantID, userID, deptID int64) int64 {
+	if s.opts.UserDeptIDsOf == nil {
+		if deptID > 0 {
+			return -1 // 通道未装配却显式指定：无法校验归属，拒绝
+		}
+		return 0
+	}
+	ids, primary, err := s.opts.UserDeptIDsOf(ctx, tenantID, userID)
+	if err != nil {
+		return 0 // 解析失败：不挂靠（owner 兜底可见），不阻断创建
+	}
+	if deptID > 0 {
+		if ids[deptID] {
+			return deptID
+		}
+		return -1
+	}
+	return primary
 }
 
 // ── 目录 ──
@@ -611,9 +649,10 @@ func (s *Service) Query(ctx context.Context, tenantID, userID int64, spaceIDs []
 	if err != nil {
 		return nil, errx.From(err)
 	}
+	deptChain := s.deptChainOf(ctx, tenantID, userID) // 每请求解析一次祖先链
 	visible := make([]kbrepo.Space, 0, len(all))
 	for _, sp := range all {
-		if s.canRead(ctx, sp, userID) {
+		if s.canRead(ctx, sp, userID, deptChain) {
 			visible = append(visible, sp)
 		}
 	}
@@ -939,12 +978,26 @@ func defaultTitle(content string) string {
 	return "未命名文档"
 }
 
-// ── 权限（v0.1：personal 只本人 + company 全员可读；dept 仅治理者，部门树阶段二）──
+// ── 权限（三层基线：personal 本人 + company 全员 + dept 部门祖先链可见；ACL 显式授权超集）──
+
+// deptChainOf 解析用户可见部门集（每请求一次；nil 通道/出错=空集 → dept 空间
+// 回落 OwnerID 兜底——与通道未装配的旧口径一致）
+func (s *Service) deptChainOf(ctx context.Context, tenantID, userID int64) map[int64]bool {
+	if s.opts.UserDeptChainOf == nil {
+		return nil
+	}
+	chain, err := s.opts.UserDeptChainOf(ctx, tenantID, userID)
+	if err != nil || len(chain) == 0 {
+		return nil // fail-safe：解析失败不放宽（dept 空间仅 owner 可见）
+	}
+	return chain
+}
 
 // canRead 读权限（检索/浏览/详情）：ACL 显式授权（≥viewer）优先——
-// 可放宽基线（如 dept 空间授部门 viewer，11 §2.1）；无授权回落
-// v0.1 基线（personal 本人/company 全员/dept 治理者）
-func (s *Service) canRead(ctx context.Context, sp kbrepo.Space, userID int64) bool {
+// 可放宽基线（如 dept 空间授部门 viewer，11 §2.1）；无授权回落三层基线
+// （personal 本人 / company 全员 / dept=空间挂靠部门 ∈ 用户祖先链并集——
+// 父部门知识对子部门成员可见，兄弟互不可见，深度无关；链未解析回落 OwnerID）
+func (s *Service) canRead(ctx context.Context, sp kbrepo.Space, userID int64, deptChain map[int64]bool) bool {
 	if sp.Status != "active" {
 		return false // 治理停用（archived）：检索/浏览/详情全挡（D8）
 	}
@@ -957,14 +1010,18 @@ func (s *Service) canRead(ctx context.Context, sp kbrepo.Space, userID int64) bo
 	case kbrepo.SpaceCompany:
 		return true // 全员 reader（11 §2.1）
 	case kbrepo.SpaceDept:
-		return sp.OwnerID == userID
+		if sp.DeptID > 0 && deptChain != nil && deptChain[sp.DeptID] {
+			return true // 三层检索：部门祖先链可见（2026-11 收口）
+		}
+		return sp.OwnerID == userID // 兜底：未挂部门/链未解析 → 创建者可见
 	}
 	return false
 }
 
 // canWrite 写权限（摄入/建目录/重摄入）：ACL ≥editor 优先（D07"写入
 // 收敛到贡献者"=公司空间显式授权 editor 者可写，收紧基线）；无授权回落
-// v0.1 基线（personal/dept=治理者；company=全员）
+// v0.1 基线（personal/dept=治理者；company=全员；部门成员只读——
+// 写入走 owner 或 ACL editor 授权，阶段二按需放开部门贡献者）
 func (s *Service) canWrite(ctx context.Context, sp kbrepo.Space, userID int64) bool {
 	if s.opts.ACLPerm != nil && s.opts.ACLPerm(ctx, sp.ID, userID) >= 3 { // editor
 		return true
@@ -984,7 +1041,7 @@ func (s *Service) getSpaceFor(ctx context.Context, userID, spaceID int64, requir
 	if sp.Status != "active" {
 		return nil, errx.New(errx.CodeKBSpaceArchived, "空间已归档停用")
 	}
-	allowed := s.canRead(ctx, *sp, userID)
+	allowed := s.canRead(ctx, *sp, userID, s.deptChainOf(ctx, sp.TenantID, userID))
 	if requireWrite {
 		allowed = s.canWrite(ctx, *sp, userID)
 	}
@@ -1011,8 +1068,9 @@ func (s *Service) docOfReadable(ctx context.Context, tenantID, userID, docID int
 func toSpaceDTO(s kbrepo.Space) kbapi.SpaceDTO {
 	return kbapi.SpaceDTO{
 		ID: strconv.FormatInt(s.ID, 10), SpaceType: s.SpaceType, Name: s.Name,
-		OwnerID: strconv.FormatInt(s.OwnerID, 10), QuotaBytes: s.QuotaBytes,
-		UsedBytes: s.UsedBytes, CreatedAt: s.CreatedAt.UnixMilli(),
+		OwnerID: strconv.FormatInt(s.OwnerID, 10), DeptID: strconv.FormatInt(s.DeptID, 10),
+		QuotaBytes: s.QuotaBytes,
+		UsedBytes:  s.UsedBytes, CreatedAt: s.CreatedAt.UnixMilli(),
 	}
 }
 
@@ -1103,7 +1161,7 @@ func (s *Service) ListGrants(ctx context.Context, tenantID, userID, spaceID int6
 	out := make([]kbapi.GrantRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, kbapi.GrantRow{
-			ID: strconv.FormatInt(r.GrantID, 10),
+			ID:        strconv.FormatInt(r.GrantID, 10),
 			GrantType: r.GrantType, GrantTarget: strconv.FormatInt(r.GrantTarget, 10),
 			Perm: r.Perm, GrantedBy: strconv.FormatInt(r.GrantedBy, 10),
 			ExpiresAt: r.ExpiresAtMs, CreatedAt: r.CreatedAtMs,

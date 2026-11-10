@@ -159,6 +159,7 @@ func main() {
 		return roleStore.PermissionPointsOf(ctx, tenantID, userID)
 	}
 	orgMod := org.NewModule(orgRepo)
+	orgDeptScope := orgMod.DeptScopeAPI() // kb 三层知识检索部门通道（11 §2.1）
 	// agentKillOn 平台总闸（D9）：adminSvc 装配于后段——var 前置声明，auth/aigw
 	// 两处闭包捕获引用，adminSvc 就绪后回填即双点生效（OBO 签发 + 网关每请求）
 	var agentKillOn func() bool
@@ -507,7 +508,15 @@ func main() {
 		ACLGrant:      kbACLGrant,
 		ACLListGrants: kbACLList,
 		ACLRevoke:     kbACLRevoke,
-		Embedder:      kbEmbed,
+		// 三层知识检索部门通道（11 §2.1：dept 空间=部门祖先链可见——org 域注入，
+		// D02 §4 跨域不引包；kb 用 orgMod 装配在后段——orgMod 先于 kb 构造 ✓）
+		UserDeptIDsOf: func(ctx context.Context, tenantID, userID int64) (map[int64]bool, int64, error) {
+			return orgDeptScope.UserDeptIDsOf(ctx, tenantID, userID)
+		},
+		UserDeptChainOf: func(ctx context.Context, tenantID, userID int64) (map[int64]bool, error) {
+			return orgDeptScope.UserDeptChainOf(ctx, tenantID, userID)
+		},
+		Embedder: kbEmbed,
 		// 文件来源摄入：经 file 域票据通道取内容（IssueTicket 校验 owner/成员 →
 		// Download 一次性票据回放流；跨模块不引 file 包，D02 §4 依赖规则）
 		OpenFile: func(ctx context.Context, tenantID, userID, fileID int64) (kbservice.FileSource, error) {
@@ -2142,7 +2151,8 @@ func handleKBListSpaces(svc kbapi.KBService) http.HandlerFunc {
 	}
 }
 
-// handleKBCreateSpace 新建空间（dept|company；personal 幂等返回惰性创建结果）
+// handleKBCreateSpace 新建空间（dept|company；personal 幂等返回惰性创建结果；
+// dept_id 可选——缺省自动挂靠主部门，显式须为本人直接所属部门）
 func handleKBCreateSpace(svc kbapi.KBService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenant, uid, err := kbActor(r)
@@ -2151,14 +2161,15 @@ func handleKBCreateSpace(svc kbapi.KBService) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			Type string `json:"type"`
-			Name string `json:"name"`
+			Type   string `json:"type"`
+			Name   string `json:"name"`
+			DeptID int64  `json:"dept_id"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			httpx.Fail(w, r, err)
 			return
 		}
-		space, err := svc.CreateSpace(r.Context(), tenant, uid, req.Type, req.Name)
+		space, err := svc.CreateSpace(r.Context(), tenant, uid, req.Type, req.Name, req.DeptID)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return
