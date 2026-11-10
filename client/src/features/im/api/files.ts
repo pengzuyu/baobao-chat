@@ -8,7 +8,7 @@
 
 import { ApiError, apiOrigin, authToken, getErrorText, http } from '../../../shared/api/http';
 
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 /** 上传响应（POST /files/upload；去重命中 dedup=true 且返回原行元数据） */
 export interface UploadResult {

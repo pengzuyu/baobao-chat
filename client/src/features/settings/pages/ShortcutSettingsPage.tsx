@@ -8,10 +8,11 @@
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const MOD = isMac ? '⌘' : 'Ctrl';
 
-/** D01 §9 权威总表（已生效子集；⌥↑↓ 切会话/⌘, 打开设置等未实现键位随瘦身二阶段清理） */
+/** D01 §9 权威总表（已生效子集；⌥↑↓ 切会话未实现暂不列） */
 const SHORTCUTS: Array<{ keys: string; label: string; scope: string }> = [
   { keys: `${MOD} + K`, label: '全局搜索（跨消息/知识库/联系人）', scope: '全局' },
   { keys: `${MOD} + F`, label: '当前会话内搜索', scope: '会话' },
+  { keys: `${MOD} + ,`, label: '打开设置', scope: '全局' },
   { keys: `Esc`, label: '逐层关闭浮层（弹窗→抽屉→搜索）', scope: '全局' },
   { keys: `${MOD} + ⇧ + .`, label: 'Agent 紧急停止（全局生效）', scope: '全局' },
   { keys: `Enter / ⇧+Enter`, label: '发送 / 换行（会话输入框）', scope: '输入框' },

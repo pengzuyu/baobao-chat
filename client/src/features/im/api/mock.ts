@@ -1,5 +1,5 @@
 /**
- * IM 桩数据（集中在此，不散落组件；VITE_USE_MOCK=0 关闭后走真实 REST/WS）。
+ * IM 桩数据（集中在此，不散落组件；默认真实 REST/WS；显式 VITE_USE_MOCK=1 才启用（D18 翻转））。
  * mock uid：u-1001=本人（与 auth mock 登录一致）。
  */
 

@@ -10,8 +10,8 @@
 #   仅当 WS 走独立域名/端口时才需显式配置覆盖。
 # =============================================================================
 
-# —— mock 开关：置 0 走真实 API；不设或非 0 时所有页面跑桩数据（纯演示用）——
-VITE_USE_MOCK=0
+# —— mock 开关（D18 翻转后默认连真实 API）：仅纯前端演示时显式置 1 跑桩数据 ——
+# VITE_USE_MOCK=1
 
 # —— 典型联调目标（按需启用其一，注释其余）——
 # ① 本机 docker compose 部署（deploy/compose --profile core；nginx 443 自签证书
@@ -22,5 +22,5 @@ VITE_API_BASE=https://localhost/api/v1
 # ② 本机裸跑服务端（make server-run，:8090）：
 # VITE_API_BASE=http://127.0.0.1:8090/api/v1
 
-# ③ 纯 mock 演示（不连服务端，变量可全注释——默认即 localhost:8080）：
+# ③ 纯 mock 演示（不连服务端：显式 VITE_USE_MOCK=1，API 变量可全注释）：
 # VITE_API_BASE=http://localhost:8080/api/v1

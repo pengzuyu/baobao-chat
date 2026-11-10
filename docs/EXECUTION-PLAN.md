@@ -132,7 +132,7 @@
 | D16 | 自动转发执行+草稿箱 | 服务端定时执行转发；草稿保存/续写流程 | 转发到点发出；草稿可恢复 | [x] 2026-11-09（投递钩子同步转发+防环；drafts/trash 全链+续写） |
 | D17 | 专家库→发起会话 | ExpertLibraryPage 接 agent_* 宿主建会话（现「阶段二」注释） | 从专家卡一键开工作台会话 | [x] 2026-11-09（详情抽屉入口；persona 注入随 expert_id 参数阶段二，登记） |
 | **D15/D16/D17 验收记录（2026-11-09）**：D15——ComposeModal 附件全链（uploadFileSmart 多选上传→file_id 引用列表（大小/移除）→SendReq.attachments 携带；服务端 9024 校验/投递透传本就绪）。D16——**自动转发**：internalSend 投递成功后查收件人 settings.auto_forward → 副本投递（Fwd: 前缀；autoFwdMarker 防环封顶一层；转发地址无效静默）；**草稿**：SaveDraft（FlagDraft bit2/drafts folder/更新=旧行入 trash）+DiscardDraft（发送后清理）+POST/DELETE /mail/drafts；前端存草稿按钮（返回新 id 续存）+草稿箱行点击续写（draftInit 重开窗）；测试 TestAutoForward（副本+防环）+TestDrafts（存/更/清理）。D17——专家详情抽屉 [用此专家开会话]（manifest model: 行→直达引用透传，useAgentStore.startSession('ask',model)→/agent/s/:id）；persona/skills 注入随宿主 expert_id 参数阶段二。client tsc/build ✓。
-| D18 | mock 默认翻转+真实联调 | `VITE_USE_MOCK !== '0'` 默认逻辑翻转（连真实后端为默认）；全模块真实模式回归（StickersPage 建集 disabled、admin 写操作 9001 等随之解决） | 默认构建连真实 server 全功能可走通 | [ ] |
+| D18 | mock 默认翻转+真实联调 | `VITE_USE_MOCK === '1'` 显式开桩（默认连真实后端）；全模块真实模式回归（StickersPage 建集 disabled、admin 写操作 9001 等随之解决） | 默认构建连真实 server 全功能可走通 | [x] 2026-11-10 翻转落地（11 处 USE_MOCK 判定+注释+client/.env.tpl 语义更新；服务端联调回归随真机） |
 
 ## 批次 E：阶段三/四路线（Agent 生态与平台化——做时再细化设计）
 

@@ -42,13 +42,7 @@ modules:
   mail: false          # ↔ compose mail profile（22 篇；独立组件组，本 chart 未含模板）
 
 # ---------------------------------------------------------------------------
-# 特性开关（BBW_FEATURE_*，16 篇 §5.3；租户级灰度走 DB feature_flag 表）
-# ---------------------------------------------------------------------------
-features:                              # compose: BBW_FEATURE_*
-  agent: true
-  kb: true
-  ai: true
-  mail: false
+# 特性开关：BBW_FEATURE_*/features.* 随 2026-11 瘦身移除（服务端零读取；租户级灰度走 feature_flag 表阶段二）
 
 # ---------------------------------------------------------------------------
 # 非敏感运行配置 → ConfigMap bbw-config

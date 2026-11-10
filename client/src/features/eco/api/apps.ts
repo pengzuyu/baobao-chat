@@ -5,7 +5,7 @@
 
 import { http } from '../../../shared/api/http';
 
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

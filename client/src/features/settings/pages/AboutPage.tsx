@@ -35,7 +35,7 @@ export function AboutPage() {
           <div className="settings-row">
             <div className="settings-row__text">
               <div className="settings-row__name">设计文档</div>
-              <div className="settings-row__desc">概要 00–22 篇 + 详设 D01–D14（docs/）</div>
+              <div className="settings-row__desc">概要 19 篇 + 详设 14 篇（docs/；doc/bot/rtc/meeting 篇目已随瘦身移除）</div>
             </div>
           </div>
         </div>

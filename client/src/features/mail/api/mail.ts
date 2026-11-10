@@ -1,6 +1,6 @@
 /**
  * 邮件域 API（22 §6.1 REST 契约；mock 桩集中本文件底部——不散落组件）。
- * USE_MOCK 默认开（README：VITE_USE_MOCK=0 直连真服务）。
+ * 默认连真服务；显式 VITE_USE_MOCK=1 才走桩（D18 翻转）。
  */
 import { http } from '../../../shared/api/http';
 import type {
@@ -14,7 +14,7 @@ import type {
   SharedMailboxView,
 } from '../model/types';
 
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 export async function fetchSummary(): Promise<MailSummary> {
   if (USE_MOCK) return mockSummary();
@@ -134,7 +134,7 @@ export async function sendAsShared(mailboxId: string, req: SendMailReq): Promise
 }
 
 // ---------------------------------------------------------------------------
-// mock 桩（集中底部；VITE_USE_MOCK=0 时死代码）
+// mock 桩（集中底部；默认死代码，VITE_USE_MOCK=1 才启用）
 // ---------------------------------------------------------------------------
 
 const mockFolders = (unread: Record<string, number>) => [

@@ -5,8 +5,8 @@
 
 import { ApiError, getErrorText, http } from '../../../shared/api/http';
 
-/** 是否使用内置桩数据（默认开，VITE_USE_MOCK=0 切真实后端） */
-export const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+/** 是否使用内置桩数据（默认连真实后端；显式 VITE_USE_MOCK=1 才走桩——D18 翻转） */
+export const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 export interface AuthUser {
   uid: string;

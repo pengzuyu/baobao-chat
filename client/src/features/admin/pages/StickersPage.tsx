@@ -21,7 +21,7 @@ import {
   type StickerSet,
 } from '../../im/api/stickers';
 
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 export function StickersPage() {
   const [sets, setSets] = useState<StickerSet[] | null>(null);

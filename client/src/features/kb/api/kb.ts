@@ -5,13 +5,13 @@
  * - 摄入：文本粘贴 / 文件引用（file_id 先经 D06 /files/upload 上传）
  * - 文档：详情 / 分块（outline|around|全量）/ 重摄入
  * - 检索：POST /kb/query（RRF 融合结果卡数据源）
- * mock 桩集中本文件（VITE_USE_MOCK=0 关闭后走真实 REST）。
+ * mock 桩集中本文件（默认真实 REST，显式 VITE_USE_MOCK=1 才启用——D18 翻转）。
  */
 
 import { http } from '../../../shared/api/http';
 import type { KbChunk, KbDoc, KbNode, KbNodeChildren, KbOutlineItem, KbQueryHit, KbQueryReq, KbQueryResp, KbSpace } from '../model/types';
 
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 /** 可见空间列表（个人空间首访惰性创建） */
 export async function fetchSpaces(type?: string): Promise<KbSpace[]> {

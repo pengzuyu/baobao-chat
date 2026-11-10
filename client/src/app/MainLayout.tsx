@@ -5,7 +5,7 @@
  * - 内容区 <Outlet/>：路由切换不销毁 IM 的 WSS 连接与未读状态
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Dropdown, type MenuProps } from 'antd';
 import { Bell, Bot, BrainCircuit, Gauge, Mail, MessageCircle, Sparkles } from 'lucide-react';
@@ -72,6 +72,18 @@ export function MainLayout() {
   // 通知中心未读红点（全局中心自身的数据源；IM 内铃铛同源）
   const notifUnread = useUnreadNotificationCount();
   const isAdmin = useMemo(() => (user?.perms ?? []).some((p) => p.startsWith('admin')), [user]);
+
+  // ⌘,/Ctrl+, 打开设置（D01 §9 键位；输入框聚焦时忽略）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+        e.preventDefault();
+        navigate('/settings/general');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navigate]);
 
   const avatarMenu: MenuProps = {
     items: [

@@ -5,8 +5,7 @@
  * - 策略 GET /admin/policies/agent · 敏感词 GET/POST /admin/policies/sensitive-words · DELETE .../{id}
  * - 用量 GET /admin/usage/summary?days=
  * - 审计 GET /admin/audit?cursor=
- * mock 桩集中本文件（VITE_USE_MOCK=0 关闭后走真实 REST；mock 登录用户无 admin 权限，
- * 正常入口不可达——直敲 /admin URL 时供六态走查）。
+ * mock 桩集中本文件（默认真实 REST，显式 VITE_USE_MOCK=1 才启用——D18 翻转）。
  */
 
 import { ApiError, http } from '../../../shared/api/http';
@@ -24,7 +23,7 @@ import type {
   AIRouteRule,
 } from '../model/types';
 
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 /** 仪表盘聚合 */
 export async function fetchDashboard(): Promise<AdminDashboard> {

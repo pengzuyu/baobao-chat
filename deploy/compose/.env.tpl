@@ -93,12 +93,8 @@ BBW_TLS_KEY_FILE=/etc/nginx/certs/tls.key
 BBW_TLS_CA_FILE=/etc/nginx/certs/ca.crt
 
 # -----------------------------------------------------------------------------
-# 7. 特性开关（helm: features.* → ConfigMap + feature_flag 租户级灰度，16 篇 §5.3）
+# 7. 特性开关：BBW_FEATURE_* 随 2026-11 瘦身移除（服务端零读取的装饰配置）
 # -----------------------------------------------------------------------------
-BBW_FEATURE_AGENT=true        # helm: features.agent   （AI Agent 工作台）
-BBW_FEATURE_KB=true           # helm: features.kb      （知识库）
-BBW_FEATURE_AI=true           # helm: features.ai      （ai-gateway）
-BBW_FEATURE_MAIL=false        # helm: features.mail    （邮件：同时须启用 mail profile，22 篇）
 
 # -----------------------------------------------------------------------------
 # 8. AI 网关上游（helm: aiGateway.* / secrets.aiUpstreamApiKey；19 篇）

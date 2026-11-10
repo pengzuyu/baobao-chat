@@ -20,7 +20,7 @@ import type {
 } from '../model/types';
 import { MOCK_CONVS, MOCK_MESSAGES, mockLatestSeq } from './mock';
 
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 export interface Paged<T> {
   items: T[];

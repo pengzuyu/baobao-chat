@@ -9,7 +9,7 @@ import { http } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
 import type { SendAck } from '../model/types';
 
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 export interface StickerItem {
   id: string;

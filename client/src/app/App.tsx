@@ -54,8 +54,8 @@ import { message as antdMessage } from 'antd';
 
 /** WS 基址：显式 VITE_WS_BASE > 同源推导自 VITE_API_BASE（统一入口路径分流，见 ws.ts） */
 const WS_BASE: string = resolveWsBase();
-/** mock 模式（无后端联调）默认开启：REST/WS 走 features 各模块 api 层内置桩数据 */
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== '0';
+/** mock 模式（无后端纯演示）：显式 VITE_USE_MOCK=1 才启用桩数据，默认连真实后端（D18 翻转） */
+const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 /** 认证门卫：无凭据强制跳 /auth（D01 §4.2） */
 function RequireAuth({ children }: { children: ReactNode }) {
