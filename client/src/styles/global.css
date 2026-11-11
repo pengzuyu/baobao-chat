@@ -2311,10 +2311,19 @@ body {
   padding: var(--bbw-space-2) 0;
 }
 
+/* 滚动区包裹层（agent-web messages-wrap 同构）：浮标定位祖先，恒浮于输入框正上方 */
+.message-stream-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .scroll-bottom-fab {
   position: absolute;
   right: var(--bbw-space-6);
-  bottom: 140px;
+  bottom: 12px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -2327,6 +2336,37 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   cursor: pointer;
   z-index: 10;
+  animation: fab-pop 0.16s ease;
+}
+
+@keyframes fab-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* AI 回答中红点（agent-web jb-dot 同款语义：流式进行中提示有内容在长） */
+.scroll-bottom-fab__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bbw-danger);
+  animation: fab-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes fab-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 /* 会话右键菜单（INT-IM-07） */

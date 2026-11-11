@@ -43,6 +43,7 @@ import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from '../components/stream/MsgContextMenu';
 import { MessageInput } from '../components/MessageInput';
 import { EmbeddedAgentSync } from '../agent/EmbeddedAgentSync';
+import type { AgentCardBody } from '../../../shared/components/AgentProcessCard';
 import { embeddedTitle, getEmbeddedSessionId, setEmbeddedSessionId } from '../agent/embedded';
 import { useAgentStore } from '../../agent/store/agent';
 import { ForwardModal } from '../components/ForwardModal';
@@ -52,6 +53,14 @@ import { MergeForwardDrawer } from '../components/MergeForwardDrawer';
 import { SearchPanel } from '../components/SearchPanel';
 
 /** 消息流 forbidden 判定：被移出(3001)/会话不存在(3019)/群解散(3002)（D03 PIM-02 六态） */
+/** 贴底判定阈值（agent-web 同款 80px：距底不足此值视为贴底，恢复跟随） */
+const NEAR_BOTTOM_PX = 80;
+
+/** 消息身份键（本地 sending 无 msgId 用 clientMsgId；ack 回填后键不变） */
+function msgKeyOf(m: Message): string {
+  return m.msgId || m.clientMsgId;
+}
+
 function isForbiddenError(err: unknown): boolean {
   return err instanceof ApiError && [3001, 3019, 3002].includes(err.code);
 }
@@ -300,21 +309,26 @@ export function ChatPage() {
               ? 'offline'
               : 'ok';
 
-  // ---- 滚动：吸底跟随 / 上翻加载更早（INT-IM-13）/ 回到底部浮标 ----
+  // ---- 滚动：智能跟随 / 上翻加载更早（INT-IM-13）/ 回到底部浮标 ----
+  // 口径对齐 agent-web ChatPage 智能滚动：贴底跟随新内容；用户上滚浏览历史时不再
+  // 抢滚动条；浮标常显（新消息计数/AI 回答中/回到底部三态），点击回底恢复跟随。
   const streamRef = useRef<HTMLDivElement>(null);
-  const prevCountRef = useRef(0);
   const stickBottomRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true); // ref 供轮询读，state 供浮标渲染
   const [awayCount, setAwayCount] = useState(0);
   const [hasOlder, setHasOlder] = useState(true);
   const loadingOlderRef = useRef(false);
   const oldestSeqRef = useRef<number | null>(null);
+  /** 尾键追踪（替代 length 计数）：prepend 不动尾键天然不误计/不触发滚动 */
+  const prevTailKeyRef = useRef<string | null | undefined>(undefined);
 
-  // 切会话重置跟随态（2026-11-11 修「首次进入停在顶部」第二半）：prevCount 归零让
-  // 新会话首屏必触发吸底跳转（两条会话缓存条数相同也不再漏跳）；上翻游标/还有更早
-  // 标记随会话重置——沿用上一会话的 hasOlder=false 会让新会话无法加载更早
+  // 切会话重置跟随态（2026-11-11 修「首次进入停在顶部」第二半）：尾键置 undefined
+  // 让新会话首屏必触发吸底跳转（两条会话缓存条数相同也不再漏跳）；上翻游标/还有
+  // 更早标记随会话重置——沿用上一会话的 hasOlder=false 会让新会话无法加载更早
   useEffect(() => {
-    prevCountRef.current = 0;
+    prevTailKeyRef.current = undefined;
     stickBottomRef.current = true;
+    setAtBottom(true);
     setAwayCount(0);
     setHasOlder(true);
     oldestSeqRef.current = null;
@@ -322,21 +336,47 @@ export function ChatPage() {
 
   // 消息流容器是否已挂载（骨架/空态分支不渲染 messageStream，streamRef 为 null——
   // 2026-11-11 修「首次进入停在顶部」主根因：缓存消息先于容器入 store 时，吸底
-  // effect 在骨架期空跑且不记 prevCount，容器挂载后 length 不变则永不复跑）
+  // effect 在骨架期空跑且不记尾键，容器挂载后尾键不变则永不复跑）
   const streamMounted = streamState === 'ok' || streamState === 'degraded' || streamState === 'offline';
+  const tailKey = messages.length > 0 ? msgKeyOf(messages[messages.length - 1]) : null;
   useEffect(() => {
     const el = streamRef.current;
-    if (!el) return; // 容器未挂：不记 prevCount，挂载后本 effect 复跑补做首跳
-    if (messages.length !== prevCountRef.current) {
-      const added = messages.length > prevCountRef.current;
-      if (added && stickBottomRef.current) {
-        el.scrollTop = el.scrollHeight; // 底部跟随（用户未上滚）/ 首跳最新
-      } else if (added) {
-        setAwayCount((n) => n + 1); // 用户在上方 → 浮标计数
-      }
-      prevCountRef.current = messages.length;
+    if (!el) return; // 容器未挂：不记尾键，挂载后本 effect 复跑补做首跳
+    const prevKey = prevTailKeyRef.current;
+    if (prevKey === tailKey) return;
+    prevTailKeyRef.current = tailKey;
+    if (tailKey == null) return; // 空列表：只记键不动作
+    if (prevKey === undefined || stickBottomRef.current) {
+      el.scrollTop = el.scrollHeight; // 底部跟随（用户未上滚）/ 首跳最新
+    } else {
+      // 用户在上方 → 按旧尾键之后的实际条数计数（批量一次到达不漏计；旧尾键
+      // 已被撤回等找不到时按 1 兜底）
+      const prevIdx = messages.findIndex((m) => msgKeyOf(m) === prevKey);
+      const added = prevIdx === -1 ? 1 : messages.length - 1 - prevIdx;
+      if (added > 0) setAwayCount((n) => n + added);
     }
-  }, [convId, messages.length, streamMounted]);
+  }, [convId, tailKey, streamMounted, messages]);
+
+  // AI 回答期间周期跟随（agent-web 同款）：agent 卡原地长高不增条数，length/
+  // 尾键 effect 触发不了——300ms 轮询补跟随；内部判贴底才滚，用户上滚即自然
+  // 停跟（不抢滚动条），滚回底部恢复跟随。cleanup 补滚一次兜住终态 PATCH 的
+  // 最后一次长高（status 翻终态后 interval 已停）。
+  const agentRunning = useMemo(
+    () => messages.some((m) => m.type === 'agent_card' && (m.body as AgentCardBody).status === 'running'),
+    [messages],
+  );
+  useEffect(() => {
+    if (!agentRunning) return;
+    const follow = () => {
+      const el = streamRef.current;
+      if (el && stickBottomRef.current) el.scrollTop = el.scrollHeight;
+    };
+    const timer = setInterval(follow, 300);
+    return () => {
+      clearInterval(timer);
+      follow(); // 终态收口兜底
+    };
+  }, [agentRunning]);
 
   /** 触顶加载更早（INT-IM-13：上滑翻页 prepend；滚动触发与提示条点击共用） */
   const loadOlder = useCallback(() => {
@@ -368,9 +408,10 @@ export function ChatPage() {
   const onStreamScroll = useCallback(() => {
     const el = streamRef.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    stickBottomRef.current = atBottom;
-    if (atBottom) setAwayCount(0);
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    stickBottomRef.current = near;
+    setAtBottom((v) => (v === near ? v : near)); // 同值不重渲染
+    if (near) setAwayCount(0);
     if (el.scrollTop <= 40) loadOlder();
   }, [loadOlder]);
 
@@ -829,6 +870,40 @@ export function ChatPage() {
     </div>
   );
 
+  // 回到底部浮标（agent-web 口径）：上滚即常显不依赖有无新消息；三态文案 =
+  // 新消息计数 / AI 回答中 / 回到底部；点击回底并恢复贴底跟随
+  const scrollFab = !atBottom ? (
+    <button
+      type="button"
+      className="scroll-bottom-fab"
+      data-testid="scroll-bottom-fab"
+      onClick={() => {
+        const el = streamRef.current;
+        stickBottomRef.current = true;
+        setAtBottom(true);
+        setAwayCount(0);
+        if (el) el.scrollTop = el.scrollHeight;
+      }}
+    >
+      {agentRunning ? <span className="scroll-bottom-fab__dot" aria-hidden /> : null}
+      <ArrowDown size={14} />
+      {awayCount > 0
+        ? `${awayCount > 99 ? '99+' : awayCount} 条新消息`
+        : agentRunning
+          ? 'AI 回答中 · 回到底部'
+          : '回到底部'}
+    </button>
+  ) : null;
+
+  // 滚动区包裹层（agent-web messages-wrap 同构）：浮标以此为定位祖先，恒浮于
+  // 输入框正上方（不猜输入区高度）；ok 与 degraded/offline 两分支共用
+  const messageStreamWrap = (
+    <div className="message-stream-wrap">
+      {messageStream}
+      {scrollFab}
+    </div>
+  );
+
   const streamNode = (
     <section className="im-content-col">
       {msActive ? (
@@ -915,25 +990,7 @@ export function ChatPage() {
       {streamState === 'none' ? (
         <StateView state="empty" emptyText="从左侧选择一个会话开始聊天" />
       ) : streamState === 'ok' ? (
-        <>
-          {messageStream}
-          {/* 回到底部浮标（INT-IM-13：用户上滚停随后出现 + 新消息计数） */}
-          {awayCount > 0 ? (
-            <button
-              type="button"
-              className="scroll-bottom-fab"
-              onClick={() => {
-                const el = streamRef.current;
-                if (el) el.scrollTop = el.scrollHeight;
-                stickBottomRef.current = true;
-                setAwayCount(0);
-              }}
-            >
-              <ArrowDown size={14} />
-              {awayCount > 0 ? `${awayCount > 99 ? '99+' : awayCount} 条新消息` : '回到底部'}
-            </button>
-          ) : null}
-        </>
+        messageStreamWrap
       ) : (
         <StateView
           state={streamState}
@@ -945,7 +1002,7 @@ export function ChatPage() {
           offlineText="离线中，消息进入待发队列"
           degradedText={degradedText ?? undefined}
         >
-          {messageStream}
+          {messageStreamWrap}
         </StateView>
       )}
 
