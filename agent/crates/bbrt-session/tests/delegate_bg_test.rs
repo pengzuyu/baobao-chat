@@ -231,7 +231,7 @@ fn background_delegate_turn_returns_immediately_and_parks_join() {
         });
     });
 
-    let report = runner.run_turn("委派修一下构建", &deps);
+    let report = runner.run_turn("委派修一下构建", &deps, None);
     assert!(!report.paused, "后台路径 turn 不应暂停: {report:?}");
     assert_eq!(report.tool_calls, 1);
 
@@ -330,7 +330,7 @@ fn manager_routes_and_injects_delegate_join_next_turn() {
 
     // turn 线程（brief 阻塞等 launch；后台化后 turn 快速收口）
     let mgr2 = Arc::clone(&mgr);
-    let turn = std::thread::spawn(move || mgr2.run_turn("s-m1", "委派修构建"));
+    let turn = std::thread::spawn(move || mgr2.run_turn("s-m1", "委派修构建", None));
     // 等简报事件拿 run_id → 定向 launch（P0-2②：session 通道）
     let brief = wait_event(&sink, 5_000, |e| {
         matches!(e, SessionEvent::DelegateBrief { .. })
@@ -375,7 +375,7 @@ fn manager_routes_and_injects_delegate_join_next_turn() {
     }
 
     // 下一轮 run_turn：join 自动注入主上下文（捕获模型消息可见）
-    mgr.run_turn("s-m1", "总结一下").unwrap();
+    mgr.run_turn("s-m1", "总结一下", None).unwrap();
     let seen = model.seen.lock().unwrap().clone();
     // inject_delegate_join 以 Round::Tool(name=delegate.join) 入 history，
     // 组装后 tool 消息 tool_call_id=name:run_id、content=摘要

@@ -10,8 +10,8 @@
  * | listSessions() | `session_list` | `{ cursor?: string }` → `{ items: SessionRow[], next_cursor }`（agent_session 表读，updated_at 倒序） |
  * | startSession() | `agent_start_session` | `{ workspace_id?: string, form: 'workbench', mode: PermissionMode, model_policy: 'auto' }` → `{ session_id }` |
  * | sendMessage() | `agent_input` | `{ session_id, text, attachments?: [] }` → `{ ok: true }` |
- * | pause() | `agent_pause` | `{ session_id }` → `{ ok }` |
- * | resume() | `agent_resume` | `{ session_id }` → `{ ok }` |
+ * | interrupt() | `agent_interrupt` | `{ session_id }` → `{ ok }`（2026-11-11 取代旧 pause/resume：中断当前轮，收口 idle） |
+ * | renameSession() | `agent_rename` | `{ session_id, title }` → `{ ok, title }`（标题落库+宿主缓存同步） |
  * | endSession() | `agent_stop` | `{ session_id, reason: 'user' }` → `{ ok }` |
  * | emergencyStop() | `agent_emergency_stop` | `{}` → `{ killed_pids: number[], cancelled_requests: string[] }` |
  * | respondPermission(allow) | `agent_approve` | `{ request_id, scope: 'once'\|'session'\|'permanent', edited_args? }` → `{ ok }` |
@@ -42,7 +42,9 @@ import type {
   AgentReport,
   AgentSessionMeta,
   AgentWorkspaceInfo,
+  ClarifyOptionDTO,
   GrantScope,
+  HistoryItem,
   MemoryEntry,
   MemoryType,
   PermissionMode,
@@ -68,7 +70,8 @@ interface SessionRow {
   model_policy: 'fast' | 'strong' | 'auto';
   /** 0023 模型直达引用（agent_session.model_override） */
   model_override?: string;
-  status: SessionStatus;
+  /** 原始 IPC 字段（壳缓存瞬态可含 starting 等）：mapSession 归一为 SessionStatus */
+  status: string;
   created_at: number;
   updated_at: number;
   ended_at?: number;
@@ -137,7 +140,8 @@ function mapSession(row: SessionRow): AgentSessionMeta {
     mode: row.mode,
     modelPolicy: row.model_policy,
     modelOverride: row.model_override,
-    status: row.status,
+    // starting=壳侧建会话 REQ 在途的瞬态（并发 list 的极小窗口）：前端枚举已无此态，归一 idle
+    status: (row.status === 'starting' ? 'idle' : row.status) as SessionStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     endedAt: row.ended_at,
@@ -177,7 +181,7 @@ export class TauriAgentBridge implements AgentBridge {
     return data.items.map(mapSession).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode, model?: string): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string): Promise<AgentSessionMeta> {
     const ack = await invoke<{ session_id: string }>('agent_start_session', {
       workspaceId: workspace,
       form: 'workbench',
@@ -185,23 +189,26 @@ export class TauriAgentBridge implements AgentBridge {
       modelPolicy: 'auto',
       // 0023 模型直达引用（p:<id>:<model>）；缺省=档位别名（宿主命令透传 Runtime session.start）
       model: model ?? null,
+      title: title ?? null,
     });
-    // 起始元信息由 session.state 事件补全；先给最小可用投影
+    // 起始元信息由 session.state 事件补全；先给最小可用投影。
+    // status 直接 idle：agent_start_session 同步等完 session.start→session.ready
+    // 回执才返回，回执到时 RT 会话已就绪——不再经过 starting（新建即「空闲」可输入）
     return {
       id: ack.session_id,
-      title: '新会话',
+      title: title?.trim() || '新会话',
       workspace,
       mode,
       modelPolicy: 'auto',
       modelOverride: model,
-      status: 'starting',
+      status: 'idle',
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
   }
 
-  async sendMessage(sessionId: string, text: string): Promise<void> {
-    await invoke('agent_input', { sessionId, text });
+  async sendMessage(sessionId: string, text: string, thinking?: 'low' | 'medium' | 'high'): Promise<void> {
+    await invoke('agent_input', { sessionId, text, thinking: thinking ?? null });
   }
 
   async switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void> {
@@ -209,16 +216,23 @@ export class TauriAgentBridge implements AgentBridge {
     await invoke('agent_switch_model', { sessionId, to, model: model ?? null });
   }
 
-  async pause(sessionId: string): Promise<void> {
-    await invoke('agent_pause', { sessionId });
+  async interrupt(sessionId: string): Promise<void> {
+    await invoke('agent_interrupt', { sessionId });
   }
 
-  async resume(sessionId: string): Promise<void> {
-    await invoke('agent_resume', { sessionId });
+  async renameSession(sessionId: string, title: string): Promise<string> {
+    const rep = await invoke<{ ok: boolean; title: string }>('agent_rename', { sessionId, title });
+    return rep.title;
   }
 
   async endSession(sessionId: string): Promise<void> {
     await invoke('agent_stop', { sessionId, reason: 'user' });
+  }
+
+  async loadHistory(sessionId: string): Promise<HistoryItem[]> {
+    // RT session.history.result 原样透传（camelCase；items 缺省 []）
+    const rep = await invoke<{ items?: HistoryItem[] }>('session_history', { sessionId });
+    return rep.items ?? [];
   }
 
   async emergencyStop(): Promise<void> {
@@ -236,6 +250,10 @@ export class TauriAgentBridge implements AgentBridge {
       return;
     }
     await invoke('agent_reject', { requestId });
+  }
+
+  async respondClarify(questionId: string, answers: string[], freeText?: string): Promise<void> {
+    await invoke('agent_clarify_respond', { questionId, answers, freeText });
   }
 
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
@@ -348,7 +366,7 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         reason: str(raw.reason) || undefined,
       };
     // RT 建会话只发 session.ready（内部即 Idle，无 starting→idle 迁移事件）；
-    // 映射为 stateChanged idle 解禁输入区（壳缓存同步翻 idle）
+    // 映射为 stateChanged idle（建会话投影已直接 idle，此处幂等兜底）
     case 'session.ready':
       return { type: 'stateChanged', sessionId: sid, state: 'idle' };
     case 'session.ended':
@@ -404,6 +422,24 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         requestId: str(raw.request_id),
         decision: raw.decision === 'allow' ? 'allow' : raw.decision === 'cancelled' ? 'cancelled' : 'deny',
         scope: raw.scope as GrantScope | undefined,
+      };
+    case 'clarify.request':
+      return {
+        type: 'clarifyRequest',
+        sessionId: sid,
+        questionId: str(raw.question_id),
+        question: str(raw.question),
+        header: str(raw.header) || undefined,
+        options: (raw.options as ClarifyOptionDTO[] | undefined) ?? [],
+        multiSelect: raw.multi_select === true,
+      };
+    case 'clarify.response':
+      return {
+        type: 'clarifyResponse',
+        sessionId: sid,
+        questionId: str(raw.question_id),
+        decision: raw.decision === 'answered' ? 'answered' : 'cancelled',
+        answers: str(raw.answers),
       };
     case 'checkpoint.created':
       return {

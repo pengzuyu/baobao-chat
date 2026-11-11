@@ -6,7 +6,8 @@
  * - resolved：终态（已采纳/已拒绝/失败/已取消）
  */
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
+import { useImeGuard } from '../../../shared/hooks/useImeGuard';
 import { CheckCircle2, ChevronRight, Loader2, TerminalSquare, XCircle } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useAgentStore } from '../store/agent';
@@ -14,11 +15,12 @@ import type { StreamItem } from '../store/agent';
 
 type DelegateItem = Extract<StreamItem, { kind: 'delegate' }>;
 
-export function DelegateCard({ item }: { item: DelegateItem }) {
+export const DelegateCard = memo(function DelegateCard({ item }: { item: DelegateItem }) {
   const confirmDelegate = useAgentStore((st) => st.confirmDelegate);
   const reviewDelegate = useAgentStore((st) => st.reviewDelegate);
   const cancelDelegate = useAgentStore((st) => st.cancelDelegate);
   const sendRunInput = useAgentStore((st) => st.sendRunInput);
+  const { imeComposing, imeCompositionProps } = useImeGuard();
   const [draft, setDraft] = useState('');
   const [open, setOpen] = useState(false);
 
@@ -75,11 +77,12 @@ export function DelegateCard({ item }: { item: DelegateItem }) {
               placeholder="运行中补充指令（转发子进程）…"
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !imeComposing()) {
                   sendRunInput(item.runId, draft);
                   setDraft('');
                 }
               }}
+              {...imeCompositionProps}
             />
             <Button
               variant="secondary"
@@ -166,4 +169,4 @@ export function DelegateCard({ item }: { item: DelegateItem }) {
       ) : null}
     </div>
   );
-}
+});

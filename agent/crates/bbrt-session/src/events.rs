@@ -96,6 +96,25 @@ pub enum SessionEvent {
         decision: String, // allow | deny | timeout
         scope: String,    // once | session | permanent
     },
+    /// clarify.request（D20 ask_user 工具触发；不超时，等用户或「停止」中断）
+    ClarifyRequest {
+        session_id: String,
+        question_id: String,
+        question: String,
+        /// 短标签（≤12 字，UI chip）
+        header: Option<String>,
+        /// 选项 JSON：[{"label":"..","description":".."}]（description 可缺省）
+        options_json: String,
+        multi_select: bool,
+    },
+    /// clarify.response 镜像（供 UI 回显；decision: answered | cancelled）
+    ClarifyResolved {
+        session_id: String,
+        question_id: String,
+        decision: String,
+        /// 所选 label 逗号拼接（回显用）
+        answers: String,
+    },
     /// compaction.event
     Compaction {
         session_id: String,

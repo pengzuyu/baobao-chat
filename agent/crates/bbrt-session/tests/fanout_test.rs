@@ -244,7 +244,7 @@ fn fanout_two_probes_join_into_history() {
         ModelTier::Strong,
         None,
     );
-    runner.run_turn("梳理这个项目的认证与配置", &deps);
+    runner.run_turn("梳理这个项目的认证与配置", &deps, None);
 
     // 工具经完整管线执行（每子任务 1 次 search_files）
     let executed = tools.0.lock().unwrap().clone();
@@ -339,7 +339,7 @@ fn fanout_none_keeps_normal_loop() {
         ModelTier::Strong,
         None,
     );
-    runner.run_turn("普通单任务", &deps);
+    runner.run_turn("普通单任务", &deps, None);
 
     let evs = sink.0.lock().unwrap().clone();
     assert!(
@@ -430,7 +430,7 @@ fn fanout_window_timeout_goes_background() {
     runner.delegate_hub = Some(hub.clone());
 
     let t0 = std::time::Instant::now();
-    runner.run_turn("梳理这个项目的认证与配置", &deps);
+    runner.run_turn("梳理这个项目的认证与配置", &deps, None);
     let turn_elapsed = t0.elapsed();
     assert!(
         turn_elapsed < std::time::Duration::from_millis(450),
@@ -543,7 +543,7 @@ fn fanout_midrun_adjust_injected() {
     );
     runner.subagent_wait_window = std::time::Duration::from_millis(250);
     runner.delegate_hub = Some(hub.clone());
-    runner.run_turn("梳理认证与配置", &deps);
+    runner.run_turn("梳理认证与配置", &deps, None);
 
     // 从 spawn 事件拿 run_id（探查注册于 spawn 前——路由即达）
     let mut run_id = String::new();

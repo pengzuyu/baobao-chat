@@ -4,7 +4,7 @@
  * 出现时刻，暂停/等待审批等状态切换会重挂载自然重置）。
  */
 
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 
 interface TypingStateProps {
   text?: string;
@@ -18,7 +18,7 @@ function formatElapsed(ms: number): string {
   return `${m}分${String(s).padStart(2, '0')}秒`;
 }
 
-export function TypingState({ text = 'Agent 正在处理' }: TypingStateProps) {
+export const TypingState = memo(function TypingState({ text = 'Agent 正在处理' }: TypingStateProps) {
   const [startedAt] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -36,4 +36,4 @@ export function TypingState({ text = 'Agent 正在处理' }: TypingStateProps) {
       <span className="typing-state__elapsed">{formatElapsed(now - startedAt)}</span>
     </div>
   );
-}
+});

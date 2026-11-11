@@ -49,6 +49,9 @@ type ChatRequest struct {
 	Stream      *bool            `json:"stream,omitempty"`
 	Temperature *float64         `json:"temperature,omitempty"`
 	MaxTokens   *int             `json:"max_tokens,omitempty"`
+	// 思考开关透传（2026-11-11：智谱 GLM 系 {"type":"enabled"}——客户端开思考后
+	// reasoning_content 增量原样回流；网关不感知语义只透传）
+	Thinking map[string]any `json:"thinking,omitempty"`
 }
 
 // UsageOpenAI OpenAI usage 形态（网关终帧口径）
@@ -279,6 +282,9 @@ func (p *OpenAICompatProvider) StreamChat(ctx context.Context, req *ChatRequest)
 			}
 		}
 		body := map[string]any{"model": upstream, "messages": req.Messages, "stream": true}
+		if req.Thinking != nil {
+			body["thinking"] = req.Thinking // 思考开关透传（2026-11-11）
+		}
 		if len(req.Tools) > 0 {
 			body["tools"] = normalizeToolsForUpstream(req.Tools)
 		}

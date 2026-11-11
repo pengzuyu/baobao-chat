@@ -261,6 +261,7 @@ pub fn run_probe(
             model: ctx.model_name.clone(),
             messages: messages_with(&system_full, &history, &spec.task),
             tools: tools.clone(),
+            thinking: None,
         };
         let Ok(stream) = ctx.model.chat(&req) else {
             break ProbeResult {
@@ -560,6 +561,8 @@ pub(crate) fn drain(
     for ev in stream {
         match ev {
             Ok(StreamEvent::TextDelta { text: t }) => text.push_str(&t),
+            // 子代理思考增量不并入产物正文（2026-11-11）
+            Ok(StreamEvent::ReasoningDelta { .. }) => {}
             Ok(StreamEvent::ToolCallBegin { id, name, .. }) => calls.push(ToolCallMsg {
                 id,
                 name,

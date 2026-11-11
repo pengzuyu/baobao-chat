@@ -55,6 +55,10 @@ pub struct ChatRequest {
     /// 空时序列化时省略（无工具轮次不占请求体）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolSpec>,
+    /// 思考开关透传（2026-11-11：智谱 GLM 系 `{"thinking":{"type":"enabled"}}`；
+    /// None=不开；思考增量经 SSE reasoning_content 回流 ReasoningDelta）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<serde_json::Value>,
 }
 
 /// SSE 流式产出的事件（session 侧映射 stream.delta / stream.done）。
@@ -62,6 +66,8 @@ pub struct ChatRequest {
 pub enum StreamEvent {
     /// 文本增量（stream.delta channel=text）。
     TextDelta { text: String },
+    /// 思考增量（stream.delta channel=reasoning；SSE reasoning_content，2026-11-11）
+    ReasoningDelta { text: String },
     /// 工具调用开始：chunk 首帧携带 id（与 name）。
     ToolCallBegin {
         index: usize,
@@ -101,12 +107,15 @@ pub(crate) fn wire_body(req: &ChatRequest) -> String {
         messages: &'a [ChatMessage],
         #[serde(skip_serializing_if = "Option::is_none")]
         tools: Option<&'a [ToolSpec]>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thinking: Option<&'a serde_json::Value>,
     }
     let wire = WireReq {
         model: &req.model,
         stream: true,
         messages: &req.messages,
         tools: (!req.tools.is_empty()).then_some(req.tools.as_slice()),
+        thinking: req.thinking.as_ref(),
     };
     serde_json::to_string(&wire).unwrap_or_else(|_| "{}".to_string())
 }
@@ -117,6 +126,7 @@ mod tests {
 
     fn sample_request() -> ChatRequest {
         ChatRequest {
+            thinking: None,
             model: "bbw-strong".to_string(),
             messages: vec![
                 ChatMessage {
@@ -185,6 +195,7 @@ mod tests {
                 tool_call_id: None,
             }],
             tools: vec![],
+            thinking: None,
         });
         assert!(body.contains(r#""stream":true"#), "body={body}");
         assert!(!body.contains("\"tools\""), "空 tools 应省略，body={body}");

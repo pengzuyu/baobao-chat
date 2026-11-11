@@ -9,12 +9,13 @@
 /** 权限模式三档（09 §3.3；中文名见 AGENT_MODE_OPTIONS，D13-A1 官方口径） */
 export type PermissionMode = 'ask' | 'auto-edit' | 'full-auto';
 
-/** 会话状态机枚举（D11 §3，9+1 态；session.state 上报同款） */
+/** 会话状态机枚举（D11 §3 + D20 waiting_clarify；session.state 上报同款）。
+ *  无 starting：建会话 REQ 同步等完 session.ready 回执（壳侧阻塞），回执到即就绪 */
 export type SessionStatus =
-  | 'starting'
   | 'idle'
   | 'running'
   | 'waiting_permission'
+  | 'waiting_clarify'
   | 'waiting_review'
   | 'subagent_fanout'
   | 'delegating'
@@ -24,6 +25,13 @@ export type SessionStatus =
 
 /** 工具风险级（09 §4.1 矩阵输入） */
 export type RiskLevel = 'low' | 'mid' | 'high';
+
+/** 会话历史条目（session.history 回执；WAL 摘要级投影——工作台打开会话加载
+ *  聊天记录，IM embedded 与工作台同一会话跨端共用。ok/summary 旧 WAL 行可缺） */
+export type HistoryItem =
+  | { kind: 'user'; text: string }
+  | { kind: 'assistant'; text: string }
+  | { kind: 'tool'; callId: string; tool: string; ok?: boolean; summary?: string };
 
 /** 审批记忆粒度（09 §4.2 三级记忆） */
 export type GrantScope = 'once' | 'session' | 'permanent';
@@ -128,6 +136,12 @@ export interface ToolBlocked {
   code: number;
 }
 
+/** D20 澄清选项（clarify.request.options 项） */
+export interface ClarifyOptionDTO {
+  label: string;
+  description?: string;
+}
+
 /**
  * UI 订阅的 Agent 事件联合（D08 §5.2 IPC 事件表的 camelCase 镜像）。
  * 命名 ↔ 协议：streamDelta=stream.delta / stateChanged=session.state /
@@ -180,6 +194,24 @@ export type AgentEvent =
       decision: 'allow' | 'deny' | 'cancelled';
       scope?: GrantScope;
     }
+  /** D20 澄清提问（clarify.request；不超时——等用户或「停止」中断） */
+  | {
+      type: 'clarifyRequest';
+      sessionId: string;
+      questionId: string;
+      question: string;
+      header?: string;
+      options: ClarifyOptionDTO[];
+      multiSelect: boolean;
+    }
+  /** D20 澄清回执镜像（clarify.response 回显；answered=已答 / cancelled=中断） */
+  | {
+      type: 'clarifyResponse';
+      sessionId: string;
+      questionId: string;
+      decision: 'answered' | 'cancelled';
+      answers: string;
+    }
   | { type: 'memorySaved'; sessionId: string; name: string; title: string; memoryType: MemoryType; updated: boolean; scope?: 'user' | 'project'; workspaceName?: string }
   | { type: 'reportDaily'; date: string; path: string; stats: ReportStats }
   | { type: 'sessionEnded'; sessionId: string; summary: string }
@@ -223,18 +255,24 @@ export interface AgentBridge {
 
   /** 会话列表（session_list，按 updated_at 倒序） */
   listSessions(): Promise<AgentSessionMeta[]>;
-  /** 新建会话（agent_start_session：workspace + 模式 + 模型直达引用（0023 可选）；form 固定 workbench） */
-  startSession(workspace: string, mode: PermissionMode, model?: string): Promise<AgentSessionMeta>;
-  /** 发送用户消息（agent_input；UI 乐观上屏，回复经 streamDelta 事件回流） */
-  sendMessage(sessionId: string, text: string): Promise<void>;
+  /** 新建会话（agent_start_session：workspace + 模式 + 模型直达引用（0023 可选）；
+   *  title 可选初始标题（IM embedded 来源名「与xxx的对话」），缺省占位由首条消息 rename 派生） */
+  startSession(workspace: string, mode: PermissionMode, model?: string, title?: string): Promise<AgentSessionMeta>;
+  /** 发送用户消息（agent_input；UI 乐观上屏，回复经 streamDelta 事件回流）；
+   *  thinking 思考三档（2026-11-11 轮级生效）缺省=medium */
+  sendMessage(sessionId: string, text: string, thinking?: 'low' | 'medium' | 'high'): Promise<void>;
   /** 会话内切换模型（agent_switch_model：model 非空=直达引用；to 为名义档位；
    *  model 缺省=清引用回档位。回执 modelSwitched 事件） */
   switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void>;
-  /** 暂停/恢复（agent_pause / agent_resume，D11 §3 迁移 16/17） */
-  pause(sessionId: string): Promise<void>;
-  resume(sessionId: string): Promise<void>;
+  /** 中断当前轮（agent_interrupt：LLM 流内/工具间检查点断，收口 idle 可继续追问；
+   *  2026-11-11 取代旧 pause/resume 用户通道——暂停按钮已移除） */
+  interrupt(sessionId: string): Promise<void>;
+  /** 会话重命名（agent_rename：RT 落库 + 宿主缓存同步；返回截断后的最终标题） */
+  renameSession(sessionId: string, title: string): Promise<string>;
   /** 结束会话（agent_stop，reason=user） */
   endSession(sessionId: string): Promise<void>;
+  /** 会话历史（session.history 直读 WAL：打开会话加载聊天记录；空=无历史） */
+  loadHistory(sessionId: string): Promise<HistoryItem[]>;
   /** 全局紧急停止（agent_emergency_stop：杀进程组 + 未决审批作废，INT-AG-12） */
   emergencyStop(): Promise<void>;
   /** 审批回应（agent_approve / agent_reject；editedArgs=命令卡改后回传，09 §6.1） */
@@ -244,6 +282,8 @@ export interface AgentBridge {
     scope?: GrantScope,
     editedArgs?: Record<string, unknown>,
   ): Promise<void>;
+  /** 澄清回答（D20 agent_clarify_respond；answers=所选 label，freeText=「其他」补充） */
+  respondClarify(questionId: string, answers: string[], freeText?: string): Promise<void>;
   /** 会话内切换权限模式（agent_set_mode） */
   setMode(sessionId: string, mode: PermissionMode): Promise<void>;
 
@@ -279,10 +319,10 @@ export interface AgentBridge {
 
 /** D11 §3 状态枚举中文（状态徽标/列表状态点共用） */
 export const SESSION_STATUS_LABELS: Record<SessionStatus, string> = {
-  starting: '启动中',
   idle: '空闲',
   running: '运行中',
   waiting_permission: '等待审批',
+  waiting_clarify: '等你回答',
   waiting_review: '等待审查',
   subagent_fanout: '子任务并行',
   delegating: '委派中',

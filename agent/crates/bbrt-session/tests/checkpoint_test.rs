@@ -357,7 +357,7 @@ fn pre_edit_snapshot_fires_on_write_tool() {
         ModelTier::Strong,
         None,
     );
-    runner.run_turn("帮我改 a.txt", &deps);
+    runner.run_turn("帮我改 a.txt", &deps, None);
 
     let events = sink.0.lock().unwrap().clone();
     let created: Vec<_> = events
@@ -406,7 +406,7 @@ fn wal_replay_recovers_user_turn_after_fix() {
         ModelTier::Strong,
         None,
     );
-    runner.run_turn("修复登录超时并跑测试", &deps);
+    runner.run_turn("修复登录超时并跑测试", &deps, None);
 
     // WAL 灌回 SQLite 事件镜像（重现 EventLog for Mutex<Store> 的写入）
     {

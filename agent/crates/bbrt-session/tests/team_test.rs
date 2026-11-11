@@ -502,7 +502,7 @@ fn loop_expert_consult_wiring() {
         ModelTier::Strong,
         None,
     );
-    runner.run_turn("多维度评审 PR#7", &deps);
+    runner.run_turn("多维度评审 PR#7", &deps, None);
 
     // 状态序列：team.cast 进 fanout 态 → team.join 回 running
     let evs = sink.0.lock().unwrap().clone();
@@ -612,7 +612,7 @@ fn loop_expert_invalid_graph_fallback() {
         ModelTier::Strong,
         None,
     );
-    runner.run_turn("任务", &deps); // 不 panic 即兜底成立
+    runner.run_turn("任务", &deps, None); // 不 panic 即兜底成立
     let entries = log.0.lock().unwrap().clone();
     // team.start 未写（校验先于 WAL）
     assert!(!entries.iter().any(|(_, t, _)| *t == "team.start"));

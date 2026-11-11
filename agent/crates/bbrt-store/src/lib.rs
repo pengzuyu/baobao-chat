@@ -42,6 +42,9 @@ pub enum StoreError {
     /// 迁移脚本执行失败
     #[error("迁移失败: {0}")]
     Migration(String),
+    /// 参数非法（如空标题重命名）
+    #[error("参数非法: {0}")]
+    InvalidInput(String),
 }
 
 impl From<rusqlite::Error> for StoreError {

@@ -38,6 +38,18 @@ impl SessionSink for BrtSink {
                 .unwrap()
                 .insert(request_id.clone(), session_id.clone());
         }
+        // 澄清路由登记（D20：clarify.response 同样无会话字段，按表路由）
+        if let SessionEvent::ClarifyRequest {
+            ref question_id,
+            ref session_id,
+            ..
+        } = evt
+        {
+            self.pending
+                .lock()
+                .unwrap()
+                .insert(question_id.clone(), session_id.clone());
+        }
         let Some(msg) = map_event(&evt) else { return };
         let id = {
             let mut n = self.seq.lock().unwrap();
@@ -246,6 +258,26 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             // session_id 已进路由表（emit 处登记），协议 PermissionRequest 不带会话字段（D11 §4 原样）
         }
         SessionEvent::PermissionResolved { .. } => return None, // 镜像事件：宿主自己发的，不回显
+        // D20 澄清：question_id 已进路由表（emit 处登记），协议 ClarifyRequest 不带会话字段
+        SessionEvent::ClarifyRequest {
+            question_id,
+            question,
+            header,
+            options_json,
+            multi_select,
+            ..
+        } => {
+            let options: Vec<bbrt_protocol::ClarifyOption> =
+                serde_json::from_str(options_json).unwrap_or_default();
+            RuntimeToHost::ClarifyRequest {
+                question_id: question_id.clone(),
+                question: question.clone(),
+                header: header.clone(),
+                options,
+                multi_select: *multi_select,
+            }
+        }
+        SessionEvent::ClarifyResolved { .. } => return None, // 镜像事件：宿主自己发的，不回显
         SessionEvent::Compaction {
             session_id,
             phase,

@@ -30,6 +30,7 @@
 | D16 | [子 Agent 三形态与 Run 记录模型设计](D16-子Agent三形态与Run记录模型设计.md) | 08/17/D11/D14 | **最终口径**：通用子 agent（同主 prompt 全工具）/专家（建议配置+本地覆写）/本机 CLI 委派（零凭证）；**run 记录**：agent_run 统一审计行+调用链字段+事件挂 run_id；同步等待窗 120s+委派直接后台+无时长上限；对上游文档的修订清单 |
 | D18 | [IM 内嵌 Agent 卡详细设计](D18-IM内嵌Agent卡详细设计.md) | 08/D03/D08/09 | **(用户,会话) 一会话**·完整过程透明卡（思考/工具/结论，推翻 D08 轻量口径）·审批弹框聊天页（推翻 OQ-B08 白名单）·分阶段更新落流（agent_card+PATCH 通道）·升级=文本注入；安全五层纵深登记阶段二（v0.1 复用 agent 既有能力）；bbrt/协议零改动 |
 | D19 | [Agent 项目/日常双区与记忆分级详细设计](D19-Agent项目与日常对话及记忆分级详细设计.md) | 08/D08/D09/D11/D13/D15/D18 | **双区模型**：session.start workspace 空串=日常/非空=项目（realpath 归一+agent_workspace 接线+workspace_id 回填）·**沙箱按会话路由**（修全局 "." 占位缺口：项目会话各自沙箱根、日常 workspace 类工具 8020 拒绝）·**记忆分级**（memory/projects/<目录名-哈希> 分区+类型驱动路由+两段召回）·session.list 持久恢复+workspace 三 REQ·工作台过程显示对齐 change-my-life（思考卡流式展开/工具组汇总条/自动折叠） |
+| D20 | [ask-user 提问卡详细设计](D20-ask-user提问卡详细设计.md) | 08/D08/D11/D18/09 | **ZCode 式澄清机制**：ask_user 工具（loop_runner 拦截不走 pipeline）·clarify.request/response 协议对（camelCase 键，**无超时**——等用户或「停止」中断收口 cancelled）·WaitingClarify 状态（#6b/#7b）·三端提问卡（工作台 ClarifyCard/聊天页 Modal/落流卡内嵌条，ClarifyForm 共用）·答案进工具结果（结构化回给模型）·完全镜像 permission 阻塞机制 |
 
 ## 模板（D01 §13）
 

@@ -119,6 +119,28 @@ pub fn permission_exhausted(state: SessionState) -> Result<SessionState, Transit
     )
 }
 
+/// #6b running→waiting_clarify：ask_user 工具触发澄清提问（上报 clarify.request）。
+/// 不变量：**无超时**——一直等用户（D20；区别于 #6 的 120s）；
+/// 用户「停止」中断时由调用方收口（回 running 后走正常中断路径）。
+pub fn request_clarify(state: SessionState) -> Result<SessionState, TransitionError> {
+    expect(
+        SessionState::Running,
+        SessionState::WaitingClarify,
+        state,
+        "澄清提问（D20 #6b）",
+    )
+}
+
+/// #7b waiting_clarify→running：收到 clarify.response（answers 回填工具结果）
+pub fn clarify_resolved(state: SessionState) -> Result<SessionState, TransitionError> {
+    expect(
+        SessionState::WaitingClarify,
+        SessionState::Running,
+        state,
+        "澄清回答回填（D20 #7b）",
+    )
+}
+
 /// #9 running→subagent_fanout：快模型判定 complex 且可并行探查（上报 subagent.spawn×n）
 pub fn begin_fanout(state: SessionState) -> Result<SessionState, TransitionError> {
     expect(

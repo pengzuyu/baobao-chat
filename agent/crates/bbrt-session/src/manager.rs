@@ -93,6 +93,8 @@ pub struct SessionManager {
     sessions: Mutex<HashMap<String, Arc<ManagedSession>>>,
     /// 审批回执路由（session_id → runner channel sender）
     permission_tx: Mutex<HashMap<String, Sender<PermissionResponse>>>,
+    /// 澄清回执路由表（D20 ask_user）
+    clarify_tx: Mutex<HashMap<String, Sender<crate::loop_runner::ClarifyAnswer>>>,
     /// 委派指令路由（简报阶段：session_id → runner channel sender；
     /// 后台 run 阶段由 hub 按 run_id 定向）
     delegate_tx: Mutex<HashMap<String, Sender<crate::loop_runner::DelegateHostMsg>>>,
@@ -109,6 +111,7 @@ impl SessionManager {
             store,
             sessions: Mutex::new(HashMap::new()),
             permission_tx: Mutex::new(HashMap::new()),
+            clarify_tx: Mutex::new(HashMap::new()),
             delegate_tx: Mutex::new(HashMap::new()),
             hub: Arc::new(crate::delegate_bg::DelegateHub::new()),
             workspaces: SessionWorkspaces::new(),
@@ -211,6 +214,10 @@ impl SessionManager {
             .lock()
             .unwrap()
             .insert(session_id.clone(), runner.permission_sender());
+        self.clarify_tx
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), runner.clarify_sender());
         self.delegate_tx
             .lock()
             .unwrap()
@@ -262,6 +269,7 @@ impl SessionManager {
         &self,
         session_id: &str,
         text: &str,
+        thinking: Option<bbrt_protocol::ThinkingLevel>,
     ) -> Result<crate::loop_runner::TurnReport, ManagerError> {
         let entry = self
             .sessions
@@ -281,7 +289,7 @@ impl SessionManager {
         for join in self.hub.drain_joins(session_id) {
             runner.inject_delegate_join(&join.run_id, &join.name, &join.summary);
         }
-        let report = runner.run_turn(text, &self.deps);
+        let report = runner.run_turn(text, &self.deps, thinking);
         *entry.state.lock().unwrap() = runner.state();
         *entry.runner.lock().unwrap() = Some(runner);
         Ok(report)
@@ -301,6 +309,23 @@ impl SessionManager {
             .cloned()
             .ok_or_else(|| ManagerError::NotFound(session_id.into()))?;
         tx.send(resp)
+            .map_err(|_| ManagerError::NotFound(session_id.into()))
+    }
+
+    /// clarify.response 路由（D20；ask_user 阻塞等待的回执注入）
+    pub fn respond_clarify(
+        &self,
+        session_id: &str,
+        answer: crate::loop_runner::ClarifyAnswer,
+    ) -> Result<(), ManagerError> {
+        let tx = self
+            .clarify_tx
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| ManagerError::NotFound(session_id.into()))?;
+        tx.send(answer)
             .map_err(|_| ManagerError::NotFound(session_id.into()))
     }
 

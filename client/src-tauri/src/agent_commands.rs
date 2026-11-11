@@ -16,7 +16,16 @@ pub fn session_list(host: Host) -> Result<Value, String> {
     Ok(json!({ "items": host.list_sessions() }))
 }
 
-/// 新建会话：宿主生成 sessionId → session.start（等 session.ready 回执）
+/// 会话历史（RT session.history 直读 WAL 透传：user/assistant 原文+工具摘要；
+/// 工作台打开会话加载聊天记录——含 IM embedded 同一会话的跨端历史）
+#[tauri::command]
+pub fn session_history(host: Host, session_id: String) -> Result<Value, String> {
+    host.request("session.history", json!({ "sessionId": session_id }))
+}
+
+/// 新建会话：宿主生成 sessionId → session.start（等 session.ready 回执）。
+/// title 可选初始标题（IM embedded 会话来源名；缺省=「会话 n」占位，
+/// 前端首条用户消息后经 agent_rename 派生）
 #[tauri::command]
 pub fn agent_start_session(
     host: Host,
@@ -24,17 +33,30 @@ pub fn agent_start_session(
     mode: String,
     model_policy: String,
     model: Option<String>,
+    title: Option<String>,
 ) -> Result<Value, String> {
-    let sid = host.start_session(&workspace_id, &mode, &model_policy, model.as_deref())?;
+    let sid = host.start_session(
+        &workspace_id,
+        &mode,
+        &model_policy,
+        model.as_deref(),
+        title.as_deref(),
+    )?;
     Ok(json!({ "session_id": sid }))
 }
 
-/// 用户输入（回执=session.state running/queued；命令返回 ok 而非透传协议回执）
+/// 用户输入（回执=session.state running/queued；命令返回 ok 而非透传协议回执）。
+/// thinking 思考三档（2026-11-11 轮级生效）：low/medium/high，缺省 None=medium
 #[tauri::command]
-pub fn agent_input(host: Host, session_id: String, text: String) -> Result<Value, String> {
+pub fn agent_input(
+    host: Host,
+    session_id: String,
+    text: String,
+    thinking: Option<String>,
+) -> Result<Value, String> {
     host.request(
         "user.message",
-        json!({ "sessionId": session_id, "text": text, "attachments": [] }),
+        json!({ "sessionId": session_id, "text": text, "attachments": [], "thinking": thinking }),
     )?;
     Ok(json!({ "ok": true }))
 }
@@ -60,17 +82,18 @@ pub fn agent_set_mode(host: Host, session_id: String, mode: String) -> Result<()
     Ok(())
 }
 
+/// 中断当前轮（2026-11-11 取代旧 agent_pause/resume——暂停按钮已移除，
+/// 「停止」=中断当前回答、会话保留可继续；置旗即回，收口以 session.state idle 上行）
 #[tauri::command]
-pub fn agent_pause(host: Host, session_id: String) -> Result<Value, String> {
-    host.request("session.pause", json!({ "sessionId": session_id }))?;
+pub fn agent_interrupt(host: Host, session_id: String) -> Result<Value, String> {
+    host.request("session.interrupt", json!({ "sessionId": session_id }))?;
     Ok(json!({ "ok": true }))
 }
 
-/// RT 侧 session.resume 尚未实现（回执缺失）——fire-and-forget 乐观返回
+/// 会话重命名（标题派生/手动改名；RT 落库 + 宿主缓存行同步）
 #[tauri::command]
-pub fn agent_resume(host: Host, session_id: String) -> Result<Value, String> {
-    host.fire("session.resume", json!({ "sessionId": session_id }))?;
-    Ok(json!({ "ok": true }))
+pub fn agent_rename(host: Host, session_id: String, title: String) -> Result<Value, String> {
+    host.rename_session(&session_id, &title)
 }
 
 #[tauri::command]
@@ -105,6 +128,22 @@ pub fn agent_reject(host: Host, request_id: String) -> Result<(), String> {
     host.fire(
         "permission.response",
         json!({ "requestId": request_id, "decision": "deny", "scope": "once" }),
+    )
+}
+
+/// D20 澄清回答（clarify.response；camelCase 键——协议侧按 camelCase 反序列化）
+#[tauri::command]
+pub fn agent_clarify_respond(
+    host: Host,
+    question_id: String,
+    answers: Vec<String>,
+    free_text: Option<String>,
+) -> Result<(), String> {
+    host.fire(
+        "clarify.response",
+        json!({
+            "questionId": question_id, "answers": answers, "freeText": free_text,
+        }),
     )
 }
 

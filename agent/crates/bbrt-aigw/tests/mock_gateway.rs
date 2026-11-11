@@ -144,6 +144,7 @@ fn write_all(stream: &mut TcpStream, bytes: &[u8]) {
 
 fn sample_request() -> ChatRequest {
     ChatRequest {
+        thinking: None,
         model: "bbw-strong".to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),

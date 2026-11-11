@@ -42,8 +42,8 @@ import { FileSendPreview } from '../components/FileSendPreview';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from '../components/stream/MsgContextMenu';
 import { MessageInput } from '../components/MessageInput';
-import { AgentActivityCard } from '../components/AgentActivityCard';
-import { contextInstruction, getEmbeddedSessionId, setEmbeddedSessionId } from '../agent/embedded';
+import { EmbeddedAgentSync } from '../agent/EmbeddedAgentSync';
+import { embeddedTitle, getEmbeddedSessionId, setEmbeddedSessionId } from '../agent/embedded';
 import { useAgentStore } from '../../agent/store/agent';
 import { ForwardModal } from '../components/ForwardModal';
 import { ReadReceiptModal } from '../components/ReadReceiptModal';
@@ -192,8 +192,10 @@ export function ChatPage() {
 
   const activeConv = convs.find((c) => c.id === convId) ?? null;
   const messages = convId ? (messagesByConv[convId] ?? []) : [];
-
-  // ── 内嵌 Agent（D18）：Agent 模式开关 + 本会话活动卡（刷新恢复=映射中的会话仍在运行） ──
+  // ── 内嵌 Agent（D18；2026-11-11 改版：活动卡取消，回复落流卡承载全部交互，
+  //    EmbeddedAgentSync 常驻（映射存在即挂，不随回合退场）管落流与审批弹框；
+  //    2026-11-11 晚再收敛：落流卡=纯展示+审批/提问应答条——发消息走输入框
+  //    （🤖 按钮//agent 命令/@Agent），进工作台走 ChatHeader 🤖 图标） ──
   const [agentMode, setAgentMode] = useState(false);
   const [embeddedActive, setEmbeddedActive] = useState<string | null>(null);
   useEffect(() => {
@@ -201,40 +203,47 @@ export function ChatPage() {
     setEmbeddedActive(null);
     if (!convId) return;
     void getEmbeddedSessionId(convId).then((sid) => {
-      if (!sid) return;
-      const meta = useAgentStore.getState().sessions.find((m) => m.id === sid);
-      // 仅运行中重挂活动卡（idle=上轮已收卡、不再打扰；新提问自然重开）
-      if (meta && ['starting', 'running', 'waiting_permission', 'waiting_review', 'subagent_fanout', 'delegating'].includes(meta.status)) {
-        setEmbeddedActive(sid);
-      }
+      // 任意状态均挂载：idle 静默（不落卡），新一轮自然落新卡；审批弹框恒有宿主
+      if (sid) setEmbeddedActive(sid);
     });
   }, [convId]);
+
+  /** 取/建本会话 embedded Agent 会话。2026-11-11「会话不死」裁决：会话=上下文，
+   * ended/error 只是当前未活跃的标记——恒定复用同一会话 id，RT 侧 input 自动
+   * 重放事件镜像复活续上下文（不再因死态重建新会话丢历史）。
+   * 事件订阅不在此等待 init（其数据加载=会话/记忆/日报多次 REQ 往返，bbrt 冷启
+   * 时含进程拉起+MCP 超时——发送路径曾被串行卡住数百 ms~秒级）：App 挂载即已
+   * ensureAgentEventSubscribed（2026-11-11 根因修复），此处只读映射直发 */
+  const ensureEmbeddedSession = async (): Promise<string> => {
+    void useAgentStore.getState().init(); // 数据预取并行（左栏/记忆页用）；不 await
+    const sid = await getEmbeddedSessionId(convId!);
+    if (sid) return sid; // 映射在=库里有行，RT 复活兜底
+    // D19：workspace 沿用最近一个「项目」会话的目录（跳过日常会话）；无项目历史=日常对话。
+    // 2026-11-11：创建即带来源标题（与xxx的对话/xxx · 群聊）——工作台左栏可辨识
+    const recent = useAgentStore.getState().sessions.find((x) => x.workspace)?.workspace ?? '';
+    const created = await useAgentStore.getState().createSession({
+      workspace: recent,
+      mode: 'ask',
+      title: embeddedTitle(activeConv?.name ?? '', activeConv?.type ?? 1),
+    });
+    await setEmbeddedSessionId(convId!, created.id);
+    return created.id;
+  };
 
   /** Agent 流程（D18 §2/§3.1）：问题照常落流为文本消息 + 交本会话 embedded Agent 处理 */
   const agentFlow = async (rawText: string) => {
     if (!convId) return;
-    const question = rawText.replaceAll('＠', '@').replace(/^@Agent\s*/, '').trim() || rawText;
-    const store = useAgentStore.getState();
-    await store.init(); // 事件泵订阅（仅 agent 页访问过才会装；幂等）
-    let sid = await getEmbeddedSessionId(convId);
-    const alive = sid ? useAgentStore.getState().sessions.some((m) => m.id === sid) : false;
-    if (!sid || !alive) {
-      // D19：workspace 沿用最近一个「项目」会话的目录（跳过日常会话）；无项目历史=日常对话
-      const recent = useAgentStore.getState().sessions.find((x) => x.workspace)?.workspace ?? '';
-      const meta = await useAgentStore.getState().createSession({ workspace: recent, mode: 'ask' });
-      sid = meta.id;
-      await setEmbeddedSessionId(convId, sid);
-    }
+    const question = rawText.replace(/^\/agent\s*/, '').trim() || rawText;
+    const sid = await ensureEmbeddedSession();
     setEmbeddedActive(sid);
     await useAgentStore.getState().sendTextTo(sid, question);
   };
 
-  /** 落流卡「在我端继续」（D18 §3.5 修订：不搬运卡片内容——自己的 embedded
-   * 会话先调 im_history 自读会话记录（含此前 Agent 卡片结论）再继续）
-   * 每人只与自己的 agent 对话（2026-11-10 用户裁决原则） */
-  const continueAgentCard = (_body: unknown) => {
+  /** 聊天头部 🤖 入口（2026-11-11）：跳工作台对应 embedded 会话；无则新建后跳转 */
+  const openAgentWorkbench = async () => {
     if (!convId) return;
-    void agentFlow(contextInstruction(convId, activeConv?.name));
+    const sid = await ensureEmbeddedSession();
+    navigate(`/agent/s/${sid}`);
   };
 
   // ---- 群详情拉取（PIM-05 数据源 + 输入框禁用判定依据：group_setting/myRole/myMuteUntil）----
@@ -300,18 +309,34 @@ export function ChatPage() {
   const loadingOlderRef = useRef(false);
   const oldestSeqRef = useRef<number | null>(null);
 
+  // 切会话重置跟随态（2026-11-11 修「首次进入停在顶部」第二半）：prevCount 归零让
+  // 新会话首屏必触发吸底跳转（两条会话缓存条数相同也不再漏跳）；上翻游标/还有更早
+  // 标记随会话重置——沿用上一会话的 hasOlder=false 会让新会话无法加载更早
+  useEffect(() => {
+    prevCountRef.current = 0;
+    stickBottomRef.current = true;
+    setAwayCount(0);
+    setHasOlder(true);
+    oldestSeqRef.current = null;
+  }, [convId]);
+
+  // 消息流容器是否已挂载（骨架/空态分支不渲染 messageStream，streamRef 为 null——
+  // 2026-11-11 修「首次进入停在顶部」主根因：缓存消息先于容器入 store 时，吸底
+  // effect 在骨架期空跑且不记 prevCount，容器挂载后 length 不变则永不复跑）
+  const streamMounted = streamState === 'ok' || streamState === 'degraded' || streamState === 'offline';
   useEffect(() => {
     const el = streamRef.current;
-    if (el && messages.length !== prevCountRef.current) {
+    if (!el) return; // 容器未挂：不记 prevCount，挂载后本 effect 复跑补做首跳
+    if (messages.length !== prevCountRef.current) {
       const added = messages.length > prevCountRef.current;
       if (added && stickBottomRef.current) {
-        el.scrollTop = el.scrollHeight; // 底部跟随（用户未上滚）
+        el.scrollTop = el.scrollHeight; // 底部跟随（用户未上滚）/ 首跳最新
       } else if (added) {
         setAwayCount((n) => n + 1); // 用户在上方 → 浮标计数
       }
       prevCountRef.current = messages.length;
     }
-  }, [messages.length]);
+  }, [convId, messages.length, streamMounted]);
 
   /** 触顶加载更早（INT-IM-13：上滑翻页 prepend；滚动触发与提示条点击共用） */
   const loadOlder = useCallback(() => {
@@ -625,8 +650,9 @@ export function ChatPage() {
       if (idx < 0) continue; // 用户已删掉 @文本：视为放弃提及
       mentions.push({ uid: p.uid, all: false, range: [idx, idx + p.name.length + 1] });
     }
-    // Agent 模式 / @Agent 前缀（D18 §3.1）：问题照常作为文本消息落流，另交 embedded Agent
-    const toAgent = agentMode || /^@Agent([\s　]|$)/.test(text.replaceAll('＠', '@'));
+    // Agent 模式 / /agent 前缀（2026-11-11 命令口径；@Agent 触发已下线留作他用）：
+    // 问题照常作为文本消息落流，另交 embedded Agent
+    const toAgent = agentMode || /^\/agent([\s　]|$)/.test(text);
     void sendText(convId, text, replyTo?.seq, mentions.length > 0 ? mentions : undefined);
     setReplyTo(null);
     if (toAgent) void agentFlow(text);
@@ -771,7 +797,9 @@ export function ChatPage() {
           ) : null}
           <MessageBubble
             message={m}
-            mine={m.senderId === myUid && m.type !== 'system'}
+            /* agent_card 恒按对方样式渲染（2026-11-11 用户口径：AI 回答左对齐+头像
+             * 在左——即使发起人是自己，回答主体是 Agent；顺带不显示发送回执尾标） */
+            mine={m.senderId === myUid && m.type !== 'system' && m.type !== 'agent_card'}
             onRetry={(clientMsgId) => convId && void retrySend(convId, clientMsgId)}
             peerReadSeq={(convId && peerReadSeq[convId]) || 0}
             actions={m.type === 'system' ? undefined : bubbleActions}
@@ -779,7 +807,6 @@ export function ChatPage() {
             myRole={myRole}
             onOpenMsgMenu={openMsgMenu}
             onOpenReceipts={activeConv && activeConv.type !== 1 ? (m) => setReceiptSeq(m.seq) : undefined}
-            onAgentCardContinue={m.type === 'agent_card' ? continueAgentCard : undefined}
             /* 多选：仅已落服务端消息参与（sending/failed 无 msgId，批量操作不可达） */
             multiSelect={
               msActive && m.type !== 'system' && m.status !== 2 && m.msgId
@@ -821,6 +848,7 @@ export function ChatPage() {
           typing={showTyping ? '对方正在输入…' : undefined}
           peerStatus={peerStatus}
           onBack={bp === 'S' ? () => navigate('/im') : undefined}
+          onOpenAgent={() => void openAgentWorkbench()}
           onToggleDetail={() => setDetailOpen((v) => !v)}
         />
       ) : null}
@@ -921,11 +949,8 @@ export function ChatPage() {
         </StateView>
       )}
 
-      {convId && embeddedActive ? (
-        <div className="agent-activity-wrap" data-testid="agent-activity-wrap">
-          <AgentActivityCard convId={convId} sessionId={embeddedActive} onRetire={() => setEmbeddedActive(null)} />
-        </div>
-      ) : null}
+      {/* 内嵌 Agent 同步控制器（无头：落流/阶段 PATCH/审批弹框；回复落流卡即实时界面） */}
+      {convId && embeddedActive ? <EmbeddedAgentSync convId={convId} sessionId={embeddedActive} /> : null}
 
       {convId ? (
         <MessageInput

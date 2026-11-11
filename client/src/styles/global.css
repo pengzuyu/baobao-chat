@@ -819,6 +819,31 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--bbw-space-1);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+/* 机器人对话模式（2026-11-11 用户口径）：输入区整体变色一眼可辨 */
+.message-input--agent {
+  background: color-mix(in srgb, var(--bbw-primary, #1652f0) 6%, transparent);
+  border-top-color: color-mix(in srgb, var(--bbw-primary, #1652f0) 45%, transparent);
+}
+
+/* 模式徽标（工具栏行右上角，点击退出） */
+.message-input__agent-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--bbw-primary, #1652f0);
+  background: color-mix(in srgb, var(--bbw-primary, #1652f0) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bbw-primary, #1652f0) 35%, transparent);
+  cursor: pointer;
+}
+.message-input__agent-badge:hover {
+  background: color-mix(in srgb, var(--bbw-primary, #1652f0) 16%, transparent);
 }
 
 .message-input__tools {
@@ -2994,13 +3019,6 @@ body {
   align-self: flex-start;
 }
 
-.agent-row--reasoning {
-  align-self: stretch;
-  max-width: 100%;
-  flex-direction: column;
-  gap: var(--bbw-space-1);
-}
-
 .agent-row__avatar {
   width: 26px;
   height: 26px;
@@ -3127,51 +3145,8 @@ body {
   color: var(--bbw-gray-9);
 }
 
-/* 思考摘要折叠（channel=reasoning） */
-.agent-reasoning__head {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  width: fit-content;
-  max-width: 100%;
-  border: none;
-  background: transparent;
-  padding: 2px 0;
-  cursor: pointer;
-  font-size: var(--bbw-font-12);
-  color: var(--bbw-gray-6);
-}
-
-.agent-reasoning__chev {
-  transition: transform 0.15s ease;
-  flex-shrink: 0;
-}
-
-.agent-reasoning__chev--open {
-  transform: rotate(90deg);
-}
-
-.agent-reasoning__label {
-  color: var(--bbw-gray-7);
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-.agent-reasoning__digest {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-.agent-reasoning__body {
-  font-size: var(--bbw-font-12);
-  color: var(--bbw-gray-6);
-  background: var(--bbw-gray-2);
-  border-radius: var(--bbw-radius-control);
-  padding: var(--bbw-space-2) var(--bbw-space-3);
-  white-space: pre-wrap;
-}
+/* 思考摘要折叠（channel=reasoning）——旧 ReasoningCollapse 已删（2026-11-11 过程区
+   统一卡片化，思考小卡复用 shared/AgentProcessCard 的 agc-thinking 同款） */
 
 /* 系统提示行（检查点/模式切换/记忆沉淀） */
 .agent-system-row {
@@ -3556,6 +3531,62 @@ body {
   overflow: hidden;
 }
 
+/* ── 澄清提问卡（D20 ask_user；对齐 perm-card 口径，主色改蓝=问询非警示）── */
+.clarify-card {
+  align-self: stretch;
+  border: 1px solid var(--bbw-primary);
+  border-radius: var(--bbw-radius-card);
+  background: var(--bbw-gray-1);
+  box-shadow: var(--bbw-shadow-pop);
+  overflow: hidden;
+}
+.clarify-card--settled { opacity: 0.85; }
+.clarify-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--bbw-space-2);
+  padding: var(--bbw-space-2) var(--bbw-space-3);
+  background: color-mix(in srgb, var(--bbw-primary) 10%, transparent);
+}
+.clarify-card__icon { color: var(--bbw-primary); }
+.clarify-card__title { font-size: 12px; font-weight: 600; color: var(--bbw-text-1); }
+.clarify-card__body { padding: var(--bbw-space-3); display: flex; flex-direction: column; gap: var(--bbw-space-2); }
+.clarify-card__outcome { font-size: 12px; color: var(--bbw-text-1); }
+.clarify-card__outcome--dim { color: var(--bbw-text-3); }
+
+.clarify-form { display: flex; flex-direction: column; gap: 10px; }
+.clarify-form__head { display: flex; align-items: baseline; gap: 8px; }
+.clarify-form__chip {
+  flex: none; font-size: 11px; padding: 1px 8px; border-radius: 999px;
+  color: var(--bbw-primary); border: 1px solid color-mix(in srgb, var(--bbw-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--bbw-primary) 8%, transparent);
+}
+.clarify-form__question { font-size: 13px; font-weight: 600; color: var(--bbw-text-1); }
+.clarify-form__options { display: flex; flex-direction: column; gap: 6px; }
+.clarify-opt {
+  display: flex; flex-direction: column; gap: 2px; text-align: left; cursor: pointer;
+  padding: 7px 10px; border-radius: var(--bbw-radius-control);
+  border: 1px solid var(--bbw-border); background: var(--bbw-gray-1);
+}
+.clarify-opt:hover { border-color: var(--bbw-primary); }
+.clarify-opt--active {
+  border-color: var(--bbw-primary);
+  background: color-mix(in srgb, var(--bbw-primary) 8%, transparent);
+}
+.clarify-opt__label { font-size: 13px; color: var(--bbw-text-1); }
+.clarify-opt__desc { font-size: 12px; color: var(--bbw-text-3); }
+.clarify-form__other {
+  align-self: flex-start; font-size: 12px; color: var(--bbw-text-3); cursor: pointer;
+  background: none; border: none; padding: 0;
+}
+.clarify-form__other:hover { color: var(--bbw-primary); }
+.clarify-form__free {
+  font-size: 13px; padding: 6px 10px; border-radius: var(--bbw-radius-control);
+  border: 1px solid var(--bbw-border); background: var(--bbw-gray-1); color: var(--bbw-text-1);
+}
+.clarify-form__actions { display: flex; align-items: center; gap: 10px; }
+.clarify-form__hint { font-size: 12px; color: var(--bbw-text-3); }
+
 .perm-card__head {
   display: flex;
   align-items: center;
@@ -3785,11 +3816,6 @@ body {
   justify-content: space-between;
   align-items: center;
   gap: var(--bbw-space-2);
-}
-
-.agent-composer__hint {
-  font-size: var(--bbw-font-12);
-  color: var(--bbw-gray-5);
 }
 
 .agent-composer__actions {
@@ -7853,24 +7879,72 @@ body {
 
 /* ─────────────── 内嵌 Agent 卡（D18 §3.4；效果对齐 change-my-life agent-web） ─────────────── */
 
-/* 活动卡外框（消息流与输入区之间） */
-.agent-activity-wrap { padding: 8px 16px 0; display: flex; flex-direction: column; gap: 6px; }
+/* 活动卡外框已删（2026-11-11 活动卡取消——回复落流卡承载全部交互，同步控制器无头化） */
 
 /* 追问输入行（活动卡下方） */
 .agc-followup { display: flex; gap: 8px; align-items: center; padding: 0 2px; }
 .agc-followup__input { flex: 1; }
 
-/* 过程卡 */
+/* 消息卡片最外层（2026-11-11 六改恢复：头部=标题+本轮问题+状态 chip；
+ * 运行中边框高亮；过程折叠块与结论为卡内内容） */
 .agc-card { border: 1px solid var(--bbw-gray-3, #e5e6eb); border-radius: 10px; background: var(--bbw-bg-card, #fff); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 .agc-card--running { border-color: var(--bbw-primary, #4080ff); }
 [data-theme='dark'] .agc-card { background: var(--bbw-bg-card, #232529); }
+/* 卡头收起触发区（2026-11-11 用户口径：整条头部行可点收起，箭头仅指示；
+ * 工作台不传 onCollapse 则无此态） */
+.agc-card__head--toggle { cursor: pointer; user-select: none; }
+.agc-card__head--toggle:hover .agc-card__title { color: var(--bbw-primary, #4080ff); }
+.agc-card__head-chev { flex-shrink: 0; margin-left: auto; color: var(--bbw-text-4, #c9cdd4); }
+
+/* 折叠摘要卡（2026-11-11 用户拍板两轮修订：AI 回答默认折叠摘要——首行「Agent
+ * 状态：本轮问题」+ 思考过程行 + 正文两行截断省略号。**固定像素宽高**（内容多寡
+ * 不影响、每个气泡完全一致）：勿用 min(448px,100%)——百分比在收缩自适应气泡容器
+ * 内解析随内容漂移，宽内容会把卡撑向左侧不齐右；max-width:100% 仅作窄窗兜底。
+ * 展开态（agc-card）宽度按实际内容自然扩展不受此限。完成起 2 分钟宽限到点自动
+ * 折叠/宽限期内新回合立即折叠——仅 IM 聊天页 */
+.agc-collapsed { display: flex; flex-direction: column; gap: 6px; width: 448px; max-width: 100%; height: 112px; overflow: hidden; padding: 8px 10px; border: 1px solid var(--bbw-gray-3, #e5e6eb); border-radius: 10px; background: var(--bbw-bg-card, #fff); color: var(--bbw-text-2, #4e5969); font-size: 12px; cursor: pointer; }
+[data-theme='dark'] .agc-collapsed { background: var(--bbw-bg-card, #232529); }
+.agc-collapsed:hover { border-color: var(--bbw-primary, #4080ff); }
+.agc-collapsed__head { display: flex; align-items: center; gap: 5px; min-width: 0; flex-shrink: 0; }
+.agc-collapsed__title { font-weight: 600; flex-shrink: 0; }
+.agc-collapsed__state { flex-shrink: 0; color: var(--bbw-text-3, #86909c); }
+.agc-collapsed__state--done { color: var(--bbw-success, #00b42a); }
+.agc-collapsed__state--failed, .agc-collapsed__state--cancelled { color: var(--bbw-danger, #f53f3f); }
+.agc-collapsed__sep { flex-shrink: 0; color: var(--bbw-text-3, #86909c); }
+.agc-collapsed__question { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; color: var(--bbw-text-3, #86909c); }
+.agc-collapsed__chev { flex-shrink: 0; color: var(--bbw-text-4, #c9cdd4); }
+/* 思考过程行（展开卡思考小卡观感的单行静态版） */
+.agc-collapsed__think { display: flex; align-items: center; gap: 5px; flex-shrink: 0; color: var(--bbw-primary, #4080ff); background: var(--bbw-primary-light, #f0f5ff); border-radius: 6px; padding: 3px 8px; min-width: 0; }
+.agc-collapsed__think-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+/* 正文：最多两行 + 省略号（line-clamp） */
+.agc-collapsed__body { font-size: 13px; line-height: 1.6; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; word-break: break-word; }
+
 .agc-card__head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--bbw-text-2, #4e5969); }
-.agc-card__title { font-weight: 600; }
-.agc-card__state { color: var(--bbw-text-3, #86909c); display: inline-flex; align-items: center; gap: 4px; }
+.agc-card__title { font-weight: 600; flex-shrink: 0; }
+.agc-card__question { flex: 1; min-width: 0; font-size: 11px; color: var(--bbw-text-3, #86909c); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agc-card__state { color: var(--bbw-text-3, #86909c); display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .agc-card__state--done { color: var(--bbw-success, #00b42a); }
 .agc-card__state--failed, .agc-card__state--cancelled { color: var(--bbw-danger, #f53f3f); }
 .agc-card__body { display: flex; flex-direction: column; gap: 6px; }
+/* 0 阶段占位（新回合落卡即见，不等模型响应） */
+.agc-waiting { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--bbw-gray-6, #86909c); padding: 2px 0; }
+.agc-waiting__dot { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.4; animation: agc-wait-pulse 1.2s ease-in-out infinite; }
+.agc-waiting__dot:nth-child(2) { animation-delay: 0.2s; }
+.agc-waiting__dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes agc-wait-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 .agc-card__actions { display: flex; gap: 8px; padding-top: 4px; border-top: 1px solid var(--bbw-gray-3, #e5e6eb); }
+
+/* 过程折叠卡片（v2 同款带边框独立卡，嵌于外层消息卡内——摘要条=整卡折叠开关；
+ * 用户裁决：此卡结构不要再动，仅作消息卡内嵌套） */
+.agc-proc { border: 1px solid var(--bbw-gray-3, #e5e6eb); border-radius: 10px; background: var(--bbw-bg-card, #fff); padding: 2px 4px 4px; display: flex; flex-direction: column; gap: 4px; }
+[data-theme='dark'] .agc-proc { background: var(--bbw-bg-card, #232529); }
+.agc-proc__bar { display: flex; align-items: center; gap: 6px; width: 100%; border: none; background: transparent; border-radius: 6px; padding: 4px 6px; cursor: pointer; font-size: 12px; color: var(--bbw-text-3, #86909c); text-align: left; }
+.agc-proc__bar:hover { background: var(--bbw-gray-1, #f7f8fa); }
+.agc-proc__chev { transition: transform 0.15s ease; color: var(--bbw-text-4, #c9cdd4); flex-shrink: 0; }
+.agc-proc__chev--open { transform: rotate(90deg); }
+.agc-proc__title { font-weight: 600; color: var(--bbw-text-2, #4e5969); flex-shrink: 0; }
+.agc-proc__stats { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.agc-proc__body { display: flex; flex-direction: column; gap: 6px; padding: 0 4px 2px; }
 
 /* 思考卡（流式展开+呼吸；结束自动折叠） */
 .agc-thinking { background: var(--bbw-primary-light, #f0f5ff); border: 1px solid rgba(64, 128, 255, 0.25); border-radius: 8px; overflow: hidden; }
@@ -7888,17 +7962,12 @@ body {
 .agc-tool__ms { color: var(--bbw-text-4, #c9cdd4); flex-shrink: 0; }
 .agc-tool__fail { color: var(--bbw-danger, #f53f3f); flex-shrink: 0; }
 
-/* 结论/来源/光标/计时 */
+/* 结论/光标/计时（结论=卡下常开的最终回答；中间正文弱化） */
 .agc-conclusion { font-size: 13px; }
 .agc-conclusion .agent-md__p { margin: 4px 0; }
-.agc-sources { font-size: 12px; color: var(--bbw-text-3, #86909c); display: flex; gap: 6px; flex-wrap: wrap; }
-.agc-sources__item { background: var(--bbw-gray-2, #f2f3f5); border-radius: 4px; padding: 1px 6px; }
+.agc-conclusion--mid { font-size: 12px; color: var(--bbw-text-3, #86909c); }
 .agc-cursor { display: inline-block; width: 7px; height: 14px; background: var(--bbw-primary, #4080ff); margin-left: 2px; vertical-align: text-bottom; animation: agc-pulse 0.9s steps(2) infinite; }
 .agc-elapsed { color: var(--bbw-text-3, #86909c); }
-
-/* 终态折叠摘要条 */
-.agc-summary-bar { display: flex; align-items: center; gap: 6px; width: 100%; border: none; background: var(--bbw-gray-1, #f7f8fa); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; color: var(--bbw-text-3, #86909c); text-align: left; }
-.agc-collapse-btn { border: none; background: transparent; color: var(--bbw-text-3, #86909c); font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 2px 0; }
 
 /* chevron 旋转 / 旋转加载 / 呼吸动画 */
 .agc-chev { transition: transform 0.2s; color: var(--bbw-text-4, #c9cdd4); }
@@ -7925,9 +7994,7 @@ body {
 .agc-stalled { font-size: 12px; color: var(--bbw-warning, #d59020); display: inline-flex; align-items: center; gap: 8px; }
 
 /* ============ D19 工作台过程显示对齐（change-my-life agent-web）============ */
-/* 思考卡：流式呼吸 + max-height 过渡（覆盖 D08 旧静态折叠行为；本体常挂载收起=0 高） */
-.agent-row--reasoning--streaming .agent-reasoning__head { animation: agc-pulse 1.5s ease-in-out infinite; color: var(--bbw-primary, #4080ff); }
-.agent-reasoning__body { max-height: 0; overflow-y: auto; transition: max-height 0.22s ease; }
+/* 思考卡旧 ReasoningCollapse 已删（2026-11-11 过程区统一卡片化，复用 agc-thinking 同款） */
 
 /* 工具调用组汇总条（ToolGroup；视觉口径对齐 ToolCallGroup.vue tg-*） */
 .tool-group { background: var(--bbw-gray-1, #f7f8fa); border-radius: 8px; margin: 4px 0; overflow: hidden; }
@@ -7967,3 +8034,82 @@ body {
 /* 记忆作用域页签徽标（AgentMemoryPage D19） */
 .agent-mem-chip--projectscope { background: var(--bbw-primary-light, #f0f5ff); color: var(--bbw-primary, #4080ff); }
 .agent-mem-proj-select { margin-left: auto; }
+
+/* ---- 工作台左栏任务分区 + embedded 来源徽标（2026-11-11） ---- */
+.agent-task-item { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 12px; background: none; border: none; cursor: pointer; text-align: left; }
+.agent-task-item:hover { background: var(--bbw-hover, rgba(0,0,0,0.04)); }
+.agent-task-item__kind { flex: none; font-size: 10px; line-height: 1; padding: 3px 5px; border-radius: 4px; background: var(--bbw-fill-2, #f2f3f5); color: var(--bbw-text-3, #86909c); }
+.agent-task-item__kind--delegate { background: var(--bbw-primary-light, #f0f5ff); color: var(--bbw-primary, #4080ff); }
+.agent-task-item__kind--expert, .agent-task-item__kind--team { background: #f9e8ff; color: #9254de; }
+.agent-task-item__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.agent-task-item__name { font-size: 12px; color: var(--bbw-text-1, #1d2129); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-task-item__meta { display: flex; gap: 6px; font-size: 10px; color: var(--bbw-text-4, #c9cdd4); }
+.agent-task-item__session { max-width: 110px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-task-item__status { flex: none; font-size: 10px; color: var(--bbw-text-4, #c9cdd4); }
+.agent-task-item__status--running { color: var(--bbw-success, #00b42a); }
+.agent-task-item__status--failed { color: var(--bbw-danger, #f53f3f); }
+.agent-task-running-count { margin-left: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--bbw-success, #00b42a); color: #fff; font-size: 9px; line-height: 14px; text-align: center; }
+.agent-embedded-badge { display: inline-flex; align-items: center; margin-right: 3px; color: var(--bbw-primary, #4080ff); vertical-align: -1px; }
+
+/* 左栏整体折叠细条（2026-11-11） */
+.agent-sessions--collapsed { width: 44px; align-items: center; padding: 8px 0; }
+.agent-sessions--collapsed .agent-sessions__body, .agent-sessions--collapsed .agent-sessions__newbar, .agent-sessions--collapsed .agent-sessions__header, .agent-sessions--collapsed .agent-sessions__footer { display: none; }
+.agent-sessions__rail { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.agent-sessions__collapse { margin-left: auto; }
+
+/* 落流卡底部常驻补充行（2026-11-11；问题标识随五改头部删除） */
+.agc-card__footer-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.agc-card__footer-row .agc-act-btn--open-wb { flex: none; font-size: 11px; }
+.agc-card__footer-row .agc-followup { flex: 1; display: flex; align-items: center; gap: 4px; margin: 0; }
+.agc-card__footer-row .agc-followup__input { flex: 1; min-width: 0; font-size: 12px; padding: 3px 8px; }
+
+/* ---- 思考中渐变流光（zcode 同款：青→紫流动渐变文字，替代纯色呼吸） ---- */
+@keyframes bbw-gradient-flow { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+.agc-thinking__title--streaming,
+.agc-proc__title--streaming {
+  background: linear-gradient(90deg, #22d3ee, #a855f7, #6366f1, #22d3ee);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: bbw-gradient-flow 2.2s linear infinite;
+  font-weight: 600;
+}
+
+/* 左栏分区头操作按钮（2026-11-11：每栏自带新增入口） */
+.agent-proj-section__head { text-transform: none; }
+.agent-proj-section__spacer { flex: 1; }
+.agent-proj-section__act { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: none; border-radius: 5px; background: transparent; color: var(--bbw-text-3, #86909c); cursor: pointer; }
+.agent-proj-section__act:hover { background: var(--bbw-fill-2, #f2f3f5); color: var(--bbw-primary, #4080ff); }
+
+/* 落流卡审批同步条（2026-11-11 三端同感同操作） */
+.agc-perm-sync { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: #fffbe6; border: 1px solid #ffe58f; width: 100%; }
+.agc-perm-sync--clarify { background: #e8f3ff; border-color: #a5cdf3; }
+.agc-perm-sync__label { flex: 1; font-size: 12px; color: #874d00; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agc-perm-sync--clarify .agc-perm-sync__label { color: #1c4f8a; }
+
+/* ============ 回合气泡（2026-11-11 三改：与 IM 落流卡共用 AgentProcessCard 单一实现）============ */
+/* 整轮（过程+最终回答）= 一张 agc-card（共享组件）；列容器承载卡片与兜底打点 */
+.agent-turn__col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+/* 中间轮正文（非最终回答，折叠区内弱化展示） */
+.agent-turn__mid { font-size: var(--bbw-font-13); color: var(--bbw-gray-7); border-left: 2px solid var(--bbw-gray-3); padding-left: 8px; }
+
+/* ============ 模型+思考强度合体选择器（2026-11-11 zcode 同款 Popover）============ */
+.agent-mt-panel { width: 250px; display: flex; flex-direction: column; gap: 2px; }
+.agent-mt-sec__title { font-size: 11px; color: var(--bbw-text-4, #c9cdd4); padding: 4px 8px 2px; }
+.agent-mt-row { display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: transparent; border-radius: 6px; padding: 6px 8px; font-size: 13px; color: var(--bbw-text-1, #1d2129); cursor: pointer; text-align: left; }
+.agent-mt-row:hover { background: var(--bbw-fill-2, #f2f3f5); }
+.agent-mt-row__name { font-weight: 500; flex-shrink: 0; }
+.agent-mt-row__sub { flex: 1; min-width: 0; font-size: 11px; color: var(--bbw-text-4, #c9cdd4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-mt-row--active .agent-mt-row__name { color: var(--bbw-primary, #4080ff); }
+.agent-mt-row__check { color: var(--bbw-primary, #4080ff); flex-shrink: 0; margin-left: auto; }
+.agent-mt-divider { height: 1px; background: var(--bbw-gray-3, #e5e6eb); margin: 6px 0 2px; }
+.agent-mt-think-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 8px; }
+.agent-mt-think-val { font-size: 13px; font-weight: 600; color: var(--bbw-text-1, #1d2129); }
+.agent-mt-think-desc { font-size: 11px; color: var(--bbw-text-4, #c9cdd4); padding: 0 8px 6px; }
+/* 滑杆：渐变轨道（绿→青→蓝）+ 白色旋钮（zcode 截图观感） */
+.agent-mt-slider { margin: 6px 12px 2px; }
+.agent-mt-slider .ant-slider-rail { height: 6px; border-radius: 3px; background: var(--bbw-fill-2, #f2f3f5); }
+.agent-mt-slider .ant-slider-track { height: 6px; border-radius: 3px; background: linear-gradient(90deg, #34d399, #22d3ee, #4080ff); }
+.agent-mt-slider .ant-slider-handle { width: 14px; height: 14px; margin-top: -4px; }
+.agent-mt-slider .ant-slider-handle::after { width: 14px; height: 14px; background: #fff; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.22); }

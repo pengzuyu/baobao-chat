@@ -10,8 +10,9 @@
 //! - obo.token 是 token 唯一下行通道；RT 侧 obo.renew REQ 由宿主应答
 //! - 握手硬约束：首条必须 initialize（10s 窗口）→ initialize.result → runtime.ready
 //!
-//! 已知协议缺口（登记）：session.resume RT 未实现（fire-and-forget）；
-//! agent_set_mode 无协议消息（宿主本地记录）；emergency_stop=杀进程（D09 §4.6）。
+//! 已知协议缺口（登记）：agent_set_mode 无协议消息（宿主本地记录）；
+//! emergency_stop=杀进程（D09 §4.6）。旧 session.pause/resume 用户通道已随
+//! 2026-11-11「停止=中断当前轮」口径移除（session.interrupt 取代，收口 idle）。
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -351,15 +352,42 @@ impl AgentHost {
             p.stdin = Some(stdin);
             p.ready = false;
         }
-        // 事件泵：行读 → obo.renew 应答 / reply_to 关联 / UNT → 键名归一 → 会话缓存 → emit
+        // 事件泵：行读 → obo.renew 应答 / reply_to 关联 / UNT → 键名归一 → 会话缓存 → emit。
+        // stream.delta 合批（2026-11-11 卡顿修复）：每 token 一条 delta emit 进
+        // WebView ≈100 次/s——IPC 风暴致主线程饱和（点击无响应）且事件过载丢帧
+        // （回复不完整）。同 (session, channel) 拼接文本，80ms 窗口合并 emit；
+        // 非 delta 事件先 flush 保序（stream.done 后于该会话全部 delta）。
         let shared = self.shared.clone();
         let emit = self.emit.clone();
         std::thread::spawn(move || {
+            const DELAY_BATCH_MS: u64 = 80;
+            let mut pending: Vec<(String, String, String, u64)> = vec![]; // (sid, channel, text, seq)
+            let mut last_flush = std::time::Instant::now();
+            macro_rules! flush_deltas {
+                () => {
+                    if !pending.is_empty() {
+                        pending.sort_by_key(|(_, _, _, seq)| *seq);
+                        let flushed = pending.len(); // TEMP 排错：flush 计数
+                        for (sid, ch, text, seq) in pending.drain(..) {
+                            emit(normalize_event(
+                                "stream.delta",
+                                json!({ "sessionId": sid, "delta": text, "seq": seq, "channel": ch }),
+                            ));
+                        }
+                        eprintln!("[pump] flush {flushed}"); // TEMP 排错（验收后移除）
+                        last_flush = std::time::Instant::now();
+                    }
+                };
+            }
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
                 let line = match line {
                     Ok(l) => l,
-                    Err(_) => break,
+                    Err(e) => {
+                        // TEMP 排错（泵静默死亡排查，验收后移除）：读错误此前静默 break
+                        eprintln!("[pump] EXIT read-err {e}");
+                        break;
+                    }
                 };
                 if line.trim().is_empty() {
                     continue;
@@ -369,6 +397,10 @@ impl AgentHost {
                     Err(_) => continue, // 非 JSON 行（RT 侧异常输出）忽略
                 };
                 let msg_type = env["type"].as_str().unwrap_or("").to_string();
+                // TEMP 排错：泵逐事件日志（非 delta）——泵若卡死/死亡此处停止打印
+                if !msg_type.is_empty() && msg_type != "stream.delta" {
+                    eprintln!("[pump] evt {msg_type}");
+                }
                 if msg_type == "runtime.ready" {
                     shared.mark_ready();
                     let _ = ready_tx.send(());
@@ -382,11 +414,34 @@ impl AgentHost {
                         continue; // REQ 回执已投递
                     }
                 }
-                // UNT/NTF：先喂会话缓存（camel 原文），再键名归一（snake + risk mid）emit
+                if msg_type == "stream.delta" {
+                    let p = &env["payload"];
+                    let sid = p["sessionId"].as_str().unwrap_or("").to_string();
+                    let ch = p["channel"].as_str().unwrap_or("text").to_string();
+                    let seq = p["seq"].as_u64().unwrap_or(0);
+                    let text = p["delta"].as_str().unwrap_or("").to_string();
+                    if let Some(slot) = pending
+                        .iter_mut()
+                        .find(|(s, c, _, _)| *s == sid && *c == ch)
+                    {
+                        slot.2.push_str(&text);
+                        slot.3 = seq;
+                    } else {
+                        pending.push((sid, ch, text, seq));
+                    }
+                    if last_flush.elapsed().as_millis() as u64 >= DELAY_BATCH_MS {
+                        flush_deltas!();
+                    }
+                    continue;
+                }
+                // 非 delta 事件：先冲刷缓冲保序，再喂缓存与 emit
+                flush_deltas!();
                 shared.apply_session_event(&msg_type, &env["payload"]);
                 emit(normalize_event(&msg_type, env["payload"].clone()));
             }
+            flush_deltas!();
             // EOF：Runtime 退出——标记 down + 壳自产 runtime.state（前端未知类型忽略）
+            eprintln!("[pump] EXIT eof（bbrt stdout 关闭）"); // TEMP 排错
             shared.mark_down();
             emit(
                 json!({ "type": "runtime.state", "session_id": null, "state": "down", "reason": "process-exited" }),
@@ -424,7 +479,7 @@ impl AgentHost {
         }
     }
 
-    /// fire-and-forget（model.switch/session.resume 等无成对回执）
+    /// fire-and-forget（model.switch 等无成对回执）
     pub fn fire(&self, msg_type: &str, payload: Value) -> Result<(), String> {
         self.ensure_running()?;
         self.fire_inner(msg_type, payload)
@@ -449,13 +504,15 @@ impl AgentHost {
         }
     }
 
-    /// 新建会话（协议口径：sessionId 由宿主生成传入）
+    /// 新建会话（协议口径：sessionId 由宿主生成传入）。title 可选初始标题，
+    /// 缺省=「会话 {n}」占位（前端首条用户消息后 rename 派生真标题）
     pub fn start_session(
         &self,
         workspace: &str,
         mode: &str,
         model_policy: &str,
         model: Option<&str>,
+        title: Option<&str>,
     ) -> Result<String, String> {
         self.ensure_running()?;
         let n = self.seq_session.fetch_add(1, Ordering::SeqCst) + 1;
@@ -463,7 +520,10 @@ impl AgentHost {
         let now = now_ms();
         self.shared.sessions.lock().unwrap().push(SessionCache {
             id: sid.clone(),
-            title: format!("会话 {n}"),
+            title: title
+                .filter(|t| !t.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("会话 {n}")),
             workspace: workspace.to_string(),
             mode: mode.to_string(),
             model_policy: model_policy.to_string(),
@@ -475,6 +535,7 @@ impl AgentHost {
         let payload = json!({
             "sessionId": sid, "workspace": workspace, "mode": mode,
             "modelPolicy": model_policy, "model": model, "skills": [],
+            "title": title,
         });
         // REQ 失败（超时/握手）或 RT 错误回执（type=error，如 8001 活跃会话超限）
         // 都须回滚缓存行——否则列表留永久 starting 幽灵行且白占 RT 名额
@@ -490,7 +551,46 @@ impl AgentHost {
             let msg = rep["message"].as_str().unwrap_or("runtime error");
             return Err(format!("会话创建失败：{msg}"));
         }
+        // 回执即 session.ready——RT 会话已就绪（Idle）。同步翻缓存行（与泵的
+        // UNT session.ready 幂等双路径），避免并发 session_list 读到 starting
+        {
+            let mut sessions = self.shared.sessions.lock().unwrap();
+            if let Some(row) = sessions.iter_mut().find(|s| s.id == sid) {
+                row.status = "idle".into();
+                row.updated_at = now_ms();
+            }
+        }
         Ok(sid)
+    }
+
+    /// 会话重命名（session.rename REQ 落库 + 宿主缓存行同步——
+    /// list_sessions 缓存行优先，不同步会盖掉库内新标题）
+    pub fn rename_session(&self, session_id: &str, title: &str) -> Result<Value, String> {
+        let rep = self.request(
+            "session.rename",
+            json!({ "sessionId": session_id, "title": title }),
+        )?;
+        if rep["type"] == "error" {
+            let msg = rep["message"].as_str().unwrap_or("runtime error");
+            return Err(format!("重命名失败：{msg}"));
+        }
+        let final_title = rep["title"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| title.trim().to_string());
+        let now = now_ms();
+        if let Some(row) = self
+            .shared
+            .sessions
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|s| s.id == session_id)
+        {
+            row.title = final_title.clone();
+            row.updated_at = now;
+        }
+        Ok(json!({ "ok": true, "title": final_title }))
     }
 
     /// 权限模式本地切换（协议缺口：HostToRuntime 无 mode 设置消息，登记）

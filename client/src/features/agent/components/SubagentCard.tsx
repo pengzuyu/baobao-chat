@@ -4,7 +4,8 @@
  * runId=持久 r-{seq}（agent_run 审计行关联；展开体标注 run 号）。
  */
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
+import { useImeGuard } from '../../../shared/hooks/useImeGuard';
 import { ChevronRight, Loader2, Radar } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useAgentStore } from '../store/agent';
@@ -12,10 +13,11 @@ import type { StreamItem } from '../store/agent';
 
 type SubagentItem = Extract<StreamItem, { kind: 'subagent' }>;
 
-export function SubagentCard({ item }: { item: SubagentItem }) {
+export const SubagentCard = memo(function SubagentCard({ item }: { item: SubagentItem }) {
   const [open, setOpen] = useState(false);
   const sendRunInput = useAgentStore((st) => st.sendRunInput);
   const cancelRun = useAgentStore((st) => st.cancelRun);
+  const { imeComposing, imeCompositionProps } = useImeGuard();
   const [draft, setDraft] = useState('');
 
   const statusNode =
@@ -48,11 +50,12 @@ export function SubagentCard({ item }: { item: SubagentItem }) {
               placeholder="运行中补充指令（下一轮生效）…"
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !imeComposing()) {
                   sendRunInput(item.runId, draft);
                   setDraft('');
                 }
               }}
+              {...imeCompositionProps}
             />
             <Button
               variant="secondary"
@@ -80,4 +83,4 @@ export function SubagentCard({ item }: { item: SubagentItem }) {
       ) : null}
     </div>
   );
-}
+});

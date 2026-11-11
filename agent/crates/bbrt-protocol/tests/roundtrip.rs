@@ -6,12 +6,13 @@
 use std::io::Cursor;
 
 use bbrt_protocol::{
-    read_message, write_message, Blocked, BriefContextItem, CheckpointReason, CodecError,
-    CompactionPhase, DailyStatsLite, Decision, DelegateEventKind, EndReason, Envelope, FileChange,
-    GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy, ModelSwitchReason,
-    PermissionMode, Preview, ProtocolError, RenewReason, ReportListItem, ReviewDecision, RiskLevel,
-    RuntimeToHost, SessionState, StreamChannel, SubagentPhase, SubagentResult, TaskBrief,
-    ToolSource, ToolsReloadReason, Usage, PROTOCOL_VERSION,
+    read_message, write_message, Blocked, BriefContextItem, CheckpointReason, ClarifyOption,
+    CodecError, CompactionPhase, DailyStatsLite, Decision, DelegateEventKind, EndReason, Envelope,
+    FileChange, GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy,
+    ModelSwitchReason, PermissionMode, Preview, ProtocolError, RenewReason, ReportListItem,
+    ReviewDecision, RiskLevel, RuntimeToHost, SessionState, StreamChannel, SubagentPhase,
+    SubagentResult, TaskBrief, ThinkingLevel, ToolSource, ToolsReloadReason, Usage,
+    PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -52,12 +53,14 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             skills: vec!["sql-review".into()],
             history_ref: None,
             backend_hint: Some("zcode".into()),
+            title: None,
         },
         HostToRuntime::UserMessage {
             session_id: "sess-1".into(),
             text: "修复登录超时 bug".into(),
             attachments: vec!["file-9".into()],
             slash: Some("/strong".into()),
+            thinking: Some(ThinkingLevel::High),
         },
         HostToRuntime::PermissionResponse {
             request_id: "req-1".into(),
@@ -65,6 +68,12 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             scope: GrantScope::Session,
             edited_args: Some(json!({"cmd": "cargo test"})),
             accepted_hunks: None,
+        },
+        // D20 澄清回答
+        HostToRuntime::ClarifyResponse {
+            question_id: "q-call-1".into(),
+            answers: vec!["加漂移窗口".into()],
+            free_text: Some("顺带补一条单测".into()),
         },
         HostToRuntime::CheckpointCreate {
             session_id: "sess-1".into(),
@@ -94,11 +103,12 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             decision: ReviewDecision::Reject,
             rejected_hunks: Some(vec!["hunk-2".into()]),
         },
-        HostToRuntime::SessionPause {
+        HostToRuntime::SessionInterrupt {
             session_id: "sess-1".into(),
         },
-        HostToRuntime::SessionResume {
+        HostToRuntime::SessionRename {
             session_id: "sess-1".into(),
+            title: "与张三的对话".into(),
         },
         HostToRuntime::SessionEnd {
             session_id: "sess-1".into(),
@@ -199,6 +209,23 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             }),
             options: vec![GrantScope::Once, GrantScope::Session, GrantScope::Permanent],
         },
+        // D20 澄清提问（不超时）
+        RuntimeToHost::ClarifyRequest {
+            question_id: "q-call-1".into(),
+            question: "用哪种方式修复？".into(),
+            header: Some("修复方式".into()),
+            options: vec![
+                ClarifyOption {
+                    label: "加漂移窗口".into(),
+                    description: Some("±60s 容忍时钟偏移".into()),
+                },
+                ClarifyOption {
+                    label: "对齐 NTP".into(),
+                    description: None,
+                },
+            ],
+            multi_select: false,
+        },
         RuntimeToHost::CheckpointCreated {
             checkpoint_id: "cp-1".into(),
             session_id: "sess-1".into(),
@@ -273,9 +300,22 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             state: SessionState::WaitingPermission,
             reason: "门控第⑥步 confirm".into(),
         },
+        RuntimeToHost::SessionStateReport {
+            session_id: "sess-1".into(),
+            state: SessionState::WaitingClarify,
+            reason: "ask_user 等待澄清回答".into(),
+        },
         RuntimeToHost::SessionEnded {
             session_id: "sess-1".into(),
             summary: "修复登录超时并跑通测试".into(),
+        },
+        // 2026-11-11 标题/中断回执
+        RuntimeToHost::SessionInterrupted {
+            session_id: "sess-1".into(),
+        },
+        RuntimeToHost::SessionRenamed {
+            session_id: "sess-1".into(),
+            title: "修复登录超时".into(),
         },
         RuntimeToHost::OboRenew {
             scopes: vec!["kb:read".into()],
@@ -368,8 +408,8 @@ fn roundtrip_all_host_to_runtime() {
     let all = all_host_to_runtime();
     assert_eq!(
         all.len(),
-        21,
-        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong"
+        22,
+        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong + D20 clarify.response"
     );
     for msg in &all {
         roundtrip(msg);
@@ -381,8 +421,8 @@ fn roundtrip_all_runtime_to_host() {
     let all = all_runtime_to_host();
     assert_eq!(
         all.len(),
-        30,
-        "D11 §4 RT→宿主 21 类型 + D15 追加 6 类型 + checkpoint.restored + 双向 ping/pong"
+        34,
+        "D11 §4 RT→宿主 21 类型 + D15 追加 6 类型 + checkpoint.restored + 双向 ping/pong + 2026-11-11 interrupted/renamed + D20 clarify.request/状态样本"
     );
     for msg in &all {
         roundtrip(msg);
@@ -395,7 +435,7 @@ fn roundtrip_all_runtime_to_host() {
 
 #[test]
 fn golden_session_start() {
-    // Option 字段缺席不出现（historyRef/backendHint）
+    // Option 字段缺席不出现（historyRef/backendHint/title）
     golden(
         &HostToRuntime::SessionStart {
             session_id: "sess-1".into(),
@@ -406,6 +446,7 @@ fn golden_session_start() {
             skills: vec!["sql-review".into()],
             history_ref: None,
             backend_hint: None,
+            title: None,
         },
         json!({
             "type": "session.start",
@@ -518,6 +559,49 @@ fn golden_permission_request_and_response() {
         json!({
             "type":"permission.response","requestId":"req-9",
             "decision":"deny","scope":"once"
+        }),
+    );
+}
+
+/// D20 澄清提问双契约（wire 锁定：camelCase 键 + multiSelect 默认缺省 false 不上线路）
+#[test]
+fn golden_clarify_request_and_response() {
+    golden(
+        &RuntimeToHost::ClarifyRequest {
+            question_id: "q-call-9".into(),
+            question: "用哪种方式修复？".into(),
+            header: Some("修复方式".into()),
+            options: vec![
+                ClarifyOption {
+                    label: "加漂移窗口".into(),
+                    description: Some("±60s 容忍时钟偏移".into()),
+                },
+                ClarifyOption {
+                    label: "对齐 NTP".into(),
+                    description: None,
+                },
+            ],
+            multi_select: true,
+        },
+        json!({
+            "type":"clarify.request","questionId":"q-call-9",
+            "question":"用哪种方式修复？","header":"修复方式",
+            "options":[
+                {"label":"加漂移窗口","description":"±60s 容忍时钟偏移"},
+                {"label":"对齐 NTP"}
+            ],
+            "multiSelect":true
+        }),
+    );
+    golden(
+        &HostToRuntime::ClarifyResponse {
+            question_id: "q-call-9".into(),
+            answers: vec!["加漂移窗口".into()],
+            free_text: None,
+        },
+        json!({
+            "type":"clarify.response","questionId":"q-call-9",
+            "answers":["加漂移窗口"]
         }),
     );
 }
@@ -824,6 +908,7 @@ fn golden_session_state_report_names() {
         ("idle", SessionState::Idle),
         ("running", SessionState::Running),
         ("waiting_permission", SessionState::WaitingPermission),
+        ("waiting_clarify", SessionState::WaitingClarify),
         ("waiting_review", SessionState::WaitingReview),
         ("subagent_fanout", SessionState::SubagentFanout),
         ("delegating", SessionState::Delegating),
@@ -880,6 +965,7 @@ fn unknown_fields_are_tolerated() {
             skills: vec![],
             history_ref: None,
             backend_hint: None,
+            title: None,
         }
     );
 }
@@ -899,6 +985,7 @@ fn envelope_wrap_unwrap_roundtrip() {
         skills: vec![],
         history_ref: None,
         backend_hint: None,
+        title: None,
     };
     let env = Envelope::wrap(PROTOCOL_VERSION, "h-1", &msg).expect("wrap");
     assert_eq!(env.msg_type, "session.start");
@@ -1113,6 +1200,141 @@ fn golden_d19_workspace_and_session_list_messages() {
                       "createdAt":1780000000000i64,"updatedAt":1790000000000i64,
                       "endedAt":1790000000500i64,"summary":"收口"}]
         }),
+    );
+}
+
+#[test]
+fn golden_session_history_messages() {
+    // 2026-11-11 会话历史：工作台打开会话加载聊天记录（直读 WAL，跨端同会话）
+    use bbrt_protocol::HistoryItem;
+
+    golden(
+        &HostToRuntime::SessionHistory {
+            session_id: "sess-1".into(),
+        },
+        json!({"type":"session.history","sessionId":"sess-1"}),
+    );
+    golden(
+        &RuntimeToHost::SessionHistoryResult {
+            session_id: "sess-1".into(),
+            items: vec![
+                HistoryItem::User {
+                    text: "修复登录超时".into(),
+                },
+                HistoryItem::Tool {
+                    call_id: "c1".into(),
+                    tool: "read_file".into(),
+                    ok: Some(true),
+                    summary: Some("42 行".into()),
+                },
+                HistoryItem::Assistant {
+                    text: "已修复".into(),
+                },
+            ],
+        },
+        json!({
+            "type":"session.history.result",
+            "sessionId":"sess-1",
+            "items":[
+                {"kind":"user","text":"修复登录超时"},
+                {"kind":"tool","callId":"c1","tool":"read_file","ok":true,"summary":"42 行"},
+                {"kind":"assistant","text":"已修复"}
+            ]
+        }),
+    );
+    // 旧 WAL 降级行：tool 无 ok/summary（Option 缺席不序列化）
+    golden(
+        &HistoryItem::Tool {
+            call_id: "c9".into(),
+            tool: "bash".into(),
+            ok: None,
+            summary: None,
+        },
+        json!({"kind":"tool","callId":"c9","tool":"bash"}),
+    );
+}
+
+#[test]
+fn golden_user_message_thinking_levels() {
+    // 2026-11-11 思考三档轮级契约：low/medium/high；缺省缺席=medium 兼容旧口径
+    golden(
+        &HostToRuntime::UserMessage {
+            session_id: "sess-1".into(),
+            text: "深挖这个问题".into(),
+            attachments: vec![],
+            slash: None,
+            thinking: Some(ThinkingLevel::High),
+        },
+        json!({"type":"user.message","sessionId":"sess-1","text":"深挖这个问题",
+               "attachments":[],"thinking":"high"}),
+    );
+    golden(
+        &HostToRuntime::UserMessage {
+            session_id: "sess-1".into(),
+            text: "快速回答".into(),
+            attachments: vec![],
+            slash: None,
+            thinking: Some(ThinkingLevel::Low),
+        },
+        json!({"type":"user.message","sessionId":"sess-1","text":"快速回答",
+               "attachments":[],"thinking":"low"}),
+    );
+    // 旧格式（无 thinking 字段）反序列化 → None
+    let m: HostToRuntime = serde_json::from_str(
+        r#"{"type":"user.message","sessionId":"s","text":"t","attachments":[]}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        m,
+        HostToRuntime::UserMessage { thinking: None, .. }
+    ));
+}
+
+#[test]
+fn golden_session_title_and_interrupt() {
+    // 2026-11-11：session.start 带 title / session.rename / session.interrupt 双向契约
+    golden(
+        &HostToRuntime::SessionStart {
+            session_id: "sess-1".into(),
+            workspace: String::new(),
+            mode: PermissionMode::Ask,
+            model_policy: ModelPolicy::Auto,
+            model: None,
+            skills: vec![],
+            history_ref: None,
+            backend_hint: None,
+            title: Some("与张三的对话".into()),
+        },
+        json!({
+            "type":"session.start","sessionId":"sess-1","workspace":"","mode":"ask",
+            "modelPolicy":"auto","skills":[],"title":"与张三的对话"
+        }),
+    );
+    golden(
+        &HostToRuntime::SessionInterrupt {
+            session_id: "sess-1".into(),
+        },
+        json!({"type":"session.interrupt","sessionId":"sess-1"}),
+    );
+    golden(
+        &HostToRuntime::SessionRename {
+            session_id: "sess-1".into(),
+            title: "修复登录超时".into(),
+        },
+        json!({"type":"session.rename","sessionId":"sess-1","title":"修复登录超时"}),
+    );
+    golden(
+        &RuntimeToHost::SessionInterrupted {
+            session_id: "sess-1".into(),
+        },
+        json!({"type":"session.interrupted","sessionId":"sess-1"}),
+    );
+    golden(
+        &RuntimeToHost::SessionRenamed {
+            session_id: "sess-1".into(),
+            title: "修复登录超时".into(),
+        },
+        json!({"type":"session.renamed","sessionId":"sess-1","title":"修复登录超时"}),
     );
 }
 

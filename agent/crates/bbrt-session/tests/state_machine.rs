@@ -2,18 +2,20 @@
 //! 状态机为纯函数：超时/计数场景由调用方判定后驱动，测试中直接给定终态输入。
 
 use bbrt_session::state::{
-    accept_user_message, begin, begin_delegation, begin_fanout, complete_delegation,
-    complete_round, end, fail_delegation, fail_initialization, fail_unrecoverable, initialized,
-    join_subagents, pause, permission_exhausted, permission_resolved, request_permission,
-    request_review, resolve_review, resume, retry_from_error,
+    accept_user_message, begin, begin_delegation, begin_fanout, clarify_resolved,
+    complete_delegation, complete_round, end, fail_delegation, fail_initialization,
+    fail_unrecoverable, initialized, join_subagents, pause, permission_exhausted,
+    permission_resolved, request_clarify, request_permission, request_review, resolve_review,
+    resume, retry_from_error,
 };
 use bbrt_session::{SessionState, TransitionError};
 
-const ALL: [SessionState; 10] = [
+const ALL: [SessionState; 11] = [
     SessionState::Starting,
     SessionState::Idle,
     SessionState::Running,
     SessionState::WaitingPermission,
+    SessionState::WaitingClarify,
     SessionState::WaitingReview,
     SessionState::SubagentFanout,
     SessionState::Delegating,
@@ -91,6 +93,25 @@ fn row_8_waiting_permission_to_paused() {
     ok(
         permission_exhausted(SessionState::WaitingPermission),
         SessionState::Paused,
+    );
+}
+
+/// D20 #6b/#7b：running↔waiting_clarify（无超时，答/停即回 running）
+#[test]
+fn row_6b_7b_running_waiting_clarify() {
+    ok(
+        request_clarify(SessionState::Running),
+        SessionState::WaitingClarify,
+    );
+    ok(
+        clarify_resolved(SessionState::WaitingClarify),
+        SessionState::Running,
+    );
+    // 非法：非源态不得进入（如 idle 直接等澄清 / waiting_permission 直接回 running）
+    illegal(request_clarify(SessionState::Idle), SessionState::Idle);
+    illegal(
+        clarify_resolved(SessionState::WaitingPermission),
+        SessionState::WaitingPermission,
     );
 }
 

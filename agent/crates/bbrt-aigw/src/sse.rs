@@ -47,6 +47,9 @@ struct ChoiceDto {
 struct DeltaDto {
     #[serde(default)]
     content: Option<String>,
+    /// 思考增量（智谱 GLM 系/OpenAI 兼容字段，2026-11-11）
+    #[serde(default)]
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<ToolCallDeltaDto>,
 }
@@ -135,6 +138,11 @@ impl<R: Read> SseEventIterator<R> {
                 if let Some(content) = delta.content {
                     if !content.is_empty() {
                         events.push(StreamEvent::TextDelta { text: content });
+                    }
+                }
+                if let Some(reasoning) = delta.reasoning_content {
+                    if !reasoning.is_empty() {
+                        events.push(StreamEvent::ReasoningDelta { text: reasoning });
                     }
                 }
                 for tc in delta.tool_calls {

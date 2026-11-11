@@ -655,6 +655,7 @@ pub fn run_expert(
             model: assembled.model.clone(),
             messages: msgs,
             tools: expert_specs(ctx.tools.as_ref(), &assembled.tool_names),
+            thinking: None,
         };
         let Ok(stream) = ctx.model.chat(&req) else {
             break ExpertResult {

@@ -5,7 +5,7 @@
  * D18 内嵌 Agent 卡起移入 shared 供 im 落流卡/活动卡与 agent 工作台共用。
  */
 
-import { type ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 
 /** 行内标记降级渲染：`code` → <code>，**bold** → <strong> */
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
@@ -28,7 +28,9 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 
 const isTableCell = (c: string): boolean => c.length > 0 && /^:?-{2,}:?$/.test(c);
 
-export function MarkdownText({ text }: { text: string }) {
+/** memo（2026-11-11 卡顿修复）：流式期间只有正在生长的那条消息 text 变化，
+ * 历史消息 text 引用稳定 → 跳过全量 markdown 重解析（O(全列表×每token) 主线程杀手） */
+export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   const lines = text.split('\n');
   const blocks: ReactNode[] = [];
   let i = 0;
@@ -130,4 +132,4 @@ export function MarkdownText({ text }: { text: string }) {
     );
   }
   return <div className="agent-md">{blocks}</div>;
-}
+});

@@ -1,0 +1,109 @@
+/**
+ * 模型 + 思考强度选择器（2026-11-11 对齐 zcode：合并为单个 Popover 两段式）：
+ * - 上段「模型」：档位（快/强）+ 公司供应商 + 我的供应商，选中项行尾打勾
+ * - 下段「思考强度」：三档滑杆（渐变轨道 + 白色旋钮），轮级生效随下一条消息下发
+ * - 触发器 = 输入框左下角模型 chip（沿用 agent-model-chip 观感）
+ */
+
+import { useMemo } from 'react';
+import { Popover, Slider } from 'antd';
+import { Check, Sparkles } from 'lucide-react';
+import { MODEL_TIER_LABELS } from '../bridge/types';
+import type { AIProvider } from '../../admin/model/types';
+import { useAgentStore } from '../store/agent';
+
+type ThinkLevel = 'low' | 'medium' | 'high';
+
+const THINK_LEVELS: readonly ThinkLevel[] = ['low', 'medium', 'high'];
+const THINK_LABELS: Record<ThinkLevel, string> = { low: '低', medium: '中', high: '高' };
+const THINK_DESCS: Record<ThinkLevel, string> = {
+  low: '快速直答，不展开思考',
+  medium: '默认思考强度',
+  high: '深度思考，更大的思考预算',
+};
+
+interface ModelRow {
+  key: string;
+  name: string;
+  sub?: string;
+}
+
+interface ModelThinkPickerProps {
+  providers: { shared: AIProvider[]; mine: AIProvider[] };
+  /** 当前名义档位（override 存在时为名义值） */
+  policy: 'fast' | 'strong' | 'auto';
+  /** 直达引用 p:<providerId>:<model>（选中态判定优先） */
+  override?: string;
+  /** key='tier:fast'…=档位 / 'p:<id>:<model>'=直达引用（页面沿用模型菜单口径） */
+  onSelect: (key: string) => void;
+}
+
+export function ModelThinkPicker({ providers, policy, override, onSelect }: ModelThinkPickerProps) {
+  const thinkLevel = useAgentStore((s) => s.thinkLevel);
+  const setThinkLevel = useAgentStore((s) => s.setThinkLevel);
+
+  const sections = useMemo(() => {
+    const ofProvider = (p: AIProvider, prefix: string): ModelRow[] =>
+      p.models.map((m) => ({ key: `p:${p.id}:${m.id}`, name: m.label || m.id, sub: `${prefix}${p.name}` }));
+    return [
+      {
+        title: '模型',
+        rows: [
+          { key: 'tier:fast', name: '快', sub: 'bbw-fast · 公司默认快档' },
+          { key: 'tier:strong', name: '强', sub: 'bbw-strong · 公司默认强档' },
+        ] as ModelRow[],
+      },
+      ...(providers.shared.length > 0 ? [{ title: '公司供应商', rows: providers.shared.flatMap((p) => ofProvider(p, '')) }] : []),
+      ...(providers.mine.length > 0 ? [{ title: '我的供应商', rows: providers.mine.flatMap((p) => ofProvider(p, '我的 · ')) }] : []),
+    ];
+  }, [providers]);
+
+  const selectedKey = override ?? `tier:${policy}`;
+  const chipLabel = override ? (override.split(':')[2] ?? MODEL_TIER_LABELS[policy]) : MODEL_TIER_LABELS[policy];
+
+  const panel = (
+    <div className="agent-mt-panel">
+      {sections.map((sec) => (
+        <div key={sec.title} className="agent-mt-sec">
+          <div className="agent-mt-sec__title">{sec.title}</div>
+          {sec.rows.map((r) => (
+            <button
+              key={r.key}
+              type="button"
+              className={`agent-mt-row${r.key === selectedKey ? ' agent-mt-row--active' : ''}`}
+              onClick={() => onSelect(r.key)}
+              title={r.sub}
+            >
+              <span className="agent-mt-row__name">{r.name}</span>
+              {r.sub ? <span className="agent-mt-row__sub">{r.sub}</span> : null}
+              {r.key === selectedKey ? <Check size={14} className="agent-mt-row__check" aria-hidden /> : null}
+            </button>
+          ))}
+        </div>
+      ))}
+      <div className="agent-mt-divider" />
+      <div className="agent-mt-think-head">
+        <span className="agent-mt-sec__title">思考强度</span>
+        <span className="agent-mt-think-val">{THINK_LABELS[thinkLevel]}</span>
+      </div>
+      <Slider
+        className="agent-mt-slider"
+        min={0}
+        max={2}
+        step={1}
+        value={THINK_LEVELS.indexOf(thinkLevel)}
+        tooltip={{ open: false }}
+        onChange={(v) => setThinkLevel(THINK_LEVELS[v as 0 | 1 | 2])}
+      />
+      <div className="agent-mt-think-desc">{THINK_DESCS[thinkLevel]}</div>
+    </div>
+  );
+
+  return (
+    <Popover trigger="click" placement="topLeft" arrow={false} content={panel}>
+      <button type="button" className="agent-model-chip" title="模型与思考强度（思考强度随下一条消息生效）">
+        <Sparkles size={13} aria-hidden /> 模型 {chipLabel}
+      </button>
+    </Popover>
+  );
+}

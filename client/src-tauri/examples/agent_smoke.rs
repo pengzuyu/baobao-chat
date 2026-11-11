@@ -28,7 +28,7 @@ fn main() {
 
     let model = std::env::var("SMOKE_MODEL").ok();
     let sid = host
-        .start_session("/tmp", "ask", "strong", model.as_deref())
+        .start_session("/tmp", "ask", "strong", model.as_deref(), None)
         .expect("start_session");
     println!("== session: {sid}");
 

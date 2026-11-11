@@ -129,6 +129,27 @@ impl Store {
         Ok(())
     }
 
+    /// 会话重命名（2026-11-11：标题派生/手动改名；updated_at 随之刷新）。
+    /// 空白标题返回 Err 不落库；返回受影响行数（0=会话不存在）。
+    pub fn rename_session(&self, id: &str, title: &str) -> Result<u32, StoreError> {
+        let trimmed = title.trim();
+        if trimmed.is_empty() {
+            return Err(StoreError::InvalidInput(format!("空标题: {id}")));
+        }
+        let title = if trimmed.chars().count() > 60 {
+            let mut cut: String = trimmed.chars().take(60).collect();
+            cut.push('…');
+            cut
+        } else {
+            trimmed.to_string()
+        };
+        let n = self.conn.execute(
+            "UPDATE agent_session SET title = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, title, now_ms()],
+        )?;
+        Ok(n as u32)
+    }
+
     /// 按 id 精确查会话。
     pub fn get_session(&self, id: &str) -> Result<Option<SessionRow>, StoreError> {
         let mut stmt = self
@@ -262,6 +283,28 @@ pub struct SessionListRow {
 #[cfg(test)]
 mod tests {
     use crate::testutil;
+
+    /// 重命名：正常改名 / 截断超长 / 空白拒绝 / 不存在返回 0（2026-11-11）
+    #[test]
+    fn rename_session_rules() {
+        let (_dir, store) = testutil::open_store();
+        testutil::seed_session(&store, "sess-r1");
+        assert_eq!(store.rename_session("sess-r1", "与张三的对话").unwrap(), 1);
+        assert_eq!(
+            store.get_session("sess-r1").unwrap().unwrap().title,
+            "与张三的对话"
+        );
+        // 超长截断到 60 字符 + 省略号
+        let long: String = std::iter::repeat('长').take(80).collect();
+        assert_eq!(store.rename_session("sess-r1", &long).unwrap(), 1);
+        let got = store.get_session("sess-r1").unwrap().unwrap().title;
+        assert_eq!(got.chars().count(), 61, "60 字 + 省略号");
+        assert!(got.ends_with('…'));
+        // 空白拒绝
+        assert!(store.rename_session("sess-r1", "   ").is_err());
+        // 不存在：0 行受影响不报错
+        assert_eq!(store.rename_session("sess-无", "新名").unwrap(), 0);
+    }
 
     /// 插入后按 id 取回，13 个字段全量一致（含可空字段与外键归属）。
     #[test]

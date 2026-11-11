@@ -313,6 +313,7 @@ fn req_dispatched_to_handler_reply_carries_reply_to() {
                 text: "修复登录超时".into(),
                 attachments: vec![],
                 slash: None,
+                thinking: None,
             },
         )
         .unwrap(),

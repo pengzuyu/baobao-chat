@@ -17,8 +17,8 @@ use bbrt_session::executor::{
     CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview,
 };
 use bbrt_session::loop_runner::{
-    EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, SessionRunner,
-    MAX_STEPS,
+    ClarifyAnswer, EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse,
+    SessionRunner, MAX_STEPS,
 };
 use bbrt_session::manager::{ManagerError, SessionManager, StartParams};
 
@@ -191,7 +191,7 @@ fn happy_path_tool_call_then_answer() {
         ModelTier::Strong,
         None,
     );
-    let report = runner.run_turn("读一下 foo.txt", &d);
+    let report = runner.run_turn("读一下 foo.txt", &d, None);
 
     assert_eq!(report.steps, 2); // 工具轮 + 收尾轮
     assert_eq!(report.tool_calls, 1);
@@ -259,7 +259,7 @@ fn permission_allow_executes_and_denies_blocks() {
             edited: Some("{\"cmd\":\"echo hi\"}".into()),
         });
     });
-    let report = runner.run_turn("跑个命令", &d);
+    let report = runner.run_turn("跑个命令", &d, None);
     assert_eq!(report.tool_calls, 1);
     assert_eq!(
         *tools.executed.lock().unwrap(),
@@ -303,9 +303,191 @@ fn permission_allow_executes_and_denies_blocks() {
             edited: None,
         });
     });
-    let rep2 = r2.run_turn("再跑一个", &d2);
+    let rep2 = r2.run_turn("再跑一个", &d2, None);
     assert_eq!(tools2.executed.lock().unwrap().len(), 0, "拒绝后不执行");
     assert_eq!(rep2.tool_calls, 1);
+}
+
+/// D20 假模型：0=ask_user 工具调用轮（args 可脚本化，缺省合法提问），其余=纯文本收尾
+struct FakeClarifyModel {
+    calls: AtomicUsize,
+    ask_args: String,
+}
+impl ChatClient for FakeClarifyModel {
+    fn chat(
+        &self,
+        _req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if n == 0 {
+            vec![
+                Ok(StreamEvent::TextDelta {
+                    text: "我先问一下用户。".into(),
+                }),
+                Ok(StreamEvent::ToolCallBegin {
+                    index: 0,
+                    id: "call-1".into(),
+                    name: "ask_user".into(),
+                }),
+                Ok(StreamEvent::ToolCallDelta {
+                    index: 0,
+                    args_delta: self.ask_args.clone(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::ToolCalls,
+                    usage: Usage {
+                        prompt_tokens: 100,
+                        completion_tokens: 20,
+                    },
+                }),
+            ]
+        } else {
+            vec![
+                Ok(StreamEvent::TextDelta {
+                    text: "按你的选择继续。".into(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 120,
+                        completion_tokens: 8,
+                    },
+                }),
+            ]
+        };
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+const GOOD_ASK_ARGS: &str = r#"{"question":"用哪种方式修复？","header":"修复方式","options":[{"label":"方案A","description":"保守"},{"label":"方案B","description":"激进"}],"multi_select":false}"#;
+
+#[test]
+fn clarify_answered_continues_turn() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeClarifyModel {
+        calls: AtomicUsize::new(0),
+        ask_args: GOOD_ASK_ARGS.into(),
+    });
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let d = deps(model, tools.clone(), sink.clone(), None);
+    let mut runner = SessionRunner::new(
+        "s-cl1".into(),
+        "/tmp/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    let tx = runner.clarify_sender();
+    // 后台扮演宿主：300ms 后回答「方案A」+自由补充
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        let _ = tx.send(ClarifyAnswer {
+            question_id: "q-call-1".into(),
+            answers: vec!["方案A".into()],
+            free_text: Some("注意兼容旧配置".into()),
+        });
+    });
+    let report = runner.run_turn("修一下", &d, None);
+    assert_eq!(report.tool_calls, 1);
+    assert_eq!(
+        tools.executed.lock().unwrap().len(),
+        0,
+        "ask_user 不走 pipeline"
+    );
+    let evs = events_of(sink.as_ref());
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        SessionEvent::ClarifyRequest { question, multi_select, .. }
+            if question == "用哪种方式修复？" && !*multi_select
+    )));
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        SessionEvent::ClarifyResolved { decision, answers, .. }
+            if decision == "answered" && answers.contains("方案A") && answers.contains("兼容旧配置")
+    )));
+    // 回答作为工具结果回给模型（下一轮模型可见）
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        SessionEvent::ToolResult { summary, .. } if summary.contains("方案A")
+    )));
+}
+
+#[test]
+fn clarify_interrupt_cancels() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeClarifyModel {
+        calls: AtomicUsize::new(0),
+        ask_args: GOOD_ASK_ARGS.into(),
+    });
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let d = deps(model, tools.clone(), sink.clone(), None);
+    let mut runner = SessionRunner::new(
+        "s-cl2".into(),
+        "/tmp/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    // 后台 300ms 后置中断旗标（提问等待 1s 轮询感知 → cancelled 收口）
+    let flag = runner.interrupted.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        flag.store(true, Ordering::SeqCst);
+    });
+    let report = runner.run_turn("问了又停", &d, None);
+    assert!(report.interrupted, "用户中断收口");
+    assert!(events_of(sink.as_ref()).iter().any(|e| matches!(
+        e,
+        SessionEvent::ClarifyResolved { decision, .. } if decision == "cancelled"
+    )));
+}
+
+#[test]
+fn clarify_bad_args_blocked_no_request() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeClarifyModel {
+        calls: AtomicUsize::new(0),
+        ask_args: r#"{"question":"缺选项"}"#.into(), // options<2 → 9001
+    });
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let d = deps(model, tools.clone(), sink.clone(), None);
+    let mut runner = SessionRunner::new(
+        "s-cl3".into(),
+        "/tmp/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    let report = runner.run_turn("坏参数", &d, None);
+    assert_eq!(report.tool_calls, 1);
+    let evs = events_of(sink.as_ref());
+    assert!(
+        !evs.iter()
+            .any(|e| matches!(e, SessionEvent::ClarifyRequest { .. })),
+        "参数非法不发提问卡"
+    );
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        SessionEvent::ToolResult {
+            blocked_code: Some(9001),
+            ..
+        }
+    )));
 }
 
 #[test]
@@ -329,7 +511,7 @@ fn permission_timeout_counts_as_deny() {
         None,
     );
     runner.permission_timeout = Duration::from_millis(100);
-    let report = runner.run_turn("无人应答", &d);
+    let report = runner.run_turn("无人应答", &d, None);
     assert_eq!(tools.executed.lock().unwrap().len(), 0);
     assert_eq!(report.tool_calls, 1);
     assert!(events_of(sink.as_ref()).iter().any(
@@ -360,7 +542,7 @@ fn memory_heuristic_and_daily_report() {
         ModelTier::Fast,
         None,
     );
-    runner.run_turn("记住：本机服务端口用 8090", &d);
+    runner.run_turn("记住：本机服务端口用 8090", &d, None);
     let evs = events_of(sink.as_ref());
     assert!(evs
         .iter()
@@ -399,7 +581,7 @@ fn consecutive_failures_pause_loop() {
         ModelTier::Strong,
         None,
     );
-    let report = runner.run_turn("反复失败", &d);
+    let report = runner.run_turn("反复失败", &d, None);
     assert!(report.paused);
     assert!(events_of(sink.as_ref())
         .iter()
@@ -480,7 +662,7 @@ fn wal_records_monotonic_events() {
         ModelTier::Strong,
         None,
     );
-    runner.run_turn("记录一下", &d);
+    runner.run_turn("记录一下", &d, None);
     let wal = log.0.lock().unwrap();
     assert!(wal.iter().any(|(_, t)| t == "turn.start"));
     assert!(wal.iter().any(|(_, t)| t == "tool.call"));
@@ -582,13 +764,18 @@ fn compaction_triggers_on_long_history() {
     // 预填长历史
     let _ = MiniBudget;
     let long_text = "上下文压力测试内容。".repeat(120);
-    let report = runner.run_turn(&long_text, &d);
+    let report = runner.run_turn(&long_text, &d, None);
     let evs = events_of(sink.as_ref());
     let compacted = evs
         .iter()
         .any(|e| matches!(e, SessionEvent::Compaction { phase, .. } if phase == "done"));
-    // 小窗口下要么压缩成功要么 8010 暂停——两者都算路径可达
-    assert!(compacted || report.paused);
+    // 小窗口下要么压缩成功、要么 8010 错误卡落时间线——两者都算路径可达。
+    // 2026-11-11 口径：错误收口 idle（不再 paused 卡死），断言改为错误事件在流内
+    let errored_8010 = evs
+        .iter()
+        .any(|e| matches!(e, SessionEvent::Error { code: 8010, .. }));
+    assert!(compacted || errored_8010);
+    assert!(!report.paused, "错误不再收口 paused（resume 通道已移除）");
 }
 
 /// Summarizer trait 引用确认（编译期契约锚点）
@@ -641,7 +828,7 @@ fn max_steps_guard() {
         ModelTier::Fast,
         None,
     );
-    let report = runner.run_turn("无限工具循环", &d);
+    let report = runner.run_turn("无限工具循环", &d, None);
     assert!(report.steps <= MAX_STEPS);
     assert!(report.paused);
 }
@@ -846,7 +1033,7 @@ fn delegate_flow_accept_review() {
         std::thread::sleep(Duration::from_millis(120));
         let _ = dtx.send(DelegateHostMsg::Review { accept: true });
     });
-    let report = runner.run_turn("委派修一下构建", &d);
+    let report = runner.run_turn("委派修一下构建", &d, None);
     assert!(!report.paused);
     let evs = events_of(sink.as_ref());
     // 状态链：delegating → waiting_review → running（含 brief/事件/end/review 镜像）
@@ -902,7 +1089,7 @@ fn delegate_flow_reject_review() {
         std::thread::sleep(Duration::from_millis(120));
         let _ = dtx.send(DelegateHostMsg::Review { accept: false });
     });
-    let _ = runner.run_turn("再委派一次", &d);
+    let _ = runner.run_turn("再委派一次", &d, None);
     assert!(events_of(sink.as_ref())
         .iter()
         .any(|e| matches!(e, SessionEvent::DelegateReviewResolved { decision, .. } if decision == "reject")));
@@ -940,7 +1127,7 @@ fn delegate_without_launcher_blocked_8030() {
         None,
     );
     runner.permission_timeout = Duration::from_millis(200);
-    let _ = runner.run_turn("委派", &d);
+    let _ = runner.run_turn("委派", &d, None);
     assert!(events_of(sink.as_ref()).iter().any(|e| matches!(
         e,
         SessionEvent::ToolResult {
@@ -1020,7 +1207,7 @@ fn w2_lesson_after_repeated_tool_failures() {
         ModelTier::Strong,
         None,
     );
-    let _ = runner.run_turn("跑一下构建", &d);
+    let _ = runner.run_turn("跑一下构建", &d, None);
 
     // 同工具同错连续 ≥2 次 → feedback 教训自动落盘（带 Why/How to apply）。
     // D19：项目会话（/ws）的 feedback 教训落该项目分区，用户级不再出现
@@ -1070,7 +1257,7 @@ fn w3_distills_memories_on_session_end() {
         ModelTier::Strong,
         None,
     );
-    let _ = runner.run_turn("以后做事先给我方案再动手", &d);
+    let _ = runner.run_turn("以后做事先给我方案再动手", &d, None);
     runner.end(&d, "");
 
     let list = mem.knowledge().list();
@@ -1109,7 +1296,7 @@ fn w3_distill_swallows_unparseable_output() {
         ModelTier::Strong,
         None,
     );
-    let _ = runner.run_turn("帮我看下配置", &d);
+    let _ = runner.run_turn("帮我看下配置", &d, None);
     runner.end(&d, "");
     // 非法输出 → 静默跳过：无记忆条目、无 MemorySaved，但会话正常收口
     assert!(mem.knowledge().list().is_empty());
@@ -1174,7 +1361,7 @@ fn system_prompt_carries_memory_guidance_and_recall() {
         ModelTier::Strong,
         None,
     );
-    let _ = runner.run_turn("8090 端口起服务", &d);
+    let _ = runner.run_turn("8090 端口起服务", &d, None);
     let systems = model.seen_system.lock().unwrap().clone();
     let sys = systems.first().expect("应捕获 system 消息");
     assert!(sys.contains("memory_save"), "W1 工具引导应在 system 提示中");
@@ -1239,7 +1426,7 @@ fn delegate_wal_audit_trail() {
         std::thread::sleep(Duration::from_millis(120));
         let _ = dtx.send(DelegateHostMsg::Review { accept: true });
     });
-    let _ = runner.run_turn("委派修一下构建", &d);
+    let _ = runner.run_turn("委派修一下构建", &d, None);
     let types = log.0.lock().unwrap().clone();
     for expect in [
         "delegate.brief",
@@ -1289,7 +1476,7 @@ fn delegate_brief_timeout_wal() {
     );
     runner.permission_timeout = Duration::from_millis(200);
     // 不发 Launch → brief 超时
-    let _ = runner.run_turn("委派但没人确认", &d);
+    let _ = runner.run_turn("委派但没人确认", &d, None);
     let types = log.0.lock().unwrap().clone();
     assert!(
         types.iter().any(|t| t == "delegate.brief_timeout"),
@@ -1435,7 +1622,7 @@ fn model_override_routes_reference_and_falls_back() {
         ModelTier::Strong,
         Some("p:1:glm-5.3".into()),
     );
-    let _ = runner.run_turn("你好", &d);
+    let _ = runner.run_turn("你好", &d, None);
     assert_eq!(*cap.models.lock().unwrap(), vec!["p:1:glm-5.3".to_string()]);
 
     let cap2 = Arc::new(CapturingModel {
@@ -1449,7 +1636,7 @@ fn model_override_routes_reference_and_falls_back() {
         ModelTier::Strong,
         None,
     );
-    let _ = runner2.run_turn("你好", &d2);
+    let _ = runner2.run_turn("你好", &d2, None);
     assert_eq!(*cap2.models.lock().unwrap(), vec!["bbw-strong".to_string()]);
 }
 

@@ -12,6 +12,7 @@
 //! 脱敏统一由 pipeline 第 7 步完成（D11 §6），本层不重复打码——例外是 violation
 //! detail（落库/展示前即打码，见 [`ExecEnv::record_violation`]）。
 
+pub mod ask_user;
 pub mod cmd;
 pub mod fs;
 pub mod git;
@@ -161,4 +162,6 @@ pub(crate) fn register_all(registry: &mut ToolRegistry) {
     registry.register(memory::coding_delegate_def());
     registry.register(memory::subagent_adjust_def());
     registry.register(memory::subagent_cancel_def());
+    // D20：提问卡（loop_runner 拦截，仅注册可发现性）
+    registry.register(ask_user::ask_user_def());
 }

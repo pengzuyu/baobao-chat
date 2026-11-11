@@ -35,6 +35,8 @@ pub fn merge_stream_events(events: Vec<StreamEvent>) -> MergedTurn {
     for event in events {
         match event {
             StreamEvent::TextDelta { text: delta } => text.push_str(&delta),
+            // 思考增量不并入正文（merge 只收最终产物；思考增量在流式层即时外发）
+            StreamEvent::ReasoningDelta { .. } => {}
             StreamEvent::ToolCallBegin { index, id, name } => {
                 ensure_slot(&mut slots, index);
                 slots[index] = (id, name, String::new());

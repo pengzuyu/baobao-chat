@@ -4,7 +4,7 @@
  * （通话入口随 rtc 域 2026-11 产品瘦身移除）
  */
 
-import { ArrowLeft, Info, MoreHorizontal } from 'lucide-react';
+import { ArrowLeft, Bot, Info, MoreHorizontal } from 'lucide-react';
 import type { Conversation } from '../model/types';
 
 interface ChatHeaderProps {
@@ -15,10 +15,12 @@ interface ChatHeaderProps {
   typing?: string;
   /** S 档两级导航：返回列表 */
   onBack?: () => void;
+  /** 打开本会话的 Agent 工作台会话（2026-11-11：无 embedded 会话则新建后跳转） */
+  onOpenAgent?: () => void;
   onToggleDetail: () => void;
 }
 
-export function ChatHeader({ conv, typing, peerStatus, onBack, onToggleDetail }: ChatHeaderProps) {
+export function ChatHeader({ conv, typing, peerStatus, onBack, onOpenAgent, onToggleDetail }: ChatHeaderProps) {
   const typeName = conv.type === 1 ? '' : conv.type === 2 ? ` (${conv.memberCount})` : ' · 广播群';
 
   return (
@@ -40,6 +42,11 @@ export function ChatHeader({ conv, typing, peerStatus, onBack, onToggleDetail }:
         {typing ? <span className="chat-header__typing">{typing}</span> : null}
       </span>
       <div className="chat-header__actions">
+        {onOpenAgent ? (
+          <button className="icon-btn" onClick={onOpenAgent} title="打开本会话的 Agent 工作台会话">
+            <Bot size={17} />
+          </button>
+        ) : null}
         <button className="icon-btn" onClick={onToggleDetail} title="会话信息">
           <Info size={17} />
         </button>

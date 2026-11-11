@@ -5,14 +5,16 @@
  * - 组内行复用 ToolCard（自带运行中展开/落定折叠）
  */
 
-import { useEffect, useState } from 'react';
+import { memo,  useEffect, useState } from 'react';
 import { ChevronDown, Wrench } from 'lucide-react';
 import type { StreamItem } from '../store/agent';
 import { ToolCard } from './ToolCard';
 
 type ToolItem = Extract<StreamItem, { kind: 'tool' }>;
 
-export function ToolGroup({ items }: { items: ToolItem[] }) {
+/** memo + 逐项比较（2026-11-11 卡顿修复）：renderStreamItems 每次渲染重建
+ * toolRun 数组（引用必变），须比内容而非引用才能跳过重渲 */
+export const ToolGroup = memo(function ToolGroup({ items }: { items: ToolItem[] }) {
   const running = items.some((it) => !it.result);
   const [open, setOpen] = useState(running);
   useEffect(() => {
@@ -37,4 +39,4 @@ export function ToolGroup({ items }: { items: ToolItem[] }) {
       ) : null}
     </div>
   );
-}
+});

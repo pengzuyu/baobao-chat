@@ -361,6 +361,7 @@ fn dispatch(
             model_policy,
             model,
             history_ref,
+            title,
             ..
         } => {
             let tier = match model_policy {
@@ -405,7 +406,8 @@ fn dispatch(
                     mode: sec_mode,
                     model_policy: tier,
                     model_override: model,
-                    title: session_id.clone(),
+                    // 2026-11-11：宿主可带初始标题（embedded 会话来源名）；缺省=库默认口径
+                    title: title.unwrap_or_else(|| "新会话".into()),
                     restored,
                 },
             ) {
@@ -424,13 +426,46 @@ fn dispatch(
             }
         }
         HostToRuntime::UserMessage {
-            session_id, text, ..
+            session_id,
+            text,
+            thinking,
+            ..
         } => {
             let mgr2 = mgr.clone();
+            let store2 = store.clone();
             let sid = session_id.clone();
             // turn 独立线程：流式事件经共享 stdout 即时外发
             std::thread::spawn(move || {
-                let _ = mgr2.run_turn(&sid, &text);
+                let report = match mgr2.run_turn(&sid, &text, thinking) {
+                    Ok(r) => r,
+                    // 会话复活（2026-11-11 用户裁决：会话=上下文，无不可逆终态）：
+                    // ended/error/重启清扫后的会话 input 即复活——从库行还原参数、
+                    // 重放事件镜像续上下文后再投本轮
+                    Err(bbrt_session::ManagerError::NotFound(_)) => {
+                        match revive_session(&store2, &mgr2, &sid) {
+                            Ok(true) => match mgr2.run_turn(&sid, &text, thinking) {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    emit_turn_error(&sid, &e.to_string());
+                                    return;
+                                }
+                            },
+                            Ok(false) => {
+                                emit_turn_error(&sid, "会话不存在（库中无行）");
+                                return;
+                            }
+                            Err(e) => {
+                                emit_turn_error(&sid, &e);
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        emit_turn_error(&sid, &e.to_string());
+                        return;
+                    }
+                };
+                let _ = report;
             });
             // 回执=状态镜像（协议无独立 ack 变体，D11 §4 user.message"接受入队"）
             Some(RuntimeToHost::SessionStateReport {
@@ -469,19 +504,77 @@ fn dispatch(
             }
             None // 循环层的 PermissionResolved 镜像事件即回显
         }
-        HostToRuntime::SessionPause { session_id } => {
-            let _ = mgr.interrupt(&session_id);
-            Some(RuntimeToHost::SessionStateReport {
-                session_id,
-                state: bbrt_protocol::SessionState::Paused,
-                reason: "user-pause".into(),
-            })
+        // D20 澄清回答：按 question→session 路由表投递，循环层镜像事件即回显
+        HostToRuntime::ClarifyResponse {
+            question_id,
+            answers,
+            free_text,
+        } => {
+            let ans = bbrt_session::loop_runner::ClarifyAnswer {
+                question_id: question_id.clone(),
+                answers,
+                free_text,
+            };
+            if let Some(sid) = sink.route_of(&question_id) {
+                let _ = mgr.respond_clarify(&sid, ans);
+            }
+            None
         }
+        // 2026-11-11：中断当前轮（取代旧 session.pause 用户通道）——置旗即回执，
+        // 实际中断在流内/工具间检查点生效，收口以 session.state(idle) 上行为准
+        HostToRuntime::SessionInterrupt { session_id } => {
+            let _ = mgr.interrupt(&session_id);
+            Some(RuntimeToHost::SessionInterrupted { session_id })
+        }
+        // 2026-11-11：会话重命名——直接落库（会话不须在运行态；历史会话也可改名）
+        HostToRuntime::SessionRename { session_id, title } => match store.lock() {
+            Ok(guard) => match guard.rename_session(&session_id, &title) {
+                Ok(0) => Some(RuntimeToHost::Error {
+                    code: 8001,
+                    message: format!("会话不存在: {session_id}"),
+                    fatal: false,
+                    session_id: Some(session_id.clone()),
+                }),
+                Ok(_) => Some(RuntimeToHost::SessionRenamed {
+                    session_id,
+                    title: title.trim().chars().take(60).collect::<String>()
+                        + if title.trim().chars().count() > 60 {
+                            "…"
+                        } else {
+                            ""
+                        },
+                }),
+                Err(e) => Some(RuntimeToHost::Error {
+                    code: 9001,
+                    message: e.to_string(),
+                    fatal: false,
+                    session_id: Some(session_id),
+                }),
+            },
+            Err(_) => Some(RuntimeToHost::Error {
+                code: 9001,
+                message: "store 锁中毒".into(),
+                fatal: false,
+                session_id: Some(session_id),
+            }),
+        },
         HostToRuntime::SessionEnd { session_id, .. } => {
             let _ = mgr.end(&session_id, "");
             Some(RuntimeToHost::SessionEnded {
                 session_id,
                 summary: String::new(),
+            })
+        }
+        // 会话历史（工作台打开会话加载聊天记录）：直读 WAL——会话不须在运行态，
+        // 历史/结束会话同样可查（与 rename 直落库同口径）
+        HostToRuntime::SessionHistory { session_id } => {
+            let events = match store.lock() {
+                Ok(g) => g.events_after(&session_id, 0, 10_000).unwrap_or_default(),
+                Err(_) => vec![],
+            };
+            Some(RuntimeToHost::SessionHistoryResult {
+                items: bbrt_session::recovery::wal_history(&events),
+                session_id,
             })
         }
         HostToRuntime::MemoryList {
@@ -951,6 +1044,78 @@ fn send(ids: &mut IdGen, msg: &RuntimeToHost) {
     if let Ok(env) = Envelope::wrap(1, format!("r-{}", ids.next_id()), msg) {
         write_env(&env);
     }
+}
+
+/// turn 线程内错误上报（无 IdGen 借用权——id 用纳秒时钟保证唯一；stdout 全局锁线程安全）
+fn emit_turn_error(session_id: &str, message: &str) {
+    let env = Envelope::wrap(
+        1,
+        format!(
+            "r-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ),
+        &RuntimeToHost::Error {
+            code: 8001,
+            message: message.to_string(),
+            fatal: false,
+            session_id: Some(session_id.to_string()),
+        },
+    );
+    if let Ok(env) = env {
+        write_env(&env);
+    }
+}
+
+/// 会话复活（2026-11-11「会话不死」裁决）：库里有行=有历史上下文——行还原
+/// workspace/mode/模型/标题，重放事件镜像后经 manager.start 重建运行对象。
+/// Ok(false)=库中无行（真·未知会话）；Err=锁/IO 失败细节。
+fn revive_session(
+    store: &Arc<Mutex<Store>>,
+    mgr: &SessionManager,
+    session_id: &str,
+) -> Result<bool, String> {
+    let guard = store.lock().map_err(|e| format!("store 锁中毒: {e}"))?;
+    let row = match guard.get_session(session_id).map_err(|e| e.to_string())? {
+        Some(r) => r,
+        None => return Ok(false), // 库中无行=真未知会话，不复活
+    };
+    let ws_path = match &row.workspace_id {
+        Some(wid) => guard
+            .get_workspace(wid)
+            .ok()
+            .flatten()
+            .map(|w| w.path)
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    let replay = bbrt_session::recover(&guard, session_id);
+    drop(guard);
+    let mode = match row.mode.as_str() {
+        "auto-edit" => bbrt_sec::gate::PermissionMode::AutoEdit,
+        "full-auto" => bbrt_sec::gate::PermissionMode::FullAuto,
+        _ => bbrt_sec::gate::PermissionMode::Ask,
+    };
+    let tier = if row.model_policy == "fast" {
+        ModelTier::Fast
+    } else {
+        ModelTier::Strong
+    };
+    mgr.start(
+        session_id.to_string(),
+        StartParams {
+            workspace: ws_path,
+            mode,
+            model_policy: tier,
+            model_override: row.model_override,
+            title: row.title,
+            restored: Some(replay),
+        },
+    )
+    .map(|_| true)
+    .map_err(|e| e.to_string())
 }
 
 fn to_lite(s: &bbrt_memory::DailyStats) -> bbrt_protocol::DailyStatsLite {

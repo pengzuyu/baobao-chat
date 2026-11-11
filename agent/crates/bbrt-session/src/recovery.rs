@@ -6,7 +6,8 @@
 //! D11 开放问题 6 已登记单写收敛方向）。
 
 use bbrt_context::Round;
-use bbrt_store::Store;
+use bbrt_protocol::HistoryItem;
+use bbrt_store::{EventRow, Store};
 
 use crate::events::SessionEvent;
 use crate::state::{self, SessionState};
@@ -172,6 +173,13 @@ pub fn recover(store: &Store, session_id: &str) -> ReplayReport {
                 pending_permission = None;
                 report.final_state = SessionState::Running;
             }
+            // D20：崩溃时未决提问与审批同口径作废（重放只还原状态，不重挂提问卡）
+            "clarify.request" => {
+                report.final_state = SessionState::WaitingClarify;
+            }
+            "clarify.resolved" => {
+                report.final_state = SessionState::Running;
+            }
             "turn.end" => {
                 in_turn = false;
                 if let Some(text) = pending_user.take() {
@@ -198,7 +206,7 @@ pub fn recover(store: &Store, session_id: &str) -> ReplayReport {
         }
         if matches!(
             report.final_state,
-            SessionState::Running | SessionState::WaitingPermission
+            SessionState::Running | SessionState::WaitingPermission | SessionState::WaitingClarify
         ) {
             report.final_state =
                 state::pause(SessionState::Running).unwrap_or(SessionState::Paused);
@@ -216,5 +224,151 @@ pub fn ready_event(session_id: &str, report: &ReplayReport) -> SessionEvent {
         session_id: session_id.to_string(),
         restored: report.found,
         replayed_events: report.replayed_events,
+    }
+}
+
+/// WAL → 会话历史条目（session.history 回执投影，与 recover 同一数据源）。
+/// user.text/assistant.done 落原文；tool.call+tool.result 按 call_id 配对
+/// （ok/summary 旧行可缺 → name-only）。审批/澄清卡是即时交互不入历史。
+pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
+    let mut items: Vec<HistoryItem> = Vec::new();
+    for ev in events {
+        let payload: serde_json::Value = match serde_json::from_str(&ev.payload) {
+            Ok(v) => v,
+            Err(_) => continue, // 坏行跳过（历史加载不因单行损坏整体失败）
+        };
+        let str_field = |key: &str| {
+            payload
+                .get(key)
+                .and_then(|x| x.as_str())
+                .map(str::to_string)
+        };
+        match ev.type_.as_str() {
+            "user.text" => {
+                if let Some(text) = str_field("text") {
+                    items.push(HistoryItem::User { text });
+                }
+            }
+            // 旧 WAL 行无 text → 跳过（无法渲染的空 assistant 轮）
+            "assistant.done" => {
+                if let Some(text) = str_field("text") {
+                    if !text.is_empty() {
+                        items.push(HistoryItem::Assistant { text });
+                    }
+                }
+            }
+            "tool.call" => items.push(HistoryItem::Tool {
+                call_id: str_field("call_id").unwrap_or_default(),
+                tool: str_field("tool").unwrap_or_default(),
+                ok: None,
+                summary: None,
+            }),
+            "tool.result" => {
+                let call_id = str_field("call_id").unwrap_or_default();
+                // 从尾向找同 call_id 未配对的 tool 行（同 call_id 不会重复出现）
+                if let Some(HistoryItem::Tool { ok, summary, .. }) =
+                    items.iter_mut().rev().find(|it| matches!(it, HistoryItem::Tool { call_id: c, ok: None, .. } if *c == call_id))
+                {
+                    *ok = payload.get("ok").and_then(|x| x.as_bool());
+                    *summary = str_field("summary");
+                }
+            }
+            _ => {}
+        }
+    }
+    items
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    fn ev(seq: i64, type_: &str, payload: &str) -> EventRow {
+        EventRow {
+            id: seq,
+            session_id: "sess-1".into(),
+            seq,
+            type_: type_.into(),
+            payload: payload.into(),
+            created_at: 0,
+            run_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn wal_history_projects_roundtrip_items() {
+        let events = vec![
+            ev(1, "session.start", r#"{"workspace":""}"#),
+            ev(2, "turn.start", r#"{"text_len":6}"#),
+            ev(3, "user.text", r#"{"text":"修复登录"}"#),
+            ev(4, "tool.call", r#"{"call_id":"c1","tool":"read_file"}"#),
+            ev(
+                5,
+                "tool.result",
+                r#"{"call_id":"c1","ok":true,"summary":"42 行"}"#,
+            ),
+            ev(
+                6,
+                "assistant.done",
+                r#"{"finish":"stop","usage_in":10,"usage_out":5,"text":"已修复"}"#,
+            ),
+            ev(
+                7,
+                "turn.end",
+                r#"{"steps":1,"paused":false,"interrupted":false}"#,
+            ),
+        ];
+        assert_eq!(
+            wal_history(&events),
+            vec![
+                HistoryItem::User {
+                    text: "修复登录".into()
+                },
+                HistoryItem::Tool {
+                    call_id: "c1".into(),
+                    tool: "read_file".into(),
+                    ok: Some(true),
+                    summary: Some("42 行".into()),
+                },
+                HistoryItem::Assistant {
+                    text: "已修复".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn wal_history_degrades_gracefully_on_legacy_rows() {
+        // 旧 WAL：assistant.done 无 text、tool.result 无 ok/summary → 跳过/name-only
+        let events = vec![
+            ev(1, "user.text", r#"{"text":"旧会话问题"}"#),
+            ev(
+                2,
+                "assistant.done",
+                r#"{"finish":"stop","usage_in":1,"usage_out":1}"#,
+            ),
+            ev(3, "tool.call", r#"{"call_id":"c9","tool":"bash"}"#),
+            ev(4, "tool.result", r#"{"call_id":"c9"}"#),
+            ev(
+                5,
+                "assistant.done",
+                r#"{"finish":"stop","usage_in":1,"usage_out":1,"text":""}"#,
+            ),
+            ev(6, "not.a.type", "{bad json"),
+        ];
+        assert_eq!(
+            wal_history(&events),
+            vec![
+                HistoryItem::User {
+                    text: "旧会话问题".into()
+                },
+                HistoryItem::Tool {
+                    call_id: "c9".into(),
+                    tool: "bash".into(),
+                    ok: None,
+                    summary: None,
+                },
+            ]
+        );
     }
 }

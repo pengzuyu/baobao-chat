@@ -21,7 +21,7 @@ import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
 import { AgentReportsPage } from '../features/agent/pages/AgentReportsPage';
-import { useAgentStore } from '../features/agent/store/agent';
+import { ensureAgentEventSubscribed, useAgentStore } from '../features/agent/store/agent';
 import { isLocallyReported, notifyAgentDone } from '../features/agent/bridge/notify';
 import { AdminLayout } from '../features/admin/pages/AdminLayout';
 import { DashboardPage } from '../features/admin/pages/DashboardPage';
@@ -84,6 +84,22 @@ function useEmergencyStopHotkey(): void {
         // 多屏提示（OQ-C30）：主窗 toast + 系统通知（免打扰不拦——紧急语义优先于偏好闸门）
         window.dispatchEvent(new CustomEvent('bbw:toast', { detail: '已触发紧急停止：Agent 进程终止、未决审批作废' }));
         void sendSystemNotification('BaobaoWork · 紧急停止', 'Agent 进程已终止，未决审批已作废');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+}
+
+/** dev 刷新键（2026-11-11 真机排查补）：Tauri webview 无原生 ⌘R——卡流/旧模块
+ *  时手动整页重载（生产构建不挂）。⌘R / ⌘⇧R / Ctrl 系同构 */
+function useDevReloadHotkey(): void {
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        window.location.reload();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -180,7 +196,13 @@ function useWsLifecycle(): void {
 export function App() {
   useWsLifecycle();
   useEmergencyStopHotkey();
+  useDevReloadHotkey();
   useGlobalToast();
+  // agent 事件监听宿主化（2026-11-11 根因修复）：App 挂载即注册——不再依赖
+  // 懒 init，任何整页重载/HMR 后恒有监听（否则壳泵照发、webview 无人听）
+  useEffect(() => {
+    ensureAgentEventSubscribed();
+  }, []);
 
   return (
     <BrowserRouter>

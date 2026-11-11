@@ -167,6 +167,7 @@ mod tests {
                 tool_call_id: None,
             }],
             tools: vec![],
+            thinking: None,
         }
     }
 

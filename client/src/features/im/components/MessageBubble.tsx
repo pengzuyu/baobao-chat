@@ -12,16 +12,21 @@
  * - 本地态尾标：sending 灰钟 → sent ✓ → 对方已读 ✓✓（msg.receipt，04 篇 §4.2）；failed 红叹号（点击重试，INT-IM-01a）
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAgentStore } from '../../agent/store/agent';
+import { getAgentBridge } from '../../agent/bridge';
+import { currentRoundItems, roundQuestionOf, stagesFromStream } from '../agent/embedded';
 import {
   AlertCircle,
   ArrowDownToLine,
   Bot,
   Check,
   CheckCheck,
+  ChevronDown,
   Clock3,
   FileText,
   Image as ImageIcon,
+  Lightbulb,
   ListOrdered,
   Mic,
   MoreHorizontal,
@@ -32,7 +37,7 @@ import {
   Video,
 } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
-import { AgentProcessCard, type AgentCardBody } from '../../../shared/components/AgentProcessCard';
+import { AgentProcessCard, agentStatsText, type AgentCardBody } from '../../../shared/components/AgentProcessCard';
 import { getErrorText } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
 import { digestOf } from '../store/im';
@@ -109,8 +114,6 @@ interface MessageBubbleProps {
   onSelectToggle?: (m: Message) => void;
   /** 打开已读回执面板（API-IM-06：群聊消息尾标点击；单聊不传=尾标不可点） */
   onOpenReceipts?: (m: Message) => void;
-  /** 内嵌 Agent 卡「在我端继续」（D18 §3.3：接收者新建自己的 embedded 会话并注入本卡结论） */
-  onAgentCardContinue?: (body: AgentCardBody) => void;
   /** 打开统一右键菜单（INT-IM-25）：右键/长按 500ms/悬浮条 ⋯ 三入口共用；
    *  system（仅复制）可开、撤回占位不可开——由 hasAnyMsgAction 判定 */
   onOpenMsgMenu?: (m: Message, at: MenuAnchor) => void;
@@ -721,6 +724,10 @@ function ImageCard({ body }: { body: FileMessageBody }) {
         src={objUrl}
         alt={body.name ?? '图片'}
         title={body.name}
+        /* 预留宽高（2026-11-11）：blob 加载前浏览器即可按比例占位——首屏跳底后
+         * 图片加载不再撑高把视口顶离最新消息（.msg-image max-width/height + object-fit 截幅） */
+        width={body.width || undefined}
+        height={body.height || undefined}
         onClick={(e) => {
           e.stopPropagation();
           setZoom(true);
@@ -754,7 +761,6 @@ export function MessageBubble({
   onSelectToggle,
   onOpenMsgMenu,
   onOpenReceipts,
-  onAgentCardContinue,
 }: MessageBubbleProps) {
   /** 完整表情选择器 popover（INT-IM-25：悬浮条「更多表情」真选择器，替换旧固定🎉） */
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
@@ -882,7 +888,11 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
       ) : null}
       <Avatar name={message.senderName} size={32} />
       <div className="msg-row__body">
-        {mine ? null : <span className="msg-row__sender">{message.senderName}</span>}
+        {/* agent_card 恒左对齐（2026-11-11）：本人发起的卡不显示发送者名（回答主体是
+         * Agent，卡头已标识）；他人卡保留名字（群聊归属有意义） */}
+        {mine || (message.type === 'agent_card' && message.senderId === myUid) ? null : (
+          <span className="msg-row__sender">{message.senderName}</span>
+        )}
         <div className="msg-row__bubble-wrap">
           {isText ? (
             <span className={`bubble ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
@@ -910,24 +920,7 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
             <VideoCard body={videoBody} />
           ) : message.type === 'agent_card' && isAgentCardBody(message.body) ? (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
-              <AgentProcessCard
-                body={message.body as AgentCardBody}
-                testId="agent-card-msg"
-                actions={
-                  onAgentCardContinue ? (
-                    <button
-                      type="button"
-                      className="agc-act-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onAgentCardContinue(message.body as AgentCardBody);
-                      }}
-                    >
-                      在我端继续
-                    </button>
-                  ) : undefined
-                }
-              />
+              <AgentCardMsg body={message.body as AgentCardBody} />
             </span>
           ) : (
             <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
@@ -1007,5 +1000,248 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
         {mine ? <StateTag message={message} onRetry={onRetry} peerReadSeq={peerReadSeq} onOpenReceipts={onOpenReceipts} /> : null}
       </div>
     </div>
+  );
+}
+
+/** Agent 会话运行态集合（落流卡 live 判定；与工作台 TURN_ACTIVE_STATUSES 同口径） */
+const AGENT_LIVE_STATUSES = new Set<string>([
+  'running',
+  'waiting_permission',
+  'waiting_clarify',
+  'waiting_review',
+  'subagent_fanout',
+  'delegating',
+]);
+
+/** 落流卡完成后保持展开的宽限（2026-11-11 用户口径）：到点后台自动折叠成摘要卡
+ *  （无倒计时 UI）；期间用户再向 agent 发消息=新回合开始，旧卡立即折叠 */
+const AGC_COLLAPSE_GRACE_MS = 120_000;
+
+/** 结论 markdown → 纯文本（折叠摘要正文用）：剥标题/代码围栏/表格分隔行与常见
+ *  行内记号后拼接，行数由 CSS 两行截断收口 */
+function agentCardPlainText(md: string): string {
+  return md
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#') && !l.startsWith('```') && !/^\|[-| :]+\|?$/.test(l))
+    .map((l) => l.replace(/^[-*+]\s+/, '').replace(/[*`>_]+/g, ''))
+    .join(' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/** 落流卡（2026-11-11 改版）：
+ * - 实时投影（活动卡取消后本卡即实时界面）：本会话运行中且本卡为当前轮
+ *   （landed running）→ 直接以 agent store 流投影渲染（随 delta 平滑流式；
+ *   写路径 PATCH 仍走阶段边界——读/写路径解耦，此前共用粗签名致文本一次性全出）
+ * - 状态校正兜底：落流停在 running 而会话实际已收口（无人 PATCH 场景）→ 按 done 渲染
+ * - 摘要折叠（2026-11-11 用户拍板，仅 IM 聊天页、工作台不走本组件）：收口后折叠为
+ *   迷你卡——首行「Agent 状态：本轮问题」+ 思考过程行 + 正文两行截断，等宽统一、
+ *   点开完整内容；运行中恒展开，完成起 2 分钟宽限到点自动折叠，宽限期内新回合
+ *   开始（流内 user 条目增加）立即折叠，重新进入聊天（重挂）即折叠；手动展开/
+ *   收起清宽限定时器（手动优先）
+ * - 应答条（仅回答 agent 的交互）：待审批黄条 + D20 提问蓝条——与聊天页弹框同感
+ * - 发起交互一律走输入框（🤖 按钮//agent 命令/@Agent 前缀）；进工作台=ChatHeader 🤖 */
+function AgentCardMsg({ body }: { body: AgentCardBody }) {
+  // 订阅只取引用（2026-11-11 卡顿修复）：此前 4 个 selector 内各做 O(流长) 扫描，
+  // store 每次 set（流式期每 delta）都会执行——聊天里每轮一张历史卡，成本 ×卡数；
+  // 现 selector 全部 O(1) 取引用，派生计算移入 useMemo（仅相关引用变化时重算）
+  const sid = body.session_id ?? null;
+  const sessions = useAgentStore((s) => (sid ? s.sessions : undefined));
+  // 本会话事件流（运行中实时投影数据源；引用仅随本会话事件变化）
+  const stream = useAgentStore((s) => (sid ? s.streams[sid] : undefined));
+  const respondPermission = useAgentStore((s) => s.respondPermission);
+  const respondClarifyAction = useAgentStore((s) => s.respondClarify);
+  // 会话真实运行态：会话行运行态，或回合权威口径仍开着（最后一条 user 未收口
+  // turnDoneAt 且已有回答事件）——后者兜底会话行缺失/迟到（重载竞态），与
+  // EmbeddedAgentSync 收口判定同口径
+  const live = useMemo(() => {
+    if (!sid) return false;
+    const m = sessions?.find((x) => x.id === sid);
+    if (m && AGENT_LIVE_STATUSES.has(m.status)) return true;
+    if (!stream) return false;
+    let lastUser: { turnDoneAt?: number } | null = null;
+    let hasReply = false;
+    for (const it of stream) {
+      if (it.kind === 'user') lastUser = it;
+      else hasReply = true;
+    }
+    return !!lastUser && !lastUser.turnDoneAt && hasReply;
+  }, [sid, sessions, stream]);
+  // 待审批（三端同步）：该会话最近一条未决 permission
+  const pendingPerm = useMemo(() => {
+    if (!stream) return null;
+    for (let i = stream.length - 1; i >= 0; i -= 1) {
+      const it = stream[i];
+      if (it.kind === 'permission' && it.outcome === null) return it;
+    }
+    return null;
+  }, [stream]);
+  // D20 待决提问（三端同步同审批口径：卡内快捷单选作答，弹框承载多选/补充）
+  const pendingClarify = useMemo(() => {
+    if (!stream) return null;
+    for (let i = stream.length - 1; i >= 0; i -= 1) {
+      const it = stream[i];
+      if (it.kind === 'clarify' && it.answer === null) return it;
+    }
+    return null;
+  }, [stream]);
+  const respondClarify = (answers: string[]) => {
+    if (pendingClarify && pendingClarify.kind === 'clarify') {
+      respondClarifyAction(pendingClarify.request.questionId, answers);
+    }
+  };
+  // 实时投影：仅当前轮（本卡 status=running）注入——历史轮卡（done）保持落流终态；
+  // 投影源=当前轮切片（最后一条 user 之后，2026-11-11 修「新卡带上一轮答案」）
+  const liveProj = useMemo<AgentCardBody | null>(() => {
+    if (!live || body.status !== 'running' || !stream) return null;
+    const { stages, sources, rounds } = stagesFromStream(currentRoundItems(stream));
+    return { ...body, stages, sources, rounds, question: roundQuestionOf(stream) ?? body.question };
+  }, [live, body, stream]);
+  const display: AgentCardBody =
+    liveProj ?? (body.status === 'running' && !live ? { ...body, status: 'done', ended_at: body.ended_at ?? Date.now() } : body);
+
+  // ---- 一行折叠态（仅 IM；口径见组件头注）----
+  const done = display.status !== 'running';
+  const [expanded, setExpanded] = useState(() => !done);
+  const graceTimerRef = useRef<number | null>(null);
+  const clearGrace = useCallback(() => {
+    if (graceTimerRef.current != null) {
+      clearTimeout(graceTimerRef.current);
+      graceTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => clearGrace, [clearGrace]); // 卸载清定时器
+  // running→done 转换（终态 PATCH/死会话校正）：起 2 分钟宽限，到点后台折叠
+  const prevDoneRef = useRef(done);
+  useEffect(() => {
+    if (!prevDoneRef.current && done) {
+      clearGrace();
+      graceTimerRef.current = window.setTimeout(() => {
+        graceTimerRef.current = null;
+        setExpanded(false);
+      }, AGC_COLLAPSE_GRACE_MS);
+    }
+    prevDoneRef.current = done;
+  }, [done, clearGrace]);
+  // 宽限期内新回合开始（同会话流 user 条目增加）且本卡已收口 → 立即折叠
+  const userCount = useMemo(() => (stream ? stream.filter((it) => it.kind === 'user').length : 0), [stream]);
+  const prevUserCountRef = useRef(userCount);
+  useEffect(() => {
+    if (userCount > prevUserCountRef.current && done) {
+      clearGrace();
+      setExpanded(false);
+    }
+    prevUserCountRef.current = userCount;
+  }, [userCount, done, clearGrace]);
+  /** 手动展开/收起：清宽限定时器（手动优先，本轮不再后台抢折） */
+  const toggleExpanded = useCallback(() => {
+    clearGrace();
+    setExpanded((v) => !v);
+  }, [clearGrace]);
+
+  // 空终态（无过程无结论且非运行）不渲染——与 AgentProcessCard 空卡口径一致
+  if (!expanded && display.stages.length === 0 && !live) return null;
+
+  const respond = (decision: 'allow' | 'deny') => {
+    if (!pendingPerm || pendingPerm.kind !== 'permission') return;
+    const { requestId } = pendingPerm.request;
+    const bridge = getAgentBridge();
+    if (decision === 'allow') {
+      void bridge.respondPermission(requestId, 'allow', 'once');
+      respondPermission(requestId, 'allow', 'once');
+    } else {
+      void bridge.respondPermission(requestId, 'deny');
+      respondPermission(requestId, 'deny');
+    }
+  };
+  // 折叠摘要卡（2026-11-11 用户口径）：首行「Agent 状态：本轮问题」+ 思考过程行 +
+  // 正文两行截断省略号——等宽统一、结构固定，点开完整内容
+  if (!expanded) {
+    const stateLabel =
+      display.status === 'done' ? '已完成' : display.status === 'failed' ? '失败' : display.status === 'cancelled' ? '已取消' : '运行中';
+    const hasThinking = display.stages.some((s) => s.t === 'thinking');
+    const durMs = display.started_at && display.ended_at ? display.ended_at - display.started_at : null;
+    let conclusionText = '';
+    for (let i = display.stages.length - 1; i >= 0; i -= 1) {
+      if (display.stages[i].t === 'conclusion') {
+        conclusionText = agentCardPlainText(display.stages[i].md ?? '');
+        break;
+      }
+    }
+    return (
+      <div
+        className="agc-collapsed"
+        data-testid="agent-card-collapsed"
+        role="button"
+        tabIndex={0}
+        title="点击展开完整内容"
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleExpanded();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleExpanded();
+          }
+        }}
+      >
+        <div className="agc-collapsed__head">
+          <Bot size={13} />
+          <span className="agc-collapsed__title">Agent</span>
+          <span className={`agc-collapsed__state agc-collapsed__state--${display.status}`}>{stateLabel}</span>
+          <span className="agc-collapsed__sep">：</span>
+          <span className="agc-collapsed__question">{body.question?.trim() || '本轮对话'}</span>
+          <ChevronDown size={13} className="agc-collapsed__chev" />
+        </div>
+        {hasThinking ? (
+          <div className="agc-collapsed__think">
+            <Lightbulb size={12} />
+            <span className="agc-collapsed__think-text">思考过程 · {agentStatsText(display.stages, durMs)}</span>
+          </div>
+        ) : null}
+        {conclusionText ? <div className="agc-collapsed__body">{conclusionText}</div> : null}
+      </div>
+    );
+  }
+  return (
+    <AgentProcessCard
+      body={display}
+      startedAt={display.started_at}
+      testId="agent-card-msg"
+      onCollapse={toggleExpanded}
+      actions={
+        <div className="agc-card__footer-row" onClick={(e) => e.stopPropagation()}>
+          {pendingPerm && pendingPerm.kind === 'permission' && live ? (
+            <div className="agc-perm-sync">
+              <span className="agc-perm-sync__label">待你审批：{pendingPerm.request.tool}</span>
+              <button type="button" className="agc-act-btn" onClick={() => respond('allow')}>
+                允许
+              </button>
+              <button type="button" className="agc-act-btn" onClick={() => respond('deny')}>
+                拒绝
+              </button>
+            </div>
+          ) : null}
+          {pendingClarify && pendingClarify.kind === 'clarify' && live ? (
+            <div className="agc-perm-sync agc-perm-sync--clarify">
+              <span className="agc-perm-sync__label">Agent 提问：{pendingClarify.request.question}</span>
+              {pendingClarify.request.options.map((o) => (
+                <button
+                  key={o.label}
+                  type="button"
+                  className="agc-act-btn"
+                  title={o.description}
+                  onClick={() => respondClarify([o.label])}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      }
+    />
   );
 }

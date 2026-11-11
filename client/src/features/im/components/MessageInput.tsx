@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { AtSign, Bot, Mic, Paperclip, Smile, Square, Trash2, X } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
+import { useImeGuard } from '../../../shared/hooks/useImeGuard';
 import { sendTyping } from '../api/im';
 import type { Message } from '../model/types';
 import { EmojiPicker } from './EmojiPicker';
@@ -28,8 +29,10 @@ function voiceExtOf(mime: string): string {
   return 'webm';
 }
 
-/** @面板虚拟 Agent 条目 uid（D18 §3.1：@Agent 触发的快捷选择形态） */
-const AGENT_MENTION_UID = '__agent__';
+/** 斜杠命令表（2026-11-11：/agent 进入/退出机器人对话模式；@Agent 触发已下线留作他用） */
+const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
+  { cmd: '/agent', desc: '进入与机器人对话模式（再次执行取消）' },
+];
 
 interface MessageInputProps {
   convId: string;
@@ -99,6 +102,8 @@ export function MessageInput({
   /** @面板：起始位置 + 过滤词（截到最后一个 @ 之后的片段） */
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
+  /** 斜杠命令面板（2026-11-11：/ 开头且未断词时开启） */
+  const [slashOpen, setSlashOpen] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingAt = useRef(0);
@@ -118,8 +123,6 @@ export function MessageInput({
     const members = mentionCandidates
       .filter((c) => c.name.toLowerCase().includes(q) || c.uid.includes(q))
       .slice(0, 6);
-    // Agent 快捷条目置顶（D18 §3.1 补全：@面板与 @人同构；命中 agent 前缀即出）
-    if ('agent'.includes(q) || q === '') return [{ uid: AGENT_MENTION_UID, name: 'Agent' }, ...members];
     return members;
   }, [mention, mentionCandidates]);
 
@@ -254,10 +257,40 @@ export function MessageInput({
   };
 
   const onChange = (v: string) => {
+    // /agent 命令补全（空格即执行）：切换 Agent 模式（再执行=取消）并吃掉命令词
+    const cmd = v.match(/^\/agent([\s　]|$)/);
+    if (cmd) {
+      onToggleAgentMode?.();
+      const rest = v.slice(cmd[0].length);
+      onDraftChange(rest);
+      requestAnimationFrame(() => {
+        const ta = taRef.current;
+        if (ta) {
+          ta.selectionStart = ta.selectionEnd = rest.length;
+          ta.focus();
+        }
+      });
+      return;
+    }
     onDraftChange(v);
     maybeTyping();
     const pos = taRef.current?.selectionStart ?? v.length;
     detectMention(v, pos);
+    setSlashOpen(/^\/[a-z]*$/i.test(v));
+  };
+
+  /** 斜杠命令命中列表（输入 / 即出提示面板） */
+  const slashMatches = useMemo(
+    () => (slashOpen ? SLASH_COMMANDS.filter((c) => c.cmd.startsWith(draft.toLowerCase())) : []),
+    [slashOpen, draft],
+  );
+
+  /** 执行命令（面板点击/Enter）：/agent=切换模式+清草稿 */
+  const execSlash = (cmd: string) => {
+    if (cmd === '/agent') onToggleAgentMode?.();
+    onDraftChange('');
+    setSlashOpen(false);
+    requestAnimationFrame(() => taRef.current?.focus());
   };
 
   const pickMention = (uid: string, name: string) => {
@@ -267,8 +300,7 @@ export function MessageInput({
       const after = draft.slice(pos);
       const replaced = `${before.slice(0, mention.start)}@${name} ${after}`;
       onDraftChange(replaced);
-      // Agent 是触发词不是人：插入 @Agent 文本即点亮 Agent 链路，不进 mentions 名单
-      if (uid !== AGENT_MENTION_UID) onMentionPicked?.(uid, name);
+      onMentionPicked?.(uid, name);
       setMention(null);
       requestAnimationFrame(() => {
         const ta = taRef.current;
@@ -281,7 +313,10 @@ export function MessageInput({
     }
   };
 
+  const { imeComposing, imeCompositionProps } = useImeGuard();
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // IME 确认键防误发（WKWebView 上 isComposing 常缺，组合窗跟踪兜底——useImeGuard）
+    const enterSafe = !e.nativeEvent.isComposing && !imeComposing();
     // @面板导航：↑↓ + Enter 选择，Esc 关闭（D03 §3.2 富文本输入框）
     if (mention && mentionList.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -294,7 +329,7 @@ export function MessageInput({
         setMentionIdx((i) => (i - 1 + mentionList.length) % mentionList.length);
         return;
       }
-      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      if (e.key === 'Enter' && !e.shiftKey && enterSafe) {
         e.preventDefault();
         const it = mentionList[mentionIdx];
         pickMention(it.uid, it.name);
@@ -309,7 +344,19 @@ export function MessageInput({
       setEmojiOpen(false);
       return;
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    // 斜杠命令面板：Enter 执行首项，Esc 关闭（@面板同款交互）
+    if (slashMatches.length > 0) {
+      if (e.key === 'Enter' && !e.shiftKey && enterSafe) {
+        e.preventDefault();
+        execSlash(slashMatches[0].cmd);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setSlashOpen(false);
+        return;
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && enterSafe) {
       e.preventDefault();
       doSend();
     }
@@ -327,7 +374,7 @@ export function MessageInput({
   }
 
   return (
-    <div className="message-input">
+    <div className={`message-input${agentMode ? ' message-input--agent' : ''}`}>
       {/* 引用回复条 / 编辑条（互斥；编辑优先） */}
       {editing ? (
         <div className="input-context-bar input-context-bar--edit">
@@ -391,6 +438,19 @@ export function MessageInput({
         <button className="tool-btn" title="语音（最长 60 秒）" type="button" data-testid="voice-btn" onClick={() => void startVoice()}>
           <Mic size={17} />
         </button>
+        {/* 机器人模式徽标（行末右上角；margin-left:auto 只推自己，操作按钮保持原位） */}
+        {agentMode ? (
+          <button
+            type="button"
+            className="message-input__agent-badge"
+            onClick={() => onToggleAgentMode?.()}
+            title="机器人对话模式中，点击退出"
+            data-testid="agent-mode-badge"
+          >
+            <Bot size={12} />
+            机器人对话模式
+          </button>
+        ) : null}
       </div>
 
       {/* 录音条（语音进行中替代输入提示；完成=上抛发送，取消/超短丢弃） */}
@@ -433,11 +493,28 @@ export function MessageInput({
               onMouseEnter={() => setMentionIdx(i)}
               onClick={() => pickMention(c.uid, c.name)}
             >
+              <span className="mention-panel__name">{c.name}</span>
+              <span className="mention-panel__uid">{c.uid}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {/* 斜杠命令面板（2026-11-11：/ 提示；Enter/点击执行） */}
+      {slashMatches.length > 0 ? (
+        <div className="mention-panel slash-panel" data-testid="slash-panel">
+          {slashMatches.map((c) => (
+            <button
+              key={c.cmd}
+              type="button"
+              className="mention-panel__item"
+              onClick={() => execSlash(c.cmd)}
+            >
               <span className="mention-panel__name">
-                {c.uid === AGENT_MENTION_UID ? <Bot size={12} style={{ marginRight: 4, verticalAlign: -1 }} /> : null}
-                {c.name}
+                <Bot size={12} style={{ marginRight: 4, verticalAlign: -1 }} />
+                {c.cmd}
               </span>
-              <span className="mention-panel__uid">{c.uid === AGENT_MENTION_UID ? 'AI 助手' : c.uid}</span>
+              <span className="mention-panel__uid">{agentMode ? '当前已在机器人模式，执行=退出' : c.desc}</span>
             </button>
           ))}
         </div>
@@ -451,6 +528,7 @@ export function MessageInput({
         value={draft}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
+        {...imeCompositionProps}
       />
       <div className="message-input__foot">
         <span className="message-input__hint">{editing ? 'Enter 保存编辑，Esc 取消' : 'Enter 发送，Shift + Enter 换行'}</span>

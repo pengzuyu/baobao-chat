@@ -97,7 +97,9 @@ function ProvidersPanel() {
       }
     } catch (err) {
       setConnResult(null);
-      setFormError(err instanceof ApiError ? getErrorText(err.code) : '连接失败');
+      // 服务端 message 优先（如「供应商被 fast 档默认路由引用，先调整路由」——
+      // 只显码表文案会把删除被拒的真实原因吞成通用「请求参数错误」）
+      setFormError(err instanceof ApiError ? err.message || getErrorText(err.code) : '连接失败');
     } finally {
       setProbing(false);
     }
@@ -168,12 +170,12 @@ function ProvidersPanel() {
   const toggleStatus = (p: AIProvider) => {
     save.mutate(
       { id: p.id, input: { name: p.name, status: p.status === 1 ? 2 : 1 } },
-      { onError: (err) => setFormError(err instanceof ApiError ? getErrorText(err.code) : '操作失败') },
+      { onError: (err) => setFormError(err instanceof ApiError ? err.message || getErrorText(err.code) : '操作失败') },
     );
   };
 
   const remove = (p: AIProvider) => {
-    del.mutate(p.id, { onError: (err) => setFormError(err instanceof ApiError ? getErrorText(err.code) : '删除失败') });
+    del.mutate(p.id, { onError: (err) => setFormError(err instanceof ApiError ? err.message || getErrorText(err.code) : '删除失败') });
   };
 
   return (
@@ -374,7 +376,7 @@ function RoutesPanel() {
       return;
     }
     setError('');
-    put.mutate(items, { onError: (err) => setError(err instanceof ApiError ? getErrorText(err.code) : '保存失败') });
+    put.mutate(items, { onError: (err) => setError(err instanceof ApiError ? err.message || getErrorText(err.code) : '保存失败') });
   };
 
   const state: ViewStateOrOk = provQuery.isPending || routesQuery.isPending ? 'loading' : provQuery.isError || routesQuery.isError ? 'error' : 'ok';

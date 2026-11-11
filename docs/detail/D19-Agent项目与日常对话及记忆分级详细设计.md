@@ -5,6 +5,8 @@
 - 关联：08（Agent 总体）/ D08（工作台）/ D09（工具与安全）/ D11（Runtime 内部）/ D13（沙箱）/ D15（记忆双轨）/ D18（IM 内嵌卡）
 - 范围：bbrt 协议+store+memory+session+tools、Tauri 壳、客户端 agent 工作台；**服务端零改动**（D15 口径：记忆本地文件唯一权威）
 
+> **落地注记（2026-11-11 · 会话历史加载）**：工作台打开会话此前只显本进程直播流（重启/切列表即空白）。新增协议 `session.history` REQ→`session.history.result`（HistoryItem：user/assistant 原文+tool 名与结果摘要；golden 契约已锁），RT 直读 `agent_event` WAL（会话不须在运行态，历史/结束会话同样可查，与 rename 直落库同口径）；WAL 写入点随之增补——`assistant.done` 加 `text` 回复原文、`tool.result` 加 `ok`/`summary`（旧 WAL 行缺字段渐进降级：assistant 旧轮跳过、tool name-only；recovery 仍只读旧字段不受影响，recovery 借 text 重建上下文留阶段二）。前端 store `selectSession` 即拉 `loadHistoryIfEmpty`（本进程无流时回填，直播中/乐观上屏不覆盖）。IM embedded 会话（D18 与私聊/群聊同一会话身份）在工作台打开即见全程聊天记录——跨端同会话历史互通。mock 桥剧本为内存态不落 WAL，历史返回空（真实链路专用）。
+
 ## 1. 背景与定位
 
 用户诉求三件：

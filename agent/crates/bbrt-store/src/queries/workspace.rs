@@ -81,6 +81,19 @@ impl Store {
         Ok(ws)
     }
 
+    /// 按 id 精确查项目（2026-11-11 会话复活：session 行 workspace_id → 路径还原）
+    pub fn get_workspace(&self, id: &str) -> Result<Option<Workspace>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, name, is_repo, trusted, extra_dirs, last_opened_at, created_at
+             FROM agent_workspace WHERE id = ?1",
+        )?;
+        let ws = stmt
+            .query_row(params![id], from_row)
+            .optional()
+            .map_err(StoreError::from)?;
+        Ok(ws)
+    }
+
     /// 全量项目列表（D19 workspace.list；last_opened_at 倒序=最近打开在前）。
     pub fn list_workspaces(&self) -> Result<Vec<Workspace>, StoreError> {
         let mut stmt = self.conn.prepare(

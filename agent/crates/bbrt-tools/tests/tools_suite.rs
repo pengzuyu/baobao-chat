@@ -118,7 +118,7 @@ fn blocked_code(out: ToolOutcome) -> (u32, String) {
 fn 注册表_内置清单查询与未注册8002() {
     let f = Fixture::new();
     let ex = f.executor();
-    // specs 覆盖内置 12 工具
+    // specs 覆盖内置 12 工具 + D20 ask_user（loop_runner 拦截、仅注册可发现性）
     let specs = ex.tool_specs();
     let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
     for expect in [
@@ -134,9 +134,15 @@ fn 注册表_内置清单查询与未注册8002() {
         "git_push",
         "http_fetch",
         "memory_save",
+        "ask_user",
     ] {
         assert!(names.contains(&expect), "缺少内置工具 {expect}");
     }
+    // ask_user 契约：question/options 必填（执行由 loop_runner 拦截，不经 pipeline）
+    let ask = specs.iter().find(|s| s.name == "ask_user").unwrap();
+    let required = ask.input_schema["required"].as_array().unwrap();
+    assert!(required.iter().any(|v| v == "question"));
+    assert!(required.iter().any(|v| v == "options"));
     // 未注册 → check Deny 8002（D11 §6 步骤 1）
     match ex.check(
         PermissionMode::Ask,

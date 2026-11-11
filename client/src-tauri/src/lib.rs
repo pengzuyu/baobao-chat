@@ -61,6 +61,11 @@ pub fn run() {
     }
     builder
         .setup(|app| {
+            // TEMP 排错仪表（2026-11-11 泵静默死亡排查，验收后移除）：任意线程 panic
+            // 落 stderr（tauri dev 日志）——事件泵线程 panic 后进程不死但事件全断
+            std::panic::set_hook(Box::new(|info| {
+                eprintln!("[bbw-panic] {info}");
+            }));
             // Agent 宿主桥：数据目录={appData}/agent-runtime；事件泵→WebView（agent://event）
             let handle = app.handle().clone();
             let data_dir = handle
@@ -80,16 +85,18 @@ pub fn run() {
             http_get_stub,
             win_minimize,
             agent_commands::session_list,
+            agent_commands::session_history,
             agent_commands::agent_start_session,
             agent_commands::agent_input,
             agent_commands::agent_switch_model,
             agent_commands::agent_set_mode,
-            agent_commands::agent_pause,
-            agent_commands::agent_resume,
+            agent_commands::agent_interrupt,
+            agent_commands::agent_rename,
             agent_commands::agent_stop,
             agent_commands::agent_emergency_stop,
             agent_commands::agent_approve,
             agent_commands::agent_reject,
+            agent_commands::agent_clarify_respond,
             agent_commands::agent_delegate_launch,
             agent_commands::agent_delegate_input,
             agent_commands::agent_delegate_cancel,

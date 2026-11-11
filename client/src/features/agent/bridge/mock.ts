@@ -17,6 +17,7 @@ import type {
   AgentSessionMeta,
   AgentWorkspaceInfo,
   GrantScope,
+  HistoryItem,
   MemoryEntry,
   RunInfo,
   PermissionMode,
@@ -48,6 +49,9 @@ class ScriptCancelled extends Error {}
 /** 单会话剧本运行上下文：wait() 在暂停期间冻结时钟，取消时抛出 */
 class ScriptContext {
   paused = false;
+  /** 在飞工具调用（callId 集合）：toolCall 发出后登记、toolResult 到达移除；
+   *  interrupt 时统一补失败结果收口（对齐 bbrt 中断收口语义，工具卡不留「运行中」） */
+  inFlightCalls = new Set<string>();
   private cancelledFlag = false;
 
   get cancelled(): boolean {
@@ -87,6 +91,18 @@ interface PendingPermission {
   requestId: string;
   resolve: (v: PermissionAnswer) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/** 澄清回答（D20；null=被中断，剧本协程随之弃置） */
+interface ClarifyAnswerMsg {
+  answers: string[];
+  freeText?: string;
+}
+
+interface PendingClarify {
+  sessionId: string;
+  questionId: string;
+  resolve: (v: ClarifyAnswerMsg | null) => void;
 }
 
 const now = Date.now();
@@ -253,6 +269,8 @@ export class MockAgentBridge implements AgentBridge {
   private contexts = new Map<string, ScriptContext>();
   /** requestId → 未决审批 */
   private pending = new Map<string, PendingPermission>();
+  /** D20 待决提问（无超时；中断/紧急停止时镜像 cancelled 收口） */
+  private pendingClarifies = new Map<string, PendingClarify>();
   private seqCounters = new Map<string, number>();
   private sessionSeq = 0;
 
@@ -285,7 +303,7 @@ export class MockAgentBridge implements AgentBridge {
     return [...this.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode, model?: string): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string): Promise<AgentSessionMeta> {
     await delay(200);
     this.sessionSeq += 1;
     // D19：项目会话自动登记（对齐 bbrt manager.start 的 realpath upsert 行为）
@@ -306,24 +324,19 @@ export class MockAgentBridge implements AgentBridge {
         });
       }
     }
+    // 建会话即 idle（对齐真实桥：session.start 同步等完 session.ready 回执才返回）
     const meta: AgentSessionMeta = {
       id: `sess-mock-n${this.sessionSeq}`,
-      title: '新会话',
+      title: title?.trim() || '新会话',
       workspace,
       mode,
       modelPolicy: 'auto',
       modelOverride: model,
-      status: 'starting',
+      status: 'idle',
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
     this.sessions.unshift(meta);
-    this.emit({ type: 'stateChanged', sessionId: meta.id, state: 'starting', reason: 'session.start' });
-    // starting → idle（工作区加载完成，D11 §3 迁移 2）
-    setTimeout(() => {
-      meta.status = 'idle';
-      this.emit({ type: 'stateChanged', sessionId: meta.id, state: 'idle', reason: 'session.ready' });
-    }, 400);
     return { ...meta };
   }
 
@@ -339,44 +352,103 @@ export class MockAgentBridge implements AgentBridge {
     this.emit({ type: 'modelSwitched', sessionId, from, to, modelOverride: model, reason: 'user' });
   }
 
-  async sendMessage(sessionId: string, text: string): Promise<void> {
-    const s = this.sessions.find((x) => x.id === sessionId);
-    if (!s || s.status === 'ended' || s.status === 'paused') return;
+  async sendMessage(sessionId: string, _text: string, _thinking?: 'low' | 'medium' | 'high'): Promise<void> {
+    let s = this.sessions.find((x) => x.id === sessionId);
+    if (!s) {
+      // 会话不死（revive 兜底）：embedded 映射跨页面重载持久（IndexedDB），而 mock
+      // 内存态随重载重置——模拟 bbrt 从 SQLite 还原库行：合成会话行继续跑
+      // （真实链路会话在库内持久，此处对齐语义，避免演示流「发消息无反应」）
+      s = {
+        id: sessionId,
+        title: 'Agent 会话',
+        workspace: '',
+        mode: 'ask',
+        modelPolicy: 'auto',
+        status: 'idle',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      this.sessions.unshift(s);
+    }
+    // 会话不死（2026-11-11）：ended/paused 会话 input 即复活（对齐 bbrt revive 语义）
+    if (s.status === 'ended' || s.status === 'paused') {
+      s.status = 'idle';
+      this.emit({ type: 'stateChanged', sessionId, state: 'idle', reason: 'revived' });
+    }
     const round = (this.rounds.get(sessionId) ?? 0) + 1;
     this.rounds.set(sessionId, round);
-    // 首条消息派生标题（会话列表可读性）
-    if (s.title === '新会话') {
-      s.title = text.length > 12 ? `${text.slice(0, 12)}…` : text;
-    }
+    // 标题派生上移 store 层（统一 20 字首行规则 + renameSession 通道），桥不再自派生
     this.touch(sessionId);
     const ctx = new ScriptContext();
     this.contexts.set(sessionId, ctx);
     if (round === 1) void this.scriptReadFile(s, ctx);
+    else if (round === 2) void this.scriptRunCommand(s, ctx);
+    else if (round === 3) void this.scriptAskUser(s, ctx);
     else void this.scriptRunCommand(s, ctx);
   }
 
-  async pause(sessionId: string): Promise<void> {
+  /** 中断当前轮（2026-11-11：取代旧 pause/resume——收口 idle 可继续追问） */
+  async interrupt(sessionId: string): Promise<void> {
     const ctx = this.contexts.get(sessionId);
-    if (ctx) ctx.paused = true;
-    this.setStatus(sessionId, 'paused', 'user.pause');
+    if (ctx) {
+      ctx.cancel();
+      // 在飞工具统一补「已中断」失败结果（剧本取消后不再发 result，
+      // 不补则工具卡永远停在「运行中」）
+      for (const callId of ctx.inFlightCalls) {
+        this.emit({ type: 'toolResult', sessionId, callId, ok: false, summary: '已被中断' });
+      }
+      ctx.inFlightCalls.clear();
+    }
+    // 未决审批作废（同 emergencyStop 口径：cancelled 镜像收口，审批卡不再倒计时；
+    // 脚本协程随 ctx.cancel 弃置，承诺不 resolve）
+    for (const [requestId, p] of this.pending) {
+      if (p.sessionId !== sessionId) continue;
+      clearTimeout(p.timer);
+      this.pending.delete(requestId);
+      this.emit({ type: 'permissionResponse', sessionId, requestId, decision: 'cancelled' });
+    }
+    // D20 未决提问作废（cancelled 镜像；协程 resolve(null) 弃置）
+    for (const [questionId, q] of this.pendingClarifies) {
+      if (q.sessionId !== sessionId) continue;
+      this.pendingClarifies.delete(questionId);
+      this.emit({ type: 'clarifyResponse', sessionId, questionId, decision: 'cancelled', answers: '' });
+      q.resolve(null);
+    }
+    this.contexts.delete(sessionId);
+    this.setStatus(sessionId, 'idle', 'user-interrupt');
   }
 
-  async resume(sessionId: string): Promise<void> {
-    const ctx = this.contexts.get(sessionId);
-    if (ctx) ctx.paused = false;
-    this.setStatus(sessionId, 'running', 'session.resume');
+  async renameSession(sessionId: string, title: string): Promise<string> {
+    await delay(60);
+    const t = title.trim().slice(0, 20);
+    const s = this.sessions.find((x) => x.id === sessionId);
+    if (s && t) {
+      s.title = t;
+      s.updatedAt = Date.now();
+    }
+    return t;
   }
 
   async endSession(sessionId: string): Promise<void> {
     this.finishSession(sessionId, '会话已结束（用户主动结束）');
   }
 
+  async loadHistory(_sessionId: string): Promise<HistoryItem[]> {
+    // mock 剧本是内存态不落 WAL——历史加载返回空（真实链路 session.history 读库）
+    return [];
+  }
+
   async emergencyStop(): Promise<void> {
-    // 三入口一致语义（INT-AG-12）：杀剧本 + 未决审批作废 + 会话暂停展示
+    // 三入口一致语义（INT-AG-12）：杀剧本 + 未决审批/提问作废 + 会话暂停展示
     for (const [requestId, p] of this.pending) {
       clearTimeout(p.timer);
       this.pending.delete(requestId);
       this.emit({ type: 'permissionResponse', sessionId: p.sessionId, requestId, decision: 'cancelled' });
+    }
+    for (const [questionId, q] of this.pendingClarifies) {
+      this.pendingClarifies.delete(questionId);
+      this.emit({ type: 'clarifyResponse', sessionId: q.sessionId, questionId, decision: 'cancelled', answers: '' });
+      q.resolve(null);
     }
     for (const [sessionId, ctx] of this.contexts) {
       ctx.cancel();
@@ -397,6 +469,16 @@ export class MockAgentBridge implements AgentBridge {
     this.pending.delete(requestId);
     this.emit({ type: 'permissionResponse', sessionId: p.sessionId, requestId, decision, scope });
     p.resolve({ decision, scope: scope ?? 'once', editedArgs, timedOut: false });
+  }
+
+  /** 澄清回答（D20）：resolve 挂起剧本 + 回执镜像（多端一致） */
+  async respondClarify(questionId: string, answers: string[], freeText?: string): Promise<void> {
+    const q = this.pendingClarifies.get(questionId);
+    if (!q) return;
+    this.pendingClarifies.delete(questionId);
+    const answersText = answers.join('、') + (freeText?.trim() ? `；补充：${freeText.trim()}` : '');
+    this.emit({ type: 'clarifyResponse', sessionId: q.sessionId, questionId, decision: 'answered', answers: answersText });
+    q.resolve({ answers, freeText });
   }
 
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
@@ -569,8 +651,10 @@ export class MockAgentBridge implements AgentBridge {
         parallel: false,
         source: 'self',
       });
+      ctx.inFlightCalls.add(`call-${sid}-r1`);
       const startedAt = Date.now();
       await ctx.wait(READ_FILE_RESULT_DELAY_MS);
+      ctx.inFlightCalls.delete(`call-${sid}-r1`);
       this.emit({
         type: 'toolResult',
         sessionId: sid,
@@ -622,6 +706,7 @@ export class MockAgentBridge implements AgentBridge {
         parallel: false,
         source: 'self',
       });
+      ctx.inFlightCalls.add(`call-${sid}-r2`);
       const preview: PermissionPreview = { kind: 'command', command: 'cargo test --lib', cwd: s.workspace, dangerFlags: [] };
       const requestId = `pr-${sid}-1`;
       this.emit({
@@ -653,6 +738,7 @@ export class MockAgentBridge implements AgentBridge {
         });
         const startedAt = Date.now();
         await ctx.wait(RUN_COMMAND_RESULT_DELAY_MS);
+        ctx.inFlightCalls.delete(`call-${sid}-r2`);
         this.emit({
           type: 'toolResult',
           sessionId: sid,
@@ -687,6 +773,7 @@ export class MockAgentBridge implements AgentBridge {
       } else {
         // ---- 阻止分支（用户拒绝 / 120s 超时=拒绝）----
         this.setStatus(sid, 'running', 'permission.deny');
+        ctx.inFlightCalls.delete(`call-${sid}-r2`);
         this.emit({
           type: 'toolResult',
           sessionId: sid,
@@ -754,5 +841,70 @@ export class MockAgentBridge implements AgentBridge {
     } finally {
       if (this.contexts.get(sid) === ctx) this.contexts.delete(sid);
     }
+  }
+
+  /** 第 3 轮（D20）：ask_user 提问卡 → 等用户选项作答 → 按答案收尾（不超时） */
+  private async scriptAskUser(s: AgentSessionMeta, ctx: ScriptContext): Promise<void> {
+    const sid = s.id;
+    try {
+      this.setStatus(sid, 'running', 'user.message');
+      await this.streamOut(ctx, sid, '修复前有个方向问题需要你拍板：', 'text');
+      const questionId = `q-${sid}-1`;
+      this.emit({
+        type: 'clarifyRequest',
+        sessionId: sid,
+        questionId,
+        question: '登录超时的修复方式选哪种？',
+        header: '修复方式',
+        options: [
+          { label: '加漂移窗口', description: 'claims 校验 ±60s 容忍时钟偏移（改动小）' },
+          { label: '对齐 NTP', description: '统一各机器时钟源（治本但要运维配合）' },
+          { label: '两者都做', description: '先加窗口止血，再排期 NTP' },
+        ],
+        multiSelect: false,
+      });
+      this.setStatus(sid, 'waiting_clarify', 'gate.clarify');
+      const answer = await this.awaitClarify(ctx, sid, questionId);
+      this.setStatus(sid, 'running', 'clarify.answered');
+      const label = answer ? answer.answers.join('、') + (answer.freeText ? `（补充：${answer.freeText}）` : '') : '';
+      await this.streamOut(
+        ctx,
+        sid,
+        answer
+          ? `收到，按「${label}」执行。我先按这个方向改，完成后再同步验证结果。`
+          : '本轮已中断，需要时随时继续。',
+        'text',
+      );
+      this.emit({ type: 'streamDone', sessionId: sid, finishReason: 'stop', usage: { in: 1980, out: 240 } });
+      this.setStatus(sid, 'idle', 'finish');
+    } catch (e) {
+      if (!(e instanceof ScriptCancelled)) throw e;
+    } finally {
+      if (this.contexts.get(sid) === ctx) this.contexts.delete(sid);
+    }
+  }
+
+  /** 等待澄清回答（D20：不超时；剧本被取消 → reject ScriptCancelled 防泄漏） */
+  private awaitClarify(ctx: ScriptContext, sessionId: string, questionId: string): Promise<ClarifyAnswerMsg | null> {
+    return new Promise<ClarifyAnswerMsg | null>((resolve, reject) => {
+      const entry: PendingClarify = {
+        sessionId,
+        questionId,
+        resolve: (v) => resolve(v),
+      };
+      this.pendingClarifies.set(questionId, entry);
+      const watch = setInterval(() => {
+        if (ctx.cancelled) {
+          clearInterval(watch);
+          this.pendingClarifies.delete(questionId);
+          reject(new ScriptCancelled());
+        }
+      }, 200);
+      const orig = entry.resolve;
+      entry.resolve = (v) => {
+        clearInterval(watch);
+        orig(v);
+      };
+    });
   }
 }

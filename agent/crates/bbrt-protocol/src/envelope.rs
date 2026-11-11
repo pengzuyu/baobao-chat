@@ -64,6 +64,17 @@ pub enum Decision {
     Deny,
 }
 
+/// 澄清选项（clarify.request.options 项；D20）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClarifyOption {
+    /// 选项短文案（回答回传此值）
+    pub label: String,
+    /// 补充说明（可选，UI 副行展示）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// 委派审查结论（delegate.review）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -336,6 +347,29 @@ pub struct SessionListItem {
     pub summary: Option<String>,
 }
 
+/// 会话历史条目（session.history 回执；工作台打开会话加载聊天记录）。
+/// WAL 摘要级投影：user 原文 / assistant 原文 / 工具名+结果摘要；
+/// 审批·澄清卡是即时交互不入历史（WAL 不回放）。旧 WAL 行缺新字段时
+/// assistant 旧轮无原文（跳过）、tool 无结果摘要（name-only 行）——渐进降级
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum HistoryItem {
+    #[serde(rename = "user")]
+    User { text: String },
+    #[serde(rename = "assistant")]
+    Assistant { text: String },
+    #[serde(rename = "tool", rename_all = "camelCase")]
+    // 变体级：enum 级 rename_all 只管变体名不管字段
+    Tool {
+        call_id: String,
+        tool: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ok: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
+}
+
 // ---------------------------------------------------------------------------
 // 会话状态枚举（D11 §3 状态机，starting + 9 态）
 // session.state 消息 payload 与 §11 agent_session.status 共用此枚举。
@@ -349,6 +383,7 @@ pub enum SessionState {
     Idle,
     Running,
     WaitingPermission,
+    WaitingClarify,
     WaitingReview,
     SubagentFanout,
     Delegating,
@@ -365,6 +400,7 @@ impl SessionState {
             SessionState::Idle => "idle",
             SessionState::Running => "running",
             SessionState::WaitingPermission => "waiting_permission",
+            SessionState::WaitingClarify => "waiting_clarify",
             SessionState::WaitingReview => "waiting_review",
             SessionState::SubagentFanout => "subagent_fanout",
             SessionState::Delegating => "delegating",
@@ -381,6 +417,7 @@ impl SessionState {
             "idle" => Some(SessionState::Idle),
             "running" => Some(SessionState::Running),
             "waiting_permission" => Some(SessionState::WaitingPermission),
+            "waiting_clarify" => Some(SessionState::WaitingClarify),
             "waiting_review" => Some(SessionState::WaitingReview),
             "subagent_fanout" => Some(SessionState::SubagentFanout),
             "delegating" => Some(SessionState::Delegating),
@@ -401,6 +438,18 @@ impl fmt::Display for SessionState {
 // ---------------------------------------------------------------------------
 // Host → Runtime 消息（D11 §4 表"宿主→RT"全部 + 双向 ping/pong）
 // ---------------------------------------------------------------------------
+
+/// 思考强度三档（2026-11-11：zcode 同款 low/medium/high；轮级随 user.message）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThinkingLevel {
+    /// 不思考（直答）
+    Low,
+    /// 默认思考
+    Medium,
+    /// 深度思考（更大思考预算）
+    High,
+}
 
 /// 宿主下发消息（15 个宿主→RT 类型 + D15 追加 3 类型 + 双向 ping/pong）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -440,6 +489,10 @@ pub enum HostToRuntime {
         history_ref: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         backend_hint: Option<String>,
+        /// 初始标题（2026-11-11：IM embedded 会话创建即带来源名「与xxx的对话」；
+        /// 缺省=库内默认「新会话」，由宿主在首条用户消息后经 session.rename 派生）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
     },
 
     /// 用户输入（REQ，回执=接受入队）
@@ -453,6 +506,10 @@ pub enum HostToRuntime {
         /// 斜杠指令（/strong 等）
         #[serde(default, skip_serializing_if = "Option::is_none")]
         slash: Option<String>,
+        /// 思考强度（2026-11-11 三档，轮级生效）：low=不思考 / medium=默认 /
+        /// high=思考+大预算；缺省=medium（旧口径兼容）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thinking: Option<ThinkingLevel>,
     },
 
     /// 权限确认回执（permission.request 的下行应答）
@@ -466,6 +523,17 @@ pub enum HostToRuntime {
         edited_args: Option<Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         accepted_hunks: Option<Vec<String>>,
+    },
+
+    /// 澄清回答回执（clarify.request 的下行应答；D20——ask_user 工具阻塞等待此消息）
+    #[serde(rename = "clarify.response", rename_all = "camelCase")]
+    ClarifyResponse {
+        question_id: String,
+        /// 所选选项 label（multi_select 多个）；「其他」自由输入只进 free_text
+        #[serde(default)]
+        answers: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        free_text: Option<String>,
     },
 
     /// 手动建检查点（REQ→checkpoint.created）
@@ -540,13 +608,15 @@ pub enum HostToRuntime {
         session_id: Option<String>,
     },
 
-    /// 暂停会话
-    #[serde(rename = "session.pause", rename_all = "camelCase")]
-    SessionPause { session_id: String },
+    /// 中断当前轮（2026-11-11 取代旧 session.pause/resume 用户操作通道——暂停/恢复
+    /// 按钮已随「停止=中断当前轮、会话保留」口径移除；RT 内部自动暂停触发不受影响）。
+    /// 语义：置中断旗标，LLM 流内/工具间检查点立即断，收口报 idle（可继续追问）
+    #[serde(rename = "session.interrupt", rename_all = "camelCase")]
+    SessionInterrupt { session_id: String },
 
-    /// 恢复会话
-    #[serde(rename = "session.resume", rename_all = "camelCase")]
-    SessionResume { session_id: String },
+    /// 会话重命名（REQ→session.renamed；标题派生/手动改名统一通道）
+    #[serde(rename = "session.rename", rename_all = "camelCase")]
+    SessionRename { session_id: String, title: String },
 
     /// 结束会话（任意态→ended）
     #[serde(rename = "session.end", rename_all = "camelCase")]
@@ -628,6 +698,11 @@ pub enum HostToRuntime {
     /// 项目移除登记（D19；REQ→workspace.forgot{ok}；只删登记行，不动会话/记忆分区）
     #[serde(rename = "workspace.forget", rename_all = "camelCase")]
     WorkspaceForget { id: String },
+
+    /// 会话历史查询（REQ→session.history.result；工作台打开会话加载聊天记录。
+    /// 直读 agent_event WAL——会话不须在运行态，历史/结束会话同样可查）
+    #[serde(rename = "session.history", rename_all = "camelCase")]
+    SessionHistory { session_id: String },
 
     /// 会话持久列表（D19；REQ→session.listed。agent_session JOIN agent_workspace，
     /// 宿主重启后恢复会话列表的数据源；活跃状态以宿主缓存叠加为准）
@@ -732,6 +807,22 @@ pub enum RuntimeToHost {
         preview: Option<Preview>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         options: Vec<GrantScope>,
+    },
+
+    /// 澄清提问（UNT；等待下行 clarify.response，**不超时**——用户可随时答，
+    /// 会话「停止」可中断收口 cancelled。D20 ask_user 工具触发）
+    #[serde(rename = "clarify.request", rename_all = "camelCase")]
+    ClarifyRequest {
+        question_id: String,
+        /// 完整问题文本
+        question: String,
+        /// 短标签（≤12 字，UI chip 展示）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        header: Option<String>,
+        options: Vec<ClarifyOption>,
+        /// true=可多选；false/缺省=单选
+        #[serde(default)]
+        multi_select: bool,
     },
 
     /// 检查点已建（=08 篇 checkpoint.event 的 D11 细化命名）
@@ -962,6 +1053,22 @@ pub enum RuntimeToHost {
     /// session.list 回执（D19；updated_at 倒序）
     #[serde(rename = "session.listed", rename_all = "camelCase")]
     SessionListed { items: Vec<SessionListItem> },
+
+    /// session.interrupt 回执（2026-11-11；置旗即回，实际中断以 session.state 上行为准）
+    #[serde(rename = "session.interrupted", rename_all = "camelCase")]
+    SessionInterrupted { session_id: String },
+
+    /// session.rename 回执（2026-11-11；落库后的最终标题）
+    #[serde(rename = "session.renamed", rename_all = "camelCase")]
+    SessionRenamed { session_id: String, title: String },
+
+    /// session.history 回执（seq 升序；空=无历史或会话不存在）
+    #[serde(rename = "session.history.result", rename_all = "camelCase")]
+    SessionHistoryResult {
+        session_id: String,
+        #[serde(default)]
+        items: Vec<HistoryItem>,
+    },
 }
 
 // ---------------------------------------------------------------------------

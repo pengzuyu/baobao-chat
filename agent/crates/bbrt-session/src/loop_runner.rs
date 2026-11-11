@@ -63,6 +63,16 @@ pub enum PermissionDecision {
     Deny,
 }
 
+/// 澄清回执（宿主 → 循环；D20 ask_user 工具等待）
+#[derive(Debug, Clone)]
+pub struct ClarifyAnswer {
+    pub question_id: String,
+    /// 所选选项 label
+    pub answers: Vec<String>,
+    /// 「其他」自由补充
+    pub free_text: Option<String>,
+}
+
 /// 宿主→循环的委派指令（delegate.launch/input/cancel/review 的 session 侧形态）
 #[derive(Debug, Clone)]
 pub enum DelegateHostMsg {
@@ -251,6 +261,7 @@ pub(crate) fn chat_text(
             },
         ],
         tools: vec![],
+        thinking: None,
     };
     let mut out = String::new();
     let iter = client.chat(&req).map_err(|e| e.to_string())?;
@@ -286,6 +297,9 @@ pub struct SessionRunner {
     pub interrupted: Arc<AtomicBool>,
     permission_tx: Sender<PermissionResponse>,
     permission_rx: Receiver<PermissionResponse>,
+    /// 澄清回执通道（D20 ask_user 阻塞等待；与审批通道分离——无超时，靠 recv 轮询中断）
+    clarify_tx: Sender<ClarifyAnswer>,
+    clarify_rx: Receiver<ClarifyAnswer>,
     /// 委派宿主指令通道（launch/input/cancel/review；与审批通道分离）
     delegate_tx: Sender<DelegateHostMsg>,
     delegate_rx: Receiver<DelegateHostMsg>,
@@ -331,6 +345,9 @@ pub struct TurnReport {
     pub usage_in: u64,
     pub usage_out: u64,
     pub paused: bool,
+    /// 用户中断（2026-11-11「停止」新语义）：收口报 idle（可继续追问），
+    /// 与 paused（内部限制/错误自动暂停，不可续）区分
+    pub interrupted: bool,
 }
 
 impl SessionRunner {
@@ -342,6 +359,7 @@ impl SessionRunner {
         model_override: Option<String>,
     ) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (ctx, crx) = std::sync::mpsc::channel();
         let (dtx, drx) = std::sync::mpsc::channel();
         Self {
             session_id,
@@ -356,6 +374,8 @@ impl SessionRunner {
             interrupted: Arc::new(AtomicBool::new(false)),
             permission_tx: tx,
             permission_rx: rx,
+            clarify_tx: ctx,
+            clarify_rx: crx,
             delegate_tx: dtx,
             delegate_rx: drx,
             // v0.1 恒开（`memory.heuristic=off` 开关随配置系统接线，D15 §2.2）
@@ -400,8 +420,15 @@ pub struct LoopDeps {
 
 impl SessionRunner {
     /// 执行一轮 turn（user.message 已入 history 前置）
-    pub fn run_turn(&mut self, user_text: &str, deps: &LoopDeps) -> TurnReport {
+    pub fn run_turn(
+        &mut self,
+        user_text: &str,
+        deps: &LoopDeps,
+        thinking: Option<bbrt_protocol::ThinkingLevel>,
+    ) -> TurnReport {
         let mut report = TurnReport::default();
+        // 中断旗标只作用于当轮：新一轮用户输入前清零，否则中断过的会话下一轮秒断
+        self.interrupted.store(false, Ordering::Relaxed);
         self.state = state::accept_user_message(self.state).unwrap_or(SessionState::Running);
         emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
             session_id: id,
@@ -618,8 +645,15 @@ impl SessionRunner {
         }
 
         loop {
-            if report.steps >= MAX_STEPS || self.interrupted.load(Ordering::Relaxed) {
+            if report.steps >= MAX_STEPS {
+                // 步数上限=防失控循环的真暂停（唯一保留 paused 的场景，罕见）
                 report.paused = true;
+                break;
+            }
+            // 用户中断：不进 paused（paused=内部限制/错误自动暂停且 resume 未实现），
+            // 收口按 idle 报——会话保留可继续追问（2026-11-11「停止」语义）
+            if self.interrupted.load(Ordering::Relaxed) {
+                report.interrupted = true;
                 break;
             }
             // ① compaction 判定（D11 §5.2）
@@ -665,7 +699,8 @@ impl SessionRunner {
                             message: "压缩后仍超上下文上限".into(),
                             fatal: true,
                         });
-                        report.paused = true;
+                        // 2026-11-11：错误收口 idle（时间线已留 Error 卡）——旧口径
+                        // 转 paused 会卡死（resume 通道已随「停止」口径移除），用户无法重试
                         break;
                     }
                 }
@@ -723,6 +758,21 @@ impl SessionRunner {
                 model: model_name,
                 messages,
                 tools: pick_tools(deps.tools.tool_specs(), &allowed_tools),
+                // 思考强度三档（2026-11-11 zcode 同款，轮级生效）：low=disabled /
+                // medium=enabled / high=enabled+大预算；缺省=medium
+                thinking: Some(
+                    match thinking.unwrap_or(bbrt_protocol::ThinkingLevel::Medium) {
+                        bbrt_protocol::ThinkingLevel::Low => {
+                            serde_json::json!({ "type": "disabled" })
+                        }
+                        bbrt_protocol::ThinkingLevel::Medium => {
+                            serde_json::json!({ "type": "enabled" })
+                        }
+                        bbrt_protocol::ThinkingLevel::High => {
+                            serde_json::json!({ "type": "enabled", "budget_tokens": 16384 })
+                        }
+                    },
+                ),
             };
 
             // ③ 流式消费（delta 即时外发；错误→8011 语义暂停）
@@ -735,7 +785,7 @@ impl SessionRunner {
                         message: format!("模型不可用: {e}"),
                         fatal: false,
                     });
-                    report.paused = true;
+                    // 模型失败收口 idle：时间线留错误卡，会话可换模型/重发即重试
                     break;
                 }
             };
@@ -754,6 +804,16 @@ impl SessionRunner {
                             delta: t,
                             seq,
                             channel: StreamChannel::Text,
+                        });
+                    }
+                    // 思考增量（2026-11-11）：只外发不并入正文——前端思考折叠卡消费
+                    Ok(StreamEvent::ReasoningDelta { text: t }) => {
+                        let seq = self.delta_seq.fetch_add(1, Ordering::Relaxed) as u32;
+                        emit(deps, &self.session_id, |id| SessionEvent::StreamDelta {
+                            session_id: id,
+                            delta: t,
+                            seq,
+                            channel: StreamChannel::Reasoning,
                         });
                     }
                     Ok(StreamEvent::ToolCallBegin { id, name, .. }) => {
@@ -791,7 +851,7 @@ impl SessionRunner {
                     message: format!("流中断（{detail}），已产出内容不重放（08 §4.6）"),
                     fatal: false,
                 });
-                report.paused = true;
+                // 同 8011：错误收口 idle 可重试（旧 paused 卡死）
                 break;
             }
             report.usage_in += usage.0;
@@ -807,19 +867,22 @@ impl SessionRunner {
                 usage_out: usage.1,
             });
             // 崩溃恢复契约：一轮模型输出完成（recovery 以 assistant.done
-            // 配对 user.text 落 assistant 轮，摘要级重建即可续会话）
+            // 配对 user.text 落 assistant 轮，摘要级重建即可续会话）。
+            // text=本轮回复原文（工作台 session.history 加载聊天记录数据源；
+            // 旧行缺此字段 → 历史加载跳过该轮，渐进降级）
             deps.wal.append(
                 &self.session_id,
                 "assistant.done",
                 &format!(
-                    "{{\"finish\":\"{}\",\"usage_in\":{},\"usage_out\":{}}}",
+                    "{{\"finish\":\"{}\",\"usage_in\":{},\"usage_out\":{},\"text\":\"{}\"}}",
                     match finish {
                         FinishReason::Stop => "stop",
                         FinishReason::ToolCalls => "tool_calls",
                         FinishReason::Length => "length",
                     },
                     usage.0,
-                    usage.1
+                    usage.1,
+                    escape_json(&text)
                 ),
             );
             self.history.push(Round::Assistant {
@@ -846,7 +909,7 @@ impl SessionRunner {
             let mut consecutive_failures = 0usize;
             for tc in tool_calls {
                 if self.interrupted.load(Ordering::Relaxed) {
-                    report.paused = true;
+                    report.interrupted = true; // 用户中断（收口 idle，可继续）
                     break;
                 }
                 let call = ToolInvocation {
@@ -956,34 +1019,41 @@ impl SessionRunner {
                     summary: summary.clone(),
                     est_tokens: bbrt_context::estimate_tokens(&summary),
                 });
+                // ok/summary=工具结果摘要（session.history 历史加载；recovery 只读
+                // call_id 不受影响）。summary 已含 "[被阻止 code]" 前缀口径
+                deps.wal.append(
+                    &self.session_id,
+                    "tool.result",
+                    &format!(
+                        "{{\"call_id\":\"{}\",\"ok\":{},\"summary\":\"{}\"}}",
+                        tc.id,
+                        matches!(outcome, ToolOutcome::Ok { .. }),
+                        escape_json(&summary)
+                    ),
+                );
                 self.history.push(Round::Tool {
                     call_id: tc.id.clone(),
                     name: tc.name.clone(),
                     summary,
                 });
-                deps.wal.append(
-                    &self.session_id,
-                    "tool.result",
-                    &format!("{{\"call_id\":\"{}\"}}", tc.id),
-                );
                 if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
                     emit(deps, &self.session_id, |id| SessionEvent::Error {
                         session_id: id,
                         code: 8021,
-                        message: "连续工具失败超限，转暂停".into(),
+                        message: "连续工具失败超限，本轮终止".into(),
                         fatal: false,
                     });
-                    report.paused = true;
+                    // 错误收口 idle（同 8010/8011 口径，避免 paused 卡死）
                     break;
                 }
             }
-            if report.paused {
+            if report.paused || report.interrupted {
                 break;
             }
         }
 
-        // 收尾状态
-        self.state = if report.paused {
+        // 收尾状态：用户中断 → idle（可继续）；内部限制/错误 → paused
+        self.state = if report.paused && !report.interrupted {
             state::pause(self.state).unwrap_or(SessionState::Paused)
         } else {
             state::complete_round(self.state).unwrap_or(SessionState::Idle)
@@ -994,18 +1064,20 @@ impl SessionRunner {
             &self.session_id,
             "turn.end",
             &format!(
-                "{{\"steps\":{},\"paused\":{}}}",
-                report.steps, report.paused
+                "{{\"steps\":{},\"paused\":{},\"interrupted\":{}}}",
+                report.steps, report.paused, report.interrupted
             ),
         );
         emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
             session_id: id,
-            state: if report.paused {
+            state: if report.paused && !report.interrupted {
                 "paused".into()
             } else {
                 "idle".into()
             },
-            reason: if report.paused {
+            reason: if report.interrupted {
+                "user-interrupt".into()
+            } else if report.paused {
                 "limit_or_interrupt".into()
             } else {
                 "stop".into()
@@ -1354,6 +1426,12 @@ impl SessionRunner {
         if call.name == "subagent.adjust" || call.name == "subagent.cancel" {
             return self.run_subagent_adjust(deps, call);
         }
+        // D20 ask_user：向用户提问——专用路径（不走 pipeline 门控/执行）：
+        // waiting_clarify 态 + clarify.request 事件 + **不超时**等待（1s 轮询查
+        // 中断旗标，用户「停止」= cancelled 收口）；回答以工具结果回给模型
+        if call.name == "ask_user" {
+            return self.run_ask_user(deps, call);
+        }
         match deps.tools.check(self.mode, call) {
             CheckOutcome::Allow { source } => {
                 let _ = source;
@@ -1472,6 +1550,136 @@ impl SessionRunner {
         }
     }
 
+    /// D20 ask_user：阻塞式提问。args={question 必填, header?, options:[{label,
+    /// description?}] 2-4 项, multi_select?}。回答（answers+free_text）以工具
+    /// 结果回给模型；参数非法=Blocked（模型可修正重试）；等待期用户中断=cancelled。
+    fn run_ask_user(&mut self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
+        let args: serde_json::Value = match serde_json::from_str(&call.args_json) {
+            Ok(v) => v,
+            Err(_) => {
+                return ToolOutcome::Blocked {
+                    code: 9001,
+                    summary: "ask_user 参数非法：必须是合法 JSON".into(),
+                }
+            }
+        };
+        let question = args["question"].as_str().unwrap_or("").trim().to_string();
+        let mut options: Vec<(String, Option<String>)> = Vec::new();
+        if let Some(arr) = args["options"].as_array() {
+            for o in arr {
+                if let Some(label) = o["label"].as_str() {
+                    let label = label.trim();
+                    if !label.is_empty() {
+                        options.push((
+                            label.to_string(),
+                            o["description"].as_str().map(str::to_string),
+                        ));
+                    }
+                }
+            }
+        }
+        if question.is_empty() || options.len() < 2 {
+            return ToolOutcome::Blocked {
+                code: 9001,
+                summary:
+                    "ask_user 参数非法：question 必填且 options 至少 2 个（{label,description?}）"
+                        .into(),
+            };
+        }
+        let header = args["header"].as_str().map(str::to_string);
+        let multi_select = args["multi_select"].as_bool().unwrap_or(false);
+
+        // 状态机 → waiting_clarify（D20 #6b）+ 事件 + WAL
+        self.state = state::request_clarify(self.state).unwrap_or(SessionState::WaitingClarify);
+        let question_id = format!("q-{}", call.call_id);
+        let options_json = serde_json::to_string(
+            &options
+                .iter()
+                .map(|(l, d)| {
+                    let mut o = serde_json::Map::new();
+                    o.insert("label".into(), serde_json::Value::String(l.clone()));
+                    if let Some(d) = d {
+                        o.insert("description".into(), serde_json::Value::String(d.clone()));
+                    }
+                    serde_json::Value::Object(o)
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".into());
+        emit(deps, &self.session_id, |id| SessionEvent::ClarifyRequest {
+            session_id: id,
+            question_id: question_id.clone(),
+            question: question.clone(),
+            header: header.clone(),
+            options_json: options_json.clone(),
+            multi_select,
+        });
+        deps.wal.append(
+            &self.session_id,
+            "clarify.request",
+            &format!("{{\"question_id\":\"{question_id}\"}}"),
+        );
+
+        // 不超时等待：1s 轮询查中断旗标（用户「停止」→ cancelled）；迟到的
+        // 其它问题回执丢弃继续等
+        let answer = loop {
+            if self.interrupted.load(Ordering::Relaxed) {
+                break None;
+            }
+            match self.clarify_rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(a) if a.question_id == question_id => break Some(a),
+                Ok(_) => continue,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break None,
+            }
+        };
+
+        self.state = state::clarify_resolved(self.state).unwrap_or(SessionState::Running);
+        match answer {
+            Some(a) => {
+                let labels = a.answers.join("、");
+                let summary = match a.free_text.as_deref().map(str::trim) {
+                    Some(t) if !t.is_empty() => format!("{labels}；补充：{t}"),
+                    _ => labels.clone(),
+                };
+                emit(deps, &self.session_id, |id| SessionEvent::ClarifyResolved {
+                    session_id: id,
+                    question_id: question_id.clone(),
+                    decision: "answered".into(),
+                    answers: summary.clone(),
+                });
+                deps.wal.append(
+                    &self.session_id,
+                    "clarify.resolved",
+                    &format!("{{\"question_id\":\"{question_id}\",\"decision\":\"answered\"}}"),
+                );
+                ToolOutcome::Ok {
+                    summary: format!("用户回答：{summary}"),
+                    truncated: false,
+                    exit_code: None,
+                    duration_ms: 0,
+                }
+            }
+            None => {
+                emit(deps, &self.session_id, |id| SessionEvent::ClarifyResolved {
+                    session_id: id,
+                    question_id: question_id.clone(),
+                    decision: "cancelled".into(),
+                    answers: String::new(),
+                });
+                deps.wal.append(
+                    &self.session_id,
+                    "clarify.resolved",
+                    &format!("{{\"question_id\":\"{question_id}\",\"decision\":\"cancelled\"}}"),
+                );
+                ToolOutcome::Blocked {
+                    code: 8002,
+                    summary: "用户已中断本轮（提问未回答）".into(),
+                }
+            }
+        }
+    }
+
     /// 会话结束：日报重算 + journal 收口（D15 §3.2 触发 1）
     pub fn end(&mut self, deps: &LoopDeps, summary: &str) {
         self.state = state::end(self.state);
@@ -1535,10 +1743,15 @@ impl SessionRunner {
     pub fn delegate_sender(&self) -> Sender<DelegateHostMsg> {
         self.delegate_tx.clone()
     }
+
+    /// 澄清回执通道（宿主 clarify.response 注入；D20）
+    pub fn clarify_sender(&self) -> Sender<ClarifyAnswer> {
+        self.clarify_tx.clone()
+    }
 }
 
-/// 系统提示（08 篇行为规格 + D15 §2.2 W1 记忆使用规范 + D19 分级；技能注入阶段二）
-pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoWork 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n长期记忆（memory_save 工具，跨会话生效；自动按作用域分区）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 作用域（自动路由，无需指定）：user 类存用户级（所有会话可见）；project/feedback/reference 类在项目会话中存该项目专属分区，在日常对话中存用户级。[记忆]区含[用户记忆]与[项目记忆]两段时，项目段仅对本项目会话生效。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。";
+/// 系统提示（08 篇行为规格 + D15 §2.2 W1 记忆使用规范 + D19 分级 + D20 澄清规范；技能注入阶段二）
+pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoWork 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n向用户提问（ask_user 工具）：仅在关键决策影响后续大量工作、或用户意图存在实质歧义时使用——方案二选一、破坏性操作确认、需求方向取舍。能合理自决的不问；一次只问一个问题，选项 2-4 个（label 简短 + description 说明取舍）；用户不选点「其他」也能自由作答。提问后等待回答，不要自行猜测答案。\n\n长期记忆（memory_save 工具，跨会话生效；自动按作用域分区）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 作用域（自动路由，无需指定）：user 类存用户级（所有会话可见）；project/feedback/reference 类在项目会话中存该项目专属分区，在日常对话中存用户级。[记忆]区含[用户记忆]与[项目记忆]两段时，项目段仅对本项目会话生效。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。";
 
 /// 组装结果 → 模型消息序列（system/记忆/项目 → history → 工具结果）
 fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {

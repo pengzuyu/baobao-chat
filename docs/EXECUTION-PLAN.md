@@ -200,3 +200,36 @@
 | G8 | IM 内嵌联动 | embedded workspace=最近项目会话（跳过日常），无则日常 | D18 实测行为不变（最近工作台会话通常即项目会话） | [x] 2026-11-10（ChatPage agentFlow 取值改 find(x=>x.workspace)） |
 | G9 | 文档 | D19 新篇+D08/D11/D15 落地注记+索引 | 设计口径可追溯 | [x] 2026-11-10 |
 | G10 | 真机验收 | 日常拒绝文案/项目会话文件落正确目录/双分区记忆/重启恢复/过程卡动效 | 用户真机走查 | [ ] 待验收（随用户未提交 WIP 一并验收提交） |
+
+## 批次 H：ask_user 提问卡（D20，2026-11-11 实施完成待真机验收）
+
+> 定案（用户裁决立项）：ZCode 式 AskUserQuestion——agent 关键决策点向用户发结构化提问，
+> 三端（私聊/群聊落流卡/工作台）选项卡点选作答，答案进工具结果回给模型；完全镜像
+> permission 阻塞机制；**无超时**（等用户或「停止」中断收口 cancelled）。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|---|---|---|---|
+| H1 | 协议对 | clarify.request UNT（questionId/question/header?/options/multiSelect）+ clarify.response REQ（camelCase）+ WaitingClarify 状态 + golden 双契约 | wire 锁定；状态名表含 waiting_clarify | [x] 2026-11-11（bbrt-protocol 29 例绿） |
+| H2 | 会话机制 | run_tool 拦截 ask_user（同 coding.delegate 先例不走 pipeline）；clarify_tx/rx+1s 轮询可中断等待；#6b/#7b 迁移；WAL 两侧+恢复作废；SYSTEM_PROMPT 提问规范 | 回答注入工具结果；停止=cancelled 收口 interrupted；坏参数 9001 不发卡 | [x] 2026-11-11（loop_tests clarify 三件套+state_machine 36 例绿） |
+| H3 | 工具+路由 | ask_user_def（Low/ReadOnly/不进工作区墙=日常可问）+注册；manager.respond_clarify；bin bridge 路由登记+映射+main dispatch arm | specs 可见；question_id→session 路由投递 | [x] 2026-11-11（tools_suite 42 例绿；全 workspace 52 套绿） |
+| H4 | 壳+前端 | agent_clarify_respond 命令；clarify 事件 normalize+StreamItem+respondClarify 全流扫描+系统通知（无超时 timer）；三端 UI（ClarifyCard/聊天页 Modal/落流卡内嵌条 ClarifyForm 共用）+mock 第 3 轮剧本+样式 | tsc/vite build 绿；composer waiting_clarify 禁用；未决提问卡强制展开 | [x] 2026-11-11 |
+| H5 | 文档 | D20 新篇+detail 索引+本批次 | 口径可追溯 | [x] 2026-11-11 |
+| H6 | 端到端冒烟 | examples/clarify_smoke.rs+假网关（ask_user tool_call SSE）→ 真 bbrt 全链 | clarify.request 壳侧 emit 可达+回答注入工具结果+回合收口 idle | [x] 2026-11-11（SMOKE PASS） |
+| H7 | 真机验收 | 三端触发提问卡/点选继续拿到答案/多选+补充/停止中断收口/系统通知可见 | 用户真机走查 | [ ] 待验收 |
+
+## 批次 I：工作台微调 + 会话历史加载（2026-11-11 实施完成待真机验收）
+
+> 定案（用户裁决两件）：①新建任务不应有「启动中」态——壳 agent_start_session 本就同步等完
+> session.ready 回执才返回，前端 starting 是多余瞬态（且事件泵线程死亡时永久卡死）；
+> ②工作台打开会话要能加载聊天记录——IM embedded 与工作台同一会话身份（D18/D19），
+> 历史直读 bbrt WAL（服务端零改动）。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|---|---|---|---|
+| I1 | 「启动中」移除 | 前端 SessionStatus 枚举删 starting（标签/禁用规则/TURN_ACTIVE/IM live 集合同步清）；建会话投影直接 idle；壳 start_session 成功回执后缓存行同步翻 idle；mapSession 瞬态归一兜底；mock 对齐 | 新建任务即「空闲」可输入；无任何 starting 残留路径 | [x] 2026-11-11（tsc/vite build+cargo check+壳 6 例绿） |
+| I2 | 输入区 hint 精简 | Composer foot 删「/ 指令 · Enter 发送」span+死样式（禁用态提示仍走 placeholder） | hint 不再显示 | [x] 2026-11-11 |
+| I3 | 协议对 | session.history REQ→session.history.result（HistoryItem user/assistant/tool；变体级 camelCase——enum 级 rename_all 不管字段）+ golden 双契约含旧 WAL 降级行 | wire 锁定 | [x] 2026-11-11（bbrt-protocol 30 例绿） |
+| I4 | WAL 增补 | assistant.done 加 text 回复原文；tool.result 加 ok/summary（recovery 只读旧字段不受影响；借 text 重建上下文留阶段二） | 历史可渲染完整回合 | [x] 2026-11-11（loop_tests/recovery 全绿） |
+| I5 | RT+壳+前端 | main dispatch 直读 events_after→wal_history（会话不须运行态）；壳 session_history 透传；bridge loadHistory；store selectSession 即拉 loadHistoryIfEmpty（空流才回填，直播不覆盖）+historyToStreamItem 回合气泡同构映射 | 工作台打开历史/结束/embedded 会话即见全程记录；重启后不再空白 | [x] 2026-11-11（agent 全 workspace 561 例绿+tsc/vite build+壳 fmt/check 绿；mock 历史返空=剧本内存态） |
+| I6 | 文档 | D19 落地注记（会话历史加载）+本批次 | 口径可追溯 | [x] 2026-11-11 |
+| I7 | 真机验收 | 新建任务无启动中/日常打开 embedded 会话见 IM 聊天记录/重启后工作台会话历史在/旧会话（WAL 无 text）降级不报错 | 用户真机走查 | [ ] 待验收 |

@@ -239,6 +239,7 @@ fn e2e_full_runtime_process() {
             skills: vec![],
             history_ref: None,
             backend_hint: None,
+            title: None,
         },
     );
     let _sr = until(&pump, "session.ready", &mut seen);
@@ -252,6 +253,7 @@ fn e2e_full_runtime_process() {
             text: "读一下 foo.txt，并记住内容是 hello runtime".into(),
             attachments: vec![],
             slash: None,
+            thinking: None,
         },
     );
 
@@ -453,6 +455,7 @@ fn e2e_delegate_via_generic_cli() {
             skills: vec![],
             history_ref: None,
             backend_hint: None,
+            title: None,
         },
     );
     let _ = until(&pump, "session.ready", &mut seen);
@@ -465,6 +468,7 @@ fn e2e_delegate_via_generic_cli() {
             text: "帮我委派修复构建".into(),
             attachments: vec![],
             slash: None,
+            thinking: None,
         },
     );
 

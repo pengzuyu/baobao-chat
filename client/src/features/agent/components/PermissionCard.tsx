@@ -6,7 +6,7 @@
  * - 终态折叠：已允许（含粒度）/ 已拒绝 / 已超时 / 已作废（紧急停止）
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import type { StreamItem } from '../store/agent';
@@ -35,7 +35,7 @@ interface PermissionCardProps {
   onRespond: (d: PermissionDecision) => void;
 }
 
-export function PermissionCard({ item, onRespond }: PermissionCardProps) {
+export const PermissionCard = memo(function PermissionCard({ item, onRespond }: PermissionCardProps) {
   const { request, outcome } = item;
   const waiting = outcome === null;
   const commandPreview = request.preview.kind === 'command' ? request.preview : null;
@@ -168,4 +168,4 @@ export function PermissionCard({ item, onRespond }: PermissionCardProps) {
       </div>
     </div>
   );
-}
+});

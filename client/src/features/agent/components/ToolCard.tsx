@@ -4,7 +4,7 @@
  * - 展开体：输入参数摘要（脱敏后的 args）+ 结果摘要（≤10 行）
  */
 
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { ChevronRight, FileText, Loader2, Search, Terminal, Wrench } from 'lucide-react';
 import type { StreamItem } from '../store/agent';
 import { RISK_LABELS } from '../bridge/types';
@@ -46,7 +46,7 @@ function summarizeArgs(args: Record<string, unknown>): string {
     .join('　');
 }
 
-export function ToolCard({ item }: { item: ToolItem }) {
+export const ToolCard = memo(function ToolCard({ item }: { item: ToolItem }) {
   // D19 自动折叠：运行中展开看实时参数、结果落定自动收回头部行（手动点击仍可翻转；
   // 每次 running 翻转重置回自动态，对齐 change-my-life ToolCallGroup 行为）
   const { call, result } = item;
@@ -100,4 +100,4 @@ export function ToolCard({ item }: { item: ToolItem }) {
       ) : null}
     </div>
   );
-}
+});

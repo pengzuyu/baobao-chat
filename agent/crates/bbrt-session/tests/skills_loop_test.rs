@@ -133,9 +133,9 @@ fn skill_body_injected_on_trigger_only() {
     );
 
     // 命中轮
-    runner.run_turn("帮我报销上次的差旅费", &deps);
+    runner.run_turn("帮我报销上次的差旅费", &deps, None);
     // 未命中轮
-    runner.run_turn("今天天气怎么样", &deps);
+    runner.run_turn("今天天气怎么样", &deps, None);
 
     let systems = captured.lock().unwrap().clone();
     assert_eq!(systems.len(), 2, "两轮各一次模型调用");
@@ -279,7 +279,7 @@ fn pick_tools_narrows_to_declared_union() {
         ModelTier::Strong,
         None,
     );
-    runner.run_turn("帮我部署服务", &deps);
+    runner.run_turn("帮我部署服务", &deps, None);
     let seen = model.0.lock().unwrap().clone();
     assert!(!seen.is_empty());
     // 收紧：并集 {read_file, search_files}，不含 list_dir
@@ -329,7 +329,7 @@ fn pick_tools_keeps_full_when_undeclared() {
         ModelTier::Strong,
         None,
     );
-    runner.run_turn("自由发挥", &deps);
+    runner.run_turn("自由发挥", &deps, None);
     let seen = model.0.lock().unwrap().clone();
     assert!(seen.iter().all(|n| n.len() == 3), "未声明不收紧: {seen:?}");
 }
