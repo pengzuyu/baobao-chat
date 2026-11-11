@@ -20,6 +20,9 @@ export interface AgentStage {
   ts?: number;
   /** thinking：摘要文本 */
   digest?: string;
+  /** thinking：本段思考仍在流式（live 投影瞬态旗标——stagesFromStream 从 StreamItem
+   *  透传；落流 PATCH 前剥除不落库，历史卡不带恒折叠） */
+  streaming?: boolean;
   /** tool */
   name?: string;
   status?: 'ok' | 'fail' | 'blocked' | 'running';
@@ -42,7 +45,9 @@ export interface AgentCardBody {
   question?: string;
 }
 
-/** 思考卡：流式强制展开+呼吸动画；结束自动折叠（change-my-life ThinkingCard 模式）。
+/** 思考卡：流式强制展开+呼吸动画；本段思考结束自动折叠（change-my-life ThinkingCard
+ *  模式）。折叠态随卸载重置：外层（IM 迷你卡/过程区摘要条）折叠即卸载本卡，再展开
+ *  重挂回初始态——已完成=折叠（省空间，2026-11-11 用户口径），仍在流式=展开。
  *  2026-11-11 导出共享：工作台回合气泡过程区同款复用（每段思考一张折叠小卡） */
 export function ThinkingCollapse({ text, streaming }: { text: string; streaming: boolean }) {
   const [expanded, setExpanded] = useState(streaming);
@@ -182,7 +187,6 @@ export function AgentProcessCard({ body, live, startedAt, staleAfterMs, actions,
   const [expanded, setExpanded] = useState(false);
   const showProcess = running || expanded || forceExpand === true;
 
-  const tools = body.stages.filter((s) => s.t === 'tool');
   const lastConclusionIdx = body.stages.map((x) => x.t).lastIndexOf('conclusion');
   const processStages = body.stages.filter((_, i) => i !== lastConclusionIdx);
   const lastConclusion = lastConclusionIdx >= 0 ? body.stages[lastConclusionIdx] : null;
@@ -267,7 +271,9 @@ export function AgentProcessCard({ body, live, startedAt, staleAfterMs, actions,
                 {children ??
                   processStages.map((s, j) =>
                     s.t === 'thinking' ? (
-                      <ThinkingCollapse key={j} text={s.digest ?? ''} streaming={running && j === processStages.length - 1 && !tools.some((t) => t.status === 'running')} />
+                      // streaming 用投影透传的精确旗标（本轮思考已收尾即折叠，不再
+                      // 启发式撑到下一阶段——2026-11-11 用户口径：一轮思考完就收）
+                      <ThinkingCollapse key={j} text={s.digest ?? ''} streaming={running && s.streaming === true} />
                     ) : s.t === 'tool' ? (
                       <ToolRow key={j} s={s} />
                     ) : (

@@ -141,7 +141,8 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
       kind: 'embedded_agent',
       session_id: sessionId,
       status,
-      stages,
+      // streaming 是 live 投影瞬态旗标（落库即过时——历史卡思考恒折叠），剥除不落
+      stages: stages.map((s) => (s.streaming == null ? s : { ...s, streaming: undefined })),
       sources,
       rounds,
       started_at: roundStartRef.current,

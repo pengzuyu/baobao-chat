@@ -107,7 +107,9 @@ export function stagesFromStream(items: StreamItem[]): { stages: AgentStage[]; s
   for (const it of items) {
     switch (it.kind) {
       case 'reasoning':
-        stages.push({ t: 'thinking', digest: it.text.slice(0, 2000), ts: Date.now() });
+        // streaming 旗标透传（瞬态）：IM 落流卡思考小卡按它精确判定「本段思考是否
+        // 已收尾」（收尾即自动折叠）；落流 PATCH 前由 EmbeddedAgentSync 剥除
+        stages.push({ t: 'thinking', digest: it.text.slice(0, 2000), streaming: it.streaming, ts: Date.now() });
         break;
       case 'agentText':
         rounds += 1;
