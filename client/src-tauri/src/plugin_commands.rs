@@ -53,18 +53,14 @@ fn valid_plugin_id(id: &str) -> bool {
 fn valid_version(v: &str) -> bool {
     let parts: Vec<&str> = v.split('.').collect();
     parts.len() == 3
-        && parts.iter().all(|p| {
-            !p.is_empty() && p.len() <= 8 && p.chars().all(|c| c.is_ascii_digit())
-        })
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 8 && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// 条目内路径安全（zip slip 三拒 + 长度）
 fn safe_rel_path(p: &str) -> bool {
-    !p.is_empty()
-        && p.len() <= 255
-        && !p.starts_with('/')
-        && !p.contains("..")
-        && !p.contains('\\')
+    !p.is_empty() && p.len() <= 255 && !p.starts_with('/') && !p.contains("..") && !p.contains('\\')
 }
 
 fn plugin_root(host: &Host, plugin_id: &str) -> Result<PathBuf, String> {
@@ -122,7 +118,11 @@ pub fn plugin_write_files(
             .decode(&f.content_b64)
             .map_err(|e| format!("文件 {} base64 解码失败: {e}", f.path))?;
         if bytes.len() > PLUGIN_FILE_MAX_BYTES {
-            return Err(format!("单文件超限（>{}MB）: {}", PLUGIN_FILE_MAX_BYTES >> 20, f.path));
+            return Err(format!(
+                "单文件超限（>{}MB）: {}",
+                PLUGIN_FILE_MAX_BYTES >> 20,
+                f.path
+            ));
         }
         let dest = ver_dir.join(&f.path);
         if let Some(parent) = dest.parent() {
@@ -130,7 +130,9 @@ pub fn plugin_write_files(
         }
         fs::write(&dest, &bytes).map_err(|e| format!("文件写入失败 {}: {e}", f.path))?;
     }
-    // 全量落盘成功 → 激活该版（enabled 不动；保留 config）
+    // 全量落盘成功 → 激活该版（enabled 不动；保留 config）→ 装配推送（L3：
+    // mcp.config 全量 + tools.reload{plugin}；失败仅告警——落盘已成功，
+    // RT 侧重启后由 ready 重推兜底）
     if finalize.unwrap_or(true) {
         let mut state = read_state(&root);
         state["activeVersion"] = json!(version);
@@ -138,6 +140,9 @@ pub fn plugin_write_files(
             state["enabled"] = json!(true);
         }
         write_state(&root, &state)?;
+        if let Err(e) = host.push_plugin_mcp() {
+            eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
+        }
     }
     Ok(())
 }
@@ -159,10 +164,13 @@ pub fn plugin_remove_local(host: Host, plugin_id: String, keep_config: bool) -> 
         fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         fs::write(root.join("config.json"), c).map_err(|e| e.to_string())?;
     }
+    if let Err(e) = host.push_plugin_mcp() {
+        eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
+    }
     Ok(())
 }
 
-/// 启用/禁用（禁用=装配剔除，L3 消费；目录与配置不动）
+/// 启用/禁用（禁用=装配剔除；目录与配置不动）
 #[tauri::command]
 pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Result<(), String> {
     let root = plugin_root(&host, &plugin_id)?;
@@ -171,7 +179,11 @@ pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Resul
     }
     let mut state = read_state(&root);
     state["enabled"] = json!(enabled);
-    write_state(&root, &state)
+    write_state(&root, &state)?;
+    if let Err(e) = host.push_plugin_mcp() {
+        eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
+    }
+    Ok(())
 }
 
 /// 本地态（已安装页对照：版本线/激活版/启禁/config 值）

@@ -124,6 +124,7 @@ fn run() -> Result<(), String> {
             .and_then(|c| c.get(now).map(str::to_string))
     });
     let (mcp_client, mcp_results) = bbrt_mcp::McpClient::connect(&mcp_configs, mcp_tokens);
+    let mcp_client = Arc::new(mcp_client); // dispatch（mcp.config 重配）与工具管线共享
     for (name, r) in &mcp_results {
         if let Err(e) = r {
             eprintln!("[bbrt] MCP server '{name}' 连接降级: {e}");
@@ -137,10 +138,10 @@ fn run() -> Result<(), String> {
         sync_experts(&data_dir, &base);
     }
 
-    // 技能索引（10 篇 §4.5）：扫描 {dataDir}/eco/skills/*/SKILL.md；
-    // tools.reload{reason:skill} 热重载（宿主安装/更新/卸载技能包后调用）
-    let skills_index = Arc::new(Mutex::new(bbrt_session::SkillIndex::scan(
-        &data_dir.join("eco/skills"),
+    // 技能索引（10 篇 §4.5 + D22/L3）：多根扫描=生态根 {dataDir}/eco/skills
+    // + 各启用插件版本目录 skills；tools.reload 热重载同口径
+    let skills_index = Arc::new(Mutex::new(bbrt_session::SkillIndex::scan_roots(
+        &skill_roots(&data_dir),
     )));
     // D19 会话工作区表（manager 与 tools 管线共享：start/end 维护，
     // 工具执行按会话解析沙箱根）
@@ -151,7 +152,9 @@ fn run() -> Result<(), String> {
         workspace: PathBuf::new(),
         launcher: None, // detect() 探测（Seatbelt/Baseline + 降级徽标）
         memory: Some(memory.clone()),
-        mcp: (!mcp_configs.is_empty()).then(|| Arc::new(mcp_client)),
+        // 恒 Some（D22/L3）：空配置零成本（连接表空），插件 mcp.config 动态
+        // 下发后无需重启即注入工具面
+        mcp: Some(mcp_client.clone()),
         session_workspaces: Some(session_workspaces.clone()),
         ..Default::default()
     }));
@@ -297,7 +300,8 @@ fn run() -> Result<(), String> {
             &store,
             &obo,
             &skills_index,
-            &data_dir.join("eco/skills"),
+            &mcp_client,
+            &data_dir,
             &mut ids,
             &env,
         );
@@ -320,7 +324,8 @@ fn dispatch(
     store: &Arc<Mutex<Store>>,
     obo: &Arc<std::sync::Mutex<bbrt_hostapi::OboCache>>,
     skills: &Arc<Mutex<bbrt_session::SkillIndex>>,
-    eco_skills_dir: &std::path::Path,
+    mcp: &Arc<bbrt_mcp::McpClient>,
+    data_dir: &std::path::Path,
     ids: &mut IdGen,
     env: &Envelope,
 ) -> Option<RuntimeToHost> {
@@ -888,12 +893,20 @@ fn dispatch(
             }
         }
         // 工具/技能热重载（10 篇 §4.5：宿主安装/更新/卸载技能包后 tools.reload
-        // {reason:skill}；App/Policy 亦触发技能重扫——生态内容变更的统一失效信号）
+        // {reason:skill}；App/Policy/Plugin 亦触发技能重扫——生态内容变更的
+        // 统一失效信号。D22/L3：扫描多根=生态根+各启用插件版本目录）
         HostToRuntime::ToolsReload { .. } => {
             if let Ok(mut idx) = skills.lock() {
-                *idx = bbrt_session::SkillIndex::scan(eco_skills_dir);
+                *idx = bbrt_session::SkillIndex::scan_roots(&skill_roots(data_dir));
             }
             None // 效果经后续轮次注入体现（协议无独立回执变体）
+        }
+        // MCP 装配动态下发（NTF；D22 §5.3/L3：宿主推全量——系统级+插件级合并、
+        // PLUGIN_ROOT 已替换；按名重配=未变保留/变了断开/新增懒连/移除断开）
+        HostToRuntime::McpConfig { servers } => {
+            let configs = servers.iter().map(wire_to_mcp_config).collect();
+            mcp.reconfigure(configs);
+            None
         }
         _ => None, // 其余 REQ 阶段二；NTF 误投忽略
     }
@@ -944,6 +957,64 @@ fn sync_experts(data_dir: &std::path::Path, base: &str) {
     }
     if synced > 0 {
         eprintln!("[bbrt] 专家库同步 +{synced}（{dir:?}）");
+    }
+}
+
+/// 技能扫描根集合（D22 §5.3/L3）：生态根在前（同名技能优先）+ 各启用插件
+/// activeVersion 目录的 skills 根。插件根=读 {dataDir}/eco/plugins/{id}/
+/// plugin-state.json（enabled=true 且 activeVersion 非空）；state 缺失/坏
+/// JSON 跳过该插件。
+fn skill_roots(data_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut roots = vec![data_dir.join("eco/skills")];
+    let plugins_dir = data_dir.join("eco/plugins");
+    let Ok(rd) = std::fs::read_dir(&plugins_dir) else {
+        return roots;
+    };
+    let mut plugin_ids: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .collect();
+    plugin_ids.sort();
+    for id in plugin_ids {
+        let base = plugins_dir.join(&id);
+        let Ok(state) = std::fs::read_to_string(base.join("plugin-state.json")) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&state) else {
+            continue;
+        };
+        let enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
+        let Some(ver) = v.get("activeVersion").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        if !enabled || ver.is_empty() {
+            continue;
+        }
+        let skills = base.join(ver).join("skills");
+        if skills.is_dir() {
+            roots.push(skills);
+        }
+    }
+    roots
+}
+
+/// mcp.config wire → McpServerConfig（env map → Vec 对，保序无要求）
+fn wire_to_mcp_config(w: &bbrt_protocol::McpServerWire) -> bbrt_mcp::McpServerConfig {
+    use bbrt_protocol::McpTransportWire;
+    let transport = match &w.transport {
+        McpTransportWire::Stdio { command, args, env } => bbrt_mcp::TransportConfig::Stdio {
+            command: command.clone(),
+            args: args.clone(),
+            env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        },
+        McpTransportWire::Http { base_url } => bbrt_mcp::TransportConfig::Http {
+            base_url: base_url.clone(),
+        },
+    };
+    bbrt_mcp::McpServerConfig {
+        name: w.name.clone(),
+        transport,
     }
 }
 

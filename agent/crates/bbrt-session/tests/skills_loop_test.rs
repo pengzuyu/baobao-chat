@@ -239,6 +239,7 @@ fn pick_tools_narrows_to_declared_union() {
         entries: vec![
             SkillEntry {
                 name: "deploy".into(),
+                description: String::new(),
                 triggers: vec!["部署".into()],
                 allowed_tools: vec!["read_file".into()],
                 risk: "low".into(),
@@ -247,6 +248,7 @@ fn pick_tools_narrows_to_declared_union() {
             },
             SkillEntry {
                 name: "audit".into(),
+                description: String::new(),
                 triggers: vec!["部署".into()], // 同 trigger 双技能并集
                 allowed_tools: vec!["search_files".into()],
                 risk: "low".into(),
@@ -298,6 +300,7 @@ fn pick_tools_keeps_full_when_undeclared() {
     let skills = SkillIndex {
         entries: vec![SkillEntry {
             name: "free".into(),
+            description: String::new(),
             triggers: vec!["自由".into()],
             allowed_tools: vec![], // 未声明=全量语义
             risk: "low".into(),

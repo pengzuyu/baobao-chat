@@ -104,13 +104,40 @@ pub enum CheckpointReason {
     PreRestore,
 }
 
-/// 工具热重载原因（tools.reload：app/skill/policy）
+/// 工具热重载原因（tools.reload：app/skill/policy/plugin）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolsReloadReason {
     App,
     Skill,
     Policy,
+    /// 插件装卸/启禁（D22/L3：skills 重扫多根 + MCP 重配后）
+    Plugin,
+}
+
+/// MCP server 装配 wire（mcp.config 载荷；D22 §5.3）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerWire {
+    /// 命名空间段：工具全名 mcp.{name}.{tool}
+    pub name: String,
+    pub transport: McpTransportWire,
+}
+
+/// 传输配置 wire（stdio 子进程 / 远程 HTTP；env 为 map 形态，Runtime 侧转 Vec 对）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum McpTransportWire {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: std::collections::HashMap<String, String>,
+    },
+    Http {
+        base_url: String,
+    },
 }
 
 /// OBO 续签原因（obo.renew）
@@ -637,6 +664,13 @@ pub enum HostToRuntime {
     /// 工具热重载（10 篇通道/策略变更）
     #[serde(rename = "tools.reload", rename_all = "camelCase")]
     ToolsReload { reason: ToolsReloadReason },
+
+    /// MCP 装配动态下发（NTF；D22 §5.3/L3：插件安装/更新/启禁/卸载后宿主推
+    /// **全量**装配——系统级（corp 等）+插件级两源合并、`${PLUGIN_ROOT}` 已
+    /// 替换为版本目录绝对路径；Runtime 按名重配：保留未变连接/断开移除/
+    /// 新增懒连。启动持久性=宿主每次 spawn ready 后重推一次）
+    #[serde(rename = "mcp.config", rename_all = "camelCase")]
+    McpConfig { servers: Vec<McpServerWire> },
 
     /// 健康（REQ；宿主每 20s 发，5s 未回 pong 判不健康）
     #[serde(rename = "ping")]

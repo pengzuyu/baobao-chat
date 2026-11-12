@@ -308,10 +308,29 @@ impl AgentHost {
         match ready_rx.recv_timeout(HANDSHAKE_TIMEOUT) {
             Ok(()) => {
                 self.shared.proc.lock().unwrap().ready = true;
+                // MCP 装配持久性（D22 §5.3/L3）：spawn 后重推全量（系统级 corp
+                // env 已注入，插件级必须经 mcp.config——RT 重启不丢插件 server）。
+                // 失败仅告警不阻断（插件降级标灰，corp 链路不受影响）
+                if let Err(e) = self.push_plugin_mcp_inner() {
+                    eprintln!("[bbw-bridge] 插件 MCP 装配推送失败（降级）: {e}");
+                }
                 Ok(())
             }
             Err(_) => Err("bbrt 握手超时（未收到 runtime.ready）".into()),
         }
+    }
+
+    /// 插件 MCP 装配推送（对外入口：ensure_running 前置）——装配变更后调用
+    pub fn push_plugin_mcp(&self) -> Result<(), String> {
+        self.ensure_running()?;
+        self.push_plugin_mcp_inner()
+    }
+
+    /// 全量装配 → mcp.config（NTF）+ tools.reload{plugin}（skills 多根重扫）
+    fn push_plugin_mcp_inner(&self) -> Result<(), String> {
+        let servers = assemble_mcp_servers(&self.data_dir, &self.gateway);
+        self.fire_inner("mcp.config", json!({ "servers": servers }))?;
+        self.fire_inner("tools.reload", json!({ "reason": "plugin" }))
     }
 
     fn spawn_child(&self) -> Result<mpsc::Receiver<()>, String> {
@@ -739,6 +758,142 @@ fn camel_to_snake(s: &str) -> String {
         }
     }
     out
+}
+
+// ── 插件 MCP 装配器（D22 §5.3 / L3）──
+//
+// 两源合并产出 mcp.config 全量 wire（camelCase，与协议 McpServerWire 对齐）：
+//   1. 系统级：corp（HTTP 网关，env 同源口径——RT 启动 env 兜底，本装配覆盖）；
+//   2. 插件级：各启用插件 activeVersion 目录的 .mcp.json（或 plugin.json 内联
+//      mcpServers——string 路径/内联对象双形态，与服务端 Go 校验器同口径）。
+// `${PLUGIN_ROOT}` 替换为版本目录绝对路径（装配时静态替换）；身份变量
+// （${BBW_USER_TOKEN}/${CONFIG:*}）随 L4 在 RT 调用层动态注入——HTTP
+// headers 本层暂丢弃（TransportConfig::Http 尚无自定义头，登记 L4）。
+// server 名冲突：系统级优先，插件同名跳过（防劫持 corp 命名空间）。
+
+fn assemble_mcp_servers(data_dir: &std::path::Path, gateway: &str) -> Vec<Value> {
+    let mut out = vec![json!({
+        "name": "corp",
+        "transport": { "kind": "http", "baseUrl": format!("{}/mcp/corp", gateway.trim_end_matches('/')) }
+    })];
+    let mut taken: Vec<String> = vec!["corp".into()];
+
+    let plugins_dir = data_dir.join("eco/plugins");
+    let Ok(rd) = std::fs::read_dir(&plugins_dir) else {
+        return out;
+    };
+    let mut ids: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .collect();
+    ids.sort();
+    for id in ids {
+        let base = plugins_dir.join(&id);
+        let Ok(state) = std::fs::read_to_string(base.join("plugin-state.json")) else {
+            continue;
+        };
+        let Ok(sv) = serde_json::from_str::<Value>(&state) else {
+            continue;
+        };
+        if !sv.get("enabled").and_then(Value::as_bool).unwrap_or(true) {
+            continue;
+        }
+        let Some(ver) = sv.get("activeVersion").and_then(Value::as_str) else {
+            continue;
+        };
+        if ver.is_empty() {
+            continue;
+        }
+        let ver_dir = base.join(ver);
+        let Some(mcp_doc) = read_plugin_mcp_doc(&ver_dir) else {
+            continue;
+        };
+        let Some(servers) = mcp_doc.get("mcpServers").and_then(Value::as_object) else {
+            continue;
+        };
+        let root = ver_dir.display().to_string();
+        for (name, def) in servers {
+            if taken.contains(name) {
+                eprintln!("[bbw-bridge] 插件 {id} MCP server 名 '{name}' 与系统级/先到冲突，跳过");
+                continue;
+            }
+            match mcp_server_wire(name, def, &root) {
+                Some(w) => {
+                    taken.push(name.clone());
+                    out.push(w);
+                }
+                None => eprintln!(
+                    "[bbw-bridge] 插件 {id} MCP server '{name}' 定义非法（缺 command/url），跳过"
+                ),
+            }
+        }
+    }
+    out
+}
+
+/// 插件 MCP 定义读取：.mcp.json 文件优先；缺省回落 plugin.json（三目录名）
+/// 的 mcpServers 字段（string=路径 → 读该文件；object=内联——包一层
+/// {"mcpServers": ...} 归一）
+fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
+    if let Ok(text) = std::fs::read_to_string(ver_dir.join(".mcp.json")) {
+        return serde_json::from_str(&text).ok();
+    }
+    for dir in [".bbw-plugin", ".claude-plugin", ".zcode-plugin"] {
+        let Ok(text) = std::fs::read_to_string(ver_dir.join(dir).join("plugin.json")) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        match v.get("mcpServers") {
+            Some(Value::String(rel)) => {
+                let p = ver_dir.join(rel.trim_start_matches("./"));
+                if let Ok(t) = std::fs::read_to_string(&p) {
+                    return serde_json::from_str(&t).ok();
+                }
+            }
+            Some(obj @ Value::Object(_)) => return Some(json!({ "mcpServers": obj })),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 单 server 定义 → wire（stdio：command/args/env 值级 `${PLUGIN_ROOT}` 替换；
+/// http：url→baseUrl，headers 丢弃登记 L4；缺 command 与 url=None）
+fn mcp_server_wire(name: &str, def: &Value, plugin_root: &str) -> Option<Value> {
+    let subst = |s: &str| s.replace("${PLUGIN_ROOT}", plugin_root);
+    if let Some(cmd) = def.get("command").and_then(Value::as_str) {
+        let args: Vec<String> = def
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(&subst).collect())
+            .unwrap_or_default();
+        let env = match def.get("env").and_then(Value::as_object) {
+            Some(m) => m
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        Value::String(subst(&v.to_string().trim_matches('"'))),
+                    )
+                })
+                .collect::<serde_json::Map<String, Value>>(),
+            None => serde_json::Map::new(),
+        };
+        return Some(json!({
+            "name": name,
+            "transport": { "kind": "stdio", "command": subst(cmd), "args": args, "env": env }
+        }));
+    }
+    if let Some(url) = def.get("url").and_then(Value::as_str) {
+        return Some(json!({
+            "name": name,
+            "transport": { "kind": "http", "baseUrl": url }
+        }));
+    }
+    None
 }
 
 #[cfg(test)]

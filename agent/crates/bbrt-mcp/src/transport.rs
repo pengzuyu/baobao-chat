@@ -20,14 +20,14 @@ use crate::http::{parse_url, post_json, ParsedUrl};
 use crate::McpError;
 
 /// server 配置（bin 从环境/eco 通道装载）
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     /// 命名空间段：工具全名 mcp.{name}.{tool}
     pub name: String,
     pub transport: TransportConfig,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TransportConfig {
     /// 本地子进程（个人 MCP / 本地网关代理）
     Stdio {

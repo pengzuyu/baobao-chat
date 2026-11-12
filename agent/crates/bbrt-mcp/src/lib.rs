@@ -52,10 +52,14 @@ pub type ConnectResults = Vec<(String, Result<(), McpError>)>;
 /// 多 server 聚合客户端（bin 装配持有；连接生命周期与进程一致）
 pub struct McpClient {
     conns: Mutex<HashMap<String, McpConnection>>,
+    /// 已连接 server 的配置快照（reconfigure 判断「同名但配置变了」用——
+    /// McpConnection 自身不保留配置）
+    active: Mutex<HashMap<String, McpServerConfig>>,
     /// 主体令牌提供者（OboCache 闭包；每次调用现取——逐请求传播）
     tokens: TokenProvider,
-    /// 全量配置（懒重连用：启动失败/无令牌降级的 server，登录后首次使用时补连）
-    configs: Vec<McpServerConfig>,
+    /// 全量配置（懒重连用：启动失败/无令牌降级的 server，登录后首次使用时补连；
+    /// mcp.config 动态重配可替换——D22 §5.3/L3）
+    configs: Mutex<Vec<McpServerConfig>>,
 }
 
 impl McpClient {
@@ -64,10 +68,12 @@ impl McpClient {
     /// tokens 同时供 Http 传输（Authorization 头）与 call 层（_meta.bbwObo）逐请求取用
     pub fn connect(configs: &[McpServerConfig], tokens: TokenProvider) -> (Self, ConnectResults) {
         let mut conns = HashMap::new();
+        let mut active = HashMap::new();
         let mut results = vec![];
         for cfg in configs {
             match McpConnection::connect(cfg, tokens.clone()) {
                 Ok(c) => {
+                    active.insert(cfg.name.clone(), cfg.clone());
                     conns.insert(cfg.name.clone(), c);
                     results.push((cfg.name.clone(), Ok(())));
                 }
@@ -77,11 +83,39 @@ impl McpClient {
         (
             Self {
                 conns: Mutex::new(conns),
+                active: Mutex::new(active),
                 tokens,
-                configs: configs.to_vec(),
+                configs: Mutex::new(configs.to_vec()),
             },
             results,
         )
+    }
+
+    /// 全量重配（D22 §5.3：宿主 mcp.config 下发后调用）：
+    /// - 名字与配置（PartialEq）都未变的连接**原样保留**（不打断在用 server）；
+    /// - 同名但配置变化 → 断开旧连接（插件更新换版本目录场景），随懒补连重建；
+    /// - 不在新配置中的连接断开移除（卸载/禁用）；
+    /// - 新增 server **不立即连接**——走既有懒补连（下次 list_tools/call 入口），
+    ///   失败降级语义与启动路径一致。
+    pub fn reconfigure(&self, configs: Vec<McpServerConfig>) {
+        let mut conns = match self.conns.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let mut active = match self.active.lock() {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+        conns.retain(|name, _| {
+            match active.get(name) {
+                Some(cur) => configs.iter().any(|c| c == cur), // 未变保留；变了/被移除 → 断开
+                None => false,
+            }
+        });
+        active.retain(|name, cur| configs.iter().any(|c| c == cur && &c.name == name));
+        if let Ok(mut c) = self.configs.lock() {
+            *c = configs;
+        }
     }
 
     /// 懒补连（2026-11-10 真机事故修复）：启动时 corp 常因用户未登录（无 OBO）
@@ -92,8 +126,11 @@ impl McpClient {
             Ok(c) => c,
             Err(_) => return,
         };
-        let missing: Vec<&McpServerConfig> = self
-            .configs
+        let all = match self.configs.lock() {
+            Ok(c) => c.clone(),
+            Err(_) => return,
+        };
+        let missing: Vec<&McpServerConfig> = all
             .iter()
             .filter(|c| !conns.contains_key(&c.name))
             .collect();
@@ -101,6 +138,9 @@ impl McpClient {
             match McpConnection::connect(cfg, self.tokens.clone()) {
                 Ok(c) => {
                     eprintln!("[bbrt] MCP server '{}' 懒补连成功", cfg.name);
+                    if let Ok(mut a) = self.active.lock() {
+                        a.insert(cfg.name.clone(), cfg.clone());
+                    }
                     conns.insert(cfg.name.clone(), c);
                 }
                 Err(_) => return, // 仍无令牌/不可达：保持降级，下次入口再试

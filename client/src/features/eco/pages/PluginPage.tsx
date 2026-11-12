@@ -103,7 +103,7 @@ export function PluginPage() {
     setNotice('');
     void installPlugin(e.plugin_id, e.installed && e.has_update ? e.current_version : undefined)
       .then(() => {
-        setNotice(`${e.name} 已安装（新会话生效；进行中的会话重启后可用）`);
+        setNotice(`${e.name} 已安装（即时生效——工具与技能已装配，进行中会话下轮生效）`);
         reload();
       })
       .catch((err) => setError(`安装失败：${err instanceof Error ? err.message : '未知错误'}`))
@@ -127,7 +127,7 @@ export function PluginPage() {
     void setPluginEnabled(e.plugin_id, enabled)
       .then(() => {
         setLocal((prev) => (prev ? { ...prev, enabled } : prev));
-        setNotice(`${e.name} 已${enabled ? '启用' : '禁用'}（新会话生效）`);
+        setNotice(`${e.name} 已${enabled ? '启用' : '禁用'}（即时生效）`);
       })
       .catch((err) => setError(`操作失败：${err instanceof Error ? err.message : '未知错误'}`))
       .finally(() => setBusyId(null));

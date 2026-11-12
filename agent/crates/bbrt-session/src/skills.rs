@@ -18,6 +18,9 @@ pub struct SkillEntry {
     pub name: String,
     /// 触发关键词（用户消息包含即命中；大小写不敏感）
     pub triggers: Vec<String>,
+    /// 一句话描述（frontmatter description；Claude 格式插件技能常见——
+    /// 进技能索引区供模型知晓存在，D22 §2.1）
+    pub description: String,
     /// 允许工具（allowedTools；v0.1 随正文提示模型）
     pub allowed_tools: Vec<String>,
     /// low | medium | high（缺省 low）
@@ -37,6 +40,12 @@ pub struct SkillIndex {
 
 /// 单轮最多注入技能数（防撑爆 skills 预算；10 篇 §4.6"按需注入"）
 const MAX_INJECT: usize = 3;
+
+/// 技能索引区上限（未命中技能一行一条供模型知晓存在；D22 §2.1）
+const MAX_INDEX_LINES: usize = 12;
+
+/// 索引区 description 截断（字符）
+const INDEX_DESC_MAX: usize = 40;
 
 impl SkillIndex {
     /// 扫描 `eco/skills/*/SKILL.md`（目录缺失/子目录无 SKILL.md 静默跳过；
@@ -59,6 +68,54 @@ impl SkillIndex {
             })
             .collect();
         Self { entries }
+    }
+
+    /// 多根扫描合并（D22 §5.3/L3：生态技能根 + 各启用插件的版本目录 skills 根）。
+    /// 根顺序即优先级：**同名技能先到先得**（生态技能优先，插件技能重名跳过——
+    /// 防触发词互相踩）；根缺失静默空。
+    pub fn scan_roots(roots: &[PathBuf]) -> Self {
+        let mut merged = Self::default();
+        let mut seen: Vec<String> = vec![];
+        for root in roots {
+            for e in Self::scan(root).entries {
+                if seen.contains(&e.name) {
+                    continue;
+                }
+                seen.push(e.name.clone());
+                merged.entries.push(e);
+            }
+        }
+        merged
+    }
+
+    /// 技能索引区文本（未命中技能一行一条：`name：description`——让模型知道
+    /// 存在、提及名字即可触发；空索引/全命中=空串。matched 中的技能已注入
+    /// 正文不出现在索引，避免重复。**无 description 只列名**——不取 body
+    /// 开头当描述（保持"未命中不漏正文"的严格语义，正文只在命中注入）
+    pub fn render_index(&self, matched: &[&SkillEntry]) -> String {
+        let matched_names: Vec<&str> = matched.iter().map(|e| e.name.as_str()).collect();
+        let lines: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|e| !matched_names.contains(&e.name.as_str()))
+            .take(MAX_INDEX_LINES)
+            .map(|e| {
+                if e.description.is_empty() {
+                    format!("- {}", e.name)
+                } else {
+                    let desc: String = e.description.chars().take(INDEX_DESC_MAX).collect();
+                    format!("- {}：{}", e.name, desc)
+                }
+            })
+            .collect();
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "（可用技能目录，提及名称或关键词即可加载对应技能）\n{}",
+                lines.join("\n")
+            )
+        }
     }
 
     /// 用户消息命中（trigger 包含匹配；≤ MAX_INJECT 条）
@@ -103,11 +160,18 @@ impl SkillIndex {
 }
 
 /// 解析单份 SKILL.md：`---` 围栏 frontmatter（行级键值/列表）+ 正文；
-/// 无围栏/未闭合围栏视为纯正文（容错：坏文件最多丢元数据，不 panic）
+/// 无围栏/未闭合围栏视为纯正文（容错：坏文件最多丢元数据，不 panic）。
+/// triggers 缺省兜底 `[name]`（D22 §2.1：Claude 格式技能只有 description——
+/// kebab-case 英文名本身作触发词，配合索引区让模型/用户提及即命中）
 fn parse_skill(dir: &Path, text: &str) -> SkillEntry {
     let t = text.trim_start_matches('\u{feff}').trim();
-    let (mut name, mut triggers, mut allowed, mut risk) =
-        (None, Vec::new(), Vec::new(), "low".to_string());
+    let (mut name, mut triggers, mut description, mut allowed, mut risk) = (
+        None,
+        Vec::new(),
+        String::new(),
+        Vec::new(),
+        "low".to_string(),
+    );
     let mut body = t.to_string();
 
     if let Some(rest) = t.strip_prefix("---") {
@@ -120,6 +184,7 @@ fn parse_skill(dir: &Path, text: &str) -> SkillEntry {
                 match k {
                     "name" => name = Some(v.to_string()),
                     "triggers" => triggers = parse_list(v),
+                    "description" => description = v.to_string(),
                     "allowedTools" => allowed = parse_list(v),
                     "risk" if !v.is_empty() => risk = v.to_string(),
                     _ => {} // 未知键忽略（前向兼容）
@@ -129,13 +194,18 @@ fn parse_skill(dir: &Path, text: &str) -> SkillEntry {
         }
     }
 
+    let name = name.unwrap_or_else(|| {
+        dir.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "unnamed".into())
+    });
+    if triggers.is_empty() {
+        triggers.push(name.clone()); // 兜底：名字即触发词
+    }
     SkillEntry {
-        name: name.unwrap_or_else(|| {
-            dir.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "unnamed".into())
-        }),
+        name,
         triggers,
+        description,
         allowed_tools: allowed,
         risk,
         body,
@@ -251,6 +321,84 @@ mod tests {
         let idx2 = SkillIndex::scan(&eco);
         assert_eq!(idx2.len(), 2);
         assert!(idx2.match_for("乙任务").iter().any(|e| e.name == "二号"));
+        let _ = std::fs::remove_dir_all(&eco);
+    }
+
+    /// D22 §2.1/L3：无 triggers 兜底 name 作触发词（Claude 格式技能只有
+    /// description）；description 解析进索引区。
+    #[test]
+    fn no_triggers_falls_back_to_name() {
+        let eco = temp_eco("fallback");
+        write_skill(
+            &eco,
+            "deploy",
+            "---\nname: deploy-helper\ndescription: 发布流程助手\n---\n发布正文。",
+        );
+        let idx = SkillIndex::scan(&eco);
+        assert_eq!(idx.entries[0].triggers, vec!["deploy-helper"]);
+        assert_eq!(idx.entries[0].description, "发布流程助手");
+        // 名字命中
+        let m = idx.match_for("按 deploy-helper 的规范来");
+        assert_eq!(m.len(), 1);
+        let _ = std::fs::remove_dir_all(&eco);
+    }
+
+    /// D22 §5.3/L3：多根扫描合并——根顺序即优先级，同名技能先到先得。
+    #[test]
+    fn scan_roots_merges_with_priority() {
+        let eco = temp_eco("roots");
+        let plugin = temp_eco("pluginroot");
+        write_skill(
+            &eco,
+            "shared",
+            "---\nname: 同名技能\ntriggers: [生态版]\n---\n生态正文。",
+        );
+        write_skill(
+            &plugin,
+            "shared",
+            "---\nname: 同名技能\ntriggers: [插件版]\n---\n插件正文。",
+        );
+        write_skill(
+            &plugin,
+            "extra",
+            "---\nname: 插件专属\ntriggers: [专属]\n---\n专属正文。",
+        );
+        let idx = SkillIndex::scan_roots(&[eco.clone(), plugin.clone()]);
+        assert_eq!(idx.len(), 2, "同名去重：生态版优先");
+        assert!(idx.match_for("生态版").len() == 1);
+        assert!(idx.match_for("插件版").is_empty(), "被去重的插件版不可触发");
+        assert!(idx.match_for("专属").len() == 1);
+        let _ = std::fs::remove_dir_all(&eco);
+        let _ = std::fs::remove_dir_all(&plugin);
+    }
+
+    /// D22 §2.1/L3：索引区——未命中技能一行一条（name：description），
+    /// 命中的不重复；无 description 只列名（不漏正文）。
+    #[test]
+    fn render_index_lists_unmatched_only() {
+        let eco = temp_eco("index");
+        write_skill(
+            &eco,
+            "a",
+            "---\nname: 甲\ntriggers: [甲]\ndescription: 甲的描述\n---\n甲正文。",
+        );
+        write_skill(
+            &eco,
+            "b",
+            "---\nname: 乙\ntriggers: [乙]\n---\n乙正文第一句。",
+        );
+        let idx = SkillIndex::scan(&eco);
+
+        let matched = idx.match_for("甲任务");
+        let text = idx.render_index(&matched);
+        assert!(text.contains("技能目录"), "索引区有引导句");
+        assert!(text.contains("乙"), "未命中技能列名");
+        assert!(!text.contains("乙正文"), "无 description 不漏正文");
+        assert!(!text.contains("甲"), "命中技能不进索引");
+        // 全命中 → 索引区空
+        let idx2 = SkillIndex::scan(&eco);
+        let all: Vec<&SkillEntry> = idx2.entries.iter().collect();
+        assert_eq!(idx2.render_index(&all), "");
         let _ = std::fs::remove_dir_all(&eco);
     }
 }

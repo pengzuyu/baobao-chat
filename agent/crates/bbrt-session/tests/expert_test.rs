@@ -161,6 +161,7 @@ fn skill_index() -> SkillIndex {
     SkillIndex {
         entries: vec![SkillEntry {
             name: "corp.review-standards".into(),
+            description: String::new(),
             triggers: vec![],
             allowed_tools: vec![],
             risk: "low".into(),

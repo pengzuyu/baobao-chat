@@ -721,13 +721,21 @@ impl SessionRunner {
             report.steps += 1;
             // 技能命中注入（10 篇 §4.5：用户消息含 trigger 的技能正文进 skills
             // 区块，context 预算 5% 截断兜底；索引空/未命中=空段零成本）+
+            // 技能索引区（D22 §2.1/L3：未命中技能一行一条 name：description——
+            // 模型知晓存在，提及名字即可触发；Claude 格式技能无 triggers 时
+            // 解析层已兜底 name 作触发词）+
             // 工具面收紧（10 篇 §4.6 pick_tools 条件①：命中技能**全体**声明
             // 非空 allowedTools → tools 收紧到并集；任一未声明=不限制——
             // 无声明技能语义即全量；快模型预筛/近期调用/目录化 system 随下轮）
             let (skills_text, allowed_tools) = {
                 let idx = deps.skills.lock().unwrap_or_else(|p| p.into_inner());
                 let matched = idx.match_for(user_text);
-                let text = idx.render(&matched);
+                let index_text = idx.render_index(&matched);
+                let text = if index_text.is_empty() {
+                    idx.render(&matched)
+                } else {
+                    format!("{}\n\n{}", index_text, idx.render(&matched))
+                };
                 let allow =
                     if matched.is_empty() || matched.iter().any(|e| e.allowed_tools.is_empty()) {
                         None

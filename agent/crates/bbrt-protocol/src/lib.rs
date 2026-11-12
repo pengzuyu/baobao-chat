@@ -10,10 +10,11 @@ pub use codec::{read_message, write_message, MAX_LINE_BYTES};
 pub use envelope::{
     Blocked, BriefContextItem, CheckpointReason, ClarifyOption, CompactionPhase, DailyStatsLite,
     Decision, DelegateEventKind, EndReason, Envelope, FileChange, GrantScope, HistoryItem,
-    HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy, ModelSwitchReason, PermissionMode,
-    Preview, ProtocolError, RenewReason, ReportListItem, ReviewDecision, RiskLevel, RuntimeToHost,
-    SessionListItem, SessionState, StreamChannel, SubagentPhase, SubagentResult, TaskBrief,
-    ThinkingLevel, ToolSource, ToolsReloadReason, Usage, WorkspaceItem, PROTOCOL_VERSION,
+    HostToRuntime, McpServerWire, McpTransportWire, MemoryListItem, MemoryScope, ModelPolicy,
+    ModelSwitchReason, PermissionMode, Preview, ProtocolError, RenewReason, ReportListItem,
+    ReviewDecision, RiskLevel, RuntimeToHost, SessionListItem, SessionState, StreamChannel,
+    SubagentPhase, SubagentResult, TaskBrief, ThinkingLevel, ToolSource, ToolsReloadReason, Usage,
+    WorkspaceItem, PROTOCOL_VERSION,
 };
 // CodecError 定义于 codec 模块（envelope 内不再重复导出）
 pub use codec::CodecError;
