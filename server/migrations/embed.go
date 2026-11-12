@@ -64,6 +64,9 @@ var mailSQL string
 //go:embed 0017_resource_acl.sql
 var resourceAclSQL string
 
+//go:embed 0037_kb_blog.sql
+var kbBlogSQL string
+
 //go:embed 0019_meeting.sql
 var meetingSQL string
 
@@ -120,4 +123,8 @@ var List = []Migration{
 	// Probe 必须留空——ai_provider 表 0003 即存在，探测会误判已应用而漏执行 ALTER；
 	// 0022_sticker 走外部通道/另有归属，不在本兜底注册表内）
 	{Version: 23, Name: "0023_ai_provider_registry", Probe: "", SQL: aiProviderRegistrySQL},
+	// 0037：kb 两维度收口（dept 并入 company 种子）+浏览量+epoch（D24；ADD/CREATE
+	// IF NOT EXISTS + DO 块幂等；0024-0036 走 psql 手工补惯例不在本注册表——
+	// 版本号各自独立，37 登记不影响其 schema_migrations 记录）
+	{Version: 37, Name: "0037_kb_blog", Probe: "", SQL: kbBlogSQL},
 }

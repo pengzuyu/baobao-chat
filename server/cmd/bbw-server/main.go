@@ -155,7 +155,8 @@ func main() {
 		return roleStore.PermissionPointsOf(ctx, tenantID, userID)
 	}
 	orgMod := org.NewModule(orgRepo)
-	orgDeptScope := orgMod.DeptScopeAPI() // kb 三层知识检索部门通道（11 §2.1）
+	orgDeptScope := orgMod.DeptScopeAPI()
+	_ = orgDeptScope // D24：kb 部门通道已随两维度收口移除；保留 API 引用位（mail/后续域可复用）
 	// agentKillOn 平台总闸（D9）：adminSvc 装配于后段——var 前置声明，auth/aigw
 	// 两处闭包捕获引用，adminSvc 就绪后回填即双点生效（OBO 签发 + 网关每请求）
 	var agentKillOn func() bool
@@ -444,7 +445,8 @@ func main() {
 	mux.HandleFunc("POST /v1/chat/completions", aigwMod.Gateway.HandleChat)
 	mux.HandleFunc("POST /v1/embeddings", aigwMod.Gateway.HandleEmbeddings)
 
-	// 知识库域（D07 阶段一务实版）：摄入管线同步版（嵌入经网关 bbw-embed）+
+	// 知识库域（D24 两维度博客版）：公司知识库+我的笔记两维度行（grants 授权与
+	// CreateSpace 已下线）+ 摄入管线同步版（嵌入经网关 bbw-embed，AI/IM 通道）+
 	// 混合检索（向量余弦 + 关键词 ILIKE，RRF 融合，权限前置过滤）
 	var kbRepo kbrepo.Repo
 	if pgPool != nil {
@@ -474,31 +476,7 @@ func main() {
 		}
 		log.Println("kb 嵌入链路：直调网关 Router mock 供应商（未配 BBW_AIGW_DEV_TOKEN，1024 维确定性向量）")
 	}
-	// ACL 查询闭包（aclSvc 装配于后段——前置函数变量+运行期回填，mailAPI 同款）
-	aclResolve := func(ctx context.Context, spaceID, userID int64) int { return 0 }
-	kbACLGrant := func(ctx context.Context, spaceID int64, gt int, target int64, perm int, grantedBy int64, expMs int64) (int64, int64, error) {
-		return 0, 0, errx.New(errx.CodeInternal, "授权管理未装配")
-	}
-	kbACLList := func(ctx context.Context, spaceID int64) ([]kbservice.ACLGrantRow, error) {
-		return nil, errx.New(errx.CodeInternal, "授权管理未装配")
-	}
-	kbACLRevoke := func(ctx context.Context, spaceID, grantID int64) error {
-		return errx.New(errx.CodeInternal, "授权管理未装配")
-	}
 	kbMod := kb.NewModule(kbservice.Options{
-		ACLPerm: aclResolve,
-		// 授权管理三操作（治理者入口 /kb/spaces/{id}/grants；aclSvc 装配于后段回填）
-		ACLGrant:      kbACLGrant,
-		ACLListGrants: kbACLList,
-		ACLRevoke:     kbACLRevoke,
-		// 三层知识检索部门通道（11 §2.1：dept 空间=部门祖先链可见——org 域注入，
-		// D02 §4 跨域不引包；kb 用 orgMod 装配在后段——orgMod 先于 kb 构造 ✓）
-		UserDeptIDsOf: func(ctx context.Context, tenantID, userID int64) (map[int64]bool, int64, error) {
-			return orgDeptScope.UserDeptIDsOf(ctx, tenantID, userID)
-		},
-		UserDeptChainOf: func(ctx context.Context, tenantID, userID int64) (map[int64]bool, error) {
-			return orgDeptScope.UserDeptChainOf(ctx, tenantID, userID)
-		},
 		Embedder: kbEmbed,
 		// 文件来源摄入：经 file 域票据通道取内容（IssueTicket 校验 owner/成员 →
 		// Download 一次性票据回放流；跨模块不引 file 包，D02 §4 依赖规则）
@@ -524,9 +502,8 @@ func main() {
 	}, kbRepo)
 	kbSvc := kbMod.API()
 
-	// 知识库 REST（D07 §5.1 阶段一务实版 10 项；摄入同步返回，jobs 为 docs 简版）
+	// 知识库 REST（D24 两维度版；摄入同步返回=AI/IM 通道，jobs 为 docs 简版）
 	mux.Handle("GET /api/v1/kb/spaces", authed(handleKBListSpaces(kbSvc)))
-	mux.Handle("POST /api/v1/kb/spaces", authed(handleKBCreateSpace(kbSvc)))
 	mux.Handle("GET /api/v1/kb/spaces/{id}/nodes", authed(handleKBListNodes(kbSvc)))
 	mux.Handle("POST /api/v1/kb/spaces/{id}/nodes", authed(handleKBCreateNode(kbSvc)))
 	mux.Handle("POST /api/v1/kb/spaces/{id}/docs", authed(handleKBIngest(kbSvc)))
@@ -535,10 +512,6 @@ func main() {
 	mux.Handle("POST /api/v1/kb/docs/{id}/reingest", authed(handleKBReingest(kbSvc)))
 	mux.Handle("POST /api/v1/kb/query", authed(handleKBQuery(kbSvc)))
 	mux.Handle("GET /api/v1/kb/jobs", authed(handleKBJobs(kbSvc)))
-	// 空间授权管理（11 §6 / D07 PKB-06；治理者入口——区别于 /admin/acl 平台管理员）
-	mux.Handle("GET /api/v1/kb/spaces/{id}/grants", authed(handleKBListGrants(kbSvc)))
-	mux.Handle("POST /api/v1/kb/spaces/{id}/grants", authed(handleKBAddGrant(kbSvc)))
-	mux.Handle("DELETE /api/v1/kb/spaces/{id}/grants/{gid}", authed(handleKBRemoveGrant(kbSvc)))
 
 	// mailAPI 前置声明（mcpgw 闭包捕获引用；mail 模块装配于后段，调用在运行期完成）
 	var mailAPI *mailservice.Service
@@ -965,49 +938,7 @@ func main() {
 	mailACL = func(ctx context.Context, resourceType, resourceID string, userID int64) int {
 		return aclSvc.Resolve(ctx, 1, resourceType, resourceID, userID)
 	}
-	// kb 空间 ACL 闭包回填（前置声明处；kb.space 资源键=空间 ID）
-	aclResolve = func(ctx context.Context, spaceID, userID int64) int {
-		return aclSvc.Resolve(ctx, 1, "kb.space", strconv.FormatInt(spaceID, 10), userID)
-	}
-	// kb 空间授权管理回填（resource_acl 统一存储，11 §5；resourceID=spaceID 字符串化）
-	kbResource := func(spaceID int64) string { return strconv.FormatInt(spaceID, 10) }
-	kbACLGrant = func(ctx context.Context, spaceID int64, gt int, target int64, perm int, grantedBy int64, expMs int64) (int64, int64, error) {
-		var expires time.Time
-		if expMs > 0 {
-			expires = time.UnixMilli(expMs)
-		}
-		e, err := aclSvc.Grant(ctx, orgacl.Entry{
-			TenantID: 1, ResourceType: "kb.space", ResourceID: kbResource(spaceID),
-			GrantType: gt, GrantTarget: target, Perm: perm, GrantedBy: grantedBy, ExpiresAt: expires,
-		})
-		if err != nil {
-			return 0, 0, err
-		}
-		return e.ID, e.CreatedAt.UnixMilli(), nil
-	}
-	kbACLList = func(ctx context.Context, spaceID int64) ([]kbservice.ACLGrantRow, error) {
-		entries, err := aclSvc.ListGrants(ctx, 1, orgacl.EntryFilter{
-			ResourceType: "kb.space", ResourceID: kbResource(spaceID),
-		})
-		if err != nil {
-			return nil, err
-		}
-		rows := make([]kbservice.ACLGrantRow, 0, len(entries))
-		for _, e := range entries {
-			r := kbservice.ACLGrantRow{
-				GrantID: e.ID, GrantType: e.GrantType, GrantTarget: e.GrantTarget,
-				Perm: e.Perm, GrantedBy: e.GrantedBy, CreatedAtMs: e.CreatedAt.UnixMilli(),
-			}
-			if !e.ExpiresAt.IsZero() {
-				r.ExpiresAtMs = e.ExpiresAt.UnixMilli()
-			}
-			rows = append(rows, r)
-		}
-		return rows, nil
-	}
-	kbACLRevoke = func(ctx context.Context, spaceID, grantID int64) error {
-		return aclSvc.Revoke(ctx, 1, grantID)
-	}
+	// kb 空间 ACL/授权管理回填已随 D24 两维度收口移除（grants 废弃，隔离随成员制后置）
 	mux.Handle("GET /api/v1/admin/acl", requireAnyAdmin(handleACLList(aclSvc)))
 	mux.Handle("POST /api/v1/admin/acl", requireAnyAdmin(handleACLGrant(aclSvc)))
 	mux.Handle("DELETE /api/v1/admin/acl/{id}", requireAnyAdmin(handleACLRevoke(aclSvc)))
@@ -2293,31 +2224,6 @@ func handleKBListSpaces(svc kbapi.KBService) http.HandlerFunc {
 
 // handleKBCreateSpace 新建空间（dept|company；personal 幂等返回惰性创建结果；
 // dept_id 可选——缺省自动挂靠主部门，显式须为本人直接所属部门）
-func handleKBCreateSpace(svc kbapi.KBService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, uid, err := kbActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		var req struct {
-			Type   string `json:"type"`
-			Name   string `json:"name"`
-			DeptID int64  `json:"dept_id"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		space, err := svc.CreateSpace(r.Context(), tenant, uid, req.Type, req.Name, req.DeptID)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, space)
-	}
-}
-
 // handleKBListNodes 目录懒加载（?parent_id= 缺省空间根：子目录 + 目录下文档）
 func handleKBListNodes(svc kbapi.KBService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -3730,78 +3636,6 @@ func handleAgentBackupBlob(svc agentbackupapi.Service) http.HandlerFunc {
 }
 
 // ── kb 空间授权管理 REST 壳（11 §6 / D07 PKB-06）──
-
-func handleKBListGrants(svc kbapi.KBService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		uid, err := uidFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		spaceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil || spaceID <= 0 {
-			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "空间 ID 非法"))
-			return
-		}
-		rows, err := svc.ListGrants(r.Context(), httpx.TenantID(r.Context()), uid, spaceID)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, map[string]any{"items": rows})
-	}
-}
-
-func handleKBAddGrant(svc kbapi.KBService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		uid, err := uidFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		spaceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil || spaceID <= 0 {
-			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "空间 ID 非法"))
-			return
-		}
-		var req kbapi.GrantReq
-		if err := decodeJSON(r, &req); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		row, err := svc.AddGrant(r.Context(), httpx.TenantID(r.Context()), uid, spaceID, req)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, row)
-	}
-}
-
-func handleKBRemoveGrant(svc kbapi.KBService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		uid, err := uidFrom(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		spaceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		if err != nil || spaceID <= 0 {
-			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "空间 ID 非法"))
-			return
-		}
-		gid, err := strconv.ParseInt(r.PathValue("gid"), 10, 64)
-		if err != nil || gid <= 0 {
-			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "授权行 ID 非法"))
-			return
-		}
-		if err := svc.RemoveGrant(r.Context(), httpx.TenantID(r.Context()), uid, spaceID, gid); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, map[string]any{"ok": true})
-	}
-}
 
 // ── Agent 工具策略编辑 REST 壳（D7）──
 

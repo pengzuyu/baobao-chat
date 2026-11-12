@@ -101,7 +101,8 @@ func (p *Postgres) EnsurePersonalSpace(ctx context.Context, tenantID, userID, qu
 	return s, tx.Commit(ctx)
 }
 
-// CreateSpace 显式创建（dept/company；personal 冲突 → ErrDupPersonal）
+// CreateSpace 显式创建（历史路径：0009 时代 dept/company 手建；D24 后产品面
+// CreateSpace API 已下线，company 维度行走 EnsureCompanySpace，本方法留作数据装配）
 func (p *Postgres) CreateSpace(ctx context.Context, s Space) (Space, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -126,6 +127,59 @@ func (p *Postgres) CreateSpace(ctx context.Context, s Space) (Space, error) {
 		return Space{}, err
 	}
 	return s, tx.Commit(ctx)
+}
+
+// EnsureCompanySpace 公司知识库维度行幂等种子（D24 两维度：uq_kb_space_company
+// 部分唯一索引并发兜底；owner_id=0 系统行——canWrite 对 company 不看 owner）
+func (p *Postgres) EnsureCompanySpace(ctx context.Context, tenantID, quotaBytes int64) (Space, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Space{}, err
+	}
+	defer tx.Rollback(ctx)
+	if hit, err := p.companyIn(ctx, tx, tenantID); err != nil {
+		return Space{}, err
+	} else if hit != nil {
+		return *hit, tx.Commit(ctx)
+	}
+	id, err := bbwpg.AllocID(ctx, tx, lockKeyKBSpace, "kb_space")
+	if err != nil {
+		return Space{}, err
+	}
+	var s Space
+	err = tx.QueryRow(ctx, `
+		INSERT INTO kb_space (id, tenant_id, space_type, name, owner_id, dept_id, quota_bytes, used_bytes, settings, status, created_at)
+		VALUES ($1,$2,'company',$3,0,NULL,$4,0,'{}'::jsonb,'active',now())
+		ON CONFLICT DO NOTHING
+		RETURNING `+spaceCols,
+		id, tenantID, "公司知识库", quotaBytes).Scan(
+		&s.ID, &s.TenantID, &s.SpaceType, &s.Name, &s.OwnerID, &s.DeptID,
+		&s.QuotaBytes, &s.UsedBytes, &s.Status, &s.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) { // 并发命中唯一索引 → 复用
+		hit, gerr := p.companyIn(ctx, tx, tenantID)
+		if gerr != nil || hit == nil {
+			return Space{}, gerr
+		}
+		return *hit, tx.Commit(ctx)
+	}
+	if err != nil {
+		return Space{}, err
+	}
+	return s, tx.Commit(ctx)
+}
+
+// companyIn 事务内取租户 company 维度行
+func (p *Postgres) companyIn(ctx context.Context, tx pgx.Tx, tenantID int64) (*Space, error) {
+	s, err := scanSpace(tx.QueryRow(ctx, `
+		SELECT `+spaceCols+` FROM kb_space
+		WHERE tenant_id=$1 AND space_type='company' LIMIT 1`, tenantID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return s, nil
 }
 
 // GetPersonal 同租户同用户 personal 空间；无命中 nil,nil

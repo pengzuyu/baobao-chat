@@ -75,6 +75,33 @@ func (m *Memory) CreateSpace(_ context.Context, s Space) (Space, error) {
 	return s, nil
 }
 
+// EnsureCompanySpace 公司知识库维度行幂等种子（D24 两维度）
+func (m *Memory) EnsureCompanySpace(_ context.Context, tenantID, quotaBytes int64) (Space, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s := m.companyLocked(tenantID); s != nil {
+		return *s, nil
+	}
+	now := time.Now()
+	s := Space{
+		ID: m.alloc(), TenantID: tenantID, SpaceType: SpaceCompany,
+		Name: "公司知识库", OwnerID: 0,
+		QuotaBytes: quotaBytes, UsedBytes: 0, Status: "active", CreatedAt: now,
+	}
+	m.spaces[s.ID] = s
+	return s, nil
+}
+
+func (m *Memory) companyLocked(tenantID int64) *Space {
+	for _, s := range m.spaces {
+		if s.TenantID == tenantID && s.SpaceType == SpaceCompany {
+			sc := s
+			return &sc
+		}
+	}
+	return nil
+}
+
 // GetPersonal 同租户同用户 personal 空间
 func (m *Memory) GetPersonal(_ context.Context, tenantID, userID int64) (*Space, error) {
 	m.mu.RLock()

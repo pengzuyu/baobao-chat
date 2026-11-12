@@ -1,10 +1,11 @@
-// Package kbservice 知识库域业务逻辑（D07 阶段一务实版）。
-// 核心链路：空间治理（惰性 personal/配额）→ 目录树（≤10 层/7014 同名）→
-// 摄入管线同步版（清洗分段 ≤800 字 → 注入 EmbedFn 嵌入 → 落 kb_chunk → ready；
-// 失败 failed+error_msg 可重试）→ 混合检索（权限前置过滤 → 向量余弦 + 关键词 ILIKE
-// → RRF 融合 k=60 → 高亮区间）。
-// v0.1 登记不做：异步队列/进度轮询（同步返回）、部门树授权（dept 空间仅治理者）、
-// kb_query_log 审计、敏感标记、reranker 重排（RRF 序直出，11 §4.3 降级口径）。
+// Package kbservice 知识库域业务逻辑（D24 两维度博客版）。
+// 核心链路：两维度行（公司知识库幂等种子+我的笔记惰性创建；「空间」产品概念消失）
+// → 目录树（≤10 层/7014 同名，=专栏）→ 摄入管线同步版（清洗分段 ≤800 字 → 注入
+// EmbedFn 嵌入 → 落 kb_chunk → ready；失败 failed+error_msg 可重试）→ 混合检索
+// （权限前置过滤 → 向量余弦 + 关键词 ILIKE → RRF 融合 k=60 → 高亮区间）。
+// D24 登记：页面无写入 UI（摄入 API=AI/IM 通道）；编辑/删除仅作者（API 后置随
+// AI 批次）；grants 授权已废弃（隔离需求随成员制后置）；异步 job/kb_query_log/
+// 敏感标记不做（冻结-插件化）。
 package kbservice
 
 import (
@@ -38,46 +39,15 @@ type FileOpener func(ctx context.Context, tenantID, userID, fileID int64) (FileS
 
 // Options 策略参数
 type Options struct {
-	PersonalQuotaBytes int64 // 个人空间默认配额（缺省 5GB，11 §4.5）
-	CompanyQuotaBytes  int64 // 公司空间默认配额（缺省 20GB）
-	DeptQuotaBytes     int64 // 部门空间默认配额（缺省 10GB）
+	PersonalQuotaBytes int64 // 个人维度默认配额（缺省 5GB）
+	CompanyQuotaBytes  int64 // 公司知识库默认配额（缺省 20GB，仅种子首次生效）
 	MaxDocBytes        int64 // 原文上限（缺省 2MB → 7006；D07 32MB/2000 页属解析器场景）
 	MaxChunkRunes      int   // 分块上限（缺省 800 字）
-	MaxDepth           int   // 目录层数上限（缺省 10，11 §2.2）
+	MaxDepth           int   // 目录层数上限（缺省 10）
 	EmbedBatch         int   // 嵌入批量（缺省 64——网关 /v1/embeddings 单请求上限）
 	Now                func() time.Time
 	Embedder           EmbedFn
 	OpenFile           FileOpener
-	// DocText 文档中心正文读取（E6：doc→kb 同步；跨域闭包——main 注 doc 域 GetFile
-	// 取 title+content_md；nil=通道未装配 9004）
-	DocText func(ctx context.Context, tenantID, userID, docID int64) (title, contentMD string, err error)
-	// ACLPerm 资源级 ACL 查询（03 §4.4；kb.space 资源键——nil 或返回 0=
-	// 无显式授权，回落 v0.1 三级空间基线；ACL 命中=显式授权超集：可放宽
-	// 如 dept 空间授部门 viewer）。返回值：0 none / 1 viewer / 2
-	// commenter / 3 editor / 4 owner（org/acl Perm 语义，闭包传 int 解耦）
-	ACLPerm func(ctx context.Context, spaceID, userID int64) int
-	// ── 授权管理通道（11 §6 grants 三操作；main 经 aclSvc 装配，跨域不引包）──
-	ACLGrant      func(ctx context.Context, spaceID int64, grantType int, grantTarget int64, perm int, grantedBy int64, expiresAtMs int64) (grantID int64, createdAtMs int64, err error)
-	ACLListGrants func(ctx context.Context, spaceID int64) ([]ACLGrantRow, error)
-	ACLRevoke     func(ctx context.Context, spaceID, grantID int64) error
-	// ── 部门归属通道（三层知识检索：公司 ∪ 部门祖先链 ∪ 个人；org 域注入，跨域不引包）──
-	// UserDeptIDsOf 直接部门集+主部门（dept 空间创建挂靠校验；nil=通道未装配，
-	// 显式 dept_id 拒 9001、缺省挂靠回落 DeptID=0 仅创建者可见）
-	UserDeptIDsOf func(ctx context.Context, tenantID, userID int64) (ids map[int64]bool, primary int64, err error)
-	// UserDeptChainOf 可见部门集=直接 ∪ 祖先链（dept 空间 canRead 口径；nil=未装配，
-	// dept 空间回落 OwnerID 兜底——与旧口径一致）
-	UserDeptChainOf func(ctx context.Context, tenantID, userID int64) (map[int64]bool, error)
-}
-
-// ACLGrantRow 授权行投影（ACLListGrants 返回；与 api.GrantRow 字段对齐，int ID 形态）
-type ACLGrantRow struct {
-	GrantID     int64
-	GrantType   int
-	GrantTarget int64
-	Perm        int
-	GrantedBy   int64
-	ExpiresAtMs int64 // 0=永久
-	CreatedAtMs int64
 }
 
 func (o *Options) fillDefaults() {
@@ -86,9 +56,6 @@ func (o *Options) fillDefaults() {
 	}
 	if o.CompanyQuotaBytes == 0 {
 		o.CompanyQuotaBytes = 20 << 30
-	}
-	if o.DeptQuotaBytes == 0 {
-		o.DeptQuotaBytes = 10 << 30
 	}
 	if o.MaxDocBytes == 0 {
 		o.MaxDocBytes = 2 << 20 // 2MB（v0.1 无分卷上传，7006 提示拆分）
@@ -124,21 +91,22 @@ func New(opts Options, r kbrepo.Repo) *Service {
 
 var _ kbapi.KBService = (*Service)(nil)
 
-// ── 空间 ──
+// ── 维度（D24 两维度：kb_space 退化为内部行，产品概念中「空间」消失）──
 
-// ListSpaces 可见空间（个人空间惰性创建）
+// ListSpaces 固定返回两维度行：公司知识库（幂等种子，全员可看可投）+ 我的笔记
+// （惰性创建，仅本人）。他人 personal 行不进结果——这两行即用户全部可见宇宙
 func (s *Service) ListSpaces(ctx context.Context, tenantID, userID int64) ([]kbapi.SpaceDTO, error) {
-	if _, err := s.repo.EnsurePersonalSpace(ctx, tenantID, userID, s.opts.PersonalQuotaBytes); err != nil {
-		return nil, errx.From(err)
-	}
-	all, err := s.repo.ListSpaces(ctx, tenantID)
+	company, err := s.repo.EnsureCompanySpace(ctx, tenantID, s.opts.CompanyQuotaBytes)
 	if err != nil {
 		return nil, errx.From(err)
 	}
-	deptChain := s.deptChainOf(ctx, tenantID, userID) // 每请求解析一次祖先链
-	out := make([]kbapi.SpaceDTO, 0, len(all))
-	for _, sp := range all {
-		if !s.canRead(ctx, sp, userID, deptChain) {
+	personal, err := s.repo.EnsurePersonalSpace(ctx, tenantID, userID, s.opts.PersonalQuotaBytes)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	out := make([]kbapi.SpaceDTO, 0, 2)
+	for _, sp := range []kbrepo.Space{company, personal} {
+		if !s.canRead(sp, userID) { // archived 治理停用：整行不可见
 			continue
 		}
 		docs, err := s.repo.ListDocsBySpace(ctx, tenantID, sp.ID)
@@ -150,70 +118,6 @@ func (s *Service) ListSpaces(ctx context.Context, tenantID, userID int64) ([]kba
 		out = append(out, dto)
 	}
 	return out, nil
-}
-
-// CreateSpace 新建（dept|company；personal 惰性创建幂等返回既有）。
-// deptID：dept 类型空间挂靠部门——显式指定须为本人直接所属部门（9001）；
-// 缺省自动挂靠主部门（primary=0 未挂部门 → DeptID=0 仅创建者可见，兜底登记）
-func (s *Service) CreateSpace(ctx context.Context, tenantID, userID int64, spaceType, name string, deptID int64) (*kbapi.SpaceDTO, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || utf8.RuneCountInString(name) > 64 {
-		return nil, errx.New(errx.CodeBadRequest, "空间名非法（非空 ≤64 字）")
-	}
-	switch spaceType {
-	case kbrepo.SpacePersonal: // 惰性创建语义：幂等返回既有个人空间
-		sp, err := s.repo.EnsurePersonalSpace(ctx, tenantID, userID, s.opts.PersonalQuotaBytes)
-		if err != nil {
-			return nil, errx.From(err)
-		}
-		dto := toSpaceDTO(sp)
-		return &dto, nil
-	case kbrepo.SpaceDept, kbrepo.SpaceCompany:
-		// v0.1 不校验 kb:space:create 权限点（阶段二接权限点字典，登记）
-	default:
-		return nil, errx.New(errx.CodeBadRequest, "空间类型非法（personal|dept|company）")
-	}
-	quota := s.opts.CompanyQuotaBytes
-	if spaceType == kbrepo.SpaceDept {
-		quota = s.opts.DeptQuotaBytes
-		deptID = s.resolveDeptBinding(ctx, tenantID, userID, deptID)
-		if deptID < 0 {
-			return nil, errx.New(errx.CodeBadRequest, "dept_id 须为本人所属部门")
-		}
-	} else {
-		deptID = 0 // company 不挂部门
-	}
-	sp, err := s.repo.CreateSpace(ctx, kbrepo.Space{
-		TenantID: tenantID, SpaceType: spaceType, Name: name, OwnerID: userID,
-		DeptID: deptID, QuotaBytes: quota, Status: "active",
-	})
-	if err != nil {
-		return nil, errx.From(err)
-	}
-	dto := toSpaceDTO(sp)
-	return &dto, nil
-}
-
-// resolveDeptBinding dept 空间挂靠部门解析：显式 deptID ∈ 本人直接部门 → 原样；
-// 缺省 → 主部门；显式但非本人部门 → -1（9001）；通道未装配 → 显式拒 / 缺省 0
-func (s *Service) resolveDeptBinding(ctx context.Context, tenantID, userID, deptID int64) int64 {
-	if s.opts.UserDeptIDsOf == nil {
-		if deptID > 0 {
-			return -1 // 通道未装配却显式指定：无法校验归属，拒绝
-		}
-		return 0
-	}
-	ids, primary, err := s.opts.UserDeptIDsOf(ctx, tenantID, userID)
-	if err != nil {
-		return 0 // 解析失败：不挂靠（owner 兜底可见），不阻断创建
-	}
-	if deptID > 0 {
-		if ids[deptID] {
-			return deptID
-		}
-		return -1
-	}
-	return primary
 }
 
 // ── 目录 ──
@@ -641,23 +545,27 @@ func (s *Service) Query(ctx context.Context, tenantID, userID int64, spaceIDs []
 	if topK > 20 {
 		topK = 20 // D07 §5.2 top_k ≤20
 	}
-	// 可见空间集（含 personal 惰性创建 → 新用户至少可检索个人空间）
-	if _, err := s.repo.EnsurePersonalSpace(ctx, tenantID, userID, s.opts.PersonalQuotaBytes); err != nil {
-		return nil, errx.From(err)
-	}
-	all, err := s.repo.ListSpaces(ctx, tenantID)
+	// 可见维度集（D24 两维度：公司+本人个人；他人 personal 不属可见宇宙）
+	company, err := s.repo.EnsureCompanySpace(ctx, tenantID, s.opts.CompanyQuotaBytes)
 	if err != nil {
 		return nil, errx.From(err)
 	}
-	deptChain := s.deptChainOf(ctx, tenantID, userID) // 每请求解析一次祖先链
+	if _, err := s.repo.EnsurePersonalSpace(ctx, tenantID, userID, s.opts.PersonalQuotaBytes); err != nil {
+		return nil, errx.From(err)
+	}
+	all := []kbrepo.Space{company}
+	if ps, perr := s.repo.GetPersonal(ctx, tenantID, userID); perr != nil {
+		return nil, errx.From(perr)
+	} else if ps != nil {
+		all = append(all, *ps)
+	}
 	visible := make([]kbrepo.Space, 0, len(all))
 	for _, sp := range all {
-		if s.canRead(ctx, sp, userID, deptChain) {
+		if s.canRead(sp, userID) {
 			visible = append(visible, sp)
 		}
 	}
-	// OQ-D10 合规提示：可见集 < 全集 = 存在被策略隐藏的空间（未授权/停用/敏感），
-	// 检索范围不含它们——结果可能不完整（文案过合规，不做逐条 deny 归因）
+	// OQ-D10 合规提示：可见集 < 全集 = 维度行被治理停用（archived）——结果可能不完整
 	hiddenHint := ""
 	if len(visible) < len(all) {
 		hiddenHint = "部分结果被策略隐藏"
@@ -982,57 +890,28 @@ func defaultTitle(content string) string {
 
 // deptChainOf 解析用户可见部门集（每请求一次；nil 通道/出错=空集 → dept 空间
 // 回落 OwnerID 兜底——与通道未装配的旧口径一致）
-func (s *Service) deptChainOf(ctx context.Context, tenantID, userID int64) map[int64]bool {
-	if s.opts.UserDeptChainOf == nil {
-		return nil
-	}
-	chain, err := s.opts.UserDeptChainOf(ctx, tenantID, userID)
-	if err != nil || len(chain) == 0 {
-		return nil // fail-safe：解析失败不放宽（dept 空间仅 owner 可见）
-	}
-	return chain
-}
-
-// canRead 读权限（检索/浏览/详情）：ACL 显式授权（≥viewer）优先——
-// 可放宽基线（如 dept 空间授部门 viewer，11 §2.1）；无授权回落三层基线
-// （personal 本人 / company 全员 / dept=空间挂靠部门 ∈ 用户祖先链并集——
-// 父部门知识对子部门成员可见，兄弟互不可见，深度无关；链未解析回落 OwnerID）
-func (s *Service) canRead(ctx context.Context, sp kbrepo.Space, userID int64, deptChain map[int64]bool) bool {
+// canRead 读权限（检索/浏览/详情）——D24 两维度收口：公司知识库全员 / 我的笔记
+// 仅本人；治理停用（archived）全挡。他人 personal 行不进可见宇宙（调用方保证不传入）
+func (s *Service) canRead(sp kbrepo.Space, userID int64) bool {
 	if sp.Status != "active" {
 		return false // 治理停用（archived）：检索/浏览/详情全挡（D8）
 	}
-	if s.opts.ACLPerm != nil && s.opts.ACLPerm(ctx, sp.ID, userID) >= 1 { // viewer
-		return true
-	}
 	switch sp.SpaceType {
+	case kbrepo.SpaceCompany:
+		return true // 全员可看可投（D24 拍板：公司知识库=公共维度）
 	case kbrepo.SpacePersonal:
 		return sp.OwnerID == userID
-	case kbrepo.SpaceCompany:
-		return true // 全员 reader（11 §2.1）
-	case kbrepo.SpaceDept:
-		if sp.DeptID > 0 && deptChain != nil && deptChain[sp.DeptID] {
-			return true // 三层检索：部门祖先链可见（2026-11 收口）
-		}
-		return sp.OwnerID == userID // 兜底：未挂部门/链未解析 → 创建者可见
 	}
 	return false
 }
 
-// canWrite 写权限（摄入/建目录/重摄入）：ACL ≥editor 优先（D07"写入
-// 收敛到贡献者"=公司空间显式授权 editor 者可写，收紧基线）；无授权回落
-// v0.1 基线（personal/dept=治理者；company=全员；部门成员只读——
-// 写入走 owner 或 ACL editor 授权，阶段二按需放开部门贡献者）
-func (s *Service) canWrite(ctx context.Context, sp kbrepo.Space, userID int64) bool {
-	if s.opts.ACLPerm != nil && s.opts.ACLPerm(ctx, sp.ID, userID) >= 3 { // editor
-		return true
-	}
-	if sp.SpaceType == kbrepo.SpaceCompany {
-		return true
-	}
-	return sp.OwnerID == userID
+// canWrite 写权限（摄入/建目录/重摄入）= canRead 同式：公司全员可投、个人仅本人
+// （D24 拍板：部门人人投稿泛化为公共维度全员投稿；文章编辑/删除仅作者——API 后置）
+func (s *Service) canWrite(sp kbrepo.Space, userID int64) bool {
+	return s.canRead(sp, userID)
 }
 
-// getSpaceFor 空间存在性 + 权限校验（写路径 requireWrite）
+// getSpaceFor 维度行存在性 + 权限校验（写路径 requireWrite）
 func (s *Service) getSpaceFor(ctx context.Context, userID, spaceID int64, requireWrite bool) (*kbrepo.Space, error) {
 	sp, err := s.repo.GetSpace(ctx, spaceID)
 	if err != nil {
@@ -1041,9 +920,9 @@ func (s *Service) getSpaceFor(ctx context.Context, userID, spaceID int64, requir
 	if sp.Status != "active" {
 		return nil, errx.New(errx.CodeKBSpaceArchived, "空间已归档停用")
 	}
-	allowed := s.canRead(ctx, *sp, userID, s.deptChainOf(ctx, sp.TenantID, userID))
+	allowed := s.canRead(*sp, userID)
 	if requireWrite {
-		allowed = s.canWrite(ctx, *sp, userID)
+		allowed = s.canWrite(*sp, userID)
 	}
 	if !allowed {
 		return nil, errx.New(errx.CodeKBQueryDenied, "无该空间的访问权限")
@@ -1124,106 +1003,6 @@ func msSince(start, end time.Time) int64 {
 	return ms
 }
 
-// ── 空间授权管理（11 §6 / D07 PKB-06）──
-
-// isGovernor 治理者判定：space.owner_id 或 ACL perm≥4（owner/admin 折叠；11 §2.4）
-func (s *Service) isGovernor(ctx context.Context, sp kbrepo.Space, userID int64) bool {
-	if sp.OwnerID == userID {
-		return true
-	}
-	return s.opts.ACLPerm != nil && s.opts.ACLPerm(ctx, sp.ID, userID) >= 4
-}
-
-// mustGovernor 治理者校验（7003 语义：无权不暴露空间细节）
-func (s *Service) mustGovernor(ctx context.Context, userID, spaceID int64) (*kbrepo.Space, error) {
-	sp, err := s.repo.GetSpace(ctx, spaceID)
-	if err != nil {
-		return nil, errx.New(errx.CodeKBSpaceNotFound, "空间不存在")
-	}
-	if !s.isGovernor(ctx, *sp, userID) {
-		return nil, errx.New(errx.CodeKBQueryDenied, "仅空间治理者可管理授权")
-	}
-	return sp, nil
-}
-
-// ListGrants 授权列表（resource_acl 投影；含过期行——展示层标灰，清理随阶段二任务）
-func (s *Service) ListGrants(ctx context.Context, tenantID, userID, spaceID int64) ([]kbapi.GrantRow, error) {
-	if _, err := s.mustGovernor(ctx, userID, spaceID); err != nil {
-		return nil, err
-	}
-	if s.opts.ACLListGrants == nil {
-		return nil, errx.New(errx.CodeInternal, "授权管理未装配")
-	}
-	rows, err := s.opts.ACLListGrants(ctx, spaceID)
-	if err != nil {
-		return nil, errx.From(err)
-	}
-	out := make([]kbapi.GrantRow, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, kbapi.GrantRow{
-			ID:        strconv.FormatInt(r.GrantID, 10),
-			GrantType: r.GrantType, GrantTarget: strconv.FormatInt(r.GrantTarget, 10),
-			Perm: r.Perm, GrantedBy: strconv.FormatInt(r.GrantedBy, 10),
-			ExpiresAt: r.ExpiresAtMs, CreatedAt: r.CreatedAtMs,
-		})
-	}
-	return out, nil
-}
-
-// AddGrant 添加授权（治理者；perm 合法集 1/3/4——治理角色折叠映射 11 §2.4）
-func (s *Service) AddGrant(ctx context.Context, tenantID, userID, spaceID int64, req kbapi.GrantReq) (*kbapi.GrantRow, error) {
-	if _, err := s.mustGovernor(ctx, userID, spaceID); err != nil {
-		return nil, err
-	}
-	if s.opts.ACLGrant == nil {
-		return nil, errx.New(errx.CodeInternal, "授权管理未装配")
-	}
-	if req.GrantType != 1 && req.GrantType != 2 {
-		return nil, errx.New(errx.CodeBadRequest, "grant_type 合法值：1(user) 2(dept)")
-	}
-	if req.Perm != 1 && req.Perm != 3 && req.Perm != 4 {
-		return nil, errx.New(errx.CodeBadRequest, "perm 合法值：1(reader) 3(contributor) 4(owner/admin)")
-	}
-	target, err := strconv.ParseInt(strings.TrimSpace(req.GrantTarget), 10, 64)
-	if err != nil || target <= 0 {
-		return nil, errx.New(errx.CodeBadRequest, "grant_target 须为正整数 ID")
-	}
-	var expiresMs int64
-	if req.ExpiresAtMs > 0 {
-		if req.ExpiresAtMs <= s.opts.Now().UnixMilli() {
-			return nil, errx.New(errx.CodeBadRequest, "expires_at 须晚于当前")
-		}
-		expiresMs = req.ExpiresAtMs
-	}
-	grantID, createdAt, err := s.opts.ACLGrant(ctx, spaceID, req.GrantType, target, req.Perm, userID, expiresMs)
-	if err != nil {
-		return nil, errx.From(err)
-	}
-	row := &kbapi.GrantRow{
-		ID: strconv.FormatInt(grantID, 10), GrantType: req.GrantType,
-		GrantTarget: req.GrantTarget, Perm: req.Perm,
-		GrantedBy: strconv.FormatInt(userID, 10), CreatedAt: createdAt,
-	}
-	if expiresMs > 0 {
-		row.ExpiresAt = expiresMs
-	}
-	return row, nil
-}
-
-// RemoveGrant 撤销授权（治理者；owner_id 为治理锚点恒在——移除 ACL 行不破坏治理）
-func (s *Service) RemoveGrant(ctx context.Context, tenantID, userID, spaceID, grantID int64) error {
-	if _, err := s.mustGovernor(ctx, userID, spaceID); err != nil {
-		return err
-	}
-	if s.opts.ACLRevoke == nil {
-		return errx.New(errx.CodeInternal, "授权管理未装配")
-	}
-	if err := s.opts.ACLRevoke(ctx, spaceID, grantID); err != nil {
-		return errx.From(err)
-	}
-	return nil
-}
-
 // ── KB 治理写操作（D8；admin 域闭包转调——权限守卫在 admin:kb:govern 路由层）──
 
 // GovernSetSpaceStatus 停用/启用（archived 空间 canRead 全挡：检索/浏览即刻不可见）
@@ -1253,26 +1032,9 @@ func (s *Service) GovernDeleteSpace(ctx context.Context, tenantID, spaceID int64
 	return nil
 }
 
-// ── 内容来源通道（E6 / 11 篇 §3.1：doc 同步 + IM 转存）──
+// ── 内容来源通道（D24：IM 转存；doc 同步已随 doc 域废弃移除）──
 
-// IngestFromDoc 文档中心同步（INT-KB-06）：读 doc 当前正文（含版本）摄入个人空间；
-// 源更新策略=手动重摄入（11 §7.7 默认；自动跟随随阶段二）
-func (s *Service) IngestFromDoc(ctx context.Context, tenantID, userID int64, spaceID, docID int64) (*kbapi.DocDTO, error) {
-	if s.opts.DocText == nil {
-		return nil, errx.New(errx.CodeInternal, "文档同步通道未装配")
-	}
-	title, content, err := s.opts.DocText(ctx, tenantID, userID, docID)
-	if err != nil {
-		return nil, errx.From(err)
-	}
-	if strings.TrimSpace(content) == "" {
-		return nil, errx.New(errx.CodeBadRequest, "文档正文为空，无可摄入内容")
-	}
-	return s.ingestExternal(ctx, tenantID, userID, spaceID, title, content, kbrepo.SourceDoc, strconv.FormatInt(docID, 10), "md")
-}
-
-// IngestFromIM IM 消息转存（11 §3.1 来源⑤简版：文本消息直存；卡片/文件消息转
-// 存随 IM 侧菜单扩展——v0.1 文本通道，登记）
+// IngestFromIM IM 消息转存（E6；N6 接线 POST /kb/docs/from-im，默认落我的笔记）
 func (s *Service) IngestFromIM(ctx context.Context, tenantID, userID int64, spaceID int64, msgID int64, title, text string) (*kbapi.DocDTO, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, errx.New(errx.CodeBadRequest, "消息文本为空")

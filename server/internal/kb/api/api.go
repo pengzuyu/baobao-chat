@@ -1,47 +1,26 @@
-// Package kbapi 知识库域对外接口与 DTO（D07 阶段一务实版）。
-// v0.1 务实口径（相对 D07 §5.1 API-KB 全表 23 项的裁剪，逐条登记）：
-//   - 落地 10 项：spaces 创建/列表、nodes 列表/新建、docs 摄入/详情/分块/重摄入、
-//     query 检索、jobs 简版（docs 按 status 列表代）；
-//   - 不做：space PATCH/DELETE（归档策略/转让阶段二）、from-im/from-doccenter/from-agent
-//     三来源（阶段二）、nodes PATCH/DELETE（移动/重命名/敏感标记/归档阶段二）、
-//     grants 授权三件套（部门树 ACL 阶段二）、audit 审计（kb_query_log 未建）；
-//   - 摄入为同步版（POST docs 返回即终态 ready/failed；>5s 场景阶段二换 job 表+轮询）。
+// Package kbapi 知识库域对外接口与 DTO（D24 两维度博客版）。
+// D24 口径（docs/detail/D24）：「空间」产品概念消失——GET /kb/spaces 固定返回两行
+// （公司知识库 company 全员可看可投 + 我的笔记 personal 仅本人）；CreateSpace 与
+// grants 授权三件套已下线（隔离需求随成员制后置项另立）；页面无写入 UI，摄入 API
+// 保留为 AI/IM 通道（保存默认落个人维度）。相对 D07 §5.1 的其余裁剪沿用 v0.1 登记
+// （space PATCH/DELETE、from-doccenter、nodes PATCH/DELETE、audit 均不做）。
 package kbapi
 
 import (
 	"context"
 )
 
-// SpaceDTO 空间（GET /kb/spaces 列表项 / POST 响应）
+// SpaceDTO 维度行（GET /kb/spaces 列表项；固定两行：company+personal）
 type SpaceDTO struct {
 	ID         string `json:"id"`
-	SpaceType  string `json:"space_type"` // personal|dept|company
+	SpaceType  string `json:"space_type"` // personal|company
 	Name       string `json:"name"`
 	OwnerID    string `json:"owner_id"`
-	DeptID     string `json:"dept_id"` // dept 空间挂靠部门（"0"=未挂靠，仅创建者可见）
+	DeptID     string `json:"dept_id"` // 废弃恒 "0"（dept 概念已除，列留兼容）
 	QuotaBytes int64  `json:"quota_bytes"`
 	UsedBytes  int64  `json:"used_bytes"`
 	DocCount   int64  `json:"doc_count"`
 	CreatedAt  int64  `json:"created_at"` // ms
-}
-
-// GrantRow 空间授权行（resource_acl 投影；治理角色折叠映射 11 §2.4：
-// perm 4=owner|admin（治理者，admin 标记 v0.1 不分档登记）/3=contributor/1=reader）
-type GrantRow struct {
-	ID          string `json:"id"`
-	GrantType   int    `json:"grant_type"`   // 1 user 2 dept
-	GrantTarget string `json:"grant_target"` // user_id/dept_id
-	Perm        int    `json:"perm"`         // 1 viewer 3 editor 4 owner
-	GrantedBy   string `json:"granted_by"`
-	ExpiresAt   int64  `json:"expires_at"` // ms；0=永久
-	CreatedAt   int64  `json:"created_at"` // ms
-}
-
-type GrantReq struct {
-	GrantType   int    `json:"grant_type"`    // 1 user 2 dept（3 role/4 tenant 随角色体系阶段二）
-	GrantTarget string `json:"grant_target"`  // 目标 ID
-	Perm        int    `json:"perm"`          // 1 reader 3 contributor 4 owner/admin
-	ExpiresAtMs int64  `json:"expires_at_ms"` // 0=永久
 }
 
 // NodeDTO 目录（nodes 列表/新建）
@@ -122,12 +101,9 @@ type QueryResp struct {
 
 // KBService 知识库域服务接口（main REST 壳依赖）
 type KBService interface {
-	// ListSpaces 可见空间列表（个人空间惰性创建；三层基线：personal 本人 +
-	// company 全员 + dept 部门祖先链可见——ACL 显式授权超集）
+	// ListSpaces 固定两维度行（D24）：公司知识库（幂等种子）+ 我的笔记（惰性创建，
+	// 仅本人）。他人 personal 行不进结果——两维度即全部可见宇宙
 	ListSpaces(ctx context.Context, tenantID, userID int64) ([]SpaceDTO, error)
-	// CreateSpace 新建空间（dept|company；personal 走惰性创建；v0.1 不校验权限点，登记）。
-	// deptID：dept 挂靠部门（显式须为本人直接部门 9001；缺省自动挂主部门）
-	CreateSpace(ctx context.Context, tenantID, userID int64, spaceType, name string, deptID int64) (*SpaceDTO, error)
 	// ListNodes 目录懒加载（子目录 + 目录下文档）
 	ListNodes(ctx context.Context, tenantID, userID, spaceID, parentID int64) (*NodeChildren, error)
 	// CreateNode 新建目录（同父同名 7014；>10 层 9001）
@@ -151,10 +127,6 @@ type KBService interface {
 	// ── 治理写操作（D8；权限守卫在 admin:kb:govern 路由层）──
 	GovernSetSpaceStatus(ctx context.Context, tenantID, spaceID int64, archived bool) error
 	GovernDeleteSpace(ctx context.Context, tenantID, spaceID int64) error
-	// ── 空间授权管理（11 §6 / D07 PKB-06；治理者=owner_id 或 ACL perm≥4）──
-	ListGrants(ctx context.Context, tenantID, userID, spaceID int64) ([]GrantRow, error)
-	AddGrant(ctx context.Context, tenantID, userID, spaceID int64, req GrantReq) (*GrantRow, error)
-	RemoveGrant(ctx context.Context, tenantID, userID, spaceID, grantID int64) error
 	// Query 检索：权限前置过滤（可见空间集注入两路 WHERE）→ 向量余弦 + 关键词 ILIKE
 	// → RRF 融合（k=60）→ 高亮区间
 	Query(ctx context.Context, tenantID, userID int64, spaceIDs []string, keyword string, topK int) (*QueryResp, error)

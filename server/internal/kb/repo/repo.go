@@ -21,19 +21,18 @@ var (
 	ErrDupPersonal = errors.New("kbrepo: duplicate personal space")
 )
 
-// 空间类型（11 篇 §2.1 三级）
+// 空间类型（D24 两维度：公司知识库 company 全租户唯一 + personal 我的笔记每人一行；
+// dept 已废除——0037 迁移存量并入 company，"空间"产品概念消失，本表退化为内部维度行）
 const (
 	SpacePersonal = "personal"
-	SpaceDept     = "dept"
 	SpaceCompany  = "company"
 )
 
-// 文档来源（v0.1 三态：粘贴文本 / 文件引用 / markdown 文本）
+// 文档来源（v0.1 三态：粘贴文本 / 文件引用 / markdown 文本；im=消息转存）
 const (
 	SourceText     = "text"
 	SourceFile     = "file"
-	SourceDoc      = "doc" // 文档中心同步（E6）
-	SourceIM       = "im"  // IM 消息转存（E6）
+	SourceIM       = "im" // IM 消息转存（E6）
 	SourceMarkdown = "markdown"
 )
 
@@ -127,8 +126,9 @@ type Repo interface {
 	// EnsurePersonalSpace 个人空间惰性创建（幂等：已存在直接返回；并发创建由
 	// uq_kb_space_personal 兜底 → 复用既有行）。quota 为默认配额（仅首次创建生效）
 	EnsurePersonalSpace(ctx context.Context, tenantID, userID, quotaBytes int64) (Space, error)
-	// CreateSpace 显式创建（dept/company；personal 语义走 EnsurePersonalSpace）
-	CreateSpace(ctx context.Context, s Space) (Space, error)
+	// EnsureCompanySpace 公司知识库维度行幂等种子（D24：全租户唯一，uq_kb_space_company
+	// 兜底并发；quota 仅首次生效；owner_id=0 系统行）
+	EnsureCompanySpace(ctx context.Context, tenantID, quotaBytes int64) (Space, error)
 	// GetPersonal 同租户同用户 personal 空间；无命中返回 nil, nil
 	GetPersonal(ctx context.Context, tenantID, userID int64) (*Space, error)
 	GetSpace(ctx context.Context, id int64) (*Space, error)

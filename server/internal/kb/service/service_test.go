@@ -9,9 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
-	kbapi "github.com/baobaowork/server/internal/kb/api"
 	kbrepo "github.com/baobaowork/server/internal/kb/repo"
 	errx "github.com/baobaowork/server/internal/platform/errors"
 )
@@ -47,6 +45,38 @@ const (
 func newTestService(t *testing.T, o Options) *Service {
 	t.Helper()
 	return New(o, kbrepo.NewMemory())
+}
+
+// personalOf 取用户个人维度行 ID（D24 两维度：ListSpaces=[company, personal]）
+func personalOf(t *testing.T, svc *Service, uid int64) string {
+	t.Helper()
+	spaces, err := svc.ListSpaces(context.Background(), tenantID, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sp := range spaces {
+		if sp.SpaceType == kbrepo.SpacePersonal {
+			return sp.ID
+		}
+	}
+	t.Fatalf("personal 维度行缺失: %+v", spaces)
+	return ""
+}
+
+// companyOf 取公司知识库维度行 ID
+func companyOf(t *testing.T, svc *Service) string {
+	t.Helper()
+	spaces, err := svc.ListSpaces(context.Background(), tenantID, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sp := range spaces {
+		if sp.SpaceType == kbrepo.SpaceCompany {
+			return sp.ID
+		}
+	}
+	t.Fatalf("company 维度行缺失: %+v", spaces)
+	return ""
 }
 
 // TestSplitIntoChunks 分段：标题链/空行分段/800 上限/超长硬切/清洗
@@ -97,10 +127,10 @@ func TestIngestReady(t *testing.T) {
 	svc := newTestService(t, Options{Embedder: fakeTopical(map[string]int{"令牌": 0, "红烧肉": 1})})
 	ctx := context.Background()
 	spaces, err := svc.ListSpaces(ctx, tenantID, alice)
-	if err != nil || len(spaces) != 1 || spaces[0].SpaceType != kbrepo.SpacePersonal {
-		t.Fatalf("惰性个人空间: %v %+v", err, spaces)
+	if err != nil || len(spaces) != 2 { // D24 两维度：company（种子）+ personal（惰性）
+		t.Fatalf("两维度行: %v %+v", err, spaces)
 	}
-	spaceID := spaces[0].ID
+	spaceID := personalOf(t, svc, alice)
 
 	doc, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, spaceID), 0, "登录规范", "text",
 		"# 登录规范\n\n当令牌过期时客户端应静默刷新并重试。\n\n连续失败则强制重新登录。", 0)
@@ -117,10 +147,16 @@ func TestIngestReady(t *testing.T) {
 	if chunks[0].HeadingPath != "登录规范" {
 		t.Fatalf("首块 heading: %+v", chunks[0])
 	}
-	// 配额累计（清洗前字节）
+	// 配额累计（清洗前字节；计入个人维度行）
 	after, _ := svc.ListSpaces(ctx, tenantID, alice)
-	if after[0].UsedBytes != doc.Size {
-		t.Fatalf("used_bytes 应等于 doc.size: %d vs %d", after[0].UsedBytes, doc.Size)
+	var personalUsed int64
+	for _, sp := range after {
+		if sp.SpaceType == kbrepo.SpacePersonal {
+			personalUsed = sp.UsedBytes
+		}
+	}
+	if personalUsed != doc.Size {
+		t.Fatalf("used_bytes 应等于 doc.size: %d vs %d", personalUsed, doc.Size)
 	}
 	// 大纲
 	outline, err := svc.GetOutline(ctx, tenantID, alice, mustInt(t, doc.ID))
@@ -138,8 +174,7 @@ func TestIngestReady(t *testing.T) {
 func TestIngestFailureAndReingest(t *testing.T) {
 	svc := newTestService(t, Options{Embedder: errEmbed})
 	ctx := context.Background()
-	spaces, _ := svc.ListSpaces(ctx, tenantID, alice)
-	doc, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, spaces[0].ID), 0, "", "text",
+	doc, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, personalOf(t, svc, alice)), 0, "", "text",
 		"红烧肉的传统做法与火候掌握", 0)
 	if err != nil {
 		t.Fatalf("同步版失败应返回文档而非请求错误: %v", err)
@@ -164,8 +199,14 @@ func TestIngestFailureAndReingest(t *testing.T) {
 		t.Fatalf("二次重摄入应 v2: %v %+v", err, again)
 	}
 	after, _ := svc2.ListSpaces(ctx, tenantID, alice)
-	if after[0].UsedBytes != fixed.Size {
-		t.Fatalf("重摄入不应重复计配额: %d", after[0].UsedBytes)
+	var usedAfter int64
+	for _, sp := range after {
+		if sp.SpaceType == kbrepo.SpacePersonal {
+			usedAfter = sp.UsedBytes
+		}
+	}
+	if usedAfter != fixed.Size {
+		t.Fatalf("重摄入不应重复计配额: %d", usedAfter)
 	}
 }
 
@@ -173,8 +214,7 @@ func TestIngestFailureAndReingest(t *testing.T) {
 func TestQueryFusionAndRanking(t *testing.T) {
 	svc := newTestService(t, Options{Embedder: fakeTopical(map[string]int{"令牌": 0, "红烧肉": 1})})
 	ctx := context.Background()
-	spaces, _ := svc.ListSpaces(ctx, tenantID, alice)
-	sid := mustInt(t, spaces[0].ID)
+	sid := mustInt(t, personalOf(t, svc, alice))
 	// 文档 A：令牌主题；文档 B：红烧肉主题（无字面"令牌过期"连续子串 → 关键词路不命中 A，向量路独证）
 	docA, err := svc.IngestDoc(ctx, tenantID, alice, sid, 0, "登录安全", "text",
 		"当令牌快要过期时，客户端应当静默刷新令牌并重试请求。", 0)
@@ -216,32 +256,34 @@ func TestQueryFusionAndRanking(t *testing.T) {
 	}
 }
 
-// TestQueryPermissionIsolation 权限前置过滤：personal 只本人；company 全员；指定无权空间 7002
+// TestQueryPermissionIsolation D24 两维度权限：公司知识库全员可看可投、我的笔记仅
+// 本人（他人 personal 不进可见宇宙）；指定无权空间 7002
 func TestQueryPermissionIsolation(t *testing.T) {
 	svc := newTestService(t, Options{Embedder: fakeTopical(map[string]int{"令牌": 0, "红烧肉": 1})})
 	ctx := context.Background()
-	aSpaces, _ := svc.ListSpaces(ctx, tenantID, alice)
-	personalID := aSpaces[0].ID
+	personalID := personalOf(t, svc, alice)
+	companyID := companyOf(t, svc)
+	if _, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, companyID), 0, "公司制度", "text", "令牌相关的公司制度公开内容", 0); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, personalID), 0, "私密笔记", "text", "令牌相关私密内容记录", 0); err != nil {
 		t.Fatal(err)
 	}
-	company, err := svc.CreateSpace(ctx, tenantID, alice, kbrepo.SpaceCompany, "全公司知识库", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, company.ID), 0, "公司制度", "text", "令牌相关的公司制度公开内容", 0); err != nil {
-		t.Fatal(err)
-	}
-	// bob：可见 company，不可见 alice personal
+	// bob：固定两维度行（company+自己的 personal）；alice personal 不可见
 	bSpaces, _ := svc.ListSpaces(ctx, tenantID, bob)
-	if len(bSpaces) != 2 { // bob 自己的 personal + company
-		t.Fatalf("bob 应见 2 空间: %+v", bSpaces)
+	if len(bSpaces) != 2 {
+		t.Fatalf("bob 应见 2 维度行: %+v", bSpaces)
+	}
+	for _, sp := range bSpaces {
+		if sp.SpaceType == kbrepo.SpacePersonal && sp.ID == personalID {
+			t.Fatalf("bob 不应见 alice personal: %+v", bSpaces)
+		}
 	}
 	resp, err := svc.Query(ctx, tenantID, bob, nil, "令牌", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Items) != 1 || resp.Items[0].SpaceID != company.ID {
+	if len(resp.Items) != 1 || resp.Items[0].SpaceID != companyID {
 		t.Fatalf("bob 只应命中 company 文档: %+v", resp.Items)
 	}
 	// 显式请求无权空间 → 7002
@@ -249,10 +291,9 @@ func TestQueryPermissionIsolation(t *testing.T) {
 	if errx.From(err).Code != errx.CodeKBQueryDenied {
 		t.Fatalf("应 7002: %v", err)
 	}
-	// company 全员可写（v0.1 登记：写入收敛到贡献者属阶段二 ACL）
-	_, err = svc.IngestDoc(ctx, tenantID, bob, mustInt(t, company.ID), 0, "x", "text", "公司空间全员可写", 0)
-	if err != nil {
-		t.Fatalf("company 应全员可写（v0.1 登记）: %v", err)
+	// company 全员可投（D24 拍板：公共维度全员可写）
+	if _, err := svc.IngestDoc(ctx, tenantID, bob, mustInt(t, companyID), 0, "x", "text", "公司空间全员可投", 0); err != nil {
+		t.Fatalf("company 应全员可投: %v", err)
 	}
 	_, err = svc.IngestDoc(ctx, tenantID, bob, mustInt(t, personalID), 0, "x", "text", "越权写入", 0)
 	if errx.From(err).Code != errx.CodeKBQueryDenied {
@@ -265,8 +306,7 @@ func TestQueryVectorDegraded(t *testing.T) {
 	// 先用正常嵌入灌一份 ready 文档
 	svc := newTestService(t, Options{Embedder: fakeTopical(map[string]int{"关键词": 0})})
 	ctx := context.Background()
-	spaces, _ := svc.ListSpaces(ctx, tenantID, alice)
-	if _, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, spaces[0].ID), 0, "", "text", "降级模式下的关键词检索测试", 0); err != nil {
+	if _, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, personalOf(t, svc, alice)), 0, "", "text", "降级模式下的关键词检索测试", 0); err != nil {
 		t.Fatal(err)
 	}
 	// 查询时嵌入服务故障（摄入不受影响——文档已 ready）
@@ -287,8 +327,7 @@ func TestQueryVectorDegraded(t *testing.T) {
 func TestCreateNodeConstraints(t *testing.T) {
 	svc := newTestService(t, Options{Embedder: fakeTopical(nil), MaxDepth: 2})
 	ctx := context.Background()
-	spaces, _ := svc.ListSpaces(ctx, tenantID, alice)
-	sid := mustInt(t, spaces[0].ID)
+	sid := mustInt(t, personalOf(t, svc, alice))
 	n1, err := svc.CreateNode(ctx, tenantID, alice, sid, 0, "技术规范")
 	if err != nil {
 		t.Fatal(err)
@@ -322,8 +361,7 @@ func TestCreateNodeConstraints(t *testing.T) {
 func TestQuotaExceeded(t *testing.T) {
 	svc := newTestService(t, Options{Embedder: fakeTopical(nil), PersonalQuotaBytes: 10})
 	ctx := context.Background()
-	spaces, _ := svc.ListSpaces(ctx, tenantID, alice)
-	_, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, spaces[0].ID), 0, "", "text", "这段文本明显超过十个字节的配额上限", 0)
+	_, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, personalOf(t, svc, alice)), 0, "", "text", "这段文本明显超过十个字节的配额上限", 0)
 	if errx.From(err).Code != errx.CodeKBQuotaExceeded {
 		t.Fatalf("应 7004: %v", err)
 	}
@@ -346,8 +384,7 @@ func TestFileIngest(t *testing.T) {
 		},
 	})
 	ctx := context.Background()
-	spaces, _ := svc.ListSpaces(ctx, tenantID, alice)
-	sid := mustInt(t, spaces[0].ID)
+	sid := mustInt(t, personalOf(t, svc, alice))
 	doc, err := svc.IngestDoc(ctx, tenantID, alice, sid, 0, "", "", "", 1)
 	if err != nil {
 		t.Fatal(err)
@@ -396,8 +433,7 @@ func TestBuildSnippet(t *testing.T) {
 func TestMarkdownFormatAndTitle(t *testing.T) {
 	svc := newTestService(t, Options{Embedder: fakeTopical(nil)})
 	ctx := context.Background()
-	spaces, _ := svc.ListSpaces(ctx, tenantID, alice)
-	doc, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, spaces[0].ID), 0, "", "markdown", "# 会议纪要标题\n\n正文内容。", 0)
+	doc, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, personalOf(t, svc, alice)), 0, "", "markdown", "# 会议纪要标题\n\n正文内容。", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,8 +446,7 @@ func TestMarkdownFormatAndTitle(t *testing.T) {
 func TestJobsSimpleList(t *testing.T) {
 	svc := newTestService(t, Options{Embedder: fakeTopical(nil)})
 	ctx := context.Background()
-	spaces, _ := svc.ListSpaces(ctx, tenantID, alice)
-	sid := mustInt(t, spaces[0].ID)
+	sid := mustInt(t, personalOf(t, svc, alice))
 	if _, err := svc.IngestDoc(ctx, tenantID, alice, sid, 0, "", "text", "就绪文档", 0); err != nil {
 		t.Fatal(err)
 	}
@@ -448,196 +483,31 @@ func extOf(name string) string {
 	return ""
 }
 
-// ACL 接入（03 §4.4 → D07 阶段二）：ACL 显式授权超集——dept 空间授
-// viewer 后部门成员可读；company 空间授 editor 后非 owner 可写；
-// 无授权回落 v0.1 基线（既有用例零破坏）
-func TestACLExplicitGrantWidens(t *testing.T) {
-	rule := map[int64]map[int64]int{} // spaceID → uid → perm（测试桩）
-	svc := newTestService(t, Options{
-		Embedder: fakeTopical(map[string]int{"令牌": 0}),
-		ACLPerm: func(_ context.Context, spaceID, userID int64) int {
-			return rule[spaceID][userID]
-		},
-	})
-	ctx := context.Background()
-	// alice（治理者）建 dept 空间并摄入
-	dept, err := svc.CreateSpace(ctx, tenantID, alice, kbrepo.SpaceDept, "研发部知识库", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.IngestDoc(ctx, tenantID, alice, mustInt(t, dept.ID), 0, "规范", "text", "令牌安全规范", 0); err != nil {
-		t.Fatal(err)
-	}
-	// 基线：bob（非治理者）不可见 dept 空间
-	bSpaces, _ := svc.ListSpaces(ctx, tenantID, bob)
-	for _, sp := range bSpaces {
-		if sp.ID == dept.ID {
-			t.Fatal("基线下 bob 不应见 dept 空间")
-		}
-	}
-	// ACL：授 bob viewer → 可见+可检索
-	deptID := mustInt(t, dept.ID)
-	setACL(rule, deptID, bob, 1)
-	bSpaces, _ = svc.ListSpaces(ctx, tenantID, bob)
-	hit := false
-	for _, sp := range bSpaces {
-		if sp.ID == dept.ID {
-			hit = true
-		}
-	}
-	if !hit {
-		t.Fatal("ACL viewer 后 bob 应见 dept 空间")
-	}
-	resp, err := svc.Query(ctx, tenantID, bob, []string{dept.ID}, "令牌", 10)
-	if err != nil || len(resp.Items) == 0 {
-		t.Fatalf("ACL viewer 检索：%v %+v", err, resp)
-	}
-	// viewer 不可写（7003 语义）
-	if _, werr := svc.IngestDoc(ctx, tenantID, bob, mustInt(t, dept.ID), 0, "x", "text", "令牌 y", 0); werr == nil {
-		t.Fatal("viewer 不可写")
-	}
-	// ACL：升 editor → bob 可写
-	setACL(rule, deptID, bob, 3)
-	if _, werr := svc.IngestDoc(ctx, tenantID, bob, mustInt(t, dept.ID), 0, "补充", "text", "令牌补充说明", 0); werr != nil {
-		t.Fatalf("editor 应可写：%v", werr)
-	}
-	// owner（4）全权
-	setACL(rule, deptID, bob, 4)
-	if _, werr := svc.IngestDoc(ctx, tenantID, bob, mustInt(t, dept.ID), 0, "再补", "text", "令牌再补", 0); werr != nil {
-		t.Fatal(err)
-	}
-	// ACL 不影响他人基线（uid 1003 无授权仍不可见）
-	cSpaces, _ := svc.ListSpaces(ctx, tenantID, 1003)
-	for _, sp := range cSpaces {
-		if sp.ID == dept.ID {
-			t.Fatal("无授权者不应见")
-		}
-	}
-}
-
-func setACL(rule map[int64]map[int64]int, spaceID, uid int64, perm int) {
-	if rule[spaceID] == nil {
-		rule[spaceID] = map[int64]int{}
-	}
-	rule[spaceID][uid] = perm
-}
-
-// TestKBGrants D4：空间授权管理——治理者校验/添加/列表/撤销 + canRead 放宽生效
-func TestKBGrants(t *testing.T) {
-	// ACL 闭包 mock：内存授权表 + Resolve 按 grant_type 展开（user 直配/dept 简化为空）
-	grants := map[int64]ACLGrantRow{} // grantID → 行
-	nextID := int64(1)
-	permOf := map[int64]int{} // userID → perm（AddGrant user 授权后回填，模拟 Resolve）
-	o := Options{Now: func() time.Time { return time.Now() }}
-	o.ACLPerm = func(_ context.Context, spaceID, userID int64) int {
-		_ = spaceID
-		return permOf[userID]
-	}
-	o.ACLGrant = func(_ context.Context, spaceID int64, gt int, target int64, perm int, grantedBy int64, expMs int64) (int64, int64, error) {
-		id := nextID
-		nextID++
-		grants[id] = ACLGrantRow{
-			GrantID: id, GrantType: gt, GrantTarget: target, Perm: perm,
-			GrantedBy: grantedBy, ExpiresAtMs: expMs, CreatedAtMs: time.Now().UnixMilli(),
-		}
-		if gt == 1 { // user 授权回填 Resolve 视图（dept 展开属 org/acl 职责，此处不模拟）
-			permOf[target] = perm
-		}
-		return id, time.Now().UnixMilli(), nil
-	}
-	o.ACLListGrants = func(_ context.Context, spaceID int64) ([]ACLGrantRow, error) {
-		_ = spaceID
-		out := make([]ACLGrantRow, 0, len(grants))
-		for _, g := range grants {
-			out = append(out, g)
-		}
-		return out, nil
-	}
-	o.ACLRevoke = func(_ context.Context, spaceID, grantID int64) error {
-		if _, ok := grants[grantID]; !ok {
-			return kbrepo.ErrNotFound
-		}
-		delete(grants, grantID)
-		return nil
-	}
-	svc := newTestService(t, o)
-	ctx := context.Background()
-
-	// bob 建部门空间（owner=bob）；建一篇文档
-	sp, err := svc.CreateSpace(ctx, 1, bob, "dept", "研发部知识库", 0)
-	if err != nil {
-		t.Fatalf("建空间: %v", err)
-	}
-	spaceID, _ := strconv.ParseInt(sp.ID, 10, 64)
-	if _, err := svc.IngestDoc(ctx, 1, bob, spaceID, 0, "规范", "md", "# 规范\n内容", 0); err != nil {
-		t.Fatalf("摄入: %v", err)
-	}
-
-	// 非治理者（alice）管理 → 7002 拒
-	if _, err := svc.ListGrants(ctx, 1, alice, spaceID); errx.From(err).Code != errx.CodeKBQueryDenied {
-		t.Fatalf("非治理者列表应 7002: %v", err)
-	}
-	// bob 授 alice contributor（perm 3）→ alice 可读可写（canRead/canWrite 放宽）
-	row, err := svc.AddGrant(ctx, 1, bob, spaceID, kbapi.GrantReq{GrantType: 1, GrantTarget: "1001", Perm: 3})
-	if err != nil {
-		t.Fatalf("授权: %v", err)
-	}
-	if _, err := svc.ListNodes(ctx, 1, alice, spaceID, 0); err != nil {
-		t.Fatalf("alice 授权后应可浏览: %v", err)
-	}
-	if _, err := svc.IngestDoc(ctx, 1, alice, spaceID, 0, "alice 的文档", "md", "# a", 0); err != nil {
-		t.Fatalf("contributor 应可摄入: %v", err)
-	}
-	// perm 非法集 → 9001
-	if _, err := svc.AddGrant(ctx, 1, bob, spaceID, kbapi.GrantReq{GrantType: 1, GrantTarget: "1001", Perm: 2}); errx.From(err).Code != errx.CodeBadRequest {
-		t.Fatalf("perm=2 应 9001: %v", err)
-	}
-	// 列表含 alice 行；撤销后 alice 失去写权（permOf 回滚由 Resolve 视图模拟——
-	// mock 不联动，改验证 ACLRevoke 路径 + 列表为空）
-	rows, err := svc.ListGrants(ctx, 1, bob, spaceID)
-	if err != nil || len(rows) != 1 || rows[0].GrantTarget != "1001" || rows[0].Perm != 3 {
-		t.Fatalf("授权列表不符: %v %+v", err, rows)
-	}
-	gid, _ := strconv.ParseInt(row.ID, 10, 64)
-	if err := svc.RemoveGrant(ctx, 1, bob, spaceID, gid); err != nil {
-		t.Fatalf("撤销: %v", err)
-	}
-	rows, _ = svc.ListGrants(ctx, 1, bob, spaceID)
-	if len(rows) != 0 {
-		t.Fatalf("撤销后列表应空: %+v", rows)
-	}
-}
-
-// TestKBGovernance D8：空间停用即刻生效（检索/浏览挡）/启用恢复/级联删除/personal 7010/
-// filtered_hint（OQ-D10：他人不可见空间存在 → 检索提示"部分结果被策略隐藏"）
+// TestKBGovernance D8+D24：维度行停用即刻生效（检索/浏览挡）/启用恢复/级联删除/
+// personal 7010/filtered_hint（OQ-D10：两维度下提示仅在维度行被治理停用时出现——
+// 他人 personal 不属可见宇宙，不触发）
 func TestKBGovernance(t *testing.T) {
 	o := Options{Embedder: fakeTopical(map[string]int{"规范": 0})}
 	svc := newTestService(t, o)
 	ctx := context.Background()
 
-	// bob 建公司空间 + 摄入；alice 建个人空间（对 bob 不可见）
-	sp, err := svc.CreateSpace(ctx, 1, bob, "company", "治理空间", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	spaceID, _ := strconv.ParseInt(sp.ID, 10, 64)
+	// bob 在公司知识库投稿；alice personal 存在但对 bob 不属可见宇宙
+	spaceID := mustInt(t, companyOf(t, svc))
 	if _, err := svc.IngestDoc(ctx, 1, bob, spaceID, 0, "安全规范", "md", "# 安全规范\n规范内容", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CreateSpace(ctx, 1, alice, "personal", "alice 私有", 0); err != nil {
-		t.Fatal(err)
-	}
+	_ = personalOf(t, svc, alice)
 
-	// filtered_hint：bob 检索时存在不可见空间（alice 个人空间）→ 提示
+	// 两维度均在 → 无隐藏提示
 	res, err := svc.Query(ctx, 1, bob, nil, "规范", 5)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if res.FilteredHint != "部分结果被策略隐藏" {
-		t.Fatalf("filtered_hint 应提示: %q", res.FilteredHint)
+	if res.FilteredHint != "" {
+		t.Fatalf("两维度可见不应提示: %q", res.FilteredHint)
 	}
 
-	// 停用：即刻生效（canRead 挡——浏览 7002；检索 targets 不含该空间）
+	// 停用 company：即刻生效（canRead 挡——浏览 7013；检索 targets 不含该维度；hint 触发）
 	if err := svc.GovernSetSpaceStatus(ctx, 1, spaceID, true); err != nil {
 		t.Fatalf("停用: %v", err)
 	}
@@ -648,7 +518,10 @@ func TestKBGovernance(t *testing.T) {
 	if err != nil || len(res2.Items) != 0 {
 		t.Fatalf("停用后检索不应命中: %v %+v", err, res2.Items)
 	}
-	// 指定停用空间检索 → 7002（不可见语义一致）
+	if res2.FilteredHint != "部分结果被策略隐藏" {
+		t.Fatalf("维度停用应触发 filtered_hint: %q", res2.FilteredHint)
+	}
+	// 指定停用维度检索 → 7002（不可见语义一致）
 	sidStr := strconv.FormatInt(spaceID, 10)
 	if _, err := svc.Query(ctx, 1, bob, []string{sidStr}, "规范", 5); errx.From(err).Code != errx.CodeKBQueryDenied {
 		t.Fatalf("指定停用空间应 7002: %v", err)
@@ -662,7 +535,7 @@ func TestKBGovernance(t *testing.T) {
 		t.Fatalf("启用后应可浏览: %v", err)
 	}
 
-	// 级联删除：空间消失
+	// 级联删除：维度行消失（下次 ListSpaces 幂等种子新行——治理清库语义）
 	if err := svc.GovernDeleteSpace(ctx, 1, spaceID); err != nil {
 		t.Fatalf("删除: %v", err)
 	}
@@ -671,115 +544,9 @@ func TestKBGovernance(t *testing.T) {
 	}
 
 	// personal 不可删 7010
-	personal, err := svc.CreateSpace(ctx, 1, alice, "personal", "p2", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid, _ := strconv.ParseInt(personal.ID, 10, 64)
+	pid := mustInt(t, personalOf(t, svc, alice))
 	if err := svc.GovernDeleteSpace(ctx, 1, pid); errx.From(err).Code != errx.CodeKBPersonalProtected {
 		t.Fatalf("personal 删除应 7010: %v", err)
 	}
 }
 
-// TestDeptSpaceAncestorChainVisibility 三层知识检索 dept 可见性（2026-11 收口）：
-// dept 空间挂靠部门 ∈ 用户祖先链并集 → 可见——父部门知识对子部门成员可见、
-// 兄弟部门互不可见、多部门取并集、创建缺省挂主部门、显式越权拒 9001
-func TestDeptSpaceAncestorChainVisibility(t *testing.T) {
-	// 部门树：研发中心(10) → 后端部(11) → 基础架构组(12)；市场部(13)
-	svc := newTestService(t, Options{
-		UserDeptIDsOf: func(_ context.Context, _ int64, userID int64) (map[int64]bool, int64, error) {
-			switch userID {
-			case alice: // alice 挂 研发中心+市场部（主=研发中心）
-				return map[int64]bool{10: true, 13: true}, 10, nil
-			case bob: // bob 挂 基础架构组（深层，主部门）
-				return map[int64]bool{12: true}, 12, nil
-			}
-			return map[int64]bool{}, 0, nil
-		},
-		UserDeptChainOf: func(_ context.Context, _ int64, userID int64) (map[int64]bool, error) {
-			switch userID {
-			case alice:
-				return map[int64]bool{10: true, 13: true}, nil
-			case bob: // 祖先链 12→11→10（深度无关）
-				return map[int64]bool{12: true, 11: true, 10: true}, nil
-			}
-			return map[int64]bool{}, nil
-		},
-	})
-	ctx := context.Background()
-
-	rd, err := svc.CreateSpace(ctx, tenantID, alice, "dept", "研发中心知识库", 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rd.DeptID != "10" {
-		t.Fatalf("显式挂靠: %s", rd.DeptID)
-	}
-	mkt, err := svc.CreateSpace(ctx, tenantID, alice, "dept", "市场部知识库", 13)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bobSp, err := svc.CreateSpace(ctx, tenantID, bob, "dept", "基础架构组知识库", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bobSp.DeptID != "12" {
-		t.Fatalf("缺省应自动挂主部门: %s", bobSp.DeptID)
-	}
-
-	// bob（深层 12）可见：祖先 10 空间 ✓、自己 12 ✓、兄弟 13 ✗
-	spaces, err := svc.ListSpaces(ctx, tenantID, bob)
-	if err != nil {
-		t.Fatal(err)
-	}
-	has := map[string]bool{}
-	for _, sp := range spaces {
-		has[sp.ID] = true
-	}
-	if !has[rd.ID] || !has[bobSp.ID] {
-		t.Fatalf("bob 应见祖先+自身部门空间: %+v", has)
-	}
-	if has[mkt.ID] {
-		t.Fatal("兄弟部门空间不应可见")
-	}
-	// alice 可见：10 ✓ 13 ✓；下级部门 12 的空间不可见（知识沿树向下流，不向上）
-	spacesAlice, _ := svc.ListSpaces(ctx, tenantID, alice)
-	hasA := map[string]bool{}
-	for _, sp := range spacesAlice {
-		hasA[sp.ID] = true
-	}
-	if !hasA[rd.ID] || !hasA[mkt.ID] || hasA[bobSp.ID] {
-		t.Fatalf("alice 可见集不符（下级部门知识不向上流）: %+v", hasA)
-	}
-
-	// 显式挂靠非本人部门 → 9001
-	if _, err := svc.CreateSpace(ctx, tenantID, bob, "dept", "越权空间", 13); errx.From(err).Code != errx.CodeBadRequest {
-		t.Fatalf("越权挂靠应 9001: %v", err)
-	}
-	// 指定不可见空间检索 → 7002（防空间探测，既有语义回归）
-	if _, err := svc.Query(ctx, tenantID, bob, []string{mkt.ID}, "x", 5); errx.From(err).Code != errx.CodeKBQueryDenied {
-		t.Fatalf("不可见空间检索应 7002: %v", err)
-	}
-}
-
-// TestDeptSpaceOwnerFallback 通道未装配/未挂部门：dept 空间回落 OwnerID（兼容旧口径）
-func TestDeptSpaceOwnerFallback(t *testing.T) {
-	svc := newTestService(t, Options{}) // 两个部门闭包均未装配
-	ctx := context.Background()
-	sp, err := svc.CreateSpace(ctx, tenantID, alice, "dept", "旧口径空间", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sp.DeptID != "0" {
-		t.Fatalf("未装配通道缺省不挂靠: %s", sp.DeptID)
-	}
-	spaces, _ := svc.ListSpaces(ctx, tenantID, bob)
-	for _, s := range spaces {
-		if s.ID == sp.ID {
-			t.Fatal("他人不应可见未挂靠的 dept 空间")
-		}
-	}
-	if _, err := svc.CreateSpace(ctx, tenantID, alice, "dept", "显式但无法校验", 9); errx.From(err).Code != errx.CodeBadRequest {
-		t.Fatalf("通道未装配显式 dept_id 应 9001: %v", err)
-	}
-}
