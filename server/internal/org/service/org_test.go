@@ -3,6 +3,7 @@ package orgservice
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/baobaowork/server/internal/org/api"
@@ -151,6 +152,15 @@ func TestDirectoryUsers(t *testing.T) {
 	}
 	if all[0].EmployeeNo != "lisi" || all[0].UID == "" {
 		t.Fatalf("行应含 uid: %+v", all[0])
+	}
+
+	// 主部门 id：挂靠者回填、未挂者空（通讯录树挂叶子用）
+	zsRow := all[2] // 工号升序 lisi<wangwu<zhangsan
+	if zsRow.EmployeeNo != "zhangsan" || zsRow.DeptID != strconv.FormatInt(tech.ID, 10) {
+		t.Fatalf("张三应回填主部门 id: %+v", zsRow)
+	}
+	if all[0].DeptID != "" || all[1].DeptID != "" {
+		t.Fatalf("未挂部门者 dept_id 应空: %+v %+v", all[0], all[1])
 	}
 
 	// 按部门过滤：技术部仅张三

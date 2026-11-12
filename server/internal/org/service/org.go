@@ -130,12 +130,14 @@ type UserCard struct {
 	OrgPath    string `json:"org_path"`
 }
 
-// DirectoryUser 用户面通讯录行（登录后；含 uid——发起单聊 conv.create 需要）
+// DirectoryUser 用户面通讯录行（登录后；含 uid——发起单聊 conv.create 需要；
+// DeptID=主部门 id，空=未挂任何部门——通讯录树把用户挂为主部门叶子/「未分组」）
 type DirectoryUser struct {
 	UID        string `json:"uid"`
 	EmployeeNo string `json:"employee_no"`
 	Name       string `json:"display_name"`
 	OrgPath    string `json:"org_path"`
+	DeptID     string `json:"dept_id"`
 }
 
 // DirectoryFilter 用户面通讯录检索过滤：Q 同搜人（工号/姓名/拼音全拼/首字母）；
@@ -284,11 +286,16 @@ func (s *Service) directory(ctx context.Context, tenantID int64, f DirectoryFilt
 			next = page[len(page)-1].EmployeeNo
 			break
 		}
+		deptID := ""
+		if d := primaryOf[u.ID]; d != 0 {
+			deptID = strconv.FormatInt(d, 10)
+		}
 		page = append(page, DirectoryUser{
 			UID:        strconv.FormatInt(u.ID, 10),
 			EmployeeNo: u.EmployeeNo,
 			Name:       u.DisplayName,
 			OrgPath:    orgPath(primaryOf[u.ID]),
+			DeptID:     deptID,
 		})
 	}
 	return page, next, nil

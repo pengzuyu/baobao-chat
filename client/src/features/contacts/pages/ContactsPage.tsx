@@ -1,17 +1,18 @@
 /**
- * 通讯录页（M2，2026-11-12 用户裁决：通讯录结构全员可见——找人/看谁在用）：
- * - 左：组织树只读（全公司 + 部门树 + 虚拟「未分组」——未挂部门用户默认落此组，
- *   自助注册账号即此形态；建部门/挂人等管理动作仍在 /admin/org）
- * - 右：成员列表（搜索命中 工号/姓名/拼音；点「发消息」→ conv.create type=1
- *   单聊幂等直达会话——服务端同对成员已有单聊直接复用）
- * 数据源：GET /org/tree + GET /org/users（登录后含 uid 口径）。
+ * 通讯录页（M2 落地后按用户口径二改，2026-11-12）：
+ * - 单棵树：全公司 → 部门树 → 用户叶子（按主部门挂靠；未挂部门用户归虚拟「未分组」）
+ * - 搜索与聊天页同款：输入先出下拉结果（联系人段=服务端四路检索；组织段=树内名称过滤），
+ *   点击结果定位回树——展开祖先 + 滚动入视 + 闪烁高亮（不直接跳走）
+ * - 交互：双击用户 → 发起单聊直达（conv.create type=1 幂等）；hover 用户 → 详情卡
+ *   （姓名/工号/组织链路 + 发消息）；管理动作仍在 /admin/org
+ * 数据源：GET /org/tree + GET /org/users（全量翻页拉齐后端内组树）。
  */
-import { useEffect, useMemo, useState } from 'react';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Input } from 'antd';
-import { Search } from 'lucide-react';
-import { Building2, ChevronDown, ChevronRight, FolderTree, MessageCircle, Users } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Input, Popover } from 'antd';
+import { Building2, ChevronDown, ChevronRight, FolderTree, MessageCircle, Search, Users } from 'lucide-react';
 import { fetchDirectoryUsers, fetchOrgTree } from '../api/contacts';
 import type { DirectoryUser } from '../api/contacts';
 import type { DeptNode } from '../../admin/api/admin';
@@ -20,77 +21,214 @@ import { qk } from '../../../shared/api/keys';
 import { errText } from '../../../shared/api/http';
 import { useAuthStore } from '../../auth/store/auth';
 
-/** 左树选中态：全公司 / 具体部门 / 虚拟「未分组」 */
-type Sel = { kind: 'all' } | { kind: 'dept'; id: string; name: string } | { kind: 'ungrouped' };
+/** 搜索防抖（与聊天页/选人器同节奏） */
+const SEARCH_DEBOUNCE_MS = 300;
+/** 下拉各段最多行数 */
+const RESULT_MAX_ROWS = 5;
+/** 定位闪烁时长（ms） */
+const FLASH_MS = 1200;
+/** DOM 节点键（定位/选中/闪烁共用） */
+const deptDomId = (id: string) => `dept-${id}`;
+const userDomId = (uid: string) => `user-${uid}`;
 
-/** 部门树节点行（只读复用 org-node 样式族——管理端同款视觉，无编辑/新增按钮） */
-function TreeRow({ node, depth, sel, onSelect }: { node: DeptNode; depth: number; sel: Sel; onSelect: (s: Sel) => void }) {
-  const [open, setOpen] = useState(true);
-  const hasChildren = !!node.children?.length;
-  const active = sel.kind === 'dept' && sel.id === node.id;
-  return (
-    <div className="org-node" style={{ marginLeft: depth * 16 }}>
-      <div className={`org-node__row${active ? ' org-node__row--selected' : ''}`}>
-        <button type="button" className="icon-btn" onClick={() => setOpen(!open)} disabled={!hasChildren}>
-          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        </button>
-        <FolderTree size={14} className="org-node__icon" />
-        <span className="org-node__name" title={node.path} onClick={() => onSelect({ kind: 'dept', id: node.id, name: node.name })}>
-          {node.name}
-        </span>
-      </div>
-      {open && hasChildren ? (
-        <div>
-          {node.children!.map((c) => (
-            <TreeRow key={c.id} node={c} depth={depth + 1} sel={sel} onSelect={onSelect} />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
+/** 全量拉齐用户（cursor 翻页聚合；v0.1 用户量级安全上限 100 页=5000 人同服务端口径） */
+async function fetchAllUsers(): Promise<DirectoryUser[]> {
+  const out: DirectoryUser[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < 100; i += 1) {
+    const page = await fetchDirectoryUsers({ cursor, limit: 50 });
+    out.push(...page.items);
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return out;
 }
 
 export function ContactsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const myUid = useAuthStore((s) => s.user?.uid);
-  const [sel, setSel] = useState<Sel>({ kind: 'all' });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const [dmBusy, setDmBusy] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // ── 数据：树 + 全量用户 ──
+  const tree = useQuery({ queryKey: ['org', 'tree'], queryFn: fetchOrgTree });
+  const usersQuery = useQuery({ queryKey: ['org', 'users', 'all'], queryFn: fetchAllUsers });
+  const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data]);
+
+  /** deptId → 节点与父链（定位展开祖先用；path 物化路径 /1/7/23/ 直拆） */
+  const deptIndex = useMemo(() => {
+    const byId = new Map<string, DeptNode>();
+    const childDepts = new Map<string, DeptNode[]>();
+    const walk = (nodes: DeptNode[]) => {
+      for (const n of nodes) {
+        byId.set(n.id, n);
+        childDepts.set(n.id, []); // 确保空部门也有键
+        (n.children ?? []).forEach((c) => childDepts.get(n.id)?.push(c));
+        walk(n.children ?? []);
+      }
+    };
+    walk(tree.data ?? []);
+    return { byId, childDepts };
+  }, [tree.data]);
+
+  /** deptId → 直接用户；未挂主部门（或指向已不存在部门——数据漂移防御）→ ungrouped */
+  const grouped = useMemo(() => {
+    const deptUsers = new Map<string, DirectoryUser[]>();
+    const ungrouped: DirectoryUser[] = [];
+    for (const u of users) {
+      if (u.dept_id && deptIndex.byId.has(u.dept_id)) {
+        const list = deptUsers.get(u.dept_id);
+        if (list) list.push(u);
+        else deptUsers.set(u.dept_id, [u]);
+      } else {
+        ungrouped.push(u);
+      }
+    }
+    return { deptUsers, ungrouped };
+  }, [users, deptIndex]);
+
+  /** 部门子树用户总数（含后代；徽标展示） */
+  const subtreeCount = useMemo(() => {
+    const memo = new Map<string, number>();
+    const calc = (id: string): number => {
+      const hit = memo.get(id);
+      if (hit !== undefined) return hit;
+      let n = (grouped.deptUsers.get(id)?.length ?? 0);
+      for (const c of deptIndex.childDepts.get(id) ?? []) n += calc(c.id);
+      memo.set(id, n);
+      return n;
+    };
+    for (const id of deptIndex.byId.keys()) calc(id);
+    return memo;
+  }, [deptIndex, grouped]);
+
+  // 树首载：默认全展开（部门量小；「看一看都有谁」是本页主诉求）
+  useEffect(() => {
+    if (tree.data) setExpanded(new Set([...deptIndex.byId.keys(), 'ungrouped']));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree.data]);
+
+  // ── 搜索（下拉先行：联系人=服务端四路检索；组织=树内名称过滤） ──
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
-  const [dmBusy, setDmBusy] = useState<string | null>(null);
+  const [ddOpen, setDdOpen] = useState(false);
+  const [people, setPeople] = useState<DirectoryUser[]>([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+  const seqRef = useRef(0);
+  const headRef = useRef<HTMLDivElement>(null);
 
-  // 搜索防抖 300ms（与登录页选人同节奏；q 变化重置翻页）
   useEffect(() => {
-    const timer = setTimeout(() => setQ(qInput.trim()), 300);
+    const timer = setTimeout(() => setQ(qInput.trim()), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [qInput]);
 
-  const tree = useQuery({ queryKey: ['org', 'tree'], queryFn: fetchOrgTree });
+  useEffect(() => {
+    const kw = q;
+    if (!kw) {
+      setPeople([]);
+      setPeopleLoading(false);
+      setDdOpen(false);
+      return;
+    }
+    setDdOpen(true);
+    setPeopleLoading(true);
+    const seq = ++seqRef.current;
+    void fetchDirectoryUsers({ q: kw, limit: RESULT_MAX_ROWS })
+      .then((res) => {
+        if (seqRef.current !== seq) return;
+        setPeople(res.items);
+        setPeopleLoading(false);
+      })
+      .catch(() => {
+        if (seqRef.current !== seq) return;
+        setPeople([]);
+        setPeopleLoading(false);
+      });
+  }, [q]);
 
-  const selKey = sel.kind === 'dept' ? `dept:${sel.id}` : sel.kind;
-  const users = useInfiniteQuery({
-    queryKey: ['org', 'users', selKey, q],
-    queryFn: ({ pageParam }) =>
-      fetchDirectoryUsers({
-        q: q || undefined,
-        deptId: sel.kind === 'dept' ? sel.id : undefined,
-        ungrouped: sel.kind === 'ungrouped' || undefined,
-        cursor: pageParam === '' ? undefined : pageParam,
-        limit: 50,
-      }),
-    initialPageParam: '',
-    getNextPageParam: (last) => last.nextCursor || undefined,
-  });
+  /** 组织段：树内名称过滤（≤5；扁平带链路名） */
+  const deptHits = useMemo(() => {
+    if (!q) return [];
+    const out: Array<{ node: DeptNode; pathLabel: string }> = [];
+    const walk = (nodes: DeptNode[], prefix: string) => {
+      for (const n of nodes) {
+        const label = prefix ? `${prefix}/${n.name}` : n.name;
+        if (n.name.toLowerCase().includes(q.toLowerCase())) out.push({ node: n, pathLabel: label });
+        walk(n.children ?? [], label);
+      }
+    };
+    walk(tree.data ?? [], '');
+    return out.slice(0, RESULT_MAX_ROWS);
+  }, [q, tree.data]);
 
-  const rows = useMemo(() => users.data?.pages.flatMap((p) => p.items) ?? [], [users.data]);
-  const totalLoaded = rows.length;
+  // 点击外部收起下拉
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (headRef.current && !headRef.current.contains(e.target as Node)) setDdOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
 
-  const title = sel.kind === 'all' ? '全公司' : sel.kind === 'ungrouped' ? '未分组' : sel.name;
+  // Esc 收起
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDdOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
-  /** 发消息：单聊幂等创建直达（创建者本人=收件人过滤在渲染层） */
+  /** 定位：展开祖先 + 滚动入视 + 闪烁（用户口径：搜索点击=定位回树，不跳走） */
+  const locate = (domId: string, deptIdsToExpand: string[]) => {
+    setDdOpen(false);
+    setSelectedId(domId);
+    setFlashId(domId);
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const id of deptIdsToExpand) next.add(id);
+      return next;
+    });
+  };
+
+  const locateDept = (id: string) => {
+    const node = deptIndex.byId.get(id);
+    // 物化路径 /1/7/23/ 直拆祖先链（去自身——部门自身可见只需父链展开）
+    const ancestors = (node?.path ?? '').split('/').filter(Boolean).slice(0, -1);
+    locate(deptDomId(id), ancestors);
+  };
+
+  const locateUser = (u: DirectoryUser) => {
+    if (!u.dept_id) {
+      // 未挂部门：叶子在「未分组」节点下
+      locate(userDomId(u.uid), ['ungrouped']);
+      return;
+    }
+    const dept = deptIndex.byId.get(u.dept_id);
+    // 主部门自身 + 其祖先链都要展开，用户叶子才渲染
+    const chain = (dept?.path ?? '').split('/').filter(Boolean);
+    locate(userDomId(u.uid), chain);
+  };
+
+  // 闪烁节点滚动入视（展开重渲染后生效）
+  useEffect(() => {
+    if (!flashId) return;
+    const raf = requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-node-id="${flashId}"]`);
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el?.classList.add('bbw-contacts__flash');
+      setTimeout(() => el?.classList.remove('bbw-contacts__flash'), FLASH_MS);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [flashId, expanded, tree.data, users]);
+
+  /** 发消息：单聊幂等创建直达（双击用户/详情卡按钮共用） */
   const startDm = async (u: DirectoryUser) => {
-    if (dmBusy) return;
-    setDmBusy(u.uid);
+    if (dmBusy || u.uid === myUid) return;
+    setDmBusy(true);
     try {
       const conv = await convCreate({ type: 1, memberIds: [u.uid] });
       await queryClient.invalidateQueries({ queryKey: qk.im.convs() });
@@ -98,93 +236,212 @@ export function ContactsPage() {
     } catch (e) {
       window.alert(errText(e, '发起会话失败，请稍后重试'));
     } finally {
-      setDmBusy(null);
+      setDmBusy(false);
     }
   };
 
-  return (
-    <div className="bbw-contacts" data-testid="contacts-page">
-      <aside className="bbw-contacts__tree">
-        <div className="bbw-contacts__tree-head">组织结构</div>
-        <div className={`org-node__row org-node__row--root${sel.kind === 'all' ? ' org-node__row--selected' : ''}`} onClick={() => setSel({ kind: 'all' })}>
-          <Building2 size={14} className="org-node__icon" />
-          <span className="org-node__name">全公司</span>
+  /** 用户叶子行（hover 详情卡 + 双击进聊 + 点击选中） */
+  const renderUserRow = (u: DirectoryUser, depth: number) => (
+    <Popover
+      key={u.uid}
+      trigger="hover"
+      mouseEnterDelay={0.35}
+      mouseLeaveDelay={0.15}
+      placement="right"
+      content={
+        <div className="bbw-contacts__card" data-testid="contacts-user-card">
+          <span className="bbw-contacts__avatar bbw-contacts__avatar--lg">{(u.display_name || '?').slice(0, 1)}</span>
+          <div className="bbw-contacts__card-main">
+            <div className="bbw-contacts__card-name">
+              {u.display_name}
+              <span className="bbw-contacts__card-empno">{u.employee_no}</span>
+            </div>
+            <div className="bbw-contacts__card-path">{u.org_path || '未分组'}</div>
+            {u.uid === myUid ? (
+              <span className="bbw-contacts__card-self">我自己</span>
+            ) : (
+              <button
+                type="button"
+                className="bbw-contacts__msg-btn"
+                disabled={dmBusy}
+                onClick={() => void startDm(u)}
+                data-testid="contacts-card-msg"
+              >
+                <MessageCircle size={13} />
+                发消息
+              </button>
+            )}
+          </div>
         </div>
-        {tree.isLoading ? (
-          <div className="bbw-contacts__hint">加载中…</div>
-        ) : tree.isError ? (
-          <div className="bbw-contacts__hint">组织结构加载失败（{errText(tree.error)}）</div>
-        ) : !tree.data?.length ? (
-          <div className="bbw-contacts__hint">暂无部门</div>
-        ) : (
-          tree.data.map((n) => <TreeRow key={n.id} node={n} depth={1} sel={sel} onSelect={setSel} />)
-        )}
-        {/* 虚拟「未分组」：未挂部门用户（自助注册默认落此组），管理员挂部门后自动离开 */}
-        <div
-          className={`org-node__row org-node__row--root${sel.kind === 'ungrouped' ? ' org-node__row--selected' : ''}`}
-          onClick={() => setSel({ kind: 'ungrouped' })}
-          style={{ marginTop: 8 }}
-        >
-          <Users size={14} className="org-node__icon" />
-          <span className="org-node__name">未分组</span>
-        </div>
-      </aside>
+      }
+    >
+      <div
+        className={`bbw-contacts__user-row${selectedId === userDomId(u.uid) ? ' bbw-contacts__user-row--selected' : ''}`}
+        style={{ marginLeft: depth * 16 + 26 }}
+        data-node-id={userDomId(u.uid)}
+        data-testid="contacts-user-row"
+        onClick={() => setSelectedId(userDomId(u.uid))}
+        onDoubleClick={() => void startDm(u)}
+        title="双击发消息"
+      >
+        <span className="bbw-contacts__avatar bbw-contacts__avatar--sm">{(u.display_name || '?').slice(0, 1)}</span>
+        <span className="bbw-contacts__user-name">{u.display_name}</span>
+        <span className="bbw-contacts__user-empno">{u.employee_no}</span>
+      </div>
+    </Popover>
+  );
 
-      <div className="bbw-contacts__main">
-        <div className="bbw-contacts__main-head">
-          <span className="bbw-contacts__title">{title}</span>
+  const renderUsers = (list: DirectoryUser[], depth: number) => list.map((u) => renderUserRow(u, depth));
+
+  const loading = tree.isLoading || usersQuery.isLoading;
+  const error = tree.isError || usersQuery.isError;
+
+  return (
+    <div className="bbw-contacts bbw-contacts--tree" data-testid="contacts-page">
+      <div className="bbw-contacts__head" ref={headRef}>
+        <span className="bbw-contacts__title">通讯录</span>
+        <div className="bbw-contacts__search">
           <Input
             allowClear
-            size="middle"
-            placeholder="搜索 工号/姓名/拼音"
+            placeholder="搜索 联系人/部门"
             prefix={<Search size={14} />}
             value={qInput}
             onChange={(e) => setQInput(e.target.value)}
-            style={{ width: 240 }}
+            onFocus={() => q && setDdOpen(true)}
           />
-        </div>
-        <div className="bbw-contacts__list">
-          {users.isLoading ? (
-            <div className="bbw-contacts__hint">加载中…</div>
-          ) : users.isError ? (
-            <div className="bbw-contacts__hint">成员加载失败（{errText(users.error)}）</div>
-          ) : rows.length === 0 ? (
-            <div className="bbw-contacts__hint">{q ? '无匹配成员' : '暂无成员'}</div>
-          ) : (
-            rows.map((u) => (
-              <div key={u.uid} className="bbw-contacts__row" data-testid="contacts-row">
-                <span className="bbw-contacts__avatar">{(u.display_name || '?').slice(0, 1)}</span>
-                <div className="bbw-contacts__info">
-                  <div className="bbw-contacts__name-line">
-                    <span className="bbw-contacts__name">{u.display_name}</span>
-                    <span className="bbw-contacts__empno">{u.employee_no}</span>
-                  </div>
-                  <div className="bbw-contacts__path">{u.org_path || '未分组'}</div>
-                </div>
-                {u.uid === myUid ? (
-                  <span className="bbw-contacts__self">我</span>
-                ) : (
-                  <button
-                    type="button"
-                    className="bbw-contacts__msg-btn"
-                    disabled={dmBusy === u.uid}
-                    onClick={() => startDm(u)}
-                  >
-                    <MessageCircle size={13} />
-                    发消息
-                  </button>
-                )}
-              </div>
-            ))
-          )}
-          {/* 翻页：cursor 触底加载（server limit 50） */}
-          {users.hasNextPage ? (
-            <button type="button" className="bbw-contacts__more" onClick={() => users.fetchNextPage()} disabled={users.isFetchingNextPage}>
-              {users.isFetchingNextPage ? '加载中…' : `加载更多（已 ${totalLoaded} 人）`}
-            </button>
+          {ddOpen && q ? (
+            <div className="bbw-contacts__search-dd" data-testid="contacts-search-dd">
+              {peopleLoading && people.length === 0 && deptHits.length === 0 ? (
+                <div className="bbw-contacts__hint">搜索中…</div>
+              ) : people.length === 0 && deptHits.length === 0 ? (
+                <div className="bbw-contacts__hint">未找到相关的人或部门</div>
+              ) : (
+                <>
+                  {people.length > 0 ? (
+                    <>
+                      <div className="bbw-contacts__dd-section">联系人</div>
+                      {people.map((u) => (
+                        <button key={u.uid} type="button" className="bbw-contacts__dd-row" onClick={() => locateUser(u)}>
+                          <span className="bbw-contacts__avatar bbw-contacts__avatar--sm">{(u.display_name || '?').slice(0, 1)}</span>
+                          <span className="bbw-contacts__user-name">{u.display_name}</span>
+                          <span className="bbw-contacts__user-empno">{u.employee_no}</span>
+                          <span className="bbw-contacts__dd-path">{u.org_path || '未分组'}</span>
+                        </button>
+                      ))}
+                    </>
+                  ) : null}
+                  {deptHits.length > 0 ? (
+                    <>
+                      <div className="bbw-contacts__dd-section">部门</div>
+                      {deptHits.map(({ node, pathLabel }) => (
+                        <button key={node.id} type="button" className="bbw-contacts__dd-row" onClick={() => locateDept(node.id)}>
+                          <FolderTree size={16} className="org-node__icon" />
+                          <span className="bbw-contacts__user-name">{node.name}</span>
+                          <span className="bbw-contacts__dd-path">{pathLabel}</span>
+                        </button>
+                      ))}
+                    </>
+                  ) : null}
+                </>
+              )}
+            </div>
           ) : null}
         </div>
       </div>
+
+      <div className="bbw-contacts__tree">
+        {loading ? (
+          <div className="bbw-contacts__hint">加载中…</div>
+        ) : error ? (
+          <div className="bbw-contacts__hint">通讯录加载失败（{errText(tree.error ?? usersQuery.error)}）</div>
+        ) : (
+          <>
+            <div
+              className={`org-node__row org-node__row--root${selectedId === deptDomId('root') ? ' org-node__row--selected' : ''}`}
+              data-node-id={deptDomId('root')}
+              style={{ cursor: 'pointer' }}
+              onClick={() => setSelectedId(deptDomId('root'))}
+            >
+              <Building2 size={14} className="org-node__icon" />
+              <span className="org-node__name">全公司</span>
+              <span className="bbw-contacts__badge">{users.length}</span>
+            </div>
+            {(tree.data ?? []).map((n) => renderDept(n, 1))}
+            {/* 虚拟「未分组」：未挂部门用户（自助注册默认落此组），管理员挂部门后自动离开 */}
+            {grouped.ungrouped.length > 0 ? (
+              <div>
+                <div
+                  className={`org-node__row org-node__row--root${selectedId === deptDomId('ungrouped') ? ' org-node__row--selected' : ''}`}
+                  style={{ cursor: 'pointer' }}
+                  data-node-id={deptDomId('ungrouped')}
+                  onClick={() => setExpanded((prev) => toggleIn(prev, 'ungrouped'))}
+                >
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpanded((prev) => toggleIn(prev, 'ungrouped'));
+                    }}
+                  >
+                    {expanded.has('ungrouped') ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  </button>
+                  <Users size={14} className="org-node__icon" />
+                  <span className="org-node__name">未分组</span>
+                  <span className="bbw-contacts__badge">{grouped.ungrouped.length}</span>
+                </div>
+                {expanded.has('ungrouped') ? renderUsers(grouped.ungrouped, 1) : null}
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
     </div>
   );
+
+  /** 部门节点渲染（闭包拿 grouped/deptIndex/subtreeCount，替代上面的占位组件） */
+  function renderDept(node: DeptNode, depth: number) {
+    const open = expanded.has(node.id);
+    const childUsers = grouped.deptUsers.get(node.id) ?? [];
+    return (
+      <div key={node.id}>
+        <div
+          className={`org-node__row${selectedId === deptDomId(node.id) ? ' org-node__row--selected' : ''}`}
+          style={{ marginLeft: depth * 16, cursor: 'pointer' }}
+          data-node-id={deptDomId(node.id)}
+          onClick={() => setExpanded((prev) => toggleIn(prev, node.id))}
+        >
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((prev) => toggleIn(prev, node.id));
+            }}
+          >
+            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </button>
+          <FolderTree size={14} className="org-node__icon" />
+          <span className="org-node__name" title={node.path}>
+            {node.name}
+          </span>
+          {(subtreeCount.get(node.id) ?? 0) > 0 ? <span className="bbw-contacts__badge">{subtreeCount.get(node.id)}</span> : null}
+        </div>
+        {open ? (
+          <div>
+            {renderUsers(childUsers, depth + 1)}
+            {(node.children ?? []).map((c) => renderDept(c, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+}
+
+/** 展开集不可变切换 */
+function toggleIn(prev: Set<string>, id: string): Set<string> {
+  const next = new Set(prev);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  return next;
 }

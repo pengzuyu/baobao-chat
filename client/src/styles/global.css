@@ -8505,42 +8505,18 @@ body {
   padding: 1px 5px;
 }
 
-/* ── 通讯录页（M2，2026-11-12 全员可见；左树复用 org-node 族）── */
+/* ── 通讯录页（2026-11-12 二改：组织+用户单棵树 + 搜索定位 + hover 详情卡；树行复用 org-node 族）── */
 .bbw-contacts {
   display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
   background: var(--bbw-gray-1);
 }
-.bbw-contacts__tree {
-  width: 232px;
-  flex: none;
-  overflow: auto;
-  padding: 12px 8px;
-  border-right: 1px solid var(--bbw-gray-3);
-  background: var(--bbw-gray-2);
-}
-.bbw-contacts__tree-head {
-  font-size: 12px;
-  color: var(--bbw-gray-6);
-  padding: 4px 8px 10px;
-}
-.bbw-contacts__hint {
-  padding: 24px 16px;
-  text-align: center;
-  color: var(--bbw-gray-5);
-  font-size: 12px;
-}
-.bbw-contacts__main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.bbw-contacts__main-head {
+.bbw-contacts__head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--bbw-gray-3);
   background: var(--bbw-gray-2);
@@ -8548,21 +8524,127 @@ body {
 .bbw-contacts__title {
   font-weight: 600;
   font-size: 15px;
+  flex: none;
 }
-.bbw-contacts__list {
-  flex: 1;
+.bbw-contacts__search {
+  position: relative;
+  width: 280px;
+}
+.bbw-contacts__search-dd {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  background: var(--bbw-gray-1);
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  max-height: 340px;
   overflow: auto;
-  padding: 8px 12px;
 }
-.bbw-contacts__row {
+.bbw-contacts__dd-section {
+  font-size: 11px;
+  color: var(--bbw-gray-5);
+  padding: 6px 10px 2px;
+}
+.bbw-contacts__dd-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
   border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--bbw-gray-8);
 }
-.bbw-contacts__row:hover {
+.bbw-contacts__dd-row:hover {
   background: var(--bbw-gray-2);
+}
+.bbw-contacts__dd-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--bbw-gray-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.bbw-contacts__tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px 24px;
+}
+.bbw-contacts__hint {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--bbw-gray-5);
+  font-size: 12px;
+}
+/* 用户叶子行（树内） */
+.bbw-contacts__user-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 30px;
+  margin: 1px 0;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--bbw-gray-8);
+}
+.bbw-contacts__user-row:hover {
+  background: var(--bbw-gray-2);
+}
+.bbw-contacts__user-row--selected {
+  background: var(--bbw-primary-light);
+}
+.bbw-contacts__user-name {
+  font-size: 13px;
+}
+.bbw-contacts__user-empno {
+  font-size: 12px;
+  color: var(--bbw-gray-5);
+}
+/* 部门/根行的人数徽标 */
+.bbw-contacts__badge {
+  font-size: 11px;
+  color: var(--bbw-gray-6);
+  background: var(--bbw-gray-2);
+  border-radius: 9px;
+  padding: 0 7px;
+  margin-left: 4px;
+  line-height: 17px;
+}
+.org-node__row--selected .bbw-contacts__badge {
+  background: var(--bbw-primary-light);
+}
+/* 搜索定位闪烁（展开+滚动入视后 1.2s 高亮） */
+@keyframes bbw-contacts-flash {
+  0%,
+  60% {
+    background: var(--bbw-primary-light);
+    box-shadow: inset 0 0 0 1px var(--bbw-primary);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+.bbw-contacts__flash {
+  animation: bbw-contacts-flash 1.2s ease-out;
+}
+/* hover 用户详情卡（Popover content） */
+.bbw-contacts__card {
+  display: flex;
+  gap: 12px;
+  padding: 4px 2px;
+  min-width: 220px;
 }
 .bbw-contacts__avatar {
   width: 36px;
@@ -8576,35 +8658,36 @@ body {
   color: #fff;
   font-size: 14px;
 }
-.bbw-contacts__info {
+.bbw-contacts__avatar--lg {
+  width: 44px;
+  height: 44px;
+  font-size: 17px;
+}
+.bbw-contacts__card-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
-.bbw-contacts__name-line {
+.bbw-contacts__card-name {
+  font-weight: 600;
   display: flex;
   align-items: baseline;
   gap: 8px;
 }
-.bbw-contacts__name {
-  font-weight: 500;
-}
-.bbw-contacts__empno {
+.bbw-contacts__card-empno {
   font-size: 12px;
+  font-weight: 400;
   color: var(--bbw-gray-6);
 }
-.bbw-contacts__path {
+.bbw-contacts__card-path {
   font-size: 12px;
   color: var(--bbw-gray-5);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.bbw-contacts__self {
+.bbw-contacts__card-self {
   font-size: 12px;
   color: var(--bbw-gray-5);
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--bbw-gray-2);
 }
 .bbw-contacts__msg-btn {
   display: inline-flex;
@@ -8618,6 +8701,7 @@ body {
   color: var(--bbw-gray-8);
   cursor: pointer;
   flex: none;
+  align-self: flex-start;
 }
 .bbw-contacts__msg-btn:hover:not(:disabled) {
   border-color: var(--bbw-primary);
@@ -8642,6 +8726,7 @@ body {
   color: var(--bbw-primary);
   border-color: var(--bbw-primary);
 }
+
 
 /* ── 通讯录选人器（M3：发起单聊/建群/邀请成员共用； bbw-contacts__avatar--sm 复用通讯录头像）── */
 .bbw-contacts__avatar--sm {

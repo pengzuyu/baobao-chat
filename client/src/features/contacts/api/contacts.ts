@@ -9,12 +9,13 @@
 import { http } from '../../../shared/api/http';
 import type { DeptNode } from '../../admin/api/admin';
 
-/** 通讯录行（登录后口径；uid=conv.create memberIds 数据源） */
+/** 通讯录行（登录后口径；uid=conv.create memberIds 数据源；dept_id=主部门，空=未挂→「未分组」） */
 export interface DirectoryUser {
   uid: string;
   employee_no: string;
   display_name: string;
   org_path: string;
+  dept_id?: string;
 }
 
 export interface DirectoryQuery {
