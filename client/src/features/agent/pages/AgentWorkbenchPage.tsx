@@ -17,6 +17,8 @@ import { open as openDirectory } from '@tauri-apps/plugin-dialog';
 import { Button } from '../../../shared/ui/Button';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
+import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
+import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { useAgentStore, selectActiveSession, selectPendingPermissions, composerDisabledFor, type StreamItem } from '../store/agent';
 import { AGENT_MODE_OPTIONS, SESSION_STATUS_LABELS } from '../bridge/types';
@@ -65,6 +67,10 @@ export function AgentWorkbenchPage() {
   }, []);
   /** 左栏会话列表整体折叠（2026-11-11：会话多时可让宽给中栏；项目内会话另有自身折叠） */
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
+  // 左栏拖拽调宽（未折叠且 L/XL 生效——M 档媒体查询收窄 56px 图标条，内联宽度会击穿须让位）
+  const sessionsSplit = useSplitWidth('agent-sessions', 232, 180, 360);
+  const bp = useBreakpoint();
+  const sessionsResizable = !sessionsCollapsed && (bp === 'L' || bp === 'XL');
   /** embedded 会话来源聊天（2026-11-11「回到聊天」：IndexedDB 映射反查 convId） */
   const [embeddedConvId, setEmbeddedConvId] = useState<string | null>(null);
   useEffect(() => {
@@ -373,7 +379,10 @@ export function AgentWorkbenchPage() {
       <AgentSubNav />
       <div className="agent-workbench">
         {/* 左：会话列表（六态）；整体可折叠成细条（会话多时让宽给中栏） */}
-        <section className={`agent-sessions${sessionsCollapsed ? ' agent-sessions--collapsed' : ''}`}>
+        <section
+          className={`agent-sessions${sessionsCollapsed ? ' agent-sessions--collapsed' : ''}`}
+          style={sessionsResizable ? { width: sessionsSplit.width } : undefined}
+        >
           {sessionsCollapsed ? (
             <div className="agent-sessions__rail">
               <button type="button" className="icon-btn" onClick={() => setSessionsCollapsed(false)} title="展开会话列表">
@@ -405,6 +414,7 @@ export function AgentWorkbenchPage() {
             </StateView>
           )}
         </section>
+        {sessionsResizable ? <SplitHandle bind={sessionsSplit.bind} /> : null}
 
         {/* 中：会话视图 */}
         <section className="agent-main">

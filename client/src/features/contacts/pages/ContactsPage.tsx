@@ -8,7 +8,7 @@
  * 数据源：GET /org/tree + GET /org/users（全量翻页拉齐后端内组树）。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Input, Popover } from 'antd';
@@ -19,6 +19,7 @@ import type { DeptNode } from '../../admin/api/admin';
 import { convCreate } from '../../im/api/im';
 import { qk } from '../../../shared/api/keys';
 import { errText } from '../../../shared/api/http';
+import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useAuthStore } from '../../auth/store/auth';
 
 /** 搜索防抖（与聊天页/选人器同节奏） */
@@ -52,6 +53,8 @@ export function ContactsPage() {
   const [flashId, setFlashId] = useState<string | null>(null);
   const [dmBusy, setDmBusy] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // 左树拖拽调宽（全站左侧栏统一能力；按页记忆）
+  const split = useSplitWidth('contacts-tree', 320, 220, 480);
 
   // ── 数据：树 + 全量用户 ──
   const tree = useQuery({ queryKey: ['org', 'tree'], queryFn: fetchOrgTree });
@@ -296,43 +299,83 @@ export function ContactsPage() {
   const loading = tree.isLoading || usersQuery.isLoading;
   const error = tree.isError || usersQuery.isError;
 
-  /** 右侧详情：用户卡（发消息等操作落位区）/ 部门概览（直接成员+子部门，点击切换选中） */
+  /** 右侧详情·整页档案风：用户档案（头图+基础信息+组织链路）/ 部门档案（成员/子部门卡片网格） */
   const renderDetail = () => {
-    // 用户详情：头像/姓名/工号/组织链路 + 发消息（后续操作继续加在这）
+    // ── 用户档案页（发消息等操作落位区，后续操作继续加在头图 actions 行） ──
     if (selectedId?.startsWith('user-')) {
       const u = users.find((x) => x.uid === selectedId.slice('user-'.length));
       if (!u) return <div className="bbw-contacts__hint">用户不存在</div>;
+      const crumbs = u.org_path ? u.org_path.split('/').filter(Boolean) : [];
       return (
-        <div className="bbw-contacts__detail-user" data-testid="contacts-detail-user">
-          <span className="bbw-contacts__avatar bbw-contacts__avatar--xl">{(u.display_name || '?').slice(0, 1)}</span>
-          <div className="bbw-contacts__detail-main">
-            <div className="bbw-contacts__card-name">
-              {u.display_name}
-              <span className="bbw-contacts__card-empno">{u.employee_no}</span>
-              {u.uid === myUid ? <span className="bbw-contacts__badge">我自己</span> : null}
+        <div className="bbw-contacts__profile" data-testid="contacts-detail-user">
+          <div className="bbw-contacts__profile-head">
+            <span className="bbw-contacts__avatar bbw-contacts__avatar--xxl">{(u.display_name || '?').slice(0, 1)}</span>
+            <div className="bbw-contacts__profile-main">
+              <div className="bbw-contacts__profile-name">
+                {u.display_name}
+                {u.uid === myUid ? <span className="bbw-contacts__badge">我自己</span> : null}
+              </div>
+              <div className="bbw-contacts__profile-sub">
+                <span>{u.employee_no}</span>
+                <span>·</span>
+                <span>{u.org_path || '未分组'}</span>
+                <span>·</span>
+                <span className="bbw-contacts__badge">在职</span>
+              </div>
+              <div className="bbw-contacts__profile-actions">
+                {u.uid === myUid ? (
+                  <span className="bbw-contacts__profile-hint">这是你自己的账号</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="bbw-contacts__msg-btn bbw-contacts__msg-btn--lg"
+                    disabled={dmBusy}
+                    onClick={() => void startDm(u)}
+                    data-testid="contacts-detail-msg"
+                  >
+                    <MessageCircle size={14} />
+                    发消息
+                  </button>
+                )}
+                <span className="bbw-contacts__profile-hint">双击左侧树中用户可直接发起聊天</span>
+              </div>
             </div>
-            <div className="bbw-contacts__card-path">{u.org_path || '未分组'}</div>
-            {u.uid === myUid ? (
-              <span className="bbw-contacts__card-self">这是你自己的账号</span>
-            ) : (
-              <button
-                type="button"
-                className="bbw-contacts__msg-btn bbw-contacts__msg-btn--lg"
-                disabled={dmBusy}
-                onClick={() => void startDm(u)}
-                data-testid="contacts-detail-msg"
-              >
-                <MessageCircle size={14} />
-                发消息
-              </button>
-            )}
-            <div className="bbw-contacts__detail-hint">双击左侧树中用户也可直接发起聊天</div>
+          </div>
+          <div className="bbw-contacts__profile-body">
+            <section className="bbw-contacts__profile-card">
+              <h4>基础信息</h4>
+              <div className="bbw-contacts__kv">
+                <span className="bbw-contacts__kv-key">姓名</span>
+                <span className="bbw-contacts__kv-val">{u.display_name}</span>
+                <span className="bbw-contacts__kv-key">工号</span>
+                <span className="bbw-contacts__kv-val">{u.employee_no}</span>
+                <span className="bbw-contacts__kv-key">所属组织</span>
+                <span className="bbw-contacts__kv-val">{u.org_path || '未分组'}</span>
+                <span className="bbw-contacts__kv-key">账号状态</span>
+                <span className="bbw-contacts__kv-val">启用</span>
+              </div>
+            </section>
+            <section className="bbw-contacts__profile-card">
+              <h4>组织链路</h4>
+              {crumbs.length > 0 ? (
+                <div className="bbw-contacts__crumbs">
+                  {crumbs.map((c, i) => (
+                    <Fragment key={`${i}-${c}`}>
+                      {i > 0 ? <span className="bbw-contacts__crumb-sep">/</span> : null}
+                      <span className="bbw-contacts__crumb">{c}</span>
+                    </Fragment>
+                  ))}
+                </div>
+              ) : (
+                <div className="bbw-contacts__kv-val">未挂部门——归入「未分组」，可由管理员调整归属</div>
+              )}
+            </section>
           </div>
         </div>
       );
     }
 
-    // 部门/根/未分组概览
+    // ── 部门/根/未分组档案页 ──
     let name = '';
     let pathLabel = '';
     let members: DirectoryUser[] = [];
@@ -362,48 +405,62 @@ export function ContactsPage() {
       return <div className="bbw-contacts__hint">从左侧选择用户或部门查看详情</div>;
     }
     return (
-      <div className="bbw-contacts__detail-dept">
-        <div className="bbw-contacts__detail-dept-head">
-          <FolderTree size={18} className="org-node__icon" />
-          <span className="bbw-contacts__detail-dept-name">{name}</span>
-          <span className="bbw-contacts__badge">{count} 人</span>
+      <div className="bbw-contacts__profile" data-testid="contacts-detail-dept">
+        <div className="bbw-contacts__profile-head">
+          <span className="bbw-contacts__avatar bbw-contacts__avatar--xxl bbw-contacts__avatar--dept">
+            <FolderTree size={26} />
+          </span>
+          <div className="bbw-contacts__profile-main">
+            <div className="bbw-contacts__profile-name">
+              {name}
+              <span className="bbw-contacts__badge">{count} 人</span>
+            </div>
+            {pathLabel ? <div className="bbw-contacts__profile-sub">{pathLabel}</div> : null}
+          </div>
         </div>
-        {pathLabel ? <div className="bbw-contacts__card-path">{pathLabel}</div> : null}
-        {members.length > 0 ? (
-          <>
-            <div className="bbw-contacts__dd-section">{memberSection}（{members.length}）</div>
-            {members.map((u) => (
-              <button
-                key={u.uid}
-                type="button"
-                className="bbw-contacts__dd-row"
-                onClick={() => setSelectedId(userDomId(u.uid))}
-                onDoubleClick={() => void startDm(u)}
-              >
-                <span className="bbw-contacts__avatar bbw-contacts__avatar--sm">{(u.display_name || '?').slice(0, 1)}</span>
-                <span className="bbw-contacts__user-name">{u.display_name}</span>
-                <span className="bbw-contacts__user-empno">{u.employee_no}</span>
-              </button>
-            ))}
-          </>
-        ) : null}
-        {subDepts.length > 0 ? (
-          <>
-            <div className="bbw-contacts__dd-section">子部门（{subDepts.length}）</div>
-            {subDepts.map((d) => (
-              <button
-                key={d.id}
-                type="button"
-                className="bbw-contacts__dd-row"
-                onClick={() => setSelectedId(deptDomId(d.id))}
-              >
-                <FolderTree size={15} className="org-node__icon" />
-                <span className="bbw-contacts__user-name">{d.name}</span>
-                <span className="bbw-contacts__dd-path">{subtreeCount.get(d.id) ?? 0} 人</span>
-              </button>
-            ))}
-          </>
-        ) : null}
+        <div className="bbw-contacts__profile-body">
+          {members.length > 0 ? (
+            <section className="bbw-contacts__profile-card">
+              <h4>{memberSection}（{members.length}）</h4>
+              <div className="bbw-contacts__grid">
+                {members.map((u) => (
+                  <button
+                    key={u.uid}
+                    type="button"
+                    className="bbw-contacts__grid-card"
+                    onClick={() => setSelectedId(userDomId(u.uid))}
+                    onDoubleClick={() => void startDm(u)}
+                  >
+                    <span className="bbw-contacts__avatar bbw-contacts__avatar--sm">{(u.display_name || '?').slice(0, 1)}</span>
+                    <span className="bbw-contacts__grid-main">
+                      <span className="bbw-contacts__grid-name">{u.display_name}</span>
+                      <span className="bbw-contacts__grid-sub">{u.employee_no}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {subDepts.length > 0 ? (
+            <section className="bbw-contacts__profile-card">
+              <h4>子部门（{subDepts.length}）</h4>
+              <div className="bbw-contacts__grid">
+                {subDepts.map((d) => (
+                  <button key={d.id} type="button" className="bbw-contacts__grid-card" onClick={() => setSelectedId(deptDomId(d.id))}>
+                    <span className="bbw-contacts__avatar bbw-contacts__avatar--sm bbw-contacts__avatar--dept">
+                      <FolderTree size={13} />
+                    </span>
+                    <span className="bbw-contacts__grid-main">
+                      <span className="bbw-contacts__grid-name">{d.name}</span>
+                      <span className="bbw-contacts__grid-sub">{subtreeCount.get(d.id) ?? 0} 人</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {members.length === 0 && subDepts.length === 0 ? <div className="bbw-contacts__hint">暂无成员</div> : null}
+        </div>
       </div>
     );
   };
@@ -462,7 +519,7 @@ export function ContactsPage() {
       </div>
 
       <div className="bbw-contacts__body">
-      <div className="bbw-contacts__tree">
+      <div className="bbw-contacts__tree" style={{ width: split.width }}>
         {loading ? (
           <div className="bbw-contacts__hint">加载中…</div>
         ) : error ? (
@@ -509,6 +566,7 @@ export function ContactsPage() {
           </>
         )}
       </div>
+      <SplitHandle bind={split.bind} />
 
         {/* 右侧详情栏：用户卡（发消息等操作落位区）/ 部门概览（成员+子部门可点切换） */}
         <aside className="bbw-contacts__detail" data-testid="contacts-detail">

@@ -16,6 +16,7 @@ import { BrainCircuit, CornerDownRight, FolderPlus, Plus, RefreshCw, Search, Upl
 import { formatListTime } from '../../../shared/utils/time';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
+import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { fetchChunksAround, fetchDoc, queryKb } from '../api/kb';
@@ -40,6 +41,8 @@ const SOURCE_LABEL: Record<KbDoc['source_type'], string> = {
 };
 
 export function KbPage() {
+  // 左栏拖拽调宽（全站左侧栏统一能力）
+  const spacesSplit = useSplitWidth('kb-spaces', 232, 180, 360);
   // ── 左栏：空间 ──
   const spacesQuery = useSpaces();
   const createSpace = useCreateSpace();
@@ -172,7 +175,7 @@ export function KbPage() {
 
       <div className="kb-page__body">
         {/* ── 左栏：空间列表 ── */}
-        <aside className="kb-spaces" data-testid="kb-spaces">
+        <aside className="kb-spaces" data-testid="kb-spaces" style={{ width: spacesSplit.width }}>
           <div className="kb-spaces__head">
             <span>空间</span>
             <span className="kb-spaces__ops">
@@ -240,6 +243,7 @@ export function KbPage() {
             />
           )}
         </aside>
+        <SplitHandle bind={spacesSplit.bind} />
 
         {/* ── 右栏：检索结果 或 空间浏览 ── */}
         <main className="kb-main">

@@ -6,7 +6,7 @@
  * - 交互：引用回复/编辑/撤回/表情回应/转发（PIM-10 简版）/上翻加载更早/未读分隔线/定位闪烁
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Dropdown } from 'antd';
@@ -15,6 +15,7 @@ import { ApiError, errText, getErrorText } from '../../../shared/api/http';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
+import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { dayKey, formatDayDivider } from '../../../shared/utils/time';
@@ -109,6 +110,9 @@ export function ChatPage() {
   // ---- 服务端态（Query）----
   const convQuery = useConversations('all');
   const msgQuery = useConversationMessages(convId ?? null);
+  // 左栏拖拽调宽（L/XL 生效；M 档媒体查询收窄 56px、S 档全宽均不参与——
+  // 设 CSS 变量而非 width，M 档 width 覆盖规则不受影响）
+  const listSplit = useSplitWidth('im-list', 264, 200, 420);
   // 通知未读数（PIM-09 铃铛红点：99+ 封顶；WS notification.new 触发失效重拉）
   const notifUnreadQuery = useUnreadNotificationCount();
   const notifUnread = notifUnreadQuery.data ?? 0;
@@ -768,7 +772,14 @@ export function ChatPage() {
   const showStream = bp !== 'S' || !!convId;
 
   const convListNode = (
-    <section className="im-list-col" style={bp === 'S' ? { width: '100%', borderRight: 'none' } : undefined}>
+    <section
+      className="im-list-col"
+      style={
+        bp === 'S'
+          ? { width: '100%', borderRight: 'none' }
+          : ({ '--bbw-list-width': `${listSplit.width}px` } as CSSProperties)
+      }
+    >
       <div className="im-list-col__header">
         {/* PIM-07 服务端态搜索（点击/⌘K 聚焦；M3 起联系人/消息双段结果——搜人即聊） */}
         <SearchPanel inputRef={searchInputRef} onSelect={onSearchSelect} onPickPerson={onPickPerson} />
@@ -1114,7 +1125,12 @@ export function ChatPage() {
 
   return (
     <div className="im-page">
-      {showList ? convListNode : null}
+      {showList ? (
+        <>
+          {convListNode}
+          {bp === 'L' || bp === 'XL' ? <SplitHandle bind={listSplit.bind} /> : null}
+        </>
+      ) : null}
       {showStream ? streamNode : null}
       {detailNode}
       {/* 消息统一右键菜单（INT-IM-25）：portal 到 body，视口定位+边缘翻转在组件内处理 */}

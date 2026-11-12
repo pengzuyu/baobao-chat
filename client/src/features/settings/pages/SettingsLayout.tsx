@@ -7,6 +7,8 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { t, useI18nStore } from '../../../shared/i18n';
 import { ArrowDownUp, Bell, Bot, Info, Keyboard, Settings } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
+import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
+import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 
 function useTabs() {
   useI18nStore((s) => s.locale); // 响应语言切换（E12）
@@ -23,9 +25,13 @@ function useTabs() {
 export function SettingsLayout() {
   const tabs = useTabs();
   const location = useLocation();
+  // 左栏拖拽调宽（S 档导航转横条不参与——内联宽度会击穿 width:100% 媒体规则）
+  const navSplit = useSplitWidth('settings-nav', 208, 170, 300);
+  const bp = useBreakpoint();
+  const navResizable = bp !== 'S';
   return (
     <div className="settings-page">
-      <aside className="settings-nav">
+      <aside className="settings-nav" style={navResizable ? { width: navSplit.width } : undefined}>
         <div className="settings-nav__title">设置</div>
         <nav className="settings-nav__list">
           {tabs.map((tab) => (
@@ -40,6 +46,7 @@ export function SettingsLayout() {
           ))}
         </nav>
       </aside>
+      {navResizable ? <SplitHandle bind={navSplit.bind} /> : null}
       <div className="settings-body">
         <ErrorBoundary resetKey={location.pathname}>
           <Outlet />

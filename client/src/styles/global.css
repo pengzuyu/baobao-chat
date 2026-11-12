@@ -8589,48 +8589,21 @@ body {
   padding: 12px 10px 24px;
   border-right: 1px solid var(--bbw-gray-3);
 }
-/* 右侧详情栏（用户卡/部门概览；后续操作入口继续落位在这） */
+/* 右侧详情栏（整页档案风：profile 自带头图带+内容区，外层零内边距占满） */
 .bbw-contacts__detail {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  padding: 24px 28px;
-}
-.bbw-contacts__detail-user {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-}
-.bbw-contacts__detail-main {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-start;
-}
-.bbw-contacts__detail-hint {
-  font-size: 12px;
-  color: var(--bbw-gray-5);
-  margin-top: 8px;
-}
-.bbw-contacts__detail-dept {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.bbw-contacts__detail-dept-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.bbw-contacts__detail-dept-name {
-  font-weight: 600;
-  font-size: 16px;
+  padding: 0;
 }
 .bbw-contacts__avatar--xl {
   width: 56px;
   height: 56px;
   font-size: 21px;
+}
+.bbw-contacts__avatar--dept {
+  background: var(--bbw-gray-3);
+  color: var(--bbw-primary);
 }
 .bbw-contacts__msg-btn--lg {
   font-size: 13px;
@@ -8929,4 +8902,177 @@ body {
 .login-card__switch a {
   color: var(--bbw-primary);
   cursor: pointer;
+}
+
+/* ── 左侧栏拖拽分界线（全站共用；SplitHandle 5px 透明带 + hover/拖拽 2px 主色线） ── */
+.bbw-split {
+  flex: none;
+  width: 5px;
+  margin-left: -5px; /* 叠在左栏右边框上：不占布局额外宽度（grid 页面除外，见各页内联） */
+  position: relative;
+  z-index: 12;
+  cursor: col-resize;
+}
+.bbw-split::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1.5px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.bbw-split:hover::after,
+.bbw-split:active::after {
+  background: var(--bbw-primary);
+}
+body.bbw-col-resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── 通讯录右侧详情·整页档案风（2026-11-12 三改后四改：占满右栏全页） ── */
+.bbw-contacts__profile {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.bbw-contacts__profile-head {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  padding: 28px 32px;
+  border-bottom: 1px solid var(--bbw-gray-3);
+  background: var(--bbw-gray-2);
+  flex-wrap: wrap;
+}
+.bbw-contacts__avatar--xxl {
+  width: 72px;
+  height: 72px;
+  font-size: 26px;
+}
+.bbw-contacts__profile-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bbw-contacts__profile-name {
+  font-size: 21px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.bbw-contacts__profile-sub {
+  font-size: 13px;
+  color: var(--bbw-gray-6);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bbw-contacts__profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.bbw-contacts__profile-hint {
+  font-size: 12px;
+  color: var(--bbw-gray-5);
+}
+.bbw-contacts__profile-body {
+  flex: 1;
+  padding: 20px 32px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 860px;
+}
+.bbw-contacts__profile-card {
+  background: var(--bbw-gray-1);
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.bbw-contacts__profile-card h4 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--bbw-gray-6);
+  font-weight: 600;
+}
+.bbw-contacts__kv {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 10px 16px;
+  font-size: 13px;
+}
+.bbw-contacts__kv-key {
+  color: var(--bbw-gray-5);
+}
+.bbw-contacts__kv-val {
+  color: var(--bbw-gray-8);
+  word-break: break-all;
+}
+.bbw-contacts__crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.bbw-contacts__crumb {
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: var(--bbw-gray-2);
+  color: var(--bbw-gray-8);
+}
+.bbw-contacts__crumb-sep {
+  color: var(--bbw-gray-5);
+}
+/* 部门概览：成员/子部门卡片网格（占满页宽） */
+.bbw-contacts__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+.bbw-contacts__grid-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--bbw-gray-3);
+  border-radius: 10px;
+  background: var(--bbw-gray-1);
+  cursor: pointer;
+  text-align: left;
+  color: var(--bbw-gray-8);
+}
+.bbw-contacts__grid-card:hover {
+  border-color: var(--bbw-primary);
+}
+.bbw-contacts__grid-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bbw-contacts__grid-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bbw-contacts__grid-sub {
+  font-size: 12px;
+  color: var(--bbw-gray-5);
 }

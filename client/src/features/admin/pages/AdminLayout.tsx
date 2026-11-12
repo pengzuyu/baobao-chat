@@ -8,6 +8,8 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
+import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
+import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 
 const TABS = [
   { to: '/admin', icon: Gauge, label: '仪表盘', end: true },
@@ -29,9 +31,13 @@ const TABS = [
 
 export function AdminLayout() {
   const location = useLocation();
+  // 左栏拖拽调宽（S 档导航转横条不参与——内联宽度会击穿 width:100% 媒体规则）
+  const navSplit = useSplitWidth('admin-nav', 208, 170, 300);
+  const bp = useBreakpoint();
+  const navResizable = bp !== 'S';
   return (
     <div className="settings-page admin-page">
-      <aside className="settings-nav">
+      <aside className="settings-nav" style={navResizable ? { width: navSplit.width } : undefined}>
         <div className="settings-nav__title">管理后台</div>
         <nav className="settings-nav__list">
           {TABS.map((tab) => (
@@ -47,6 +53,7 @@ export function AdminLayout() {
           ))}
         </nav>
       </aside>
+      {navResizable ? <SplitHandle bind={navSplit.bind} /> : null}
       <div className="settings-body admin-body">
         <ErrorBoundary resetKey={location.pathname}>
           <Outlet />

@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import { Archive, FileText, Inbox, Mail, Pencil, Search, Send, Settings, Star, Trash2, Users } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { StateView } from '../../../shared/ui/StateView';
+import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { ComposeModal } from '../components/ComposeModal';
 import { SettingsDrawer } from '../components/SettingsDrawer';
 import {
@@ -52,6 +53,8 @@ const FILTERS: { key: string; label: string }[] = [
 ];
 
 export function MailPage() {
+  // 左栏拖拽调宽（grid 首列；全站左侧栏统一能力）
+  const mailSplit = useSplitWidth('mail-tree', 216, 170, 340);
   const [folder, setFolder] = useState('inbox');
   // 草稿续写初值（D16）
   const [draftInit, setDraftInit] = useState<{ id: string; to: string; cc: string; subject: string; body: string } | null>(null);
@@ -125,7 +128,7 @@ export function MailPage() {
   }, [selected, detail.data, list]);
 
   return (
-    <div className="mail-page">
+    <div className="mail-page" style={{ gridTemplateColumns: `${mailSplit.width}px 5px 340px 1fr` }}>
       {/* 文件夹树（左栏） */}
       <aside className="mail-tree">
         <div className="mail-tree__head">
@@ -178,6 +181,7 @@ export function MailPage() {
           <span>{quotaPct}% 已用（{summary.data ? (summary.data.quota_used / (1 << 20)).toFixed(0) : '…'} MB / 5 GB）</span>
         </div>
       </aside>
+      <SplitHandle bind={mailSplit.bind} style={{ marginLeft: 0 }} />
 
       {/* 列表（中栏） */}
       <section className="mail-list">
