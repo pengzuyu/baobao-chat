@@ -27,6 +27,15 @@ docker compose --profile core --profile media up -d          # 或显式多组
 - 首次启动 `app-init` 自动执行 `init/01-init.sh`：等待 pg → 应用 `server/migrations` → 打印管理员引导命令。
 - 升级 / 回滚 / 备份：`./upgrade.sh <TAG>` · `./rollback.sh [TAG]` · `./backup.sh` · `./restore.sh`。
 
+### 2.1 部署形态与文件存储（2026-11-12 拍板：单节点优先，多节点按需选择）
+
+- **应用层**：默认单节点（`--scale app=1`）。多实例（`--scale app=N`）当前**不可直接开**——
+  WS 推送/presence/上传会话为进程内状态，跨副本消息不达；需先补跨实例事件总线（登记项，
+  见 D25 §10 与 EXECUTION-PLAN 多实例注记）。开启后 ip_hash 仅保证同客户端同副本。
+- **文件存储（D25）**：与单/多节点正交。`BBW_S3_PUBLIC_ENDPOINT` 空=本地盘回落（开发机形态）；
+  **正式部署（含单节点）建议一律启用 MinIO**——栈内自带、bbw-data 版本化桶、未来加副本文件零迁移；
+  多实例为硬性必配。本地盘历史文件经 `./migrate-files-to-minio.sh` 一次性搬入（幂等可续跑）。
+
 ## 3. 端口清单（默认发布）
 
 | 端口 | 协议 | 服务 | 方向 | 备注 |
