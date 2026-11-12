@@ -8998,10 +8998,12 @@ body.bbw-col-resizing {
   /* 不设 max-width：整页铺满右栏（用户口径），宽屏由成员网格 auto-fill 自然分列 */
 }
 .bbw-contacts__profile-card {
-  background: var(--bbw-gray-1);
-  border: 1px solid var(--bbw-gray-3);
-  border-radius: 12px;
-  padding: 18px 20px;
+  /* 透明落画布：整页统一灰底不再出大白板（用户报「右边还有好多白色」——
+     gray-1 卡片全幅展开后右侧大片空白）；分隔靠小节标题+留白 */
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 4px 0 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -9035,8 +9037,9 @@ body.bbw-col-resizing {
 .bbw-contacts__crumb {
   padding: 3px 10px;
   border-radius: 6px;
-  background: var(--bbw-gray-2);
+  background: var(--bbw-gray-1);
   color: var(--bbw-gray-8);
+  border: 1px solid var(--bbw-gray-3);
 }
 .bbw-contacts__crumb-sep {
   color: var(--bbw-gray-5);
