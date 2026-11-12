@@ -6,15 +6,15 @@
  */
 
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Users, Zap, Package } from 'lucide-react';
+import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 
 const TABS = [
   { to: '/admin', icon: Gauge, label: '仪表盘', end: true },
-  { to: '/admin/users', icon: Users, label: '用户' },
+  // 2026-11-12 用户裁决：用户+组织合并为「组织用户」通讯录页（组织树上直接开人）
+  { to: '/admin/org', icon: Network, label: '组织用户' },
   { to: '/admin/users/import', icon: FileUp, label: '批量导入' },
   { to: '/admin/roles', icon: UserCog, label: '角色' },
-  { to: '/admin/org', icon: Network, label: '组织' },
   { to: '/admin/notices', icon: Megaphone, label: '公告' },
   { to: '/admin/agent', icon: Bot, label: 'Agent' },
   { to: '/admin/kb', icon: BookOpen, label: '知识库' },

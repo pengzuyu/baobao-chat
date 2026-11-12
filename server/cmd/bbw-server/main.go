@@ -721,6 +721,10 @@ func main() {
 	adminOpts.CreateUser = func(ctx context.Context, u orgapi.User) (orgapi.User, error) {
 		return orgRepo.CreateUser(ctx, u)
 	}
+	// 部门挂靠（2026-11-12 通讯录单建用户：建成即挂部门标主部门）
+	adminOpts.AttachDeptMember = func(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error {
+		return orgRepo.AttachUser(ctx, tenantID, userID, deptID, isPrimary)
+	}
 	adminOpts.BroadcastNotice = func(ctx context.Context, tenantID int64, title, digest string) int {
 		users, _, err := orgAdmin.ListUsers(ctx, orgapi.UserListFilter{TenantID: tenantID, Status: orgapi.UserStatusActive, Limit: 5000})
 		if err != nil {
@@ -845,6 +849,9 @@ func main() {
 	mux.Handle("POST /api/v1/admin/notices", requirePerm("admin:notice:publish")(handleAdminPublishNotice(adminSvc)))
 	// 批量导入（PAD-06）
 	mux.Handle("POST /api/v1/admin/users/import", requirePerm("admin:user:manage")(handleAdminImportUsers(adminSvc)))
+	// 单建用户 + 工号建议（2026-11-12 通讯录合并页：组织树上直接开人，全拼建议可改）
+	mux.Handle("POST /api/v1/admin/users", requirePerm("admin:user:manage")(handleAdminCreateUser(adminSvc)))
+	mux.Handle("GET /api/v1/admin/users/empno-suggest", requirePerm("admin:user:manage")(handleAdminSuggestEmpno(adminSvc)))
 	// Agent 治理（PAD-14）。killswitch 收紧为 platform:agent:killswitch 随平台运营
 	// 角色落地（D12 阶段二）——阶段一单租户无平台运营，暂 requireAnyAdmin，登记。
 	mux.Handle("GET /api/v1/admin/agent/users", requirePerm("admin:agent:revoke")(handleAdminAgentUsers(adminSvc)))
@@ -3148,6 +3155,45 @@ func handleAdminImportUsers(svc adminapi.AdminService) http.HandlerFunc {
 	}
 }
 
+// handleAdminCreateUser 单建用户（2026-11-12 通讯录合并页；工号空=按姓名全拼自动生成）
+func handleAdminCreateUser(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		op, err := adminActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req adminapi.CreateUserReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		u, err := svc.CreateUser(r.Context(), httpx.TenantID(r.Context()), op, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, u)
+	}
+}
+
+// handleAdminSuggestEmpno 工号建议（姓名→全拼；重名两位补零递增）
+func handleAdminSuggestEmpno(svc adminapi.AdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+		if name == "" {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "name 必填"))
+			return
+		}
+		empno, err := svc.SuggestEmpno(r.Context(), httpx.TenantID(r.Context()), name)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"empno": empno})
+	}
+}
+
 // ── Agent 治理 REST 壳（PAD-14） ──
 
 func handleAdminAgentUsers(svc adminapi.AdminService) http.HandlerFunc {
@@ -3701,14 +3747,21 @@ func handleDeptMembers(m orgapi.DeptMembershipReaderWriter, users orgapi.UserRea
 		}
 		items := make([]map[string]any, 0, len(rows))
 		for _, u := range rows {
-			name := ""
+			// 2026-11-12 通讯录合并页：成员行补工号/邮箱/状态（原仅 name/is_primary）
+			name, empno, email, status := "", "", "", 0
 			if u2, uerr := users.GetUser(r.Context(), u.UserID); uerr == nil && u2 != nil {
 				name = u2.DisplayName
+				empno = u2.EmployeeNo
+				email = u2.Email
+				status = u2.Status
 			}
 			items = append(items, map[string]any{
-				"user_id":    strconv.FormatInt(u.UserID, 10),
-				"name":       name,
-				"is_primary": u.IsPrimary,
+				"user_id":     strconv.FormatInt(u.UserID, 10),
+				"name":        name,
+				"employee_no": empno,
+				"email":       email,
+				"status":      status,
+				"is_primary":  u.IsPrimary,
 			})
 		}
 		httpx.OK(w, r, map[string]any{"items": items})

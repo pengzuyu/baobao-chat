@@ -27,12 +27,11 @@ import { AdminLayout } from '../features/admin/pages/AdminLayout';
 import { DashboardPage } from '../features/admin/pages/DashboardPage';
 import { EcoAppsPage } from '../features/admin/pages/EcoAppsPage';
 import { SkillsPage } from '../features/admin/pages/SkillsPage';
-import { UsersPage } from '../features/admin/pages/UsersPage';
+import { OrgDirectoryPage } from '../features/admin/pages/OrgDirectoryPage';
 import { RolesPage } from '../features/admin/pages/RolesPage';
 import { NoticesPage } from '../features/admin/pages/NoticesPage';
 import { ImportPage } from '../features/admin/pages/ImportPage';
 import { AgentGovernancePage } from '../features/admin/pages/AgentGovernancePage';
-import { OrgTreePage } from '../features/admin/pages/OrgTreePage';
 import { KbGovernancePage } from '../features/admin/pages/KbGovernancePage';
 import { PoliciesPage } from '../features/admin/pages/PoliciesPage';
 import { AiProvidersPage } from '../features/admin/pages/AiProvidersPage';
@@ -245,12 +244,13 @@ export function App() {
             一级"管理"入口按 me.perms admin:* 显隐（MainLayout），服务端守卫 2003 兜底 */}
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<DashboardPage />} />
-          <Route path="users" element={<UsersPage />} />
+          {/* 2026-11-12 用户裁决：用户+组织合并为通讯录页；旧 /admin/users 重定向 */}
+          <Route path="users" element={<Navigate to="/admin/org" replace />} />
           <Route path="users/import" element={<ImportPage />} />
           <Route path="roles" element={<RolesPage />} />
           <Route path="notices" element={<NoticesPage />} />
           <Route path="agent" element={<AgentGovernancePage />} />
-          <Route path="org" element={<OrgTreePage />} />
+          <Route path="org" element={<OrgDirectoryPage />} />
           <Route path="kb" element={<KbGovernancePage />} />
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="ai-providers" element={<AiProvidersPage />} />

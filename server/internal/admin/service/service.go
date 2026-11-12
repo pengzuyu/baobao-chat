@@ -10,11 +10,14 @@ package adminservice
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mozillazg/go-pinyin"
 
 	"github.com/baobaowork/server/internal/admin/api"
 	"github.com/baobaowork/server/internal/admin/repo"
@@ -60,6 +63,8 @@ type Options struct {
 	HashPassword func(password string) (string, error)
 	// CreateUser 建用户闭包（PAD-06；main 注入 orgRepo.CreateUser——admin 域不引 org repo）
 	CreateUser func(ctx context.Context, u orgapi.User) (orgapi.User, error)
+	// AttachDeptMember 挂部门闭包（2026-11-12 通讯录单建用户；main 注入 orgRepo.AttachUser）
+	AttachDeptMember func(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error
 	// AgentUsage Agent 计量聚合闭包（PAD-14；main 注入 aigw Meter Snapshot 按用户聚合；nil=空列表）
 	AgentUsage func(tenantID int64) []AgentUsageRow
 	// KBSpaces KB 空间总览闭包（PAD-10；main 注入 kb repo 全量空间+文档数；nil=空列表）
@@ -1022,6 +1027,110 @@ func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int
 	}
 	_ = s.audit(ctx, tenantID, operatorID, "users.import", "", map[string]any{"created": res.Created, "failed": res.Failed})
 	return res, nil
+}
+
+/* ── 单建用户（2026-11-12 通讯录合并页：组织树上直接开人）── */
+
+// pinyinBase 姓名→工号基名：中文逐字转全拼小写（go-pinyin Normal 风格）；ASCII
+// 字母数字保留（统一小写）；其余字符跳过。多音字取首读音，生成不准由端侧可改兜底。
+func pinyinBase(name string) string {
+	var b strings.Builder
+	args := pinyin.NewArgs()
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		case r >= 0x80:
+			if py := pinyin.SinglePinyin(r, args); len(py) > 0 {
+				b.WriteString(py[0])
+			}
+		}
+	}
+	return b.String()
+}
+
+// SuggestEmpno 工号建议：基名重名两位补零递增（zhangsan→zhangsan02→zhangsan03，
+// 用户拍板口径；首号无后缀）。查重经 UserReader.GetByLogin（与导入同口径）。
+func (s *Service) SuggestEmpno(ctx context.Context, tenantID int64, name string) (string, error) {
+	base := pinyinBase(strings.TrimSpace(name))
+	if base == "" {
+		return "", errx.New(errx.CodeBadRequest, "姓名无法生成拼音工号（生僻字/纯符号），请手填")
+	}
+	// 后缀最多 2 位 + 字段上限 32 字符内
+	if len(base) > 30 {
+		base = base[:30]
+	}
+	for i := 0; i <= 98; i++ {
+		cand := base
+		if i > 0 {
+			cand = fmt.Sprintf("%s%02d", base, i+1)
+		}
+		if u, err := s.same.GetUserByLogin(ctx, tenantID, cand); err != nil || u == nil {
+			return cand, nil
+		}
+	}
+	return "", errx.New(errx.CodeBadRequest, "同名工号已超 99 个，请手填")
+}
+
+// CreateUser 单建（工号空=自动建议；可选挂部门标主部门+授角色 scope=4；审计）。
+// 部分失败语义（用户已建但挂靠/授权失败）：报错明示，用户已落库不回滚——低频管理操作可接受，登记。
+func (s *Service) CreateUser(ctx context.Context, tenantID, operatorID int64, req adminapi.CreateUserReq) (*adminapi.AdminUser, error) {
+	name := strings.TrimSpace(req.DisplayName)
+	if name == "" || len([]rune(name)) > 50 {
+		return nil, errx.New(errx.CodeBadRequest, "姓名非法（非空 ≤50 字）")
+	}
+	empno := strings.TrimSpace(req.EmployeeNo)
+	if empno == "" {
+		suggested, serr := s.SuggestEmpno(ctx, tenantID, name)
+		if serr != nil {
+			return nil, serr
+		}
+		empno = suggested
+	} else if len(empno) > 32 {
+		return nil, errx.New(errx.CodeBadRequest, "工号非法（非空 ≤32）")
+	}
+	if u, err := s.same.GetUserByLogin(ctx, tenantID, empno); err == nil && u != nil {
+		return nil, errx.New(errx.CodeBadRequest, "工号已存在")
+	}
+	if s.opts.CreateUser == nil {
+		return nil, s.internal("用户创建通道未装配")
+	}
+	// 初始口令 = 工号 + 固定盐后缀（批量导入同口径；首登强制改密）
+	hash := ""
+	if s.opts.HashPassword != nil {
+		if h, herr := s.opts.HashPassword(empno + "!BBW"); herr == nil {
+			hash = h
+		}
+	}
+	created, cerr := s.opts.CreateUser(ctx, orgapi.User{
+		TenantID: tenantID, Type: orgapi.UserTypeHuman, EmployeeNo: empno,
+		DisplayName: name, Email: strings.TrimSpace(req.Email),
+		PasswordHash: hash, Status: orgapi.UserStatusActive,
+		Scopes:            []string{"im:message:send"}, // 与导入同口径（角色化随 RBAC 收口）
+		MustChangePassword: true,
+	})
+	if cerr != nil {
+		return nil, errx.New(errx.CodeBadRequest, "创建失败："+cerr.Error())
+	}
+	if req.DeptID > 0 {
+		if s.opts.AttachDeptMember == nil {
+			return nil, s.internal("部门挂靠通道未装配")
+		}
+		if aerr := s.opts.AttachDeptMember(ctx, tenantID, created.ID, req.DeptID, true); aerr != nil {
+			return nil, errx.New(errx.CodeBadRequest, "用户已建但挂部门失败："+aerr.Error())
+		}
+	}
+	if req.RoleID > 0 {
+		if gerr := s.GrantRole(ctx, tenantID, operatorID, created.ID, req.RoleID, 4, 0); gerr != nil {
+			return nil, errx.New(errx.CodeBadRequest, "用户已建但授权失败："+gerr.Error())
+		}
+	}
+	_ = s.audit(ctx, tenantID, operatorID, "user.create", "user:"+strconv.FormatInt(created.ID, 10),
+		map[string]any{"employee_no": empno, "dept_id": req.DeptID, "role_id": req.RoleID})
+	au := toAdminUser(created)
+	return &au, nil
 }
 
 /* ── Agent 治理（PAD-14；v0.1：计量聚合视图+令牌吊销+总闸内存态） ── */

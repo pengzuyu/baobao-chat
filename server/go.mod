@@ -2,7 +2,10 @@ module github.com/baobaowork/server
 
 go 1.22
 
-require github.com/jackc/pgx/v5 v5.7.1
+require (
+	github.com/jackc/pgx/v5 v5.7.1
+	github.com/mozillazg/go-pinyin v0.21.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

@@ -517,6 +517,30 @@ export async function fetchKBSpaces(): Promise<KBSpaceRow[]> {
   return data.items;
 }
 
+/* ── 单建用户 + 工号建议（2026-11-12 通讯录合并页） ── */
+
+/** 单建输入：employee_no 空=服务端按姓名全拼自动生成（重名两位补零递增） */
+export interface CreateUserInput {
+  employee_no?: string;
+  display_name: string;
+  email?: string;
+  dept_id?: number;
+  role_id?: number;
+}
+
+/** 单建用户（初始口令=工号+!BBW 首登强制改密——批量导入同口径） */
+export async function createUser(input: CreateUserInput): Promise<AdminUser> {
+  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持创建用户');
+  return http.post<AdminUser>('/admin/users', input);
+}
+
+/** 工号建议（姓名→全拼小写；重名 zhangsan02 两位补零递增） */
+export async function suggestEmpno(name: string): Promise<string> {
+  if (USE_MOCK) return `suggest${Date.now() % 1000}`;
+  const data = await http.get<{ empno: string }>(`/admin/users/empno-suggest?name=${encodeURIComponent(name)}`);
+  return data.empno;
+}
+
 /* ── 离职交接（PAD-07） ── */
 
 export async function offboardUser(userId: string): Promise<void> {
@@ -593,6 +617,10 @@ export async function putAIRoutes(items: AIRouteRule[]): Promise<AIRouteRule[]> 
 export interface DeptMemberRow {
   user_id: string;
   name: string;
+  /** 2026-11-12 通讯录合并页增补（旧服务端无这三字段→undefined 渐进降级） */
+  employee_no?: string;
+  email?: string;
+  status?: number;
   is_primary: boolean;
 }
 

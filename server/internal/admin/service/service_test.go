@@ -61,6 +61,10 @@ func newFixture(adminAccounts []string) (*Service, *orgrepo.Memory, adminrepo.Re
 		CreateUser: func(ctx context.Context, u orgapi.User) (orgapi.User, error) {
 			return orgRepo.CreateUser(ctx, u)
 		},
+		AttachDeptMember: func(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error {
+			return orgRepo.AttachUser(ctx, tenantID, userID, deptID, isPrimary)
+		},
+		HashPassword: func(p string) (string, error) { return "pbkdf2$test$" + p, nil },
 		UsersTotal:       func(context.Context, int64) (int64, error) { return 2, nil },
 		OnlineNow:        func() int64 { return 2 },
 		ConvsActiveSince: func(context.Context, int64, time.Time) (int64, error) { return 1, nil },
@@ -581,5 +585,91 @@ func TestGrantRoleScope(t *testing.T) {
 	g2, _ := roles.ListUserRoles(ctx, 1, uid2.ID)
 	if g2[0].ScopeType != 4 {
 		t.Fatalf("缺省应 4: %+v", g2[0])
+	}
+}
+
+// TestPinyinBase 工号基名：中文全拼小写/ASCII 归一/符号跳过（2026-11-12 通讯录工号方案）
+func TestPinyinBase(t *testing.T) {
+	cases := map[string]string{
+		"张三":   "zhangsan",
+		"李四":   "lisi",
+		"Jack张": "jackzhang",
+		"王-五.":  "wangwu",
+		"O'Neil": "oneil",
+		"···":    "",
+	}
+	for in, want := range cases {
+		if got := pinyinBase(in); got != want {
+			t.Fatalf("pinyinBase(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+// TestSuggestEmpno 工号建议递增：首号无后缀，重名两位补零 zhangsan02/03（用户拍板口径）
+func TestSuggestEmpno(t *testing.T) {
+	svc, orgRepo, _, _ := newFixture(nil)
+	ctx := context.Background()
+	first, err := svc.SuggestEmpno(ctx, 1, "张三")
+	if err != nil || first != "zhangsan" {
+		t.Fatalf("首号应 zhangsan: %q err=%v", first, err)
+	}
+	if _, err := orgRepo.CreateUser(ctx, orgapi.User{TenantID: 1, EmployeeNo: "zhangsan", DisplayName: "张三", Status: 1}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.SuggestEmpno(ctx, 1, "张三")
+	if err != nil || second != "zhangsan02" {
+		t.Fatalf("重名应 zhangsan02: %q err=%v", second, err)
+	}
+	if _, err := orgRepo.CreateUser(ctx, orgapi.User{TenantID: 1, EmployeeNo: "zhangsan02", DisplayName: "张三", Status: 1}); err != nil {
+		t.Fatal(err)
+	}
+	third, err := svc.SuggestEmpno(ctx, 1, "张三")
+	if err != nil || third != "zhangsan03" {
+		t.Fatalf("再重名应 zhangsan03: %q err=%v", third, err)
+	}
+	if _, err := svc.SuggestEmpno(ctx, 1, "···"); err == nil {
+		t.Fatal("纯符号应报错请手填")
+	}
+}
+
+// TestCreateUser 单建全链：工号自动生成+挂部门主部门+授权+首登强制改密+审计
+func TestCreateUser(t *testing.T) {
+	svc, orgRepo, _, _ := newFixture(nil)
+	ctx := context.Background()
+	dept, err := orgRepo.CreateDept(ctx, 1, 0, "技术部", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 角色取 fixture 实际分配的 ID（内存仓储 nextID 分配，勿写死）
+	roleList, err := svc.ListRoles(ctx, 1)
+	if err != nil || len(roleList) == 0 {
+		t.Fatalf("fixture 应内置角色: %v", err)
+	}
+	u, err := svc.CreateUser(ctx, 1, 1, adminapi.CreateUserReq{DisplayName: "王五", DeptID: dept.ID, RoleID: roleList[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.EmployeeNo != "wangwu" || u.Status != orgapi.UserStatusActive {
+		t.Fatalf("工号应自动 wangwu: %+v", u)
+	}
+	uid, _ := strconv.ParseInt(u.ID, 10, 64)
+	full, err := orgRepo.GetUser(ctx, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !full.MustChangePassword || full.PasswordHash != "pbkdf2$test$wangwu!BBW" {
+		t.Fatalf("初始口令应 工号+!BBW 且首登强制改密: %+v", full)
+	}
+	depts, err := orgRepo.ListUserDepts(ctx, 1, uid)
+	if err != nil || len(depts) != 1 || depts[0].DeptID != dept.ID || !depts[0].IsPrimary {
+		t.Fatalf("应挂技术部并标主部门: %+v err=%v", depts, err)
+	}
+	grants, err := svc.ListUserGrants(ctx, 1, uid)
+	if err != nil || len(grants) != 1 || grants[0].RoleID != roleList[0].ID {
+		t.Fatalf("应授予内置角色: %+v err=%v", grants, err)
+	}
+	// 显式工号撞号
+	if _, err := svc.CreateUser(ctx, 1, 1, adminapi.CreateUserReq{EmployeeNo: "wangwu", DisplayName: "王五2"}); err == nil {
+		t.Fatal("撞号应拒绝")
 	}
 }

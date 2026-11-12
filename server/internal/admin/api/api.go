@@ -206,6 +206,17 @@ type ImportUserRow struct {
 	Email string `json:"email"`
 }
 
+// CreateUserReq 单建用户（2026-11-12 通讯录合并页：组织树上直接开人）——
+// 初始口令=工号+!BBW 首登强制改密（与批量导入同口径）；EmployeeNo 空则服务端
+// 按姓名全拼自动生成（重名两位补零递增 zhangsan02，用户拍板口径）
+type CreateUserReq struct {
+	EmployeeNo  string `json:"employee_no,omitempty"` // 空串=自动生成建议值
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email,omitempty"`
+	DeptID      int64  `json:"dept_id,omitempty"` // >0 建成即挂该部门并标主部门
+	RoleID      int64  `json:"role_id,omitempty"` // >0 建成即授予角色（scope=4 全租户）
+}
+
 // ImportRow 导入行结果（PAD-06）
 type ImportRow struct {
 	Row    int    `json:"row"` // 1 起行号（不含表头）
@@ -266,6 +277,11 @@ type AdminService interface {
 	AgentKillOn() bool
 	// ── 批量导入（PAD-06；v0.1 同步 ≤100 行/次，admin_task 异步化阶段二登记）──
 	BatchImportUsers(ctx context.Context, tenantID, operatorID int64, rows []ImportUserRow) (*ImportResult, error)
+	// ── 单建用户（2026-11-12 通讯录合并页）──
+	// CreateUser 单建（工号空=按姓名全拼自动生成；可选挂部门/授权/审计；初始口令=工号+!BBW）
+	CreateUser(ctx context.Context, tenantID, operatorID int64, req CreateUserReq) (*AdminUser, error)
+	// SuggestEmpno 工号建议（姓名→全拼小写；重名 zhangsan02 两位补零递增；前端预填可改）
+	SuggestEmpno(ctx context.Context, tenantID int64, name string) (string, error)
 	// ── 平台公告（PAD-15；admin:notice:publish）──
 	PublishNotice(ctx context.Context, tenantID, operatorID int64, title, content string) (*NoticeDTO, error)
 	ListNotices(ctx context.Context, tenantID int64, cursor int64, limit int) ([]NoticeDTO, bool, error)
