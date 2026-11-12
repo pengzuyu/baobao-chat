@@ -33,6 +33,7 @@
 | D20 | [ask-user 提问卡详细设计](D20-ask-user提问卡详细设计.md) | 08/D08/D11/D18/09 | **ZCode 式澄清机制**：ask_user 工具（loop_runner 拦截不走 pipeline）·clarify.request/response 协议对（camelCase 键，**无超时**——等用户或「停止」中断收口 cancelled）·WaitingClarify 状态（#6b/#7b）·三端提问卡（工作台 ClarifyCard/聊天页 Modal/落流卡内嵌条，ClarifyForm 共用）·答案进工具结果（结构化回给模型）·完全镜像 permission 阻塞机制 |
 | D21 | [自动更新与官网发布链详细设计](D21-自动更新与官网发布链详细设计.md) | 16/15/D01 | **发布工程**：单变量 BBW_PUBLIC_URL 三链注入（前端 env/壳编译期网关/updater 端点）·v0.1 统一 http 拍板（证书口径澄清与转 https 三步走）·updater 全链（minisign 密钥/静默 6h 检查/关于页更新卡/requireSignedVersion 拒降级）·nginx 80 主入口全路由（补 /v1/ /mcp/ bbrt 生产链路）·update-src/website 落地 bind 卷·gen-manifest/publish 脚本族·官网工程（运行时拉 release-info 自动跟进版本） |
 | D22 | [插件系统详细设计](D22-插件系统详细设计.md) | 09/D08/D11/D14 | **插件市场**：Claude Code 插件格式超集（.bbw-plugin 主/三目录名都认）·五类组件一包（skills/工具=MCP/命令/专家/hooks 只读不执行）·工具一律 MCP（进程内不做/dsh 兼容否决）·市场三表+包体 bytea+发布双端校验（zip slip）·PluginPage 市场/已安装/配置表单（SkillTab 并入删除）·落盘多版本+activeVersion 回滚·`mcp.config`/`auth.push`/`config.push` 宿主协议（MCP 装配从 env 走向动态下发）·三变量族身份注入（`${BBW_USER_TOKEN}` HTTP-only/`${CONFIG:*}` 钥匙串/`${PLUGIN_ROOT}`） |
+| D23 | [Agent 记忆系统升级详细设计](D23-Agent记忆系统升级详细设计.md) | 08/09/D11/D15/D19 | **公共层换制**（D15 文件族+LRU→journal+USER.md 压实视图）：预算 3000/2400/单条 80 字·十类硬枚举+硬度轴（禁止/授权硬·压实不可删只能显式解除·目标时敏）·压实漏斗（规则→仅软条目进 bbw-fast→硬条目程序拼回→校验失败宁旧勿错）·view=缓存/journal=真相+启动 reconcile·更正=forget+write 零 LLM（条目粒度防同名误伤）·provenance 只进 journal·项目层沿用收口（LRU 废除/hook ≤40 限长/last_used/蒸馏纪律 P1）·不做身份键（人轴外包 OS）·状态类延后·BBW_MEMORY_ROOT 联调隔离·插件 MCP 信任边界（记忆目录不进插件 fs 授权） |
 
 ## 模板（D01 §13）
 

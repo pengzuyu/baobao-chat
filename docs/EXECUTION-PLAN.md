@@ -281,3 +281,20 @@
 | L3 | 装配链 | 宿主装配器（系统级 env 源+插件级 .mcp.json 两源合并+`${PLUGIN_ROOT}` 替换）+ 宿主协议 `mcp.config` 动态下发（McpClient 重配：断开移除/懒连新增）+ SkillIndex 扫描路径扩展（无 triggers 技能 name 兜底触发+索引区）+ tools.reload 接线 | 真机：装带 MCP 插件→会话内出现 `mcp.<server>.*` 工具且调用过审批卡 | [x] 2026-11-12（a5ed35e） |
 | L4 | 身份层 | bbrt-mcp 调用层三变量族替换（`${BBW_USER_TOKEN}` HTTP-only/`${CONFIG:*}`/`${PLUGIN_ROOT}`）+ `auth.push`/`config.push` 宿主协议 + 钥匙串接线 + OBO `_meta.bbwObo` 泛化 + 身份使用标识 UI | 真机：HTTP 插件工具带 Bearer 调通同生态服务；config token 注入外部系统头 | [x] 2026-11-12（c87834b；实现收敛：CONFIG/USER_ID 装配静态替换+保存/换号重推，弃 config.push/auth.push——仅 TOKEN 必须动态） |
 | L5 | 命令与专家 | `/` 命令列表+模板渲染（$ARGUMENTS/$1..$9，纯客户端注入用户消息）+ agents frontmatter→专家 Persona Manifest 翻译器（走现有专家装配交集） | 真机：/release 出模板；插件专家可被选中会诊 | [x] 2026-11-12（51f4833；IM 聊天页斜杠命令后续登记） |
+
+## 批次 M：Agent 记忆系统升级（D23，2026-11-12 设计定稿待编码）
+
+> 定案（用户裁决 2026-11-12 九轮讨论）：两层=公共+项目，会话层不做；**公共层换制**
+> journal+USER.md 压实视图（硬顶 3000 字/常态 2400/单条 80 字），十类硬枚举+硬度轴
+> （禁止/授权硬·压实不可删·目标时敏）；view=缓存 journal=真相（启动 reconcile 自愈）；
+> provenance 只进 journal；单写者进程内 Mutex；**不做 tenant/user 身份键**（人轴外包
+> OS，P2 同步时一次性迁移）；状态类延后；更正=forget+write 零 LLM；项目层沿用收口
+> （两层 LRU 废除/hook ≤40 限长/last_used）；日常 project 类保留 D19 回落（IM embedded
+> 主场景不丢教训）。设计：[D23](detail/D23-Agent记忆系统升级详细设计.md)。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|---|---|---|---|
+| M1 | 公共层存储换制 | bbrt-memory 新 global/ 模块（journal.jsonl append/replay/重投影/启动 reconcile）+ 一次性迁移（既有用户级 slug 族→op:add 灌入（四类→十类映射）→USER.md 派生→旧文件 archive/）+ memory_save 双枚举路由（global 十类/项目三类）+ W1/W2/W3 三写入路径全改灌 journal + 日常 project 类回落 global + 全局 Mutex 串行 | cargo test global 套件绿（重放幂等/迁移幂等/单条 80 字拒/回落路由）；启动后 USER.md 生成且旧文件入 archive | [ ] |
+| M2 | 压实漏斗+工具面 | compact.rs（规则层去重/过期→仅软条目进 bbw-fast 目标 2400→硬条目程序拼回→校验失败保留旧视图）+ memory_forget（tombstone+移除清单 0/1/N 回显）+ memory_read（路径限定记忆目录+touch last_used）+ knowledge/ 取消 LRU+索引行 hook ≤40 硬拒+last_used | 压实产物 ≤3000 且硬条目逐字保留断言（含「硬条目不进 LLM 请求体」）；forget 三态；8020 记忆目录不可达 | [ ] |
+| M3 | 协议+记忆页+联调隔离 | memory.forgot 事件（RT→宿主）+ memory.list 增 global 段 + 记忆页 USER.md 视图/global 条目删除（编辑 P1 随蒸馏纪律）+ BBW_MEMORY_ROOT env 覆盖 | tsc/vite build 绿；记忆页 global 页签可见可删 | [ ] |
+| M4 | 真机验收 | D23 §9 六项走查（十类落盘/回落教训/禁止→解除更正链/压实与断 provider/记忆页/8020+BBW_MEMORY_ROOT） | 用户真机走查 | [ ] |
