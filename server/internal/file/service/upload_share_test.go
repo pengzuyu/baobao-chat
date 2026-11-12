@@ -79,7 +79,7 @@ func TestChunkedUploadFullFlow(t *testing.T) {
 		t.Fatalf("part1 重传（覆盖）: %v", err)
 	}
 	// 位图（断点续传）
-	st, err := svc.UploadStatus(ctx, 1, 7, init.UploadID)
+	st, err := svc.UploadStatus(ctx, 1, 7, init.UploadID, 0)
 	if err != nil || len(st.Received) != 2 || st.Received[0] != 1 || st.Received[1] != 3 {
 		t.Fatalf("位图应 [1,3]: %+v %v", st, err)
 	}
@@ -171,7 +171,7 @@ func TestUploadSessionValidation(t *testing.T) {
 	if err := svc.UploadPart(ctx, 1, 8, init.UploadID, 1, bytes.NewReader(content)); codeOf(t, err) != errx.CodeFileUploadExpired {
 		t.Fatal("他人会话应 4008 口径拒绝")
 	}
-	if _, err := svc.UploadStatus(ctx, 1, 7, "nope"); codeOf(t, err) != errx.CodeFileUploadExpired {
+	if _, err := svc.UploadStatus(ctx, 1, 7, "nope", 0); codeOf(t, err) != errx.CodeFileUploadExpired {
 		t.Fatal("未知会话应 4008")
 	}
 	// 策略：黑名单/超限/名字非法在 check/init 双入口一致拒绝

@@ -200,8 +200,21 @@ func main() {
 		fileRepo = filerepo.NewMemory()
 		fileTransfers = filerepo.NewMemoryTransfers()
 	}
+	// 单文件上限：Local=20MB（磁盘+中转形态）；S3=2GB（presign 直传大文件，D25；
+	// BBW_MAX_UPLOAD_MB 可覆盖——relay 中转另有 20MB 硬顶见 service.relayMaxBytes）
+	fileMaxBytes := int64(20 << 20)
+	if fileStore != nil {
+		if _, isS3 := fileStore.(*filestore.S3); isS3 {
+			fileMaxBytes = int64(2 << 30)
+			if mb := envOr("BBW_MAX_UPLOAD_MB", ""); mb != "" {
+				if v, perr := strconv.ParseInt(mb, 10, 64); perr == nil && v > 0 && v <= 10240 {
+					fileMaxBytes = v << 20
+				}
+			}
+		}
+	}
 	fileMod := file.NewModule(fileservice.Options{
-		MaxUploadBytes: 20 << 20, // 单文件 20MB（multipart 直传与 complete 合并共用上限）
+		MaxUploadBytes: fileMaxBytes,
 		TicketTTL:      120 * time.Second,
 		IsConvMember: func(ctx context.Context, userID, convID int64) bool {
 			m, err := msgRepo.MemberOf(ctx, convID, userID)
@@ -2197,7 +2210,7 @@ func handleFileTicket(svc fileapi.FileService) http.HandlerFunc {
 			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "文件 ID 非法"))
 			return
 		}
-		res, err := svc.IssueTicket(r.Context(), httpx.TenantID(r.Context()), uid, fileID)
+		res, err := svc.IssueClientTicket(r.Context(), httpx.TenantID(r.Context()), uid, fileID, r.URL.Query().Get("variant"))
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return
@@ -2919,7 +2932,8 @@ func handleFileUploadStatus(svc fileapi.FileService) http.HandlerFunc {
 			httpx.Fail(w, r, err)
 			return
 		}
-		res, err := svc.UploadStatus(r.Context(), httpx.TenantID(r.Context()), uid, r.PathValue("id"))
+		fromPart, _ := strconv.Atoi(r.URL.Query().Get("from_part")) // 预签名续批起点（D25；0=仅位图）
+		res, err := svc.UploadStatus(r.Context(), httpx.TenantID(r.Context()), uid, r.PathValue("id"), fromPart)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return

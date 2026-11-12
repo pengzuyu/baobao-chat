@@ -114,6 +114,11 @@ func MpKey(uploadID string) string { return "s/" + uploadID }
 // BlobKey 内容对象键（O2 service 层拼 variant 用）
 func BlobKey(tenantID int64, sha256 string) string { return s3BlobKey(tenantID, sha256) }
 
+// VariantKey 缩略变体键（service 层预签名直指变体用）
+func VariantKey(tenantID int64, sha256, variant string) string {
+	return s3VariantKey(tenantID, sha256, variant)
+}
+
 // isNotFound 404 归一（NoSuchKey/NotFound/HTTP 404 三形态）
 func isNotFound(err error) bool {
 	if err == nil {
@@ -507,6 +512,32 @@ func (s *S3) AbortMultipart(ctx context.Context, uploadID, s3UploadID string) er
 func (s *S3) DeleteKey(ctx context.Context, key string) error {
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
 	return err
+}
+
+// ── 缩略图变体（D25 拍板⑥：t/{tenant}/{sha2}/{sha}_t{240|720}.jpg） ──
+
+func s3VariantKey(tenantID int64, sha256, variant string) string {
+	return s3BlobKey(tenantID, sha256) + "_t" + variant + ".jpg"
+}
+
+// PutVariant 写变体
+func (s *S3) PutVariant(ctx context.Context, tenantID int64, sha256, variant, contentType string, data []byte) error {
+	return s.PutBytes(ctx, s3VariantKey(tenantID, sha256, variant), contentType, data)
+}
+
+// HasVariant 变体存在性
+func (s *S3) HasVariant(ctx context.Context, tenantID int64, sha256, variant string) bool {
+	ok, err := s.StatExists(ctx, s3VariantKey(tenantID, sha256, variant))
+	return err == nil && ok
+}
+
+// OpenVariant 开变体只读流（缺失 ErrNotFound）
+func (s *S3) OpenVariant(ctx context.Context, tenantID int64, sha256, variant string) (io.ReadCloser, error) {
+	rc, err := s.OpenKey(ctx, s3VariantKey(tenantID, sha256, variant))
+	if err == ErrNotFound {
+		return nil, ErrNotFound
+	}
+	return rc, err
 }
 
 // ── 内部 ──

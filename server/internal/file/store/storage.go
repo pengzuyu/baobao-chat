@@ -48,6 +48,14 @@ type Storage interface {
 	RemoveStaging(ctx context.Context, uploadID string) error
 	// ResetStaging 清空全部暂存（启动期孤儿回收——会话元数据内存态，重启即失配）
 	ResetStaging() error
+
+	// ── 缩略图变体（D25 拍板⑥：内容对象旁挂 {sha}_t{240|720}.jpg） ──
+	// PutVariant 写变体字节（惰性生成落位；variant ∈ {240,720}）
+	PutVariant(ctx context.Context, tenantID int64, sha256, variant string, contentType string, data []byte) error
+	// HasVariant 变体存在性（存在则票据直指变体；不存在触发惰性生成/回退原图）
+	HasVariant(ctx context.Context, tenantID int64, sha256, variant string) bool
+	// OpenVariant 开变体只读流（缺失返回 ErrNotFound——调用方回退原图）
+	OpenVariant(ctx context.Context, tenantID int64, sha256, variant string) (io.ReadCloser, error)
 }
 
 // Local 本地磁盘实现
@@ -283,4 +291,35 @@ func (l *Local) ResetStaging() error {
 		return err
 	}
 	return nil
+}
+
+// ── 缩略图变体（D25：内容对象同目录 {sha}_t{240|720}.jpg） ──
+
+// variantPath 变体文件路径（与内容对象同目录旁挂）
+func (l *Local) variantPath(tenantID int64, sha256, variant string) string {
+	return l.blobPath(tenantID, sha256) + "_t" + variant + ".jpg"
+}
+
+// PutVariant 写变体（0644 常规文件；目录已存在——内容对象落位时建过）
+func (l *Local) PutVariant(_ context.Context, tenantID int64, sha256, variant, contentType string, data []byte) error {
+	_ = contentType // 恒 image/jpeg（后缀已表达）
+	return os.WriteFile(l.variantPath(tenantID, sha256, variant), data, 0o644)
+}
+
+// HasVariant 变体存在性
+func (l *Local) HasVariant(_ context.Context, tenantID int64, sha256, variant string) bool {
+	_, err := os.Stat(l.variantPath(tenantID, sha256, variant))
+	return err == nil
+}
+
+// OpenVariant 开变体只读流（缺失 ErrNotFound）
+func (l *Local) OpenVariant(_ context.Context, tenantID int64, sha256, variant string) (io.ReadCloser, error) {
+	f, err := os.Open(l.variantPath(tenantID, sha256, variant))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return f, nil
 }

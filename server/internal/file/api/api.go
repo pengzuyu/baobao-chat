@@ -22,10 +22,12 @@ type UploadResult struct {
 	Dedup       bool   `json:"dedup,omitempty"`  // 同租户同 sha 复用原行（07 §4.1 ③ 简化）
 }
 
-// TicketResult GET /files/{id}/ticket 响应（url 为相对路径，端内拼 API origin）
+// TicketResult GET /files/ticket/{id} 响应。
+// Local 模式 url=相对路径 /api/v1/files/dl?t={token}（端内拼 API origin）；
+// S3 模式 url=预签名 GET 绝对地址（120s；对外端点含 /oss 前缀，D25 拍板②）
 type TicketResult struct {
-	URL       string `json:"url"`       // /api/v1/files/dl?t={token}
-	ExpiresIn int    `json:"expiresIn"` // 秒（v0.1 恒 120）
+	URL       string `json:"url"`
+	ExpiresIn int    `json:"expiresIn"` // 秒（恒 120）
 }
 
 // DownloadTarget dl 端点回放目标（票据消费成功后）
@@ -63,19 +65,30 @@ type UploadInitReq struct {
 	PartSize    int64  `json:"part_size"` // 缺省 4MB（07 §1.2；范围 1–8MB）
 }
 
-// UploadInitResult 会话建立响应（秒传命中直接返回 file_id 跳过分片）
-type UploadInitResult struct {
-	UploadID  string `json:"upload_id,omitempty"`
-	PartSize  int64  `json:"part_size,omitempty"`
-	PartTotal int    `json:"part_total,omitempty"`
-	FileID    string `json:"file_id,omitempty"` // 秒传命中（dedup=true）才有
-	Dedup     bool   `json:"dedup"`
+// UploadPartURL 分片预签名（D25 presign 模式；首批 ≤32 张、1h 时效、批间经 status 续签）
+type UploadPartURL struct {
+	No        int    `json:"no"`
+	URL       string `json:"url"`               // 绝对地址（对外端点；PUT 原始字节、免 Authorization）
+	Method    string `json:"method"`            // 恒 PUT
+	ExpiresAt int64  `json:"expires_at"`        // ms（到期前 10min 客户端主动续签）
 }
 
-// UploadStatus GET /files/uploads/{id}（断点续传：已收分片位图）
+// UploadInitResult 会话建立响应（秒传命中直接返回 file_id 跳过分片）
+type UploadInitResult struct {
+	UploadID  string           `json:"upload_id,omitempty"`
+	PartSize  int64            `json:"part_size,omitempty"`
+	PartTotal int              `json:"part_total,omitempty"`
+	Mode      string           `json:"mode,omitempty"`      // presign=客户端 PUT 直传（D25）；缺省/relay=PATCH 中转
+	Parts     []UploadPartURL  `json:"parts,omitempty"`     // presign 首批（≤32）
+	FileID    string           `json:"file_id,omitempty"`   // 秒传命中（dedup=true）才有
+	Dedup     bool             `json:"dedup"`
+}
+
+// UploadStatus GET /files/uploads/{id}?from_part=N（断点续传位图 + 预签名续批）
 type UploadStatus struct {
-	UploadID string `json:"upload_id"`
-	Received []int  `json:"received"` // 已落盘分片号（客户端跳过续传）
+	UploadID string          `json:"upload_id"`
+	Received []int           `json:"received"`           // 已收分片号（客户端跳过续传）
+	Parts    []UploadPartURL `json:"parts,omitempty"`    // ?from_part= 时返回从该号起的续批（≤32）
 }
 
 // UploadPartResult PATCH /files/uploads/{id}/{no} 响应
@@ -109,8 +122,11 @@ type FileDTO struct {
 type FileService interface {
 	// Upload 上传：扩展名黑名单(4002)/大小上限(4009)/sha 去重复用；图片解析宽高入元数据
 	Upload(ctx context.Context, tenantID, ownerID int64, name, contentType string, convID int64, r io.Reader) (*UploadResult, error)
-	// IssueTicket 取下载票据（owner 或 conv 成员；一次性 120s）
+	// IssueTicket 取下载票据·内部 token 形态（kb 摄取等服务端消费方配 Download 回放流）
 	IssueTicket(ctx context.Context, tenantID, userID int64, fileID int64) (*TicketResult, error)
+	// IssueClientTicket 取下载票据·客户端形态（D25）：S3=预签名 GET 120s 绝对地址（variant
+	// ∈ origin/240/720，缩略惰性生成）；Local=token dl 相对路径（与 IssueTicket 同源）
+	IssueClientTicket(ctx context.Context, tenantID, userID int64, fileID int64, variant string) (*TicketResult, error)
 	// Download 票据校验 → 打开内容流（票据一次性：二次消费 4014）
 	Download(ctx context.Context, token string) (*DownloadTarget, io.ReadCloser, error)
 	// ListMine 我的文件（软删排除）
@@ -126,13 +142,14 @@ type FileService interface {
 	// OnMsgRecalled 锚点消息撤回联动（OQ-B24：文件保留、recalled 置灰；尽力而为）
 	OnMsgRecalled(ctx context.Context, convID int64, msgSeq int64) error
 
-	// ── 分片上传会话（07 §4.1 ④⑤⑥⑦ 本地盘形态：PATCH 直传，无预签名） ──
+	// ── 分片上传会话（07 §4.1：relay=本地盘 PATCH 中转 / presign=S3 预签名直传 D25） ──
 	// Check 秒传预检（策略再校验：大小/黑名单不因预检豁免）
 	Check(ctx context.Context, tenantID, ownerID int64, req CheckReq) (*CheckResult, error)
-	// InitUpload 建会话（7 天有效）；声明 sha 已存在 → 直接秒传建行
+	// InitUpload 建会话（7 天有效）；声明 sha 已存在 → 直接秒传建行；
+	// presign 模式响应 mode/parts（首批 ≤32 张 1h 预签名，part_size 强制 8MB）
 	InitUpload(ctx context.Context, tenantID, ownerID int64, req UploadInitReq) (*UploadInitResult, error)
-	// UploadStatus 断点续传位图（会话过期 4008）
-	UploadStatus(ctx context.Context, tenantID, userID int64, uploadID string) (*UploadStatus, error)
+	// UploadStatus 断点续传位图（会话过期 4008）；fromPart>0 时附预签名续批
+	UploadStatus(ctx context.Context, tenantID, userID int64, uploadID string, fromPart int) (*UploadStatus, error)
 	// UploadPart 写分片（no 范围校验；超 part_size 4009；覆盖写支持坏块重传）
 	UploadPart(ctx context.Context, tenantID, userID int64, uploadID string, no int, r io.Reader) error
 	// CompleteUpload 合并+整体 sha 校验（不一致 4006 作废）→ 落位去重建行

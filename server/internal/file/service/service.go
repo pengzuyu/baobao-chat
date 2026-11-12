@@ -5,6 +5,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -66,8 +67,13 @@ type Service struct {
 type ticketEntry struct {
 	fileID  int64
 	userID  int64
+	variant string // origin/240/720（D25 缩略变体；origin=原图）
 	expires time.Time
 }
+
+// relayMaxBytes 中转上传硬顶（D25 拍板④：relay 保留给小文件——S3 模式全局上限可抬到
+// GB 级，但 multipart 中转路径仍按 20MB 收口，杜绝巨流穿服务端）
+const relayMaxBytes int64 = 20 << 20
 
 // New 构造（transfers 可为 nil——阶段一装配形态；启动回收 staging
 // 孤儿分片：会话元数据内存态，重启即与磁盘失配）
@@ -93,8 +99,13 @@ func (s *Service) Upload(ctx context.Context, tenantID, ownerID int64, name, con
 		return nil, errx.New(errx.CodeFileTypeForbidden, "文件类型不允许上传（."+ext+"）")
 	}
 
-	// ① 流式落临时文件 + sha256（超限即中止 4009）
-	size, sha, tmpPath, err := s.store.Save(ctx, tenantID, r, s.opts.MaxUploadBytes)
+	// ① 流式落临时文件 + sha256（超限即中止 4009；中转硬顶 20MB——S3 模式大文件走
+	// presign 直传，relay 只服务小文件，杜绝巨流穿服务端，D25 拍板④）
+	relayCap := s.opts.MaxUploadBytes
+	if relayCap > relayMaxBytes {
+		relayCap = relayMaxBytes
+	}
+	size, sha, tmpPath, err := s.store.Save(ctx, tenantID, r, relayCap)
 	if err != nil {
 		if err == filestore.ErrTooLarge {
 			return nil, errx.New(errx.CodeFileSizeLimit, "超过单文件大小上限")
@@ -160,11 +171,11 @@ func (s *Service) IssueTicket(ctx context.Context, tenantID, userID int64, fileI
 		return nil, errx.New(errx.CodePermACLDenied, "无权访问该文件")
 	}
 
-	return s.issueTicketFor(ctx, f, userID)
+	return s.issueTicketFor(f, userID, "origin")
 }
 
-// issueTicketFor 票据签发（IssueTicket 与 share 解析通道共用；绑定用户一次性）
-func (s *Service) issueTicketFor(_ context.Context, f *filerepo.File, userID int64) (*fileapi.TicketResult, error) {
+// issueTicketFor 票据签发·token 形态（IssueTicket/IssueClientTicket-Local 共用；绑定用户一次性）
+func (s *Service) issueTicketFor(f *filerepo.File, userID int64, variant string) (*fileapi.TicketResult, error) {
 	// 一次性票据：32 字节随机 hex；过期条目顺带清理（无定时器，惰性回收）
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {
@@ -179,7 +190,7 @@ func (s *Service) issueTicketFor(_ context.Context, f *filerepo.File, userID int
 			delete(s.tickets, k)
 		}
 	}
-	s.tickets[t] = ticketEntry{fileID: f.ID, userID: userID, expires: expires}
+	s.tickets[t] = ticketEntry{fileID: f.ID, userID: userID, variant: variant, expires: expires}
 	s.mu.Unlock()
 	return &fileapi.TicketResult{
 		URL:       "/api/v1/files/dl?t=" + t,
@@ -200,14 +211,29 @@ func (s *Service) Download(ctx context.Context, token string) (*fileapi.Download
 	if err != nil {
 		return nil, nil, err
 	}
+	// 变体分流（D25）：缩略小图读全量（≤百 KB 级）取真实大小；缺失回退原图（迁移兜底）
 	rc, err := s.store.Open(ctx, f.TenantID, f.SHA256)
+	name, ctype, size := f.Name, f.ContentType, f.Size
+	if err == nil && ent.variant != "" && ent.variant != "origin" {
+		if vrc, verr := s.store.OpenVariant(ctx, f.TenantID, f.SHA256, ent.variant); verr == nil {
+			data, rerr := io.ReadAll(vrc)
+			vrc.Close()
+			if rerr == nil {
+				rc.Close()
+				rc = io.NopCloser(bytes.NewReader(data))
+				name = f.Name + "_t" + ent.variant + ".jpg"
+				ctype = "image/jpeg"
+				size = int64(len(data))
+			}
+		}
+	}
 	if err != nil {
 		return nil, nil, errx.New(errx.CodeFileNotFound, "文件内容缺失")
 	}
-	s.recordTransferDownload(ctx, f.TenantID, ent.userID, f.ID, f.Size) // 07 §5 下载镜像
+	s.recordTransferDownload(ctx, f.TenantID, ent.userID, f.ID, f.Size) // 07 §5 下载镜像（按原档口径）
 	return &fileapi.DownloadTarget{
-		FileID: f.ID, TenantID: f.TenantID, Name: f.Name,
-		ContentType: f.ContentType, SHA256: f.SHA256, Size: f.Size,
+		FileID: f.ID, TenantID: f.TenantID, Name: name,
+		ContentType: ctype, SHA256: f.SHA256, Size: size,
 	}, rc, nil
 }
 

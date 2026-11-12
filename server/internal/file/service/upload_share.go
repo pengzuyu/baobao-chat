@@ -40,6 +40,7 @@ type uploadSession struct {
 	convID      int64
 	partSize    int64
 	partTotal   int
+	s3UploadID  string // presign 模式：S3 multipart UploadId（D25；空=relay PATCH 形态）
 	expires     time.Time
 	done        *fileapi.CompleteResult // complete 后幂等回放（重复 complete 同结果）
 }
@@ -93,6 +94,9 @@ func (s *Service) InitUpload(ctx context.Context, tenantID, ownerID int64, req f
 		return &fileapi.UploadInitResult{FileID: strconv.FormatInt(hit.ID, 10), Dedup: true}, nil
 	}
 	partSize := req.PartSize
+	if _, presign := s.presignStore(); presign {
+		partSize = presignPartSize // 拍板⑤：S3 非末片 ≥5MiB 硬限 → 定值 8MB（忽略端侧声明）
+	}
 	if partSize == 0 {
 		partSize = defaultPartSize
 	}
@@ -109,17 +113,31 @@ func (s *Service) InitUpload(ctx context.Context, tenantID, ownerID int64, req f
 	}
 	uploadID := hex.EncodeToString(id)
 	now := s.opts.Now()
-	s.mu.Lock()
-	s.uploads[uploadID] = &uploadSession{
+	sess := &uploadSession{
 		tenantID: tenantID, ownerID: ownerID,
 		name: strings.TrimSpace(req.Name), ext: ext,
 		size: req.Size, sha256: req.SHA256, contentType: strings.TrimSpace(req.ContentType),
 		convID: req.ConvID, partSize: partSize, partTotal: partTotal,
 		expires: now.Add(uploadSessionTTL),
 	}
+	// presign 模式（D25）：建 S3 multipart + 首批 ≤32 张预签名（建败即弃会话）
+	var parts []fileapi.UploadPartURL
+	mode := ""
+	if _, presign := s.presignStore(); presign {
+		p, err := s.initPresignSession(ctx, uploadID, sess)
+		if err != nil {
+			return nil, err
+		}
+		parts, mode = p, "presign"
+	}
+	s.mu.Lock()
+	s.uploads[uploadID] = sess
 	s.mu.Unlock()
 	s.recordTransferQueued(ctx, tenantID, ownerID, uploadID, req.Size)
-	return &fileapi.UploadInitResult{UploadID: uploadID, PartSize: partSize, PartTotal: partTotal}, nil
+	return &fileapi.UploadInitResult{
+		UploadID: uploadID, PartSize: partSize, PartTotal: partTotal,
+		Mode: mode, Parts: parts,
+	}, nil
 }
 
 // getSession 取有效会话（过期 4008；非本人/跨租户不暴露——按 4008 口径拒绝）
@@ -134,10 +152,14 @@ func (s *Service) getSession(uploadID string, tenantID, userID int64) (*uploadSe
 	return sess, nil
 }
 
-// UploadStatus 断点续传位图
-func (s *Service) UploadStatus(ctx context.Context, tenantID, userID int64, uploadID string) (*fileapi.UploadStatus, error) {
-	if _, err := s.getSession(uploadID, tenantID, userID); err != nil {
+// UploadStatus 断点续传位图（presign=ListParts 真值；fromPart>0 附预签名续批，D25）
+func (s *Service) UploadStatus(ctx context.Context, tenantID, userID int64, uploadID string, fromPart int) (*fileapi.UploadStatus, error) {
+	sess, err := s.getSession(uploadID, tenantID, userID)
+	if err != nil {
 		return nil, err
+	}
+	if sess.s3UploadID != "" {
+		return s.statusPresign(ctx, uploadID, sess, fromPart)
 	}
 	received, err := s.store.ListStaging(ctx, uploadID)
 	if err != nil {
@@ -146,11 +168,14 @@ func (s *Service) UploadStatus(ctx context.Context, tenantID, userID int64, uplo
 	return &fileapi.UploadStatus{UploadID: uploadID, Received: received}, nil
 }
 
-// UploadPart 写分片（覆盖写=坏块重传；超限 4009）
+// UploadPart 写分片（relay 形态；覆盖写=坏块重传；超限 4009。presign 会话拒——直传不经服务端）
 func (s *Service) UploadPart(ctx context.Context, tenantID, userID int64, uploadID string, no int, r io.Reader) error {
 	sess, err := s.getSession(uploadID, tenantID, userID)
 	if err != nil {
 		return err
+	}
+	if sess.s3UploadID != "" {
+		return errx.New(errx.CodeBadRequest, "presign 会话不走服务端中转（PUT 预签名直传）")
 	}
 	if no < 1 || no > sess.partTotal {
 		return errx.New(errx.CodeBadRequest, "分片号越界")
@@ -178,6 +203,10 @@ func (s *Service) CompleteUpload(ctx context.Context, tenantID, userID int64, up
 	// 幂等：已 complete 的会话重复调用回放同结果（客户端重试友好）
 	if sess.done != nil {
 		return sess.done, nil
+	}
+	// presign 形态（D25）：S3 合并收口（位图/校验/落位/建行独立链路）
+	if sess.s3UploadID != "" {
+		return s.completePresign(ctx, tenantID, uploadID, sess)
 	}
 	// ① 分片齐全（缺 4007——客户端按位图补传后再 complete）
 	received, err := s.store.ListStaging(ctx, uploadID)
