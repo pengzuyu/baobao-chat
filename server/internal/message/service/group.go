@@ -333,15 +333,19 @@ func (s *Service) CreateConversation(ctx context.Context, userID int64, p messag
 			return nil, errx.From(err)
 		}
 	}
-	// 系统消息：group.created（PIM-12）+ 每位受邀成员 member.joined（04 篇 §4.5.2 邀请文案）
-	s.sendSystem(ctx, conv.ID, userID, messageapi.SystemBody{
-		Kind: messageapi.SysKindGroupCreated, Group: p.Name,
-	})
-	for _, uid := range uids {
+	// 系统消息：group.created（PIM-12）+ 每位受邀成员 member.joined（04 篇 §4.5.2 邀请文案）。
+	// 仅群聊/广播群——单聊是两人私密对话不落群生命周期文案（2026-11-12 用户报
+	// 「发消息却显示创建了群聊/邀请加入」；残迹单聊里的错误系统消息另行数据清理）
+	if p.Type != messageapi.ConvSingle {
 		s.sendSystem(ctx, conv.ID, userID, messageapi.SystemBody{
-			Kind: messageapi.SysKindMemberJoined, Target: strconv.FormatInt(uid, 10),
-			TargetName: s.nameOf(uid), Group: p.Name,
+			Kind: messageapi.SysKindGroupCreated, Group: p.Name,
 		})
+		for _, uid := range uids {
+			s.sendSystem(ctx, conv.ID, userID, messageapi.SystemBody{
+				Kind: messageapi.SysKindMemberJoined, Target: strconv.FormatInt(uid, 10),
+				TargetName: s.nameOf(uid), Group: p.Name,
+			})
+		}
 	}
 	fresh, _ := s.repo.GetConversation(ctx, conv.ID)
 	members, _ := s.repo.MembersOf(ctx, conv.ID)
