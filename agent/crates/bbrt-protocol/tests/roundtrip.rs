@@ -367,9 +367,14 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
                 hook: "记住.*远端".into(),
                 scope: None,
                 workspace_name: None,
+                global_type: None,
             }],
         },
         RuntimeToHost::MemoryDeleteResult { ok: true },
+        // D23/M3：公共层移除回执
+        RuntimeToHost::MemoryForgetResult {
+            removed: vec!["[画像] 用户叫小红".into()],
+        },
         RuntimeToHost::ReportListResult {
             items: vec![ReportListItem {
                 date: "2026-11-06".into(),
@@ -424,8 +429,8 @@ fn roundtrip_all_runtime_to_host() {
     let all = all_runtime_to_host();
     assert_eq!(
         all.len(),
-        34,
-        "D11 §4 RT→宿主 21 类型 + D15 追加 6 类型 + checkpoint.restored + 双向 ping/pong + 2026-11-11 interrupted/renamed + D20 clarify.request/状态样本"
+        35,
+        "D11 §4 RT→宿主 21 类型 + D15 追加 6 类型 + checkpoint.restored + 双向 ping/pong + 2026-11-11 interrupted/renamed + D20 clarify.request/状态样本 + D23 memory.forget.result"
     );
     for msg in &all {
         roundtrip(msg);
@@ -854,17 +859,25 @@ fn golden_d15_memory_and_report_messages() {
                 hook: "记住.*远端".into(),
                 scope: None,
                 workspace_name: None,
+                // D23/M3：携带=公共层条目（删除走 memory.forget）
+                global_type: Some("画像".into()),
             }],
         },
         json!({
             "type":"memory.list.result",
             "items":[{"name":"gitee-remote","title":"Gitee 远端","type":"knowledge",
-                      "updated_at":1790000000000u64,"hook":"记住.*远端"}]
+                      "updated_at":1790000000000u64,"hook":"记住.*远端","globalType":"画像"}]
         }),
     );
     golden(
         &RuntimeToHost::MemoryDeleteResult { ok: true },
         json!({"type":"memory.delete.result","ok":true}),
+    );
+    golden(
+        &RuntimeToHost::MemoryForgetResult {
+            removed: vec!["用户叫小红".into()],
+        },
+        json!({"type":"memory.forget.result","removed":["用户叫小红"]}),
     );
     golden(
         &RuntimeToHost::ReportListResult {

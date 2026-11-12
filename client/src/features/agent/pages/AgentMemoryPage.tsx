@@ -39,6 +39,7 @@ export function AgentMemoryPage() {
   const loading = useAgentStore((s) => s.memoriesLoading);
   const error = useAgentStore((s) => s.memoriesError);
   const deleteMemory = useAgentStore((s) => s.deleteMemory);
+  const forgetMemory = useAgentStore((s) => s.forgetMemory);
   const sessions = useAgentStore((s) => s.sessions);
   // D19 作用域视图（用户记忆 / 项目记忆+项目选择）
   const memoryScope = useAgentStore((s) => s.memoryScope);
@@ -83,11 +84,13 @@ export function AgentMemoryPage() {
     <div className="agent-mem-list">
       {filtered.map((m) => {
         const source = sessions.find((s) => s.id === m.sessionId);
+        // D23：globalType 携带=公共层 USER.md 条目——chip 用十类标签、撤销走 forget
+        const isGlobal = Boolean(m.globalType);
         return (
           <div key={`${m.scope ?? 'user'}-${m.workspaceName ?? ''}-${m.name}`} className="agent-mem-item" data-memory-name={m.name}>
             <div className="agent-mem-item__main">
               <div className="agent-mem-item__title-row">
-                <span className={`agent-mem-chip agent-mem-chip--${m.type}`}>{MEMORY_TYPE_LABELS[m.type]}</span>
+                <span className={`agent-mem-chip agent-mem-chip--${m.type}`}>{m.globalType ?? MEMORY_TYPE_LABELS[m.type]}</span>
                 {(m.scope ?? 'user') === 'project' ? (
                   <span className="agent-mem-chip agent-mem-chip--projectscope" title={m.workspaceName}>
                     {workspaces.find((w) => (m.workspaceName ?? '').startsWith(`${w.name}-`))?.name ?? m.workspaceName ?? '项目'}
@@ -95,17 +98,21 @@ export function AgentMemoryPage() {
                 ) : null}
                 <span className="agent-mem-item__title">{m.title}</span>
               </div>
-              <div className="agent-mem-item__hook">{m.hook}</div>
+              {m.hook && m.hook !== m.title ? <div className="agent-mem-item__hook">{m.hook}</div> : null}
               <div className="agent-mem-item__meta">
-                更新 {formatDay(m.updatedAt)}
+                {m.updatedAt ? `更新 ${formatDay(m.updatedAt)}` : '公共层（USER.md 压实视图）'}
                 {source ? ` · 来源会话「${source.title}」` : m.sessionId ? ` · ${m.sessionId}` : ''}
               </div>
             </div>
             <Button
               variant="secondary"
               className="agent-mem-item__revoke"
-              onClick={() => void deleteMemory(m.name, memoryScope, memoryWorkspacePath ?? undefined)}
-              title="撤销该记忆（删除后即时生效）"
+              onClick={() =>
+                isGlobal
+                  ? void forgetMemory(m.globalType ?? '', m.title)
+                  : void deleteMemory(m.name, memoryScope, memoryWorkspacePath ?? undefined)
+              }
+              title={isGlobal ? '移除该公共记忆（条目粒度，即时生效）' : '撤销该记忆（删除后即时生效）'}
             >
               <Trash2 size={12} aria-hidden />
               撤销

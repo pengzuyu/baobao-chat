@@ -1043,6 +1043,8 @@ mod tests {
                 updated_at: 0,
             }]),
             token: Mutex::new(None),
+            // D22 L4：Shared.user（换账号重推装配）——测试补齐缺省空身份
+            user: Mutex::new((String::new(), String::new())),
             halted: AtomicBool::new(false),
         });
         (shared, "s1".into())

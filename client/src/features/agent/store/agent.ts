@@ -170,6 +170,8 @@ interface AgentState {
   /** 会话内切换模型（model=直达引用；缺省=档位；回执 modelSwitched 事件驱动 UI） */
   switchModel: (to: 'fast' | 'strong' | 'auto', model?: string) => void;
   deleteMemory: (name: string, scope?: 'user' | 'project', workspacePath?: string) => Promise<void>;
+  /** D23 §3.5：公共层（USER.md）条目撤销（条目粒度；globalType+contains 匹配） */
+  forgetMemory: (memoryType: string, contains: string) => Promise<void>;
   /** D19 切换记忆视图作用域并拉取（记忆页页签；project 需项目路径） */
   loadMemories: (scope?: 'user' | 'project', workspacePath?: string | null) => Promise<void>;
   /** D19 拉取项目登记表 */
@@ -612,6 +614,20 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const effPath = workspacePath ?? get().memoryWorkspacePath;
     set((s) => ({ memories: s.memories.filter((m) => m.name !== name) }));
     await bridge.deleteMemory(name, effScope, effPath ?? undefined).catch(() => undefined);
+  },
+
+  forgetMemory: async (memoryType, contains) => {
+    // D23 §3.5：公共层（USER.md）条目撤销——条目粒度 tombstone；
+    // 乐观移除 + 回执清单兜底刷新（同名多条被一并移除时靠 reload 对齐）
+    set((s) => ({
+      memories: s.memories.filter(
+        (m) => !(m.globalType === memoryType && m.title.includes(contains)),
+      ),
+    }));
+    await bridge
+      .forgetMemory(memoryType, contains)
+      .then(() => get().loadMemories())
+      .catch(() => undefined);
   },
 
   loadMemories: async (scope, workspacePath) => {

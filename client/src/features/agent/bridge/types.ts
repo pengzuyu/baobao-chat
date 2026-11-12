@@ -90,6 +90,8 @@ export interface MemoryEntry {
   scope?: 'user' | 'project';
   /** D19 项目分区名（scope=project 时；目录名-路径短哈希） */
   workspaceName?: string;
+  /** D23 公共层十类标签（画像/偏好/…；携带=该条在 USER.md 压实视图，删除走 forgetMemory） */
+  globalType?: string;
 }
 
 /** D19 项目（agent_workspace 投影；workspace.list/register 数据形状） */
@@ -301,6 +303,8 @@ export interface AgentBridge {
   listMemories(scope?: 'user' | 'project', workspacePath?: string): Promise<MemoryEntry[]>;
   /** 删除知识记忆（D15 §2.4 memory.delete；PAG-11 撤销；D19 作用域参数） */
   deleteMemory(name: string, scope?: 'user' | 'project', workspacePath?: string): Promise<void>;
+  /** 公共层记忆移除（D23 §3.5 memory.forget：条目粒度 tombstone；返回被移除清单） */
+  forgetMemory(memoryType: string, contains: string): Promise<{ removed: string[] }>;
 
   /** D19 项目登记（workspace.register：realpath upsert，同目录重复打开不换身份） */
   registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo>;

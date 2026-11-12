@@ -525,6 +525,16 @@ export class MockAgentBridge implements AgentBridge {
     this.memories = this.memories.filter((m) => !(names.has(m.name) && (scope ? (m.scope ?? 'user') === scope : true)));
   }
 
+  async forgetMemory(memoryType: string, contains: string): Promise<{ removed: string[] }> {
+    // D23 §3.5：公共层条目撤销 mock（globalType 匹配 + 文本包含）
+    await delay(150);
+    const hit = this.memories.filter(
+      (m) => m.globalType === memoryType && m.title.includes(contains),
+    );
+    this.memories = this.memories.filter((m) => !hit.includes(m));
+    return { removed: hit.map((m) => m.title) };
+  }
+
   async registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo> {
     await delay(180);
     const existing = this.workspaces.find((w) => w.path === path);

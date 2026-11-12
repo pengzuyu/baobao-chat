@@ -315,6 +315,10 @@ pub struct MemoryListItem {
     /// D19 项目分区名（scope=project 时携带；目录名-路径短哈希）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_name: Option<String>,
+    /// D23 公共层十类标签（画像/偏好/…；携带=该条在 USER.md 压实视图中，
+    /// 删除走 memory.forget 而非 memory.delete）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_type: Option<String>,
 }
 
 /// report.list 回执条目（D15 §3.3：{date, stats}）
@@ -712,6 +716,17 @@ pub enum HostToRuntime {
         workspace_path: Option<String>,
     },
 
+    /// 公共层记忆移除（D23 §3.5/M3；REQ→memory.forget.result{removed[]}）：
+    /// 条目粒度 tombstone——同类型文本包含 contains 的条目全部移除并回显清单
+    #[serde(rename = "memory.forget", rename_all = "camelCase")]
+    MemoryForget {
+        /// 十类标签（画像/偏好/风格/习惯/禁止/授权/人际/术语/目标/教训）；
+        /// 信封 type 已被 tag 占用，线路名沿用 memoryType（同 MemorySaved）
+        memory_type: String,
+        /// 匹配串
+        contains: String,
+    },
+
     /// 日报列表查询（D15 §3.3；REQ→report.list.result）
     #[serde(rename = "report.list", rename_all = "camelCase")]
     ReportList {
@@ -1073,6 +1088,14 @@ pub enum RuntimeToHost {
     /// memory.delete 回执（D15 §2.4）
     #[serde(rename = "memory.delete.result", rename_all = "camelCase")]
     MemoryDeleteResult { ok: bool },
+
+    /// memory.forget 回执（D23 §3.5/M3：公共层条目移除清单——UI 同步删除）
+    #[serde(rename = "memory.forget.result", rename_all = "camelCase")]
+    MemoryForgetResult {
+        /// 被移除条目文本（0/1/N；同名误伤回显）
+        #[serde(default)]
+        removed: Vec<String>,
+    },
 
     /// report.list 回执（D15 §3.3）
     #[serde(rename = "report.list.result", rename_all = "camelCase")]

@@ -56,6 +56,7 @@ impl RuntimeHandler for TestHandler {
                     hook: "记住.*远端".into(),
                     scope: None,
                     workspace_name: None,
+                    global_type: None,
                 }],
             }),
             HostToRuntime::MemoryDelete { name, .. } => Some(RuntimeToHost::MemoryDeleteResult {

@@ -88,6 +88,8 @@ interface MemoryRow {
   /** D19 作用域（协议 optional） */
   scope?: 'user' | 'project';
   workspaceName?: string;
+  /** D23 公共层十类标签（协议 optional；携带=USER.md 条目） */
+  globalType?: string;
 }
 
 interface ReportRow {
@@ -291,11 +293,17 @@ export class TauriAgentBridge implements AgentBridge {
       sessionId: m.session ?? '',
       scope: m.scope,
       workspaceName: m.workspaceName,
+      globalType: m.globalType,
     }));
   }
 
   async deleteMemory(name: string, scope?: 'user' | 'project', workspacePath?: string): Promise<void> {
     await invoke('memory_delete', { name, scope: scope ?? null, workspacePath: workspacePath ?? null });
+  }
+
+  async forgetMemory(memoryType: string, contains: string): Promise<{ removed: string[] }> {
+    // D23 §3.5：公共层条目撤销（memory_forget 壳命令 → RT memory.forget REQ）
+    return invoke('memory_forget', { memoryType, contains });
   }
 
   async registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo> {

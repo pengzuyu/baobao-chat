@@ -301,8 +301,19 @@ impl MemoryEngine {
     /// 打开（或初始化）引擎；启动链：D23 一次性迁移（幂等）→ 重建项目分区索引
     /// → 公共层 reconcile（确定性重建视图；崩溃恢复：索引/视图可重建故非权威）。
     pub fn open(data_dir: &Path, clock: Arc<dyn Clock>) -> io::Result<Self> {
+        Self::open_root(data_dir, None, clock)
+    }
+
+    /// D23/M3：`BBW_MEMORY_ROOT` 覆盖入口——记忆根（global/projects/archive）
+    /// 可整体指到别处（联调隔离：防 :8090 测试期 agent 脏记忆污染日常
+    /// USER.md）；活动 journal/日报仍在 dataDir（被动轨与记忆存储无关）。
+    pub fn open_root(
+        data_dir: &Path,
+        memory_root: Option<PathBuf>,
+        clock: Arc<dyn Clock>,
+    ) -> io::Result<Self> {
         let base = data_dir.join("agent");
-        let memory_root = base.join("memory");
+        let memory_root = memory_root.unwrap_or_else(|| base.join("memory"));
         let global = GlobalStore::new(memory_root.join("global"), Arc::clone(&clock))?;
         let knowledge = KnowledgeStore::new(&memory_root, Arc::clone(&clock))?;
         let journal = Journal::new(base.join("journal"))?;

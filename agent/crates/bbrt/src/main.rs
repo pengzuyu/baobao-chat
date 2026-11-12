@@ -100,8 +100,14 @@ fn run() -> Result<(), String> {
         }
     }
     let memory = Arc::new(
-        MemoryEngine::open(&data_dir, Arc::new(bbrt_memory::SystemClock))
-            .map_err(|e| format!("记忆引擎打开失败: {e}"))?,
+        // D23/M3：BBW_MEMORY_ROOT 覆盖记忆根（联调隔离——测试期 agent 脏记忆
+        // 不污染日常 USER.md；与 BBW_RT_DEFAULT_WORKSPACE 同族 env 模式）
+        MemoryEngine::open_root(
+            &data_dir,
+            std::env::var_os("BBW_MEMORY_ROOT").map(PathBuf::from),
+            Arc::new(bbrt_memory::SystemClock),
+        )
+        .map_err(|e| format!("记忆引擎打开失败: {e}"))?,
     );
     // 启动回补漏日日报（D15 §3.2 触发 2；产物经 report.daily 事件补报宿主）
     let backfilled = memory.startup_backfill().unwrap_or_default();
@@ -613,6 +619,7 @@ fn dispatch(
                         hook: e.hook,
                         scope: scope_tag,
                         workspace_name: ws_name.clone(),
+                        global_type: None,
                     })
                     .collect::<Vec<_>>()
             };
@@ -640,7 +647,26 @@ fn dispatch(
                         })
                         .collect(),
                 },
-                _ => mem_items(memory.list_scoped(None), None, None),
+                _ => {
+                    // D23：缺省/User 作用域=公共层 USER.md 压实视图条目——
+                    // 直读 replay（带十类标签），删除走 memory.forget
+                    memory
+                        .global()
+                        .replay()
+                        .into_iter()
+                        .map(|e| bbrt_protocol::MemoryListItem {
+                            // name=title=条目全文（forget 的 contains 精确键）
+                            name: e.text.clone(),
+                            title: e.text.clone(),
+                            memory_type: "user".into(),
+                            updated_at: 0, // 视图无元数据（D23 拍板 #6）
+                            hook: String::new(),
+                            scope: None,
+                            workspace_name: None,
+                            global_type: Some(e.gtype.label().to_string()),
+                        })
+                        .collect()
+                }
             };
             Some(RuntimeToHost::MemoryListResult { items })
         }
@@ -661,6 +687,19 @@ fn dispatch(
                 )
                 .unwrap_or(false),
         }),
+        // D23 §3.5/M3：公共层条目移除（记忆页撤销按钮；条目粒度 tombstone）
+        HostToRuntime::MemoryForget {
+            memory_type,
+            contains,
+        } => {
+            let removed = match bbrt_memory::GlobalType::parse(&memory_type) {
+                Some(gtype) => memory
+                    .forget_global(gtype, &contains, "host-ui")
+                    .unwrap_or_default(),
+                None => vec![],
+            };
+            Some(RuntimeToHost::MemoryForgetResult { removed })
+        }
         // ── D19 项目/日常双区 ──
         HostToRuntime::WorkspaceRegister { path, name } => {
             // realpath 归一 upsert（同目录重复打开不换身份）；登记后取全行回执

@@ -177,6 +177,17 @@ pub fn memory_delete(
     Ok(json!({ "ok": true }))
 }
 
+/// 公共层记忆移除（D23 §3.5/M3：USER.md 条目撤销——条目粒度 tombstone，
+/// 返回被移除清单；项目知识条目仍走 memory_delete）
+#[tauri::command]
+pub fn memory_forget(host: Host, memory_type: String, contains: String) -> Result<Value, String> {
+    let result = host.request(
+        "memory.forget",
+        json!({ "memoryType": memory_type, "contains": contains }),
+    )?;
+    Ok(json!({ "removed": result["removed"].clone() }))
+}
+
 /// D19 项目登记（workspace.register → workspace.registered；realpath upsert）
 #[tauri::command]
 pub fn workspace_register(host: Host, path: String, name: Option<String>) -> Result<Value, String> {

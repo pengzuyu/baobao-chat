@@ -107,6 +107,7 @@ pub fn run() {
             agent_commands::agent_runs_list,
             agent_commands::memory_list,
             agent_commands::memory_delete,
+            agent_commands::memory_forget,
             agent_commands::report_list,
             agent_commands::report_get,
             agent_commands::auth_set_token,
