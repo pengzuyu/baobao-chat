@@ -9,7 +9,7 @@
 import { useEffect, useState } from 'react';
 import { Select } from 'antd';
 import { PlugZap, Plus, Search, Trash2, Zap } from 'lucide-react';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import {
   createMyProvider,
@@ -99,7 +99,7 @@ function DefaultModelCard() {
       await patchAIDefault(mode === 'org' ? { mode: 'org' } : { mode: 'provider', providerId: provId, model });
       setSaved(true);
     } catch (err) {
-      setError(err instanceof ApiError ? getErrorText(err.code) : '保存失败');
+      setError(errText(err, '保存失败'));
     } finally {
       setSaving(false);
     }
@@ -230,7 +230,7 @@ function MyProvidersCard() {
       }
     } catch (err) {
       setConnResult(null);
-      setError(err instanceof ApiError ? getErrorText(err.code) : '连接失败');
+      setError(errText(err, '连接失败'));
     } finally {
       setProbing(false);
     }
@@ -255,7 +255,7 @@ function MyProvidersCard() {
       setConnResult(null);
       await reload();
     } catch (err) {
-      setError(err instanceof ApiError ? getErrorText(err.code) : '添加失败');
+      setError(errText(err, '添加失败'));
     } finally {
       setSaving(false);
     }
@@ -267,7 +267,7 @@ function MyProvidersCard() {
       await deleteMyProvider(id);
       await reload();
     } catch (err) {
-      setError(err instanceof ApiError ? getErrorText(err.code) : '删除失败');
+      setError(errText(err, '删除失败'));
     }
   };
 

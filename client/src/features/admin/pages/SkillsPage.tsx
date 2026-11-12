@@ -6,7 +6,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Plus, Sparkles, Upload } from 'lucide-react';
-import { ApiError, getErrorText, http } from '../../../shared/api/http';
+import { http, errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 
 interface SkillRow {
@@ -45,7 +45,7 @@ export function SkillsPage() {
       .then((d) => setSkills(d.items ?? []))
       .catch((e) => {
         setSkills([]);
-        setError(e instanceof ApiError ? getErrorText(e.code) : '加载失败');
+        setError(errText(e, '加载失败'));
       });
   }, []);
   useEffect(reload, [reload]);
@@ -65,7 +65,7 @@ export function SkillsPage() {
         setVersion('1.0.0');
         reload();
       })
-      .catch((e) => setError(e instanceof ApiError ? getErrorText(e.code) : '发布失败'))
+      .catch((e) => setError(errText(e, '发布失败')))
       .finally(() => setBusy(false));
   };
 
@@ -79,7 +79,7 @@ export function SkillsPage() {
         setEditVer('');
         reload();
       })
-      .catch((e) => setError(e instanceof ApiError ? getErrorText(e.code) : '更新失败'))
+      .catch((e) => setError(errText(e, '更新失败')))
       .finally(() => setBusy(false));
   };
 
@@ -89,7 +89,7 @@ export function SkillsPage() {
     void http
       .post(`/admin/eco/skills/${encodeURIComponent(s.id)}/delist`, {})
       .then(reload)
-      .catch((e) => setError(e instanceof ApiError ? getErrorText(e.code) : '下架失败'))
+      .catch((e) => setError(errText(e, '下架失败')))
       .finally(() => setBusy(false));
   };
 

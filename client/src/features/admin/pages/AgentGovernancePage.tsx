@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Power, ShieldOff } from 'lucide-react';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { errText } from '../../../shared/api/http';
 import { agentKillswitch, fetchAgentUsers, revokeAgentAccess, type AgentUserRow } from '../api/admin';
 
 export function AgentGovernancePage() {
@@ -38,7 +38,7 @@ export function AgentGovernancePage() {
       await revokeAgentAccess(r.user_id);
       await reload();
     } catch (e) {
-      setError(e instanceof ApiError ? getErrorText(e.code) : '撤销失败');
+      setError(errText(e, '撤销失败'));
     } finally {
       setBusy(null);
     }
@@ -52,7 +52,7 @@ export function AgentGovernancePage() {
     try {
       setKill(await agentKillswitch(next));
     } catch (e) {
-      setError(e instanceof ApiError ? getErrorText(e.code) : '操作失败');
+      setError(errText(e, '操作失败'));
     } finally {
       setBusy(null);
     }

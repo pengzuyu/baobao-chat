@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Bot, Plus, ShieldAlert, Trash2 } from 'lucide-react';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { ApiError, errText as apiErrText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonBlock, SkeletonList } from '../../../shared/ui/Skeleton';
 import { StateView, type ViewStateOrOk } from '../../../shared/ui/StateView';
@@ -77,7 +77,7 @@ function AgentPolicyPanel() {
     setErrText('');
     void p
       .then(() => qc.invalidateQueries({ queryKey: ['admin', 'policy', 'agent'] }))
-      .catch((e) => setErrText(e instanceof ApiError ? getErrorText(e.code) : '操作失败'))
+      .catch((e) => setErrText(apiErrText(e, '操作失败')))
       .finally(() => setBusy(null));
   };
 
@@ -229,7 +229,7 @@ function WordsPanel() {
       { word: w, category: category.trim() || undefined },
       {
         onSuccess: () => setWord(''),
-        onError: (err) => setFormError(err instanceof ApiError ? getErrorText(err.code) : '新增失败'),
+        onError: (err) => setFormError(apiErrText(err, '新增失败')),
       },
     );
   };

@@ -19,7 +19,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { ApiError, getErrorText , errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import {
   attachDeptMember,
@@ -258,7 +258,7 @@ function CreateUserModal({
       setEmail('');
       setRoleId('0');
     } catch (e) {
-      setErr(e instanceof ApiError ? getErrorText(e.code) || e.message : '创建失败，请稍后重试');
+      setErr(errText(e, '创建失败，请稍后重试'));
     } finally {
       setSubmitting(false);
     }
@@ -402,7 +402,7 @@ export function OrgDirectoryPage() {
       await createDept(parentId, deptName);
       await reloadTree();
     } catch (e) {
-      setActionError(e instanceof ApiError ? getErrorText(e.code) : '部门创建失败');
+      setActionError(errText(e, '部门创建失败'));
     }
   };
 
@@ -411,7 +411,7 @@ export function OrgDirectoryPage() {
       await renameDept(id, newName);
       await reloadTree();
     } catch (e) {
-      setActionError(e instanceof ApiError ? getErrorText(e.code) : '改名失败');
+      setActionError(errText(e, '改名失败'));
     }
   };
 
@@ -421,7 +421,7 @@ export function OrgDirectoryPage() {
       if (selected === id) setSelected(null);
       await reloadTree();
     } catch (e) {
-      setActionError(e instanceof ApiError ? getErrorText(e.code) : '删除失败（有子部门或挂人）');
+      setActionError(errText(e, '删除失败（有子部门或挂人）'));
     }
   };
 
@@ -448,7 +448,7 @@ export function OrgDirectoryPage() {
           setActionOk(vars.action === 'disable' ? `已禁用 ${uname}：全端下线并吊销刷新令牌（已记审计）` : `已启用 ${uname}（已记审计）`);
           if (selected) void reloadMembers(selected);
         },
-        onError: (err) => setActionError(err instanceof ApiError ? getErrorText(err.code) : '操作失败，请稍后再试'),
+        onError: (err) => setActionError(errText(err, '操作失败，请稍后再试')),
       },
     );
   };
@@ -463,7 +463,7 @@ export function OrgDirectoryPage() {
       void query.refetch();
       if (selected) void reloadMembers(selected);
     } catch (e) {
-      setActionError(e instanceof ApiError ? getErrorText(e.code) : '操作失败，请稍后重试');
+      setActionError(errText(e, '操作失败，请稍后重试'));
     }
   };
 
@@ -475,7 +475,7 @@ export function OrgDirectoryPage() {
       setAttachUid('');
       await reloadMembers(selected);
     } catch (e) {
-      setActionError(e instanceof ApiError ? getErrorText(e.code) : '挂靠失败（用户不存在？）');
+      setActionError(errText(e, '挂靠失败（用户不存在？）'));
     }
   };
 

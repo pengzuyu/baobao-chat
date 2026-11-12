@@ -22,6 +22,12 @@ export class ApiError extends Error {
   readonly details?: Record<string, unknown>;
   /** 429 / 1007 场景的重试等待秒数 */
   readonly retryAfterSec?: number;
+  /**
+   * 认领旗标（2026-11-12 全局兜底机制）：调用方自己展示了错误（errText/内联错误条）
+   * 或有意静默（后台预取）时置真——未认领的错由全局 notifier 兜底 toast，
+   * 从此「catch 静默吞掉」不再等于「用户看不见」。
+   */
+  claimed = false;
 
   constructor(code: number, message: string, options?: { traceId?: string; details?: Record<string, unknown>; retryAfterSec?: number }) {
     super(message);
@@ -31,6 +37,37 @@ export class ApiError extends Error {
     this.details = options?.details;
     this.retryAfterSec = options?.retryAfterSec;
   }
+
+  /** 认领（自展示/有意静默）——认领后不再触发全局兜底提示 */
+  claim(): ApiError {
+    this.claimed = true;
+    return this;
+  }
+}
+
+/** 全局兜底 notifier（main.tsx 装配=antd message；测试/特殊宿主可置空） */
+let apiErrorNotifier: ((e: ApiError) => void) | null = null;
+export function setApiErrorNotifier(fn: ((e: ApiError) => void) | null): void {
+  apiErrorNotifier = fn;
+}
+
+/** 抛出即调度兜底：一个宏任务内未被认领 → 全局 toast（同步 catch 有机会先认领） */
+function scheduleFallback(err: ApiError): ApiError {
+  if (apiErrorNotifier) {
+    setTimeout(() => {
+      if (!err.claimed) apiErrorNotifier?.(err);
+    }, 0);
+  }
+  return err;
+}
+
+/** 取错误文案并认领（自展示场景统一入口：认领+服务端 message 优先+码表回退） */
+export function errText(e: unknown, fallback = '操作失败，请稍后重试'): string {
+  if (e instanceof ApiError) {
+    e.claim();
+    return e.message || getErrorText(e.code);
+  }
+  return fallback;
 }
 
 /** 错误码→中文文案（14 篇 §7 主流码；未登记者回退通用文案） */
@@ -142,24 +179,31 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (body !== undefined) headers.set('Content-Type', 'application/json');
   if (idempotencyKey) headers.set('Idempotency-Key', idempotencyKey);
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    // 主动取消（组件卸载/query 失效）透传不提示；断网/CORS 等网络层失败统一 9004 兜底
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
+  }
 
   // 429 限流：读取 Retry-After（14 篇 §5.1）
   if (res.status === 429) {
     const retryAfter = Number(res.headers.get('Retry-After') ?? '0') || undefined;
-    throw new ApiError(9003, getErrorText(9003), { retryAfterSec: retryAfter });
+    throw scheduleFallback(new ApiError(9003, getErrorText(9003), { retryAfterSec: retryAfter }));
   }
 
   let envelope: ApiEnvelope<T>;
   try {
     envelope = (await res.json()) as ApiEnvelope<T>;
   } catch {
-    throw new ApiError(9004, getErrorText(9004));
+    throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
   }
 
   if (envelope.code !== 0) {
@@ -169,9 +213,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       traceId: envelope.trace_id,
       details: envelope.details,
     });
-    // token 过期/吊销：交给 auth 层（静默刷新失败则登出）
-    if (envelope.code === 1003 || envelope.code === 1004) unauthorizedHandler?.(err);
-    throw err;
+    // token 过期/吊销：交给 auth 层（静默刷新失败则登出）——该两类已被登出流接管，认领防双显
+    if (envelope.code === 1003 || envelope.code === 1004) {
+      err.claim();
+      unauthorizedHandler?.(err);
+    }
+    throw scheduleFallback(err);
   }
   return envelope.data;
 }

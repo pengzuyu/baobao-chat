@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Fragment } from 'react';
 import { Package, Plus, Upload } from 'lucide-react';
-import { ApiError, getErrorText, http } from '../../../shared/api/http';
+import { http, errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 
 interface AdminApp {
@@ -78,7 +78,7 @@ export function EcoAppsPage() {
         whitelist: wl,
       })
       .then(() => setRolloutFor(null))
-      .catch((e) => setError(e instanceof ApiError ? getErrorText(e.code) : '灰度设置失败'))
+      .catch((e) => setError(errText(e, '灰度设置失败')))
       .finally(() => setBusy(false));
   };
 
@@ -89,7 +89,7 @@ export function EcoAppsPage() {
       .then((d) => setApps(d.items ?? []))
       .catch((e) => {
         setApps([]);
-        setError(e instanceof ApiError ? getErrorText(e.code) : '加载失败');
+        setError(errText(e, '加载失败'));
       });
   }, []);
   useEffect(reload, [reload]);
@@ -107,7 +107,7 @@ export function EcoAppsPage() {
         setVersion('1.0.0');
         reload();
       })
-      .catch((e) => setError(e instanceof ApiError ? getErrorText(e.code) : '登记失败'))
+      .catch((e) => setError(errText(e, '登记失败')))
       .finally(() => setBusy(false));
   };
 
@@ -134,7 +134,7 @@ export function EcoAppsPage() {
         openVersions(id);
         reload();
       })
-      .catch((e) => setError(e instanceof ApiError ? getErrorText(e.code) : '版本追加失败'))
+      .catch((e) => setError(errText(e, '版本追加失败')))
       .finally(() => setBusy(false));
   };
 
@@ -144,7 +144,7 @@ export function EcoAppsPage() {
     void http
       .post(`/admin/eco/apps/${encodeURIComponent(id)}/versions/${encodeURIComponent(vid)}/publish`, {})
       .then(reload)
-      .catch((e) => setError(e instanceof ApiError ? getErrorText(e.code) : '发布失败'))
+      .catch((e) => setError(errText(e, '发布失败')))
       .finally(() => setBusy(false));
   };
 
@@ -154,7 +154,7 @@ export function EcoAppsPage() {
     void http
       .post(`/admin/eco/apps/${encodeURIComponent(id)}/delist`, {})
       .then(reload)
-      .catch((e) => setError(e instanceof ApiError ? getErrorText(e.code) : '下架失败'))
+      .catch((e) => setError(errText(e, '下架失败')))
       .finally(() => setBusy(false));
   };
 

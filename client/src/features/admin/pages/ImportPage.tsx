@@ -8,7 +8,7 @@
 import { useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { ArrowRight, FileUp } from 'lucide-react';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { errText } from '../../../shared/api/http';
 import { batchImportUsers, type ImportInputRow, type ImportResult } from '../api/admin';
 
 type Step = 'paste' | 'result';
@@ -93,7 +93,7 @@ export function ImportPage() {
       setResult(await batchImportUsers(parsed.rows));
       setStep('result');
     } catch (e) {
-      setError(e instanceof ApiError ? getErrorText(e.code) : '导入失败');
+      setError(errText(e, '导入失败'));
     } finally {
       setBusy(false);
     }

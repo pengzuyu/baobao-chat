@@ -5,7 +5,7 @@
  * - 组内行复用 ToolCard（自带运行中展开/落定折叠）
  */
 
-import { memo,  useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { ChevronDown, Wrench } from 'lucide-react';
 import type { StreamItem } from '../store/agent';
 import { ToolCard } from './ToolCard';

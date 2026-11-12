@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Input } from 'antd';
 import { Search } from 'lucide-react';
+import { ApiError } from '../../../shared/api/http';
 import { apiSearchUsers, type UserCard } from '../api/auth';
 
 const PAGE_SIZE = 20;
@@ -50,8 +51,9 @@ export function UserPicker({
       setItems(page.items);
       setCursor(page.next_cursor);
       setActiveIdx(page.items.length > 0 ? 0 : -1);
-    } catch {
+    } catch (e) {
       if (seq !== seqRef.current) return;
+      e instanceof ApiError && e.claim(); // 下拉内 loadError 自展示——认领防双显
       setItems([]);
       setCursor('');
       setActiveIdx(-1);

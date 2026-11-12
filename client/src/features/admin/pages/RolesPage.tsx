@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Plus, ShieldCheck, Trash2, X } from 'lucide-react';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { errText } from '../../../shared/api/http';
 import {
   createRole,
   deleteRole,
@@ -82,7 +82,7 @@ export function RolesPage() {
       setEditor(null);
       await reload();
     } catch (e) {
-      setError(e instanceof ApiError ? getErrorText(e.code) : '保存失败');
+      setError(errText(e, '保存失败'));
     } finally {
       setBusy(false);
     }
@@ -95,7 +95,7 @@ export function RolesPage() {
       await deleteRole(r.id);
       await reload();
     } catch (e) {
-      setError(e instanceof ApiError ? getErrorText(e.code) : '删除失败');
+      setError(errText(e, '删除失败'));
     }
   };
 
@@ -106,7 +106,7 @@ export function RolesPage() {
     try {
       setGrants(await fetchUserGrants(uid));
     } catch (e) {
-      setError(e instanceof ApiError ? getErrorText(e.code) : '查询失败');
+      setError(errText(e, '查询失败'));
     }
   };
 
@@ -117,7 +117,7 @@ export function RolesPage() {
       setGrants(await fetchUserGrants(grantUid.trim()));
       await reload();
     } catch (e) {
-      setError(e instanceof ApiError ? getErrorText(e.code) : '授权失败');
+      setError(errText(e, '授权失败'));
     }
   };
 
@@ -128,7 +128,7 @@ export function RolesPage() {
       setGrants(await fetchUserGrants(grantUid.trim()));
       await reload();
     } catch (e) {
-      setError(e instanceof ApiError ? getErrorText(e.code) : '收回失败');
+      setError(errText(e, '收回失败'));
     }
   };
 

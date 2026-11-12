@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Megaphone } from 'lucide-react';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { errText } from '../../../shared/api/http';
 import { fetchNotices, publishNotice, type AdminNotice } from '../api/admin';
 
 export function NoticesPage() {
@@ -41,7 +41,7 @@ export function NoticesPage() {
       setOk(true);
       await reload();
     } catch (e) {
-      setError(e instanceof ApiError ? getErrorText(e.code) : '发布失败');
+      setError(errText(e, '发布失败'));
     } finally {
       setBusy(false);
     }

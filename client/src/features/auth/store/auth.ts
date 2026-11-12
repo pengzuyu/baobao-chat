@@ -89,6 +89,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       set(applyLogin(result));
       scheduleSilentRefresh(() => useAuthStore.getState()); // 静默刷新骨架
     } catch (err) {
+      err instanceof ApiError && err.claim(); // 表单自展示——认领防全局兜底双显
       const apiError = err instanceof ApiError ? err : new ApiError(9004, '登录失败，请稍后重试');
       // 1007：错误锁定，展示倒计时（retry_after 秒）
       if (apiError.code === 1007 && apiError.retryAfterSec) {

@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Building2, ShieldCheck, User, X } from 'lucide-react';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { ApiError, errText as apiErrText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
 import { addSpaceGrant, fetchSpaceGrants, removeSpaceGrant, type KbGrantRow } from '../api/kb';
@@ -37,7 +37,7 @@ export function GrantModal(props: { spaceId: string; spaceName: string; onClose:
       .catch((e) => {
         setRows([]);
         if (e instanceof ApiError && e.code === 7002) setForbidden(true);
-        else setErrText(e instanceof ApiError ? getErrorText(e.code) : '加载失败');
+        else setErrText(apiErrText(e, '加载失败'));
       });
   }, [props.spaceId]);
 
@@ -61,7 +61,7 @@ export function GrantModal(props: { spaceId: string; spaceName: string; onClose:
         setTarget('');
         reload();
       })
-      .catch((e) => setErrText(e instanceof ApiError ? getErrorText(e.code) : '添加失败'))
+      .catch((e) => setErrText(apiErrText(e, '添加失败')))
       .finally(() => setBusy(false));
   };
 

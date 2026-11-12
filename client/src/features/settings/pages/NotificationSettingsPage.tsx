@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Select, Switch } from 'antd';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { ApiError, getErrorText , errText } from '../../../shared/api/http';
 import { fetchNotifyPref, patchNotifyPref, type NotifyPref } from '../api/notifyPref';
 
 const DEFAULT_PREF: NotifyPref = { msg_notify: true, mention_notify: true, dnd_range: 'off' };
@@ -36,7 +36,7 @@ export function NotificationSettingsPage() {
       })
       .catch((e) => {
         setLocal(prev);
-        setError(e instanceof ApiError ? getErrorText(e.code) : '保存失败');
+        setError(errText(e, '保存失败'));
       });
   };
 
