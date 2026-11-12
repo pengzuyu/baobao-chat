@@ -240,24 +240,46 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
 
   # ===========================================================================
-  # update-src：客户端更新静态源（manifest + 安装包，16 篇 §5.1；nginx-alpine 基）
-  # 数据由制品库/rsync 同步至 updates-data 卷（TODO：与 CI 发布流水线对接）
+  # update-src：客户端更新静态源（16 篇 §5.1 → D21 落地；nginx-alpine 基）
+  # bind 卷 volumes/updates/（rsync 直写，publish.sh 发布）：
+  #   latest.json（Tauri updater 标准清单）/ release-info.json（官网数据源）/
+  #   releases/v<ver>/…（按版本不可变布局：安装包 + .sig）
+  # 正式 bbw-update-src 镜像（灰度/ed25519 签名清单）后续经 BBW_UPDATE_SRC_IMAGE 替换
   # ===========================================================================
   update-src:
-    # 客户端更新静态源（16 篇 §5.1）：v0.1 以 nginx 官方镜像占位（serve 配置内联的
-    # 占位 manifest）；正式 bbw-update-src 镜像（rsync/CI 对接 + ed25519 签名清单）
-    # 随发布流水线落地后经 BBW_UPDATE_SRC_IMAGE 替换
     image: ${BBW_UPDATE_SRC_IMAGE:-nginx:1.27.4-alpine3.21}
     profiles: [core, deps]
     restart: unless-stopped
+    logging: *default-logging
     volumes:
-      - updates-data:/srv/updates
+      - ./volumes/updates:/srv/updates:ro
     configs:
-      # 占位 manifest：保证健康探测可过；正式清单由发布流水线以 ed25519 签名写入
-      - source: updates-manifest
-        target: /usr/share/nginx/html/update-manifest.json
+      # 健康探测（/update-ok）与发布物解耦；清单 no-store / 安装包长缓存
+      - source: updates-src-conf
+        target: /etc/nginx/conf.d/default.conf
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/update-manifest.json"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/update-ok"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # website：官网静态站（D21）——nginx-alpine serve volumes/website/（rsync 发布）
+  # 未发布时根路径回占位提示（try_files 回落），健康探测不依赖发布物
+  # ===========================================================================
+  website:
+    image: nginx:1.27.4-alpine3.21
+    profiles: [core]
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - ./volumes/website:/usr/share/nginx/html:ro
+    configs:
+      - source: website-conf
+        target: /etc/nginx/conf.d/default.conf
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/website-ok"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -375,7 +397,6 @@ volumes:
   bbw-data:           # app 文件域本地盘（BBW_DATA_DIR=/data；对象存储阶段二替换）
   redis-data:
   minio-data:         # 对象存储（单节点 2TB 档，§3.3）
-  updates-data:       # 客户端更新静态文件
   prometheus-data:
   grafana-data:
   mail-data:
@@ -409,13 +430,68 @@ configs:
           keepalive 64;
         }
         upstream bbw_update { server update-src:80; }
+        upstream bbw_website { server website:80; }
 
+        # —— 80 主入口（D21 v0.1 统一 http）：内网明文全路由——
+        #    官网/更新源明文可接受（静态内容 + 安装包 minisign 签名保完整性）；
+        #    API/WS 同时挂 443（下方），未来切 https 客户端零改动。
         server {
           listen 80;
           server_name _;
           # 健康检查端点（容器 healthcheck / SLB 探测专用，不记日志）
           location = /healthz { access_log off; return 200 "ok\n"; }
-          location / { return 301 https://$$host$$request_uri; }
+
+          # REST API
+          location /api/ {
+            proxy_pass http://bbw_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Real-IP $$remote_addr;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_read_timeout 60s;
+          }
+
+          # WS 长连接（/ws/connect）
+          location /ws/ {
+            proxy_pass http://bbw_app;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $$http_upgrade;
+            proxy_set_header Connection $$connection_upgrade;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+          }
+
+          # AI 网关 OpenAI 兼容端点（/v1/chat/completions、/v1/embeddings；bbrt 生产链路）
+          # SSE 流式：关缓冲，长读超时对齐 bbrt 60s 套接字超时留余量
+          location /v1/ {
+            proxy_pass http://bbw_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_buffering off;
+            proxy_read_timeout 300s;
+          }
+
+          # MCP 网关（bbrt corp MCP：POST /mcp/corp）
+          location /mcp/ {
+            proxy_pass http://bbw_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+          }
+
+          # 客户端更新源（latest.json / release-info.json / releases/）
+          location /update/ {
+            proxy_pass http://bbw_update/;
+          }
+
+          # 官网（静态）
+          location / {
+            proxy_pass http://bbw_website;
+            proxy_set_header Host $$host;
+          }
         }
 
         server {
@@ -455,6 +531,30 @@ configs:
           # 客户端更新源（manifest + 安装包，16 篇 §5.1）
           location /update/ {
             proxy_pass http://bbw_update/;
+          }
+
+          # AI 网关 OpenAI 兼容端点（bbrt 生产链路，D21；SSE 关缓冲）
+          location /v1/ {
+            proxy_pass http://bbw_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_buffering off;
+            proxy_read_timeout 300s;
+          }
+
+          # MCP 网关（bbrt corp MCP，D21）
+          location /mcp/ {
+            proxy_pass http://bbw_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+          }
+
+          # 官网（静态，D21）
+          location / {
+            proxy_pass http://bbw_website;
+            proxy_set_header Host $$host;
           }
         }
 
@@ -513,16 +613,45 @@ configs:
             # TODO: 后端追踪存储（Tempo/Jaeger）接入后替换 debug
             exporters: [debug]
 
-  updates-manifest:
+  updates-src-conf:
     content: |
-      {
-        "v": 1,
-        "channel": "stable",
-        "platforms": {},
-        "agent_runtime": {},
-        "rollout": { "percentage": 0 },
-        "force": { "min_version": "0.0.0", "deadline": "2099-01-01" },
-        "notes_url": "",
-        "signed_at": "",
-        "sig": {}
+      # update-src：更新静态源（D21）——清单 no-store / 安装包按版本不可变长缓存
+      server {
+        listen 80;
+        location = /update-ok { access_log off; return 200 "ok\n"; }
+        location = /latest.json {
+          root /srv/updates;
+          add_header Cache-Control "no-store";
+        }
+        location = /release-info.json {
+          root /srv/updates;
+          add_header Cache-Control "no-store";
+        }
+        location /releases/ {
+          root /srv/updates;
+          add_header Cache-Control "public, max-age=31536000, immutable";
+        }
+        location / { return 404; }
+      }
+
+  website-conf:
+    content: |
+      # website：官网静态站（D21）——rsync 发布至 volumes/website/；
+      # 未发布时根路径回落占位提示（发布后正常 serve index.html 与资产）
+      server {
+        listen 80;
+        location = /website-ok { access_log off; return 200 "ok\n"; }
+        location = /index.html {
+          root /usr/share/nginx/html;
+          add_header Cache-Control "no-store";
+        }
+        location / {
+          root /usr/share/nginx/html;
+          index index.html;
+          try_files $$uri $$uri/ @placeholder;
+        }
+        location @placeholder {
+          default_type text/plain;
+          return 200 "BaobaoWork 官网尚未发布：先在构建机执行 scripts/release/publish-website.sh\n";
+        }
       }

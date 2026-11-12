@@ -1,10 +1,11 @@
 {{/*
 Ingress + TLS（16 篇 §3.4：BBW_TLS_* 的 K8s 形态 = TLS Secret + ingress）
-· 主域 api：/ /api /ws → gateway（WSS 长连接）
+· 主域 api：/ /api /ws /v1 /mcp → gateway（WSS 长连接 + aigw/MCP，D21 bbrt 生产链路）
 · 客户端 pinning 企业根 CA（15 篇 §3.1）；叶证书轮换走 §4.7 双证书流程，
   换 Secret 即可，客户端无感。
-· TODO：update-src（§3.2 Deployment×2 + 内网 CDN）未含本 chart——大档通常
-  由内网 CDN 承接 /update/，如需在集群内分发请补 deployment-updatesrc.yaml。
+· TODO：update-src（§3.2 Deployment×2 + 内网 CDN）与官网静态站未含本 chart
+  （D21 官网走 compose 形态 volumes/website）——大档通常由内网 CDN 承接
+  /update/ 与 /，如需集群内分发请补对应 Deployment。
 */}}
 {{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
@@ -15,7 +16,7 @@ metadata:
     {{- include "bbw.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- toYaml . | nindent 8 }}
   {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
@@ -37,6 +38,20 @@ spec:
                 port:
                   name: http-ws
           - path: /api/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "bbw.fullname" . }}-gateway
+                port:
+                  name: http-ws
+          - path: /v1/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "bbw.fullname" . }}-gateway
+                port:
+                  name: http-ws
+          - path: /mcp/
             pathType: Prefix
             backend:
               service:
