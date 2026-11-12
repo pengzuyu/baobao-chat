@@ -296,8 +296,120 @@ export function ContactsPage() {
   const loading = tree.isLoading || usersQuery.isLoading;
   const error = tree.isError || usersQuery.isError;
 
+  /** 右侧详情：用户卡（发消息等操作落位区）/ 部门概览（直接成员+子部门，点击切换选中） */
+  const renderDetail = () => {
+    // 用户详情：头像/姓名/工号/组织链路 + 发消息（后续操作继续加在这）
+    if (selectedId?.startsWith('user-')) {
+      const u = users.find((x) => x.uid === selectedId.slice('user-'.length));
+      if (!u) return <div className="bbw-contacts__hint">用户不存在</div>;
+      return (
+        <div className="bbw-contacts__detail-user" data-testid="contacts-detail-user">
+          <span className="bbw-contacts__avatar bbw-contacts__avatar--xl">{(u.display_name || '?').slice(0, 1)}</span>
+          <div className="bbw-contacts__detail-main">
+            <div className="bbw-contacts__card-name">
+              {u.display_name}
+              <span className="bbw-contacts__card-empno">{u.employee_no}</span>
+              {u.uid === myUid ? <span className="bbw-contacts__badge">我自己</span> : null}
+            </div>
+            <div className="bbw-contacts__card-path">{u.org_path || '未分组'}</div>
+            {u.uid === myUid ? (
+              <span className="bbw-contacts__card-self">这是你自己的账号</span>
+            ) : (
+              <button
+                type="button"
+                className="bbw-contacts__msg-btn bbw-contacts__msg-btn--lg"
+                disabled={dmBusy}
+                onClick={() => void startDm(u)}
+                data-testid="contacts-detail-msg"
+              >
+                <MessageCircle size={14} />
+                发消息
+              </button>
+            )}
+            <div className="bbw-contacts__detail-hint">双击左侧树中用户也可直接发起聊天</div>
+          </div>
+        </div>
+      );
+    }
+
+    // 部门/根/未分组概览
+    let name = '';
+    let pathLabel = '';
+    let members: DirectoryUser[] = [];
+    let subDepts: DeptNode[] = [];
+    let count = 0;
+    let memberSection = '直接成员';
+    if (selectedId === deptDomId('root')) {
+      name = '全公司';
+      members = grouped.ungrouped;
+      subDepts = tree.data ?? [];
+      count = users.length;
+      memberSection = '未分组成员';
+    } else if (selectedId === deptDomId('ungrouped')) {
+      name = '未分组';
+      members = grouped.ungrouped;
+      count = grouped.ungrouped.length;
+    } else if (selectedId) {
+      const id = selectedId.slice('dept-'.length);
+      const node = deptIndex.byId.get(id);
+      if (!node) return <div className="bbw-contacts__hint">部门不存在</div>;
+      name = node.name;
+      pathLabel = node.path;
+      members = grouped.deptUsers.get(id) ?? [];
+      subDepts = deptIndex.childDepts.get(id) ?? [];
+      count = subtreeCount.get(id) ?? 0;
+    } else {
+      return <div className="bbw-contacts__hint">从左侧选择用户或部门查看详情</div>;
+    }
+    return (
+      <div className="bbw-contacts__detail-dept">
+        <div className="bbw-contacts__detail-dept-head">
+          <FolderTree size={18} className="org-node__icon" />
+          <span className="bbw-contacts__detail-dept-name">{name}</span>
+          <span className="bbw-contacts__badge">{count} 人</span>
+        </div>
+        {pathLabel ? <div className="bbw-contacts__card-path">{pathLabel}</div> : null}
+        {members.length > 0 ? (
+          <>
+            <div className="bbw-contacts__dd-section">{memberSection}（{members.length}）</div>
+            {members.map((u) => (
+              <button
+                key={u.uid}
+                type="button"
+                className="bbw-contacts__dd-row"
+                onClick={() => setSelectedId(userDomId(u.uid))}
+                onDoubleClick={() => void startDm(u)}
+              >
+                <span className="bbw-contacts__avatar bbw-contacts__avatar--sm">{(u.display_name || '?').slice(0, 1)}</span>
+                <span className="bbw-contacts__user-name">{u.display_name}</span>
+                <span className="bbw-contacts__user-empno">{u.employee_no}</span>
+              </button>
+            ))}
+          </>
+        ) : null}
+        {subDepts.length > 0 ? (
+          <>
+            <div className="bbw-contacts__dd-section">子部门（{subDepts.length}）</div>
+            {subDepts.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                className="bbw-contacts__dd-row"
+                onClick={() => setSelectedId(deptDomId(d.id))}
+              >
+                <FolderTree size={15} className="org-node__icon" />
+                <span className="bbw-contacts__user-name">{d.name}</span>
+                <span className="bbw-contacts__dd-path">{subtreeCount.get(d.id) ?? 0} 人</span>
+              </button>
+            ))}
+          </>
+        ) : null}
+      </div>
+    );
+  };
+
   return (
-    <div className="bbw-contacts bbw-contacts--tree" data-testid="contacts-page">
+    <div className="bbw-contacts" data-testid="contacts-page">
       <div className="bbw-contacts__head" ref={headRef}>
         <span className="bbw-contacts__title">通讯录</span>
         <div className="bbw-contacts__search">
@@ -349,6 +461,7 @@ export function ContactsPage() {
         </div>
       </div>
 
+      <div className="bbw-contacts__body">
       <div className="bbw-contacts__tree">
         {loading ? (
           <div className="bbw-contacts__hint">加载中…</div>
@@ -395,6 +508,12 @@ export function ContactsPage() {
             ) : null}
           </>
         )}
+      </div>
+
+        {/* 右侧详情栏：用户卡（发消息等操作落位区）/ 部门概览（成员+子部门可点切换） */}
+        <aside className="bbw-contacts__detail" data-testid="contacts-detail">
+          {renderDetail()}
+        </aside>
       </div>
     </div>
   );

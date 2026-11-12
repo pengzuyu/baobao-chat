@@ -8575,11 +8575,66 @@ body {
   white-space: nowrap;
   text-align: right;
 }
-.bbw-contacts__tree {
+.bbw-contacts__body {
   flex: 1;
   min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+.bbw-contacts__tree {
+  width: 320px;
+  flex: none;
+  min-height: 0;
   overflow: auto;
-  padding: 12px 16px 24px;
+  padding: 12px 10px 24px;
+  border-right: 1px solid var(--bbw-gray-3);
+}
+/* 右侧详情栏（用户卡/部门概览；后续操作入口继续落位在这） */
+.bbw-contacts__detail {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 24px 28px;
+}
+.bbw-contacts__detail-user {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.bbw-contacts__detail-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.bbw-contacts__detail-hint {
+  font-size: 12px;
+  color: var(--bbw-gray-5);
+  margin-top: 8px;
+}
+.bbw-contacts__detail-dept {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bbw-contacts__detail-dept-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.bbw-contacts__detail-dept-name {
+  font-weight: 600;
+  font-size: 16px;
+}
+.bbw-contacts__avatar--xl {
+  width: 56px;
+  height: 56px;
+  font-size: 21px;
+}
+.bbw-contacts__msg-btn--lg {
+  font-size: 13px;
+  padding: 6px 16px;
 }
 .bbw-contacts__hint {
   padding: 24px 16px;
