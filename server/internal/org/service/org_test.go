@@ -130,3 +130,45 @@ func TestUserDirectorySearch(t *testing.T) {
 		t.Fatalf("搜索次页应 zhangsan03 到底: %+v n=%q", p2, n2)
 	}
 }
+
+// TestDirectoryUsers 用户面通讯录（登录后）：含 uid + 按部门过滤（任一挂靠命中）+
+// 虚拟「未分组」（未挂任何部门）+ 公开口径无 uid 不回退（UserDirectorySearch 剥 uid）
+func TestDirectoryUsers(t *testing.T) {
+	r := orgrepo.NewMemory()
+	ctx := context.Background()
+	root, _ := r.CreateDept(ctx, 1, 0, "总公司", 0)
+	tech, _ := r.CreateDept(ctx, 1, root.ID, "技术部", 0)
+	zs, _ := r.CreateUser(ctx, orgapi.User{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "zhangsan", DisplayName: "张三", Status: 1})
+	_, _ = r.CreateUser(ctx, orgapi.User{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "lisi", DisplayName: "李四", Status: 1})
+	ww, _ := r.CreateUser(ctx, orgapi.User{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "wangwu", DisplayName: "王五", Status: 1})
+	_ = r.AttachUser(ctx, 1, zs.ID, tech.ID, true)
+	svc := New(r)
+
+	// 全量含 uid：张三/李四/王五（uid 非空且与仓建返回一致格式）
+	all, _, err := svc.DirectoryUsers(ctx, 1, DirectoryFilter{})
+	if err != nil || len(all) != 3 {
+		t.Fatalf("全量应 3 人: %+v err=%v", all, err)
+	}
+	if all[0].EmployeeNo != "lisi" || all[0].UID == "" {
+		t.Fatalf("行应含 uid: %+v", all[0])
+	}
+
+	// 按部门过滤：技术部仅张三
+	dept, _, _ := svc.DirectoryUsers(ctx, 1, DirectoryFilter{DeptID: tech.ID})
+	if len(dept) != 1 || dept[0].EmployeeNo != "zhangsan" {
+		t.Fatalf("技术部应仅张三: %+v", dept)
+	}
+
+	// 未分组（虚拟）：李四+王五；张三已挂部门不出现
+	ung, _, _ := svc.DirectoryUsers(ctx, 1, DirectoryFilter{Ungrouped: true})
+	if len(ung) != 2 || ung[0].EmployeeNo != "lisi" || ung[1].EmployeeNo != "wangwu" {
+		t.Fatalf("未分组应 lisi/wangwu: %+v", ung)
+	}
+
+	// 未分组 + q 叠加：仅王五
+	ungQ, _, _ := svc.DirectoryUsers(ctx, 1, DirectoryFilter{Ungrouped: true, Q: "ww"})
+	if len(ungQ) != 1 || ungQ[0].EmployeeNo != "wangwu" {
+		t.Fatalf("未分组+首字母 ww 应王五: %+v", ungQ)
+	}
+	_ = ww
+}

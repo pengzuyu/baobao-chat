@@ -19,6 +19,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	// 时区内嵌（~450KB）：镜像不带 tzdata 时 TZ=Asia/Shanghai 仍生效（Dockerfile 注）
 	_ "time/tzdata"
@@ -331,6 +332,13 @@ func main() {
 	// 改密（D11：旧密码校验+清首登强制标志）
 	mux.Handle("POST /api/v1/me/password", authed(handleChangePassword(authAPI)))
 	mux.Handle("GET /api/v1/me", authed(handleMe))
+
+	// 用户面通讯录只读（2026-11-12 用户裁决：通讯录全员可见——找人/看谁在用）：
+	// 组织树复用管理端 handler（只读无写径）；检索含 uid（发起单聊/选人器数据源），
+	// 区别于预登录公开 /auth/users 不含 uid 的口径；dept_id/ungrouped 支撑
+	// 按部门浏览与虚拟「未分组」节点（自助注册用户默认落此组）
+	mux.Handle("GET /api/v1/org/tree", authed(handleDeptTree(orgRepo)))
+	mux.Handle("GET /api/v1/org/users", authed(handleOrgDirectoryUsers(orgMod.DirectoryAPI())))
 
 	// 表情包（0022 个人集；公共集治理走 /admin/stickers/*）
 	mux.Handle("GET /api/v1/stickers", authed(handleStickerLibrary(stickerSvc)))
@@ -750,6 +758,10 @@ func main() {
 	}
 	adminMod := admin.NewModule(orgAdmin, orgMod.API(), adminStore, roleStore, noticeStore, adminOpts, toolPolicyStore)
 	adminSvc := adminMod.API()
+	// 自助注册（2026-11-12 用户裁决）：姓名+自设口令 → 工号自动生成（拼音基名+重名
+	// 递增，复用管理端 SuggestEmpno 口径）；不挂部门=虚拟「未分组」（管理员后续调整）；
+	// 注册成功回登录页自行登录（不自动签发——用户拍板）；单租户 v0.1=tenant 1
+	mux.HandleFunc("POST /api/v1/auth/register", handleAuthRegister(orgRepo, adminSvc.SuggestEmpno))
 	// D9 回填：平台总闸双点（auth OBO 签发 + aigw 每请求）
 	agentKillOn = adminSvc.AgentKillOn
 	// 管理路由守卫（RBAC 阶段二）：auth → tenant → per-route 权限点判定。
@@ -1106,6 +1118,84 @@ func handleAuthUserSearch(svc *orgservice.Service) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, map[string]any{"items": items, "next_cursor": next})
+	}
+}
+
+// handleOrgDirectoryUsers 用户面通讯录检索（登录后）：q/dept_id/ungrouped/cursor/limit，
+// 返回含 uid 行（DirectoryUser）；口径同登录页搜人 + 部门/未分组过滤
+func handleOrgDirectoryUsers(svc *orgservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		cursor := r.URL.Query().Get("cursor")
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		deptID, _ := strconv.ParseInt(r.URL.Query().Get("dept_id"), 10, 64)
+		ungrouped := r.URL.Query().Get("ungrouped") == "1"
+		items, next, err := svc.DirectoryUsers(r.Context(), httpx.TenantID(r.Context()), orgservice.DirectoryFilter{
+			Q: q, DeptID: deptID, Ungrouped: ungrouped, Cursor: cursor, Limit: limit,
+		})
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeInternal, "通讯录检索失败"))
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items, "next_cursor": next})
+	}
+}
+
+// handleAuthRegister 自助注册（预登录公开）：姓名+口令 → 工号自动生成后落库；
+// 口令规则与改密一致（≥8 位且含字母与数字，03 篇 §5）；自设口令不置首登强制改密；
+// 成功返回工号（前端展示后回登录页，不签发 token——用户拍板）
+func handleAuthRegister(users orgrepo.Repo, suggest func(ctx context.Context, tenantID int64, name string) (string, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			DisplayName string `json:"display_name"`
+			Password    string `json:"password"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		name := strings.TrimSpace(req.DisplayName)
+		if name == "" || len([]rune(name)) > 50 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "姓名非法（非空 ≤50 字）"))
+			return
+		}
+		if len(req.Password) < 8 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "密码至少 8 位"))
+			return
+		}
+		hasLetter, hasDigit := false, false
+		for _, c := range req.Password {
+			if unicode.IsLetter(c) {
+				hasLetter = true
+			}
+			if unicode.IsDigit(c) {
+				hasDigit = true
+			}
+		}
+		if !hasLetter || !hasDigit {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "密码须同时包含字母与数字"))
+			return
+		}
+		empno, err := suggest(r.Context(), 1, name)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		hash, err := authservice.HashPassword(req.Password)
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeInternal, "密码哈希失败"))
+			return
+		}
+		if _, err := users.CreateUser(r.Context(), orgapi.User{
+			TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: empno, DisplayName: name,
+			PasswordHash: hash, Status: orgapi.UserStatusActive,
+			Scopes: []string{"im:message:send"}, // 与管理端建用户同口径（内存态；PG 角色化随 RBAC 收口）
+		}); err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "注册失败："+err.Error()))
+			return
+		}
+		log.Printf("auth register: 自助注册成功（工号=%s 租户=1，未分组待管理员调整）", empno)
+		httpx.OK(w, r, map[string]any{"employee_no": empno})
 	}
 }
 

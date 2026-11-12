@@ -4,6 +4,7 @@ package orgservice
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/baobaowork/server/internal/org/api"
@@ -119,25 +120,65 @@ func (s *Service) UserDeptChainOf(ctx context.Context, tenantID, userID int64) (
 	return chain, nil
 }
 
-/* ── 登录页搜人（2026-11-12：账号输入改选人下拉，预登录公开检索）── */
+/* ── 通讯录检索（2026-11-12：登录页搜人预登录公开版 + 用户面全员版共用内核）── */
 
-// UserCard 通讯录卡片行（登录页下拉一项；org_path=主部门链路名 xx公司/a部门/xx组）
+// UserCard 通讯录卡片行（登录页下拉一项；org_path=主部门链路名 xx公司/a部门/xx组）。
+// 预登录公开口径：不含 uid（防匿名枚举用户 ID）；登录后需 uid 发消息走 DirectoryUser
 type UserCard struct {
 	EmployeeNo string `json:"employee_no"`
 	Name       string `json:"display_name"`
 	OrgPath    string `json:"org_path"`
 }
 
-// UserDirectorySearch 通讯录模糊检索：q 命中 工号/姓名/拼音全拼/拼音首字母（不区分
-// 大小写）；仅启用中人类账号；按工号升序 cursor 翻页（cursor=上一页末条工号，空=首页，
+// DirectoryUser 用户面通讯录行（登录后；含 uid——发起单聊 conv.create 需要）
+type DirectoryUser struct {
+	UID        string `json:"uid"`
+	EmployeeNo string `json:"employee_no"`
+	Name       string `json:"display_name"`
+	OrgPath    string `json:"org_path"`
+}
+
+// DirectoryFilter 用户面通讯录检索过滤：Q 同搜人（工号/姓名/拼音全拼/首字母）；
+// DeptID>0 按部门过滤（任一挂靠命中，与管理端部门成员口径一致）；
+// Ungrouped 仅未挂任何部门的用户（虚拟「未分组」——自助注册用户默认落此组，
+// 管理员挂部门后自动离开，无 dept 记录零迁移）
+type DirectoryFilter struct {
+	Q         string
+	DeptID    int64
+	Ungrouped bool
+	Cursor    string
+	Limit     int
+}
+
+// UserDirectorySearch 登录页搜人（预登录公开）：薄委托共享内核，剥 uid 出公开卡片。
+func (s *Service) UserDirectorySearch(ctx context.Context, tenantID int64, q, cursor string, limit int) ([]UserCard, string, error) {
+	rows, next, err := s.directory(ctx, tenantID, DirectoryFilter{Q: q, Cursor: cursor, Limit: limit})
+	if err != nil {
+		return nil, "", err
+	}
+	cards := make([]UserCard, len(rows))
+	for i, r := range rows {
+		cards[i] = UserCard{EmployeeNo: r.EmployeeNo, Name: r.Name, OrgPath: r.OrgPath}
+	}
+	return cards, next, nil
+}
+
+// DirectoryUsers 用户面通讯录检索（登录后；含 uid + 部门/未分组过滤）。
+func (s *Service) DirectoryUsers(ctx context.Context, tenantID int64, f DirectoryFilter) ([]DirectoryUser, string, error) {
+	return s.directory(ctx, tenantID, f)
+}
+
+// directory 共享内核：q 命中 工号/姓名/拼音全拼/拼音首字母（不区分大小写）；
+// 仅启用中人类账号；按工号升序 cursor 翻页（cursor=上一页末条工号，空=首页，
 // 搜索态与翻页可叠加——q 变化前端重置 cursor）。内存实现（v0.1 用户量级）：全量用户
 // 一次 + 部门挂靠按部门聚合（部门数小，避免按用户 N+1）。
-func (s *Service) UserDirectorySearch(ctx context.Context, tenantID int64, q, cursor string, limit int) ([]UserCard, string, error) {
+func (s *Service) directory(ctx context.Context, tenantID int64, f DirectoryFilter) ([]DirectoryUser, string, error) {
+	limit := f.Limit
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
-	q = strings.ToLower(strings.TrimSpace(q))
-	cursor = strings.TrimSpace(cursor)
+	q := strings.ToLower(strings.TrimSpace(f.Q))
+	cursor := strings.TrimSpace(f.Cursor)
 
 	users, _, err := s.repo.ListUsers(ctx, orgapi.UserListFilter{TenantID: tenantID, Status: orgapi.UserStatusActive, Limit: 5000})
 	if err != nil {
@@ -186,7 +227,9 @@ func (s *Service) UserDirectorySearch(ctx context.Context, tenantID int64, q, cu
 		return strings.Join(names, "/")
 	}
 
-	// 用户→主部门（按部门聚合成员，primary 优先）
+	// 用户→部门集 + 主部门（按部门聚合成员，primary 优先；部门集兼做
+	// deptID 过滤与「未分组」判定）
+	memberOf := make(map[int64]map[int64]bool)
 	primaryOf := make(map[int64]int64)
 	for id := range depts {
 		rows, derr := s.repo.ListDeptUsers(ctx, tenantID, id)
@@ -194,6 +237,12 @@ func (s *Service) UserDirectorySearch(ctx context.Context, tenantID int64, q, cu
 			continue
 		}
 		for _, u := range rows {
+			set := memberOf[u.UserID]
+			if set == nil {
+				set = make(map[int64]bool)
+				memberOf[u.UserID] = set
+			}
+			set[id] = true
 			if _, seen := primaryOf[u.UserID]; !seen || u.IsPrimary {
 				primaryOf[u.UserID] = id
 			}
@@ -204,6 +253,12 @@ func (s *Service) UserDirectorySearch(ctx context.Context, tenantID int64, q, cu
 	matched := make([]orgapi.User, 0, len(users))
 	for _, u := range users {
 		if u.Type != orgapi.UserTypeHuman || u.Status != orgapi.UserStatusActive {
+			continue
+		}
+		if f.DeptID > 0 && !memberOf[u.ID][f.DeptID] {
+			continue
+		}
+		if f.Ungrouped && len(memberOf[u.ID]) > 0 {
 			continue
 		}
 		if q != "" {
@@ -219,7 +274,7 @@ func (s *Service) UserDirectorySearch(ctx context.Context, tenantID int64, q, cu
 	}
 	sort.Slice(matched, func(i, j int) bool { return matched[i].EmployeeNo < matched[j].EmployeeNo })
 
-	page := make([]UserCard, 0, limit)
+	page := make([]DirectoryUser, 0, limit)
 	next := ""
 	for _, u := range matched {
 		if cursor != "" && u.EmployeeNo <= cursor {
@@ -229,7 +284,8 @@ func (s *Service) UserDirectorySearch(ctx context.Context, tenantID int64, q, cu
 			next = page[len(page)-1].EmployeeNo
 			break
 		}
-		page = append(page, UserCard{
+		page = append(page, DirectoryUser{
+			UID:        strconv.FormatInt(u.ID, 10),
 			EmployeeNo: u.EmployeeNo,
 			Name:       u.DisplayName,
 			OrgPath:    orgPath(primaryOf[u.ID]),
