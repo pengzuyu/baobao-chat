@@ -6,6 +6,7 @@
 
 import { memo, useEffect, useState } from 'react';
 import { ChevronRight, FileText, Loader2, Search, Terminal, Wrench } from 'lucide-react';
+import { toolCallCommand } from '../../../shared/components/AgentProcessCard';
 import type { StreamItem } from '../store/agent';
 import { RISK_LABELS } from '../bridge/types';
 
@@ -57,6 +58,10 @@ export const ToolCard = memo(function ToolCard({ item }: { item: ToolItem }) {
   }, [running]);
   const Icon = toolIcon(call.tool);
   const blocked = result?.blocked;
+  // 2026-11-12 终端行口径：run_command 头部显示「终端」+命令（单行截断），
+  // 与 IM 落流卡 ToolRow 同款（toolCallCommand 共用）；其他工具显示关键参数
+  const isTerm = call.tool === 'run_command';
+  const cmd = toolCallCommand(call.tool, call.args);
 
   const statusNode = running ? (
     <span className="tool-card__status tool-card__status--running">
@@ -76,7 +81,8 @@ export const ToolCard = memo(function ToolCard({ item }: { item: ToolItem }) {
       <button type="button" className="tool-card__head" onClick={() => setOpen((v) => !v)}>
         <ChevronRight size={12} className={`tool-card__chev${open ? ' tool-card__chev--open' : ''}`} aria-hidden />
         <Icon size={13} className="tool-card__icon" aria-hidden />
-        <span className="tool-card__name">{call.tool}</span>
+        <span className="tool-card__name">{isTerm ? '终端' : call.tool}</span>
+        {cmd ? <code className="tool-card__cmd">{cmd}</code> : null}
         <span className={`agent-risk agent-risk--${call.risk}`}>{RISK_LABELS[call.risk]}</span>
         <span className="tool-card__status-wrap">{statusNode}</span>
       </button>
@@ -89,11 +95,11 @@ export const ToolCard = memo(function ToolCard({ item }: { item: ToolItem }) {
       {open ? (
         <div className="tool-card__body">
           <div className="tool-card__section">
-            <div className="tool-card__section-label">输入参数（已脱敏）</div>
-            <div className="tool-card__mono">{summarizeArgs(call.args) || '（无参数）'}</div>
+            <div className="tool-card__section-label">{isTerm ? '命令' : '输入参数（已脱敏）'}</div>
+            <div className="tool-card__mono">{isTerm && cmd ? `$ ${cmd}` : summarizeArgs(call.args) || '（无参数）'}</div>
           </div>
           <div className="tool-card__section">
-            <div className="tool-card__section-label">结果摘要{result?.truncated ? '（已截断）' : ''}</div>
+            <div className="tool-card__section-label">执行结果{result?.truncated ? '（已截断）' : ''}</div>
             <div className="tool-card__mono">{result?.summary ?? '（执行中…）'}</div>
           </div>
         </div>

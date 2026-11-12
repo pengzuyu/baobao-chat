@@ -3515,6 +3515,18 @@ body {
   flex-shrink: 0;
 }
 
+/* 2026-11-12 终端行：头部命令/关键参数（单行截断，点开看完整命令与结果） */
+.tool-card__cmd {
+  font-family: var(--bbw-font-mono);
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-gray-7);
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool-card__status-wrap {
   margin-left: auto;
   min-width: 0;
@@ -8014,12 +8026,22 @@ body {
 .agc-thinking__text { margin: 0; padding: 0 10px 8px; font-size: 12px; line-height: 1.7; color: var(--bbw-text-3, #86909c); white-space: pre-wrap; word-break: break-word; font-family: inherit; }
 
 /* 工具行 */
-.agc-tool { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--bbw-text-3, #86909c); padding: 4px 8px; background: var(--bbw-gray-1, #f7f8fa); border-radius: 6px; }
-.agc-tool code { font-family: 'SF Mono', 'Fira Code', Consolas, monospace; word-break: break-all; flex: 1; }
-.agc-tool--running code { color: var(--bbw-primary, #4080ff); }
-.agc-tool--fail code { color: var(--bbw-danger, #f53f3f); }
+/* 工具行（2026-11-12 终端行口径）：外层容器=头部行+可展开详情；
+ * run_command 头部=「终端」+命令（单行截断），点开看完整命令与执行结果 */
+.agc-tool { background: var(--bbw-gray-1, #f7f8fa); border-radius: 6px; overflow: hidden; }
+.agc-tool__head { display: flex; align-items: center; gap: 6px; width: 100%; border: none; background: transparent; padding: 4px 8px; font-size: 12px; color: var(--bbw-text-3, #86909c); text-align: left; cursor: default; }
+.agc-tool--expandable .agc-tool__head { cursor: pointer; }
+.agc-tool--expandable .agc-tool__head:hover { background: var(--bbw-gray-2, #f2f3f5); }
+.agc-tool__head:disabled { cursor: default; }
+.agc-tool__name { flex-shrink: 0; font-weight: 500; }
+.agc-tool__cmd { font-family: 'SF Mono', 'Fira Code', Consolas, monospace; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agc-tool--running .agc-tool__cmd { color: var(--bbw-primary, #4080ff); }
+.agc-tool--fail .agc-tool__cmd { color: var(--bbw-danger, #f53f3f); }
 .agc-tool__ms { color: var(--bbw-text-4, #c9cdd4); flex-shrink: 0; }
 .agc-tool__fail { color: var(--bbw-danger, #f53f3f); flex-shrink: 0; }
+.agc-tool__body { display: flex; flex-direction: column; gap: 4px; padding: 0 8px 8px 26px; }
+.agc-tool__line { margin: 0; background: var(--bbw-gray-2, #f2f3f5); border-radius: 6px; padding: 6px 8px; font-family: 'SF Mono', 'Fira Code', Consolas, monospace; font-size: 12px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all; color: var(--bbw-text-2, #4e5969); }
+.agc-tool__line--out { color: var(--bbw-text-3, #86909c); }
 
 /* 结论/光标/计时（结论=卡下常开的最终回答；中间正文弱化） */
 .agc-conclusion { font-size: 13px; }

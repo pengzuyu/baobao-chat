@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bot, ChevronDown, ChevronRight, ChevronUp, Code2, Lightbulb, Loader2 } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, ChevronUp, Code2, Lightbulb, Loader2, Terminal } from 'lucide-react';
 import { MarkdownText } from './MarkdownText';
 
 /** 落流卡 stages 条目（D18 §4.1；服务端不透明透传，此为客户端投影类型） */
@@ -28,8 +28,25 @@ export interface AgentStage {
   status?: 'ok' | 'fail' | 'blocked' | 'running';
   ms?: number;
   summary?: string;
+  /** tool：行内命令/关键参数摘要（run_command=命令原文；2026-11-12 终端行口径，
+   *  stagesFromStream 从 toolCall.args 提取，随卡落库——历史卡可见） */
+  command?: string;
+  /** tool：完整结果文本（展开查看用，≤2000 字截断；summary 是 120 字行内版） */
+  result?: string;
   /** conclusion：markdown 正文 */
   md?: string;
+}
+
+/** 工具调用 → 行内命令/关键参数摘要（2026-11-12 终端行口径，落流卡 ToolRow 与
+ *  工作台 ToolCard 共用）：run_command=命令原文；其他工具=首个字符串参数（path/query） */
+export function toolCallCommand(tool: string, args: Record<string, unknown> | undefined): string | undefined {
+  if (!args) return undefined;
+  if (tool === 'run_command') {
+    const c = args.command;
+    return typeof c === 'string' && c ? c : undefined;
+  }
+  const v = Object.values(args).find((x): x is string => typeof x === 'string' && !!x);
+  return v || undefined;
 }
 
 export interface AgentCardBody {
@@ -80,18 +97,39 @@ export function ThinkingCollapse({ text, streaming }: { text: string; streaming:
   );
 }
 
-/** 工具行：name — 参数/结果摘要 · 耗时（code 样式单行） */
+/** 工具行（2026-11-12 终端行口径）：run_command 显示「终端」+ 命令（单行截断），
+ *  其他工具=name+关键参数；有命令/结果可点开查看完整命令与执行结果（等宽块） */
 function ToolRow({ s }: { s: AgentStage }) {
+  const [open, setOpen] = useState(false);
   const running = s.status === 'running';
+  const isTerm = s.name === 'run_command';
+  const inline = s.command ?? (isTerm ? undefined : s.summary);
+  const expandable = !!(s.command || s.result || (!isTerm && s.summary));
   return (
-    <div className={`agc-tool${running ? ' agc-tool--running' : ''}${s.status === 'fail' ? ' agc-tool--fail' : ''}`}>
-      {running ? <Loader2 size={12} className="agc-spin" /> : <Code2 size={12} />}
-      <code>
-        {s.name}
-        {s.summary ? ` — ${s.summary}` : ''}
-      </code>
-      {s.ms != null && s.ms > 0 ? <span className="agc-tool__ms">{(s.ms / 1000).toFixed(1)}s</span> : null}
-      {s.status === 'fail' ? <span className="agc-tool__fail">失败</span> : null}
+    <div
+      className={`agc-tool${running ? ' agc-tool--running' : ''}${s.status === 'fail' ? ' agc-tool--fail' : ''}${expandable ? ' agc-tool--expandable' : ''}`}
+    >
+      <button
+        type="button"
+        className="agc-tool__head"
+        onClick={expandable ? () => setOpen((v) => !v) : undefined}
+        disabled={!expandable}
+        aria-expanded={expandable ? open : undefined}
+      >
+        {running ? <Loader2 size={12} className="agc-spin" /> : isTerm ? <Terminal size={12} /> : <Code2 size={12} />}
+        <span className="agc-tool__name">{isTerm ? '终端' : s.name}</span>
+        {inline ? <code className="agc-tool__cmd">{inline}</code> : null}
+        {s.ms != null && s.ms > 0 ? <span className="agc-tool__ms">{(s.ms / 1000).toFixed(1)}s</span> : null}
+        {s.status === 'fail' ? <span className="agc-tool__fail">失败</span> : null}
+        {expandable ? <ChevronDown size={12} className={`agc-chev${open ? ' agc-chev--open' : ''}`} /> : null}
+      </button>
+      {open && expandable ? (
+        <div className="agc-tool__body">
+          {s.command ? <pre className="agc-tool__line">{isTerm ? `$ ${s.command}` : s.command}</pre> : null}
+          {s.result ? <pre className="agc-tool__line agc-tool__line--out">{s.result}</pre> : null}
+          {!s.command && !s.result && !isTerm && s.summary ? <pre className="agc-tool__line agc-tool__line--out">{s.summary}</pre> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -9,7 +9,7 @@
 import { localMetaGet, localMetaSet } from '../../../shared/api/localdb';
 import { http } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
-import type { AgentCardBody, AgentStage } from '../../../shared/components/AgentProcessCard';
+import { toolCallCommand, type AgentCardBody, type AgentStage } from '../../../shared/components/AgentProcessCard';
 import type { StreamItem } from '../../agent/store/agent';
 import { useImStore } from '../store/im';
 
@@ -120,9 +120,13 @@ export function stagesFromStream(items: StreamItem[]): { stages: AgentStage[]; s
         stages.push({
           t: 'tool',
           name: it.call.tool,
+          // 2026-11-12 终端行口径：行内命令（run_command=命令原文/其他=首个字符串
+          // 参数）+ 展开用完整结果（≤2000 字，随卡落库历史可见）
+          command: toolCallCommand(it.call.tool, it.call.args)?.slice(0, 500),
           status: r ? (r.ok ? 'ok' : r.blocked ? 'blocked' : 'fail') : 'running',
           ms: r?.durationMs,
           summary: r?.summary?.slice(0, 120),
+          result: r?.summary?.slice(0, 2000),
           ts: Date.now(),
         });
         break;
