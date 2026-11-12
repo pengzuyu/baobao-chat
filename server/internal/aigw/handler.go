@@ -265,7 +265,7 @@ func (g *Gateway) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, 8052, "路由档位未配置: embed", 0)
 		return
 	}
-	vecs, usage, err := candidates[0].Provider.Embed(r.Context(), inputs)
+	vecs, usage, err := candidates[0].Provider.Embed(r.Context(), candidates[0].Model, inputs)
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, 8051, "供应商不可用: "+err.Error(), 0)
 		return
@@ -287,6 +287,61 @@ func (u *UsageOpenAI) Total() int {
 		return u.TotalTokens
 	}
 	return u.PromptTokens + u.CompletionTokens
+}
+
+// HandleRerank POST /v1/rerank（D24 N3a：bbw-rerank；kb Query RRF 候选重排消费）。
+// 结构同 HandleEmbeddings：鉴权→OBO 闸→解码→限流→路由→调用→计量开票
+func (g *Gateway) HandleRerank(w http.ResponseWriter, r *http.Request) {
+	who, err := g.auth(r)
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, int(errx.From(err).Code), "鉴权失败", 0)
+		return
+	}
+	if gerr := g.oboGate(who); gerr != nil {
+		writeErr(w, http.StatusServiceUnavailable, int(errx.From(gerr).Code), gerr.Error(), 30)
+		return
+	}
+	var req struct {
+		Model     string   `json:"model"`
+		Query     string   `json:"query"`
+		Documents []string `json:"documents"`
+		TopN      int      `json:"top_n"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, 9001, "请求体非法", 0)
+		return
+	}
+	if req.Model != AliasRerank {
+		writeErr(w, http.StatusNotFound, 8052, "路由档位未配置: "+req.Model, 0)
+		return
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		writeErr(w, http.StatusBadRequest, 9001, "query 必填", 0)
+		return
+	}
+	if len(req.Documents) == 0 || len(req.Documents) > 64 {
+		writeErr(w, http.StatusBadRequest, 9001, "documents 1-64 条", 0)
+		return
+	}
+	if ok, wait := g.limiter.Allow(who.Subject); !ok {
+		writeErr(w, http.StatusTooManyRequests, 8050, "网关限流", wait)
+		return
+	}
+	candidates, ok := g.router.Route(AliasRerank)
+	if !ok || len(candidates) == 0 {
+		writeErr(w, http.StatusNotFound, 8052, "路由档位未配置: rerank", 0)
+		return
+	}
+	hits, usage, err := candidates[0].Provider.Rerank(r.Context(), candidates[0].Model, req.Query, req.Documents, req.TopN)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, 8051, "供应商不可用: "+err.Error(), 0)
+		return
+	}
+	dim := MeterDim{Tenant: who.TenantID, User: uidOf(who), Svc: svcSubject(who), Scene: "rerank", Tier: "rerank", Provider: candidates[0].Provider.ID()}
+	g.meter.Invoice(dim, int64(usage.PromptTokens), 0, false)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-BBW-Request-Id", r.Header.Get("Idempotency-Key"))
+	_ = json.NewEncoder(w).Encode(map[string]any{"results": hits, "usage": usage, "model": AliasRerank})
 }
 
 func headerOr(r *http.Request, k, def string) string {

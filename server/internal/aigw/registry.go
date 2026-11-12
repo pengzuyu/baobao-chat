@@ -374,8 +374,9 @@ func (reg *Registry) loadOne(ctx context.Context, id int64) (*providerRec, error
 	return rec, nil
 }
 
-// Reload 热装配：ai_provider(enabled) → Router 供应商池；ai_route_rule(active, fast/strong)
-// → 档位候选（替换 env/mock 兜底装配）。单行解密失败跳过并登记日志；embed 档不走表。
+// Reload 热装配：ai_provider(enabled) → Router 供应商池；ai_route_rule(active,
+// fast/strong/embed/rerank) → 档位候选（替换 env/mock 兜底装配；embed/rerank 未配
+// 表时不覆盖 → mock 兜底恒可用，D24 N3a）。单行解密失败跳过并登记日志。
 func (reg *Registry) Reload(ctx context.Context) error {
 	rows, err := reg.pool.Query(ctx,
 		`SELECT id, tenant_id, owner_user_id, name, kind, endpoints, api_key_ref, models, status
@@ -450,8 +451,8 @@ func (reg *Registry) Reload(ctx context.Context) error {
 		}
 	}
 	for tier, list := range tiers {
-		if tier == "fast" || tier == "strong" {
-			reg.router.SetTier(tier, list)
+		if tier == "fast" || tier == "strong" || tier == "embed" || tier == "rerank" {
+			reg.router.SetTier(tier, list) // D24：embed/rerank 放开表驱动（未配时 NewRouter mock 兜底不覆盖）
 		}
 	}
 	return routeRows.Err()
@@ -482,7 +483,7 @@ func (reg *Registry) GetRoutes(ctx context.Context) ([]RouteRuleDTO, error) {
 		}
 	}
 	list := make([]RouteRuleDTO, 0, len(out))
-	for _, t := range []string{"fast", "strong"} {
+	for _, t := range []string{"fast", "strong", "embed", "rerank"} {
 		if rr, ok := out[t]; ok {
 			list = append(list, rr)
 		}
@@ -490,12 +491,15 @@ func (reg *Registry) GetRoutes(ctx context.Context) ([]RouteRuleDTO, error) {
 	return list, rows.Err()
 }
 
-// PutRoutes 整表替换 fast/strong 路由（版本化：旧 active→archived，新 version+1 active）。
-// 候选校验：供应商存在且启用、公司级（个人 BYOK 不进路由表）、model 在清单。
+// PutRoutes 整表替换 fast/strong/embed/rerank 路由（版本化：旧 active→archived，新
+// version+1 active；D24 N3a 放开 embed/rerank 档——管理员经此配 bbw-embed/bbw-rerank
+// 上游）。候选校验：供应商存在且启用、公司级（个人 BYOK 不进路由表）、model 在清单。
 func (reg *Registry) PutRoutes(ctx context.Context, rules []RouteRuleDTO, tenantID, uid int64) error {
 	for _, rr := range rules {
-		if rr.Tier != "fast" && rr.Tier != "strong" {
-			return errx.New(errx.CodeBadRequest, "tier 仅 fast/strong（embed 恒系统装配）")
+		switch rr.Tier {
+		case "fast", "strong", "embed", "rerank":
+		default:
+			return errx.New(errx.CodeBadRequest, "tier 仅 fast/strong/embed/rerank")
 		}
 		if len(rr.Candidates) == 0 {
 			return errx.New(errx.CodeBadRequest, rr.Tier+" 档至少 1 个候选（主选）")

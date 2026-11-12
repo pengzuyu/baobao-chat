@@ -214,7 +214,7 @@ func TestMeteringSceneAndSessionHeader(t *testing.T) {
 func TestMockEmbedSemanticSimilarity(t *testing.T) {
 	// 词袋语义：同主题文本相似度高、不同主题近正交（KB 自检索的向量层前提）
 	mock := NewMockProvider(1, "m")
-	vecs, _, _ := mock.Embed(context.Background(), []string{"量子计算的基本原理与应用前景", "量子计算应用前景广阔", "红烧肉的传统做法与火候"})
+	vecs, _, _ := mock.Embed(context.Background(), "", []string{"量子计算的基本原理与应用前景", "量子计算应用前景广阔", "红烧肉的传统做法与火候"})
 	a1, a2, b := vecs[0], vecs[1], vecs[2]
 	cos := func(x, y []float32) float64 {
 		var d float64
@@ -230,10 +230,51 @@ func TestMockEmbedSemanticSimilarity(t *testing.T) {
 		t.Fatalf("不同主题应近正交: %f", cos(a1, b))
 	}
 	// 确定性
-	vecs2, _, _ := mock.Embed(context.Background(), []string{"量子计算的基本原理与应用前景"})
+	vecs2, _, _ := mock.Embed(context.Background(), "", []string{"量子计算的基本原理与应用前景"})
 	a1b := vecs2[0]
 	if cos(a1, a1b) < 0.999 {
 		t.Fatalf("同文本应同向量: %f", cos(a1, a1b))
+	}
+}
+
+// TestRerank /v1/rerank 通道（D24 N3a）：mock 词面重叠打分 + 计量 scene=rerank；
+// 排序语义=命中查询词的文档居首
+func TestRerank(t *testing.T) {
+	gw, meter, _ := newTestGateway(0, "dev")
+	req := httptest.NewRequest(http.MethodPost, "/v1/rerank",
+		strings.NewReader(`{"model":"bbw-rerank","query":"token 过期处理","documents":["关于红烧肉的做法","token 过期时应静默刷新","API 清单"],"top_n":2}`))
+	req.Header.Set("Authorization", "Bearer dev")
+	rec := httptest.NewRecorder()
+	gw.HandleRerank(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Results []RerankHit `json:"results"`
+		Usage   *UsageOpenAI `json:"usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Results) != 2 { // top_n=2 截断
+		t.Fatalf("results=%d: %s", len(resp.Results), rec.Body.String())
+	}
+	if resp.Results[0].Index != 1 || resp.Results[0].Score <= 0 {
+		t.Fatalf("命中查询词的文档应居首: %+v", resp.Results)
+	}
+	for dim := range meter.Snapshot() {
+		if dim.Scene != "rerank" {
+			t.Fatalf("scene 应 rerank: %+v", dim)
+		}
+	}
+	// 非法档位 → 8052
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/rerank",
+		strings.NewReader(`{"model":"bbw-fast","query":"q","documents":["d"]}`))
+	req2.Header.Set("Authorization", "Bearer dev")
+	rec2 := httptest.NewRecorder()
+	gw.HandleRerank(rec2, req2)
+	if rec2.Code != 404 {
+		t.Fatalf("非法档位应 404/8052: %d", rec2.Code)
 	}
 }
 

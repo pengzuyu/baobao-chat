@@ -16,6 +16,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -69,6 +70,12 @@ type ProviderResult struct {
 	Err    error
 }
 
+// RerankHit 重排命中（Cohere 风格 rerank API 的 results 元素）
+type RerankHit struct {
+	Index int     `json:"index"` // documents 下标
+	Score float64 `json:"relevance_score"`
+}
+
 // Provider 供应商适配器（§3.1 适配层；kind 决定实现）
 type Provider interface {
 	ID() int64
@@ -76,8 +83,12 @@ type Provider interface {
 	Kind() string
 	// StreamChat 流式对话：resp 载荷经 frames 透传（含 [DONE] 由网关补，实现可不发）
 	StreamChat(ctx context.Context, req *ChatRequest) *ProviderResult
-	// Embed 维度固定 1024（01 篇冻结）；v0.1 仅 mock 实现
-	Embed(ctx context.Context, input []string) ([][]float32, *UsageOpenAI, error)
+	// Embed 嵌入：model=候选上游具体模型名（表驱动路由；空=env 兜底装配按档位映射/
+	// mock 忽略）。mock 恒 1024 维；真实供应商维度随模型（kb 侧 epoch/dims 校验，D24）
+	Embed(ctx context.Context, model string, input []string) ([][]float32, *UsageOpenAI, error)
+	// Rerank 重排：query×documents 相关性打分（Cohere/Jina/SiliconFlow 兼容协议）；
+	// topN≤0=全量返回；mock=词面重叠确定性打分
+	Rerank(ctx context.Context, model, query string, documents []string, topN int) ([]RerankHit, *UsageOpenAI, error)
 }
 
 // ---- mock 供应商（echo-agent 启发式；开发/联调/E2E 专用）----
@@ -172,8 +183,8 @@ func (m *MockProvider) StreamChat(_ context.Context, req *ChatRequest) *Provider
 	return res
 }
 
-// Embed 确定性 1024 维向量（HMAC 哈希展开；仅联调用，语义无意义）
-func (m *MockProvider) Embed(_ context.Context, input []string) ([][]float32, *UsageOpenAI, error) {
+// Embed 确定性 1024 维向量（HMAC 哈希展开；仅联调用，语义无意义；model 忽略）
+func (m *MockProvider) Embed(_ context.Context, _ string, input []string) ([][]float32, *UsageOpenAI, error) {
 	out := make([][]float32, 0, len(input))
 	for _, s := range input {
 		out = append(out, mockEmbedOne(s))
@@ -183,6 +194,59 @@ func (m *MockProvider) Embed(_ context.Context, input []string) ([][]float32, *U
 		tokens += len([]rune(s))
 	}
 	return out, &UsageOpenAI{PromptTokens: tokens, TotalTokens: tokens}, nil
+}
+
+// Rerank mock 重排：query 分词（CJK 2-gram+ASCII 词）在文档中的命中占比确定性打分
+// ——零网络可测；同 mockEmbedOne 词袋口径（查询与文档重叠词越多分越高）
+func (m *MockProvider) Rerank(_ context.Context, _, query string, documents []string, topN int) ([]RerankHit, *UsageOpenAI, error) {
+	toks := bagOfTokens(query)
+	hits := make([]RerankHit, 0, len(documents))
+	tokens := len([]rune(query))
+	for i, doc := range documents {
+		tokens += len([]rune(doc))
+		if len(toks) == 0 {
+			hits = append(hits, RerankHit{Index: i, Score: 0})
+			continue
+		}
+		hit := 0
+		low := strings.ToLower(doc)
+		for tok := range toks {
+			if strings.Contains(low, tok) {
+				hit++
+			}
+		}
+		hits = append(hits, RerankHit{Index: i, Score: float64(hit) / float64(len(toks))})
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+	if topN > 0 && len(hits) > topN {
+		hits = hits[:topN]
+	}
+	return hits, &UsageOpenAI{PromptTokens: tokens, TotalTokens: tokens}, nil
+}
+
+// bagOfTokens mockEmbedOne 同款词袋（去重集合形态）
+func bagOfTokens(s string) map[string]bool {
+	out := map[string]bool{}
+	runes := []rune(strings.ToLower(s))
+	var ascii strings.Builder
+	flush := func() {
+		if ascii.Len() > 0 {
+			out[ascii.String()] = true
+			ascii.Reset()
+		}
+	}
+	for i, r := range runes {
+		if r < 128 && !isSpaceASCII(byte(r)) {
+			ascii.WriteRune(r)
+			continue
+		}
+		flush()
+		if r >= 0x4e00 && r <= 0x9fff && i+1 < len(runes) && runes[i+1] >= 0x4e00 && runes[i+1] <= 0x9fff {
+			out[string(runes[i:i+2])] = true
+		}
+	}
+	flush()
+	return out
 }
 
 // mockEmbedOne 词袋嵌入：分词（CJK 2-gram + ASCII 词）→ 每词 HMAC 定维累加 → L2 归一化。
@@ -342,9 +406,141 @@ func (p *OpenAICompatProvider) StreamChat(ctx context.Context, req *ChatRequest)
 	return res
 }
 
-// Embed 真实嵌入：v0.1 未接 bge 服务，返回未实现（8052 侧档位不路由即不达）
-func (p *OpenAICompatProvider) Embed(_ context.Context, _ []string) ([][]float32, *UsageOpenAI, error) {
-	return nil, nil, fmt.Errorf("embed 档位未配置真实供应商")
+// Embed 真实嵌入（D24 N3a）：POST {base}/embeddings（OpenAI 协议）。model 解析：
+// 表驱动候选携带的具体模型名优先；空=env 兜底装配按 Cfg.Models["embed"] 档位映射；
+// 两处皆空 → 未配置。返回维度随上游模型（kb 侧 dims/epoch 校验，D24 §5.3）
+func (p *OpenAICompatProvider) Embed(ctx context.Context, model string, input []string) ([][]float32, *UsageOpenAI, error) {
+	upstream := model
+	if upstream == "" {
+		upstream = p.Cfg.Models["embed"]
+	}
+	if upstream == "" {
+		return nil, nil, fmt.Errorf("embed 档位未配置真实供应商模型")
+	}
+	body, _ := jsonMarshal(map[string]any{"model": upstream, "input": input})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimSuffix(p.Cfg.BaseURL, "/")+"/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.Cfg.APIKey)
+	client := p.Client
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, nil, fmt.Errorf("上游 embeddings %d: %s", resp.StatusCode, string(b))
+	}
+	var out struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+			Index     int       `json:"index"`
+		} `json:"data"`
+		Usage *UsageOpenAI `json:"usage"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&out); err != nil {
+		return nil, nil, err
+	}
+	if out.Error != nil {
+		return nil, nil, fmt.Errorf("上游 embeddings 错误: %s", out.Error.Message)
+	}
+	if len(out.Data) != len(input) {
+		return nil, nil, fmt.Errorf("上游 embeddings 返回条数 %d ≠ 请求 %d", len(out.Data), len(input))
+	}
+	vecs := make([][]float32, len(input))
+	for _, d := range out.Data {
+		if d.Index < 0 || d.Index >= len(vecs) || len(d.Embedding) == 0 {
+			return nil, nil, fmt.Errorf("上游 embeddings 条目非法（index=%d dim=%d）", d.Index, len(d.Embedding))
+		}
+		vecs[d.Index] = d.Embedding
+	}
+	usage := out.Usage
+	if usage == nil {
+		tokens := 0
+		for _, s := range input {
+			tokens += len([]rune(s))
+		}
+		usage = &UsageOpenAI{PromptTokens: tokens, TotalTokens: tokens}
+	}
+	return vecs, usage, nil
+}
+
+// Rerank 真实重排：POST {base}/rerank（Cohere/Jina/SiliconFlow 兼容协议）：
+// 请求 {model, query, documents, top_n} → 响应 {results:[{index, relevance_score}], usage}
+func (p *OpenAICompatProvider) Rerank(ctx context.Context, model, query string, documents []string, topN int) ([]RerankHit, *UsageOpenAI, error) {
+	if model == "" {
+		model = p.Cfg.Models["rerank"]
+	}
+	if model == "" {
+		return nil, nil, fmt.Errorf("rerank 档位未配置真实供应商模型")
+	}
+	body := map[string]any{"model": model, "query": query, "documents": documents}
+	if topN > 0 {
+		body["top_n"] = topN
+	}
+	buf, _ := jsonMarshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimSuffix(p.Cfg.BaseURL, "/")+"/rerank", bytes.NewReader(buf))
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.Cfg.APIKey)
+	client := p.Client
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, nil, fmt.Errorf("上游 rerank %d: %s", resp.StatusCode, string(b))
+	}
+	var out struct {
+		Results []struct {
+			Index          int      `json:"index"`
+			RelevanceScore *float64 `json:"relevance_score"` // Cohere/Jina；部分实现叫 document_score
+			DocumentScore  *float64 `json:"document_score"`
+		} `json:"results"`
+		Usage *UsageOpenAI `json:"usage"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&out); err != nil {
+		return nil, nil, err
+	}
+	if out.Error != nil {
+		return nil, nil, fmt.Errorf("上游 rerank 错误: %s", out.Error.Message)
+	}
+	hits := make([]RerankHit, 0, len(out.Results))
+	for _, r := range out.Results {
+		score := 0.0
+		if r.RelevanceScore != nil {
+			score = *r.RelevanceScore
+		} else if r.DocumentScore != nil {
+			score = *r.DocumentScore
+		}
+		hits = append(hits, RerankHit{Index: r.Index, Score: score})
+	}
+	usage := out.Usage
+	if usage == nil {
+		usage = &UsageOpenAI{}
+	}
+	return hits, usage, nil
 }
 
 // ---- 小工具 ----

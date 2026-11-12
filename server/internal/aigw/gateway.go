@@ -20,6 +20,7 @@ const (
 	AliasFast   = "bbw-fast"
 	AliasStrong = "bbw-strong"
 	AliasEmbed  = "bbw-embed"
+	AliasRerank = "bbw-rerank" // D24：kb 重排档（/v1/rerank；mock 词面重叠兜底）
 	// RefPrefix 直达引用前缀：p:<provider_id>:<model>（0023 表驱动多供应商）
 	RefPrefix = "p:"
 )
@@ -59,7 +60,10 @@ func NewRouter(mock Provider, upstream *OpenAICompatProvider) *Router {
 	}
 	r.tier["strong"] = chat
 	r.tier["fast"] = fast
-	r.tier["embed"] = []Candidate{{Provider: mock, Priority: 1}} // bge 真实服务未接，mock 供联调
+	// embed/rerank：mock 兜底恒可用（联调零配置）；管理端配表路由后由 Reload 覆盖
+	// （registry 放开 embed/rerank 档表驱动——D24 N3a：管理员可配嵌入/重排供应商）
+	r.tier["embed"] = []Candidate{{Provider: mock, Priority: 1}}
+	r.tier["rerank"] = []Candidate{{Provider: mock, Priority: 1}}
 	return r
 }
 
@@ -71,7 +75,7 @@ func (r *Router) Route(alias string) ([]Candidate, bool) {
 	return c, ok
 }
 
-// SetTier 表驱动装配：替换档位候选（registry.Reload 调用；embed 档不走表，恒 mock/env）
+// SetTier 表驱动装配：替换档位候选（registry.Reload 调用；fast/strong/embed/rerank 四档）
 func (r *Router) SetTier(tier string, cands []Candidate) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

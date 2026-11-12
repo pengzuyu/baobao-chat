@@ -444,6 +444,7 @@ func main() {
 	}, func() bool { return agentKillOn != nil && agentKillOn() })
 	mux.HandleFunc("POST /v1/chat/completions", aigwMod.Gateway.HandleChat)
 	mux.HandleFunc("POST /v1/embeddings", aigwMod.Gateway.HandleEmbeddings)
+	mux.HandleFunc("POST /v1/rerank", aigwMod.Gateway.HandleRerank) // D24：kb 检索重排档（bbw-rerank）
 
 	// 知识库域（D24 两维度博客版）：公司知识库+我的笔记两维度行（grants 授权与
 	// CreateSpace 已下线）+ 摄入管线同步版（嵌入经网关 bbw-embed，AI/IM 通道）+
@@ -471,10 +472,10 @@ func main() {
 	} else if cands, ok := aigwMod.Router.Route(aigw.AliasEmbed); ok && len(cands) > 0 {
 		prov := cands[0].Provider
 		kbEmbed = func(ctx context.Context, in []string) ([][]float32, error) {
-			v, _, err := prov.Embed(ctx, in)
+			v, _, err := prov.Embed(ctx, cands[0].Model, in)
 			return v, err
 		}
-		log.Println("kb 嵌入链路：直调网关 Router mock 供应商（未配 BBW_AIGW_DEV_TOKEN，1024 维确定性向量）")
+		log.Println("kb 嵌入链路：直调网关 Router 供应商（未配 BBW_AIGW_DEV_TOKEN；表驱动路由生效后为真实上游，否则 mock 确定性向量）")
 	}
 	kbMod := kb.NewModule(kbservice.Options{
 		Embedder: kbEmbed,
