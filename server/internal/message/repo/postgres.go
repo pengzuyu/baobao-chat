@@ -655,11 +655,13 @@ func (p *Postgres) FindSingleConv(ctx context.Context, userA, userB int64) (*Con
 	return c, nil
 }
 
-// ListMembersDetailed 成员行明细（全状态；join_at 毫秒化）
+// ListMembersDetailed 成员行明细（全状态；join_at 直读 timestamptz——Member.JoinAt
+// 即 time.Time，毫秒化在 DTO 层做。2026-11-12 修复：原第 5 列选 epoch 毫秒 bigint
+// 却扫进 time.Time，PG 二进制协议必炸 9004——conv.create 落库成功后 buildDetail 恒
+// 失败（残迹：重复单聊行），PG 模式建会话从未走通）
 func (p *Postgres) ListMembersDetailed(ctx context.Context, convID int64) ([]Member, error) {
 	rows, err := p.pool.Query(ctx, `
-		SELECT user_id, role, status, mute_until,
-			(extract(epoch from join_at)*1000)::bigint
+		SELECT user_id, role, status, mute_until, join_at
 		FROM conversation_member WHERE conv_id=$1 ORDER BY join_at, user_id`, convID)
 	if err != nil {
 		return nil, err
