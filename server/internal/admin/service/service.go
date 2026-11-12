@@ -109,14 +109,16 @@ var _ adminapi.AdminService = (*Service)(nil)
 // ── 管理员判定（RBAC 阶段二）──
 
 // effectiveScopesOf 用户有效权限点 = users 行内 Scopes ∪ 角色聚合（03 篇 §4）。
-// ScopesOf 未装配/查询失败时退回行内值（登录链路同口径，authservice.effectiveScopes）。
+// ScopesOf 未装配/查询失败/无角色时退回行内值（登录链路同口径，authservice.effectiveScopes）；
+// 行内值不落库恒 nil（org repo postgres.go「Scopes 不落库」），须兜非 nil 空切片——
+// AdminUser.Scopes 无 omitempty，nil 会序列化成 JSON null 炸穿前端 scopes.filter（2026-11-12 用户管理白屏）。
 func (s *Service) effectiveScopesOf(ctx context.Context, u *orgapi.User) []string {
 	if s.opts.ScopesOf == nil {
-		return u.Scopes
+		return nonNilScopes(u.Scopes)
 	}
 	extra, err := s.opts.ScopesOf(ctx, u.TenantID, u.ID)
 	if err != nil || len(extra) == 0 {
-		return u.Scopes
+		return nonNilScopes(u.Scopes)
 	}
 	seen := make(map[string]struct{}, len(u.Scopes)+len(extra))
 	out := make([]string, 0, len(u.Scopes)+len(extra))
@@ -691,8 +693,16 @@ func sortByKeyDesc(m map[string]*adminapi.UsageByDim) []adminapi.UsageByDim {
 func toAdminUser(u orgapi.User) adminapi.AdminUser {
 	return adminapi.AdminUser{
 		ID: strconv.FormatInt(u.ID, 10), EmployeeNo: u.EmployeeNo,
-		DisplayName: u.DisplayName, Email: u.Email, Status: u.Status, Scopes: u.Scopes,
+		DisplayName: u.DisplayName, Email: u.Email, Status: u.Status, Scopes: nonNilScopes(u.Scopes),
 	}
+}
+
+// nonNilScopes nil → 空切片（JSON [] 而非 null；Scopes 无 omitempty 的响应字段统一走此口径）
+func nonNilScopes(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 /* ── 角色与授权（PAD-08；权限点字典 v0.1 前端静态维护，服务端只校验格式） ── */

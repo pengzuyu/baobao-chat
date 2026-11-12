@@ -218,10 +218,11 @@ export function UsersPage() {
   );
 }
 
-/** 权限列：优先展示 admin:*，否则取前两项普通权限点 */
-function scopesText(scopes: string[]): string {
-  if (scopes.length === 0) return '—';
-  const adminScopes = scopes.filter((s) => s === 'admin' || s.startsWith('admin:'));
+/** 权限列：优先展示 admin:*，否则取前两项普通权限点（?? [] 兜底——旧服务端对无角色用户曾返 scopes:null，2026-11-12 白屏根因） */
+function scopesText(scopes: string[] | null | undefined): string {
+  const list = scopes ?? [];
+  if (list.length === 0) return '—';
+  const adminScopes = list.filter((s) => s === 'admin' || s.startsWith('admin:'));
   if (adminScopes.length > 0) return adminScopes.join(', ');
-  return scopes.slice(0, 2).join(', ');
+  return list.slice(0, 2).join(', ');
 }

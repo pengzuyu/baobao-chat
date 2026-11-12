@@ -148,13 +148,15 @@ func (s *Service) Login(ctx context.Context, req authapi.LoginReq) (*authapi.Tok
 
 // effectiveScopes 用户有效权限点 = users 行内 Scopes ∪ RBAC 角色聚合（03 篇 §4）。
 // 登录/续签/OBO 子集校验统一经此口径——角色授权后无需重登录即随下次签发生效。
+// 行内值不落库恒 nil（org repo postgres.go「Scopes 不落库」），回退须兜非 nil 空切片，
+// 防 perms 字段序列化成 JSON null 穿透前端（2026-11-12 用户管理白屏同根）。
 func (s *Service) effectiveScopes(ctx context.Context, u *orgapi.User) []string {
 	if s.opts.ScopesOf == nil {
-		return u.Scopes
+		return nonNilScopes(u.Scopes)
 	}
 	extra, err := s.opts.ScopesOf(ctx, u.TenantID, u.ID)
 	if err != nil || len(extra) == 0 {
-		return u.Scopes // 聚合失败不阻断登录，退回行内值（登记）
+		return nonNilScopes(u.Scopes) // 聚合失败不阻断登录，退回行内值（登记）
 	}
 	seen := make(map[string]struct{}, len(u.Scopes)+len(extra))
 	out := make([]string, 0, len(u.Scopes)+len(extra))
@@ -171,6 +173,14 @@ func (s *Service) effectiveScopes(ctx context.Context, u *orgapi.User) []string 
 		}
 	}
 	return out
+}
+
+// nonNilScopes nil → 空切片（防 JSON null 穿透；与 admin service 同口径）
+func nonNilScopes(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // issuePair 签发 access + refresh；refresh 只存哈希，rotated_from 首签为 nil
