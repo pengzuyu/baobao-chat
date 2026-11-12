@@ -49,6 +49,7 @@ import { TransferSettingsPage } from '../features/settings/pages/TransferSetting
 import { AgentSettingsPage } from '../features/settings/pages/AgentSettingsPage';
 import { AboutPage } from '../features/settings/pages/AboutPage';
 import { sendSystemNotification } from '../features/agent/bridge/notify';
+import { startUpdaterAutoCheck } from '../features/settings/updater';
 import { message as antdMessage } from 'antd';
 
 /** WS 基址：显式 VITE_WS_BASE > 同源推导自 VITE_API_BASE（统一入口路径分流，见 ws.ts） */
@@ -201,6 +202,17 @@ export function App() {
   // 懒 init，任何整页重载/HMR 后恒有监听（否则壳泵照发、webview 无人听）
   useEffect(() => {
     ensureAgentEventSubscribed();
+  }, []);
+
+  // 应用更新静默检查（D21，16 篇 §4.2：启动延迟 3s + 每 6h 复查；发现新版发
+  // 系统通知引导到「设置 · 关于」——通知回调在 App 层注入避免 settings→agent 横向 import）
+  useEffect(() => {
+    startUpdaterAutoCheck((info) => {
+      void sendSystemNotification(
+        'BaobaoWork · 发现新版本',
+        `v${info.version} 已发布，可到「设置 · 关于」下载更新`,
+      );
+    });
   }, []);
 
   return (

@@ -50,7 +50,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         // 目录/文件选择（D13）
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        // relaunch（D21：更新装完一键重启；无条件注册——updater 禁用时前端不调即无感）
+        .plugin(tauri_plugin_process::init());
     if updater_pubkey.is_empty() {
         eprintln!(
             "[bbw] updater 未配置签名公钥（tauri.conf.json plugins.updater.pubkey），自动更新禁用；\

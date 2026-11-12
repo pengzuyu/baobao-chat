@@ -1442,6 +1442,46 @@ body {
   text-align: center;
 }
 
+/* 关于页 · 软件更新卡片（D21） */
+.about-update__progress {
+  padding: var(--bbw-space-1) 0 var(--bbw-space-2);
+}
+
+.about-update__notes {
+  margin-top: var(--bbw-space-2);
+  padding: var(--bbw-space-2) var(--bbw-space-3);
+  background: var(--bbw-gray-2);
+  border-radius: var(--bbw-radius-control);
+  font-size: var(--bbw-font-12);
+  line-height: 1.6;
+  color: var(--bbw-gray-7);
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.about-update__error {
+  margin-top: var(--bbw-space-2);
+  font-size: var(--bbw-font-12);
+  color: var(--bbw-danger);
+  word-break: break-all;
+}
+
+.about-update__guide {
+  margin-top: var(--bbw-space-1);
+  color: var(--bbw-gray-6);
+}
+
+.about-update__guide button {
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0 2px;
+  color: var(--bbw-primary);
+  cursor: pointer;
+  font-size: var(--bbw-font-12);
+}
+
 /* ============ 骨架屏 shimmer ============ */
 .bbw-skeleton {
   background: var(--bbw-gray-2);

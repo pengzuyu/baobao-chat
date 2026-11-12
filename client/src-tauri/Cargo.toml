@@ -23,6 +23,8 @@ tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 # 自动更新（16 篇 §5.1：ed25519 签名 manifest + /update/ 静态源；pubkey 未配置时禁用）
 tauri-plugin-updater = "2"
+# relaunch（D21：更新装完一键重启）
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
