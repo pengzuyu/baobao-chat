@@ -7,6 +7,7 @@
  */
 
 import { ApiError, apiOrigin, authToken, getErrorText, http } from '../../../shared/api/http';
+import { sha256HexStream } from './sha256';
 
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
@@ -92,14 +93,17 @@ export function uploadFile(
   });
 }
 
-/** 取下载票据（owner 或会话成员；一次性 120s） */
-export async function getDownloadTicket(fileId: string): Promise<DownloadTicket> {
+/** 取下载票据（owner 或会话成员；120s。variant=240/720 缩略变体——服务端惰性生成、
+ * 无变体自动回退原图，客户端无需判定；缺省=原图） */
+export async function getDownloadTicket(fileId: string, variant?: 'origin' | '240' | '720'): Promise<DownloadTicket> {
   if (USE_MOCK) return { url: `/api/v1/files/dl?t=mock-${fileId}`, expiresIn: 120 };
-  return http.get<DownloadTicket>(`/files/ticket/${encodeURIComponent(fileId)}`);
+  const q = variant && variant !== 'origin' ? `?variant=${variant}` : '';
+  return http.get<DownloadTicket>(`/files/ticket/${encodeURIComponent(fileId)}${q}`);
 }
 
-/** 票据相对路径 → 绝对地址（服务端返回 /api/v1 前缀相对 URL） */
+/** 票据 URL → 可用地址：S3 模式为预签名绝对地址直用（D25）；Local 模式相对路径拼 API origin */
 export function downloadUrl(ticketUrl: string): string {
+  if (/^https?:\/\//i.test(ticketUrl)) return ticketUrl;
   return `${apiOrigin()}${ticketUrl}`;
 }
 
@@ -127,19 +131,30 @@ export interface CheckResult {
   dedup: boolean;
 }
 
+/** 分片预签名 URL（D25 presign 模式；PUT 原始字节、免 Authorization、1h 时效、批 ≤32） */
+export interface UploadPartURL {
+  no: number;
+  url: string;
+  method: string;
+  expires_at: number; // ms
+}
+
 /** 分片会话初始化结果（POST /files/uploads；秒传命中直接回 file_id） */
 export interface UploadInitResult {
   upload_id?: string;
   part_size?: number;
   part_total?: number;
+  mode?: string; // presign=客户端 PUT 直传（D25）；缺省/relay=PATCH 中转
+  parts?: UploadPartURL[]; // presign 首批
   file_id?: string;
   dedup: boolean;
 }
 
-/** 断点续传位图（GET /files/uploads/{id}） */
+/** 断点续传位图（GET /files/uploads/{id}?from_part=N；from_part>0 附预签名续批） */
 export interface UploadStatusResult {
   upload_id: string;
   received: number[];
+  parts?: UploadPartURL[];
 }
 
 /** complete 结果（POST /files/uploads/{id}/complete；幂等回放同结果） */
@@ -148,13 +163,9 @@ export interface CompleteResult {
   dedup?: boolean;
 }
 
-/** 本地 sha256（hex；单文件 ≤20MB 整块计算——流式实现随大文件支持阶段三，登记） */
+/** 本地 sha256（hex；流式切片增量——大文件不再整块入内存，D25。见 sha256.ts） */
 export async function sha256Hex(file: File): Promise<string> {
-  const buf = await file.arrayBuffer();
-  const digest = await crypto.subtle.digest('SHA-256', buf);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+  return sha256HexStream(file);
 }
 
 /** 秒传预检（策略再校验在服务端：黑名单/上限不因预检豁免） */
@@ -164,7 +175,7 @@ export async function checkFile(sha256: string, size: number, name: string, conv
   });
 }
 
-/** 建分片会话（7 天有效；part_size 缺省 4MB） */
+/** 建分片会话（7 天有效；part_size 由服务端定：presign=8MB/relay=4MB——D25 拍板⑤） */
 export async function initChunkedUpload(req: {
   sha256: string; name: string; size: number; content_type?: string; conv_id?: string; part_size?: number;
 }): Promise<UploadInitResult> {
@@ -178,9 +189,10 @@ export async function initChunkedUpload(req: {
   });
 }
 
-/** 断点续传位图（已落盘分片号；会话过期 4008） */
-export async function fetchUploadStatus(uploadId: string): Promise<UploadStatusResult> {
-  return http.get<UploadStatusResult>(`/files/uploads/${encodeURIComponent(uploadId)}`);
+/** 断点续传位图（已落盘分片号；会话过期 4008。fromPart>0 附预签名续批） */
+export async function fetchUploadStatus(uploadId: string, fromPart = 0): Promise<UploadStatusResult> {
+  const q = fromPart > 0 ? `?from_part=${fromPart}` : '';
+  return http.get<UploadStatusResult>(`/files/uploads/${encodeURIComponent(uploadId)}${q}`);
 }
 
 /** 直传一片（PATCH 原始字节；覆盖写=坏块重传；超 part_size 4009） */
@@ -209,16 +221,125 @@ export async function completeChunkedUpload(uploadId: string): Promise<CompleteR
   return http.post<CompleteResult>(`/files/uploads/${encodeURIComponent(uploadId)}/complete`, {});
 }
 
-/** 分片阈值：超过则走分片链路（4MB/片，07 §1.2；阈值下 multipart 直传保留 XHR 进度） */
+/** 分片阈值：超过走分片会话链路（阈值下 multipart 中转直传保留 XHR 进度；D25 拍板④） */
 const CHUNKED_THRESHOLD = 8 << 20;
-const PART_SIZE = 4 << 20;
+
+/** URL 到期保护边（07 §4.1：到期前 10min 视为失效主动续签） */
+const PRESIGN_EXPIRE_MARGIN = 10 * 60_000;
 
 /**
- * 智能上传（D06 阶段二统一入口）：
- * ① sha256 → check 秒传（命中零上传直接回 file_id）
- * ② 未命中且 ≤8MB → multipart 直传（既有 XHR 进度路径）
- * ③ 未命中且 >8MB → 分片会话：init → 位图断点续传（跳过已收分片）→
- *    顺序 PATCH → complete；进度按字节比例（续传从已有分片起算）
+ * 预签名直传引擎（D25 presign 模式）：并行 3 PUT 直传 MinIO（大流量不经服务端）；
+ * 断点位图跳过已传分片；URL 临期/403 自动续签重批（不计失败次数）；单片重试 ≤3
+ * 指数退避；连续失败降并行 1（弱网）。进度按字节比例。
+ */
+async function uploadPresigned(
+  file: File,
+  init: UploadInitResult,
+  onProgress?: (percent: number, phase?: 'dedup' | 'direct' | 'chunked' | 'resuming') => void,
+): Promise<CompleteResult> {
+  const uploadId = init.upload_id!;
+  const partSize = init.part_size!;
+  const total = init.part_total!;
+  const sizeOf = (no: number): number =>
+    no === total ? file.size - (no - 1) * partSize : partSize;
+
+  // URL 缓存（init 首批 + status 续批回填）
+  const urls = new Map<number, UploadPartURL>();
+  (init.parts ?? []).forEach((p) => urls.set(p.no, p));
+
+  // 断点续传：位图跳过（进度从已有字节起算；resuming 相=07 篇 OQ-C29 枚举）
+  let received = new Set<number>();
+  try {
+    const st = await fetchUploadStatus(uploadId);
+    (st.parts ?? []).forEach((p) => urls.set(p.no, p));
+    received = new Set(st.received);
+  } catch {
+    /* 位图拉取失败按全量重传（分片覆盖写幂等） */
+  }
+  let done = 0;
+  received.forEach((no) => (done += sizeOf(no)));
+  const resuming = received.size > 0;
+  const report = () =>
+    onProgress?.(Math.min(99, Math.round((done / file.size) * 100)), resuming ? 'resuming' : 'chunked');
+  report();
+
+  // 取分片 URL：缓存未到期直用；临期/缺失 → status?from_part={no} 续批
+  const ensureUrl = async (no: number): Promise<string> => {
+    const p = urls.get(no);
+    if (p && p.expires_at - PRESIGN_EXPIRE_MARGIN > Date.now()) return p.url;
+    const st = await fetchUploadStatus(uploadId, no);
+    (st.parts ?? []).forEach((q) => urls.set(q.no, q));
+    const np = urls.get(no);
+    if (!np) throw new ApiError(9004, getErrorText(9004));
+    return np.url;
+  };
+
+  // 单片 PUT（403/400=签名过期 → 重签一次重试，不计失败）
+  const putPart = async (no: number, allowResign: boolean): Promise<void> => {
+    const url = await ensureUrl(no);
+    const blob = file.slice((no - 1) * partSize, Math.min(no * partSize, file.size));
+    const resp = await fetch(url, { method: 'PUT', body: blob }); // 预签名即凭证，免 Authorization
+    if ((resp.status === 403 || resp.status === 400) && allowResign) {
+      urls.delete(no);
+      return putPart(no, false);
+    }
+    if (!resp.ok) throw new ApiError(9004, `分片上传失败（${resp.status}）`);
+    done += sizeOf(no);
+    report();
+  };
+
+  // 工作池：queue + N 协程；activeGate 落实降并行（连败 2 → 并行 1，多出协程等待）
+  const queue: number[] = [];
+  for (let no = 1; no <= total; no++) if (!received.has(no)) queue.push(no);
+  let qi = 0;
+  let parallel = 3;
+  let active = 0;
+  let consecutiveFails = 0;
+  let firstErr: unknown = null;
+  const worker = async (): Promise<void> => {
+    while (qi < queue.length && !firstErr) {
+      while (active >= parallel && !firstErr) await new Promise((r) => setTimeout(r, 150));
+      if (firstErr) return;
+      const no = queue[qi++];
+      active++;
+      try {
+        await putPart(no, true);
+        consecutiveFails = 0;
+      } catch (e) {
+        // 单片三次指数退避；仍败即全局止（首错透传）
+        let last = e;
+        for (let attempt = 1; attempt < 3; attempt++) {
+          await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+          try {
+            await putPart(no, true);
+            last = null;
+            break;
+          } catch (e2) {
+            last = e2;
+          }
+        }
+        if (last) {
+          firstErr = firstErr ?? last;
+          break;
+        }
+        if (++consecutiveFails >= 2) parallel = 1; // 弱网：降并行
+      } finally {
+        active--;
+      }
+    }
+  };
+  const workers = Array.from({ length: Math.min(3, queue.length || 1) }, () => worker());
+  await Promise.all(workers);
+  if (firstErr) throw firstErr instanceof ApiError ? firstErr : new ApiError(9004, getErrorText(9004));
+  return completeChunkedUpload(uploadId);
+}
+
+/**
+ * 智能上传（D06+D25 统一入口）：
+ * ① sha256（流式增量）→ init 秒传（命中零上传直接回 file_id）
+ * ② 未命中且 ≤8MB → multipart 中转直传（既有 XHR 进度路径；拍板④小文件保留中转）
+ * ③ 未命中且 >8MB → 分片会话：mode=presign → 直传引擎（并行 3/续签/降级）；
+ *    mode=relay（Local 回落）→ 顺序 PATCH（part_size 用服务端下发值）
  * mock 模式直接走 multipart（服务端不在场，秒传/分片无意义）
  */
 export async function uploadFileSmart(
@@ -252,7 +373,7 @@ export async function uploadFileSmart(
   const sha = await sha256Hex(file);
   const init = await initChunkedUpload({
     sha256: sha, name: file.name, size: file.size,
-    content_type: file.type, conv_id: convId, part_size: PART_SIZE,
+    content_type: file.type, conv_id: convId, part_size: 0, // 服务端定片宽（presign=8MB/relay=4MB）
   });
   if (init.dedup && init.file_id) {
     onProgress?.(100, 'dedup');
@@ -261,7 +382,16 @@ export async function uploadFileSmart(
   if (!init.upload_id || !init.part_total) throw new ApiError(9004, getErrorText(9004));
   const uploadId = init.upload_id;
   const total = init.part_total;
-  // 断点续传：已收分片跳过（进度从已有字节起算；resuming 相=07 篇 OQ-C29 枚举）
+
+  // presign 模式（D25）：并行 PUT 直传
+  if (init.mode === 'presign') {
+    const done2 = await uploadPresigned(file, init, onProgress);
+    onProgress?.(100, 'chunked');
+    return { ...localMeta(), id: done2.file_id, dedup: done2.dedup };
+  }
+
+  // relay 模式（Local 回落）：顺序 PATCH（part_size 用服务端下发值，不再本地硬编码）
+  const partSize = init.part_size ?? 4 << 20;
   let received = new Set<number>();
   try {
     const st = await fetchUploadStatus(uploadId);
@@ -270,14 +400,16 @@ export async function uploadFileSmart(
     /* 位图拉取失败按全量重传（服务端覆盖写幂等） */
   }
   const resuming = received.size > 0;
-  const doneBytes0 = received.size * PART_SIZE;
-  let done = doneBytes0;
+  let done = 0;
+  received.forEach((no) => {
+    done += no === total ? file.size - (no - 1) * partSize : partSize;
+  });
   const report = () => onProgress?.(Math.min(99, Math.round((done / file.size) * 100)), resuming ? 'resuming' : 'chunked');
   report();
   for (let no = 1; no <= total; no++) {
     if (received.has(no)) continue;
-    const start = (no - 1) * PART_SIZE;
-    const blob = file.slice(start, Math.min(start + PART_SIZE, file.size));
+    const start = (no - 1) * partSize;
+    const blob = file.slice(start, Math.min(start + partSize, file.size));
     await uploadPart(uploadId, no, blob);
     done += blob.size;
     report();

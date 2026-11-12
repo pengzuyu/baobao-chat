@@ -654,20 +654,22 @@ function AudioClipCard({ body, mine }: { body: FileMessageBody; mine: boolean })
 }
 
 /**
- * 图片气泡（D06 阶段一）：取一次性票据 → fetch blob → objectURL 渲染（票据一次性不可直接作 src 复用）；
- * 点击灯箱放大查看（三级预览只做原图+灯箱，服务端缩略不做——端内 CSS 渲染原图，登记）；
+ * 图片气泡（D06+D25）：气泡取 240 缩略变体票据（服务端惰性生成、无变体自动回退
+ * 原图——首屏先糊后清）；点击灯箱懒加载原图（origin 票据按需取，未加载完回落缩略）；
  * 4014/加载失败红态可重试。
  */
 function ImageCard({ body }: { body: FileMessageBody }) {
   const [objUrl, setObjUrl] = useState<string | null>(null);
+  const [originUrl, setOriginUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [zoom, setZoom] = useState(false);
   const urlRef = useRef<string | null>(null);
+  const originRef = useRef<string | null>(null);
 
   const load = useCallback(async (fileId: string) => {
     setFailed(false);
     try {
-      const t = await getDownloadTicket(fileId);
+      const t = await getDownloadTicket(fileId, '240');
       const resp = await fetch(downloadUrl(t.url));
       if (!resp.ok) throw new Error(`status ${resp.status}`);
       const blob = await resp.blob();
@@ -684,9 +686,34 @@ function ImageCard({ body }: { body: FileMessageBody }) {
     void load(body.file_id);
     return () => {
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      if (originRef.current) URL.revokeObjectURL(originRef.current);
       urlRef.current = null;
+      originRef.current = null;
     };
   }, [load, body.file_id]);
+
+  // 灯箱原图懒加载（zoom 时才取 origin 票据；失败静默用缩略）
+  useEffect(() => {
+    if (!zoom || originUrl) return;
+    let alive = true;
+    (async () => {
+      try {
+        const t = await getDownloadTicket(body.file_id, 'origin');
+        const resp = await fetch(downloadUrl(t.url));
+        if (!resp.ok) return;
+        const blob = await resp.blob();
+        if (!alive) return;
+        const u = URL.createObjectURL(blob);
+        originRef.current = u;
+        setOriginUrl(u);
+      } catch {
+        /* 原图取失败：灯箱继续展示缩略 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [zoom, originUrl, body.file_id]);
 
   // 灯箱 Esc 关闭
   useEffect(() => {
@@ -737,7 +764,7 @@ function ImageCard({ body }: { body: FileMessageBody }) {
       {body.caption ? <span className="msg-image__caption">{body.caption}</span> : null}
       {zoom ? (
         <div className="image-lightbox" data-testid="image-lightbox" onClick={() => setZoom(false)}>
-          <img className="image-lightbox__img" src={objUrl} alt={body.name ?? '图片'} />
+          <img className="image-lightbox__img" src={originUrl ?? objUrl} alt={body.name ?? '图片'} />
           <div className="image-lightbox__caption">
             {body.name} {body.width && body.height ? `${body.width}×${body.height}` : ''}
           </div>
