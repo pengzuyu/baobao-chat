@@ -199,6 +199,7 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             duration_ms: Some(12),
         },
         RuntimeToHost::PermissionRequest {
+            session_id: "sess-1".into(),
             request_id: "req-1".into(),
             tool: "run_command".into(),
             risk: RiskLevel::High,
@@ -211,6 +212,7 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
         },
         // D20 澄清提问（不超时）
         RuntimeToHost::ClarifyRequest {
+            session_id: "sess-1".into(),
             question_id: "q-call-1".into(),
             question: "用哪种方式修复？".into(),
             header: Some("修复方式".into()),
@@ -531,6 +533,7 @@ fn golden_tool_call_and_result() {
 fn golden_permission_request_and_response() {
     golden(
         &RuntimeToHost::PermissionRequest {
+            session_id: "sess-9".into(),
             request_id: "req-9".into(),
             tool: "run_command".into(),
             risk: RiskLevel::High,
@@ -542,7 +545,7 @@ fn golden_permission_request_and_response() {
             options: vec![GrantScope::Once, GrantScope::Session, GrantScope::Permanent],
         },
         json!({
-            "type":"permission.request","requestId":"req-9","tool":"run_command",
+            "type":"permission.request","sessionId":"sess-9","requestId":"req-9","tool":"run_command",
             "risk":"high","args":{"cmd":"cargo build"},"reason":"高危命令需确认",
             "preview":{"kind":"command","command":"cargo build"},
             "options":["once","session","permanent"]
@@ -568,6 +571,7 @@ fn golden_permission_request_and_response() {
 fn golden_clarify_request_and_response() {
     golden(
         &RuntimeToHost::ClarifyRequest {
+            session_id: "sess-9".into(),
             question_id: "q-call-9".into(),
             question: "用哪种方式修复？".into(),
             header: Some("修复方式".into()),
@@ -584,7 +588,7 @@ fn golden_clarify_request_and_response() {
             multi_select: true,
         },
         json!({
-            "type":"clarify.request","questionId":"q-call-9",
+            "type":"clarify.request","sessionId":"sess-9","questionId":"q-call-9",
             "question":"用哪种方式修复？","header":"修复方式",
             "options":[
                 {"label":"加漂移窗口","description":"±60s 容忍时钟偏移"},

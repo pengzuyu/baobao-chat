@@ -798,6 +798,10 @@ pub enum RuntimeToHost {
     /// 权限确认请求（UNT；等待下行 permission.response，120s 超时=拒绝）
     #[serde(rename = "permission.request", rename_all = "camelCase")]
     PermissionRequest {
+        /// 发起会话（2026-11-12 补：wire 原不带会话字段，宿主壳无从路由 → 审批
+        /// 弹框在真机链路永不弹、120s 全超时；缺省空串兼容旧宿主/旧 golden）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        session_id: String,
         request_id: String,
         tool: String,
         risk: RiskLevel,
@@ -813,6 +817,10 @@ pub enum RuntimeToHost {
     /// 会话「停止」可中断收口 cancelled。D20 ask_user 工具触发）
     #[serde(rename = "clarify.request", rename_all = "camelCase")]
     ClarifyRequest {
+        /// 发起会话（2026-11-12 补：与 permission.request 同因——wire 无会话字段
+        /// 则宿主壳无法路由到会话流，提问卡永不弹；缺省空串兼容旧宿主）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        session_id: String,
         question_id: String,
         /// 完整问题文本
         question: String,

@@ -221,6 +221,7 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             duration_ms: Some(*duration_ms),
         },
         SessionEvent::PermissionRequest {
+            session_id,
             request_id,
             tool,
             risk: r,
@@ -232,6 +233,10 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             ..
         } => {
             RuntimeToHost::PermissionRequest {
+                // 2026-11-12：协议补会话字段——原「不带会话字段（D11 §4 原样）」导致
+                // 宿主壳无法路由，真机审批弹框永不弹、120s 全超时（request_id 路由表
+                // 仅服务下行应答，从未上行告知宿主）
+                session_id: session_id.clone(),
                 request_id: request_id.clone(),
                 tool: tool.clone(),
                 risk: risk(r),
@@ -255,11 +260,12 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
                     })
                     .collect(),
             }
-            // session_id 已进路由表（emit 处登记），协议 PermissionRequest 不带会话字段（D11 §4 原样）
         }
         SessionEvent::PermissionResolved { .. } => return None, // 镜像事件：宿主自己发的，不回显
-        // D20 澄清：question_id 已进路由表（emit 处登记），协议 ClarifyRequest 不带会话字段
+        // D20 澄清：question_id 已进路由表（emit 处登记）；2026-11-12 协议补会话字段
+        // （同 permission.request——无会话字段则宿主壳无法路由，提问卡永不弹）
         SessionEvent::ClarifyRequest {
+            session_id,
             question_id,
             question,
             header,
@@ -270,6 +276,7 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             let options: Vec<bbrt_protocol::ClarifyOption> =
                 serde_json::from_str(options_json).unwrap_or_default();
             RuntimeToHost::ClarifyRequest {
+                session_id: session_id.clone(),
                 question_id: question_id.clone(),
                 question: question.clone(),
                 header: header.clone(),
