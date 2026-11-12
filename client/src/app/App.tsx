@@ -14,7 +14,9 @@ import { ChatPage } from '../features/im/pages/ChatPage';
 import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
 import { ContactsPage } from '../features/contacts/pages/ContactsPage';
-import { KbPage } from '../features/kb/pages/KbPage';
+import { ArticlePage } from '../features/kb/pages/ArticlePage';
+import { KbHomePage } from '../features/kb/pages/KbHomePage';
+import { SearchPage } from '../features/kb/pages/SearchPage';
 import { MailPage } from '../features/mail/pages/MailPage';
 import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
 import { AppStorePage } from '../features/eco/pages/AppStorePage';
@@ -244,7 +246,9 @@ export function App() {
         <Route path="/notifications" element={<NotificationCenterPage />} />
         <Route path="/im/notifications" element={<Navigate to="/notifications" replace />} />
         {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
-        <Route path="/kb" element={<KbPage />} />
+        <Route path="/kb" element={<KbHomePage />} />
+        <Route path="/kb/search" element={<SearchPage />} />
+        <Route path="/kb/d/:docId" element={<ArticlePage />} />
         {/* 邮箱（22 篇 MAI-01~04：三栏/写信/设置/搜索） */}
         <Route path="/mail" element={<MailPage />} />
         {/* 专家库（D14 PAG-13~15：公司/个人库/编辑器；协作图视图随 agent_* 接线） */}

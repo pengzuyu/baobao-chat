@@ -46,6 +46,8 @@ export interface KbDoc {
   status: DocStatus;
   error_msg?: string;
   version: number;
+  view_count?: number; // D24 浏览量
+  space_type?: 'company' | 'personal'; // D24 维度标识
   created_by: string;
   created_at: number;
   updated_at: number;
@@ -89,6 +91,7 @@ export interface KbQueryHit {
   snippet: string;
   highlight?: Array<[number, number]>;
   score: number;
+  rerank_score?: number; // D24 态三（0/缺省=未启用重排）
 }
 
 /** POST /kb/query 响应 */
@@ -97,4 +100,58 @@ export interface KbQueryResp {
   took_ms: number;
   degraded?: string[]; // 'vector'=向量路降级（仅关键词）
   filtered_hint?: string; // OQ-D10 合规提示："部分结果被策略隐藏"（存在不可见空间时）
+}
+
+// ── D24 博客化增量（浏览量/榜单/我的）──
+
+/** 个人概览（GET /kb/me/summary） */
+export interface KbMeSummary {
+  doc_count: number;
+  month_new: number;
+  total_views: number;
+  views_7d: number;
+  author_rank: number; // 0=未上榜
+  last_doc?: KbDoc;
+}
+
+/** 我的文章列表响应 */
+export interface KbMyDocsResp {
+  items: KbDoc[];
+  next_cursor?: string;
+}
+
+/** 榜单文章行（latest/hot） */
+export interface KbRankDoc {
+  doc_id: string;
+  title: string;
+  user_id: string;
+  user_name: string;
+  dept_name?: string;
+  node_name: string; // 专栏（空=根）
+  view_count: number;
+  hot: number; // 窗口浏览（latest 恒 0）
+  created_at: number;
+}
+
+/** 作者榜行 */
+export interface KbRankAuthor {
+  rank: number;
+  user_id: string;
+  user_name: string;
+  dept_name?: string;
+  doc_count: number;
+  total_views: number;
+}
+
+/** 榜单响应（board 对应数组填一） */
+export interface KbRankingsResp {
+  board: 'latest' | 'hot' | 'authors';
+  window?: '7d' | '30d' | 'all';
+  docs?: KbRankDoc[];
+  authors?: KbRankAuthor[];
+}
+
+/** 浏览上报响应 */
+export interface KbViewResp {
+  view_count: number;
 }

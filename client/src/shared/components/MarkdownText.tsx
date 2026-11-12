@@ -1,24 +1,58 @@
 /**
  * markdown 纯文本降级渲染（不引第三方渲染器；覆盖结论/日报用到的语法子集：
- * 围栏代码/表格/标题/列表/粗体/行内码）。
+ * 围栏代码/表格/标题/列表/粗体/行内码；D24 补链接/图片/有序列表——博客阅读页需要，
+ * agent 消费方只增不改）。
  * 原实现于 features/agent/StreamMessage（PAG-03 §3.3 降级规范），
  * D18 内嵌 Agent 卡起移入 shared 供 im 落流卡/活动卡与 agent 工作台共用。
  */
 
 import { memo, type ReactNode } from 'react';
 
-/** 行内标记降级渲染：`code` → <code>，**bold** → <strong> */
+/** 链接出站协议白名单（javascript:/data: 等拒绝——降级渲染的最小 XSS 防线） */
+function safeHref(url: string): string | null {
+  const u = url.trim();
+  if (/^(https?:\/\/|\/)/i.test(u)) return u;
+  return null;
+}
+
+/** 行内标记降级渲染：`code` → <code>，**bold** → <strong>，
+ * [text](url) → <a target=_blank>，![alt](url) → <img>（D24） */
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
   const out: ReactNode[] = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  const re = /(`[^`]+`|\*\*[^*]+\*\*|!?\[[^\]]*\]\([^)\s]+\))/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) out.push(text.slice(last, m.index));
     const token = m[0];
-    if (token.startsWith('`')) out.push(<code key={`${keyPrefix}-c${i}`}>{token.slice(1, -1)}</code>);
-    else out.push(<strong key={`${keyPrefix}-b${i}`}>{token.slice(2, -2)}</strong>);
+    if (token.startsWith('`')) {
+      out.push(<code key={`${keyPrefix}-c${i}`}>{token.slice(1, -1)}</code>);
+    } else if (token.startsWith('**')) {
+      out.push(<strong key={`${keyPrefix}-b${i}`}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith('![')) {
+      // 图片 ![alt](url)
+      const im = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
+      if (im) {
+        const href = safeHref(im[2]);
+        out.push(href
+          ? <img key={`${keyPrefix}-img${i}`} className="agent-md__img" src={href} alt={im[1]} loading="lazy" />
+          : token);
+      } else {
+        out.push(token);
+      }
+    } else {
+      // 链接 [text](url)
+      const lm = /^\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
+      if (lm) {
+        const href = safeHref(lm[2]);
+        out.push(href
+          ? <a key={`${keyPrefix}-a${i}`} className="agent-md__a" href={href} target="_blank" rel="noreferrer noopener">{lm[1] || href}</a>
+          : token);
+      } else {
+        out.push(token);
+      }
+    }
     last = m.index + token.length;
     i += 1;
   }
@@ -106,6 +140,23 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
       continue;
     }
 
+    // 有序列表（D24：`1. item`——序号任意，渲染统一 <ol>）
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*\d+[.)]\s+/, ''));
+        i += 1;
+      }
+      blocks.push(
+        <ol key={key++} className="agent-md__list agent-md__list--ordered">
+          {items.map((it, li) => (
+            <li key={li}>{renderInline(it, `ol${key}-${li}`)}</li>
+          ))}
+        </ol>,
+      );
+      continue;
+    }
+
     // 空行
     if (line.trim() === '') {
       i += 1;
@@ -120,7 +171,8 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
       !lines[i].startsWith('```') &&
       !lines[i].trimStart().startsWith('|') &&
       !/^#{1,3}\s+/.test(lines[i]) &&
-      !/^\s*[-*]\s+/.test(lines[i])
+      !/^\s*[-*]\s+/.test(lines[i]) &&
+      !/^\s*\d+[.)]\s+/.test(lines[i])
     ) {
       para.push(lines[i]);
       i += 1;

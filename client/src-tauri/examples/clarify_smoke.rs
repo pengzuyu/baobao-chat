@@ -31,9 +31,7 @@ fn main() {
                     let qid = payload["question_id"].as_str().unwrap_or("").to_string();
                     println!(
                         "== clarify.request 到达壳侧 emit: question={} options={} multi_select={}",
-                        payload["question"],
-                        payload["options"],
-                        payload["multi_select"]
+                        payload["question"], payload["options"], payload["multi_select"]
                     );
                     *question_id.lock().unwrap() = qid;
                     saw_request.store(true, Ordering::SeqCst);
@@ -67,7 +65,9 @@ fn main() {
     std::fs::create_dir_all(&ws).expect("create workspace");
     let host = Arc::new(AgentHost::new(data_dir, emit));
 
-    let sid = host.start_session(ws.to_str().unwrap(), "ask", "strong", None, None).expect("start_session");
+    let sid = host
+        .start_session(ws.to_str().unwrap(), "ask", "strong", None, None)
+        .expect("start_session");
     println!("== session: {sid}");
 
     host.request(

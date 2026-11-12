@@ -62,6 +62,12 @@ export const qk = {
     chunks: (docId: string): QueryKeyRO => ['kb', 'chunks', docId],
     /** jobs 简版 ['kb','jobs',spaceId,status] */
     jobs: (spaceId: string, status: string = 'all'): QueryKeyRO => ['kb', 'jobs', spaceId, status],
+    /** 个人概览 ['kb','me','summary']（D24） */
+    meSummary: (): QueryKeyRO => ['kb', 'me', 'summary'],
+    /** 我的文章 ['kb','me','docs',cursor] */
+    myDocs: (cursor: string = ''): QueryKeyRO => ['kb', 'me', 'docs', cursor],
+    /** 榜单 ['kb','rankings',board,window] */
+    rankings: (board: string, window: string = ''): QueryKeyRO => ['kb', 'rankings', board, window],
   },
   admin: {
     /** 仪表盘 ['admin','dashboard']（60s 轮询刷新；PAD-02） */

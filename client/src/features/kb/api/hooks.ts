@@ -107,3 +107,40 @@ export function useReingest() {
     },
   });
 }
+
+// ── D24 博客化 hooks ──
+
+import { fetchMyDocs, fetchMySummary, fetchRankings, viewDoc } from './kb';
+
+/** 个人概览（首页概览卡；view 上报后失效刷新） */
+export function useMySummary() {
+  return useQuery({ queryKey: qk.kb.meSummary(), queryFn: fetchMySummary });
+}
+
+/** 我的全部文章（cursor 翻页） */
+export function useMyDocs(cursor: string = '') {
+  return useQuery({
+    queryKey: qk.kb.myDocs(cursor),
+    queryFn: () => fetchMyDocs(cursor || undefined),
+  });
+}
+
+/** 榜单（board/window） */
+export function useRankings(board: 'latest' | 'hot' | 'authors', window: '7d' | '30d' | 'all' = '7d') {
+  return useQuery({
+    queryKey: qk.kb.rankings(board, board === 'hot' ? window : ''),
+    queryFn: () => fetchRankings(board, board === 'hot' ? window : undefined),
+  });
+}
+
+/** 浏览上报（打开阅读页即调；成功后失效概览/榜单） */
+export function useViewDoc() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (docId: string) => viewDoc(docId),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['kb', 'me'] });
+      void qc.invalidateQueries({ queryKey: ['kb', 'rankings'] });
+    },
+  });
+}

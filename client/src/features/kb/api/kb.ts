@@ -216,3 +216,66 @@ export async function removeSpaceGrant(spaceId: string, grantId: string): Promis
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ── D24 博客化：浏览量/榜单/我的 ──
+
+import type { KbMeSummary, KbMyDocsResp, KbRankingsResp, KbViewResp } from '../model/types';
+
+/** 浏览上报（日去重+作者本人不计；打开阅读页即调） */
+export async function viewDoc(docId: string): Promise<KbViewResp> {
+  if (USE_MOCK) {
+    await delay(80);
+    return { view_count: 42 };
+  }
+  return http.post<KbViewResp>(`/kb/docs/${encodeURIComponent(docId)}/view`);
+}
+
+/** 个人概览（首页概览卡） */
+export async function fetchMySummary(): Promise<KbMeSummary> {
+  if (USE_MOCK) {
+    await delay(150);
+    return { doc_count: 6, month_new: 2, total_views: 1284, views_7d: 86, author_rank: 3 };
+  }
+  return http.get<KbMeSummary>('/kb/me/summary');
+}
+
+/** 我的全部文章（两维度，cursor 翻页） */
+export async function fetchMyDocs(cursor?: string, limit?: number): Promise<KbMyDocsResp> {
+  if (USE_MOCK) {
+    await delay(150);
+    return { items: mockDocs().map((d) => ({ ...d, view_count: 12, space_type: 'personal' as const })) };
+  }
+  const q = new URLSearchParams();
+  if (cursor) q.set('cursor', cursor);
+  if (limit) q.set('limit', String(limit));
+  const qs = q.toString();
+  return http.get<KbMyDocsResp>(`/kb/me/docs${qs ? `?${qs}` : ''}`);
+}
+
+/** 榜单（board=latest|hot|authors；window=7d|30d|all 仅 hot；仅公共维度） */
+export async function fetchRankings(board: 'latest' | 'hot' | 'authors', window?: '7d' | '30d' | 'all'): Promise<KbRankingsResp> {
+  if (USE_MOCK) {
+    await delay(200);
+    if (board === 'authors') {
+      return {
+        board,
+        authors: [
+          { rank: 1, user_id: 'u-1002', user_name: '李四', doc_count: 32, total_views: 8921 },
+          { rank: 2, user_id: 'u-1001', user_name: '张三', doc_count: 23, total_views: 1204 },
+        ],
+      };
+    }
+    return {
+      board,
+      window,
+      docs: mockDocs().map((d, i) => ({
+        doc_id: d.id, title: d.title, user_id: 'u-1001', user_name: '张三',
+        node_name: i === 0 ? '技术分享' : '', view_count: 42 + i, hot: board === 'hot' ? 42 - i * 10 : 0,
+        created_at: d.created_at,
+      })),
+    };
+  }
+  const q = new URLSearchParams({ board });
+  if (window) q.set('window', window);
+  return http.get<KbRankingsResp>(`/kb/rankings?${q.toString()}`);
+}
