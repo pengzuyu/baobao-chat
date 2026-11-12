@@ -1,6 +1,6 @@
 /**
  * 主窗布局（D01 §4/§5.1）：
- * - 左侧 56px 图标导航栏（品牌 Logo + 消息/通知/知识库/邮件/Agent/专家/管理 + 头像菜单）
+ * - 左侧 56px 图标导航栏（品牌 Logo + 消息/通知/知识库/邮件/Agent/管理 + 头像菜单；专家/应用入口 2026-11-12 起暂时隐藏）
  * - 顶部连接状态横幅（六态 offline/degraded 全局落点，D01 §7）
  * - 内容区 <Outlet/>：路由切换不销毁 IM 的 WSS 连接与未读状态
  */
@@ -8,7 +8,7 @@
 import { useEffect, useMemo } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Dropdown, type MenuProps } from 'antd';
-import { Bell, Bot, Boxes, BrainCircuit, Gauge, Mail, MessageCircle, Sparkles } from 'lucide-react';
+import { Bell, Bot, BrainCircuit, Gauge, Mail, MessageCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
@@ -34,8 +34,9 @@ function useNavItems(): NavItem[] {
   { to: '/kb', icon: BrainCircuit, label: t('nav.kb') },
   { to: '/mail', icon: Mail, label: t('nav.mail') },
   { to: '/agent', icon: Bot, label: t('nav.agent') },
-  { to: '/experts', icon: Sparkles, label: t('nav.experts') },
-  { to: '/apps', icon: Boxes, label: '应用' },
+  // 2026-11-12 用户指示先隐藏，恢复时取消注释即可（路由保留可直接深链访问）
+  // { to: '/experts', icon: Sparkles, label: t('nav.experts') },
+  // { to: '/apps', icon: Boxes, label: '应用' },
   ];
 }
 
