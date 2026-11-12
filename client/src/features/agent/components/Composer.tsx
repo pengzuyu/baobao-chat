@@ -146,19 +146,22 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
       />
       <div className="agent-composer__foot">
         {modePicker}
-        {modelPicker}
-        <div className="agent-composer__actions">
-          {/* 停止（红色）：中断当前回答，会话保留可继续 */}
-          {canStop ? (
-            <Button variant="danger" onClick={onStop} className="agent-composer__stop">
-              <Square size={12} aria-hidden />
-              停止
+        {/* 模型 chip 紧挨操作区（2026-11-12 用户口径：靠近发送按钮） */}
+        <div className="agent-composer__foot-right">
+          {modelPicker}
+          <div className="agent-composer__actions">
+            {/* 停止（红色）：中断当前回答，会话保留可继续 */}
+            {canStop ? (
+              <Button variant="danger" onClick={onStop} className="agent-composer__stop">
+                <Square size={12} aria-hidden />
+                停止
+              </Button>
+            ) : null}
+            <Button variant="primary" onClick={submit} disabled={disabled || !text.trim()}>
+              <Send size={12} aria-hidden />
+              发送
             </Button>
-          ) : null}
-          <Button variant="primary" onClick={submit} disabled={disabled || !text.trim()}>
-            <Send size={12} aria-hidden />
-            发送
-          </Button>
+          </div>
         </div>
       </div>
     </div>

@@ -155,8 +155,10 @@ export const AgentSessionList = memo(function AgentSessionList({
     return { projectGroups: groups, dailySessions: daily };
   }, [sessions, workspaces]);
 
-  // 日常区=IM 来源 embedded 会话（chatSessions；2026-11-11 用户裁决一一对应）
-  const chatSessions = useMemo(() => dailySessions.filter((s) => embeddedIds.has(s.id)), [dailySessions, embeddedIds]);
+  // 日常区=全部日常会话（2026-11-12 用户报修：新建任务（工作台日常会话）发送后
+  // 不落左栏——旧口径只显示 IM embedded 来源，工作台新建的日常会话无处渲染；
+  // 现平铺全部 workspace='' 会话，embedded 徽标仍按来源标注）
+  const chatSessions = dailySessions;
 
   // 折叠态：默认展开含活跃会话的项目；切项目即用（状态不持久化，v0.1 简化）
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});

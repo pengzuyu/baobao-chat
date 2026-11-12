@@ -789,22 +789,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           };
         }
         case 'modelSwitched': {
-          const list = s.streams[event.sessionId] ?? [];
+          // 2026-11-12 用户口径：切换提示不进回复气泡（chip 即时反映档位/直达引用，
+          // 时间线插话打扰阅读）；仅更新会话模型状态
           return {
             modelBySession: { ...s.modelBySession, [event.sessionId]: { policy: event.to, override: event.modelOverride } },
-            streams: {
-              ...s.streams,
-              [event.sessionId]: [
-                ...list,
-                {
-                  kind: 'system',
-                  key: nextKey('sys'),
-                  text: event.modelOverride
-                    ? `模型切换：${event.from} → ${event.modelOverride}（${event.reason}）`
-                    : `模型档位切换：${event.from} → ${event.to}（${event.reason}）`,
-                },
-              ],
-            },
           };
         }
         case 'memorySaved': {
