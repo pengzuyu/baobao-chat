@@ -266,7 +266,7 @@
 | K5 | 签名密钥启用 | 用户执行 `npm run tauri signer generate`（口令自设、私钥自管），pubkey 填 tauri.conf.json plugins.updater.pubkey 后提交——updater 壳侧条件注册即活 | lib.rs 启动不再打印「updater 未配置公钥」 | [ ] 待用户出钥 |
 | K6 | 真机验收 | ①v0.1.0 装机（Intel+M 各一）②服务器 publish v0.1.1 ③静默提示+关于页检查→下载→重启升级→版本变化 ④Windows NSIS passive/Linux AppImage/deb 引导 ⑤生产包 bbrt 走 http://域名/v1 跑通 IM agent 卡 ⑥官网下载区随发布自动更新 | 用户真机走查（清单详见 D21 §8） | [ ] 待验收 |
 
-## 批次 L：插件系统（D22，2026-11-12 设计定稿待实施）
+## 批次 L：插件系统（D22，2026-11-12 L1-L5 编码完成待真机验收）
 
 > 定案（用户裁决 2026-11-12）：包格式采 **Claude Code 插件格式超集**（`.bbw-plugin/`
 > 主、`.claude-plugin/`/`.zcode-plugin/` 三目录名都认）；**工具一律 MCP**（不做进程内
@@ -276,8 +276,8 @@
 
 | # | 事项 | 改动点 | 验收 | 状态 |
 |---|---|---|---|---|
-| L1 | 服务端市场 | 迁移 0036（plugin_pkg/plugin_version/plugin_install 三表，包体 bytea ≤10MB）+ repo 双实现（memory 兜底+postgres）+ 发布校验器（清单三目录名/组件存在性/zip slip）+ 用户面 catalog 检索（q/category/component/安装态/hasUpdate）/详情/install/download/mine + 管理面发布/版本 publish/下架/policy + 单测 | go build/vet/test 绿；curl 发包→检索→下载 zip 闭环 | [ ] |
-| L2 | 客户端插件页 | PluginPage（市场/已安装/详情/配置表单四区）+ 下载落盘双端复跑校验 + plugin-state.json（enabled/activeVersion）多版本管理 + SkillTab.tsx 删除并入 + `/plugins` 路由挂工作台域 | tsc/vite build 绿；真机检索→安装→已安装管理 | [ ] |
-| L3 | 装配链 | 宿主装配器（系统级 env 源+插件级 .mcp.json 两源合并+`${PLUGIN_ROOT}` 替换）+ 宿主协议 `mcp.config` 动态下发（McpClient 重配：断开移除/懒连新增）+ SkillIndex 扫描路径扩展（无 triggers 技能 name 兜底触发+索引区）+ tools.reload 接线 | 真机：装带 MCP 插件→会话内出现 `mcp.<server>.*` 工具且调用过审批卡 | [ ] |
-| L4 | 身份层 | bbrt-mcp 调用层三变量族替换（`${BBW_USER_TOKEN}` HTTP-only/`${CONFIG:*}`/`${PLUGIN_ROOT}`）+ `auth.push`/`config.push` 宿主协议 + 钥匙串接线 + OBO `_meta.bbwObo` 泛化 + 身份使用标识 UI | 真机：HTTP 插件工具带 Bearer 调通同生态服务；config token 注入外部系统头 | [ ] |
-| L5 | 命令与专家 | `/` 命令列表+模板渲染（$ARGUMENTS/$1..$9，纯客户端注入用户消息）+ agents frontmatter→专家 Persona Manifest 翻译器（走现有专家装配交集） | 真机：/release 出模板；插件专家可被选中会诊 | [ ] |
+| L1 | 服务端市场 | 迁移 0036（plugin_pkg/plugin_version/plugin_install 三表，包体 bytea ≤10MB）+ repo 双实现（memory 兜底+postgres）+ 发布校验器（清单三目录名/组件存在性/zip slip）+ 用户面 catalog 检索（q/category/component/安装态/hasUpdate）/详情/install/download/mine + 管理面发布/版本 publish/下架/policy + 单测 | go build/vet/test 绿；curl 发包→检索→下载 zip 闭环 | [x] 2026-11-12（a1b618d；含 :8091 curl 冒烟闭环实测） |
+| L2 | 客户端插件页 | PluginPage（市场/已安装/详情/配置表单四区）+ 下载落盘双端复跑校验 + plugin-state.json（enabled/activeVersion）多版本管理 + SkillTab.tsx 删除并入 + `/plugins` 路由挂工作台域 | tsc/vite build 绿；真机检索→安装→已安装管理 | [x] 2026-11-12（e5f6416；SkillTab 已删并入） |
+| L3 | 装配链 | 宿主装配器（系统级 env 源+插件级 .mcp.json 两源合并+`${PLUGIN_ROOT}` 替换）+ 宿主协议 `mcp.config` 动态下发（McpClient 重配：断开移除/懒连新增）+ SkillIndex 扫描路径扩展（无 triggers 技能 name 兜底触发+索引区）+ tools.reload 接线 | 真机：装带 MCP 插件→会话内出现 `mcp.<server>.*` 工具且调用过审批卡 | [x] 2026-11-12（a5ed35e） |
+| L4 | 身份层 | bbrt-mcp 调用层三变量族替换（`${BBW_USER_TOKEN}` HTTP-only/`${CONFIG:*}`/`${PLUGIN_ROOT}`）+ `auth.push`/`config.push` 宿主协议 + 钥匙串接线 + OBO `_meta.bbwObo` 泛化 + 身份使用标识 UI | 真机：HTTP 插件工具带 Bearer 调通同生态服务；config token 注入外部系统头 | [x] 2026-11-12（c87834b；实现收敛：CONFIG/USER_ID 装配静态替换+保存/换号重推，弃 config.push/auth.push——仅 TOKEN 必须动态） |
+| L5 | 命令与专家 | `/` 命令列表+模板渲染（$ARGUMENTS/$1..$9，纯客户端注入用户消息）+ agents frontmatter→专家 Persona Manifest 翻译器（走现有专家装配交集） | 真机：/release 出模板；插件专家可被选中会诊 | [x] 2026-11-12（51f4833；IM 聊天页斜杠命令后续登记） |
