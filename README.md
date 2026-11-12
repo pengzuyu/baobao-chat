@@ -48,7 +48,7 @@
 
 - 公共规范：D01 客户端设计系统/断点/六态/工程结构 · D02 服务端模块划分/事件总线
 - 模块篇：D03 IM · D06 文件图片 · D07 知识库 · D08 Agent 工作台 · D09 生态技能 · D10 管理后台 · D12 身份与组织域（多租户/角色/部门/用户 + 浏览器一键登录）（D04 通话/D17 群通话已随瘦身移除）
-- 专题篇：D11 Runtime 内部（crate/状态机/stdio 全协议/沙箱管线） · D13 变更控制模式（三档）与无 Docker 沙箱（bwrap/Seatbelt/JobObject） · D14 专家 Agent 与 Team Graph 多智能体协作（对齐 dsh 生态） · D21 自动更新与官网发布链（BBW_PUBLIC_URL 打包注入 / updater / 官网 / 发布脚本族）
+- 专题篇：D11 Runtime 内部（crate/状态机/stdio 全协议/沙箱管线） · D13 变更控制模式（三档）与无 Docker 沙箱（bwrap/Seatbelt/JobObject） · D14 专家 Agent 与 Team Graph 多智能体协作（对齐 dsh 生态） · D21 自动更新与官网发布链（BBW_PUBLIC_URL 打包注入 / updater / 官网 / 发布脚本族） · D22 插件系统（Claude Code 格式超集五类组件 / 插件市场与 PluginPage / MCP 动态下发与身份变量注入）
 
 ## 推荐阅读路径
 
