@@ -25,3 +25,7 @@ func (m *Module) AdminAPI() orgapi.UserAdminReader { return m.svc }
 
 // DeptScopeAPI 部门归属读（kb 三层知识检索经 main 闭包消费；同上依赖规则）
 func (m *Module) DeptScopeAPI() orgapi.DeptScopeReader { return m.svc }
+
+// DirectoryAPI 通讯录检索（2026-11-12 登录页公开搜人：工号/姓名/拼音模糊+分页；
+// 返回具体类型供 main 公开路由直调）
+func (m *Module) DirectoryAPI() *orgservice.Service { return m.svc }

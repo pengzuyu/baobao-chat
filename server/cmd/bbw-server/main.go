@@ -62,6 +62,7 @@ import (
 	orgacl "github.com/baobaowork/server/internal/org/acl"
 	"github.com/baobaowork/server/internal/org/api"
 	"github.com/baobaowork/server/internal/org/repo"
+	orgservice "github.com/baobaowork/server/internal/org/service"
 	"github.com/baobaowork/server/internal/platform/authjwt"
 	"github.com/baobaowork/server/internal/platform/config"
 	errx "github.com/baobaowork/server/internal/platform/errors"
@@ -311,6 +312,9 @@ func main() {
 	authAPI := authMod.API()
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authAPI))
 	mux.HandleFunc("POST /api/v1/auth/refresh", handleRefresh(authAPI))
+	// 登录页搜人（2026-11-12 账号改选人下拉）：预登录公开检索——内网定位可接受；
+	// 只出工号/姓名/组织路径，无邮箱等敏感字段；单租户 v0.1=tenant 1
+	mux.HandleFunc("GET /api/v1/auth/users", handleAuthUserSearch(orgMod.DirectoryAPI()))
 
 	// setup 初始化向导（16 篇 §2.2 Web 化主通道）：空租户免认证引导首个管理员；
 	// 建户即关（租户内有任何用户 → bootstrap 永久 1014）。CLI bootstrap 降级为兜底
@@ -1081,6 +1085,22 @@ func decodeJSON(r *http.Request, v any) error {
 		return errx.New(errx.CodeBadRequest, "请求体非法")
 	}
 	return nil
+}
+
+// handleAuthUserSearch 登录页搜人（预登录公开：工号/姓名/拼音全拼/首字母模糊 +
+// 工号升序 cursor 翻页；搜索态与翻页可叠加——q 与 cursor 同时透传）
+func handleAuthUserSearch(svc *orgservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		cursor := r.URL.Query().Get("cursor")
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		items, next, err := svc.UserDirectorySearch(r.Context(), 1, q, cursor, limit)
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeInternal, "用户检索失败"))
+			return
+		}
+		httpx.OK(w, r, map[string]any{"items": items, "next_cursor": next})
+	}
 }
 
 func handleLogin(svc authapi.AuthService) http.HandlerFunc {

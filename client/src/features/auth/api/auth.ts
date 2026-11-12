@@ -75,6 +75,47 @@ export async function apiRefresh(refreshToken: string): Promise<LoginResult> {
   };
 }
 
+/** ── 登录页搜人（2026-11-12 账号改选人下拉；预登录公开检索） ── */
+
+/** 通讯录卡片行（下拉一项：工号+姓名+组织链路名） */
+export interface UserCard {
+  employee_no: string;
+  display_name: string;
+  org_path: string;
+}
+
+/** 用户搜索页（cursor 翻页；next_cursor 空=到底） */
+export interface UserSearchPage {
+  items: UserCard[];
+  next_cursor: string;
+}
+
+/** 搜人：q 命中 工号/姓名/拼音全拼/首字母（不区分大小写）；工号升序；搜索态与翻页可叠加 */
+export async function apiSearchUsers(q: string, cursor?: string, limit = 20): Promise<UserSearchPage> {
+  if (USE_MOCK) {
+    await delay(150);
+    const all: UserCard[] = [
+      { employee_no: 'alice', display_name: 'Alice', org_path: '总公司/技术部' },
+      { employee_no: 'bob', display_name: 'Bob（张伯）', org_path: '总公司/技术部/前端组' },
+      { employee_no: 'zhangsan', display_name: '张三', org_path: '总公司/技术部/前端组' },
+    ].filter(
+      (u) =>
+        !q ||
+        u.employee_no.includes(q.toLowerCase()) ||
+        u.display_name.toLowerCase().includes(q.toLowerCase()) ||
+        u.org_path.toLowerCase().includes(q.toLowerCase()),
+    );
+    const start = cursor ? all.findIndex((u) => u.employee_no > cursor) : 0;
+    const items = all.slice(Math.max(0, start), Math.max(0, start) + limit);
+    return { items, next_cursor: items.length === limit ? items[items.length - 1].employee_no : '' };
+  }
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (cursor) params.set('cursor', cursor);
+  if (limit) params.set('limit', String(limit));
+  return http.get<UserSearchPage>(`/auth/users${params.size > 0 ? `?${params}` : ''}`);
+}
+
 /** ── setup 初始化向导（16 篇 §2.2 Web 化：空系统引导首个管理员） ── */
 
 /** 系统是否已初始化（租户内已有用户）。mock 模式恒已初始化——纯前端走查不被向导打断 */

@@ -1,6 +1,8 @@
 /**
  * 认证页 Pxx-AUTH（D01 §3 认证窗 420×560）：
- * 账号口令表单；1007 错误锁定倒计时展示；错误文案按错误码映射（D01 §11）。
+ * 2026-11-12：账号改为搜人选择（工号/拼音/名字模糊检索下拉——选中自动填充工号，
+ * 不再手填；卡片带工号/姓名/组织链路，滚动分页按工号排序）。
+ * 1007 错误锁定倒计时展示；错误文案按错误码映射（D01 §11）。
  * D11：登录命中 must_change_pwd（导入用户初始口令）→ 二步改密表单
  * （token 已发但被本页拦截，改密成功才放行进应用）。
  */
@@ -11,7 +13,8 @@ import { Navigate } from 'react-router-dom';
 import { getErrorText } from '../../../shared/api/http';
 import { Logo } from '../../../shared/ui/Logo';
 import { useAuthStore } from '../store/auth';
-import { apiSetupStatus } from '../api/auth';
+import { apiSetupStatus, type UserCard } from '../api/auth';
+import { UserPicker } from '../components/UserPicker';
 
 /** 锁定剩余秒数（每秒心跳刷新） */
 function useLockCountdown(lockUntil: number): number {
@@ -34,6 +37,10 @@ export function LoginPage() {
 
   const lockSecondsLeft = useLockCountdown(lockUntil);
   const locked = lockSecondsLeft > 0;
+
+  // 搜人选账号（2026-11-12）：下拉选中后自动填充工号，不再手填
+  const [picked, setPicked] = useState<UserCard | null>(null);
+  const [pickError, setPickError] = useState('');
 
   // 空系统检测：未初始化 → 初始化向导（16 篇 §2.2；探测失败静默留在登录页）
   const [needsSetup, setNeedsSetup] = useState(false);
@@ -122,11 +129,20 @@ export function LoginPage() {
           layout="vertical"
           className="login-card__form"
           disabled={locked}
-          onFinish={(values) => void login(String(values.account ?? ''), String(values.password ?? ''))}
+          onFinish={(values) => {
+            if (!picked) {
+              setPickError('请先搜索并选择账号');
+              return;
+            }
+            setPickError('');
+            void login(picked.employee_no, String(values.password ?? ''));
+          }}
         >
-          <Form.Item name="account" label="账号" rules={[{ required: true, message: '请输入账号' }]}>
-            <Input placeholder="请输入账号" autoComplete="username" size="large" />
-          </Form.Item>
+          <div className="login-card__field">
+            <label className="login-card__label">账号</label>
+            <UserPicker selected={picked} onSelect={setPicked} disabled={locked} />
+            {pickError ? <div className="login-card__error" data-testid="login-pick-error">{pickError}</div> : null}
+          </div>
           <Form.Item name="password" label="口令" rules={[{ required: true, message: '请输入口令' }]}>
             <Input.Password placeholder="请输入口令" autoComplete="current-password" size="large" />
           </Form.Item>

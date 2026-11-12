@@ -17,12 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mozillazg/go-pinyin"
-
 	"github.com/baobaowork/server/internal/admin/api"
 	"github.com/baobaowork/server/internal/admin/repo"
 	"github.com/baobaowork/server/internal/org/api"
 	errx "github.com/baobaowork/server/internal/platform/errors"
+	"github.com/baobaowork/server/internal/platform/pinyinutil"
 )
 
 // Options 装配项（main 注入；跨域闭包 + 管理员白名单）
@@ -1031,24 +1030,9 @@ func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int
 
 /* ── 单建用户（2026-11-12 通讯录合并页：组织树上直接开人）── */
 
-// pinyinBase 姓名→工号基名：中文逐字转全拼小写（go-pinyin Normal 风格）；ASCII
-// 字母数字保留（统一小写）；其余字符跳过。多音字取首读音，生成不准由端侧可改兜底。
+// pinyinBase 姓名→工号基名（实现抽至 platform/pinyinutil 供登录页搜人共用；此处薄委托）
 func pinyinBase(name string) string {
-	var b strings.Builder
-	args := pinyin.NewArgs()
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r + ('a' - 'A'))
-		case r >= 0x80:
-			if py := pinyin.SinglePinyin(r, args); len(py) > 0 {
-				b.WriteString(py[0])
-			}
-		}
-	}
-	return b.String()
+	return pinyinutil.Pinyin(name)
 }
 
 // SuggestEmpno 工号建议：基名重名两位补零递增（zhangsan→zhangsan02→zhangsan03，

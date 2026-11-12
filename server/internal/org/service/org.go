@@ -3,9 +3,12 @@ package orgservice
 
 import (
 	"context"
+	"sort"
+	"strings"
 
 	"github.com/baobaowork/server/internal/org/api"
 	"github.com/baobaowork/server/internal/org/repo"
+	"github.com/baobaowork/server/internal/platform/pinyinutil"
 )
 
 // Service 实现 orgapi.UserReader
@@ -114,4 +117,123 @@ func (s *Service) UserDeptChainOf(ctx context.Context, tenantID, userID int64) (
 		}
 	}
 	return chain, nil
+}
+
+/* ── 登录页搜人（2026-11-12：账号输入改选人下拉，预登录公开检索）── */
+
+// UserCard 通讯录卡片行（登录页下拉一项；org_path=主部门链路名 xx公司/a部门/xx组）
+type UserCard struct {
+	EmployeeNo string `json:"employee_no"`
+	Name       string `json:"display_name"`
+	OrgPath    string `json:"org_path"`
+}
+
+// UserDirectorySearch 通讯录模糊检索：q 命中 工号/姓名/拼音全拼/拼音首字母（不区分
+// 大小写）；仅启用中人类账号；按工号升序 cursor 翻页（cursor=上一页末条工号，空=首页，
+// 搜索态与翻页可叠加——q 变化前端重置 cursor）。内存实现（v0.1 用户量级）：全量用户
+// 一次 + 部门挂靠按部门聚合（部门数小，避免按用户 N+1）。
+func (s *Service) UserDirectorySearch(ctx context.Context, tenantID int64, q, cursor string, limit int) ([]UserCard, string, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	q = strings.ToLower(strings.TrimSpace(q))
+	cursor = strings.TrimSpace(cursor)
+
+	users, _, err := s.repo.ListUsers(ctx, orgapi.UserListFilter{TenantID: tenantID, Status: orgapi.UserStatusActive, Limit: 5000})
+	if err != nil {
+		return nil, "", err
+	}
+
+	// 部门 id→名字/父链（ListTree 嵌套树展平，一次深度遍历）
+	type deptMeta struct {
+		name   string
+		parent int64
+	}
+	depts := make(map[int64]deptMeta)
+	var walk func(n orgapi.DeptNode, parentID int64)
+	walk = func(n orgapi.DeptNode, parentID int64) {
+		if _, dup := depts[n.ID]; dup {
+			return
+		}
+		depts[n.ID] = deptMeta{name: n.Name, parent: parentID}
+		for _, c := range n.Children {
+			walk(c, n.ID)
+		}
+	}
+	tree, err := s.repo.ListTree(ctx, tenantID)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, r := range tree {
+		walk(r, 0)
+	}
+	orgPath := func(deptID int64) string {
+		var names []string
+		cur, visited := deptID, map[int64]bool{}
+		for cur != 0 && !visited[cur] {
+			visited[cur] = true
+			d, ok := depts[cur]
+			if !ok {
+				break
+			}
+			names = append(names, d.name)
+			cur = d.parent
+		}
+		// names 目前 dept→root，反转成 root→dept 后以 / 连接
+		for i, j := 0, len(names)-1; i < j; i, j = i+1, j-1 {
+			names[i], names[j] = names[j], names[i]
+		}
+		return strings.Join(names, "/")
+	}
+
+	// 用户→主部门（按部门聚合成员，primary 优先）
+	primaryOf := make(map[int64]int64)
+	for id := range depts {
+		rows, derr := s.repo.ListDeptUsers(ctx, tenantID, id)
+		if derr != nil {
+			continue
+		}
+		for _, u := range rows {
+			if _, seen := primaryOf[u.UserID]; !seen || u.IsPrimary {
+				primaryOf[u.UserID] = id
+			}
+		}
+	}
+
+	// 过滤（q 空=全量）+ 工号升序 + cursor 之后的 limit+1 条探测 has_more
+	matched := make([]orgapi.User, 0, len(users))
+	for _, u := range users {
+		if u.Type != orgapi.UserTypeHuman || u.Status != orgapi.UserStatusActive {
+			continue
+		}
+		if q != "" {
+			full, initials := pinyinutil.Pinyin(u.DisplayName), pinyinutil.Initials(u.DisplayName)
+			if !(strings.Contains(strings.ToLower(u.EmployeeNo), q) ||
+				strings.Contains(strings.ToLower(u.DisplayName), q) ||
+				strings.Contains(full, q) ||
+				strings.Contains(initials, q)) {
+				continue
+			}
+		}
+		matched = append(matched, u)
+	}
+	sort.Slice(matched, func(i, j int) bool { return matched[i].EmployeeNo < matched[j].EmployeeNo })
+
+	page := make([]UserCard, 0, limit)
+	next := ""
+	for _, u := range matched {
+		if cursor != "" && u.EmployeeNo <= cursor {
+			continue
+		}
+		if len(page) >= limit {
+			next = page[len(page)-1].EmployeeNo
+			break
+		}
+		page = append(page, UserCard{
+			EmployeeNo: u.EmployeeNo,
+			Name:       u.DisplayName,
+			OrgPath:    orgPath(primaryOf[u.ID]),
+		})
+	}
+	return page, next, nil
 }
