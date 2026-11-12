@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useMemo } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Dropdown, type MenuProps } from 'antd';
 import { Bell, Bot, BrainCircuit, Gauge, Mail, MessageCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -18,6 +18,7 @@ import { useConnectionStore } from '../shared/store/connection';
 import { useThemeStore, type ThemeMode } from '../shared/store/theme';
 import { t, useI18nStore } from '../shared/i18n';
 import { Logo } from '../shared/ui/Logo';
+import { ErrorBoundary } from '../shared/ui/ErrorBoundary';
 
 interface NavItem {
   to: string;
@@ -63,6 +64,7 @@ function ConnectionBanner() {
 export function MainLayout() {
   const navItems = useNavItems();
   const navigate = useNavigate();
+  const location = useLocation();
   // IM WS 事件常驻绑定：任意页面实时入流 + 未读徽标（订阅随主布局，D01 §4.2）
   useImWsEvents();
   const user = useAuthStore((s) => s.user);
@@ -160,7 +162,9 @@ export function MainLayout() {
       <div className="main-area">
         <ConnectionBanner />
         <div className="route-content">
-          <Outlet />
+          <ErrorBoundary resetKey={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </div>
       </div>
     </div>

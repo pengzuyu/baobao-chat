@@ -1096,6 +1096,25 @@ body {
   z-index: 2;
 }
 
+/* ============ ErrorBoundary（渲染异常兜底，2026-11-12）============ */
+/* panel：内容区内嵌（布局存活）；page：main.tsx 根部整页兜底 */
+.err-boundary {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.err-boundary--page {
+  min-height: 100vh;
+}
+
+.err-boundary .state-view__action {
+  display: flex;
+  justify-content: center;
+  gap: var(--bbw-space-2);
+  flex-wrap: wrap;
+}
+
 /* ============ 占位页（PlaceholderPage）============ */
 .placeholder-page__icon {
   width: 64px;

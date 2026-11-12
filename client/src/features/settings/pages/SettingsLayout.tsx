@@ -3,9 +3,10 @@
  * S 档 tab 转横向滚动条（global.css 断点处理）；内容页由子路由渲染。
  */
 
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { t, useI18nStore } from '../../../shared/i18n';
 import { ArrowDownUp, Bell, Bot, Info, Keyboard, Settings } from 'lucide-react';
+import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 
 function useTabs() {
   useI18nStore((s) => s.locale); // 响应语言切换（E12）
@@ -21,6 +22,7 @@ function useTabs() {
 
 export function SettingsLayout() {
   const tabs = useTabs();
+  const location = useLocation();
   return (
     <div className="settings-page">
       <aside className="settings-nav">
@@ -39,7 +41,9 @@ export function SettingsLayout() {
         </nav>
       </aside>
       <div className="settings-body">
-        <Outlet />
+        <ErrorBoundary resetKey={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </div>
     </div>
   );

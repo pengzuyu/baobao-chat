@@ -5,8 +5,9 @@
  * - 阶段一无 perm.changed 实时显隐/二次验证票据条（取舍登记，见 D10 §3.0 裁剪）
  */
 
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Users, Zap, Package } from 'lucide-react';
+import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 
 const TABS = [
   { to: '/admin', icon: Gauge, label: '仪表盘', end: true },
@@ -27,6 +28,7 @@ const TABS = [
 ] as const;
 
 export function AdminLayout() {
+  const location = useLocation();
   return (
     <div className="settings-page admin-page">
       <aside className="settings-nav">
@@ -46,7 +48,9 @@ export function AdminLayout() {
         </nav>
       </aside>
       <div className="settings-body admin-body">
-        <Outlet />
+        <ErrorBoundary resetKey={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </div>
     </div>
   );
