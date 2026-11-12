@@ -35,6 +35,9 @@
 | D22 | [插件系统详细设计](D22-插件系统详细设计.md) | 09/D08/D11/D14 | **插件市场**：Claude Code 插件格式超集（.bbw-plugin 主/三目录名都认）·五类组件一包（skills/工具=MCP/命令/专家/hooks 只读不执行）·工具一律 MCP（进程内不做/dsh 兼容否决）·市场三表+包体 bytea+发布双端校验（zip slip）·PluginPage 市场/已安装/配置表单（SkillTab 并入删除）·落盘多版本+activeVersion 回滚·`mcp.config`/`auth.push`/`config.push` 宿主协议（MCP 装配从 env 走向动态下发）·三变量族身份注入（`${BBW_USER_TOKEN}` HTTP-only/`${CONFIG:*}` 钥匙串/`${PLUGIN_ROOT}`） |
 | D23 | [Agent 记忆系统升级详细设计](D23-Agent记忆系统升级详细设计.md) | 08/09/D11/D15/D19 | **公共层换制**（D15 文件族+LRU→journal+USER.md 压实视图）：预算 3000/2400/单条 80 字·十类硬枚举+硬度轴（禁止/授权硬·压实不可删只能显式解除·目标时敏）·压实漏斗（规则→仅软条目进 bbw-fast→硬条目程序拼回→校验失败宁旧勿错）·view=缓存/journal=真相+启动 reconcile·更正=forget+write 零 LLM（条目粒度防同名误伤）·provenance 只进 journal·项目层沿用收口（LRU 废除/hook ≤40 限长/last_used/蒸馏纪律 P1）·不做身份键（人轴外包 OS）·状态类延后·BBW_MEMORY_ROOT 联调隔离·插件 MCP 信任边界（记忆目录不进插件 fs 授权） |
 
+| D25 | [对象存储与预签名直传设计](D25-对象存储与预签名直传设计.md) | 07/D06/13/16 | **MinIO 替换本地盘**（双副本 404 治本）：aws-sdk-go-v2·双实现回落（BBW_S3_ENDPOINT 空=Local 开发零负担）·仅 >8MB 分片预签名直传（≤8MB 中转保留，07 全量预签名修订）·part_size 4→8MB（S3 ≥5MiB 硬限）·对外端点 nginx 443 `/oss/` 路径代理（strip+Host 透传+签名按去前缀路径算、URL 拼回）·complete=CompleteMultipart+流式 sha 校验+CopyObject(>5GB UploadPartCopy 环)·ticket=预签名 GET 120s+variant(240/720 JPEG 缩略同批，webp 弃)·mc mirror 迁移脚本 file 表零改 |
+| D24 | 知识库轻量化=博客方向（草案待收尾，编号预留） | 11 | 六拍板：目录留/人人投稿/首页榜单/AI 写文/跨空间不做/成员制空间去组织化 |
+
 ## 模板（D01 §13）
 
 概述与范围 → 页面与路由 → 页面详细设计（线框+六态） → 交互详细设计（INT 事件表+状态机） → 接口详细设计（全参数+示例 JSON） → 模型设计（DDL+TS 类型） → 响应式适配（四档断点） → 模块划分（目录树） → 边界与异常 → 开放问题。

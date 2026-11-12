@@ -302,3 +302,15 @@
 | M2 | 压实漏斗+工具面 | compact.rs（Compactor trait+prompt 契约+parse）+ reproject 超限路径（硬条目程序拼回不进 LLM/四重校验/snapshot op 持久化）+ bbrt-session FastCompactor（bbw-fast）+ main set_compactor 接线 + memory_forget（tombstone+移除清单 0/1/N 回显）/memory_read（touch last_used+日常 8002 引导）工具与分发 + knowledge/ LRU 废除+hook 渲染层截断 ≤40+last_used | 压实产物 ≤3000 且硬条目逐字保留断言（含「硬条目不进压实输入批次」）；forget 三态；快照后常规写入免压实 | [x] 2026-11-12（4debbf8；FakeCompactor 两套+tools 五断言链） |
 | M3 | 协议+记忆页+联调隔离 | memory.forget REQ/result 协议对（golden 锁定）+ MemoryListItem 增 globalType + bbrt list 用户段直读 global replay（带十类标签）/forget 处理臂 + 壳 memory_forget 命令 + 前端桥 forgetMemory（tauri/mock）+store 动作+记忆页 global 条目（十类 chip/撤销走 forget/meta 标注 USER.md）+ MemoryEngine::open_root（BBW_MEMORY_ROOT 覆盖） | tsc/vite build 绿；记忆页用户页签=USER.md 条目可见可删 | [x] 2026-11-12（本提交；顺修 D22 L4 遗漏的 agent_bridge 测试 Shared.user initializer） |
 | M4 | 真机验收 | D23 §9 六项走查（十类落盘/回落教训/禁止→解除更正链/压实与断 provider/记忆页/8020+BBW_MEMORY_ROOT） | 用户真机走查 | [ ] |
+
+## 批次 O：对象存储与预签名直传（D25，2026-11-12 设计定稿）
+
+> 动机=compose `nginx-lb→app×2` 双副本 + v0.1 本地盘 = 文件随机 404（部署阻塞项）；compose 内 minio/桶/env 占位已久未接。拍板六条见 D25 §1 勿重提（aws-sdk-go-v2 / nginx /oss 路径代理+Host 透传 / 空 endpoint 回落 Local / 仅 >8MB 直传 / part_size 8MB / JPEG 缩略）。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|------|--------|------|------|
+| O1 | 服务端 S3 存储层 | aws-sdk-go-v2 依赖 + store/s3.go（Save/Promote/Open/Head/staging 五法 S3 实现，key=t/{tenant}/{sha2}/{sha}）+ S3Options 双端点构造（endpoint/public/bucket/前缀）+ main.go BBW_S3_ENDPOINT 空回落 Local | go build/test 绿；S3 测试 env 门控（BBW_TEST_S3_ADDR 配了才跑） | [ ] |
+| O2 | 预签名编排+缩略图 | init 响应 mode/parts[{no,url,method,expires_at}]（presign 首批 ≤32 张 1h）+ status ?from_part= ListParts 位图+续签 + complete=CompleteMultipart→流式 sha 校验→CopyObject(>5GB UploadPartCopy 环)→建行 + ticket 预签名 GET 120s（对外端点拼前缀）+ ?variant=origin/240/720 + JPEG 缩略生成（240/720 失败不阻塞）+ DTO thumbs | go test 绿；S3 集成链（配 env 后 init→PUT→complete→ticket 全通） | [ ] |
+| O3 | 客户端直传引擎 | uploadFileSmart presign 模式（跟随 mode/parts：PUT 并行 3→失败降 1、403 续签重批不计失败、断点位图跳过）+ sha256Hex 增量流式（TS 实现，弃整块 arrayBuffer）+ downloadUrl 绝对地址直用 + 图片气泡 s240 先糊后清 | tsc + vite build 绿；真机走查归 §9 | [ ] |
+| O4 | 部署接线+迁移 | nginx-lb `/oss/` location（strip+Host 透传）+ minio-init mc cors（PUT/OPTIONS）+ migrate-files-to-minio.sh（mc mirror，file 表零改）+ .env.tpl BBW_S3_PUBLIC_ENDPOINT/BUCKET | compose config 校验；迁移后历史文件可下载 | [ ] |
+| O5 | 文档收尾 | D25 落地注记（首批实测数据/偏差）+ 本批次 | 口径可追溯 | [ ] |
