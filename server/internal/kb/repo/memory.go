@@ -20,6 +20,7 @@ type Memory struct {
 	chunks  map[int64]Chunk
 	bySpace map[int64][]int64 // space_id → doc ids（列表序维护省事：遍历时再过滤）
 	docViews map[docViewKey]bool // 日去重浏览流水（kb_doc_view 内存同构，D24）
+	settings map[int64]*Settings // kb_settings 内存同构（D24 epoch）
 }
 
 var _ Repo = (*Memory)(nil)
@@ -30,6 +31,7 @@ func NewMemory() *Memory {
 		nextID: 0, spaces: map[int64]Space{}, nodes: map[int64]Node{},
 		docs: map[int64]Doc{}, chunks: map[int64]Chunk{}, bySpace: map[int64][]int64{},
 		docViews: map[docViewKey]bool{},
+		settings: map[int64]*Settings{},
 	}
 }
 
@@ -266,6 +268,9 @@ func (m *Memory) IngestCommit(_ context.Context, docID int64, chunks []Chunk, us
 		c.TenantID = d.TenantID
 		c.DocID = d.ID
 		c.SpaceID = d.SpaceID
+		if c.EmbedEpoch <= 0 { // 直写路径兜底
+			c.EmbedEpoch = 1
+		}
 		c.CreatedAt = now
 		m.chunks[c.ID] = c
 	}
@@ -395,9 +400,18 @@ func (m *Memory) candidatesLocked(tenantID int64, spaceIDs []int64) []ChunkHit {
 }
 
 // SearchVector 内存余弦（与 pgvector <=> 同语义；正交/负相关剔除同 PG 轨）
-func (m *Memory) SearchVector(_ context.Context, tenantID int64, spaceIDs []int64, vec []float32, topK int) ([]ChunkHit, error) {
+func (m *Memory) SearchVector(_ context.Context, tenantID int64, spaceIDs []int64, vec []float32, topK, epoch int) ([]ChunkHit, error) {
 	m.mu.RLock()
 	hits := m.candidatesLocked(tenantID, spaceIDs)
+	if epoch > 0 { // D24：向量路只命中当前代（旧代靠关键词路兜底）
+		kept := hits[:0]
+		for _, h := range hits {
+			if c, ok := m.chunks[h.ChunkID]; ok && c.EmbedEpoch == epoch {
+				kept = append(kept, h)
+			}
+		}
+		hits = kept
+	}
 	m.mu.RUnlock()
 	for i := range hits {
 		hits[i].Score = cosine(vec, hits[i].emb)
@@ -735,3 +749,57 @@ func (m *Memory) UserStats(_ context.Context, tenantID, userID int64, monthStart
 	}
 	return st, nil
 }
+
+// ── epoch 重建（D24 §5.3；内存轨）──
+
+// GetSettings 单行读取（缺行=默认）
+func (m *Memory) GetSettings(_ context.Context, tenantID int64) (Settings, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if st, ok := m.settings[tenantID]; ok {
+		return *st, nil
+	}
+	return DefaultSettings(), nil
+}
+
+// SaveSettings 单行 upsert
+func (m *Memory) SaveSettings(_ context.Context, tenantID int64, st Settings) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := st
+	m.settings[tenantID] = &cp
+	return nil
+}
+
+// ListReadyDocIDs 全部 ready 文档 ID（id 升序）
+func (m *Memory) ListReadyDocIDs(_ context.Context, tenantID int64) ([]int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := make([]int64, 0, len(m.docs))
+	for _, d := range m.docs {
+		if d.TenantID == tenantID && d.Status == DocReady {
+			ids = append(ids, d.ID)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids, nil
+}
+
+// UpdateChunkEmbeddings 按 seq 整批替换向量与代次（幂等）
+func (m *Memory) UpdateChunkEmbeddings(_ context.Context, tenantID, docID int64, vecsBySeq map[int][]float32, epoch int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, c := range m.chunks {
+		if c.TenantID == tenantID && c.DocID == docID {
+			if vec, ok := vecsBySeq[c.Seq]; ok {
+				c.Embedding = vec
+				c.EmbedEpoch = epoch
+				m.chunks[id] = c
+			}
+		}
+	}
+	return nil
+}
+
+// RebuildEmbeddingColumn 内存轨 no-op（无列类型概念）
+func (m *Memory) RebuildEmbeddingColumn(_ context.Context, _ int64, _ int) error { return nil }

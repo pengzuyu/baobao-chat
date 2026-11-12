@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	kbrepo "github.com/baobaowork/server/internal/kb/repo"
 	errx "github.com/baobaowork/server/internal/platform/errors"
@@ -625,4 +627,115 @@ func TestRankingsCompanyOnly(t *testing.T) {
 		t.Fatalf("作者榜: %v %+v", err, au.Authors)
 	}
 	_ = b
+}
+
+// TestQueryRerank D24 态三：RerankFn 重排改变次序；失败→degraded=reranker 直出
+func TestQueryRerank(t *testing.T) {
+	svc := newTestService(t, Options{Embedder: fakeTopical(map[string]int{"令牌": 0, "红烧肉": 1})})
+	ctx := context.Background()
+	sid := mustInt(t, companyOf(t, svc))
+	if _, err := svc.IngestDoc(ctx, tenantID, alice, sid, 0, "红烧肉大全", "text", "红烧肉的传统做法与火候掌握", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.IngestDoc(ctx, tenantID, alice, sid, 0, "令牌规范", "text", "当令牌过期时客户端应静默刷新", 0); err != nil {
+		t.Fatal(err)
+	}
+	// 注入重排：把含「过期」的文档提到首位
+	svc2 := New(Options{
+		Embedder: fakeTopical(map[string]int{"令牌": 0, "红烧肉": 1}),
+		Reranker: func(_ context.Context, q string, docs []string, topN int) ([]RerankHit, error) {
+			_ = q
+			hits := make([]RerankHit, 0, len(docs))
+			for i, d := range docs {
+				score := 0.0
+				if strings.Contains(d, "过期") {
+					score = 0.99
+				} else {
+					score = 0.1
+				}
+				hits = append(hits, RerankHit{Index: i, Score: score})
+			}
+			sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+			if topN > 0 && len(hits) > topN {
+				hits = hits[:topN]
+			}
+			return hits, nil
+		},
+	}, svc.repo)
+	resp, err := svc2.Query(ctx, tenantID, alice, nil, "令牌 红烧肉", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Items) < 2 || resp.Items[0].Title != "令牌规范" || resp.Items[0].RerankScore == 0 {
+		t.Fatalf("rerank 应把「过期」文档提首: %+v", resp.Items)
+	}
+	// rerank 失败 → degraded=reranker，RRF 序直出
+	svc3 := New(Options{
+		Embedder: fakeTopical(map[string]int{"令牌": 0, "红烧肉": 1}),
+		Reranker: func(_ context.Context, _ string, _ []string, _ int) ([]RerankHit, error) {
+			return nil, errors.New("rerank down")
+		},
+	}, svc.repo)
+	resp3, err := svc3.Query(ctx, tenantID, alice, nil, "令牌 红烧肉", 10)
+	if err != nil || len(resp3.Items) == 0 {
+		t.Fatalf("rerank 失败不应阻塞检索: %v %+v", err, resp3)
+	}
+	found := false
+	for _, d := range resp3.Degraded {
+		if d == "reranker" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("应标记 degraded=reranker: %+v", resp3.Degraded)
+	}
+}
+
+// TestEpochRebuild D24 §5.3：重建=epoch+1 全量重嵌；过渡期向量路只命中当前代、
+// 关键词路全量兜底；维度探测不符 7018；running 重复触发 7017
+func TestEpochRebuild(t *testing.T) {
+	embed8 := fakeTopical(map[string]int{"规范": 0})
+	svc := newTestService(t, Options{Embedder: embed8})
+	ctx := context.Background()
+	sid := mustInt(t, companyOf(t, svc))
+	doc, err := svc.IngestDoc(ctx, tenantID, alice, sid, 0, "安全规范", "text", "安全规范正文内容", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 维度探测不符 → 7018（声明 1024 实际 8）
+	if _, err := svc.RebuildEmbeddings(ctx, tenantID, "bge-m3", 1024, false); errx.From(err).Code != errx.CodeKBEmbedDimsMismatch {
+		t.Fatalf("应 7018: %v", err)
+	}
+	// 正常重建（同维度渐进：8→8）
+	st, err := svc.RebuildEmbeddings(ctx, tenantID, "test-embed-8d", 8, false)
+	if err != nil || st.RebuildStatus != "running" {
+		t.Fatalf("重建启动: %v %+v", err, st)
+	}
+	// 重建中重复触发 → 7017
+	if _, err := svc.RebuildEmbeddings(ctx, tenantID, "test-embed-8d", 8, false); errx.From(err).Code != errx.CodeKBRebuildRunning {
+		t.Fatalf("应 7017: %v", err)
+	}
+	// 等 goroutine 跑完（内存轨毫秒级；轮询进度）
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		cur, _ := svc.GetEmbeddingSettings(ctx, tenantID)
+		if cur.RebuildStatus == "idle" && cur.RebuildDone == cur.RebuildTotal && cur.RebuildTotal == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	final, _ := svc.GetEmbeddingSettings(ctx, tenantID)
+	if final.RebuildStatus != "idle" || final.RebuildDone != 1 || final.EmbedEpoch != 2 || final.EmbedModel != "test-embed-8d" {
+		t.Fatalf("重建完成态: %+v", final)
+	}
+	// 新代检索正常（向量路命中 epoch2；关键词路兜底）
+	resp, err := svc.Query(ctx, tenantID, alice, nil, "安全规范", 10)
+	if err != nil || len(resp.Items) == 0 {
+		t.Fatalf("重建后检索应命中: %v %+v", err, resp)
+	}
+	// chunk 已在新代（repo 层直验代次；ChunkDTO 不透出实现细节）
+	rawChunks, rerr := svc.repo.ListChunks(ctx, tenantID, mustInt(t, doc.ID))
+	if rerr != nil || len(rawChunks) == 0 || rawChunks[0].EmbedEpoch != 2 {
+		t.Fatalf("chunk 应在 epoch2: %v %+v", rerr, rawChunks)
+	}
 }

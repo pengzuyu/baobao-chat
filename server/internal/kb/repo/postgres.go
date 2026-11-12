@@ -321,7 +321,7 @@ func (p *Postgres) CreateDoc(ctx context.Context, d Doc) (Doc, error) {
 		id, d.TenantID, d.SpaceID, i64OrNull(d.NodeID), d.Title, d.SourceType,
 		strOrNull(d.SourceRef), d.Ext, d.Size, d.Status, d.Version, strOrNull(d.Content), d.CreatedBy).Scan(
 		&d.ID, &d.TenantID, &d.SpaceID, &d.NodeID, &d.Title, &d.SourceType, &d.SourceRef, &d.Ext,
-		&d.Size, &d.Status, &d.ErrorMsg, &d.Version, &d.Content, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		&d.Size, &d.Status, &d.ErrorMsg, &d.Version, &d.Content, &d.ViewCount, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return Doc{}, err
 	}
 	return d, tx.Commit(ctx)
@@ -382,6 +382,9 @@ func (p *Postgres) IngestCommit(ctx context.Context, docID int64, chunks []Chunk
 			c := chunks[i]
 			c.ID = nextID + int64(i)
 			c.TenantID, c.DocID, c.SpaceID = d.TenantID, d.ID, d.SpaceID
+			if c.EmbedEpoch <= 0 { // 直写路径兜底（service 正常路径恒显式传当前代）
+				c.EmbedEpoch = 1
+			}
 			var embArg any
 			if p.useVector {
 				embArg = vecToText(c.Embedding) // '[v1,v2,…]' 文本（vector 列隐式强转）
@@ -389,9 +392,9 @@ func (p *Postgres) IngestCommit(ctx context.Context, docID int64, chunks []Chunk
 				embArg = f32ToF64(c.Embedding) // float8[] 原生数组
 			}
 			if _, err = tx.Exec(ctx, `
-				INSERT INTO kb_chunk (id, tenant_id, doc_id, space_id, seq, heading_path, text, token_count, embedding, created_at)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-				c.ID, c.TenantID, c.DocID, c.SpaceID, c.Seq, strOrNull(c.HeadingPath), c.Text, c.TokenCount, embArg, now); err != nil {
+				INSERT INTO kb_chunk (id, tenant_id, doc_id, space_id, seq, heading_path, text, token_count, embedding, embed_epoch, created_at)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+				c.ID, c.TenantID, c.DocID, c.SpaceID, c.Seq, strOrNull(c.HeadingPath), c.Text, c.TokenCount, embArg, c.EmbedEpoch, now); err != nil {
 				return Doc{}, err
 			}
 		}
@@ -400,7 +403,7 @@ func (p *Postgres) IngestCommit(ctx context.Context, docID int64, chunks []Chunk
 		UPDATE kb_doc SET status='ready', error_msg=NULL, version=version+1, updated_at=$2
 		WHERE id=$1 RETURNING `+docCols, docID, now).Scan(
 		&d.ID, &d.TenantID, &d.SpaceID, &d.NodeID, &d.Title, &d.SourceType, &d.SourceRef, &d.Ext,
-		&d.Size, &d.Status, &d.ErrorMsg, &d.Version, &d.Content, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		&d.Size, &d.Status, &d.ErrorMsg, &d.Version, &d.Content, &d.ViewCount, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return Doc{}, err
 	}
 	if usedDelta != 0 {
@@ -517,15 +520,15 @@ func (p *Postgres) scanChunk(row pgx.Row) (*Chunk, error) {
 
 // SearchVector 向量路：pgvector → ORDER BY embedding <=> $vec（余弦近邻，A 路）；
 // float8[] 降级 → 取最近 1000 块内存余弦（候选规模 v0.1 可接受，登记）
-func (p *Postgres) SearchVector(ctx context.Context, tenantID int64, spaceIDs []int64, vec []float32, topK int) ([]ChunkHit, error) {
+func (p *Postgres) SearchVector(ctx context.Context, tenantID int64, spaceIDs []int64, vec []float32, topK, epoch int) ([]ChunkHit, error) {
 	if p.useVector {
 		rows, err := p.pool.Query(ctx, `
 			SELECT c.id, c.doc_id, c.space_id, c.seq, COALESCE(c.heading_path,''), c.text, d.title,
 				1 - (c.embedding <=> $2::vector) AS score
 			FROM kb_chunk c JOIN kb_doc d ON d.id = c.doc_id AND d.status='ready'
-			WHERE c.tenant_id=$1 AND c.space_id = ANY($3)
+			WHERE c.tenant_id=$1 AND c.space_id = ANY($3) AND c.embed_epoch = $5
 			ORDER BY c.embedding <=> $2::vector
-			LIMIT $4`, tenantID, vecToText(vec), spaceIDs, topK)
+			LIMIT $4`, tenantID, vecToText(vec), spaceIDs, topK, epoch)
 		if err != nil {
 			return nil, err
 		}
@@ -542,8 +545,8 @@ func (p *Postgres) SearchVector(ctx context.Context, tenantID int64, spaceIDs []
 		SELECT c.id, c.doc_id, c.space_id, c.seq, COALESCE(c.heading_path,''), c.text, d.title,
 			NULL::float8 AS score, c.embedding
 		FROM kb_chunk c JOIN kb_doc d ON d.id = c.doc_id AND d.status='ready'
-		WHERE c.tenant_id=$1 AND c.space_id = ANY($2)
-		ORDER BY c.id DESC LIMIT 1000`, tenantID, spaceIDs)
+		WHERE c.tenant_id=$1 AND c.space_id = ANY($2) AND c.embed_epoch = $3
+		ORDER BY c.id DESC LIMIT 1000`, tenantID, spaceIDs, epoch)
 	if err != nil {
 		return nil, err
 	}
@@ -1010,4 +1013,97 @@ func (p *Postgres) UserStats(ctx context.Context, tenantID, userID int64, monthS
 		return st, err
 	}
 	return st, nil
+}
+
+// ── epoch 重建（D24 §5.3）──
+
+// GetSettings 单行读取（缺行=默认）
+func (p *Postgres) GetSettings(ctx context.Context, tenantID int64) (Settings, error) {
+	var st Settings
+	err := p.pool.QueryRow(ctx, `
+		SELECT embed_epoch, COALESCE(embed_model,''), embed_dims, rebuild_status, rebuild_done, rebuild_total, updated_at
+		FROM kb_settings WHERE tenant_id=$1`, tenantID).Scan(
+		&st.EmbedEpoch, &st.EmbedModel, &st.EmbedDims, &st.RebuildStatus,
+		&st.RebuildDone, &st.RebuildTotal, &st.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DefaultSettings(), nil
+	}
+	if err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
+// SaveSettings 单行 upsert
+func (p *Postgres) SaveSettings(ctx context.Context, tenantID int64, st Settings) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO kb_settings (tenant_id, embed_epoch, embed_model, embed_dims, rebuild_status, rebuild_done, rebuild_total, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,now())
+		ON CONFLICT (tenant_id) DO UPDATE SET
+			embed_epoch=EXCLUDED.embed_epoch, embed_model=EXCLUDED.embed_model,
+			embed_dims=EXCLUDED.embed_dims, rebuild_status=EXCLUDED.rebuild_status,
+			rebuild_done=EXCLUDED.rebuild_done, rebuild_total=EXCLUDED.rebuild_total,
+			updated_at=now()`,
+		tenantID, st.EmbedEpoch, st.EmbedModel, st.EmbedDims, st.RebuildStatus, st.RebuildDone, st.RebuildTotal)
+	return err
+}
+
+// ListReadyDocIDs 全部 ready 文档 ID（重建遍历）
+func (p *Postgres) ListReadyDocIDs(ctx context.Context, tenantID int64) ([]int64, error) {
+	rows, err := p.pool.Query(ctx, `SELECT id FROM kb_doc WHERE tenant_id=$1 AND status='ready' ORDER BY id`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]int64, 0, 64)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// UpdateChunkEmbeddings 按 seq 整批替换向量与代次（幂等）
+func (p *Postgres) UpdateChunkEmbeddings(ctx context.Context, tenantID, docID int64, vecsBySeq map[int][]float32, epoch int) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for seq, vec := range vecsBySeq {
+		var embArg any
+		if p.useVector {
+			embArg = vecToText(vec)
+		} else {
+			embArg = f32ToF64(vec)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE kb_chunk SET embedding=$4, embed_epoch=$5
+			WHERE tenant_id=$1 AND doc_id=$2 AND seq=$3`,
+			tenantID, docID, seq, embArg, epoch); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// RebuildEmbeddingColumn 跨维度重建 DDL：pgvector 轨改列维度+HNSW 重建；降级轨清空即可
+func (p *Postgres) RebuildEmbeddingColumn(ctx context.Context, tenantID int64, dims int) error {
+	if !p.useVector {
+		_, err := p.pool.Exec(ctx, `UPDATE kb_chunk SET embedding=NULL`)
+		return err
+	}
+	if _, err := p.pool.Exec(ctx, `DROP INDEX IF EXISTS idx_kb_chunk_hnsw`); err != nil {
+		return err
+	}
+	if _, err := p.pool.Exec(ctx,
+		`ALTER TABLE kb_chunk ALTER COLUMN embedding TYPE vector($1) USING NULL`, dims); err != nil {
+		return err
+	}
+	_, err := p.pool.Exec(ctx,
+		`CREATE INDEX idx_kb_chunk_hnsw ON kb_chunk USING hnsw (embedding vector_cosine_ops)`)
+	return err
 }

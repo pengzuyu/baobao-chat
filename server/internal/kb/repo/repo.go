@@ -128,7 +128,24 @@ type Chunk struct {
 	Text        string
 	TokenCount  int
 	Embedding   []float32
+	EmbedEpoch  int // 向量代次（D24：切换嵌入模型渐进重建；检索向量路只命中当前代）
 	CreatedAt   time.Time
+}
+
+// Settings kb_settings 单行（D24 §5.3 epoch 重建）
+type Settings struct {
+	EmbedEpoch    int    // 当前向量代次（新写入一律此值）
+	EmbedModel    string // 当前嵌入模型登记（治理页展示）
+	EmbedDims     int    // 当前维度（跨维度重建须 ALTER 列）
+	RebuildStatus string // idle|running
+	RebuildDone   int
+	RebuildTotal  int
+	UpdatedAt     time.Time
+}
+
+// DefaultSettings 缺省（缺行/内存模式）
+func DefaultSettings() Settings {
+	return Settings{EmbedEpoch: 1, EmbedModel: "", EmbedDims: 1024, RebuildStatus: "idle"}
 }
 
 // ChunkHit 检索命中（chunk 精简字段 + 文档标题冗余 + 该路得分）
@@ -192,8 +209,9 @@ type Repo interface {
 
 	// ── 检索（权限前置过滤：spaceIDs 为调用方已按可见性裁剪的集合）──
 	// SearchVector 向量路：pgvector 可用时 ORDER BY embedding <=> $vec（余弦近邻）；
-	// float8[] 降级轨由实现取回候选后内存余弦。仅参与 status=ready 的文档
-	SearchVector(ctx context.Context, tenantID int64, spaceIDs []int64, vec []float32, topK int) ([]ChunkHit, error)
+	// float8[] 降级轨由实现取回候选后内存余弦。仅参与 status=ready 的文档；
+	// epoch>0 时只命中该代 chunk（D24：切换模型渐进重建，旧代靠关键词路兜底）
+	SearchVector(ctx context.Context, tenantID int64, spaceIDs []int64, vec []float32, topK, epoch int) ([]ChunkHit, error)
 	// SearchKeyword 关键词路：ILIKE 兜底（tokens 为空白切分的关键词；
 	// 命中任意 token 即候选，得分为出现次数），仅参与 status=ready 的文档
 	SearchKeyword(ctx context.Context, tenantID int64, spaceIDs []int64, tokens []string, topK int) ([]ChunkHit, error)
@@ -213,6 +231,19 @@ type Repo interface {
 	ListDocsByUser(ctx context.Context, tenantID, userID int64, before time.Time, limit int) ([]Doc, error)
 	// UserStats 个人概览聚合（monthStart/weekStart 为统计窗起点，零值=该项 0）
 	UserStats(ctx context.Context, tenantID, userID int64, monthStart, weekStart time.Time) (UserKBStats, error)
+
+	// ── epoch 重建（D24 §5.3）──
+	// GetSettings 单行读取（缺行=DefaultSettings）
+	GetSettings(ctx context.Context, tenantID int64) (Settings, error)
+	// SaveSettings 单行 upsert
+	SaveSettings(ctx context.Context, tenantID int64, st Settings) error
+	// ListReadyDocIDs 全部 ready 文档 ID（重建遍历序：id 升序）
+	ListReadyDocIDs(ctx context.Context, tenantID int64) ([]int64, error)
+	// UpdateChunkEmbeddings 按 seq 整批替换向量与代次（重建 goroutine 消费；幂等）
+	UpdateChunkEmbeddings(ctx context.Context, tenantID, docID int64, vecsBySeq map[int][]float32, epoch int) error
+	// RebuildEmbeddingColumn 跨维度重建：pgvector 轨 ALTER 列维度+HNSW 索引重建
+	// （向量清空 USING NULL）；降级轨/内存轨=清空向量 no-op DDL（service 先行判断）
+	RebuildEmbeddingColumn(ctx context.Context, tenantID int64, dims int) error
 }
 
 // DocStatsReader 管理端统计可选接口（D10 仪表盘跨域闭包；不进 Repo 主接口）

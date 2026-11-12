@@ -90,3 +90,58 @@ func truncateStr(s string, n int) string {
 	}
 	return string(r[:n]) + "…"
 }
+
+// GatewayRerankFn 构造指向本服务 AI 网关的重排函数（D24 N3b：POST /v1/rerank，
+// model=bbw-rerank；Cohere 风格 {query, documents, top_n} → {results:[{index, relevance_score}]}）
+func GatewayRerankFn(baseURL, token string, hc *http.Client) RerankFn {
+	client := hc
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	u := strings.TrimSuffix(baseURL, "/") + "/v1/rerank"
+	return func(ctx context.Context, query string, documents []string, topN int) ([]RerankHit, error) {
+		if len(documents) == 0 {
+			return nil, fmt.Errorf("rerank documents 为空")
+		}
+		body, err := json.Marshal(map[string]any{"model": "bbw-rerank", "query": query, "documents": documents, "top_n": topN})
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("重排网关请求失败: %w", err)
+		}
+		defer resp.Body.Close()
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("重排网关 %d: %s", resp.StatusCode, truncateStr(string(payload), 200))
+		}
+		var out struct {
+			Results []struct {
+				Index          int     `json:"index"`
+				RelevanceScore float64 `json:"relevance_score"`
+			} `json:"results"`
+			Error *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(payload, &out); err != nil {
+			return nil, fmt.Errorf("重排响应解析失败: %w", err)
+		}
+		if out.Error != nil {
+			return nil, fmt.Errorf("重排网关错误 %d: %s", out.Error.Code, out.Error.Message)
+		}
+		hits := make([]RerankHit, 0, len(out.Results))
+		for _, r := range out.Results {
+			hits = append(hits, RerankHit{Index: r.Index, Score: r.RelevanceScore})
+		}
+		return hits, nil
+	}
+}

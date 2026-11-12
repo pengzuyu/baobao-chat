@@ -11,9 +11,11 @@ package kbservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -24,6 +26,15 @@ import (
 
 // EmbedFn 嵌入函数注入（生产=HTTP 自调 AI 网关 bbw-embed 1024 维；测试=假嵌入不走网络）
 type EmbedFn func(ctx context.Context, input []string) ([][]float32, error)
+
+// RerankHit 重排命中（与 aigw RerankHit 同构；闭包传值解耦不引包）
+type RerankHit struct {
+	Index int
+	Score float64
+}
+
+// RerankFn 重排函数注入（生产=HTTP 自调 AI 网关 bbw-rerank；nil/失败=RRF 序直出降级）
+type RerankFn func(ctx context.Context, query string, documents []string, topN int) ([]RerankHit, error)
 
 // FileSource D06 文件内容（IngestDoc file 来源经 OpenFile 取回）
 type FileSource struct {
@@ -47,7 +58,11 @@ type Options struct {
 	EmbedBatch         int   // 嵌入批量（缺省 64——网关 /v1/embeddings 单请求上限）
 	Now                func() time.Time
 	Embedder           EmbedFn
+	Reranker           RerankFn // D24 §5.2 态三：未装配=RRF 直出（degraded 不标记）
 	OpenFile           FileOpener
+	// EnforceEmbedDims 维度防护开关：pgvector 定维轨（vector(N) 列不容异维）才开；
+	// 降级 float8[]/内存轨不定维不防护（main 按 VectorMode 装配，测试默认关）
+	EnforceEmbedDims bool
 	// UserInfoOfMany 作者信息批量查询（榜单/概览展示名；org 域闭包注入，跨域不引包；
 	// nil=通道未装配，榜单 UserName 置空——内网降级可接受）
 	UserInfoOfMany func(ctx context.Context, ids []int64) map[int64]UserInfo
@@ -89,12 +104,36 @@ var kbIngestExtWhitelist = map[string]bool{"txt": true, "md": true, "markdown": 
 type Service struct {
 	repo kbrepo.Repo
 	opts Options
+	// epoch 配置缓存（懒加载；RebuildEmbeddings 更新——settings 变更仅经此口）
+	setMu     sync.Mutex
+	setCache  *kbrepo.Settings
+	rebuildMu sync.Mutex // 重建 goroutine 互斥（防并发双跑）
 }
 
 // New 构造
 func New(opts Options, r kbrepo.Repo) *Service {
 	opts.fillDefaults()
 	return &Service{repo: r, opts: opts}
+}
+
+// loadSettings 读取（带缓存）当前 epoch 配置
+func (s *Service) loadSettings(ctx context.Context, tenantID int64) kbrepo.Settings {
+	s.setMu.Lock()
+	if s.setCache != nil {
+		st := *s.setCache
+		s.setMu.Unlock()
+		return st
+	}
+	s.setMu.Unlock()
+	st, err := s.repo.GetSettings(ctx, tenantID)
+	if err != nil {
+		return kbrepo.DefaultSettings() // 读失败回落默认（fail-safe：epoch=1/dims=1024）
+	}
+	s.setMu.Lock()
+	cp := st
+	s.setCache = &cp
+	s.setMu.Unlock()
+	return st
 }
 
 var _ kbapi.KBService = (*Service)(nil)
@@ -352,6 +391,7 @@ func (s *Service) runPipeline(ctx context.Context, d kbrepo.Doc, content string)
 	for i, p := range parts {
 		texts[i] = p.text
 	}
+	st := s.loadSettings(ctx, d.TenantID)
 	embeds, err := s.embedBatched(ctx, texts)
 	if err != nil { // 7008 语义：嵌入服务不可用 → failed 挂起（同步版即终态，重试入口）
 		_ = s.repo.FailDoc(ctx, d.ID, "嵌入服务不可用: "+err.Error(), s.opts.Now())
@@ -364,6 +404,20 @@ func (s *Service) runPipeline(ctx context.Context, d kbrepo.Doc, content string)
 		dto.ErrorMsg = "嵌入服务不可用"
 		return &dto, nil
 	}
+	// D24 §5.3 维度防护（pgvector 定维轨）：真实供应商维度≠配置 → failed
+	// （管理员须对齐 bbw-embed 路由模型或触发跨维度重建）
+	if s.opts.EnforceEmbedDims && len(embeds) > 0 && len(embeds[0]) != st.EmbedDims {
+		msg := fmt.Sprintf("嵌入维度 %d ≠ 配置 %d（bbw-embed 路由模型与 kb_settings 不一致，请联系管理员触发重建）", len(embeds[0]), st.EmbedDims)
+		_ = s.repo.FailDoc(ctx, d.ID, msg, s.opts.Now())
+		if d2, gerr := s.repo.GetDoc(ctx, d.ID); gerr == nil {
+			dto := toDocDTO(*d2)
+			return &dto, nil
+		}
+		dto := toDocDTO(d)
+		dto.Status = kbrepo.DocFailed
+		dto.ErrorMsg = msg
+		return &dto, nil
+	}
 	chunks := make([]kbrepo.Chunk, len(parts))
 	for i, p := range parts {
 		emb := []float32(nil)
@@ -372,7 +426,7 @@ func (s *Service) runPipeline(ctx context.Context, d kbrepo.Doc, content string)
 		}
 		chunks[i] = kbrepo.Chunk{
 			Seq: i + 1, HeadingPath: p.heading, Text: p.text,
-			TokenCount: utf8.RuneCountInString(p.text), Embedding: emb,
+			TokenCount: utf8.RuneCountInString(p.text), Embedding: emb, EmbedEpoch: st.EmbedEpoch,
 		}
 	}
 	// 配额增量：仅首次转 ready 计入（重摄入替换不重复计数）
@@ -622,12 +676,13 @@ func (s *Service) Query(ctx context.Context, tenantID, userID int64, spaceIDs []
 		return nil, errx.From(err)
 	}
 	// A 路：查询词嵌入 → 向量余弦（嵌入失败 → degraded=vector，B 路直出，11 §7.2）
+	st := s.loadSettings(ctx, tenantID)
 	var vecHits []kbrepo.ChunkHit
 	if s.opts.Embedder != nil {
 		vecs, eerr := s.embedBatched(ctx, []string{keyword})
 		if eerr != nil || len(vecs) == 0 {
 			resp.Degraded = append(resp.Degraded, "vector")
-		} else if vhits, verr := s.repo.SearchVector(ctx, tenantID, targetIDs, vecs[0], topK); verr != nil {
+		} else if vhits, verr := s.repo.SearchVector(ctx, tenantID, targetIDs, vecs[0], topK, st.EmbedEpoch); verr != nil {
 			resp.Degraded = append(resp.Degraded, "vector")
 		} else {
 			vecHits = vhits
@@ -659,6 +714,47 @@ func (s *Service) Query(ctx context.Context, tenantID, userID int64, spaceIDs []
 			all2[j], all2[j-1] = all2[j-1], all2[j]
 		}
 	}
+	// rerank 阶段（D24 §5.2 态三）：RRF 候选取 30 → 重排 → topK；
+	// 未装配/失败 → degraded=reranker，RRF 序直出（不阻塞检索）
+	rerankScores := map[int64]float64{}
+	if s.opts.Reranker != nil && len(all2) > 0 {
+		cands := all2
+		if len(cands) > 30 {
+			cands = cands[:30]
+		}
+		docs := make([]string, len(cands))
+		for i, f := range cands {
+			docs[i] = f.hit.Text
+		}
+		if hits, rerr := s.opts.Reranker(ctx, keyword, docs, topK); rerr != nil {
+			resp.Degraded = append(resp.Degraded, "reranker")
+		} else {
+			for _, h := range hits {
+				if h.Index >= 0 && h.Index < len(cands) {
+					rerankScores[cands[h.Index].hit.ChunkID] = h.Score
+				}
+			}
+			reordered := make([]*fused, 0, len(hits))
+			for _, h := range hits {
+				if h.Index >= 0 && h.Index < len(cands) {
+					reordered = append(reordered, cands[h.Index])
+				}
+			}
+			// 未被重排返回的候选（topN 截断外）按 RRF 序续尾
+			inHits := map[int64]bool{}
+			for _, h := range hits {
+				if h.Index >= 0 && h.Index < len(cands) {
+					inHits[cands[h.Index].hit.ChunkID] = true
+				}
+			}
+			for _, f := range cands {
+				if !inHits[f.hit.ChunkID] {
+					reordered = append(reordered, f)
+				}
+			}
+			all2 = reordered
+		}
+	}
 	if len(all2) > topK {
 		all2 = all2[:topK]
 	}
@@ -674,6 +770,7 @@ func (s *Service) Query(ctx context.Context, tenantID, userID int64, spaceIDs []
 			Snippet:     snippet,
 			Highlight:   ranges,
 			Score:       f.rrf,
+			RerankScore: rerankScores[f.hit.ChunkID],
 		})
 	}
 	resp.TookMs = msSince(start, s.opts.Now())
@@ -1250,4 +1347,121 @@ func ext2format(ext string) string {
 		return "markdown"
 	}
 	return "text"
+}
+
+// ── epoch 重建（D24 §5.3；管理端 admin:kb:govern 消费）──
+
+// toEmbeddingSettingsDTO 设置 DTO
+func toEmbeddingSettingsDTO(st kbrepo.Settings) *kbapi.EmbeddingSettingsDTO {
+	return &kbapi.EmbeddingSettingsDTO{
+		EmbedEpoch: st.EmbedEpoch, EmbedModel: st.EmbedModel, EmbedDims: st.EmbedDims,
+		RebuildStatus: st.RebuildStatus, RebuildDone: st.RebuildDone, RebuildTotal: st.RebuildTotal,
+	}
+}
+
+// GetEmbeddingSettings 嵌入配置现状
+func (s *Service) GetEmbeddingSettings(ctx context.Context, tenantID int64) (*kbapi.EmbeddingSettingsDTO, error) {
+	// 重建进度实时（不经缓存）
+	st, err := s.repo.GetSettings(ctx, tenantID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	return toEmbeddingSettingsDTO(st), nil
+}
+
+// RebuildEmbeddings 触发向量重建：样本探测（7018）→ epoch+1 → 跨维度 ALTER →
+// 后台 goroutine 按 doc 重嵌（复用 embedBatched；直调注入的 Embedder——HTTP 限流
+// 由装配侧决定，dev token 通道走网关计量照记）→ 进度写 kb_settings。
+// 同维切换=渐进重建（旧代关键词路兜底，零停机）；跨维度=清空+改列（确认文案在管理端）
+func (s *Service) RebuildEmbeddings(ctx context.Context, tenantID int64, model string, dims int, force bool) (*kbapi.EmbeddingSettingsDTO, error) {
+	if model == "" || dims <= 0 || dims > 20000 {
+		return nil, errx.New(errx.CodeBadRequest, "model 必填且 dims 须为 (0, 20000]")
+	}
+	if s.opts.Embedder == nil {
+		return nil, errx.New(errx.CodeBadRequest, "嵌入服务未装配（BBW_AIGW_DEV_TOKEN 或表路由 bbw-embed）")
+	}
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+	st, err := s.repo.GetSettings(ctx, tenantID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	if st.RebuildStatus == "running" && !force {
+		return nil, errx.New(errx.CodeKBRebuildRunning, "向量重建已在进行（force=true 可强制续跑，幂等覆盖）")
+	}
+	// 样本探测：实际维度须与声明一致（7018）
+	probe, err := s.embedBatched(ctx, []string{"bbw-embed 维度探测样本"})
+	if err != nil {
+		return nil, errx.New(errx.CodeBadRequest, "嵌入服务探测失败: "+err.Error())
+	}
+	if len(probe) == 0 || len(probe[0]) != dims {
+		got := 0
+		if len(probe) > 0 {
+			got = len(probe[0])
+		}
+		return nil, errx.New(errx.CodeKBEmbedDimsMismatch, fmt.Sprintf("样本嵌入维度 %d ≠ 声明 dims %d", got, dims))
+	}
+	ids, err := s.repo.ListReadyDocIDs(ctx, tenantID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	newEpoch := st.EmbedEpoch + 1
+	if dims != st.EmbedDims { // 跨维度：清空向量+改列+HNSW 重建（管理端确认弹窗前置）
+		if err := s.repo.RebuildEmbeddingColumn(ctx, tenantID, dims); err != nil {
+			return nil, errx.From(err)
+		}
+	}
+	st.EmbedEpoch, st.EmbedModel, st.EmbedDims = newEpoch, model, dims
+	st.RebuildStatus, st.RebuildDone, st.RebuildTotal = "running", 0, len(ids)
+	if err := s.repo.SaveSettings(ctx, tenantID, st); err != nil {
+		return nil, errx.From(err)
+	}
+	s.setMu.Lock()
+	cp := st
+	s.setCache = &cp
+	s.setMu.Unlock()
+	// 后台 goroutine：逐 doc 重嵌（UpdateChunkEmbeddings 幂等——force 续跑/中断重触发安全）
+	go s.runRebuild(tenantID, ids, newEpoch)
+	return toEmbeddingSettingsDTO(st), nil
+}
+
+// runRebuild 重建主体（goroutine）：逐 doc 取 chunk 文本 → 批量重嵌 → 按序写回新代；
+// 单 doc 失败跳过续跑（进度继续），全部完成置 idle；致命错误置 idle 并保留 done 供排查
+func (s *Service) runRebuild(tenantID int64, ids []int64, epoch int) {
+	ctx := context.Background()
+	for i, docID := range ids {
+		chunks, err := s.repo.ListChunks(ctx, tenantID, docID)
+		if err != nil || len(chunks) == 0 {
+			continue
+		}
+		texts := make([]string, len(chunks))
+		for j, c := range chunks {
+			texts[j] = c.Text
+		}
+		embeds, err := s.embedBatched(ctx, texts)
+		if err != nil {
+			continue // 嵌入服务抖动：跳过该 doc（幂等重触发补齐）
+		}
+		vecs := make(map[int][]float32, len(chunks))
+		for j, c := range chunks {
+			if j < len(embeds) {
+				vecs[c.Seq] = embeds[j]
+			}
+		}
+		_ = s.repo.UpdateChunkEmbeddings(ctx, tenantID, docID, vecs, epoch)
+		// 进度（每 doc 一写；内网量级可接受）
+		if st, err := s.repo.GetSettings(ctx, tenantID); err == nil {
+			st.RebuildDone = i + 1
+			if st.RebuildDone >= st.RebuildTotal {
+				st.RebuildStatus = "idle"
+			}
+			_ = s.repo.SaveSettings(ctx, tenantID, st)
+			if st.RebuildStatus == "idle" {
+				s.setMu.Lock()
+				cp := st
+				s.setCache = &cp
+				s.setMu.Unlock()
+			}
+		}
+	}
 }

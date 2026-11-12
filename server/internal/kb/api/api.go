@@ -84,12 +84,14 @@ type QueryHit struct {
 	DocID       string   `json:"doc_id"`
 	Title       string   `json:"title"`
 	SpaceID     string   `json:"space_id"`
-	SpaceType   string   `json:"space_type"` // 来源空间徽章（personal/dept/company）
+	SpaceType   string   `json:"space_type"` // 来源徽章（company|personal）
 	ChunkSeq    int      `json:"chunk_seq"`
 	HeadingPath string   `json:"heading_path"`
 	Snippet     string   `json:"snippet"`
 	Highlight   [][2]int `json:"highlight,omitempty"`
 	Score       float64  `json:"score"` // RRF 融合分
+	// RerankScore 重排序分（D24 态三；0=未启用 rerank/该条未被重排窗口命中）
+	RerankScore float64 `json:"rerank_score,omitempty"`
 }
 
 // QueryResp POST /kb/query 响应
@@ -143,6 +145,23 @@ type KBService interface {
 	MyDocs(ctx context.Context, tenantID, userID int64, cursor string, limit int) (*MyDocsResp, error)
 	// Rankings 榜单（board=latest|hot|authors，window=7d|30d|all 仅 hot；仅公共维度）
 	Rankings(ctx context.Context, tenantID, userID int64, board, window string) (*RankingsResp, error)
+
+	// ── epoch 重建（D24 §5.3；管理端 admin:kb:govern 路由层守卫）──
+	// GetEmbeddingSettings 嵌入配置现状（epoch/模型/维度/重建进度）
+	GetEmbeddingSettings(ctx context.Context, tenantID int64) (*EmbeddingSettingsDTO, error)
+	// RebuildEmbeddings 触发重建：样本维度校验（7018）→ epoch+1（跨维度先行 ALTER）
+	// → 后台 goroutine 按 doc 重嵌（进度入 kb_settings）；running 拒 7017（force 破）
+	RebuildEmbeddings(ctx context.Context, tenantID int64, model string, dims int, force bool) (*EmbeddingSettingsDTO, error)
+}
+
+// EmbeddingSettingsDTO 嵌入配置与重建进度（治理页轮询）
+type EmbeddingSettingsDTO struct {
+	EmbedEpoch    int    `json:"embed_epoch"`
+	EmbedModel    string `json:"embed_model"`
+	EmbedDims     int    `json:"embed_dims"`
+	RebuildStatus string `json:"rebuild_status"` // idle|running
+	RebuildDone   int    `json:"rebuild_done"`
+	RebuildTotal  int    `json:"rebuild_total"`
 }
 
 // ViewResp POST /kb/docs/{id}/view 响应

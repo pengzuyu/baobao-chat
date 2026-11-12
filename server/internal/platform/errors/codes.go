@@ -123,6 +123,8 @@ const (
 	CodeKBRetryExhausted    Code = 7012 // 重试超限
 	CodeKBSpaceArchived     Code = 7013 // 空间已归档
 	CodeKBDuplicateNode     Code = 7014 // 同名节点冲突
+	CodeKBRebuildRunning    Code = 7017 // 向量重建已在进行（D24 epoch 机制）
+	CodeKBEmbedDimsMismatch Code = 7018 // 嵌入维度校验不符（D24 样本探测/写入防护）
 )
 
 // ───────────────────────── 8xxx Agent/应用（08/09/10/19 篇） ─────────────────────────

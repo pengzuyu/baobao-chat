@@ -144,7 +144,7 @@ func TestPGKBSmoke(t *testing.T) {
 	})
 	_ = r.FailDoc(ctx, d3.ID, "嵌入服务不可用", time.Now())
 
-	vecHits, err := r.SearchVector(ctx, tenant, []int64{s1.ID}, testVec(1, 0), 10)
+	vecHits, err := r.SearchVector(ctx, tenant, []int64{s1.ID}, testVec(1, 0), 10, 1) // epoch=1（默认代）
 	if err != nil {
 		t.Fatalf("SearchVector: %v", err)
 	}

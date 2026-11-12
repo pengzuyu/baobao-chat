@@ -450,13 +450,15 @@ func main() {
 	// CreateSpace 已下线）+ 摄入管线同步版（嵌入经网关 bbw-embed，AI/IM 通道）+
 	// 混合检索（向量余弦 + 关键词 ILIKE，RRF 融合，权限前置过滤）
 	var kbRepo kbrepo.Repo
+	kbEnforceDims := false // 维度防护仅 pgvector 定维轨（D24 §5.3）
 	if pgPool != nil {
 		kbRepo = kbrepo.NewPostgres(pgPool)
 		if kp, ok := kbRepo.(*kbrepo.Postgres); ok {
 			if vOK, ver := kp.VectorMode(); vOK {
-				log.Printf("kb 检轨：pgvector %s（kb_chunk.embedding=vector(1024)，<=> 余弦排序）", ver)
+				kbEnforceDims = true
+				log.Printf("kb 检轨：pgvector %s（kb_chunk.embedding=vector(1024)，<=> 余弦排序；维度防护开）", ver)
 			} else {
-				log.Printf("kb 检轨：pgvector 不可用 → embedding 降级 float8[]（内存余弦 + ILIKE 兜底，登记）")
+				log.Printf("kb 检轨：pgvector 不可用 → embedding 降级 float8[]（内存余弦 + ILIKE 兜底；不定维不防护）")
 			}
 		}
 	} else {
@@ -466,19 +468,38 @@ func main() {
 	// 与真实调用方同路径：鉴权/限流/计量全过）；未配开发令牌时直调网关 Router 的
 	// mock 供应商（联调零配置兜底）。测试注入假 EmbedFn 不走网络（任务约束）
 	var kbEmbed kbservice.EmbedFn
+	var kbRerank kbservice.RerankFn // D24 N3b：仅 dev token 通道装配（直调 Router 的
+	// rerank 供应商留作装配位——表驱动配 bbw-rerank 后 dev token 链路即真实上游）
 	if devTok := os.Getenv("BBW_AIGW_DEV_TOKEN"); devTok != "" {
 		kbEmbed = kbservice.GatewayEmbedFn("http://127.0.0.1"+cfg.HTTPAddr, devTok, nil)
-		log.Printf("kb 嵌入链路：HTTP 网关 http://127.0.0.1%s/v1/embeddings（bbw-embed，开发令牌）", cfg.HTTPAddr)
+		kbRerank = kbservice.GatewayRerankFn("http://127.0.0.1"+cfg.HTTPAddr, devTok, nil)
+		log.Printf("kb 嵌入链路：HTTP 网关 http://127.0.0.1%s/v1/embeddings（bbw-embed，开发令牌）；重排链路：/v1/rerank（bbw-rerank）", cfg.HTTPAddr)
 	} else if cands, ok := aigwMod.Router.Route(aigw.AliasEmbed); ok && len(cands) > 0 {
 		prov := cands[0].Provider
 		kbEmbed = func(ctx context.Context, in []string) ([][]float32, error) {
 			v, _, err := prov.Embed(ctx, cands[0].Model, in)
 			return v, err
 		}
+		if rc, ok := aigwMod.Router.Route(aigw.AliasRerank); ok && len(rc) > 0 && rc[0].Provider.Kind() != "mock" {
+			rprov := rc[0].Provider
+			kbRerank = func(ctx context.Context, q string, docs []string, topN int) ([]kbservice.RerankHit, error) {
+				hits, _, err := rprov.Rerank(ctx, rc[0].Model, q, docs, topN)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]kbservice.RerankHit, 0, len(hits))
+				for _, h := range hits {
+					out = append(out, kbservice.RerankHit{Index: h.Index, Score: h.Score})
+				}
+				return out, nil
+			}
+		}
 		log.Println("kb 嵌入链路：直调网关 Router 供应商（未配 BBW_AIGW_DEV_TOKEN；表驱动路由生效后为真实上游，否则 mock 确定性向量）")
 	}
 	kbMod := kb.NewModule(kbservice.Options{
 		Embedder: kbEmbed,
+		Reranker: kbRerank,
+		EnforceEmbedDims: kbEnforceDims,
 		// 作者信息批量查询（D24 榜单/概览展示名；org 域闭包——跨域不引包，
 		// 循环 GetUser：每榜 ≤10 人，量级可忽略；部门名 P1 随目录通道补）
 		UserInfoOfMany: func(ctx context.Context, ids []int64) map[int64]kbservice.UserInfo {
@@ -909,6 +930,9 @@ func main() {
 	mux.Handle("POST /api/v1/admin/kb/spaces/{id}/archive", requirePerm("admin:kb:govern")(handleAdminKBArchive(adminSvc)))
 	mux.Handle("POST /api/v1/admin/kb/spaces/{id}/activate", requirePerm("admin:kb:govern")(handleAdminKBActivate(adminSvc)))
 	mux.Handle("DELETE /api/v1/admin/kb/spaces/{id}", requirePerm("admin:kb:govern")(handleAdminKBDelete(adminSvc)))
+	// 嵌入设置与向量重建（D24 §5.3：epoch/模型/维度/进度；跨维度重建=清空+ALTER 确认）
+	mux.Handle("GET /api/v1/admin/kb/embedding", requirePerm("admin:kb:govern")(handleKBEmbeddingGet(kbSvc)))
+	mux.Handle("POST /api/v1/admin/kb/embedding/rebuild", requirePerm("admin:kb:govern")(handleKBEmbeddingRebuild(kbSvc)))
 	// 离职交接（PAD-07）
 	mux.Handle("POST /api/v1/admin/users/{id}/offboard", requirePerm("admin:user:offboard")(handleAdminOffboard(adminSvc)))
 
@@ -2542,6 +2566,39 @@ func handleKBRankings(svc kbapi.KBService) http.HandlerFunc {
 			board = "latest"
 		}
 		resp, err := svc.Rankings(r.Context(), tenant, uid, board, r.URL.Query().Get("window"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleKBEmbeddingGet 嵌入配置现状（治理页轮询进度）
+func handleKBEmbeddingGet(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp, err := svc.GetEmbeddingSettings(r.Context(), httpx.TenantID(r.Context()))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleKBEmbeddingRebuild 触发向量重建（{model, dims, force?}；7017/7018 语义）
+func handleKBEmbeddingRebuild(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+			Dims  int    `json:"dims"`
+			Force bool   `json:"force"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		resp, err := svc.RebuildEmbeddings(r.Context(), httpx.TenantID(r.Context()), req.Model, req.Dims, req.Force)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return
