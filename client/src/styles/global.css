@@ -465,12 +465,11 @@ body {
   font-size: var(--bbw-font-13);
 }
 
-/* ── 登录页搜人选择器（2026-11-12 账号改选人） ── */
+/* ── 登录页搜人选择器（2026-11-12 账号改选人；卡片两行制：工号+名字 / 组织） ── */
 .login-card__field { margin-bottom: var(--bbw-space-5); }
 .login-card__label { display: block; font-size: var(--bbw-font-13); color: var(--bbw-text-2, #4f5a6e); margin-bottom: 6px; }
 
 .user-picker { position: relative; }
-.user-picker__input input { height: 40px; font-size: 14px; }
 .user-picker__dropdown {
   position: absolute;
   top: calc(100% + 4px);
@@ -483,30 +482,28 @@ body {
   z-index: 50;
   overflow: hidden;
 }
-.user-picker__list { max-height: 272px; overflow-y: auto; } /* 单卡~40px≈一屏 6-7 人 */
+.user-picker__list { max-height: 260px; overflow-y: auto; } /* 两行卡~50px≈一屏 5 人 */
 .user-picker__card {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
   width: 100%;
-  padding: 8px 12px;
+  padding: 7px 12px;
   border: 0;
   background: none;
   cursor: pointer;
   text-align: left;
-  font-size: var(--bbw-font-13);
 }
 .user-picker__card:hover, .user-picker__card--active { background: var(--bbw-primary-light, #e8f0ff); }
-.user-picker__empno { font-family: var(--bbw-font-mono); color: var(--bbw-text-2, #4f5a6e); min-width: 88px; }
-.user-picker__name { font-weight: 500; color: var(--bbw-text-1, #1f2329); }
+.user-picker__line1 { display: flex; align-items: baseline; gap: 8px; }
+.user-picker__empno { font-family: var(--bbw-font-mono); font-size: var(--bbw-font-13); color: var(--bbw-text-2, #4f5a6e); }
+.user-picker__name { font-size: var(--bbw-font-14); font-weight: 500; color: var(--bbw-text-1, #1f2329); }
 .user-picker__org {
-  margin-left: auto;
   color: var(--bbw-text-3, #8f9aae);
   font-size: var(--bbw-font-12);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 45%;
 }
 .user-picker__empty, .user-picker__more {
   padding: 14px 12px;
