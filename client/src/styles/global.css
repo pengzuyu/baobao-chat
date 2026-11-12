@@ -8992,7 +8992,7 @@ body.bbw-col-resizing {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 860px;
+  /* 不设 max-width：整页铺满右栏（用户口径），宽屏由成员网格 auto-fill 自然分列 */
 }
 .bbw-contacts__profile-card {
   background: var(--bbw-gray-1);
