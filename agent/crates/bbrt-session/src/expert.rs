@@ -83,7 +83,7 @@ impl Default for ExpertConstraints {
 /// 专家定义包（声明式，不携带可执行代码）
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpertManifest {
-    /// corp./dept. 公司级；usr.{userId}. 个人级
+    /// corp./dept. 公司级；usr.{userId}. 个人级；plugin.{plugin_id}.{name} 插件翻译（D22/L5）
     pub id: String,
     /// 一期仅 local（remote=外呼 A2A 二期预留，解析即拒）
     pub kind: String,
@@ -232,8 +232,14 @@ pub fn parse_manifest(text: &str) -> Result<ExpertManifest, ExpertError> {
 /// 语义校验（§2 关键约束 + §8 资源界限）
 fn validate(m: &ExpertManifest) -> Result<(), ExpertError> {
     let inv = |msg: &str| Err(ExpertError::Invalid(msg.into()));
-    if !(m.id.starts_with("corp.") || m.id.starts_with("dept.") || m.id.starts_with("usr.")) {
-        return inv("id 前缀必须为 corp./dept./usr.{userId}.");
+    if !(m.id.starts_with("corp.")
+        || m.id.starts_with("dept.")
+        || m.id.starts_with("usr.")
+        // 插件翻译专家（D22 §2/L5：壳 agents/*.md 翻译落
+        // eco/experts/plugin_{id}_*.yaml，id=plugin.{plugin_id}.{name}）
+        || m.id.starts_with("plugin."))
+    {
+        return inv("id 前缀必须为 corp./dept./usr.{userId}./plugin.");
     }
     if m.kind != "local" {
         return inv(&format!(

@@ -117,7 +117,8 @@ pub fn run() {
             plugin_commands::plugin_remove_local,
             plugin_commands::plugin_set_enabled,
             plugin_commands::plugin_local_state,
-            plugin_commands::plugin_write_config
+            plugin_commands::plugin_write_config,
+            plugin_commands::plugin_commands_list
         ])
         .run(context)
         .expect("Tauri 应用启动失败");

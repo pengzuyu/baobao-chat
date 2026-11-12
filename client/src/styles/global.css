@@ -8460,3 +8460,47 @@ body {
   flex-direction: column;
   gap: 3px;
 }
+
+/* ── 插件斜杠命令下拉（D22 §2/L5；工作台输入框上方浮层） ── */
+.agent-composer__slash {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  margin-bottom: 6px;
+  border: 1px solid var(--bbw-gray-2, #e8e9eb);
+  border-radius: 8px;
+  background: var(--bbw-bg, #fff);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.agent-composer__slash-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+.agent-composer__slash-item--active {
+  background: var(--bbw-gray-1, #f2f3f5);
+}
+.agent-composer__slash-desc {
+  color: var(--bbw-gray-6, #8f959e);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-composer__slash-src {
+  font-size: 11px;
+  color: var(--bbw-gray-5, #8f959e);
+  background: var(--bbw-gray-1, #f2f3f5);
+  border-radius: 4px;
+  padding: 1px 5px;
+}

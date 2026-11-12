@@ -132,7 +132,8 @@ pub fn plugin_write_files(
     }
     // 全量落盘成功 → 激活该版（enabled 不动；保留 config）→ 装配推送（L3：
     // mcp.config 全量 + tools.reload{plugin}；失败仅告警——落盘已成功，
-    // RT 侧重启后由 ready 重推兜底）
+    // RT 侧重启后由 ready 重推兜底）→ 专家翻译同步（L5：agents/*.md →
+    // eco/experts/plugin_{id}_*.yaml）
     if finalize.unwrap_or(true) {
         let mut state = read_state(&root);
         state["activeVersion"] = json!(version);
@@ -140,6 +141,7 @@ pub fn plugin_write_files(
             state["enabled"] = json!(true);
         }
         write_state(&root, &state)?;
+        sync_plugin_experts(&root, &plugin_id);
         if let Err(e) = host.push_plugin_mcp() {
             eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
         }
@@ -164,13 +166,14 @@ pub fn plugin_remove_local(host: Host, plugin_id: String, keep_config: bool) -> 
         fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         fs::write(root.join("config.json"), c).map_err(|e| e.to_string())?;
     }
+    remove_plugin_experts(&host, &plugin_id);
     if let Err(e) = host.push_plugin_mcp() {
         eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
 }
 
-/// 启用/禁用（禁用=装配剔除；目录与配置不动）
+/// 启用/禁用（禁用=装配剔除与专家翻译移除；目录与配置不动）
 #[tauri::command]
 pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Result<(), String> {
     let root = plugin_root(&host, &plugin_id)?;
@@ -180,6 +183,11 @@ pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Resul
     let mut state = read_state(&root);
     state["enabled"] = json!(enabled);
     write_state(&root, &state)?;
+    if enabled {
+        sync_plugin_experts(&root, &plugin_id);
+    } else {
+        remove_plugin_experts(&host, &plugin_id);
+    }
     if let Err(e) = host.push_plugin_mcp() {
         eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
     }
@@ -285,4 +293,209 @@ pub fn plugin_write_config(
         eprintln!("[bbw-plugin] 配置变更装配重推失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
+}
+
+// ── L5：命令清单与专家翻译（D22 §2）──
+
+/// 解析 `---` 围栏 frontmatter（行级键值；与 bbrt skills.rs 同取向）。
+/// 返回 (键值表, 正文)；无围栏=(空表, 全文)
+fn split_frontmatter(text: &str) -> (Vec<(String, String)>, String) {
+    let t = text.trim_start_matches('\u{feff}').trim();
+    let Some(rest) = t.strip_prefix("---") else {
+        return (vec![], t.to_string());
+    };
+    let Some((fm, after)) = rest.trim_start_matches('\n').split_once("\n---") else {
+        return (vec![], t.to_string());
+    };
+    let kvs = fm
+        .lines()
+        .filter_map(|ln| ln.split_once(':'))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .collect();
+    (kvs, after.trim_start_matches('\n').trim().to_string())
+}
+
+fn fm_get<'a>(kvs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    kvs.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+}
+
+/// 命令清单（已启用插件 activeVersion 的 commands/*.md：name/description/
+/// 模板正文——前端 `/` 渲染 $ARGUMENTS/$1..$9）。非 Tauri 宿主返回空。
+#[tauri::command]
+pub fn plugin_commands_list(host: Host) -> Result<Value, String> {
+    let plugins_dir = host.data_dir().join("eco/plugins");
+    let Ok(rd) = fs::read_dir(&plugins_dir) else {
+        return Ok(json!([]));
+    };
+    let mut out = vec![];
+    let mut ids: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .collect();
+    ids.sort();
+    for id in ids {
+        let base = plugins_dir.join(&id);
+        let Ok(state) = fs::read_to_string(base.join("plugin-state.json")) else {
+            continue;
+        };
+        let Ok(sv) = serde_json::from_str::<Value>(&state) else {
+            continue;
+        };
+        if !sv.get("enabled").and_then(Value::as_bool).unwrap_or(true) {
+            continue;
+        }
+        let Some(ver) = sv.get("activeVersion").and_then(Value::as_str) else {
+            continue;
+        };
+        let cmd_dir = base.join(ver).join("commands");
+        let Ok(files) = fs::read_dir(&cmd_dir) else {
+            continue;
+        };
+        let mut names: Vec<String> = files
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .collect();
+        names.sort();
+        for fname in names {
+            let Ok(text) = fs::read_to_string(cmd_dir.join(&fname)) else {
+                continue;
+            };
+            let (kvs, template) = split_frontmatter(&text);
+            let name = fm_get(&kvs, "name")
+                .map(str::to_string)
+                .unwrap_or_else(|| fname.trim_end_matches(".md").to_string());
+            if name.is_empty() || name.contains(char::is_whitespace) {
+                continue; // 命令名须单词（/name args 解析依赖）
+            }
+            out.push(json!({
+                "pluginId": id,
+                "name": name,
+                "description": fm_get(&kvs, "description").unwrap_or(""),
+                "template": template,
+            }));
+        }
+    }
+    Ok(Value::Array(out))
+}
+
+/// 专家翻译（D22 §2/L5）：agents/*.md（Claude frontmatter：name/description/
+/// tools/model）→ 专家 Persona Manifest 落 {dataDir}/eco/experts/
+/// plugin_{plugin_id}_{name}.yaml（走 ExpertIndex::scan 既有装配链——
+/// manifest ∩ 注册表 ∩ 租户策略交集，超集剔除标灰）。
+/// tools 分拣：`mcp.*` 进 mcp 白名单、其余进 builtin；model→tier（缺省 strong）。
+/// 单条翻译失败跳过（降级语义同生态装载）。幂等：先清本插件旧翻译再写。
+fn sync_plugin_experts(root: &std::path::Path, plugin_id: &str) {
+    // root = {dataDir}/eco/plugins/{id} → experts = {dataDir}/eco/experts
+    // （plugins → eco → join experts）
+    let Some(experts_dir) = root
+        .parent()
+        .and_then(std::path::Path::parent)
+        .map(|eco| eco.join("experts"))
+    else {
+        return;
+    };
+    if fs::create_dir_all(&experts_dir).is_err() {
+        return;
+    }
+    // 幂等：清旧
+    let prefix = format!("plugin_{plugin_id}_");
+    if let Ok(rd) = fs::read_dir(&experts_dir) {
+        for e in rd.flatten() {
+            if e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(&prefix))
+            {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
+    let Ok(state) = fs::read_to_string(root.join("plugin-state.json")) else {
+        return;
+    };
+    let Ok(sv) = serde_json::from_str::<Value>(&state) else {
+        return;
+    };
+    if !sv.get("enabled").and_then(Value::as_bool).unwrap_or(true) {
+        return;
+    }
+    let Some(ver) = sv.get("activeVersion").and_then(Value::as_str) else {
+        return;
+    };
+    let agents_dir = root.join(ver).join("agents");
+    let Ok(files) = fs::read_dir(&agents_dir) else {
+        return;
+    };
+    let mut names: Vec<String> = files
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .collect();
+    names.sort();
+    for fname in names {
+        let Ok(text) = fs::read_to_string(agents_dir.join(&fname)) else {
+            continue;
+        };
+        let (kvs, body) = split_frontmatter(&text);
+        let name = fm_get(&kvs, "name")
+            .map(str::to_string)
+            .unwrap_or_else(|| fname.trim_end_matches(".md").to_string());
+        if name.is_empty() {
+            continue;
+        }
+        // tools 分拣（宽松分隔：逗号/空格）
+        let mut builtin = vec![];
+        let mut mcp = vec![];
+        if let Some(tools) = fm_get(&kvs, "tools") {
+            let cleaned = tools.trim_start_matches('[').trim_end_matches(']');
+            for t in cleaned.split(|c: char| c == ',' || c.is_whitespace()) {
+                let t = t.trim();
+                if t.is_empty() {
+                    continue;
+                }
+                if t.starts_with("mcp.") {
+                    mcp.push(t);
+                } else {
+                    builtin.push(t);
+                }
+            }
+        }
+        let tier = match fm_get(&kvs, "model") {
+            Some("fast") => "fast",
+            _ => "strong",
+        };
+        let display = fm_get(&kvs, "description").unwrap_or(&name).to_string();
+        // persona 块标量：正文按两空格缩进（expert.rs take_block 按 dedent 处理）
+        let persona_block: String = body
+            .lines()
+            .map(|ln| format!("  {ln}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let yaml = format!(
+            "id: plugin.{plugin_id}.{name}\ntype: local\nversion: {ver}\ndisplay: {display}\nicon: plug\npersona: |\n{persona_block}\ntools:\n  builtin: [{}]\n  apps: []\n  mcp: [{}]\nmodel: {{ tier: {tier} }}\n",
+            builtin.join(", "),
+            mcp.join(", "),
+        );
+        let dest = experts_dir.join(format!("{prefix}{name}.yaml"));
+        if let Err(e) = fs::write(&dest, &yaml) {
+            eprintln!("[bbw-plugin] 专家翻译写入失败 {dest:?}: {e}");
+        }
+    }
+}
+
+/// 移除本插件全部专家翻译（卸载/禁用）
+fn remove_plugin_experts(host: &Host, plugin_id: &str) {
+    let experts_dir = host.data_dir().join("eco/experts");
+    let prefix = format!("plugin_{plugin_id}_");
+    if let Ok(rd) = fs::read_dir(&experts_dir) {
+        for e in rd.flatten() {
+            if e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(&prefix))
+            {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
 }

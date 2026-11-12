@@ -33,6 +33,7 @@ import { TurnBubble, groupTurns, renderProcessItems } from '../components/TurnBu
 import { ModelThinkPicker } from '../components/ModelThinkPicker';
 import { convIdOfSession } from '../../im/agent/embedded';
 import { Composer } from '../components/Composer';
+import { fetchPluginCommands, type PluginCommand } from '../../eco/api/plugins';
 
 /** ai_default → 会话 model 直达引用（mode=org/解析失败 → undefined=档位别名） */
 async function resolveDefaultModel(): Promise<string | undefined> {
@@ -57,6 +58,11 @@ export function AgentWorkbenchPage() {
   const navigate = useNavigate();
   /** 右栏上下文栏折叠态（PAG-01 E 区；L 档起可固定，M/S 浮层化的骨架阶段先做显隐） */
   const [sideOpen, setSideOpen] = useState(true);
+  // 插件斜杠命令表（D22/L5：/ 渲染；失败降级空=功能关闭）
+  const [pluginCommands, setPluginCommands] = useState<PluginCommand[]>([]);
+  useEffect(() => {
+    void fetchPluginCommands().then(setPluginCommands);
+  }, []);
   /** 左栏会话列表整体折叠（2026-11-11：会话多时可让宽给中栏；项目内会话另有自身折叠） */
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   /** embedded 会话来源聊天（2026-11-11「回到聊天」：IndexedDB 映射反查 convId） */
@@ -466,6 +472,7 @@ export function AgentWorkbenchPage() {
                 canStop={canStop}
                 onSend={(text) => void sendText(text)}
                 onStop={stopActive}
+                commands={pluginCommands}
                 modePicker={
                   <Dropdown menu={modeMenu} trigger={['click']}>
                     <button type="button" className="agent-mode-capsule" title="切换权限模式（本会话即时生效）">

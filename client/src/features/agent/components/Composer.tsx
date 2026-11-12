@@ -4,12 +4,16 @@
  * - 暂停/等待审批/运行中/已结束等态禁用（禁用规则见 store.composerDisabledFor）
  * - 停止按钮为红色（2026-11-11：中断当前轮=收口 idle 可继续，取代旧「紧急停止」
  *   杀进程语义——杀进程兜底退居 ⌘⇧. 全局快捷键）
+ * - 斜杠命令（D22 §2/L5）：`/` 开头弹插件命令下拉（↑↓ 导航/Enter 选中/Esc 关）；
+ *   发送时 `/name args` 命中→模板渲染（$ARGUMENTS=全部参数、$1..$9=位置参数）
+ *   作为用户消息发进会话；未命中原样发送
  */
 
-import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Send, Square } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useImeGuard } from '../../../shared/hooks/useImeGuard';
+import { renderCommand, type PluginCommand } from '../../eco/api/plugins';
 
 interface ComposerProps {
   disabled: boolean;
@@ -23,24 +27,81 @@ interface ComposerProps {
   modePicker?: ReactNode;
   /** 模型+思考强度选择（2026-11-11 zcode 同款合体 Popover：页面注入 ModelThinkPicker） */
   modelPicker?: ReactNode;
+  /** 插件斜杠命令表（D22/L5；空表=功能关闭零成本） */
+  commands?: PluginCommand[];
 }
 
-export function Composer({ disabled, disabledHint, canStop, onSend, onStop, modePicker, modelPicker }: ComposerProps) {
+export function Composer({ disabled, disabledHint, canStop, onSend, onStop, modePicker, modelPicker, commands = [] }: ComposerProps) {
   const [text, setText] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
   const { imeComposing, imeCompositionProps } = useImeGuard();
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashIdx, setSlashIdx] = useState(0);
+
+  // `/` 开头 → 候选命令（首词前缀过滤；含空格后不再过滤——用户已在输参数）
+  const slashCandidates = useMemo<PluginCommand[]>(() => {
+    if (!slashOpen || commands.length === 0 || !text.startsWith('/')) return [];
+    const firstToken = text.split(/\s/, 1)[0] ?? '';
+    const q = firstToken.slice(1).toLowerCase();
+    return commands.filter((c) => (q === '' ? true : c.name.toLowerCase().startsWith(q))).slice(0, 6);
+  }, [slashOpen, text, commands]);
+
+  const applyCommand = (cmd: PluginCommand) => {
+    setText(`/${cmd.name} `);
+    setSlashOpen(false);
+    taRef.current?.focus();
+  };
 
   const submit = () => {
     const trimmed = text.trim();
     if (!trimmed || disabled) return;
-    onSend(trimmed);
+    // 斜杠命令解析：/name args... 命中→模板渲染；未命中原样（普通消息）
+    let outgoing = trimmed;
+    if (trimmed.startsWith('/')) {
+      const [head, ...args] = trimmed.split(/\s+/);
+      const cmd = commands.find((c) => c.name === head.slice(1));
+      if (cmd) outgoing = renderCommand(cmd, args);
+    }
+    onSend(outgoing);
     setText('');
+    setSlashOpen(false);
     taRef.current?.focus();
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 下拉导航：↑↓/Enter 选命令、Esc 关闭（下拉激活时优先于发送）
+    if (slashCandidates.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashIdx((i) => (i + 1) % slashCandidates.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashIdx((i) => (i - 1 + slashCandidates.length) % slashCandidates.length);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSlashOpen(false);
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        applyCommand(slashCandidates[slashIdx] ?? slashCandidates[0]);
+        return;
+      }
+    }
     // IME 确认键防误发：WKWebView 上 isComposing 常缺，组合窗跟踪兜底（useImeGuard）
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !imeComposing()) {
+      // `/name` 严格相等（无参数无尾空格）且在候选中 → Enter=选中进参数态；
+      // `/name `（带尾空格）或已输参数 → 正常发送渲染后的模板
+      const exact = commands.find((c) => text === `/${c.name}`);
+      if (exact && slashCandidates.some((c) => c.name === exact.name)) {
+        e.preventDefault();
+        applyCommand(exact);
+        return;
+      }
       e.preventDefault();
       submit();
     }
@@ -48,14 +109,37 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
 
   return (
     <div className="agent-composer">
+      {slashCandidates.length > 0 ? (
+        <div className="agent-composer__slash" role="listbox" aria-label="插件命令">
+          {slashCandidates.map((c, i) => (
+            <button
+              key={`${c.pluginId}/${c.name}`}
+              type="button"
+              role="option"
+              aria-selected={i === slashIdx}
+              className={`agent-composer__slash-item${i === slashIdx ? ' agent-composer__slash-item--active' : ''}`}
+              onMouseEnter={() => setSlashIdx(i)}
+              onClick={() => applyCommand(c)}
+            >
+              <b>/{c.name}</b>
+              {c.description ? <span className="agent-composer__slash-desc">{c.description}</span> : null}
+              <span className="agent-composer__slash-src">{c.pluginId}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       <textarea
         ref={taRef}
         className="agent-composer__textarea"
         value={text}
         rows={2}
-        placeholder={disabled ? (disabledHint ?? '当前状态不可输入') : '输入任务，Enter 发送（Shift+Enter 换行）'}
+        placeholder={disabled ? (disabledHint ?? '当前状态不可输入') : '输入任务，Enter 发送（Shift+Enter 换行）；/ 唤起插件命令'}
         disabled={disabled}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          setText(e.target.value);
+          setSlashOpen(e.target.value.startsWith('/'));
+          setSlashIdx(0);
+        }}
         onKeyDown={onKeyDown}
         {...imeCompositionProps}
         aria-label="Agent 会话输入框"

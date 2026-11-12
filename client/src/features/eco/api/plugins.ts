@@ -75,6 +75,38 @@ export interface PluginInstallResp {
   download_url: string;
 }
 
+// ---- 插件斜杠命令（D22 §2/L5：commands/*.md，工作台输入框 / 渲染）----
+
+export interface PluginCommand {
+  pluginId: string;
+  name: string;
+  description: string;
+  /** 提示词模板（$ARGUMENTS=全部参数拼接、$1..$9=位置参数） */
+  template: string;
+}
+
+/** 命令表（空表=无插件命令，功能零成本；失败降级空） */
+export async function fetchPluginCommands(): Promise<PluginCommand[]> {
+  if (!isTauriAvailable()) return [];
+  try {
+    const list = await invoke<PluginCommand[]>('plugin_commands_list');
+    return list ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** `/name a b` → 模板渲染（$ARGUMENTS="a b"、$1=a、$2=b；未引用的占位符保留） */
+export function renderCommand(cmd: PluginCommand, args: string[]): string {
+  let out = cmd.template;
+  const all = args.join(' ');
+  out = out.replaceAll('$ARGUMENTS', all);
+  args.slice(0, 9).forEach((a, i) => {
+    out = out.replaceAll(`$${i + 1}`, a);
+  });
+  return out.trim();
+}
+
 // ---- 本地态（壳 plugin_local_state 镜像）----
 
 export interface PluginLocalState {
