@@ -48,6 +48,14 @@ type Options struct {
 	Now                func() time.Time
 	Embedder           EmbedFn
 	OpenFile           FileOpener
+	// UserInfoOfMany 作者信息批量查询（榜单/概览展示名；org 域闭包注入，跨域不引包；
+	// nil=通道未装配，榜单 UserName 置空——内网降级可接受）
+	UserInfoOfMany func(ctx context.Context, ids []int64) map[int64]UserInfo
+}
+
+// UserInfo 作者展示信息（榜单/概览；部门名 P1 随 org 目录通道补）
+type UserInfo struct {
+	Name string
 }
 
 func (o *Options) fillDefaults() {
@@ -430,10 +438,12 @@ func (s *Service) GetDoc(ctx context.Context, tenantID, userID, docID int64) (*k
 	if err != nil {
 		return nil, errx.New(errx.CodeNotFound, "文档不存在")
 	}
-	if _, err := s.getSpaceFor(ctx, userID, d.SpaceID, false); err != nil {
+	sp, err := s.getSpaceFor(ctx, userID, d.SpaceID, false)
+	if err != nil {
 		return nil, err
 	}
 	dto := toDocDTO(*d)
+	dto.SpaceType = sp.SpaceType // 阅读页维度标识（D24）
 	return &dto, nil
 }
 
@@ -973,7 +983,8 @@ func toDocDTO(d kbrepo.Doc) kbapi.DocDTO {
 		ID: strconv.FormatInt(d.ID, 10), SpaceID: strconv.FormatInt(d.SpaceID, 10),
 		NodeID: node, Title: d.Title, SourceType: d.SourceType, SourceRef: d.SourceRef,
 		Ext: d.Ext, Size: d.Size, Status: d.Status, ErrorMsg: d.ErrorMsg,
-		Version: d.Version, CreatedBy: strconv.FormatInt(d.CreatedBy, 10),
+		Version: d.Version, ViewCount: d.ViewCount,
+		CreatedBy: strconv.FormatInt(d.CreatedBy, 10),
 		CreatedAt: d.CreatedAt.UnixMilli(), UpdatedAt: d.UpdatedAt.UnixMilli(),
 	}
 }
@@ -1001,6 +1012,176 @@ func msSince(start, end time.Time) int64 {
 		return 0
 	}
 	return ms
+}
+
+// ── 浏览量/榜单/我的（D24 §4.2）──
+
+// RecordDocView 浏览上报：作者本人短路（防自刷榜）；否则日去重后 +1
+func (s *Service) RecordDocView(ctx context.Context, tenantID, userID, docID int64) (*kbapi.ViewResp, error) {
+	d, err := s.docOfReadable(ctx, tenantID, userID, docID)
+	if err != nil {
+		return nil, err
+	}
+	if d.CreatedBy == userID { // 作者本人不计（D24 拍板 7）
+		return &kbapi.ViewResp{ViewCount: d.ViewCount}, nil
+	}
+	n, err := s.repo.RecordView(ctx, tenantID, docID, userID, s.opts.Now())
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	return &kbapi.ViewResp{ViewCount: n}, nil
+}
+
+// MySummary 个人概览（首页概览卡）：两维度聚合 + 公司作者排名 + 最近发表
+func (s *Service) MySummary(ctx context.Context, tenantID, userID int64) (*kbapi.MeSummaryDTO, error) {
+	now := s.opts.Now()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	weekStart := now.AddDate(0, 0, -7)
+	st, err := s.repo.UserStats(ctx, tenantID, userID, monthStart, weekStart)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	out := &kbapi.MeSummaryDTO{
+		DocCount: st.DocCount, MonthNew: st.MonthNew,
+		TotalViews: st.TotalViews, Views7d: st.Views7d, AuthorRank: st.AuthorRank,
+	}
+	if docs, err := s.repo.ListDocsByUser(ctx, tenantID, userID, time.Time{}, 1); err == nil && len(docs) > 0 {
+		dto := toDocDTO(docs[0])
+		out.LastDoc = &dto
+	}
+	return out, nil
+}
+
+// MyDocs 我的全部文章（两维度 ready，created_at 降序 cursor 翻页）
+func (s *Service) MyDocs(ctx context.Context, tenantID, userID int64, cursor string, limit int) (*kbapi.MyDocsResp, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	var before time.Time
+	if cursor != "" {
+		ms, err := strconv.ParseInt(cursor, 10, 64)
+		if err != nil || ms <= 0 {
+			return nil, errx.New(errx.CodeBadRequest, "cursor 非法（created_at ms）")
+		}
+		before = time.UnixMilli(ms)
+	}
+	docs, err := s.repo.ListDocsByUser(ctx, tenantID, userID, before, limit)
+	if err != nil {
+		return nil, errx.From(err)
+	}
+	typeOf := s.spaceTypeMap(ctx, tenantID, userID)
+	out := &kbapi.MyDocsResp{Items: make([]kbapi.DocDTO, 0, len(docs))}
+	for _, d := range docs {
+		dto := toDocDTO(d)
+		dto.SpaceType = typeOf[d.SpaceID]
+		out.Items = append(out.Items, dto)
+	}
+	if len(docs) == limit { // 满页才有下一页
+		out.NextCursor = strconv.FormatInt(docs[len(docs)-1].CreatedAt.UnixMilli(), 10)
+	}
+	return out, nil
+}
+
+// Rankings 榜单（D24 拍板 8：仅公共维度文章——个人维度不参与攀比）
+func (s *Service) Rankings(ctx context.Context, tenantID, userID int64, board, window string) (*kbapi.RankingsResp, error) {
+	resp := &kbapi.RankingsResp{Board: board}
+	switch board {
+	case "latest":
+		rows, err := s.repo.ListCompanyDocsLatest(ctx, tenantID, 10)
+		if err != nil {
+			return nil, errx.From(err)
+		}
+		names := s.userNamesOf(ctx, rankDocUserIDs(rows))
+		resp.Docs = make([]kbapi.RankDocDTO, 0, len(rows))
+		for _, r := range rows {
+			uid := strconv.FormatInt(r.Doc.CreatedBy, 10)
+			resp.Docs = append(resp.Docs, kbapi.RankDocDTO{
+				DocID: strconv.FormatInt(r.Doc.ID, 10), Title: r.Doc.Title,
+				UserID: uid, UserName: names[r.Doc.CreatedBy].Name,
+				NodeName: r.NodeName, ViewCount: r.Doc.ViewCount,
+				CreatedAt: r.Doc.CreatedAt.UnixMilli(),
+			})
+		}
+	case "hot":
+		if window == "" {
+			window = "7d"
+		}
+		var since time.Time
+		switch window {
+		case "7d":
+			since = s.opts.Now().AddDate(0, 0, -6)
+		case "30d":
+			since = s.opts.Now().AddDate(0, 0, -29)
+		case "all":
+			since = time.Time{}
+		default:
+			return nil, errx.New(errx.CodeBadRequest, "window 合法值：7d|30d|all")
+		}
+		resp.Window = window
+		rows, err := s.repo.ListCompanyDocsHot(ctx, tenantID, since, 10)
+		if err != nil {
+			return nil, errx.From(err)
+		}
+		names := s.userNamesOf(ctx, rankDocUserIDs(rows))
+		resp.Docs = make([]kbapi.RankDocDTO, 0, len(rows))
+		for _, r := range rows {
+			resp.Docs = append(resp.Docs, kbapi.RankDocDTO{
+				DocID: strconv.FormatInt(r.Doc.ID, 10), Title: r.Doc.Title,
+				UserID: strconv.FormatInt(r.Doc.CreatedBy, 10), UserName: names[r.Doc.CreatedBy].Name,
+				NodeName: r.NodeName, ViewCount: r.Doc.ViewCount, Hot: r.Hot,
+				CreatedAt: r.Doc.CreatedAt.UnixMilli(),
+			})
+		}
+	case "authors":
+		rows, err := s.repo.ListAuthorRanks(ctx, tenantID, 10)
+		if err != nil {
+			return nil, errx.From(err)
+		}
+		ids := make([]int64, 0, len(rows))
+		for _, a := range rows {
+			ids = append(ids, a.UserID)
+		}
+		names := s.userNamesOf(ctx, ids)
+		resp.Authors = make([]kbapi.RankAuthorDTO, 0, len(rows))
+		for i, a := range rows {
+			resp.Authors = append(resp.Authors, kbapi.RankAuthorDTO{
+				Rank: i + 1, UserID: strconv.FormatInt(a.UserID, 10),
+				UserName: names[a.UserID].Name, DocCount: a.DocCount, TotalViews: a.TotalViews,
+			})
+		}
+	default:
+		return nil, errx.New(errx.CodeBadRequest, "board 合法值：latest|hot|authors")
+	}
+	return resp, nil
+}
+
+// rankDocUserIDs 榜单行作者 ID 集
+func rankDocUserIDs(rows []kbrepo.RankDoc) []int64 {
+	ids := make([]int64, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.Doc.CreatedBy)
+	}
+	return ids
+}
+
+// userNamesOf 批量取作者名（通道未装配=空 map，UserName 置空降级）
+func (s *Service) userNamesOf(ctx context.Context, ids []int64) map[int64]UserInfo {
+	if s.opts.UserInfoOfMany == nil || len(ids) == 0 {
+		return map[int64]UserInfo{}
+	}
+	return s.opts.UserInfoOfMany(ctx, ids)
+}
+
+// spaceTypeMap 维度 id → type（两行小查，我的文章/阅读页维度标识）
+func (s *Service) spaceTypeMap(ctx context.Context, tenantID, userID int64) map[int64]string {
+	out := map[int64]string{}
+	if sp, err := s.repo.EnsureCompanySpace(ctx, tenantID, s.opts.CompanyQuotaBytes); err == nil {
+		out[sp.ID] = sp.SpaceType
+	}
+	if sp, err := s.repo.EnsurePersonalSpace(ctx, tenantID, userID, s.opts.PersonalQuotaBytes); err == nil {
+		out[sp.ID] = sp.SpaceType
+	}
+	return out
 }
 
 // ── KB 治理写操作（D8；admin 域闭包转调——权限守卫在 admin:kb:govern 路由层）──

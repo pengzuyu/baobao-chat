@@ -667,13 +667,13 @@ func scanNode(row pgx.Row) (*Node, error) {
 	return &n, nil
 }
 
-const docCols = `id, tenant_id, space_id, COALESCE(node_id,0), title, source_type, COALESCE(source_ref,''), COALESCE(ext,''), size, status, COALESCE(error_msg,''), version, COALESCE(content,''), created_by, created_at, updated_at`
+const docCols = `id, tenant_id, space_id, COALESCE(node_id,0), title, source_type, COALESCE(source_ref,''), COALESCE(ext,''), size, status, COALESCE(error_msg,''), version, COALESCE(content,''), view_count, created_by, created_at, updated_at`
 
 func scanDoc(row pgx.Row) (*Doc, error) {
 	var d Doc
 	if err := row.Scan(&d.ID, &d.TenantID, &d.SpaceID, &d.NodeID, &d.Title, &d.SourceType,
 		&d.SourceRef, &d.Ext, &d.Size, &d.Status, &d.ErrorMsg, &d.Version, &d.Content,
-		&d.CreatedBy, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		&d.ViewCount, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &d, nil
@@ -805,4 +805,209 @@ func (p *Postgres) SetDocSource(ctx context.Context, tenantID, docID int64, sour
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ── 浏览量/榜单/我的（D24 §4.2）──
+
+// RecordView 日去重浏览：新插入流水行才 +1（CTE 单语句原子；冲突=幂等返回现值）
+func (p *Postgres) RecordView(ctx context.Context, tenantID, docID, userID int64, day time.Time) (int64, error) {
+	var n int64
+	err := p.pool.QueryRow(ctx, `
+		WITH ins AS (
+			INSERT INTO kb_doc_view (tenant_id, doc_id, user_id, view_date)
+			VALUES ($1,$2,$3,$4)
+			ON CONFLICT DO NOTHING
+			RETURNING 1
+		)
+		UPDATE kb_doc d SET view_count = d.view_count + (SELECT count(*) FROM ins)
+		WHERE d.tenant_id=$1 AND d.id=$2
+		RETURNING d.view_count`, tenantID, docID, userID, day).Scan(&n)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// rankDocCols 榜单行精简列（content 置空——榜单不拉正文，最重 2MB/行）
+const rankDocCols = `d.id, d.tenant_id, d.space_id, COALESCE(d.node_id,0), d.title, d.source_type, COALESCE(d.source_ref,''), COALESCE(d.ext,''), d.size, d.status, COALESCE(d.error_msg,''), d.version, '' AS content, d.view_count, d.created_by, d.created_at, d.updated_at`
+
+func scanRankDoc(row pgx.Row) (RankDoc, error) {
+	var r RankDoc
+	if err := row.Scan(&r.Doc.ID, &r.Doc.TenantID, &r.Doc.SpaceID, &r.Doc.NodeID, &r.Doc.Title,
+		&r.Doc.SourceType, &r.Doc.SourceRef, &r.Doc.Ext, &r.Doc.Size, &r.Doc.Status,
+		&r.Doc.ErrorMsg, &r.Doc.Version, &r.Doc.Content, &r.Doc.ViewCount,
+		&r.Doc.CreatedBy, &r.Doc.CreatedAt, &r.Doc.UpdatedAt, &r.NodeName); err != nil {
+		return RankDoc{}, err
+	}
+	return r, nil
+}
+
+// companyJoin 公共维度行 JOIN 片段（active 才进榜单——治理停用即全员不可见）
+const companyJoin = `JOIN kb_space s ON s.id=d.space_id AND s.tenant_id=d.tenant_id AND s.space_type='company' AND s.status='active'`
+
+// ListCompanyDocsLatest 公共维度最新（created_at 降序）
+func (p *Postgres) ListCompanyDocsLatest(ctx context.Context, tenantID int64, limit int) ([]RankDoc, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT `+rankDocCols+`, COALESCE(n.name,'')
+		FROM kb_doc d `+companyJoin+`
+		LEFT JOIN kb_node n ON n.id = d.node_id
+		WHERE d.tenant_id=$1 AND d.status='ready'
+		ORDER BY d.created_at DESC LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]RankDoc, 0, limit)
+	for rows.Next() {
+		r, err := scanRankDoc(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ListCompanyDocsHot 公共维度最热：since 非零=窗口流水聚合；零值=总榜 view_count
+func (p *Postgres) ListCompanyDocsHot(ctx context.Context, tenantID int64, since time.Time, limit int) ([]RankDoc, error) {
+	if since.IsZero() {
+		rows, err := p.pool.Query(ctx, `
+			SELECT `+rankDocCols+`, COALESCE(n.name,''), d.view_count
+			FROM kb_doc d `+companyJoin+`
+			LEFT JOIN kb_node n ON n.id = d.node_id
+			WHERE d.tenant_id=$1 AND d.status='ready'
+			ORDER BY d.view_count DESC, d.created_at DESC LIMIT $2`, tenantID, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		out := make([]RankDoc, 0, limit)
+		for rows.Next() {
+			r, err := scanRankDocHot(rows)
+			if err != nil {
+				return nil, err
+			}
+			r.Hot = r.Doc.ViewCount
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+	rows, err := p.pool.Query(ctx, `
+		WITH hot AS (
+			SELECT doc_id, count(*) AS cnt FROM kb_doc_view
+			WHERE tenant_id=$1 AND view_date >= $2::date
+			GROUP BY doc_id
+		)
+		SELECT `+rankDocCols+`, COALESCE(n.name,''), COALESCE(hot.cnt,0)
+		FROM kb_doc d `+companyJoin+`
+		JOIN hot ON hot.doc_id = d.id
+		LEFT JOIN kb_node n ON n.id = d.node_id
+		WHERE d.tenant_id=$1 AND d.status='ready'
+		ORDER BY hot.cnt DESC, d.created_at DESC LIMIT $3`, tenantID, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]RankDoc, 0, limit)
+	for rows.Next() {
+		r, err := scanRankDocHot(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// scanRankDocHot 榜单行+窗口热度扫描（rankDocCols + node_name + hot）
+func scanRankDocHot(row pgx.Row) (RankDoc, error) {
+	var r RankDoc
+	if err := row.Scan(&r.Doc.ID, &r.Doc.TenantID, &r.Doc.SpaceID, &r.Doc.NodeID,
+		&r.Doc.Title, &r.Doc.SourceType, &r.Doc.SourceRef, &r.Doc.Ext,
+		&r.Doc.Size, &r.Doc.Status, &r.Doc.ErrorMsg, &r.Doc.Version,
+		&r.Doc.Content, &r.Doc.ViewCount, &r.Doc.CreatedBy, &r.Doc.CreatedAt,
+		&r.Doc.UpdatedAt, &r.NodeName, &r.Hot); err != nil {
+		return RankDoc{}, err
+	}
+	return r, nil
+}
+
+// ListAuthorRanks 作者榜（公共维度 ready 文章按作者总浏览降序）
+func (p *Postgres) ListAuthorRanks(ctx context.Context, tenantID int64, limit int) ([]AuthorRank, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT d.created_by, count(*), COALESCE(SUM(d.view_count),0)
+		FROM kb_doc d `+companyJoin+`
+		WHERE d.tenant_id=$1 AND d.status='ready'
+		GROUP BY d.created_by
+		ORDER BY 3 DESC, 2 DESC LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]AuthorRank, 0, limit)
+	for rows.Next() {
+		var a AuthorRank
+		if err := rows.Scan(&a.UserID, &a.DocCount, &a.TotalViews); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ListDocsByUser 用户全部文章（两维度 ready，created_at 降序；before 翻页锚）
+func (p *Postgres) ListDocsByUser(ctx context.Context, tenantID, userID int64, before time.Time, limit int) ([]Doc, error) {
+	q := `SELECT ` + docCols + ` FROM kb_doc
+		WHERE tenant_id=$1 AND created_by=$2 AND status='ready'`
+	args := []any{tenantID, userID}
+	if !before.IsZero() {
+		args = append(args, before)
+		q += ` AND created_at < $3`
+	}
+	args = append(args, limit)
+	q += ` ORDER BY created_at DESC LIMIT ` + strconv.Itoa(len(args))
+	return p.listDocs(ctx, q, args...)
+}
+
+// UserStats 个人概览聚合（D24 me/summary 四数 + 作者排名）
+func (p *Postgres) UserStats(ctx context.Context, tenantID, userID int64, monthStart, weekStart time.Time) (UserKBStats, error) {
+	var st UserKBStats
+	err := p.pool.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE created_at >= $3),
+		       COALESCE(SUM(view_count),0)
+		FROM kb_doc
+		WHERE tenant_id=$1 AND created_by=$2 AND status='ready'`,
+		tenantID, userID, monthStart).Scan(&st.DocCount, &st.MonthNew, &st.TotalViews)
+	if err != nil {
+		return st, err
+	}
+	if !weekStart.IsZero() {
+		if err := p.pool.QueryRow(ctx, `
+			SELECT COALESCE(SUM(1),0)
+			FROM kb_doc_view v JOIN kb_doc d ON d.id = v.doc_id
+			WHERE v.tenant_id=$1 AND d.created_by=$2 AND v.view_date >= $3::date`,
+			tenantID, userID, weekStart).Scan(&st.Views7d); err != nil {
+			return st, err
+		}
+	}
+	// 作者排名：公共维度作者总浏览超我者 +1；无公共文章 → 0（未上榜）
+	err = p.pool.QueryRow(ctx, `
+		WITH at AS (
+			SELECT d.created_by, COALESCE(SUM(d.view_count),0) AS v
+			FROM kb_doc d `+companyJoin+`
+			WHERE d.tenant_id=$1 AND d.status='ready'
+			GROUP BY d.created_by
+		)
+		SELECT CASE WHEN mine.v IS NULL THEN 0
+		            ELSE (SELECT count(*)+1 FROM at WHERE at.v > mine.v) END
+		FROM (SELECT (SELECT v FROM at WHERE created_by=$2) AS v) AS mine`,
+		tenantID, userID).Scan(&st.AuthorRank)
+	if err != nil {
+		return st, err
+	}
+	return st, nil
 }

@@ -550,3 +550,79 @@ func TestKBGovernance(t *testing.T) {
 	}
 }
 
+
+// TestViewCountAndSummary D24：浏览量日去重（一人一天一篇计 1）+作者本人不计+概览联动
+func TestViewCountAndSummary(t *testing.T) {
+	svc := newTestService(t, Options{Embedder: fakeTopical(nil)})
+	ctx := context.Background()
+	companyID := mustInt(t, companyOf(t, svc))
+	doc, err := svc.IngestDoc(ctx, tenantID, alice, companyID, 0, "公开文", "text", "公开内容若干", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	did := mustInt(t, doc.ID)
+	// 作者本人浏览：不计
+	v, err := svc.RecordDocView(ctx, tenantID, alice, did)
+	if err != nil || v.ViewCount != 0 {
+		t.Fatalf("作者浏览不应计数: %v %+v", err, v)
+	}
+	// bob 同日两次：只计 1
+	if v, _ = svc.RecordDocView(ctx, tenantID, bob, did); v.ViewCount != 1 {
+		t.Fatalf("首次他人浏览应 1: %+v", v)
+	}
+	if v, _ = svc.RecordDocView(ctx, tenantID, bob, did); v.ViewCount != 1 {
+		t.Fatalf("同日重复浏览不涨: %+v", v)
+	}
+	// 第三人：2
+	if v, _ = svc.RecordDocView(ctx, tenantID, 1003, did); v.ViewCount != 2 {
+		t.Fatalf("第三人应 2: %+v", v)
+	}
+	// 概览联动：alice 总浏览 2/公司作者榜第 1；bob 无公司文章未上榜
+	sum, err := svc.MySummary(ctx, tenantID, alice)
+	if err != nil || sum.TotalViews != 2 || sum.DocCount != 1 || sum.AuthorRank != 1 {
+		t.Fatalf("alice 概览: %v %+v", err, sum)
+	}
+	sumBob, _ := svc.MySummary(ctx, tenantID, bob)
+	if sumBob.AuthorRank != 0 {
+		t.Fatalf("bob 无公司文章应未上榜: %+v", sumBob)
+	}
+}
+
+// TestRankingsCompanyOnly D24：榜单只收公共维度；latest 降序/hot 窗口聚合/authors 聚合
+func TestRankingsCompanyOnly(t *testing.T) {
+	svc := newTestService(t, Options{Embedder: fakeTopical(nil)})
+	ctx := context.Background()
+	companyID := mustInt(t, companyOf(t, svc))
+	personalID := mustInt(t, personalOf(t, svc, bob))
+	a, _ := svc.IngestDoc(ctx, tenantID, alice, companyID, 0, "公司文A", "text", "A 内容", 0)
+	b, _ := svc.IngestDoc(ctx, tenantID, alice, companyID, 0, "公司文B", "text", "B 内容", 0)
+	// bob 的个人维度文：不该进任何榜
+	if _, err := svc.IngestDoc(ctx, tenantID, bob, personalID, 0, "私有文P", "text", "P 内容", 0); err != nil {
+		t.Fatal(err)
+	}
+	// 制造浏览：A ×2（bob 两次同人同日=1 + 1003=1）
+	_, _ = svc.RecordDocView(ctx, tenantID, bob, mustInt(t, a.ID))
+	_, _ = svc.RecordDocView(ctx, tenantID, 1003, mustInt(t, a.ID))
+
+	// latest：B 在前（created_at 降序），仅 2 条（P 不进榜）
+	lat, err := svc.Rankings(ctx, tenantID, alice, "latest", "")
+	if err != nil || len(lat.Docs) != 2 || lat.Docs[0].Title != "公司文B" {
+		t.Fatalf("latest 榜: %v %+v", err, lat.Docs)
+	}
+	// hot 总榜：A hot=2 居首
+	hotAll, err := svc.Rankings(ctx, tenantID, alice, "hot", "all")
+	if err != nil || len(hotAll.Docs) != 2 || hotAll.Docs[0].Title != "公司文A" || hotAll.Docs[0].Hot != 2 {
+		t.Fatalf("hot 总榜: %v %+v", err, hotAll.Docs)
+	}
+	// hot 7d 窗口（今日在内）：A 仍 2
+	hot7, err := svc.Rankings(ctx, tenantID, alice, "hot", "7d")
+	if err != nil || hot7.Docs[0].Title != "公司文A" || hot7.Docs[0].Hot != 2 {
+		t.Fatalf("hot 7d 榜: %v %+v", err, hot7.Docs)
+	}
+	// authors：alice 第 1（2 文 2 浏览）；bob 个人文不计
+	au, err := svc.Rankings(ctx, tenantID, alice, "authors", "")
+	if err != nil || len(au.Authors) != 1 || au.Authors[0].Rank != 1 || au.Authors[0].DocCount != 2 || au.Authors[0].TotalViews != 2 {
+		t.Fatalf("作者榜: %v %+v", err, au.Authors)
+	}
+	_ = b
+}

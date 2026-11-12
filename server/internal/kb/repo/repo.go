@@ -80,17 +80,41 @@ type Doc struct {
 	SpaceID    int64
 	NodeID     int64 // 0=空间根
 	Title      string
-	SourceType string // text|file|markdown|doc|im（11 §3.1 五来源；doc=文档中心同步 im=消息转存 E6）
-	SourceRef  string // file 来源=file_id
+	SourceType string // text|file|markdown|im（D24：doc 来源已废）
+	SourceRef  string // file 来源=file_id / im 来源=msg_id
 	Ext        string
 	Size       int64
 	Status     string
 	ErrorMsg   string
 	Version    int
 	Content    string
+	ViewCount  int64 // 浏览量冗余总计（kb_doc_view 日去重流水驱动，D24）
 	CreatedBy  int64
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+}
+
+// RankDoc 榜单文章行（D24 §4.2；仅公共维度）
+type RankDoc struct {
+	Doc      Doc
+	NodeName string // 专栏名（空间根=""）
+	Hot      int64  // 窗口内浏览量（hot 榜 window=all 时=view_count 同值）
+}
+
+// AuthorRank 作者榜行（D24：公共维度文章聚合）
+type AuthorRank struct {
+	UserID     int64
+	DocCount   int64
+	TotalViews int64
+}
+
+// UserKBStats 个人概览聚合（D24 me/summary）
+type UserKBStats struct {
+	DocCount   int64 // ready 文章数（两维度）
+	MonthNew   int64 // 本月新增（created_at ≥ monthStart）
+	TotalViews int64 // 全部文章浏览量总计
+	Views7d    int64 // 近 7 日新增浏览
+	AuthorRank int   // 公司维度作者排名（按公共文章总浏览；0=未上榜）
 }
 
 // Chunk 分块行（kb_chunk；Embedding 1024 维）
@@ -173,6 +197,22 @@ type Repo interface {
 	// SearchKeyword 关键词路：ILIKE 兜底（tokens 为空白切分的关键词；
 	// 命中任意 token 即候选，得分为出现次数），仅参与 status=ready 的文档
 	SearchKeyword(ctx context.Context, tenantID int64, spaceIDs []int64, tokens []string, topK int) ([]ChunkHit, error)
+
+	// ── 浏览量/榜单/我的（D24 §4.2）──
+	// RecordView 日去重浏览：INSERT kb_doc_view(doc,user,day) ON CONFLICT DO NOTHING；
+	// 新插入才 view_count+1，返回最新计数（作者本人计不计由 service 短路——repo 不管）
+	RecordView(ctx context.Context, tenantID, docID, userID int64, day time.Time) (int64, error)
+	// ListCompanyDocsLatest 公共维度最新文章（ready，created_at 降序 LIMIT）
+	ListCompanyDocsLatest(ctx context.Context, tenantID int64, limit int) ([]RankDoc, error)
+	// ListCompanyDocsHot 公共维度最热文章：since 非零=窗口内 kb_doc_view 聚合降序；
+	// since 零值=总榜按 view_count（window=all）
+	ListCompanyDocsHot(ctx context.Context, tenantID int64, since time.Time, limit int) ([]RankDoc, error)
+	// ListAuthorRanks 作者榜（公共维度 ready 文章按作者总浏览降序 LIMIT）
+	ListAuthorRanks(ctx context.Context, tenantID int64, limit int) ([]AuthorRank, error)
+	// ListDocsByUser 用户全部文章（两维度 ready，created_at 降序；before 非零=翻页锚）
+	ListDocsByUser(ctx context.Context, tenantID, userID int64, before time.Time, limit int) ([]Doc, error)
+	// UserStats 个人概览聚合（monthStart/weekStart 为统计窗起点，零值=该项 0）
+	UserStats(ctx context.Context, tenantID, userID int64, monthStart, weekStart time.Time) (UserKBStats, error)
 }
 
 // DocStatsReader 管理端统计可选接口（D10 仪表盘跨域闭包；不进 Repo 主接口）

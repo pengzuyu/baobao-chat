@@ -36,15 +36,17 @@ type NodeDTO struct {
 type DocDTO struct {
 	ID         string `json:"id"`
 	SpaceID    string `json:"space_id"`
-	NodeID     string `json:"node_id"` // 空=空间根
+	SpaceType  string `json:"space_type,omitempty"` // company|personal（榜单/我的文章卡维度标识）
+	NodeID     string `json:"node_id"`              // 空=空间根
 	Title      string `json:"title"`
-	SourceType string `json:"source_type"` // text|file|markdown
-	SourceRef  string `json:"source_ref"`  // file 来源=file_id
+	SourceType string `json:"source_type"` // text|file|markdown|im
+	SourceRef  string `json:"source_ref"`  // file 来源=file_id / im 来源=msg_id
 	Ext        string `json:"ext"`
 	Size       int64  `json:"size"`
 	Status     string `json:"status"` // processing|ready|failed
 	ErrorMsg   string `json:"error_msg,omitempty"`
 	Version    int    `json:"version"`
+	ViewCount  int64  `json:"view_count"` // 浏览量（D24）
 	CreatedBy  string `json:"created_by"`
 	CreatedAt  int64  `json:"created_at"` // ms
 	UpdatedAt  int64  `json:"updated_at"` // ms
@@ -130,4 +132,67 @@ type KBService interface {
 	// Query 检索：权限前置过滤（可见空间集注入两路 WHERE）→ 向量余弦 + 关键词 ILIKE
 	// → RRF 融合（k=60）→ 高亮区间
 	Query(ctx context.Context, tenantID, userID int64, spaceIDs []string, keyword string, topK int) (*QueryResp, error)
+
+	// ── 浏览量/榜单/我的（D24 §4.2）──
+	// RecordDocView 浏览上报：作者本人短路返回现值；否则日去重（一人一天一篇计 1）
+	// 后 view_count+1
+	RecordDocView(ctx context.Context, tenantID, userID, docID int64) (*ViewResp, error)
+	// MySummary 个人概览：文章数/本月新增/总浏览/7 日新增/公司作者排名（0=未上榜）/最近发表
+	MySummary(ctx context.Context, tenantID, userID int64) (*MeSummaryDTO, error)
+	// MyDocs 我的全部文章（两维度 ready，created_at 降序；cursor=上一页末条 created_at ms）
+	MyDocs(ctx context.Context, tenantID, userID int64, cursor string, limit int) (*MyDocsResp, error)
+	// Rankings 榜单（board=latest|hot|authors，window=7d|30d|all 仅 hot；仅公共维度）
+	Rankings(ctx context.Context, tenantID, userID int64, board, window string) (*RankingsResp, error)
+}
+
+// ViewResp POST /kb/docs/{id}/view 响应
+type ViewResp struct {
+	ViewCount int64 `json:"view_count"`
+}
+
+// MeSummaryDTO GET /kb/me/summary（首页概览卡）
+type MeSummaryDTO struct {
+	DocCount   int64   `json:"doc_count"`
+	MonthNew   int64   `json:"month_new"`
+	TotalViews int64   `json:"total_views"`
+	Views7d    int64   `json:"views_7d"`
+	AuthorRank int     `json:"author_rank"` // 0=未上榜
+	LastDoc    *DocDTO `json:"last_doc,omitempty"`
+}
+
+// MyDocsResp GET /kb/me/docs 响应
+type MyDocsResp struct {
+	Items      []DocDTO `json:"items"`
+	NextCursor string   `json:"next_cursor,omitempty"` // 空=没有更多
+}
+
+// RankDocDTO 榜单文章行（latest/hot）
+type RankDocDTO struct {
+	DocID     string `json:"doc_id"`
+	Title     string `json:"title"`
+	UserID    string `json:"user_id"`
+	UserName  string `json:"user_name"` // 通道未装配时为空
+	DeptName  string `json:"dept_name,omitempty"`
+	NodeName  string `json:"node_name"` // 专栏名（空=维度根）
+	ViewCount int64  `json:"view_count"`
+	Hot       int64  `json:"hot"` // 窗口内浏览量（latest 榜恒 0；all=总浏览同 view_count）
+	CreatedAt int64  `json:"created_at"` // ms
+}
+
+// RankAuthorDTO 作者榜行
+type RankAuthorDTO struct {
+	Rank       int    `json:"rank"` // 1 起（总浏览相同并列）
+	UserID     string `json:"user_id"`
+	UserName   string `json:"user_name"`
+	DeptName   string `json:"dept_name,omitempty"`
+	DocCount   int64  `json:"doc_count"`
+	TotalViews int64  `json:"total_views"`
+}
+
+// RankingsResp GET /kb/rankings 响应（board 对应数组填一个）
+type RankingsResp struct {
+	Board   string          `json:"board"`
+	Window  string          `json:"window,omitempty"` // hot 榜回显
+	Docs    []RankDocDTO    `json:"docs,omitempty"`
+	Authors []RankAuthorDTO `json:"authors,omitempty"`
 }

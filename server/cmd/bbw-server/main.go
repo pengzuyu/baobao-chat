@@ -478,6 +478,17 @@ func main() {
 	}
 	kbMod := kb.NewModule(kbservice.Options{
 		Embedder: kbEmbed,
+		// 作者信息批量查询（D24 榜单/概览展示名；org 域闭包——跨域不引包，
+		// 循环 GetUser：每榜 ≤10 人，量级可忽略；部门名 P1 随目录通道补）
+		UserInfoOfMany: func(ctx context.Context, ids []int64) map[int64]kbservice.UserInfo {
+			out := make(map[int64]kbservice.UserInfo, len(ids))
+			for _, id := range ids {
+				if u, err := orgMod.API().GetUser(ctx, id); err == nil && u != nil {
+					out[id] = kbservice.UserInfo{Name: u.DisplayName}
+				}
+			}
+			return out
+		},
 		// 文件来源摄入：经 file 域票据通道取内容（IssueTicket 校验 owner/成员 →
 		// Download 一次性票据回放流；跨模块不引 file 包，D02 §4 依赖规则）
 		OpenFile: func(ctx context.Context, tenantID, userID, fileID int64) (kbservice.FileSource, error) {
@@ -512,6 +523,11 @@ func main() {
 	mux.Handle("POST /api/v1/kb/docs/{id}/reingest", authed(handleKBReingest(kbSvc)))
 	mux.Handle("POST /api/v1/kb/query", authed(handleKBQuery(kbSvc)))
 	mux.Handle("GET /api/v1/kb/jobs", authed(handleKBJobs(kbSvc)))
+	// D24：浏览量/榜单/我的（首页概览卡+三列榜单+我的文章）
+	mux.Handle("POST /api/v1/kb/docs/{id}/view", authed(handleKBViewDoc(kbSvc)))
+	mux.Handle("GET /api/v1/kb/me/summary", authed(handleKBMySummary(kbSvc)))
+	mux.Handle("GET /api/v1/kb/me/docs", authed(handleKBMyDocs(kbSvc)))
+	mux.Handle("GET /api/v1/kb/rankings", authed(handleKBRankings(kbSvc)))
 
 	// mailAPI 前置声明（mcpgw 闭包捕获引用；mail 模块装配于后段，调用在运行期完成）
 	var mailAPI *mailservice.Service
@@ -2447,6 +2463,90 @@ func kbActor(r *http.Request) (int64, int64, error) {
 		return 0, 0, err
 	}
 	return httpx.TenantID(r.Context()), uid, nil
+}
+
+// handleKBViewDoc 浏览上报（D24：日去重+作者本人不计；幂等可重放）
+func handleKBViewDoc(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		docID, err := pathID(r, "id")
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		resp, err := svc.RecordDocView(r.Context(), tenant, uid, docID)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleKBMySummary 个人概览（首页概览卡）
+func handleKBMySummary(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		resp, err := svc.MySummary(r.Context(), tenant, uid)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleKBMyDocs 我的全部文章（cursor 翻页）
+func handleKBMyDocs(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		limit := 0
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if limit, err = strconv.Atoi(v); err != nil || limit <= 0 {
+				httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "limit 非法"))
+				return
+			}
+		}
+		resp, err := svc.MyDocs(r.Context(), tenant, uid, r.URL.Query().Get("cursor"), limit)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
+}
+
+// handleKBRankings 榜单（board=latest|hot|authors；window=7d|30d|all）
+func handleKBRankings(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		board := r.URL.Query().Get("board")
+		if board == "" {
+			board = "latest"
+		}
+		resp, err := svc.Rankings(r.Context(), tenant, uid, board, r.URL.Query().Get("window"))
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, resp)
+	}
 }
 
 // pathID 路径 ID 解析（kb 路由共用）

@@ -19,6 +19,7 @@ type Memory struct {
 	docs    map[int64]Doc
 	chunks  map[int64]Chunk
 	bySpace map[int64][]int64 // space_id → doc ids（列表序维护省事：遍历时再过滤）
+	docViews map[docViewKey]bool // 日去重浏览流水（kb_doc_view 内存同构，D24）
 }
 
 var _ Repo = (*Memory)(nil)
@@ -28,6 +29,7 @@ func NewMemory() *Memory {
 	return &Memory{
 		nextID: 0, spaces: map[int64]Space{}, nodes: map[int64]Node{},
 		docs: map[int64]Doc{}, chunks: map[int64]Chunk{}, bySpace: map[int64][]int64{},
+		docViews: map[docViewKey]bool{},
 	}
 }
 
@@ -526,4 +528,210 @@ func (m *Memory) SetDocSource(_ context.Context, _, docID int64, sourceType, sou
 	d.SourceRef = sourceRef
 	m.docs[docID] = d
 	return nil
+}
+
+// ── 浏览量/榜单/我的（D24 §4.2；内存轨）──
+
+// docViewKey 日去重浏览键（kb_doc_view 三元组主键同构）
+type docViewKey struct {
+	docID, userID int64
+	day           string // YYYY-MM-DD
+}
+
+func (m *Memory) RecordView(_ context.Context, tenantID, docID, userID int64, day time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.docs[docID]
+	if !ok || d.TenantID != tenantID {
+		return 0, ErrNotFound
+	}
+	k := docViewKey{docID: docID, userID: userID, day: day.Format("2006-01-02")}
+	if !m.docViews[k] {
+		m.docViews[k] = true
+		d.ViewCount++
+		m.docs[docID] = d
+	}
+	return d.ViewCount, nil
+}
+
+func (m *Memory) companyDocsLocked(tenantID int64) []Doc {
+	cs := m.companyLocked(tenantID)
+	if cs == nil || cs.Status != "active" {
+		return nil // 治理停用即全员不可见（PG companyJoin 同口径）
+	}
+	out := make([]Doc, 0, 8)
+	for _, d := range m.docs {
+		if d.TenantID == tenantID && d.SpaceID == cs.ID && d.Status == DocReady {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out
+}
+
+func (m *Memory) ListCompanyDocsLatest(_ context.Context, tenantID int64, limit int) ([]RankDoc, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	docs := m.companyDocsLocked(tenantID)
+	if len(docs) > limit {
+		docs = docs[:limit]
+	}
+	out := make([]RankDoc, 0, len(docs))
+	for _, d := range docs {
+		r := RankDoc{Doc: m.rankDocNoContent(d), NodeName: m.nodeNameLocked(d.NodeID)}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func (m *Memory) ListCompanyDocsHot(_ context.Context, tenantID int64, since time.Time, limit int) ([]RankDoc, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	docs := m.companyDocsLocked(tenantID)
+	// 窗口热度（内存轨：全量键扫描；测试量级足够）
+	hot := map[int64]int64{}
+	if !since.IsZero() {
+		sd := since.Format("2006-01-02")
+		for k := range m.docViews {
+			if k.day >= sd {
+				if d, ok := m.docs[k.docID]; ok && d.TenantID == tenantID && d.Status == DocReady {
+					hot[k.docID]++
+				}
+			}
+		}
+	}
+	out := make([]RankDoc, 0, len(docs))
+	for _, d := range docs {
+		h := d.ViewCount
+		if !since.IsZero() {
+			var ok bool
+			if h, ok = hot[d.ID]; !ok {
+				continue // 窗口榜只收窗口内有浏览的文章（PG JOIN hot 同口径）
+			}
+		}
+		out = append(out, RankDoc{Doc: m.rankDocNoContent(d), NodeName: m.nodeNameLocked(d.NodeID), Hot: h})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Hot != out[j].Hot {
+			return out[i].Hot > out[j].Hot
+		}
+		return out[i].Doc.CreatedAt.After(out[j].Doc.CreatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// rankDocNoContent 榜单行不携带正文（PG rankDocCols 同口径）
+func (m *Memory) rankDocNoContent(d Doc) Doc {
+	d.Content = ""
+	return d
+}
+
+// nodeNameLocked 专栏名（空间根=""）
+func (m *Memory) nodeNameLocked(nodeID int64) string {
+	if nodeID == 0 {
+		return ""
+	}
+	return m.nodes[nodeID].Name
+}
+
+func (m *Memory) ListAuthorRanks(_ context.Context, tenantID int64, limit int) ([]AuthorRank, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	agg := map[int64]*AuthorRank{}
+	for _, d := range m.companyDocsLocked(tenantID) {
+		a, ok := agg[d.CreatedBy]
+		if !ok {
+			a = &AuthorRank{UserID: d.CreatedBy}
+			agg[d.CreatedBy] = a
+		}
+		a.DocCount++
+		a.TotalViews += d.ViewCount
+	}
+	out := make([]AuthorRank, 0, len(agg))
+	for _, a := range agg {
+		out = append(out, *a)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].TotalViews != out[j].TotalViews {
+			return out[i].TotalViews > out[j].TotalViews
+		}
+		return out[i].DocCount > out[j].DocCount
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (m *Memory) ListDocsByUser(_ context.Context, tenantID, userID int64, before time.Time, limit int) ([]Doc, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Doc, 0, 16)
+	for _, d := range m.docs {
+		if d.TenantID != tenantID || d.CreatedBy != userID || d.Status != DocReady {
+			continue
+		}
+		if !before.IsZero() && !d.CreatedAt.Before(before) {
+			continue
+		}
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (m *Memory) UserStats(_ context.Context, tenantID, userID int64, monthStart, weekStart time.Time) (UserKBStats, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var st UserKBStats
+	for _, d := range m.docs {
+		if d.TenantID != tenantID || d.CreatedBy != userID || d.Status != DocReady {
+			continue
+		}
+		st.DocCount++
+		if !monthStart.IsZero() && !d.CreatedAt.Before(monthStart) {
+			st.MonthNew++
+		}
+		st.TotalViews += d.ViewCount
+	}
+	if !weekStart.IsZero() {
+		wd := weekStart.Format("2006-01-02")
+		for k := range m.docViews {
+			if k.userID == userID && k.day >= wd {
+				if d, ok := m.docs[k.docID]; ok && d.TenantID == tenantID {
+					st.Views7d++
+				}
+			}
+		}
+	}
+	// 作者排名：公共维度作者总浏览超我者 +1（严格大于=并列同名次，与 PG 口径一致）；
+	// 无公共文章 → 0（未上榜）
+	var myViews int64
+	hasCompany := false
+	for _, d := range m.companyDocsLocked(tenantID) {
+		if d.CreatedBy == userID {
+			myViews += d.ViewCount
+			hasCompany = true
+		}
+	}
+	if hasCompany {
+		above := 0
+		agg := map[int64]int64{}
+		for _, d := range m.companyDocsLocked(tenantID) {
+			agg[d.CreatedBy] += d.ViewCount
+		}
+		for _, v := range agg {
+			if v > myViews {
+				above++
+			}
+		}
+		st.AuthorRank = above + 1
+	}
+	return st, nil
 }
