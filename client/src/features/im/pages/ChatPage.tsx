@@ -9,8 +9,9 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, Bell, Megaphone, SquarePen, Star } from 'lucide-react';
-import { ApiError, getErrorText } from '../../../shared/api/http';
+import { Dropdown } from 'antd';
+import { ArrowDown, Bell, Megaphone, Plus, Star, UserPlus, Users } from 'lucide-react';
+import { ApiError, errText, getErrorText } from '../../../shared/api/http';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
@@ -19,6 +20,7 @@ import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { dayKey, formatDayDivider } from '../../../shared/utils/time';
 import { useConversationMessages, useConversations, useUnreadNotificationCount } from '../api/hooks';
 import {
+  convCreate,
   fetchConvDetail,
   fetchMessagesBefore,
   editMessage,
@@ -38,6 +40,8 @@ import { ChatHeader } from '../components/ChatHeader';
 import { ConversationList } from '../components/ConversationList';
 import { ConvInfoSidebar } from '../components/ConvInfoSidebar';
 import { CreateConvModal } from '../components/CreateConvModal';
+import { PersonPickerModal } from '../components/PersonPicker';
+import type { DirectoryUser } from '../../contacts/api/contacts';
 import { FileSendPreview } from '../components/FileSendPreview';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from '../components/stream/MsgContextMenu';
@@ -85,6 +89,8 @@ export function ChatPage() {
   /** PIM-11 合并转发详情抽屉：点击 merge_forward 气泡打开 */
   const [mergeDrawerMsg, setMergeDrawerMsg] = useState<Message | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  /** 发起单聊选人器（M3：「+」菜单/搜索框联系人/空态入口共用） */
+  const [dmPickerOpen, setDmPickerOpen] = useState(false);
   /** 附件发送（D06 阶段一）：file input → 预览弹层 → upload+msg.send */
   const [pickedFile, setPickedFile] = useState<File | null>(null);
   /** @全体被策略拦截的提示条（3014，3s 自动消失） */
@@ -672,6 +678,23 @@ export function ChatPage() {
     [navigate],
   );
 
+  // 发起单聊（M3）：「+」菜单/搜索框联系人命中/空态入口共用——服务端同对成员已有单聊幂等复用
+  const startDm = useCallback(
+    async (uid: string) => {
+      try {
+        const conv = await convCreate({ type: 1, memberIds: [uid] });
+        await queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
+        navigate(`/im/c/${conv.id}`);
+      } catch (e) {
+        window.alert(errText(e, '发起会话失败，请稍后重试'));
+      }
+    },
+    [queryClient, navigate],
+  );
+
+  // 搜索框联系人命中（M3）：搜人即聊——点人发起单聊直达
+  const onPickPerson = useCallback((u: DirectoryUser) => void startDm(u.uid), [startDm]);
+
   const doSend = (text: string) => {
     if (!convId) return;
     // @全体：文本包含「@全体」即携带 all mention（服务端按 mention_all_policy 校验 3014）
@@ -747,8 +770,8 @@ export function ChatPage() {
   const convListNode = (
     <section className="im-list-col" style={bp === 'S' ? { width: '100%', borderRight: 'none' } : undefined}>
       <div className="im-list-col__header">
-        {/* PIM-07 服务端态搜索（点击/⌘K 聚焦；本地 FTS5 态属 Tauri/Rust 侧不在此） */}
-        <SearchPanel inputRef={searchInputRef} onSelect={onSearchSelect} />
+        {/* PIM-07 服务端态搜索（点击/⌘K 聚焦；M3 起联系人/消息双段结果——搜人即聊） */}
+        <SearchPanel inputRef={searchInputRef} onSelect={onSearchSelect} onPickPerson={onPickPerson} />
         <div className="im-list-col__header-actions">
           {/* 通知中心入口（PIM-09 D03 §3.9）：铃铛 + 未读红点数字（99+ 封顶） */}
           <button
@@ -772,14 +795,22 @@ export function ChatPage() {
           >
             <Star size={16} />
           </button>
-          <button
-            className="icon-btn"
-            title="新建会话（单聊/建群）"
-            onClick={() => setCreateOpen(true)}
-            data-testid="create-conv-btn"
+          {/* 新建会话（M3 2026-11-12 用户口径）：「+」下拉菜单——发起单聊直达选人器/发起群聊 */}
+          <Dropdown
+            menu={{
+              items: [
+                { key: 'single', icon: <UserPlus size={14} />, label: '发起单聊' },
+                { key: 'group', icon: <Users size={14} />, label: '发起群聊' },
+              ],
+              onClick: ({ key }) => (key === 'single' ? setDmPickerOpen(true) : setCreateOpen(true)),
+            }}
+            trigger={['click']}
+            placement="bottomRight"
           >
-            <SquarePen size={16} />
-          </button>
+            <button className="icon-btn" title="新建会话" data-testid="create-conv-btn">
+              <Plus size={16} />
+            </button>
+          </Dropdown>
         </div>
       </div>
       {listState === 'ok' ? (
@@ -797,7 +828,7 @@ export function ChatPage() {
           error={convQuery.error}
           onRetry={() => void convQuery.refetch()}
           emptyText="还没有会话，发起第一个会话吧"
-          emptyAction={<Button onClick={() => navigate('/im')}>发起单聊</Button>}
+          emptyAction={<Button onClick={() => setDmPickerOpen(true)}>发起单聊</Button>}
           offlineText="离线中，可浏览本地缓存的会话"
           degradedText={degradedText ?? undefined}
         >
@@ -1134,6 +1165,15 @@ export function ChatPage() {
           }}
         />
       ) : null}
+      {/* 发起单聊选人器（M3：「+」菜单/空态入口；点人即建单聊直达） */}
+      <PersonPickerModal
+        open={dmPickerOpen}
+        title="发起单聊"
+        onClose={() => setDmPickerOpen(false)}
+        onConfirm={(picked) => {
+          if (picked[0]) void startDm(picked[0].uid);
+        }}
+      />
       {pickedFile && convId ? (
         <FileSendPreview convId={convId} file={pickedFile} onClose={() => setPickedFile(null)} />
       ) : null}

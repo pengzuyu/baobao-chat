@@ -8642,3 +8642,112 @@ body {
   color: var(--bbw-primary);
   border-color: var(--bbw-primary);
 }
+
+/* ── 通讯录选人器（M3：发起单聊/建群/邀请成员共用； bbw-contacts__avatar--sm 复用通讯录头像）── */
+.bbw-contacts__avatar--sm {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+.bbw-pp {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+.bbw-pp__body {
+  padding: 14px 16px 8px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.bbw-pp__list {
+  overflow: auto;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bbw-pp__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--bbw-gray-8);
+}
+.bbw-pp__row:hover {
+  background: var(--bbw-gray-2);
+}
+.bbw-pp__row--selected {
+  background: var(--bbw-primary-light);
+}
+.bbw-pp__name {
+  font-size: 13px;
+  font-weight: 500;
+  flex: none;
+}
+.bbw-pp__empno {
+  font-size: 12px;
+  color: var(--bbw-gray-6);
+  flex: none;
+}
+.bbw-pp__path {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--bbw-gray-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bbw-pp__check {
+  flex: none;
+  color: var(--bbw-primary);
+}
+.bbw-pp__hint {
+  padding: 18px 8px;
+  text-align: center;
+  color: var(--bbw-gray-5);
+  font-size: 12px;
+}
+.bbw-pp__hint--warn {
+  color: var(--bbw-warning);
+}
+.bbw-pp__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.bbw-pp__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--bbw-gray-4);
+  background: var(--bbw-gray-1);
+  color: var(--bbw-gray-8);
+  cursor: pointer;
+}
+.bbw-pp__chip:hover {
+  border-color: var(--bbw-primary);
+  color: var(--bbw-primary);
+}
+/* 搜索面板联系人段（M3） */
+.search-panel__section {
+  font-size: 11px;
+  color: var(--bbw-gray-5);
+  padding: 6px 10px 2px;
+}
+.search-people__empno {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--bbw-gray-6);
+}

@@ -26,6 +26,7 @@ import {
   memberRole,
 } from '../api/im';
 import { downloadUrl, fetchConvFiles, getDownloadTicket, type MyFileItem } from '../api/files';
+import { PersonPickerModal } from './PersonPicker';
 import { useImStore } from '../store/im';
 import { formatMuteUntil } from '../pages/systemMessageRegistry';
 import type { Conversation, ConversationMember, MemberRole } from '../model/types';
@@ -58,8 +59,8 @@ export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onL
   const [groupAnnouncement, setGroupAnnouncement] = useState<string | undefined>(conv.groupSetting?.announcement);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  /** 添加成员（手输 uid，逗号/空白分隔）——正式版接通讯录选人（登记） */
-  const [addUids, setAddUids] = useState('');
+  /** 邀请成员选人器（M3：替代手输 uid——通讯录多选，排除已有成员） */
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   const isGroup = conv.type !== 1;
   const isMgr = myRole === 1 || myRole === 2;
@@ -225,16 +226,7 @@ export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onL
                 myUid={myUid}
                 myRole={myRole}
                 busy={busy}
-                addUids={addUids}
-                setAddUids={setAddUids}
-                onAdd={() => {
-                  const uids = addUids.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean);
-                  if (uids.length === 0) return;
-                  void run(async () => {
-                    await memberAdd(conv.id, uids);
-                    setAddUids('');
-                  });
-                }}
+                onInvite={() => setInviteOpen(true)}
                 onRemove={(uid) => void run(() => memberRemove(conv.id, uid))}
                 onRole={(uid, role) => void run(() => memberRole(conv.id, uid, role))}
                 onTransferMember={(uid) => void run(() => memberRole(conv.id, uid, 1))}
@@ -258,6 +250,20 @@ export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onL
           </div>
         </>
       )}
+      {/* 邀请成员选人器（M3）：通讯录多选，排除已有成员；确认即 memberAdd */}
+      <PersonPickerModal
+        open={inviteOpen}
+        title={`邀请成员加入「${conv.name}」`}
+        multiple
+        excludeUids={detail.map((m) => m.uid)}
+        onClose={() => setInviteOpen(false)}
+        onConfirm={(picked) => {
+          if (picked.length === 0) return;
+          void run(async () => {
+            await memberAdd(conv.id, picked.map((p) => p.uid));
+          });
+        }}
+      />
     </aside>
   );
 }
@@ -398,9 +404,7 @@ function MembersTab({
   myUid,
   myRole,
   busy,
-  addUids,
-  setAddUids,
-  onAdd,
+  onInvite,
   onRemove,
   onRole,
   onTransferMember,
@@ -411,9 +415,8 @@ function MembersTab({
   myUid: string;
   myRole?: MemberRole;
   busy: boolean;
-  addUids: string;
-  setAddUids: (v: string) => void;
-  onAdd: () => void;
+  /** 邀请成员（M3：通讯录选人器，排除已有成员） */
+  onInvite: () => void;
   onRemove: (uid: string) => void;
   onRole: (uid: string, role: 2 | 3) => void;
   /** 转让群主（role=1，危险确认后调用） */
@@ -426,20 +429,11 @@ function MembersTab({
 
   return (
     <div className="gm-section">
-      {/* 添加成员：手输 uid 列表（正式版接通讯录选人，登记） */}
+      {/* 邀请成员（M3）：通讯录多选弹窗（PersonPickerModal，群内已有成员自动排除） */}
       {iAmMgr && conv.status === 1 ? (
         <div className="gm-op" data-testid="add-member">
-          <div className="gm-op__label">添加成员（uid，逗号分隔）</div>
-          <div className="bbw-input">
-            <input
-              placeholder="如 10003, 10004"
-              value={addUids}
-              onChange={(e) => setAddUids(e.target.value)}
-              data-testid="add-member-uids"
-            />
-          </div>
-          <Button variant="primary" disabled={busy || !addUids.trim()} onClick={onAdd}>
-            添加
+          <Button variant="primary" disabled={busy} onClick={onInvite}>
+            邀请成员
           </Button>
         </div>
       ) : null}

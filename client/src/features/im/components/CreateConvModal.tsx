@@ -1,15 +1,16 @@
 /**
- * 建会话弹窗（D03 INT-IM-15 最简版）：
- * - 单聊：选 1 人（手输 uid，服务端去重复用已有单聊）
- * - 群聊：群名 + 手输 uid 列表（≤499）
- * 正式版成员选择器接通讯录（org 域 API），当前以手输 uid 列表兜底（登记）。
+ * 建群弹窗（D03 INT-IM-15；M3 2026-11-12 改版）：
+ * - 单聊不再走本弹窗——「+」菜单「发起单聊」直达选人器（ChatPage PersonPickerModal）
+ * - 群聊：群名 + 通讯录多选人（PersonPickerCore 内嵌，替代手输 uid 兜底）≤499
  */
 
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
-import { getErrorText } from '../../../shared/api/http';
+import { errText } from '../../../shared/api/http';
 import { convCreate } from '../api/im';
+import type { DirectoryUser } from '../../contacts/api/contacts';
+import { PersonPickerCore } from './PersonPicker';
 
 interface CreateConvModalProps {
   onClose: () => void;
@@ -18,35 +19,32 @@ interface CreateConvModalProps {
 }
 
 export function CreateConvModal({ onClose, onCreated }: CreateConvModalProps) {
-  const [type, setType] = useState<1 | 2>(1);
   const [name, setName] = useState('');
-  const [members, setMembers] = useState('');
+  const [members, setMembers] = useState<DirectoryUser[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const uids = members.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean);
-
   const submit = async () => {
     if (busy) return;
-    if (type === 1 && uids.length !== 1) {
-      setError('单聊恰选 1 人');
+    if (!name.trim()) {
+      setError('群名必填');
       return;
     }
-    if (type === 2 && !name.trim()) {
-      setError('群名必填');
+    if (members.length === 0) {
+      setError('至少选择 1 名成员');
       return;
     }
     setBusy(true);
     setError(null);
     try {
       const conv = await convCreate({
-        type,
-        name: type === 2 ? name.trim() : undefined,
-        memberIds: uids,
+        type: 2,
+        name: name.trim(),
+        memberIds: members.map((m) => m.uid),
       });
       onCreated(conv.id);
     } catch (e) {
-      setError(e && typeof e === 'object' && 'code' in e ? getErrorText((e as { code: number }).code) : '创建失败');
+      setError(errText(e, '创建失败，请稍后重试'));
     } finally {
       setBusy(false);
     }
@@ -56,59 +54,46 @@ export function CreateConvModal({ onClose, onCreated }: CreateConvModalProps) {
     <div className="modal-mask" onClick={onClose}>
       <div className="forward-modal" onClick={(e) => e.stopPropagation()} data-testid="create-conv-modal">
         <div className="forward-modal__head">
-          <span>新建会话</span>
+          <span>发起群聊</span>
           <button type="button" className="icon-btn" onClick={onClose} title="关闭">
             <X size={16} />
           </button>
         </div>
 
         <div className="gm-create__body">
-          <div className="gm-create__types">
-            <button
-              type="button"
-              className={`gm-tab${type === 1 ? ' gm-tab--active' : ''}`}
-              onClick={() => setType(1)}
-              data-testid="create-type-single"
-            >
-              发起单聊
-            </button>
-            <button
-              type="button"
-              className={`gm-tab${type === 2 ? ' gm-tab--active' : ''}`}
-              onClick={() => setType(2)}
-              data-testid="create-type-group"
-            >
-              创建群聊
-            </button>
-          </div>
-
-          {type === 2 ? (
-            <div className="gm-field">
-              <label className="gm-field__label">群名称（≤50 字）</label>
-              <div className="bbw-input">
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="如：产品研发群"
-                  data-testid="create-conv-name"
-                />
-              </div>
-            </div>
-          ) : null}
-
           <div className="gm-field">
-            <label className="gm-field__label">
-              {type === 1 ? '对方用户 ID（恰 1 人）' : `成员用户 ID 列表（逗号分隔，已选 ${uids.length}/499）`}
-            </label>
+            <label className="gm-field__label">群名称（≤50 字）</label>
             <div className="bbw-input">
               <input
-                value={members}
-                onChange={(e) => setMembers(e.target.value)}
-                placeholder={type === 1 ? '如 10002' : '如 10002, 10003'}
-                data-testid="create-conv-members"
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="如：产品研发群"
+                data-testid="create-conv-name"
               />
             </div>
           </div>
+
+          <div className="gm-field">
+            <label className="gm-field__label">选择成员（已选 {members.length}/499）</label>
+          </div>
+          {members.length > 0 ? (
+            <div className="bbw-pp__chips" data-testid="create-conv-chips">
+              {members.map((m) => (
+                <button
+                  key={m.uid}
+                  type="button"
+                  className="bbw-pp__chip"
+                  title={`移除 ${m.display_name}`}
+                  onClick={() => setMembers((prev) => prev.filter((p) => p.uid !== m.uid))}
+                >
+                  {m.display_name}
+                  <X size={11} />
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <PersonPickerCore multiple selected={members} onToggle={(u) => setMembers((prev) => (prev.some((p) => p.uid === u.uid) ? prev.filter((p) => p.uid !== u.uid) : [...prev, u]))} />
 
           {error ? <div className="gm-error">{error}</div> : null}
 
@@ -116,8 +101,8 @@ export function CreateConvModal({ onClose, onCreated }: CreateConvModalProps) {
             <Button variant="text" onClick={onClose}>
               取消
             </Button>
-            <Button variant="primary" disabled={busy || uids.length === 0} onClick={() => void submit()} data-testid="create-conv-submit">
-              {busy ? '创建中…' : '创建'}
+            <Button variant="primary" disabled={busy || members.length === 0} onClick={() => void submit()} data-testid="create-conv-submit">
+              {busy ? '创建中…' : '创建群聊'}
             </Button>
           </div>
         </div>
