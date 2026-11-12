@@ -326,6 +326,7 @@
 | N5 | 前端其余+管理端 | SpaceBrowsePage（目录树懒加载接通）+ MyArticlesPage + SearchPage（命中卡文章化）+ KbGovernancePage 嵌入设置面板（模型/epoch/重建进度）+ 旧件退役（UploadModal/GrantModal/旧 KbPage） | tsc+vite build 绿 | [ ] |
 | N6 | IM 收藏入库 | IngestFromIM 接路由 POST /kb/docs/from-im + IM 消息右键入口（默认落我的笔记） | go test+tsc+build 绿 | [ ] |
 | N7 | 真机验收 | D24 §10 七项走查（首页榜单/浏览量口径/阅读页渲染/维度隔离/检索三态/重建进度/IM 入库） | 用户真机走查（:8090 重启+Tauri） | [ ] |
+| N8 | 正文媒体引用权限（D24 §11 补记） | file_ref 表随 0037 建（file_id/ctx_type/ctx_id/created_by）+ file 域 canAccess 第三判据（EXISTS 可见引用上下文，kb_article 可见性闭包注入——挂门法，否掉文件行打标）+ 正文 bbwfile://{id} 引用语法与 N4 阅读页渲染换票（120s 票据现场取）+ 删除三层（静默删引用/本体删除引用计数提示/全零回收归 D06 登记项）；IM conv_id 旧径不动（message 迁 file_ref 终态另立） | 非作者读者打开公开文章正文图正常显示（旧路径 403）；编辑删图/文章移动不影响其他门 | [ ] |
 
 ## 批次 O：对象存储与预签名直传（D25，2026-11-12 设计定稿）
 
