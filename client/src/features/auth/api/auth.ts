@@ -116,6 +116,24 @@ export async function apiSearchUsers(q: string, cursor?: string, limit = 20): Pr
   return http.get<UserSearchPage>(`/auth/users${params.size > 0 ? `?${params}` : ''}`);
 }
 
+/** ── 自助注册（M4，2026-11-12 用户裁决：开放注册；工号自动生成；回登录页登录） ── */
+
+/**
+ * 自助注册：姓名+自设口令 → 服务端自动生成工号（拼音基名+重名递增）；
+ * 注册用户不挂部门=虚拟「未分组」（管理员后续调整）。返回分配的工号（登录账号）。
+ */
+export async function apiRegister(displayName: string, password: string): Promise<string> {
+  if (USE_MOCK) {
+    await delay(400);
+    return `mock-${displayName.toLowerCase()}`;
+  }
+  const data = await http.post<{ employee_no: string }>('/auth/register', {
+    display_name: displayName,
+    password,
+  });
+  return data.employee_no;
+}
+
 /** ── setup 初始化向导（16 篇 §2.2 Web 化：空系统引导首个管理员） ── */
 
 /** 系统是否已初始化（租户内已有用户）。mock 模式恒已初始化——纯前端走查不被向导打断 */

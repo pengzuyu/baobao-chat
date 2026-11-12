@@ -1146,6 +1146,12 @@ func handleOrgDirectoryUsers(svc *orgservice.Service) http.HandlerFunc {
 // 成功返回工号（前端展示后回登录页，不签发 token——用户拍板）
 func handleAuthRegister(users orgrepo.Repo, suggest func(ctx context.Context, tenantID int64, name string) (string, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 空系统防占位：首个用户必须走 /setup 向导建管理员——否则自助注册会占住
+		// 「租户内已有用户」条件，把 bootstrap 永久关闭（1014）锁死管理面
+		if n, err := users.CountUsers(r.Context(), 1); err == nil && n == 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeAuthSetupDone, "系统未初始化，请先完成初始化向导"))
+			return
+		}
 		var req struct {
 			DisplayName string `json:"display_name"`
 			Password    string `json:"password"`
