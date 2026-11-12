@@ -170,10 +170,27 @@ func main() {
 			}
 		})
 
-	// 文件域（D06 阶段一+阶段二 server 侧）：本地磁盘存储 + 一次性票据下载 +
-	// 分片上传会话（check 秒传/uploads/PATCH 分片/complete）；
-	// 会话成员判定经闭包查 message 仓（跨模块不引 message 包，D02 §4 依赖规则）
-	fileStore := filestore.NewLocal(envOr("BBW_DATA_DIR", "./data"))
+	// 文件域（D06 + D25）：存储层双实现——BBW_S3_ENDPOINT 配了走 MinIO 对象存储
+	// （t/{tenant}/{sha2}/{sha} 布局 + 预签名直传，D25）；空=本地盘回落
+	// （开发机/CI/单机裸跑零负担，D25 拍板③）。会话成员判定经闭包查 message 仓（D02 §4）
+	var fileStore filestore.Storage
+	if ep := envOr("BBW_S3_ENDPOINT", ""); ep != "" {
+		s3Store, err := filestore.NewS3(filestore.S3Options{
+			Endpoint:       ep,
+			PublicEndpoint: envOr("BBW_S3_PUBLIC_ENDPOINT", ""),
+			AccessKey:      envOr("BBW_S3_ACCESS_KEY", ""),
+			SecretKey:      envOr("BBW_S3_SECRET_KEY", ""),
+			Bucket:         envOr("BBW_S3_BUCKET", ""),
+		})
+		if err != nil {
+			log.Fatalf("S3 存储构造失败: %v", err)
+		}
+		fileStore = s3Store
+		log.Printf("文件存储：MinIO 对象存储（%s，对外 %s）", ep, envOr("BBW_S3_PUBLIC_ENDPOINT", ep))
+	} else {
+		fileStore = filestore.NewLocal(envOr("BBW_DATA_DIR", "./data"))
+		log.Printf("文件存储：本地磁盘（%s；未配置 BBW_S3_ENDPOINT，D25 回落）", envOr("BBW_DATA_DIR", "./data"))
+	}
 	var fileRepo filerepo.Repo
 	var fileTransfers filerepo.TransferRepo
 	if pgPool != nil {
