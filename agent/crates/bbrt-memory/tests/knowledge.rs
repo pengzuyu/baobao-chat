@@ -134,13 +134,12 @@ fn same_topic_update_keeps_created_at_and_no_duplicate() {
 }
 
 // ---------------------------------------------------------------------------
-// LRU 淘汰 + 索引重建
+// 容量语义（D23 §4.2：LRU 废除——超 200 条不淘汰，否决/拍板类静默丢失=事故源）
 // ---------------------------------------------------------------------------
 
 #[test]
-fn lru_evicts_oldest_beyond_capacity_and_keeps_just_saved() {
+fn 超容量不淘汰_d23_lru废除() {
     let (store, clock, _dir) = setup("2026-11-06T08:00:00+08:00", "2026-11-06");
-    // 逐分钟推进写入 201 条（title 各不相同）→ 超限 1 条，淘汰最旧
     let mut last = None;
     for i in 0..201 {
         clock.set(
@@ -153,16 +152,37 @@ fn lru_evicts_oldest_beyond_capacity_and_keeps_just_saved() {
                 .unwrap(),
         );
     }
-    assert_eq!(store.list().len(), 200, "超限回落到 200");
-    // 最后一次保存触发淘汰，受害者 = updated_at 最旧的 000（返回 evicted 列表）
-    assert_eq!(last.unwrap().evicted, vec!["事实编号-000".to_string()]);
-    assert!(store.get("事实编号-000").unwrap().is_none(), "最旧被淘汰");
-    assert!(store.get("事实编号-001").unwrap().is_some());
-    assert!(store.get("事实编号-200").unwrap().is_some(), "刚写入的保留");
-    // 索引行数与条目数一致（淘汰后重建）
+    assert_eq!(store.list().len(), 201, "全部保留——LRU 已废除");
+    assert!(
+        last.unwrap().evicted.is_empty(),
+        "evicted 恒空（协议兼容位）"
+    );
+    assert!(store.get("事实编号-000").unwrap().is_some(), "最旧不淘汰");
+    // 索引行数与条目数一致
     let index = fs::read_to_string(store.dir().join(INDEX_FILE)).unwrap();
-    assert_eq!(index.lines().count(), 200);
-    assert!(!index.contains("事实编号 000"));
+    assert_eq!(index.lines().count(), 201);
+}
+
+// ---------------------------------------------------------------------------
+// last_used 触碰（D23 §4.2：memory_read 依据——蒸馏纪律 P1）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn touch更新last_used且不动正文() {
+    let (store, clock, _dir) = setup("2026-11-06T08:00:00+08:00", "2026-11-06");
+    store.save(&input("端口约定", "开发固定 8090。")).unwrap();
+    assert_eq!(
+        store.get("端口约定").unwrap().unwrap().last_used,
+        "",
+        "新条目从未读"
+    );
+    clock.set("2026-11-06T12:00:00+08:00", "2026-11-06");
+    assert!(store.touch("端口约定").unwrap());
+    let e = store.get("端口约定").unwrap().unwrap();
+    assert_eq!(e.last_used, "2026-11-06T12:00:00+08:00");
+    assert_eq!(e.body, "开发固定 8090。", "正文不动");
+    assert_eq!(e.updated_at, "2026-11-06T08:00:00+08:00", "updated_at 不动");
+    assert!(!store.touch("不存在").unwrap(), "缺失 false");
 }
 
 #[test]

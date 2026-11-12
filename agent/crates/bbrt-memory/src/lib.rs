@@ -23,14 +23,15 @@ pub mod knowledge;
 
 pub use digest::{DailyStats, DelegateExit, Digest, DigestError, Report, SessionRow};
 pub use global::{
-    global_line, AddOutcome, GlobalEntry, GlobalError, GlobalOp, GlobalStore, GlobalType,
-    HARD_LIMIT_CHARS, MAX_ENTRY_CHARS, SOFT_TARGET_CHARS,
+    compaction_prompt, global_line, parse_compacted, AddOutcome, Compactor, GlobalEntry,
+    GlobalError, GlobalOp, GlobalStore, GlobalType, HARD_LIMIT_CHARS, MAX_ENTRY_CHARS,
+    SOFT_TARGET_CHARS,
 };
 pub use journal::{ActivityEvent, DayRead, FileChangeKind, Journal, RETENTION_DAYS};
 pub use knowledge::{
     detect_memory_hint, ErrorTracker, Heuristic, IndexOutcome, KnowledgeStore, LessonCandidate,
     MemoryEntry, MemoryError, MemorySummary, MemoryType, SaveInput, SaveResult, MAX_BODY_BYTES,
-    MAX_ENTRIES, RECALL_FULL_ENTRIES, RECALL_TOP_K,
+    RECALL_FULL_ENTRIES, RECALL_TOP_K,
 };
 
 use std::collections::HashMap;
@@ -473,6 +474,22 @@ impl MemoryEngine {
         self.global
             .forget(gtype, contains, session)
             .map_err(MemoryError::from)
+    }
+
+    /// D23 `memory_read` 数据源：取项目分区单条正文并 touch `last_used`（§4.2）。
+    /// 日常会话（None/空）返回 None——公共层 USER.md 已全文注入无需读。
+    pub fn read_scoped_entry(&self, workspace: Option<&Path>, name: &str) -> Option<String> {
+        let ws = workspace.and_then(|w| (!w.as_os_str().is_empty()).then(|| w.to_path_buf()))?;
+        let real = fs::canonicalize(&ws).unwrap_or(ws);
+        let store = self.project_store(&real).ok()?;
+        let entry = store.get(name).ok()??;
+        let _ = store.touch(name);
+        Some(entry.body)
+    }
+
+    /// D23：装配公共层压实器（bbrt main 接 bbw-fast；见 bbrt_session::FastCompactor）
+    pub fn set_compactor(&self, c: Option<Arc<dyn global::Compactor>>) {
+        self.global.set_compactor(c);
     }
 
     /// D19 作用域列表：Some(workspace) → 该项目分区条目；None/空 → 公共层条目

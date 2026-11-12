@@ -15,10 +15,11 @@ use std::path::Path;
 
 /// 单条正文上限 4KB
 pub const MAX_BODY_BYTES: usize = 4 * 1024;
-/// 总条数上限 200，超限按 `updated_at` 最旧淘汰（LRU）
-pub const MAX_ENTRIES: usize = 200;
 /// 标题上限（一句话 ≤40 字）
 pub const MAX_TITLE_CHARS: usize = 40;
+/// 索引钩子上限（D23 §4.2：索引行=路由信息非正文——钩子在渲染层截断到
+/// 与标题同口径 40 字；索引可重建故无损，自动路径长首行不拒写防丢教训）
+pub const MAX_HOOK_CHARS: usize = MAX_TITLE_CHARS;
 /// 索引文件名（启动注入 / 重建目标）；索引可从目录重建，故非权威
 pub const INDEX_FILE: &str = "MEMORY.md";
 
@@ -64,8 +65,11 @@ pub struct MemoryEntry {
     pub mtype: MemoryType,
     /// 首次创建时刻（RFC3339；同题更新时保留）
     pub created_at: String,
-    /// 最近更新时刻（RFC3339；LRU 淘汰依据）
+    /// 最近更新时刻（RFC3339）
     pub updated_at: String,
+    /// 最近被 `memory_read` 触碰时刻（RFC3339；空=从未读——D23 §4.2，
+    /// 旧文件缺该键解析为空）
+    pub last_used: String,
     /// 产生该记忆的会话 id
     pub session: String,
     /// 关联记忆 slug（可悬空，标记待补）
@@ -236,8 +240,8 @@ pub(crate) fn entry_to_markdown(e: &MemoryEntry) -> String {
         format!("[{}]", e.links.join(", "))
     };
     format!(
-        "---\nname: {}\ntitle: {}\ntype: {}\ncreated_at: {}\nupdated_at: {}\nsession: {}\nlinks: {}\n---\n\n{}\n",
-        e.name, e.title, e.mtype_wire(), e.created_at, e.updated_at, e.session, links, e.body
+        "---\nname: {}\ntitle: {}\ntype: {}\ncreated_at: {}\nupdated_at: {}\nlast_used: {}\nsession: {}\nlinks: {}\n---\n\n{}\n",
+        e.name, e.title, e.mtype_wire(), e.created_at, e.updated_at, e.last_used, e.session, links, e.body
     )
 }
 
@@ -293,6 +297,7 @@ impl MemoryEntry {
             mtype,
             created_at: get("created_at").ok_or("缺少 created_at")?,
             updated_at: get("updated_at").ok_or("缺少 updated_at")?,
+            last_used: get("last_used").unwrap_or_default(), // 旧文件缺键=从未读
             session: get("session").unwrap_or_default(),
             links: parse_links(&get("links").unwrap_or_default()),
             body,
@@ -359,14 +364,17 @@ pub(crate) fn index_line(e: &MemoryEntry) -> String {
     format!("- [{}]({}.md) — {}", e.title, e.name, hook_of(e))
 }
 
-/// 钩子摘要：正文首个非空行；正文全空时退回标题
+/// 钩子摘要：正文首个非空行；正文全空时退回标题。
+/// D23 §4.2：索引行=路由信息非正文——一律截断到 `MAX_HOOK_CHARS`
+/// （渲染层截断而非拒写：索引可重建故无损，W2 自动路径长首行不丢教训）。
 pub(crate) fn hook_of(e: &MemoryEntry) -> String {
-    e.body
+    let hook = e
+        .body
         .lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
-        .unwrap_or(&e.title)
-        .to_string()
+        .unwrap_or(&e.title);
+    hook.chars().take(MAX_HOOK_CHARS).collect()
 }
 
 /// 把条目列表写成 `MEMORY.md`（整文件重写；调用方保证条目已按展示序排列）。
@@ -413,6 +421,7 @@ mod tests {
             mtype: MemoryType::Project,
             created_at: "2026-11-06T23:20:00+08:00".to_string(),
             updated_at: "2026-11-06T23:21:00+08:00".to_string(),
+            last_used: String::new(),
             session: "sess-1".to_string(),
             links: vec!["gitee-remote".to_string()],
             body: "开发服务固定走 8090。".to_string(),

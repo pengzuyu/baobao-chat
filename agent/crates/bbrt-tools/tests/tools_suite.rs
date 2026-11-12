@@ -763,6 +763,103 @@ fn memory_save_未装配引擎拒绝() {
     assert!(msg.contains("未装配"));
 }
 
+/// D23/M2：memory_forget（更正第一步）与 memory_read（项目正文拉取+touch）
+#[test]
+fn memory_forget移除清单与memory_read项目正文() {
+    let data = tempfile::tempdir().expect("memory data dir");
+    let proj = tempfile::tempdir().expect("proj ws");
+    let engine = Arc::new(
+        bbrt_memory::MemoryEngine::open(data.path(), Arc::new(bbrt_memory::SystemClock)).unwrap(),
+    );
+    let mut cfg = ToolsConfig::new(proj.path().to_path_buf());
+    cfg.policy = Some(ToolPolicy::default());
+    cfg.memory = Some(engine.clone());
+    cfg.session_workspaces = Some(ws_registry(proj.path()));
+    let ex = PipelineExecutor::new(Arc::new(cfg));
+
+    // 项目会话写一条项目知识（sess-a 已注册工作区）
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_save",
+            serde_json::json!({"title": "端口约定", "type": "project", "body": "开发服务固定走 8090"}),
+            "sess-a",
+        ),
+    ));
+    // ① memory_read：正文按需拉取（slug=标题 slug 化）
+    let (summary, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_read",
+            serde_json::json!({"name": "端口约定"}),
+            "sess-a",
+        ),
+    ));
+    assert!(summary.contains("8090"), "{summary}");
+    // ② 日常会话 memory_read → 8002 引导（公共层已全文注入）
+    let (code, msg) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_read",
+            serde_json::json!({"name": "x"}),
+            "sess-daily",
+        ),
+    ));
+    assert_eq!(code, 8002);
+    assert!(msg.contains("USER.md"), "{msg}");
+    // ③ memory_forget：画像改名两步链
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_save",
+            serde_json::json!({"title": "用户叫小红", "type": "画像", "body": ""}),
+            "sess-a",
+        ),
+    ));
+    let (summary, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_forget",
+            serde_json::json!({"type": "画像", "contains": "小红"}),
+            "sess-a",
+        ),
+    ));
+    assert!(summary.contains("已移除 1 条"), "{summary}");
+    assert!(summary.contains("用户叫小红"), "{summary}");
+    let view = fs::read_to_string(data.path().join("agent/memory/global/USER.md")).unwrap();
+    assert!(!view.contains("小红"), "更正后视图即净：{view}");
+    // ④ 未命中回显
+    let (summary, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_forget",
+            serde_json::json!({"type": "画像", "contains": "不存在"}),
+            "sess-a",
+        ),
+    ));
+    assert!(summary.contains("无匹配"), "{summary}");
+    // ⑤ last_used 已被 touch（read 后条目 frontmatter 带 last_used 时间戳）
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "memory_read",
+            serde_json::json!({"name": "端口约定"}),
+            "sess-a",
+        ),
+    ));
+    let partition = fs::read_dir(data.path().join("agent/memory/projects"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.is_dir())
+        .expect("项目分区应存在");
+    let md = fs::read_to_string(partition.join("端口约定.md")).unwrap();
+    assert!(
+        md.contains("last_used: 2"),
+        "touch 应写 last_used 时间戳：{md}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // masking / git / http
 // ---------------------------------------------------------------------------

@@ -171,6 +171,11 @@ fn run() -> Result<(), String> {
             .and_then(|c| c.get(now).map(str::to_string))
             .unwrap_or_else(|| static_token.clone())
     }));
+    // D23/M2：公共层压实器接线（USER.md 超 3000 字时仅软条目进 bbw-fast 凝缩，
+    // 禁止/授权硬条目引擎侧结构性隔离不进 LLM；失败保留旧视图）
+    memory.set_compactor(Some(Arc::new(bbrt_session::FastCompactor::new(
+        model.clone(),
+    ))));
 
     // 专家会诊启用（D14 §3.3 / D16 P1-5）：本地专家库扫描（含 .override.yaml
     // 覆写合并——D16 §6 三层配置）→ FastCaster 快模型选角（判定优先于探查）。

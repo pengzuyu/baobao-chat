@@ -169,6 +169,150 @@ pub fn memory_save_def() -> ToolDef {
     }
 }
 
+/// memory_forget 实现（D23 §3.5 更正第一步）：公共层条目 tombstone+重投影。
+pub(crate) fn forget(
+    env: &ExecEnv,
+    args: &Value,
+    session_id: &str,
+) -> Result<ExecOutput, ToolBlock> {
+    let type_str = str_arg(args, "type")
+        .ok_or_else(|| deny(CODE_TOOL_ARGS, "memory_forget 缺少 type 参数"))?;
+    let contains = str_arg(args, "contains")
+        .ok_or_else(|| deny(CODE_TOOL_ARGS, "memory_forget 缺少 contains 参数"))?;
+    let gtype = GlobalType::parse(&type_str).ok_or_else(|| {
+        deny(
+            CODE_TOOL_ARGS,
+            format!("type 必须是十类公共层类型（画像/偏好/风格/习惯/禁止/授权/人际/术语/目标/教训），收到 {type_str}"),
+        )
+    })?;
+    let (result, ms) = timed(|| -> Result<ExecOutput, ToolBlock> {
+        let engine = env.memory.as_ref().ok_or_else(|| {
+            deny(
+                CODE_TOOL_ARGS,
+                "memory_forget 不可用（8002）：MemoryEngine 未装配",
+            )
+        })?;
+        match engine.forget_global(gtype, &contains, session_id) {
+            Ok(removed) => {
+                let summary = if removed.is_empty() {
+                    format!("无匹配条目（[{type_str}] 中不含「{contains}」——可能已移除）")
+                } else {
+                    let lines: Vec<String> = removed
+                        .iter()
+                        .map(|t| format!("[{type_str}] {t}"))
+                        .collect();
+                    format!(
+                        "已移除 {} 条：\n{}\n（journal 留审计；误删可用 memory_save 重写）",
+                        removed.len(),
+                        lines.join("\n")
+                    )
+                };
+                Ok(ExecOutput {
+                    summary,
+                    truncated: false,
+                    exit_code: None,
+                    duration_ms: 0,
+                })
+            }
+            Err(e) => Err(deny(CODE_TOOL_ARGS, format!("记忆移除被拒：{e}"))),
+        }
+    });
+    let out = result?;
+    Ok(ExecOutput {
+        duration_ms: ms,
+        ..out
+    })
+}
+
+/// memory_read 实现（D23 §4.2）：项目分区单条正文 + touch last_used。
+pub(crate) fn read(
+    env: &ExecEnv,
+    args: &Value,
+    _session_id: &str,
+    ws: Option<&std::path::Path>,
+) -> Result<ExecOutput, ToolBlock> {
+    let name =
+        str_arg(args, "name").ok_or_else(|| deny(CODE_TOOL_ARGS, "memory_read 缺少 name 参数"))?;
+    let in_project = ws.is_some_and(|w| !w.as_os_str().is_empty());
+    let (result, ms) = timed(|| -> Result<ExecOutput, ToolBlock> {
+        if !in_project {
+            return Err(deny(
+                CODE_TOOL_ARGS,
+                "日常会话无项目记忆（公共层 USER.md 已全文注入无需读取；项目记忆请切到项目会话）",
+            ));
+        }
+        let engine = env.memory.as_ref().ok_or_else(|| {
+            deny(
+                CODE_TOOL_ARGS,
+                "memory_read 不可用（8002）：MemoryEngine 未装配",
+            )
+        })?;
+        match engine.read_scoped_entry(ws, &name) {
+            Some(body) => Ok(ExecOutput {
+                summary: body,
+                truncated: false,
+                exit_code: None,
+                duration_ms: 0,
+            }),
+            None => Err(deny(
+                CODE_TOOL_ARGS,
+                format!("项目记忆条目不存在：{name}（slug 见注入的项目记忆索引）"),
+            )),
+        }
+    });
+    let out = result?;
+    Ok(ExecOutput {
+        duration_ms: ms,
+        ..out
+    })
+}
+
+/// memory_forget 工具定义（更正/解除第一步；随后 memory_save 写新事实完成更正）
+pub fn memory_forget_def() -> ToolDef {
+    ToolDef {
+        name: "memory_forget".into(),
+        description: "移除公共记忆（USER.md）中匹配的条目——更正两步的第一步：\
+                      先 forget 旧事实，再用 memory_save 写入新事实（如改名：\
+                      forget(画像,旧名)+save(画像,新名)）。硬约束的解除（禁止/授权）\
+                      也走这里。条目粒度匹配（同类型+包含串）防同名误伤；\
+                      返回移除清单，误删可立即重写。"
+            .into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "type": {"type": "string",
+                         "enum": ["画像", "偏好", "风格", "习惯", "禁止", "授权",
+                                  "人际", "术语", "目标", "教训"],
+                         "description": "条目类型"},
+                "contains": {"type": "string", "description": "匹配串（该类型下文本包含此串的条目全部移除）"}
+            },
+            "required": ["type", "contains"]
+        }),
+        risk: RiskLevel::Low,
+        category: bbrt_sec::gate::ActionCategory::FileEdit,
+    }
+}
+
+/// memory_read 工具定义（项目记忆正文按需拉取；touch last_used）
+pub fn memory_read_def() -> ToolDef {
+    ToolDef {
+        name: "memory_read".into(),
+        description: "读取项目记忆单条正文（slug 见注入的项目记忆索引 MEMORY.md；\
+                      索引行只是路由信息，正文经本工具按需拉取）。\
+                      公共层 USER.md 已全文注入无需读取；日常会话无项目记忆。"
+            .into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "记忆 slug（索引行括号内的文件名主干）"}
+            },
+            "required": ["name"]
+        }),
+        risk: RiskLevel::Low,
+        category: bbrt_sec::gate::ActionCategory::ReadOnly,
+    }
+}
+
 /// coding.delegate 薄门面（D11 §2.4 coding.rs：定义 inputSchema/风险级，执行由 session
 /// 循环的委派专用路径承接——本 crate 的 execute 不会收到该调用；schema 即模型可发现面）
 /// subagent.adjust 薄门面（D16 决策⑧：运行中子任务补充指令——探查/专家/

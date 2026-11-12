@@ -320,6 +320,13 @@ impl ToolExecutor for PipelineExecutor {
                 let ws = self.session_ws_path(&call.session_id);
                 builtin::memory::save(&env, &args, &call.session_id, ws.as_deref())
             }
+            // D23/M2：公共层更正（全局，无会话工作区参与）
+            "memory_forget" => builtin::memory::forget(&env, &args, &call.session_id),
+            // D23/M2：项目记忆正文按需拉取（touch last_used）
+            "memory_read" => {
+                let ws = self.session_ws_path(&call.session_id);
+                builtin::memory::read(&env, &args, &call.session_id, ws.as_deref())
+            }
             // mcp.{server}.{tool}（D11 §2.10 dispatch_by_source：网关/外部 MCP 工具；
             // OBO 由 McpClient 令牌闭包逐请求注入；断连/未注册 → 8002 标灰语义）
             _ if call.name.starts_with("mcp.") => match &self.mcp {

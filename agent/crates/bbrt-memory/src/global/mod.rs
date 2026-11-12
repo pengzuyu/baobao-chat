@@ -20,6 +20,10 @@ use std::sync::{Arc, Mutex};
 use crate::knowledge::store::find_secret;
 use crate::Clock;
 
+pub mod compact;
+
+pub use compact::{compaction_prompt, parse_compacted, Compactor};
+
 /// 视图硬顶（D23 拍板 #3：3000 字）
 pub const HARD_LIMIT_CHARS: usize = 3000;
 /// 压实常态目标（M2 压实漏斗使用；余量使压实低频）
@@ -120,26 +124,36 @@ impl GlobalType {
 /// journal 一行 op（内部格式；provenance 只在此层，D23 拍板 #6）
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GlobalOp {
-    /// "add" | "remove"
+    /// "add" | "remove" | "snapshot"
     pub op: String,
-    /// 条目类型
-    #[serde(rename = "type")]
+    /// 条目类型（snapshot 不消费此字段，序列化为占位默认值）
+    #[serde(rename = "type", default)]
     pub gtype: GlobalType,
     /// add=条目文本；remove=contains 匹配串（条目粒度，防同名误伤）
     pub text: String,
+    /// snapshot 专有：压实后的全量有效条目（其余 op 恒空）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<GlobalEntry>,
     /// 写入时刻（RFC3339）
     pub ts: String,
-    /// 来源会话（审计用）
+    /// 来源会话（审计用；压实快照记 "compactor"）
     pub session: String,
 }
 
 /// 重放后的在册条目
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GlobalEntry {
     /// 类型
     pub gtype: GlobalType,
     /// 一句话内容（≤80 字）
     pub text: String,
+}
+
+impl Default for GlobalType {
+    /// serde default（snapshot op 的 gtype 占位）
+    fn default() -> Self {
+        Self::Profile
+    }
 }
 
 /// 公共层错误（D15 §4 脱敏拒写同口径）
@@ -179,6 +193,8 @@ pub struct GlobalStore {
     dir: PathBuf,
     clock: Arc<dyn Clock>,
     lock: Mutex<()>,
+    /// 压实器（M2；None=超限保留旧视图——测试/降级态）
+    compactor: Mutex<Option<Arc<dyn Compactor>>>,
 }
 
 impl Clone for GlobalStore {
@@ -187,6 +203,12 @@ impl Clone for GlobalStore {
             dir: self.dir.clone(),
             clock: Arc::clone(&self.clock),
             lock: Mutex::new(()),
+            compactor: Mutex::new(
+                self.compactor
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone(),
+            ),
         }
     }
 }
@@ -208,7 +230,13 @@ impl GlobalStore {
             dir,
             clock,
             lock: Mutex::new(()),
+            compactor: Mutex::new(None),
         })
+    }
+
+    /// 装配压实器（bbrt main 接 bbw-fast；见 bbrt_session::FastCompactor）
+    pub fn set_compactor(&self, c: Option<Arc<dyn Compactor>>) {
+        *self.compactor.lock().unwrap_or_else(|p| p.into_inner()) = c;
     }
 
     /// 存储目录
@@ -243,9 +271,11 @@ impl GlobalStore {
     }
 
     /// 重放 journal → 在册条目（D23 §3.3 规则层，全部确定性零 LLM）：
-    /// ① 应用 remove tombstone（remove 只影响其前的 add——forget 后重写同款=合法回加）；
-    /// ② 去重：同 type+归一文本 → 保最后（软类"新盖旧"的落地）；
-    /// ③ 目标类过期剔除（文本内日期全部早于今天）。
+    /// ① snapshot：以其条目集**整体替换**此前全部状态（压实结果的持久化——
+    ///    journal 仍只追加，永不删行；增长随每次压实收敛）；
+    /// ② 应用 remove tombstone（remove 只影响其前的 add——forget 后重写同款=合法回加）；
+    /// ③ 去重：同 type+归一文本 → 保最后（软类"新盖旧"的落地）；
+    /// ④ 目标类过期剔除（文本内日期全部早于今天）。
     /// 坏行容忍：跳过不计数失败（与 D15 §2.1 目录扫描同语义）。
     pub fn replay(&self) -> Vec<GlobalEntry> {
         let mut entries: Vec<GlobalEntry> = Vec::new();
@@ -262,6 +292,7 @@ impl GlobalStore {
                     text: op.text,
                 }),
                 "remove" => entries.retain(|e| !(e.gtype == op.gtype && e.text.contains(&op.text))),
+                "snapshot" => entries = op.entries,
                 _ => {}
             }
         }
@@ -298,14 +329,67 @@ impl GlobalStore {
         s
     }
 
-    /// 重投影（每次写入/启动 reconcile 调用；调用方持锁）：
-    /// 规则渲染 ≤3000 字 → temp+rename 原子写；超限**保留旧视图**
-    /// （宁旧勿错；M2 压实漏斗接管超限路径）。
+    /// 重投影（每次写入/启动 reconcile 调用；调用方持锁；D23 §3.3 压实漏斗）：
+    /// 1. 规则渲染 ≤3000 字 → temp+rename 原子写（常规路径，零 LLM）；
+    /// 2. 超限 → 压实：硬条目（禁止/授权）程序保留**不进 LLM 输入**，
+    ///    仅软条目交压实器（目标 ≤2400−硬占字）；输出校验（条目合法/非空/
+    ///    总渲染 ≤3000）不过则保留旧视图（宁旧勿错）；通过则 journal 追加
+    ///    **snapshot op** 持久化压实结果再写视图；
+    /// 3. 无压实器/压实失败 → 保留旧视图，journal 无损，下次再试。
     fn reproject(&self) -> io::Result<()> {
-        let content = Self::render(&self.replay());
-        if content.chars().count() > HARD_LIMIT_CHARS {
-            return Ok(()); // 待压实：journal 无损，视图停在最后一次合法渲染
+        let entries = self.replay();
+        let content = Self::render(&entries);
+        if content.chars().count() <= HARD_LIMIT_CHARS {
+            return atomic_write(&self.view_path(), &content);
         }
+        let compactor = self
+            .compactor
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let Some(compactor) = compactor else {
+            return Ok(()); // 无压实器：宁旧勿错
+        };
+        let hard: Vec<GlobalEntry> = entries
+            .iter()
+            .filter(|e| e.gtype.is_hard())
+            .cloned()
+            .collect();
+        let soft: Vec<GlobalEntry> = entries
+            .iter()
+            .filter(|e| !e.gtype.is_hard())
+            .cloned()
+            .collect();
+        let budget = SOFT_TARGET_CHARS.saturating_sub(Self::render(&hard).chars().count());
+        let compacted = match compactor.compact(&soft, budget) {
+            Ok(c) => c,
+            Err(_) => return Ok(()), // 压实失败：保留旧视图
+        };
+        // 校验：空输出（软条目非空时）=压丢一切，按失败处理；单条限长
+        if compacted.is_empty() && !soft.is_empty() {
+            return Ok(());
+        }
+        if compacted
+            .iter()
+            .any(|e| e.text.trim().is_empty() || e.text.chars().count() > MAX_ENTRY_CHARS)
+        {
+            return Ok(());
+        }
+        let mut merged = hard;
+        merged.extend(compacted);
+        let content = Self::render(&merged);
+        if content.chars().count() > HARD_LIMIT_CHARS {
+            return Ok(()); // 压缩不达标：保留旧视图
+        }
+        // snapshot 持久化压实结果（journal 只追加；replay 以其整体替换历史）
+        self.append_op(&GlobalOp {
+            op: "snapshot".to_string(),
+            gtype: GlobalType::Profile, // 占位：snapshot 不消费
+            text: String::new(),
+            entries: merged,
+            ts: self.clock.now_rfc3339(),
+            session: "compactor".to_string(),
+        })?;
         atomic_write(&self.view_path(), &content)
     }
 
@@ -348,6 +432,7 @@ impl GlobalStore {
             op: "add".to_string(),
             gtype,
             text: text.to_string(),
+            entries: Vec::new(),
             ts: self.clock.now_rfc3339(),
             session: session.to_string(),
         })?;
@@ -387,6 +472,7 @@ impl GlobalStore {
                 op: "remove".to_string(),
                 gtype,
                 text: contains.to_string(),
+                entries: Vec::new(),
                 ts: self.clock.now_rfc3339(),
                 session: session.to_string(),
             })?;
@@ -522,10 +608,11 @@ pub fn migrate_legacy_user_store(
                         op: "add".to_string(),
                         gtype,
                         text,
+                        entries: Vec::new(),
                         ts: e.updated_at.clone(),
                         session: e.session.clone(),
                     })
-                    .ok(); // 单条失败不阻断迁移（journal 缺该条，条目仍在 archive 前的根目录可重试？——不：下方统一归档）
+                    .ok(); // 单条失败不阻断迁移（归档文件保留原内容可人工恢复）
             }
         }
         fs::rename(&src, &dst).ok();

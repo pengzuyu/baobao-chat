@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bbrt_memory::{
-    GlobalType, MemoryEngine, MemoryType, SaveInput, HARD_LIMIT_CHARS, MAX_ENTRY_CHARS,
+    GlobalEntry, GlobalType, MemoryEngine, MemoryType, SaveInput, HARD_LIMIT_CHARS, MAX_ENTRY_CHARS,
 };
 
 struct TempDir(PathBuf);
@@ -347,4 +347,113 @@ fn 引擎路由_日常回落与user恒公共层() {
     assert!(proj.contains("[用户记忆]"));
     assert!(proj.contains("[项目记忆·"));
     assert!(proj.contains("端口约定"));
+}
+
+// ---------------------------------------------------------------------------
+// M2 压实漏斗：快照持久化 + 硬条目结构性隔离 + 失败保留旧视图
+// ---------------------------------------------------------------------------
+
+/// 确定性假压实器：软条目隔条保留、每条截 20 字；记录每批输入供断言
+struct FakeCompactor {
+    fail: bool,
+    batches: std::sync::Mutex<Vec<Vec<GlobalEntry>>>,
+}
+
+impl bbrt_memory::Compactor for FakeCompactor {
+    fn compact(&self, soft: &[GlobalEntry], _budget: usize) -> Result<Vec<GlobalEntry>, String> {
+        if self.fail {
+            return Err("provider 不可用".to_string());
+        }
+        self.batches.lock().unwrap().push(soft.to_vec());
+        Ok(soft
+            .iter()
+            .step_by(2)
+            .map(|e| GlobalEntry {
+                gtype: e.gtype,
+                text: e.text.chars().take(20).collect(),
+            })
+            .collect())
+    }
+}
+
+#[test]
+fn 压实快照持久化_硬条目不进llm() {
+    let (dir, eng) = engine("compact", "2026-11-12");
+    let fake = Arc::new(FakeCompactor {
+        fail: false,
+        batches: std::sync::Mutex::new(vec![]),
+    });
+    eng.global().set_compactor(Some(fake.clone()));
+
+    // 硬条目 2 条 + 软条目 50 条（~75 字/条 → 约 #39 越过 3000 硬顶）
+    eng.save_global(GlobalType::Prohibition, "不替我直接发消息给同事", "s")
+        .unwrap();
+    eng.save_global(GlobalType::Grant, "测试文件直接改不用确认", "s")
+        .unwrap();
+    for i in 0..50 {
+        eng.save_global(
+            GlobalType::Profile,
+            &format!("事实编号 {i:02}：{}", "稳".repeat(50)),
+            "s",
+        )
+        .unwrap();
+    }
+
+    let v = view(&dir.0);
+    assert!(
+        v.chars().count() <= HARD_LIMIT_CHARS,
+        "压实后 ≤ 硬顶：{}",
+        v.chars().count()
+    );
+    // 硬条目逐字保留（程序拼回，非 LLM 复述）
+    assert!(v.contains("[禁止] 不替我直接发消息给同事"), "{v}");
+    assert!(v.contains("[授权] 测试文件直接改不用确认"), "{v}");
+
+    // 结构性隔离：压实器收到的每一批都不含硬条目
+    let batches = fake.batches.lock().unwrap().clone();
+    assert!(!batches.is_empty(), "应至少压实一次");
+    assert!(
+        batches.iter().flatten().all(|e| !e.gtype.is_hard()),
+        "硬条目不得进入 LLM 输入"
+    );
+
+    // 快照持久化：journal 末行 op=snapshot；此后的常规写入不再触发压实
+    let jl = journal_lines(&dir.0);
+    assert!(
+        jl.iter().any(|l| l.contains("\"op\":\"snapshot\"")),
+        "压实结果应以 snapshot op 持久化：{jl:?}"
+    );
+    let batches_before = fake.batches.lock().unwrap().len();
+    eng.save_global(GlobalType::Preference, "先结论后细节", "s")
+        .unwrap();
+    assert_eq!(
+        fake.batches.lock().unwrap().len(),
+        batches_before,
+        "快照后 replay 状态 ≤ 硬顶，常规写入走免 LLM 路径"
+    );
+    assert!(view(&dir.0).contains("[偏好] 先结论后细节"));
+}
+
+#[test]
+fn 压实失败保留旧视图journal无损() {
+    let (dir, eng) = engine("compact-fail", "2026-11-12");
+    let fake = Arc::new(FakeCompactor {
+        fail: true,
+        batches: std::sync::Mutex::new(vec![]),
+    });
+    eng.global().set_compactor(Some(fake));
+    for i in 0..50 {
+        eng.save_global(
+            GlobalType::Profile,
+            &format!("事实编号 {i:02}：{}", "稳".repeat(50)),
+            "s",
+        )
+        .unwrap();
+    }
+    // 宁旧勿错：视图停在最后一次合法渲染；journal 全量无损、无 snapshot
+    let v = view(&dir.0);
+    assert!(v.chars().count() <= HARD_LIMIT_CHARS);
+    let jl = journal_lines(&dir.0);
+    assert_eq!(jl.len(), 50);
+    assert!(!jl.iter().any(|l| l.contains("snapshot")));
 }

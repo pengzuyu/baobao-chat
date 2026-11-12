@@ -1,13 +1,15 @@
 //! 知识记忆（主动轨，D15 §2）：ZCode 式"一文件一事实 + `MEMORY.md` 索引"。
 //!
 //! - 业务面在本文件（`KnowledgeStore` 的 save/list/delete/recall）；
-//!   文件层细节（frontmatter、slug、脱敏、索引重写、LRU）在 `store.rs`。
+//!   文件层细节（frontmatter、slug、脱敏、索引重写）在 `store.rs`。
 //! - 写入路径：W1 模型工具 → `save()`；W2 规则触发 → `heuristic.rs`（免模型兜底）；
 //!   W3 会话结束提炼 → 阶段二（依赖 aigw 压缩摘要）。
 //! - 写入规则"同题更新不重复"：slug 相等或 title 完全相等 → 原地更新
 //!   （保留 `created_at`、更新 `updated_at`），否则新增（D15 §2.2）。
 //! - 召回注入：`recall()` 返回 `MEMORY.md` 全文（≤200 行，超限截断+标注），
 //!   由 D11 assemble() 的"项目上下文"区块拼接；记忆属 trusted 内容。
+//! - D23 §4.2：**LRU 容量淘汰废除**（否决/拍板类被静默淘汰=重提已否决方案
+//!   的事故源，增长治理交蒸馏纪律 P1）；索引钩子渲染层截断 ≤40 字。
 
 pub mod heuristic;
 pub mod store;
@@ -15,7 +17,7 @@ pub mod store;
 pub use heuristic::{detect_memory_hint, ErrorTracker, Heuristic, LessonCandidate};
 pub use store::{
     rebuild_index, scan_entries, IndexOutcome, MemoryEntry, MemoryError, MemoryType, SaveInput,
-    MAX_BODY_BYTES, MAX_ENTRIES,
+    MAX_BODY_BYTES,
 };
 
 use std::fs;
@@ -48,7 +50,7 @@ pub struct MemorySummary {
     pub hook: String,
 }
 
-/// save() 结果：最终 slug/标题、是否同题更新、被 LRU 淘汰的 name 列表
+/// save() 结果：最终 slug/标题、是否同题更新
 #[derive(Debug, Clone, PartialEq)]
 pub struct SaveResult {
     /// 最终 slug（可能因标题规范化与输入不同）
@@ -57,7 +59,8 @@ pub struct SaveResult {
     pub title: String,
     /// true = 命中既有条目原地更新；false = 新增
     pub updated: bool,
-    /// 容量淘汰（reason=capacity）的受害者 name，按淘汰序
+    /// 恒空（D23 §4.2 LRU 废除；字段保留为协议兼容位——`memory.evicted`
+    /// 事件不再产生）
     pub evicted: Vec<String>,
 }
 
@@ -103,11 +106,11 @@ impl KnowledgeStore {
         }
     }
 
-    /// W1 写入（D15 §2.2 同题更新规则 + §2.1 容量/脱敏约束）：
+    /// W1 写入（D15 §2.2 同题更新规则 + §2.1 容量/脱敏约束；D23 §4.2 LRU 废除）：
     /// 1. 标题规范化、正文 ≤4KB、标题与正文过密钥特征扫描（命中拒写）；
     /// 2. slug 相等或 title 完全相等 → 原地更新（保留 created_at）；
-    /// 3. 超过 200 条按 updated_at 最旧 LRU 淘汰（不淘汰本次刚写的条目）；
-    /// 4. 先写条目文件（tmp+rename），再整写 `MEMORY.md` 索引。
+    /// 3. 先写条目文件（tmp+rename），再整写 `MEMORY.md` 索引。
+    ///    容量不设限——知识类静默淘汰的事故面大于无限增长（蒸馏纪律 P1 治理）。
     pub fn save(&self, input: &SaveInput) -> Result<SaveResult, MemoryError> {
         let title = normalize_title(&input.title).ok_or(MemoryError::EmptyTitle)?;
         if input.body.len() > MAX_BODY_BYTES {
@@ -139,6 +142,10 @@ impl KnowledgeStore {
             mtype: input.mtype,
             created_at,
             updated_at: now,
+            // 同题更新保留上次 last_used；新条目空=从未读
+            last_used: existing
+                .map(|i| entries[i].last_used.clone())
+                .unwrap_or_default(),
             session: input.session.clone(),
             links: input.links.clone(),
             body: input.body.clone(),
@@ -150,32 +157,26 @@ impl KnowledgeStore {
             None => entries.push(entry),
         }
 
-        // LRU：按 updated_at 升序（最旧在前）淘汰至 ≤200 条
-        let mut evicted = Vec::new();
-        if entries.len() > MAX_ENTRIES {
-            entries.sort_by(|a, b| {
-                a.updated_at
-                    .cmp(&b.updated_at)
-                    .then_with(|| a.name.cmp(&b.name))
-            });
-            while entries.len() > MAX_ENTRIES {
-                let idx = entries
-                    .iter()
-                    .position(|e| e.name != name) // 刚写入的条目不淘汰
-                    .expect("超限必有非本次条目");
-                let victim = entries.remove(idx);
-                fs::remove_file(self.entry_path(&victim.name))?;
-                evicted.push(victim.name);
-            }
-        }
+        // D23 §4.2：LRU 淘汰废除——不再按容量删除条目（evicted 恒空）
         store::sort_for_display(&mut entries);
         store::write_index(&self.dir, &entries)?; // 再重写索引
         Ok(SaveResult {
             name,
             title,
             updated,
-            evicted,
+            evicted: Vec::new(),
         })
+    }
+
+    /// D23 §4.2：`memory_read` 触碰——重写条目 frontmatter 的 `last_used`
+    /// （正文/其余字段不动；蒸馏纪律 P1 的依据）。缺失返回 false。
+    pub fn touch(&self, name: &str) -> Result<bool, MemoryError> {
+        let Some(mut entry) = self.get(name)? else {
+            return Ok(false);
+        };
+        entry.last_used = self.clock.now_rfc3339();
+        store::write_entry(&self.dir, &entry)?;
+        Ok(true)
     }
 
     /// 全量列表（updated_at 新→旧）；目录缺失/坏文件按容错处理不计失败
@@ -373,6 +374,7 @@ mod tests {
             mtype: MemoryType::Project,
             created_at: "2026-11-06T10:00:00+08:00".to_string(),
             updated_at: "2026-11-06T10:00:00+08:00".to_string(),
+            last_used: String::new(),
             session: "s".to_string(),
             links: vec![],
             body: "远端用 gitee 而非 github\n第二行".to_string(),
@@ -384,13 +386,14 @@ mod tests {
     }
 
     #[test]
-    fn hook_falls_back_to_title_when_body_blank() {
+    fn hook_falls_back_to_title_when_body_blank_and_truncates_long_lines() {
         let mut e = MemoryEntry {
             name: "n".to_string(),
             title: "标题兜底".to_string(),
             mtype: MemoryType::User,
             created_at: "c".to_string(),
             updated_at: "u".to_string(),
+            last_used: String::new(),
             session: "s".to_string(),
             links: vec![],
             body: "\n  \n".to_string(),
@@ -398,5 +401,8 @@ mod tests {
         assert_eq!(hook_of(&e), "标题兜底");
         e.body = String::new();
         assert_eq!(hook_of(&e), "标题兜底");
+        // D23 §4.2：索引钩子渲染层截断 ≤40 字（索引=路由信息非正文）
+        e.body = "长".repeat(60);
+        assert_eq!(hook_of(&e).chars().count(), 40);
     }
 }
