@@ -79,6 +79,7 @@ const zh: Record<string, string> = {
   'settings.transfer.downloadDir': '默认下载目录',
   // 导航/壳
   'nav.im': '消息',
+  'nav.contacts': '通讯录',
   'nav.notification': '通知',
   'nav.experts': '专家',
   'nav.kb': '知识库',
@@ -112,6 +113,7 @@ const en: Record<string, string> = {
   'settings.transfer.downLimit': 'Download limit',
   'settings.transfer.downloadDir': 'Default download folder',
   'nav.im': 'Messages',
+  'nav.contacts': 'Contacts',
   'nav.notification': 'Notifications',
   'nav.experts': 'Experts',
   'nav.kb': 'Knowledge',

@@ -13,6 +13,7 @@ import { SetupPage } from '../features/auth/pages/SetupPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
 import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
+import { ContactsPage } from '../features/contacts/pages/ContactsPage';
 import { KbPage } from '../features/kb/pages/KbPage';
 import { MailPage } from '../features/mail/pages/MailPage';
 import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
@@ -234,6 +235,8 @@ export function App() {
         {/* IM：默认落点；子路由切换不销毁 WSS 连接与未读状态（D01 §4.2） */}
         <Route path="/im" element={<ChatPage />} />
         <Route path="/im/c/:convId" element={<ChatPage />} />
+        {/* 通讯录（M2，2026-11-12 全员可见）：组织树+成员浏览/找人发消息；管理动作在 /admin/org */}
+        <Route path="/contacts" element={<ContactsPage />} />
         {/* 我的收藏（PIM-08，D03 §3.8） */}
         <Route path="/im/favorites" element={<FavoritesPage />} />
         {/* 全局通知中心（OQ-B07 上移：/notifications——IM/kb/agent 审批复用同一中心， */}

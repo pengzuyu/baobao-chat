@@ -8,7 +8,7 @@
 import { useEffect, useMemo } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Dropdown, type MenuProps } from 'antd';
-import { Bell, Bot, BrainCircuit, Gauge, Mail, MessageCircle } from 'lucide-react';
+import { Bell, Bot, BookUser, BrainCircuit, Gauge, Mail, MessageCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
@@ -31,6 +31,8 @@ function useNavItems(): NavItem[] {
   useI18nStore((s) => s.locale); // E12
   return [
   { to: '/im', icon: MessageCircle, label: t('nav.im') },
+  // 通讯录（M2，2026-11-12 用户裁决：全员可见——组织树+成员浏览/找人发消息）
+  { to: '/contacts', icon: BookUser, label: t('nav.contacts') },
   { to: '/notifications', icon: Bell, label: t('nav.notification') },
   { to: '/kb', icon: BrainCircuit, label: t('nav.kb') },
   { to: '/mail', icon: Mail, label: t('nav.mail') },
