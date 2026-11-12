@@ -8588,13 +8588,17 @@ body {
   overflow: auto;
   padding: 12px 10px 24px;
   border-right: 1px solid var(--bbw-gray-3);
+  background: var(--bbw-gray-2);
 }
-/* 右侧详情栏（整页档案风：profile 自带头图带+内容区，外层零内边距占满） */
+/* 右侧详情栏（整页档案风：整面灰底画布——卡片浮于其上，右栏永不显空；flex 列强制子元素撑满两轴） */
 .bbw-contacts__detail {
   flex: 1;
   min-width: 0;
   overflow: auto;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bbw-gray-2);
 }
 .bbw-contacts__avatar--xl {
   width: 56px;
@@ -8938,7 +8942,7 @@ body.bbw-col-resizing {
 .bbw-contacts__profile {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  flex: 1;
 }
 .bbw-contacts__profile-head {
   display: flex;
@@ -8946,7 +8950,6 @@ body.bbw-col-resizing {
   align-items: center;
   padding: 28px 32px;
   border-bottom: 1px solid var(--bbw-gray-3);
-  background: var(--bbw-gray-2);
   flex-wrap: wrap;
 }
 .bbw-contacts__avatar--xxl {
