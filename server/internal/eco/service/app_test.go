@@ -10,7 +10,7 @@ import (
 )
 
 func newAppSvc() *Service {
-	return New(ecorepo.NewMemory(), ecorepo.NewAppMemory(), ecorepo.NewRolloutMemory(), ecorepo.NewSkillMemory())
+	return New(ecorepo.NewMemory(), ecorepo.NewAppMemory(), ecorepo.NewRolloutMemory(), ecorepo.NewSkillMemory(), ecorepo.NewPluginMemory())
 }
 
 func TestEcoAppLifecycle(t *testing.T) {

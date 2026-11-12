@@ -997,7 +997,13 @@ func main() {
 	} else {
 		ecoSkills = ecorepo.NewSkillMemory()
 	}
-	ecoMod := eco.NewModule(ecoRepoInst, ecoAppStore, ecoRollouts, ecoSkills)
+	var ecoPlugins ecorepo.PluginRepo
+	if pgPool != nil {
+		ecoPlugins = ecorepo.NewPostgresPlugins(pgPool)
+	} else {
+		ecoPlugins = ecorepo.NewPluginMemory()
+	}
+	ecoMod := eco.NewModule(ecoRepoInst, ecoAppStore, ecoRollouts, ecoSkills, ecoPlugins)
 	ecoapi.RegisterUserRoutes(mux, authed, ecoMod.API())
 	ecoapi.RegisterPublicRoutes(mux, ecoMod.API())
 	ecoapi.RegisterAdminRoutes(mux, requirePerm("admin:app:publish"), ecoMod.API())

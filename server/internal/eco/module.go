@@ -11,9 +11,9 @@ type Module struct {
 	svc *ecoservice.Service
 }
 
-// NewModule 装配（main 调用）
-func NewModule(r ecorepo.Repo, apps ecorepo.AppRepo, rollouts ecorepo.RolloutRepo, skills ecorepo.SkillRepo) *Module {
-	return &Module{svc: ecoservice.New(r, apps, rollouts, skills)}
+// NewModule 装配（main 调用；plugins 可 nil=插件面降级 9004）
+func NewModule(r ecorepo.Repo, apps ecorepo.AppRepo, rollouts ecorepo.RolloutRepo, skills ecorepo.SkillRepo, plugins ecorepo.PluginRepo) *Module {
+	return &Module{svc: ecoservice.New(r, apps, rollouts, skills, plugins)}
 }
 
 // API 域服务

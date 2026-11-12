@@ -10,7 +10,7 @@ import (
 )
 
 func TestSkillMarket(t *testing.T) {
-	svc := New(ecorepo.NewMemory(), ecorepo.NewAppMemory(), ecorepo.NewRolloutMemory(), ecorepo.NewSkillMemory())
+	svc := New(ecorepo.NewMemory(), ecorepo.NewAppMemory(), ecorepo.NewRolloutMemory(), ecorepo.NewSkillMemory(), ecorepo.NewPluginMemory())
 	ctx := context.Background()
 	manifest := "skills:\n  - name: weekly-report\n    steps: [...]\n"
 

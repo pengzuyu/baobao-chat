@@ -22,15 +22,16 @@ var (
 
 // Service 生态域服务
 type Service struct {
-	repo     ecorepo.Repo
-	apps     ecorepo.AppRepo     // 生态应用（0031/E1）；nil=应用面 9004
-	rollouts ecorepo.RolloutRepo // 灰度（0032/E2）；nil=全量（无灰度）
-	skills   ecorepo.SkillRepo   // 技能包（0034/E4）；nil=技能面 9004
+	repo        ecorepo.Repo
+	apps        ecorepo.AppRepo     // 生态应用（0031/E1）；nil=应用面 9004
+	rollouts    ecorepo.RolloutRepo // 灰度（0032/E2）；nil=全量（无灰度）
+	skills      ecorepo.SkillRepo   // 技能包（0034/E4）；nil=技能面 9004
+	pluginsRepo ecorepo.PluginRepo  // 插件市场（0036/D22/L1）；nil=插件面 9004
 }
 
-// New 构造（apps/rollouts 可 nil——未装配时对应面降级，专家面不受影响）
-func New(r ecorepo.Repo, apps ecorepo.AppRepo, rollouts ecorepo.RolloutRepo, skills ecorepo.SkillRepo) *Service {
-	return &Service{repo: r, apps: apps, rollouts: rollouts, skills: skills}
+// New 构造（apps/rollouts/skills/plugins 可 nil——未装配时对应面降级，专家面不受影响）
+func New(r ecorepo.Repo, apps ecorepo.AppRepo, rollouts ecorepo.RolloutRepo, skills ecorepo.SkillRepo, plugins ecorepo.PluginRepo) *Service {
+	return &Service{repo: r, apps: apps, rollouts: rollouts, skills: skills, pluginsRepo: plugins}
 }
 
 // PublishReq 发布入参
