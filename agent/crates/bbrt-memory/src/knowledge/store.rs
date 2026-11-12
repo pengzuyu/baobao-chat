@@ -107,6 +107,9 @@ pub enum MemoryError {
     /// 正文超过 4KB 上限
     #[error("记忆正文超限：{actual} 字节 > 上限 {max} 字节")]
     BodyTooLarge { actual: usize, max: usize },
+    /// D23 公共层单条超限（≤80 字，一条一事实一句一线）
+    #[error("公共记忆单条超限：{actual} 字 > 上限 {max} 字")]
+    GlobalEntryTooLong { actual: usize, max: usize },
     /// 规范化后标题为空
     #[error("记忆标题不能为空")]
     EmptyTitle,

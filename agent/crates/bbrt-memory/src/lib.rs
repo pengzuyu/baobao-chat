@@ -1,12 +1,15 @@
-//! bbrt-memory：知识记忆双轨与活动日报（权威 = docs/detail/D15）。
+//! bbrt-memory：知识记忆双轨与活动日报（权威 = docs/detail/D15）+
+//! 公共层压实记忆（D23 升级）。
 //!
 //! - **主动轨** `knowledge/`：ZCode 式文件记忆（frontmatter + `MEMORY.md` 索引）。
 //!   写入路径 W1（模型工具 `memory.save`）与 W2（规则启发，免模型兜底）；
 //!   W3（会话结束提炼）阶段二随 aigw 压缩摘要接入。
+//! - **公共层** `global/`（D23）：用户级换制——journal.jsonl（真相）+ USER.md
+//!   （压实视图=缓存）；十类硬枚举+硬度轴；user 类与日常会话回落路由至此。
 //! - **被动轨** `journal` + `digest`：活动 JSONL 按日落地 → 确定性聚合出日报
 //!   （md + json 双产物，不依赖 LLM，弱网/离线可用）。
-//! - 装配：`MemoryEngine` 组合 knowledge + journal + digest，被 bbrt-session 依赖
-//!   （会话事件喂 journal；session.ended 触发当日日报重算）。
+//! - 装配：`MemoryEngine` 组合 global + knowledge + journal + digest，被
+//!   bbrt-session 依赖（会话事件喂 journal；session.ended 触发当日日报重算）。
 //!
 //! 约束：同步 API、无 tokio；存储为纯文件（不依赖 SQLite），目录即权威；
 //! 脱敏在记忆正文入口就地拒写（D15 §4；不依赖 bbrt-sec，接入层可叠加 masking）。
@@ -14,10 +17,15 @@
 #![forbid(unsafe_code)]
 
 pub mod digest;
+pub mod global;
 pub mod journal;
 pub mod knowledge;
 
 pub use digest::{DailyStats, DelegateExit, Digest, DigestError, Report, SessionRow};
+pub use global::{
+    global_line, AddOutcome, GlobalEntry, GlobalError, GlobalOp, GlobalStore, GlobalType,
+    HARD_LIMIT_CHARS, MAX_ENTRY_CHARS, SOFT_TARGET_CHARS,
+};
 pub use journal::{ActivityEvent, DayRead, FileChangeKind, Journal, RETENTION_DAYS};
 pub use knowledge::{
     detect_memory_hint, ErrorTracker, Heuristic, IndexOutcome, KnowledgeStore, LessonCandidate,
@@ -120,17 +128,34 @@ pub struct MemorySavedEvent {
     pub r#type: MemoryType,
     /// true = 同题原地更新；false = 新增
     pub updated: bool,
-    /// D19 作用域："user" | "project"（默认 user=旧口径）
+    /// D19 作用域："user" | "project"（默认 user=旧口径；D23 起 user=公共层）
     #[serde(default = "default_scope_user")]
     pub scope: String,
     /// D19 项目分区名（scope=project 时携带；scope_key 形如 baobao-work-72ab07a9…）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_name: Option<String>,
+    /// D23 公共层十类标签（画像/偏好/…；None=项目分区知识记忆）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_type: Option<String>,
 }
 
 /// serde 默认值：作用域 user
 fn default_scope_user() -> String {
     "user".to_string()
+}
+
+/// D23：公共层错误 → 记忆错误（save_memory_scoped 回落路由共用错误面）
+impl From<GlobalError> for MemoryError {
+    fn from(e: GlobalError) -> Self {
+        match e {
+            GlobalError::EmptyText => MemoryError::EmptyTitle,
+            GlobalError::EntryTooLong { actual, max } => {
+                MemoryError::GlobalEntryTooLong { actual, max }
+            }
+            GlobalError::Sensitive(w) => MemoryError::SensitiveContent(w),
+            GlobalError::Io(io) => MemoryError::Io(io),
+        }
+    }
 }
 
 /// `memory.evicted`：容量淘汰上报（UNT；reason=capacity）
@@ -183,16 +208,18 @@ impl Report {
 
 /// 记忆引擎：统一打开 `{dataDir}/agent` 下的 memory / journal / reports 三目录。
 ///
-/// 目录布局（D15 §2.1 / §3.1 / §3.2；D19 增项目分区）：
+/// 目录布局（D15 §2.1 / §3.1 / §3.2；D19 增项目分区；D23 用户级换制+迁移归档）：
 /// ```text
-/// {dataDir}/agent/memory/                 MEMORY.md + <slug>.md（用户级）
+/// {dataDir}/agent/memory/global/          D23 公共层：journal.jsonl + USER.md
 /// {dataDir}/agent/memory/projects/<key>/  项目级分区（key=scope_key(工作目录)）
-/// {dataDir}/agent/journal/                YYYY-MM-DD.jsonl
+/// {dataDir}/agent/memory/archive/         D23 一次性迁移归档（旧用户级文件族）
+/// {dataDir}/agent/journal/                YYYY-MM-DD.jsonl（被动轨活动日志）
 /// {dataDir}/agent/reports/                YYYY-MM-DD.md + YYYY-MM-DD.json
 /// ```
 /// MemoryEngine（Clone 为手工实现——见下方 impl）
 pub struct MemoryEngine {
     clock: Arc<dyn Clock>,
+    global: GlobalStore,
     knowledge: KnowledgeStore,
     journal: Journal,
     digest: Digest,
@@ -212,6 +239,7 @@ impl Clone for MemoryEngine {
             .clone();
         Self {
             clock: Arc::clone(&self.clock),
+            global: self.global.clone(),
             knowledge: self.knowledge.clone(),
             journal: self.journal.clone(),
             digest: self.digest.clone(),
@@ -223,8 +251,9 @@ impl Clone for MemoryEngine {
 
 impl std::fmt::Debug for MemoryEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // 时钟为 trait 对象不可 Debug，展示三个子组件
+        // 时钟为 trait 对象不可 Debug，展示子组件
         f.debug_struct("MemoryEngine")
+            .field("global", &self.global)
             .field("knowledge", &self.knowledge)
             .field("journal", &self.journal)
             .field("digest", &self.digest)
@@ -268,25 +297,35 @@ pub fn scope_key(path: &Path) -> String {
 }
 
 impl MemoryEngine {
-    /// 打开（或初始化）引擎；启动即重建 `MEMORY.md` 索引
-    /// （崩溃恢复：索引可重建故非权威，D15 §2.1）。
+    /// 打开（或初始化）引擎；启动链：D23 一次性迁移（幂等）→ 重建项目分区索引
+    /// → 公共层 reconcile（确定性重建视图；崩溃恢复：索引/视图可重建故非权威）。
     pub fn open(data_dir: &Path, clock: Arc<dyn Clock>) -> io::Result<Self> {
         let base = data_dir.join("agent");
-        let knowledge = KnowledgeStore::new(base.join("memory"), Arc::clone(&clock))?;
+        let memory_root = base.join("memory");
+        let global = GlobalStore::new(memory_root.join("global"), Arc::clone(&clock))?;
+        let knowledge = KnowledgeStore::new(&memory_root, Arc::clone(&clock))?;
         let journal = Journal::new(base.join("journal"))?;
         let digest = Digest::new(journal.clone(), base.join("reports"))?;
+        global::migrate_legacy_user_store(&memory_root, &global, &clock)?;
         knowledge.rebuild_index()?;
+        global.reconcile()?;
         Ok(Self {
             clock,
+            global,
             knowledge,
             journal,
             digest,
-            projects_dir: base.join("memory").join("projects"),
+            projects_dir: memory_root.join("projects"),
             project_stores: Mutex::new(HashMap::new()),
         })
     }
 
-    /// 知识记忆存储（主动轨；用户级根目录）
+    /// D23 公共层存储（journal + USER.md）
+    pub fn global(&self) -> &GlobalStore {
+        &self.global
+    }
+
+    /// 知识记忆存储（主动轨；项目分区根目录——D23 起用户级走 `global`）
     pub fn knowledge(&self) -> &KnowledgeStore {
         &self.knowledge
     }
@@ -340,22 +379,31 @@ impl MemoryEngine {
         self.save_memory_scoped(None, input)
     }
 
-    /// D19 W1 作用域写入：Some(workspace) → 项目分区；None/空 → 用户级。
-    /// 两条路径共享 journal（被动轨全局活动统计）与容量/脱敏约束。
+    /// D19 W1 作用域写入。D23 §3.6 路由修订：
+    /// - `user` 类**恒公共层**（画像）——项目会话也不例外（用户事实与项目无关）；
+    /// - 日常会话（None/空 workspace）的 project/feedback/reference **回落公共层**
+    ///   （落地修订 A：IM embedded 主场景不丢教训——feedback→教训、reference→术语、
+    ///   project→画像）；
+    /// - 项目会话三类知识记忆落项目分区（D19 原口径不变）。
     pub fn save_memory_scoped(
         &self,
         workspace: Option<&Path>,
         input: &SaveInput,
     ) -> Result<SaveOutcome, MemoryError> {
-        let (store, scope, workspace_name) = match workspace.map(Path::to_path_buf) {
-            Some(ws) if !ws.as_os_str().is_empty() => {
-                let real = fs::canonicalize(&ws).unwrap_or(ws);
-                let name = scope_key(&real);
-                let store = self.project_store(&real).map_err(MemoryError::Io)?;
-                (store, "project".to_string(), Some(name))
-            }
-            _ => (self.knowledge.clone(), "user".to_string(), None),
-        };
+        let ws = workspace.and_then(|w| (!w.as_os_str().is_empty()).then(|| w.to_path_buf()));
+        if ws.is_none() || input.mtype == MemoryType::User {
+            let gtype = match input.mtype {
+                MemoryType::User | MemoryType::Project => GlobalType::Profile,
+                MemoryType::Feedback => GlobalType::Lesson,
+                MemoryType::Reference => GlobalType::Glossary,
+            };
+            let text = global_line(&input.title, &input.body);
+            return self.save_global(gtype, &text, &input.session);
+        }
+        let real = fs::canonicalize(ws.as_ref().expect("ws.is_some 已保证"))
+            .unwrap_or_else(|_| ws.clone().expect("ws.is_some 已保证"));
+        let name = scope_key(&real);
+        let store = self.project_store(&real).map_err(MemoryError::Io)?;
         let result = store.save(input)?;
         self.record(&ActivityEvent::MemorySaved {
             session: input.session.clone(),
@@ -369,8 +417,9 @@ impl MemoryEngine {
                 title: result.title.clone(),
                 r#type: input.mtype,
                 updated: result.updated,
-                scope,
-                workspace_name,
+                scope: "project".to_string(),
+                workspace_name: Some(name),
+                global_type: None,
             },
             evicted: result
                 .evicted
@@ -384,17 +433,77 @@ impl MemoryEngine {
         })
     }
 
-    /// D19 作用域列表：Some(workspace) → 该项目分区条目；None/空 → 用户级条目。
+    /// D23 公共层写入（W1 十类直通 / W2·W3 回落统一入口）：
+    /// journal 追加 + 重投影（规则内免 LLM）+ 被动轨统计（best-effort）。
+    pub fn save_global(
+        &self,
+        gtype: GlobalType,
+        text: &str,
+        session: &str,
+    ) -> Result<SaveOutcome, MemoryError> {
+        let outcome = self.global.add(gtype, text, session)?;
+        let _ = self.record(&ActivityEvent::MemorySaved {
+            session: session.to_string(),
+            title: text.chars().take(40).collect(),
+            memory_type: MemoryType::User,
+        });
+        Ok(SaveOutcome {
+            saved: MemorySavedEvent {
+                session_id: session.to_string(),
+                name: global::VIEW_FILE.to_string(),
+                title: text.to_string(),
+                r#type: MemoryType::User,
+                updated: outcome.updated,
+                scope: "user".to_string(),
+                workspace_name: None,
+                global_type: Some(gtype.label().to_string()),
+            },
+            evicted: vec![],
+        })
+    }
+
+    /// D23 更正第一步（§3.5）：tombstone 匹配条目；返回被移除文本
+    /// （0/1/N 三态回显防同名误伤——误删可重写，journal 有底）。
+    pub fn forget_global(
+        &self,
+        gtype: GlobalType,
+        contains: &str,
+        session: &str,
+    ) -> Result<Vec<String>, MemoryError> {
+        self.global
+            .forget(gtype, contains, session)
+            .map_err(MemoryError::from)
+    }
+
+    /// D19 作用域列表：Some(workspace) → 该项目分区条目；None/空 → 公共层条目
+    /// （D23：用户级换制为 USER.md 视图——name 取文本 slug 仅供展示，
+    /// 删除/编辑走 `forget_global`，M3 协议收口）。
     pub fn list_scoped(&self, workspace: Option<&Path>) -> Vec<MemorySummary> {
-        match workspace.map(Path::to_path_buf) {
-            Some(ws) if !ws.as_os_str().is_empty() => {
+        match workspace.and_then(|w| (!w.as_os_str().is_empty()).then(|| w.to_path_buf())) {
+            Some(ws) => {
                 let real = fs::canonicalize(&ws).unwrap_or(ws);
                 self.project_store(&real)
                     .map(|s| s.list())
                     .unwrap_or_default()
             }
-            _ => self.knowledge.list(),
+            None => self.global_summaries(),
         }
+    }
+
+    /// 公共层条目 → 记忆页摘要（title=条目文本；updated_at 空——视图无元数据，
+    /// D23 拍板 #6）
+    fn global_summaries(&self) -> Vec<MemorySummary> {
+        self.global
+            .replay()
+            .into_iter()
+            .map(|e| MemorySummary {
+                name: knowledge::store::slugify(&e.text),
+                title: e.text.clone(),
+                mtype: MemoryType::User,
+                updated_at: String::new(),
+                hook: e.text,
+            })
+            .collect()
     }
 
     /// D19 全部项目分区清单（memory.list scope=project 未指定路径时）：
@@ -449,25 +558,28 @@ impl MemoryEngine {
         }
     }
 
-    /// D19 作用域召回（loop_runner [记忆] 块数据源）：
-    /// - 日常（None/空）→ 仅用户级（等价 recall_for）；
-    /// - 项目会话 → 用户级 + 项目级两段，带 `[用户记忆]`/`[项目记忆·<分区>]`
+    /// D19 作用域召回（loop_runner [记忆] 块数据源；D23 §6 修订）：
+    /// - 用户段 = **USER.md 全文**（公共层压实视图，≤3000 字常载成本恒定，
+    ///   取代旧用户级 MEMORY.md 全量/Top-K）；
+    /// - 项目段 = 分区 MEMORY.md（D15 v0.2 分档沿用：≤50 全量/>50 Top-K）；
+    /// - 日常（None/空）仅用户段；项目会话两段带 `[用户记忆]`/`[项目记忆·<分区>]`
     ///   小节头（单段为空则只注另一段；两段皆空 → 空串）。
     pub fn recall_scoped(&self, workspace: Option<&Path>, query: &str) -> String {
-        let user_part = self.knowledge.recall_for(query).unwrap_or_default();
-        let project = match workspace {
-            Some(ws) if !ws.as_os_str().is_empty() => {
-                let real = fs::canonicalize(ws).unwrap_or_else(|_| ws.to_path_buf());
-                let key = scope_key(&real);
-                let part = self
-                    .project_store(&real)
-                    .ok()
-                    .and_then(|s| s.recall_for(query).ok())
-                    .unwrap_or_default();
-                Some((key, part))
-            }
-            _ => None,
-        };
+        let user_part = self.global.view();
+        let project =
+            match workspace.and_then(|w| (!w.as_os_str().is_empty()).then(|| w.to_path_buf())) {
+                Some(ws) => {
+                    let real = fs::canonicalize(&ws).unwrap_or(ws);
+                    let key = scope_key(&real);
+                    let part = self
+                        .project_store(&real)
+                        .ok()
+                        .and_then(|s| s.recall_for(query).ok())
+                        .unwrap_or_default();
+                    Some((key, part))
+                }
+                None => None,
+            };
         match (&user_part, &project) {
             (u, None) if u.is_empty() => String::new(),
             (u, None) => u.clone(),
@@ -613,13 +725,16 @@ mod scoped_tests {
 
         eng.save_memory(&input("用户偏好", "回答用中文")).unwrap();
 
-        // 用户级不含项目条目；项目分区不含用户条目
+        // 公共层（D23 用户级换制）不含项目条目；项目分区不含用户条目
         let user_titles: Vec<String> = eng
             .list_scoped(None)
             .iter()
             .map(|m| m.title.clone())
             .collect();
-        assert_eq!(user_titles, ["用户偏好"]);
+        assert_eq!(user_titles.len(), 1, "user 类应落公共层：{user_titles:?}");
+        assert!(user_titles[0].contains("用户偏好"), "{user_titles:?}");
+        // USER.md 真实落盘
+        assert!(dir.0.join("agent/memory/global/USER.md").exists());
         let ws_titles: Vec<String> = eng
             .list_scoped(Some(&ws))
             .iter()

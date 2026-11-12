@@ -1,14 +1,15 @@
-//! memory_save 工具（D11 §2.4 builtin/memory.rs；D15 §2 主动轨 W1 模型写入路径）。
+//! memory_save 工具（D11 §2.4 builtin/memory.rs；D15 §2 主动轨 W1 模型写入路径；
+//! D23 §3.6 十类直通路由）。
 //!
-//! 直通 `bbrt_memory::MemoryEngine::save_memory`：
-//! - 同题更新不重复（slug/title 相等原地更新）、正文 ≤4KB、密钥特征拒写
-//!   （MemoryError 映射回 blocked）、LRU 容量淘汰——全部由 bbrt-memory 内建；
-//! - journal 落 `memory.saved` 事件由 MemoryEngine 自记（被动轨同源），本工具
-//!   不再经 journal_hook 重复发事件；
-//! - 注册为低风险（知识写入经脱敏约束）；门控侧 gate 未登记该工具，走未知工具
-//!   兜底档（任意命令 → 逐次确认），待 bbrt-sec static_category 补行后归位。
+//! 直通 `bbrt_memory::MemoryEngine`：
+//! - type=十类（画像/偏好/风格/习惯/禁止/授权/人际/术语/目标/教训）→ **公共层**
+//!   journal+USER.md（单条 ≤80 字、密钥特征拒写、同题去重、目标过期自清）；
+//! - type=user/project/feedback/reference → 知识记忆（项目分区/回落公共层，
+//!   引擎内路由——user 恒公共层画像、日常会话三类回落，D23 落地修订 A）；
+//! - journal 落 `memory.saved` 事件由 MemoryEngine 自记（被动轨同源）；
+//! - 注册为低风险（知识写入经脱敏约束）。
 
-use bbrt_memory::{MemoryType, SaveInput};
+use bbrt_memory::{GlobalType, MemoryType, SaveInput};
 use serde_json::{json, Value};
 
 use super::{deny, str_arg, timed, ExecEnv, ExecOutput, ToolBlock};
@@ -17,9 +18,7 @@ use crate::registry::{RiskLevel, ToolDef};
 /// 工具参数/装配错误码（14 篇：8002）
 const CODE_TOOL_ARGS: u32 = 8002;
 
-/// memory_save 实现：title/type/body → SaveInput → MemoryEngine 分级写入。
-/// D19 作用域路由（pipeline 传入会话工作目录）：user 类→用户级；
-/// project/feedback/reference 类且会话在项目中→该项目分区，日常回落用户级。
+/// memory_save 实现：type 十类直通公共层；四类走引擎分级路由。
 pub(crate) fn save(
     env: &ExecEnv,
     args: &Value,
@@ -34,12 +33,6 @@ pub(crate) fn save(
         .unwrap_or_default()
         .to_string();
     let type_str = str_arg(args, "type").unwrap_or_else(|| "user".to_string());
-    let mtype = MemoryType::parse(&type_str).ok_or_else(|| {
-        deny(
-            CODE_TOOL_ARGS,
-            format!("type 必须是 user/project/feedback/reference 之一，收到 {type_str}"),
-        )
-    })?;
     let links = args
         .get("links")
         .and_then(Value::as_array)
@@ -57,6 +50,44 @@ pub(crate) fn save(
                 "memory_save 不可用（8002）：MemoryEngine 未装配",
             )
         })?;
+        // D23 §3.6：十类 → 公共层直通（title(+body 首行) 拼单条文本）
+        if let Some(gtype) = GlobalType::parse(&type_str) {
+            let text = bbrt_memory::global_line(&title, &body);
+            return match engine.save_global(gtype, &text, session_id) {
+                Ok(outcome) => {
+                    let verb = if outcome.saved.updated {
+                        "更新"
+                    } else {
+                        "写入"
+                    };
+                    let budget = engine.global().budget_left();
+                    let budget_label = if budget < 0 {
+                        "（USER.md 超限待压实）".to_string()
+                    } else {
+                        format!("（USER.md 余量 {budget} 字）")
+                    };
+                    Ok(ExecOutput {
+                        summary: format!(
+                            "公共记忆已{verb}：[{type_str}] {}{budget_label}",
+                            outcome.saved.title
+                        ),
+                        truncated: false,
+                        exit_code: None,
+                        duration_ms: 0,
+                    })
+                }
+                Err(e) => Err(deny(CODE_TOOL_ARGS, format!("公共记忆写入被拒：{e}"))),
+            };
+        }
+        let mtype = MemoryType::parse(&type_str).ok_or_else(|| {
+            deny(
+                CODE_TOOL_ARGS,
+                format!(
+                    "type 必须是 画像/偏好/风格/习惯/禁止/授权/人际/术语/目标/教训（公共层）\
+                     或 user/project/feedback/reference（项目知识），收到 {type_str}"
+                ),
+            )
+        })?;
         let input = SaveInput {
             title,
             mtype,
@@ -64,12 +95,8 @@ pub(crate) fn save(
             session: session_id.to_string(),
             links,
         };
-        // D19 类型路由：user 恒用户级；其余随会话目录落项目分区
-        let scope_ws = match mtype {
-            MemoryType::User => None,
-            _ => ws,
-        };
-        match engine.save_memory_scoped(scope_ws, &input) {
+        // 引擎内 D23 路由：user 恒公共层；项目会话三类落分区；日常三类回落公共层
+        match engine.save_memory_scoped(ws, &input) {
             Ok(outcome) => {
                 let verb = if outcome.saved.updated {
                     "更新"
@@ -81,6 +108,8 @@ pub(crate) fn save(
                         "，项目分区={}",
                         outcome.saved.workspace_name.unwrap_or_default()
                     )
+                } else if let Some(g) = &outcome.saved.global_type {
+                    format!("，公共层[{g}]")
                 } else {
                     String::new()
                 };
@@ -94,7 +123,7 @@ pub(crate) fn save(
                     duration_ms: 0,
                 })
             }
-            // 含 D15 §4 脱敏拒写（SensitiveContent）与 4KB 上限等
+            // 含 D15 §4 脱敏拒写（SensitiveContent）与 4KB/80 字上限等
             Err(e) => Err(deny(CODE_TOOL_ARGS, format!("记忆写入被拒：{e}"))),
         }
     });
@@ -105,22 +134,33 @@ pub(crate) fn save(
     })
 }
 
-/// memory_save 工具定义（低风险知识写入；见模块注释的门控档说明）
+/// memory_save 工具定义（D23：双枚举——公共层十类+项目知识四类；
+/// 采集话术即写入门禁，随描述下发）
 pub fn memory_save_def() -> ToolDef {
     ToolDef {
         name: "memory_save".into(),
-        description: "保存长期记忆（一文件一事实，写入用户记忆库并更新 MEMORY.md 索引；\
-                      正文 ≤4KB、命中密钥特征拒写、同题更新不重复）"
+        description: "保存长期记忆。写前自问：换个项目还成立吗？明天还成立吗？\
+                      任一否→不记公共层（改记项目知识或不记）。公共层（用户全局，\
+                      USER.md ≤3000 字）：画像=我是谁的稳定事实/偏好=内容与流程取舍\
+                      /风格=呈现形式/习惯=周期性行为/禁止=硬否定（仅显式解除）\
+                      /授权=硬肯定许可/人际=对具体他人的协作事实/术语=私有词汇\
+                      /目标=阶段性方向（带截止日期到期自清）/教训=泛化失败规律。\
+                      项目知识（项目会话）：project=项目事实/feedback=教训\
+                      /reference=外部指针（一文件一事实+MEMORY.md 索引，≤4KB，\
+                      同题更新不重复；日常会话自动回落公共层）。单条凝练一句一线。"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "一句话标题（≤40 字）"},
-                "type": {"type": "string", "enum": ["user", "project", "feedback", "reference"],
-                         "description": "记忆类型（默认 user）"},
-                "body": {"type": "string", "description": "事实正文（≤4KB）"},
+                "title": {"type": "string", "description": "一句话标题（公共层=条目主句；≤40 字）"},
+                "type": {"type": "string",
+                         "enum": ["画像", "偏好", "风格", "习惯", "禁止", "授权",
+                                  "人际", "术语", "目标", "教训",
+                                  "user", "project", "feedback", "reference"],
+                         "description": "十类→公共层 USER.md（单条 ≤80 字）；四类→项目知识/回落（默认 user）"},
+                "body": {"type": "string", "description": "补充正文（公共层取首行并入单条；知识记忆 ≤4KB）"},
                 "links": {"type": "array", "items": {"type": "string"},
-                          "description": "关联记忆 slug（可选）"}
+                          "description": "关联记忆 slug（仅项目知识；可选）"}
             },
             "required": ["title", "body"]
         }),

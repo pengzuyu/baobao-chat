@@ -53,13 +53,25 @@ fn open_creates_layout_and_rebuilds_stale_index() {
     for sub in ["memory", "journal", "reports"] {
         assert!(dir.path().join("agent").join(sub).is_dir(), "缺目录 {sub}");
     }
-    // 索引已从目录扫描重建（陈旧内容被替换）
+    // D23 一次性迁移：project 类不迁公共层——旧文件与陈旧索引整体移 archive/，
+    // 根索引重建为空（用户级文件族由 global/ 取代）
     let index = fs::read_to_string(dir.path().join("agent/memory").join(INDEX_FILE)).unwrap();
-    assert_eq!(
-        index,
-        "- [端口 8090 约定](端口-8090-约定.md) — 开发服务固定走 8090。\n"
+    assert_eq!(index, "");
+    assert_eq!(engine.knowledge().list().len(), 0);
+    assert!(
+        dir.path()
+            .join("agent/memory/archive/端口-8090-约定.md")
+            .exists(),
+        "旧条目应归档"
     );
-    assert_eq!(engine.knowledge().list().len(), 1);
+    assert!(
+        dir.path().join("agent/memory/archive/MEMORY.md").exists(),
+        "旧索引应归档"
+    );
+    assert!(
+        dir.path().join("agent/memory/global").is_dir(),
+        "公共层目录就位"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -134,18 +146,25 @@ fn session_end_on_empty_day_returns_none() {
 #[test]
 fn save_memory_persists_and_journals() {
     let (engine, clock, dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    // D23：Project 类走项目分区（日常会话会回落公共层，见 tests/global.rs）
+    let ws = dir.path().join("proj");
+    fs::create_dir_all(&ws).unwrap();
     let outcome = engine
-        .save_memory(&SaveInput {
-            title: "端口 8090 约定".into(),
-            mtype: MemoryType::Project,
-            body: "开发服务固定走 8090。".into(),
-            session: "s1".into(),
-            links: vec![],
-        })
+        .save_memory_scoped(
+            Some(&ws),
+            &SaveInput {
+                title: "端口 8090 约定".into(),
+                mtype: MemoryType::Project,
+                body: "开发服务固定走 8090。".into(),
+                session: "s1".into(),
+                links: vec![],
+            },
+        )
         .unwrap();
     assert!(!outcome.saved.updated);
     assert!(outcome.evicted.is_empty());
     assert_eq!(outcome.saved.name, "端口-8090-约定");
+    assert_eq!(outcome.saved.scope, "project");
 
     // 被动轨：journal 记了 memory.saved
     let day = engine.journal().read_day("2026-11-06");
@@ -155,17 +174,20 @@ fn save_memory_persists_and_journals() {
     // 同题再写：updated=true，journal 累计 2 行，条目仍 1 条
     clock.set("2026-11-06T12:00:00+08:00", "2026-11-06");
     let outcome2 = engine
-        .save_memory(&SaveInput {
-            title: "端口 8090 约定".into(),
-            mtype: MemoryType::Project,
-            body: "改：8090 只用于开发。".into(),
-            session: "s1".into(),
-            links: vec![],
-        })
+        .save_memory_scoped(
+            Some(&ws),
+            &SaveInput {
+                title: "端口 8090 约定".into(),
+                mtype: MemoryType::Project,
+                body: "改：8090 只用于开发。".into(),
+                session: "s1".into(),
+                links: vec![],
+            },
+        )
         .unwrap();
     assert!(outcome2.saved.updated);
     assert_eq!(engine.journal().read_day("2026-11-06").events.len(), 2);
-    assert_eq!(engine.knowledge().list().len(), 1);
+    assert_eq!(engine.list_scoped(Some(&ws)).len(), 1);
 
     // 日报聚合到 memory_saved 标题（交叉印证）
     let report = engine.on_session_end().unwrap().unwrap();
@@ -187,7 +209,7 @@ fn save_memory_persists_and_journals() {
         })
         .is_err());
     assert_eq!(engine.journal().read_day("2026-11-06").events.len(), before);
-    assert_eq!(engine.knowledge().list().len(), 1);
+    assert_eq!(engine.list_scoped(Some(&ws)).len(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +276,7 @@ fn memory_saved_payload_roundtrip_camel_case() {
         updated: true,
         scope: "user".into(),
         workspace_name: None,
+        global_type: None,
     };
     let json = serde_json::to_string(&ev).unwrap();
     assert_eq!(

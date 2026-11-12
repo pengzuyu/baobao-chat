@@ -1260,13 +1260,15 @@ fn w3_distills_memories_on_session_end() {
     let _ = runner.run_turn("以后做事先给我方案再动手", &d, None);
     runner.end(&d, "");
 
-    let list = mem.knowledge().list();
+    // D23：user 类提炼条目恒落公共层（画像档，文本=标题：正文首行）
+    let list = mem.list_scoped(None);
     assert!(
-        list.iter().any(|e| e.title == "用户偏好先方案"),
-        "W3 应落盘提炼条目，实际: {list:?}"
+        list.iter().any(|e| e.title.contains("用户偏好先方案")),
+        "W3 应落公共层提炼条目，实际: {list:?}"
     );
+    assert!(mem.global().view().contains("[画像] 用户偏好先方案"));
     assert!(events_of(sink.as_ref()).iter().any(
-        |e| matches!(e, SessionEvent::MemorySaved { title, .. } if title == "用户偏好先方案")
+        |e| matches!(e, SessionEvent::MemorySaved { title, .. } if title.contains("用户偏好先方案"))
     ));
     // SessionEnded 正常外发（提炼不阻塞收口）
     assert!(events_of(sink.as_ref())

@@ -689,7 +689,7 @@ fn record_grant_高危命令永久记忆拒绝() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn memory_save_写入tmp目录出现md与memory索引() {
+fn memory_save_十类直通公共层与四类回落() {
     let data = tempfile::tempdir().expect("memory data dir");
     let engine = Arc::new(
         bbrt_memory::MemoryEngine::open(data.path(), Arc::new(bbrt_memory::SystemClock)).unwrap(),
@@ -698,27 +698,42 @@ fn memory_save_写入tmp目录出现md与memory索引() {
     cfg.policy = Some(ToolPolicy::default());
     cfg.memory = Some(engine);
     let ex = PipelineExecutor::new(Arc::new(cfg));
+    // ① 十类直通：偏好 → USER.md 一行 + journal 落盘
     let (summary, _, _, _) = ok_of(ex.execute(
         PermissionMode::Ask,
         &call(
             "memory_save",
-            serde_json::json!({"title": "偏好简洁回复", "type": "user", "body": "用户偏好简洁的中文回复"}),
+            serde_json::json!({"title": "先结论后细节", "type": "偏好", "body": "汇报先给结论"}),
         ),
     ));
-    assert!(summary.contains("偏好简洁回复"), "{summary}");
-    let mem_dir = data.path().join("agent").join("memory");
-    assert!(mem_dir.join("MEMORY.md").exists(), "MEMORY.md 索引应生成");
-    let entries: Vec<_> = fs::read_dir(&mem_dir)
-        .unwrap()
-        .flatten()
-        .filter(|e| {
-            e.file_name().to_string_lossy().ends_with(".md") && e.file_name() != "MEMORY.md"
-        })
-        .collect();
-    assert_eq!(entries.len(), 1, "一文件一事实：新增一条记忆");
-    // MEMORY.md 索引含标题行
-    let index = fs::read_to_string(mem_dir.join("MEMORY.md")).unwrap();
-    assert!(index.contains("偏好简洁回复"));
+    assert!(summary.contains("[偏好]"), "{summary}");
+    let global_dir = data.path().join("agent").join("memory").join("global");
+    let view = fs::read_to_string(global_dir.join("USER.md")).unwrap();
+    assert!(view.contains("[偏好] 先结论后细节"), "{view}");
+    assert!(global_dir.join("journal.jsonl").exists(), "journal 应生成");
+    // ② 四类兼容：user → 引擎路由公共层（画像回落，不再落用户级文件族）
+    let (summary, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "memory_save",
+            serde_json::json!({"title": "后端为主", "type": "user", "body": "主语言 Go"}),
+        ),
+    ));
+    assert!(
+        summary.contains("画像"),
+        "user 类应回落公共层画像：{summary}"
+    );
+    let view = fs::read_to_string(global_dir.join("USER.md")).unwrap();
+    assert!(view.contains("[画像] 后端为主"), "{view}");
+    // ③ 非法 type 拒绝（8002）
+    let (code, _) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "memory_save",
+            serde_json::json!({"title": "t", "type": "hacker", "body": "b"}),
+        ),
+    ));
+    assert_eq!(code, 8002);
 }
 
 /// 独立工作区（memory 测试不依赖主夹具的 tempdir 生命周期）
@@ -1195,8 +1210,8 @@ fn d19_memory_save按会话作用域分级() {
     user_titles.sort();
     assert_eq!(
         user_titles,
-        ["临时事实", "偏好中文"],
-        "用户级=user 类 + 日常回落的 project 类"
+        ["临时事实：日常会话记录的事实", "偏好中文：回答用中文"],
+        "公共层=user 类与日常回落的 project 类（D23：文本=标题：首行，均画像档）"
     );
 }
 
