@@ -53,9 +53,11 @@ pub(crate) fn parse_url(base: &str) -> Result<ParsedUrl, McpError> {
 }
 
 /// 单次 POST 交换：返回 (状态码, body 文本)。IO 失败/超时 → Connect。
+/// extra_headers：自定义头（D22 §6.1/L4）；同名（如 Authorization）覆盖自动 Bearer。
 pub(crate) fn post_json(
     url: &ParsedUrl,
     bearer: Option<&str>,
+    extra_headers: &[(String, String)],
     body: &str,
     timeout: Duration,
 ) -> Result<(u16, String), McpError> {
@@ -68,13 +70,26 @@ pub(crate) fn post_json(
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
 
-    let auth = bearer
-        .map(|t| format!("Authorization: Bearer {t}\r\n"))
-        .unwrap_or_default();
+    // 自动 Bearer 之上叠自定义头；同名 Authorization 覆盖由调用方
+    // （HttpTransport::exchange）决定 bearer 传 None 实现，本层不做头去重
+    let mut header_lines = String::new();
+    if let Some(t) = bearer {
+        header_lines.push_str(&format!("Authorization: Bearer {t}\r\n"));
+    }
+    for (k, v) in extra_headers {
+        let k = k.trim();
+        if k.is_empty()
+            || k.eq_ignore_ascii_case("host")
+            || k.eq_ignore_ascii_case("content-length")
+        {
+            continue; // 保留字段不可覆盖
+        }
+        header_lines.push_str(&format!("{k}: {v}\r\n"));
+    }
     let head = format!(
         "POST {path} HTTP/1.1\r\n\
          Host: {host}:{port}\r\n\
-         {auth}\
+         {header_lines}\
          Content-Type: application/json\r\n\
          Accept: application/json\r\n\
          User-Agent: {ua}\r\n\

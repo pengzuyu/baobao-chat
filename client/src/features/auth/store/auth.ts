@@ -55,7 +55,12 @@ function scheduleSilentRefresh(getState: () => AuthState): void {
 function applyLogin(result: LoginResult) {
   // Tauri 宿主同步 token（→ obo.token 下发 Runtime；浏览器环境为 no-op）
   if (result.accessToken && isTauriHost()) {
-    void invoke('auth_set_token', { token: result.accessToken, expiresAt: result.expiresAt }).catch(() => undefined);
+    void invoke('auth_set_token', {
+      token: result.accessToken,
+      expiresAt: result.expiresAt,
+      userId: result.user?.uid,
+      userName: result.user?.name,
+    }).catch(() => undefined);
   }
   return {
     token: result.accessToken,

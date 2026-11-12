@@ -294,8 +294,20 @@ pub fn agent_runs_list(host: Host, session_id: Option<String>) -> Result<Value, 
     Ok(json!({ "items": result["items"].clone() }))
 }
 
-/// 登录/刷新成功后下发 token（obo.token → RT 的 OboCache；obo.renew 由桥应答）
+/// 登录/刷新成功后下发 token（obo.token → RT 的 OboCache；obo.renew 由桥应答）。
+/// user_id/user_name（D22/L4）：装配器静态替换 ${BBW_USER_ID}/${BBW_USER_NAME}
+/// 用——换账号触发装配重推（stdio env 是 spawn 快照）
 #[tauri::command]
-pub fn auth_set_token(host: Host, token: String, expires_at: i64) -> Result<(), String> {
-    host.set_token(token, expires_at)
+pub fn auth_set_token(
+    host: Host,
+    token: String,
+    expires_at: i64,
+    user_id: Option<String>,
+    user_name: Option<String>,
+) -> Result<(), String> {
+    let r = host.set_token(token, expires_at);
+    if let (Some(id), Some(name)) = (user_id, user_name) {
+        let _ = host.set_user(&id, &name); // 失败仅告警（重登自愈）
+    }
+    r
 }

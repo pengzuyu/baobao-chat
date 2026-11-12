@@ -36,8 +36,13 @@ pub enum TransportConfig {
         env: Vec<(String, String)>,
     },
     /// 远程网关（公司域 MCP 网关，如 http://127.0.0.1:8090/mcp/corp；
-    /// 主体令牌经 TokenProvider 逐请求注入——装配时与 McpClient 同源）
-    Http { base_url: String },
+    /// 主体令牌经 TokenProvider 逐请求注入——装配时与 McpClient 同源）。
+    /// headers：插件外部系统自定义头（D22 §6.1/L4）——值中 `${BBW_USER_TOKEN}`
+    /// 调用层动态替换；自定义 Authorization 覆盖自动 Bearer
+    Http {
+        base_url: String,
+        headers: Vec<(String, String)>,
+    },
 }
 
 /// 传输抽象（conn 持有 Box<dyn Transport>；请求-响应/通知两原语）
@@ -206,23 +211,48 @@ impl Transport for StdioTransport {
     }
 }
 
-/// 远程 HTTP 传输（公司域 MCP 网关）：单请求单连接，OBO 逐请求注入 Bearer。
+/// 远程 HTTP 传输（公司域 MCP 网关 / 插件 HTTP server）：单请求单连接，
+/// OBO 逐请求注入 Bearer；插件自定义头（D22 §6.1/L4）值中
+/// `${BBW_USER_TOKEN}` 逐请求动态替换（token 轮换不静态化），
+/// 自带 Authorization 时覆盖自动 Bearer。
 pub struct HttpTransport {
     url: ParsedUrl,
     tokens: TokenProvider,
+    headers: Vec<(String, String)>,
 }
 
 impl HttpTransport {
     /// base_url 为网关端点全路径（含 /mcp/corp 等）；令牌提供者与 McpClient 同源。
-    pub fn new(base_url: &str, tokens: TokenProvider) -> Result<Self, McpError> {
+    pub fn new(
+        base_url: &str,
+        headers: Vec<(String, String)>,
+        tokens: TokenProvider,
+    ) -> Result<Self, McpError> {
         Ok(Self {
             url: parse_url(base_url)?,
             tokens,
+            headers,
         })
     }
 
-    fn bearer(&self) -> Option<String> {
-        (self.tokens)().filter(|t| !t.is_empty())
+    /// 最终头表：自定义头值替换 ${BBW_USER_TOKEN}（当前 token 现取）；
+    /// 自带 authorization → 自动 Bearer 压掉（覆盖语义）
+    fn effective(&self) -> (Option<String>, Vec<(String, String)>) {
+        let token = (self.tokens)().filter(|t| !t.is_empty());
+        let mut extra = Vec::with_capacity(self.headers.len());
+        let mut custom_auth = false;
+        for (k, v) in &self.headers {
+            let val = match token.as_deref() {
+                Some(t) => v.replace("${BBW_USER_TOKEN}", t),
+                None => v.replace("${BBW_USER_TOKEN}", ""),
+            };
+            if k.trim().eq_ignore_ascii_case("authorization") {
+                custom_auth = true;
+            }
+            extra.push((k.clone(), val));
+        }
+        let bearer = if custom_auth { None } else { token };
+        (bearer, extra)
     }
 
     fn exchange(
@@ -230,9 +260,11 @@ impl HttpTransport {
         frame: &serde_json::Value,
         timeout: Duration,
     ) -> Result<(u16, String), McpError> {
+        let (bearer, extra) = self.effective();
         post_json(
             &self.url,
-            self.bearer().as_deref(),
+            bearer.as_deref(),
+            &extra,
             &frame.to_string(),
             timeout,
         )
@@ -277,5 +309,75 @@ impl Transport for HttpTransport {
             return Err(McpError::Connect(format!("MCP 网关通知 HTTP {status}")));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod http_header_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::{Arc, Mutex};
+
+    fn transport(headers: Vec<(String, String)>, token: Option<&str>) -> HttpTransport {
+        let t = token.map(str::to_string);
+        let counter = Arc::new(AtomicUsize::new(0));
+        let _ = counter; // 闭包按需构造，不计数
+        let provider: TokenProvider = Arc::new(move || t.clone());
+        HttpTransport::new("http://127.0.0.1:1/mcp", headers, provider).unwrap()
+    }
+
+    /// 无自定义头：自动 Bearer（生态服务缺省链路）
+    #[test]
+    fn effective_default_bearer() {
+        let tr = transport(vec![], Some("tok-1"));
+        let (bearer, extra) = tr.effective();
+        assert_eq!(bearer.as_deref(), Some("tok-1"));
+        assert!(extra.is_empty());
+    }
+
+    /// 自定义 Authorization → 覆盖自动 Bearer（外部系统自带鉴权头）
+    #[test]
+    fn effective_custom_auth_overrides_bearer() {
+        let tr = transport(
+            vec![("Authorization".into(), "Private-Token abc".into())],
+            Some("tok-1"),
+        );
+        let (bearer, extra) = tr.effective();
+        assert!(bearer.is_none(), "自动 Bearer 应压掉");
+        assert_eq!(extra[0].1, "Private-Token abc");
+    }
+
+    /// ${BBW_USER_TOKEN} 动态替换（token 现取——轮换后无需重配）
+    #[test]
+    fn effective_replaces_user_token() {
+        let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let c = captured.clone();
+        let provider: TokenProvider = Arc::new(move || c.lock().unwrap().clone());
+        let tr = HttpTransport::new(
+            "http://127.0.0.1:1/mcp",
+            vec![("Authorization".into(), "Bearer ${BBW_USER_TOKEN}".into())],
+            provider,
+        )
+        .unwrap();
+        *captured.lock().unwrap() = Some("fresh-tok".into());
+        let (bearer, extra) = tr.effective();
+        assert!(bearer.is_none());
+        assert_eq!(extra[0].1, "Bearer fresh-tok");
+        // token 过期/未登录 → 空值（外部系统 401 诚实反馈）
+        *captured.lock().unwrap() = None;
+        let (_, extra) = tr.effective();
+        assert_eq!(extra[0].1, "Bearer ");
+    }
+
+    /// 非鉴权自定义头（如 X-Api-Key）与自动 Bearer 并存
+    #[test]
+    fn effective_extra_header_keeps_bearer() {
+        let tr = transport(
+            vec![("X-Api-Key".into(), "k-${BBW_USER_TOKEN}".into())],
+            Some("tok-2"),
+        );
+        let (bearer, extra) = tr.effective();
+        assert_eq!(bearer.as_deref(), Some("tok-2"));
+        assert_eq!(extra[0].1, "k-tok-2");
     }
 }

@@ -186,7 +186,7 @@ pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Resul
     Ok(())
 }
 
-/// 本地态（已安装页对照：版本线/激活版/启禁/config 值）
+/// 本地态（已安装页对照：版本线/激活版/启禁/config 值——secret 经钥匙串回读）
 #[tauri::command]
 pub fn plugin_local_state(host: Host, plugin_id: String) -> Result<Value, String> {
     let root = plugin_root(&host, &plugin_id)?;
@@ -207,10 +207,7 @@ pub fn plugin_local_state(host: Host, plugin_id: String) -> Result<Value, String
         }
     }
     versions.sort();
-    let config = fs::read_to_string(root.join("config.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .unwrap_or(json!({}));
+    let config = Value::Object(read_plugin_config(&root));
     Ok(json!({
         "enabled": state.get("enabled").and_then(Value::as_bool).unwrap_or(true),
         "activeVersion": state.get("activeVersion").and_then(Value::as_str).unwrap_or(""),
@@ -219,23 +216,73 @@ pub fn plugin_local_state(host: Host, plugin_id: String) -> Result<Value, String
     }))
 }
 
-/// 写用户配置（L4 钥匙串接入前，secret 暂同存 config.json——登记）
+/// 钥匙串条目（service 固定；account={plugin_id}/{key}——卸载保留=钥匙串
+/// 不删，重装即复用；D22 §5.2 keepConfig 语义）
+fn keyring_entry(plugin_id: &str, key: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new("com.baobaowork.plugins", &format!("{plugin_id}/{key}"))
+        .map_err(|e| format!("钥匙串不可用: {e}"))
+}
+
+/// 读插件配置（装配器与 local_state 共用）：config.json 全量 + 空串键查
+/// 钥匙串（secret 真值只在钥匙串，config.json 存空串占位——D22 §6.1/L4）
+pub fn read_plugin_config(root: &std::path::Path) -> serde_json::Map<String, Value> {
+    let mut cfg = fs::read_to_string(root.join("config.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let plugin_id = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let keys: Vec<String> = cfg
+        .iter()
+        .filter(|(_, v)| v.as_str() == Some(""))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in keys {
+        if let Ok(entry) = keyring_entry(&plugin_id, &k) {
+            if let Ok(v) = entry.get_password() {
+                cfg.insert(k, Value::String(v));
+            }
+        }
+    }
+    cfg
+}
+
+/// 写用户配置（D22 §6.1/L4：secret_keys 分流钥匙串——config.json 只存空串
+/// 占位，真值不落盘；非 secret 直写 config.json）
 #[tauri::command]
 pub fn plugin_write_config(
     host: Host,
     plugin_id: String,
     values: HashMap<String, String>,
+    secret_keys: Option<Vec<String>>,
 ) -> Result<(), String> {
     let root = plugin_root(&host, &plugin_id)?;
     fs::create_dir_all(&root).map_err(|e| format!("目录创建失败: {e}"))?;
+    let secrets = secret_keys.unwrap_or_default();
     let mut merged = fs::read_to_string(root.join("config.json"))
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .unwrap_or(json!({}));
     let obj = merged.as_object_mut().ok_or("config.json 损坏")?;
     for (k, v) in values {
-        obj.insert(k, json!(v));
+        if secrets.contains(&k) && !v.is_empty() {
+            // secret：真值入钥匙串，config.json 空串占位（真值不落盘）
+            keyring_entry(&plugin_id, &k)?
+                .set_password(&v)
+                .map_err(|e| format!("钥匙串写入失败（{k}）: {e}"))?;
+            obj.insert(k, json!(""));
+        } else {
+            obj.insert(k, json!(v));
+        }
     }
     let body = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
-    fs::write(root.join("config.json"), body).map_err(|e| format!("config 写入失败: {e}"))
+    fs::write(root.join("config.json"), body).map_err(|e| format!("config 写入失败: {e}"))?;
+    // 配置变更 → 装配重推（CONFIG:* 已静态进 wire）
+    if let Err(e) = host.push_plugin_mcp() {
+        eprintln!("[bbw-plugin] 配置变更装配重推失败（降级，重启会话后生效）: {e}");
+    }
+    Ok(())
 }

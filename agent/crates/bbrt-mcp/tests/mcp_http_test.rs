@@ -182,7 +182,10 @@ fn http_gateway_discover_and_call_with_bearer() {
     let (base, seen) = spawn_fake_gateway(false);
     let cfg = McpServerConfig {
         name: "corp".into(),
-        transport: TransportConfig::Http { base_url: base },
+        transport: TransportConfig::Http {
+            base_url: base,
+            headers: vec![],
+        },
     };
     let tokens: bbrt_mcp::TokenProvider = Arc::new(|| Some("obo-token-7".into()));
     let (client, results) = McpClient::connect(&[cfg], tokens);
@@ -225,7 +228,10 @@ fn http_gateway_no_token_degrades_to_call_error() {
     let (base, _) = spawn_fake_gateway(false);
     let cfg = McpServerConfig {
         name: "corp".into(),
-        transport: TransportConfig::Http { base_url: base },
+        transport: TransportConfig::Http {
+            base_url: base,
+            headers: vec![],
+        },
     };
     let (_, results) = McpClient::connect(&[cfg], bbrt_mcp::no_token());
     assert!(
@@ -241,7 +247,10 @@ fn http_gateway_chunked_response_decodes() {
     let (base, _) = spawn_fake_gateway(true);
     let cfg = McpServerConfig {
         name: "corp".into(),
-        transport: TransportConfig::Http { base_url: base },
+        transport: TransportConfig::Http {
+            base_url: base,
+            headers: vec![],
+        },
     };
     let tokens: bbrt_mcp::TokenProvider = Arc::new(|| Some("t".into()));
     let (client, results) = McpClient::connect(&[cfg], tokens);

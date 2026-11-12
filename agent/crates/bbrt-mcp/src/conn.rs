@@ -30,7 +30,9 @@ impl McpConnection {
     pub fn connect(cfg: &McpServerConfig, tokens: TokenProvider) -> Result<Self, McpError> {
         let mut transport: Box<dyn Transport> = match &cfg.transport {
             TransportConfig::Stdio { .. } => Box::new(StdioTransport::spawn(&cfg.transport)?),
-            TransportConfig::Http { base_url } => Box::new(HttpTransport::new(base_url, tokens)?),
+            TransportConfig::Http { base_url, headers } => {
+                Box::new(HttpTransport::new(base_url, headers.clone(), tokens)?)
+            }
         };
         let result = transport.request(
             "initialize",

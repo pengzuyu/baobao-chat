@@ -137,6 +137,11 @@ pub enum McpTransportWire {
     },
     Http {
         base_url: String,
+        /// 自定义请求头（外部系统鉴权如 Private-Token；值中 `${BBW_USER_TOKEN}`
+        /// 由 Runtime 调用层动态替换——token 15min 轮换不静态化；`${CONFIG:*}`
+        /// 宿主装配时已替换。自定义 Authorization 覆盖自动 Bearer。D22 §6.1/L4）
+        #[serde(default)]
+        headers: std::collections::HashMap<String, String>,
     },
 }
 

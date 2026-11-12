@@ -123,6 +123,7 @@ fn connect_failures_degrade() {
         name: "gw".into(),
         transport: TransportConfig::Http {
             base_url: "http://127.0.0.1:1/mcp".into(), // 端口 1 无监听
+            headers: vec![],
         },
     };
     let (_, results) = McpClient::connect(&[http], no_token());

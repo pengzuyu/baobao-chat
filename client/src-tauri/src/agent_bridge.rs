@@ -70,6 +70,9 @@ struct Shared {
     sessions: Mutex<Vec<SessionCache>>,
     /// (token, exp unix 秒)——auth_set_token 缓存，obo.renew 应答源
     token: Mutex<Option<(String, u64)>>,
+    /// 当前登录用户（工号/姓名）——插件装配器静态替换 ${BBW_USER_ID}/${BBW_USER_NAME}
+    /// 用（D22 §6.1/L4；换账号=set_user 后重推装配，stdio env 是 spawn 快照）
+    user: Mutex<(String, String)>,
     /// 紧急停止后抑制惰性重启（下一次显式命令重新拉起）
     halted: AtomicBool,
 }
@@ -191,6 +194,7 @@ impl AgentHost {
                 }),
                 sessions: Mutex::new(Vec::new()),
                 token: Mutex::new(None),
+                user: Mutex::new((String::new(), String::new())),
                 halted: AtomicBool::new(false),
             }),
             bin,
@@ -273,6 +277,28 @@ impl AgentHost {
         )
     }
 
+    /// 登录用户信息（D22/L4）：装配器替换 ${BBW_USER_ID}/${BBW_USER_NAME} 用；
+    /// 更新后重推装配（换账号 → stdio env 随新 spawn 生效；HTTP 的 TOKEN 是
+    /// RT 动态替换不受影响）。失败仅告警（装配重推自愈）
+    pub fn set_user(&self, user_id: &str, user_name: &str) -> Result<(), String> {
+        {
+            let mut u = self.shared.user.lock().unwrap();
+            if u.0 == user_id && u.1 == user_name {
+                return Ok(()); // 未变不重推
+            }
+            *u = (user_id.to_string(), user_name.to_string());
+        }
+        if let Err(e) = self.push_plugin_mcp() {
+            eprintln!("[bbw-bridge] 用户变更装配重推失败（降级）: {e}");
+        }
+        Ok(())
+    }
+
+    /// 当前登录用户（工号/姓名；未登录空串）
+    pub fn current_user(&self) -> (String, String) {
+        self.shared.user.lock().unwrap().clone()
+    }
+
     // ---- 生命周期 ----
 
     /// 惰性拉起：清理上次半死进程 → spawn → initialize（必须首条）→ runtime.ready → 置位；
@@ -328,7 +354,8 @@ impl AgentHost {
 
     /// 全量装配 → mcp.config（NTF）+ tools.reload{plugin}（skills 多根重扫）
     fn push_plugin_mcp_inner(&self) -> Result<(), String> {
-        let servers = assemble_mcp_servers(&self.data_dir, &self.gateway);
+        let user = self.current_user();
+        let servers = assemble_mcp_servers(&self.data_dir, &self.gateway, &user);
         self.fire_inner("mcp.config", json!({ "servers": servers }))?;
         self.fire_inner("tools.reload", json!({ "reason": "plugin" }))
     }
@@ -771,7 +798,11 @@ fn camel_to_snake(s: &str) -> String {
 // headers 本层暂丢弃（TransportConfig::Http 尚无自定义头，登记 L4）。
 // server 名冲突：系统级优先，插件同名跳过（防劫持 corp 命名空间）。
 
-fn assemble_mcp_servers(data_dir: &std::path::Path, gateway: &str) -> Vec<Value> {
+fn assemble_mcp_servers(
+    data_dir: &std::path::Path,
+    gateway: &str,
+    user: &(String, String),
+) -> Vec<Value> {
     let mut out = vec![json!({
         "name": "corp",
         "transport": { "kind": "http", "baseUrl": format!("{}/mcp/corp", gateway.trim_end_matches('/')) }
@@ -813,12 +844,13 @@ fn assemble_mcp_servers(data_dir: &std::path::Path, gateway: &str) -> Vec<Value>
             continue;
         };
         let root = ver_dir.display().to_string();
+        let config = crate::plugin_commands::read_plugin_config(&base);
         for (name, def) in servers {
             if taken.contains(name) {
                 eprintln!("[bbw-bridge] 插件 {id} MCP server 名 '{name}' 与系统级/先到冲突，跳过");
                 continue;
             }
-            match mcp_server_wire(name, def, &root) {
+            match mcp_server_wire(name, def, &root, user, &config) {
                 Some(w) => {
                     taken.push(name.clone());
                     out.push(w);
@@ -860,15 +892,46 @@ fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
     None
 }
 
-/// 单 server 定义 → wire（stdio：command/args/env 值级 `${PLUGIN_ROOT}` 替换；
-/// http：url→baseUrl，headers 丢弃登记 L4；缺 command 与 url=None）
-fn mcp_server_wire(name: &str, def: &Value, plugin_root: &str) -> Option<Value> {
-    let subst = |s: &str| s.replace("${PLUGIN_ROOT}", plugin_root);
+/// 单 server 定义 → wire（D22 §6.1/L4 变量族——装配层静态替换：
+/// `${PLUGIN_ROOT}` 版本目录 / `${BBW_USER_ID}`·`${BBW_USER_NAME}` 当前登录
+/// 用户 / `${CONFIG:key}` 插件配置（config.json+钥匙串合并）；**`${BBW_USER_TOKEN}`
+/// 仅 HTTP headers 保留给 RT 调用层动态替换**（token 15min 轮换不静态化），
+/// stdio env 遇 TOKEN 置空（HTTP-only 约定——env 是 spawn 快照，D22 决策④））
+fn mcp_server_wire(
+    name: &str,
+    def: &Value,
+    plugin_root: &str,
+    user: &(String, String),
+    config: &serde_json::Map<String, Value>,
+) -> Option<Value> {
+    let subst_static = |s: &str| -> String {
+        let mut out = s.replace("${PLUGIN_ROOT}", plugin_root);
+        out = out.replace("${BBW_USER_ID}", &user.0);
+        out = out.replace("${BBW_USER_NAME}", &user.1);
+        // CONFIG:key（缺省保留占位符——外部系统收到 401 比伪值诚实）
+        if out.contains("${CONFIG:") {
+            let mut replaced = out.clone();
+            for (k, v) in config {
+                let pat = format!("${{CONFIG:{k}}}");
+                if let Some(vs) = v.as_str() {
+                    replaced = replaced.replace(&pat, vs);
+                }
+            }
+            out = replaced;
+        }
+        // stdio 约定：TOKEN 不进子进程 env（HTTP-only）
+        out.replace("${BBW_USER_TOKEN}", "")
+    };
     if let Some(cmd) = def.get("command").and_then(Value::as_str) {
         let args: Vec<String> = def
             .get("args")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).map(&subst).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(&subst_static)
+                    .collect()
+            })
             .unwrap_or_default();
         let env = match def.get("env").and_then(Value::as_object) {
             Some(m) => m
@@ -876,7 +939,7 @@ fn mcp_server_wire(name: &str, def: &Value, plugin_root: &str) -> Option<Value> 
                 .map(|(k, v)| {
                     (
                         k.clone(),
-                        Value::String(subst(&v.to_string().trim_matches('"'))),
+                        Value::String(subst_static(&v.to_string().trim_matches('"'))),
                     )
                 })
                 .collect::<serde_json::Map<String, Value>>(),
@@ -884,13 +947,29 @@ fn mcp_server_wire(name: &str, def: &Value, plugin_root: &str) -> Option<Value> 
         };
         return Some(json!({
             "name": name,
-            "transport": { "kind": "stdio", "command": subst(cmd), "args": args, "env": env }
+            "transport": { "kind": "stdio", "command": subst_static(cmd), "args": args, "env": env }
         }));
     }
     if let Some(url) = def.get("url").and_then(Value::as_str) {
+        // headers：CONFIG 静态替换，${BBW_USER_TOKEN} 保留（RT 调用层动态替换）
+        let headers = match def.get("headers").and_then(Value::as_object) {
+            Some(m) => m
+                .iter()
+                .map(|(k, v)| {
+                    let raw = v.to_string().trim_matches('"').to_string();
+                    let val = if raw.contains("${BBW_USER_TOKEN}") {
+                        raw // 保留给 RT
+                    } else {
+                        subst_static(&raw)
+                    };
+                    (k.clone(), Value::String(val))
+                })
+                .collect::<serde_json::Map<String, Value>>(),
+            None => serde_json::Map::new(),
+        };
         return Some(json!({
             "name": name,
-            "transport": { "kind": "http", "baseUrl": url }
+            "transport": { "kind": "http", "baseUrl": url, "headers": headers }
         }));
     }
     None

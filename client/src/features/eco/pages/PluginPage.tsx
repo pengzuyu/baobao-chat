@@ -143,7 +143,7 @@ export function PluginPage() {
 
   const saveConfig = (pluginId: string) => {
     setBusyId(pluginId);
-    void writePluginConfig(pluginId, configDraft)
+    void writePluginConfig(pluginId, configDraft, detail?.plugin.manifest?.configSecrets ?? [])
       .then(() => setNotice('配置已保存'))
       .catch((err) => setError(`保存失败：${err instanceof Error ? err.message : '未知错误'}`))
       .finally(() => setBusyId(null));
@@ -312,7 +312,7 @@ export function PluginPage() {
                     <input
                       type="password"
                       value={configDraft[key] ?? ''}
-                      placeholder={/token|secret|key/i.test(key) ? '敏感值（加密存储随 L4 接入，当前暂存本地）' : ''}
+                      placeholder={/token|secret|key/i.test(key) ? '敏感值，保存后存入系统钥匙串' : ''}
                       onChange={(ev) => setConfigDraft((prev) => ({ ...prev, [key]: ev.target.value }))}
                     />
                   </label>

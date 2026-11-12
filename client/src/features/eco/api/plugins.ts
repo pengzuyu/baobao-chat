@@ -42,6 +42,8 @@ export interface PluginManifest {
   netAllow?: string[];
   usesIdentity: boolean;
   configKeys?: string[];
+  /** secret 型配置键（L4：客户端据此分流钥匙串） */
+  configSecrets?: string[];
 }
 
 export interface PluginEntry {
@@ -266,7 +268,12 @@ export async function setPluginEnabled(pluginId: string, enabled: boolean): Prom
   await invoke('plugin_set_enabled', { pluginId, enabled });
 }
 
-export async function writePluginConfig(pluginId: string, values: Record<string, string>): Promise<void> {
+export async function writePluginConfig(
+  pluginId: string,
+  values: Record<string, string>,
+  secretKeys: string[] = [],
+): Promise<void> {
   if (!isTauriAvailable()) throw new Error('需要桌面端');
-  await invoke('plugin_write_config', { pluginId, values });
+  // 壳侧分流：secret 键入钥匙串（config.json 空串占位），非 secret 直写（D22 §6.1/L4）
+  await invoke('plugin_write_config', { pluginId, values, secretKeys });
 }

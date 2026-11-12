@@ -1008,8 +1008,12 @@ fn wire_to_mcp_config(w: &bbrt_protocol::McpServerWire) -> bbrt_mcp::McpServerCo
             args: args.clone(),
             env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         },
-        McpTransportWire::Http { base_url } => bbrt_mcp::TransportConfig::Http {
+        McpTransportWire::Http { base_url, headers } => bbrt_mcp::TransportConfig::Http {
             base_url: base_url.clone(),
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         },
     };
     bbrt_mcp::McpServerConfig {
@@ -1036,6 +1040,7 @@ fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
             let transport = if target.trim_start().starts_with("http://") {
                 bbrt_mcp::TransportConfig::Http {
                     base_url: target.trim().to_string(),
+                    headers: vec![], // env 通道无自定义头（插件级经 mcp.config wire 携带）
                 }
             } else {
                 let mut parts = target.split_whitespace();
@@ -1233,7 +1238,7 @@ mod tests {
         assert_eq!(cfgs.len(), 2, "坏段（无名/无=）应跳过: {cfgs:?}");
         assert!(matches!(
             &cfgs[0].transport,
-            bbrt_mcp::TransportConfig::Http { base_url }
+            bbrt_mcp::TransportConfig::Http { base_url, .. }
                 if base_url == "http://127.0.0.1:8090/mcp/corp",
         ));
         assert_eq!(cfgs[0].name, "corp");

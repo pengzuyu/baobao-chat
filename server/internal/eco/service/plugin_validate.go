@@ -49,6 +49,8 @@ type PluginManifest struct {
 	NetAllow    []string `json:"netAllow,omitempty"`   // v0.1 仅展示
 	UsesIdentity bool   `json:"usesIdentity"`          // .mcp.json 出现 ${BBW_USER_TOKEN}
 	ConfigKeys  []string `json:"configKeys,omitempty"` // bbw.config 声明（详情页配置表单）
+	// ConfigSecrets secret 型配置键（L4：客户端分流钥匙串存储的判定依据）
+	ConfigSecrets []string `json:"configSecrets,omitempty"`
 }
 
 // pluginJSONRaw plugin.json 原始形态（组件字段 string=路径；mcpServers 两态）
@@ -329,6 +331,9 @@ func validatePluginPackage(pkg []byte) (*PluginManifest, []string, error) {
 				return nil, nil, errx.New(errx.CodeBadRequest, "bbw.config type ∈ secret|string: "+c.Key)
 			}
 			m.ConfigKeys = append(m.ConfigKeys, c.Key)
+			if c.Type == "secret" {
+				m.ConfigSecrets = append(m.ConfigSecrets, c.Key)
+			}
 		}
 	}
 

@@ -20,7 +20,10 @@ fn live_go_gateway_handshake_discover_call() {
     let token = std::env::var("BBW_MCP_SMOKE_TOKEN").expect("BBW_MCP_SMOKE_TOKEN 未设置");
     let cfg = McpServerConfig {
         name: "corp".into(),
-        transport: TransportConfig::Http { base_url: base },
+        transport: TransportConfig::Http {
+            base_url: base,
+            headers: vec![],
+        },
     };
     let tokens: bbrt_mcp::TokenProvider = Arc::new(move || Some(token.clone()));
     let (client, results) = McpClient::connect(&[cfg], tokens);
