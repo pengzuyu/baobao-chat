@@ -27,6 +27,8 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 插件包落盘（D22 §5.2：前端 fflate 解压后内容 base64 传输；复用依赖树既有版本）
+base64 = "0.23"
 
 [profile.release]
 codegen-units = 1

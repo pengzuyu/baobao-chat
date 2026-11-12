@@ -231,3 +231,36 @@ export const http = {
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
+
+/**
+ * 二进制下载（D22 插件包）：同 token 注入与网络层错误口径，但不走 JSON 信封——
+ * 失败时服务端可能返回 JSON 错误包或原始 zip，统一非 2xx 抛 ApiError（认领交给调用方）。
+ */
+export async function downloadBlob(path: string): Promise<Blob> {
+  const headers = new Headers();
+  const token = tokenProvider();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { headers });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
+  }
+  if (!res.ok) {
+    // 尝试解 JSON 错误包（如 401/404 的信封），失败则按状态码兜底
+    let code = res.status;
+    let msg = `下载失败（HTTP ${res.status}）`;
+    try {
+      const envelope = (await res.json()) as ApiEnvelope<unknown>;
+      if (envelope.code !== 0) {
+        code = envelope.code;
+        msg = envelope.message?.trim() || getErrorText(code);
+      }
+    } catch {
+      /* 非 JSON 体：保持状态码口径 */
+    }
+    throw scheduleFallback(new ApiError(code, msg));
+  }
+  return res.blob();
+}

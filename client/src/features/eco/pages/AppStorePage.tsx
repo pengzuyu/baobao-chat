@@ -1,16 +1,16 @@
 /**
- * 应用商店（D09 PEC-07 / E1+E4）：双 tab——应用 catalog 差异视图 / 技能市场——可安装/可升级/已装
- * /已撤销四态卡流；安装/升级/卸载即时生效；tools.reload 热加载随宿主命令
- * 阶段二（登记）。灰度（E2）与签名链（10 §7）接入后本页自动透出对应态。
+ * 应用商店（D09 PEC-07 / E1）：应用 catalog 差异视图——可安装/可升级/已装/已撤销
+ * 四态卡流；安装/升级/卸载即时生效；tools.reload 热加载随宿主命令阶段二（登记）。
+ * 灰度（E2）与签名链（10 §7）接入后本页自动透出对应态。
+ * 技能市场已并入插件页（D22 决策③：/agent/plugins 超集，SkillTab 删除）。
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Ban, CheckCircle2, Download, Package, RotateCcw, Upload, Sparkles } from 'lucide-react';
+import { Ban, CheckCircle2, Download, Package, RotateCcw, Upload } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { Empty } from '../../../shared/ui/Empty';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
 import { fetchCatalog, installApp, uninstallApp, type CatalogEntry } from '../api/apps';
-import { SkillTab } from './SkillTab';
 
 const ACTION_META: Record<CatalogEntry['action'], { label: string; icon: typeof Download; tone: string }> = {
   install: { label: '可安装', icon: Download, tone: 'ok' },
@@ -20,7 +20,6 @@ const ACTION_META: Record<CatalogEntry['action'], { label: string; icon: typeof 
 };
 
 export function AppStorePage() {
-  const [tab, setTab] = useState<'apps' | 'skills'>('apps');
   const [entries, setEntries] = useState<CatalogEntry[] | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -61,18 +60,6 @@ export function AppStorePage() {
         </h2>
         <span className="eco-store__hint">管理员发布的应用与工具集；安装后 Agent 工具注册表同步（热加载随阶段二）</span>
       </header>
-      <div className="admin-tabs" role="tablist" style={{ paddingBottom: 8 }}>
-        <button type="button" role="tab" aria-selected={tab === 'apps'} className={`admin-tab${tab === 'apps' ? ' admin-tab--active' : ''}`} onClick={() => setTab('apps')}>
-          <Package size={14} /> 应用
-        </button>
-        <button type="button" role="tab" aria-selected={tab === 'skills'} className={`admin-tab${tab === 'skills' ? ' admin-tab--active' : ''}`} onClick={() => setTab('skills')} data-testid="store-skill-tab">
-          <Sparkles size={14} /> 技能
-        </button>
-      </div>
-      {tab === 'skills' ? (
-        <SkillTab />
-      ) : (
-      <>
       {error ? <div className="eco-store__error">{error}</div> : null}
       {entries === null ? (
         <SkeletonList count={4} />
@@ -113,8 +100,6 @@ export function AppStorePage() {
             );
           })}
         </div>
-      )}
-      </>
       )}
     </div>
   );

@@ -7,6 +7,7 @@
 
 pub mod agent_bridge;
 pub mod agent_commands;
+pub mod plugin_commands;
 
 use std::sync::Arc;
 
@@ -111,7 +112,12 @@ pub fn run() {
             agent_commands::auth_set_token,
             agent_commands::workspace_register,
             agent_commands::workspace_list,
-            agent_commands::workspace_forget
+            agent_commands::workspace_forget,
+            plugin_commands::plugin_write_files,
+            plugin_commands::plugin_remove_local,
+            plugin_commands::plugin_set_enabled,
+            plugin_commands::plugin_local_state,
+            plugin_commands::plugin_write_config
         ])
         .run(context)
         .expect("Tauri 应用启动失败");

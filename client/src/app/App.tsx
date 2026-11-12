@@ -21,6 +21,7 @@ import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { AgentMemoryPage } from '../features/agent/pages/AgentMemoryPage';
 import { AgentReportsPage } from '../features/agent/pages/AgentReportsPage';
+import { PluginPage } from '../features/eco/pages/PluginPage';
 import { ensureAgentEventSubscribed, useAgentStore } from '../features/agent/store/agent';
 import { isLocallyReported, notifyAgentDone } from '../features/agent/bridge/notify';
 import { AdminLayout } from '../features/admin/pages/AdminLayout';
@@ -252,6 +253,7 @@ export function App() {
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />
         <Route path="/agent/memory" element={<AgentMemoryPage />} />
         <Route path="/agent/reports" element={<AgentReportsPage />} />
+        <Route path="/agent/plugins" element={<PluginPage />} />
         {/* 管理后台（D10 阶段一务实版）：仪表盘/用户/策略/用量/审计五页；
             一级"管理"入口按 me.perms admin:* 显隐（MainLayout），服务端守卫 2003 兜底 */}
         <Route path="/admin" element={<AdminLayout />}>
