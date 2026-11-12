@@ -73,6 +73,9 @@ BBW_REDIS_ADDR=redis:6379
 # 5. 对象存储 MinIO/S3（helm: externalServices.s3.* → ConfigMap；凭据 → Secret bbw-s3）
 # -----------------------------------------------------------------------------
 BBW_S3_ENDPOINT=http://minio:9000
+# 预签名对外基址（D25）：空=回落本地盘（不启用对象存储）；启用后客户端直传/直下走它。
+# compose 域名形态 http(s)://<对外host>/oss（nginx 已带 /oss/ 代理）；内网直连形态 http://<host>:9000
+BBW_S3_PUBLIC_ENDPOINT=
 BBW_S3_USE_PATH_STYLE=true                   # MinIO 必须 path-style；云 S3 置 false
 BBW_S3_BUCKET=bbw-data                       # helm: externalServices.s3.bucket（版本化）
 BBW_S3_BACKUP_BUCKET=bbw-backup              # helm: externalServices.s3.backupBucket（独立凭据，§4.6）

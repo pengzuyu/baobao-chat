@@ -61,6 +61,8 @@ externalServices:
     address: bbw-redis.bbw-data.svc.cluster.local:6379      # compose: BBW_REDIS_ADDR
   s3:
     endpoint: http://minio.bbw-data.svc.cluster.local:9000  # compose: BBW_S3_ENDPOINT
+    publicEndpoint: ""                                      # compose: BBW_S3_PUBLIC_ENDPOINT（D25 预签名对外基址；
+                                                            # 空=本地盘回落；启用须同时给 ingress 加 /oss/ 路由）
     bucket: bbw-data                                        # compose: BBW_S3_BUCKET
     backupBucket: bbw-backup                                # compose: BBW_S3_BACKUP_BUCKET
     usePathStyle: true                                      # compose: BBW_S3_USE_PATH_STYLE

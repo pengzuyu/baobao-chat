@@ -39,6 +39,9 @@ x-bbw-env: &bbw-env
   BBW_CORS_ORIGINS: ${BBW_CORS_ORIGINS:-}
   BBW_REDIS_ADDR: ${BBW_REDIS_ADDR:-redis:6379}
   BBW_S3_ENDPOINT: ${BBW_S3_ENDPOINT:-http://minio:9000}
+  # 预签名对外基址（D25）：空=回落本地盘（不起对象存储）；配域名形态 https://host/oss
+  # 或内网直连 http://ip:9000——客户端直传/直下走它，签名按对外 host 计算（nginx strip+Host 透传）
+  BBW_S3_PUBLIC_ENDPOINT: ${BBW_S3_PUBLIC_ENDPOINT:-}
   BBW_S3_USE_PATH_STYLE: ${BBW_S3_USE_PATH_STYLE:-true}
   BBW_S3_BUCKET: ${BBW_S3_BUCKET:-bbw-data}
   BBW_S3_BACKUP_BUCKET: ${BBW_S3_BACKUP_BUCKET:-bbw-backup}
@@ -234,7 +237,14 @@ services:
         mc mb -p local/bbw-data || true
         mc version enable local/bbw-data || true
         mc mb -p local/bbw-backup || true
-        echo "[minio-init] 桶初始化完成：bbw-data(版本化) / bbw-backup"
+        # CORS（D25 预签名直传：webview fetch PUT/GET 需过预检；预签名 URL 即凭证无
+        # Authorization 头，通配 origin 无泄露面——签名本身即授权）
+        mc cors remove local/bbw-data >/dev/null 2>&1 || true
+        mc cors add local/bbw-data --allowed-origins "*" \
+          --allowed-methods "GET,PUT,POST,HEAD" \
+          --allowed-headers "content-type,x-amz-*" \
+          --expose-headers "etag" --max-age 3600 || true
+        echo "[minio-init] 桶初始化完成：bbw-data(版本化) / bbw-backup（CORS 已配）"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
@@ -463,6 +473,20 @@ configs:
             proxy_send_timeout 300s;
           }
 
+          # 对象存储预签名直传（D25）：/oss/ → MinIO；strip 前缀（trailing slash）+
+          # Host 透传=SigV4 验签前提（服务端签名按去前缀路径+对外 host 计算，URL 拼回 /oss）
+          location /oss/ {
+            proxy_pass http://minio:9000/;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Real-IP $$remote_addr;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            client_max_body_size 0;      # 分片 PUT 直穿（8MB/片；应用层已限额）
+            proxy_request_buffering off; # 大对象流式转发不落盘缓冲
+            proxy_buffering off;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+          }
+
           # AI 网关 OpenAI 兼容端点（/v1/chat/completions、/v1/embeddings；bbrt 生产链路）
           # SSE 流式：关缓冲，长读超时对齐 bbrt 60s 套接字超时留余量
           location /v1/ {
@@ -531,6 +555,18 @@ configs:
           # 客户端更新源（manifest + 安装包，16 篇 §5.1）
           location /update/ {
             proxy_pass http://bbw_update/;
+          }
+
+          # 对象存储预签名直传（D25；与 80 块同款——strip 前缀+Host 透传）
+          location /oss/ {
+            proxy_pass http://minio:9000/;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Real-IP $$remote_addr;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_request_buffering off;
+            proxy_buffering off;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
           }
 
           # AI 网关 OpenAI 兼容端点（bbrt 生产链路，D21；SSE 关缓冲）

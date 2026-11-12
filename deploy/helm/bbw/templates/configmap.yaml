@@ -15,6 +15,7 @@ data:
   BBW_OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelEndpoint | quote }}
   BBW_REDIS_ADDR: {{ .Values.externalServices.redis.address | quote }}
   BBW_S3_ENDPOINT: {{ .Values.externalServices.s3.endpoint | quote }}
+  BBW_S3_PUBLIC_ENDPOINT: {{ .Values.externalServices.s3.publicEndpoint | default "" | quote }}
   BBW_S3_BUCKET: {{ .Values.externalServices.s3.bucket | quote }}
   BBW_S3_BACKUP_BUCKET: {{ .Values.externalServices.s3.backupBucket | quote }}
   BBW_S3_USE_PATH_STYLE: {{ .Values.externalServices.s3.usePathStyle | quote | lower }}
