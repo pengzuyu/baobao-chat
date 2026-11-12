@@ -59,6 +59,10 @@ deploy/frp/certs/
 # ---- 本地覆盖 values（helm install 时自动拾取，见 Makefile helm-install）----
 deploy/helm/bbw/.local-values.yaml
 
+# ---- 发布打包产物/临时覆盖（D21：scripts/release 生成，不入库）----
+out/
+client/src-tauri/tauri.release.conf.json
+
 # ---- 本地构建产物/会话目录 ----
 server/bbw-server
 .zcode/

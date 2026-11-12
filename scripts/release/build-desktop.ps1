@@ -1,0 +1,83 @@
+# =============================================================================
+# build-desktop.ps1 —— Windows 桌面发布出包（D21；与 build-desktop.sh 同口径）
+#
+# Windows 包不随带 bbrt sidecar（既有决策：bbrt 编不过 Windows）。
+#
+# 用法（Windows 机器，PowerShell）：
+#   $env:BBW_PUBLIC_URL = "http://bbw.example.internal"
+#   $env:TAURI_SIGNING_PRIVATE_KEY = "<minisign 私钥内容或路径>"
+#   $env:TAURI_SIGNING_PASSWORD = "<口令>"
+#   powershell -ExecutionPolicy Bypass -File scripts\release\build-desktop.ps1
+#
+# 产物：out\release\v<ver>\windows-x86_64\（NSIS setup.exe + .sig）
+# =============================================================================
+$ErrorActionPreference = "Stop"
+
+$Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$Url = $env:BBW_PUBLIC_URL
+
+if (-not $Url -or $Url -notmatch '^https?://[^/]+/?$') {
+  Write-Error "[build-desktop] BBW_PUBLIC_URL 必填且形如 http://bbw.example.internal（不带路径）"
+}
+$Url = $Url.TrimEnd('/')
+
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+  if ($env:BBW_ALLOW_UNSIGNED -eq "1") {
+    Write-Warning "[build-desktop] 无签名私钥（BBW_ALLOW_UNSIGNED=1）：出包无 .sig，仅可本地试装、不可发布"
+  } else {
+    Write-Error "[build-desktop] 缺 TAURI_SIGNING_PRIVATE_KEY（+TAURI_SIGNING_PASSWORD）；本地试包可 BBW_ALLOW_UNSIGNED=1"
+  }
+}
+
+$Conf = Get-Content "$Root\client\src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
+$Version = $Conf.version
+$Out = Join-Path $Root "out\release\v$Version\windows-x86_64"
+
+if (-not (Test-Path "$Root\client\node_modules")) {
+  Write-Error "[build-desktop] 先装依赖：npm --prefix client install"
+}
+
+# ---- 编译期注入临时文件（finally 清理，域名不进 git）----
+$EnvProd = "$Root\client\.env.production"
+$RelConf = "$Root\client\src-tauri\tauri.release.conf.json"
+$Insecure = if ($Url -like "http://*") { "true" } else { "false" }
+
+@"
+# build-desktop.ps1 生成（临时，勿提交）：v0.1 统一 http（D21）
+VITE_API_BASE=$Url/api/v1
+"@ | Set-Content -Encoding UTF8 $EnvProd
+
+@"
+{
+  "plugins": {
+    "updater": {
+      "endpoints": ["$Url/update/latest.json"],
+      "dangerousInsecureTransportProtocol": $Insecure,
+      "requireSignedVersion": true
+    }
+  }
+}
+"@ | Set-Content -Encoding UTF8 $RelConf
+
+Write-Host "[build-desktop] v$Version · 网关=$Url · insecureTransport=$Insecure"
+
+try {
+  Push-Location "$Root\client"
+  & ".\node_modules\.bin\tauri.cmd" build --config $RelConf
+  if ($LASTEXITCODE -ne 0) { Write-Error "[build-desktop] tauri build 失败（exit=$LASTEXITCODE）" }
+} finally {
+  Pop-Location
+  Remove-Item $EnvProd, $RelConf -ErrorAction SilentlyContinue
+}
+
+# ---- 收集 NSIS 产物（无 --target 时落 target\release\bundle）----
+$Bundle = "$Root\client\src-tauri\target\release\bundle\nsis"
+if (-not (Test-Path $Bundle)) { Write-Error "[build-desktop] 找不到 NSIS 产物目录: $Bundle" }
+New-Item -ItemType Directory -Force -Path $Out | Out-Null
+Copy-Item "$Bundle\*" $Out -Force
+
+Write-Host ""
+Write-Host "[build-desktop] 产物已收至 $Out："
+Get-ChildItem $Out | ForEach-Object { Write-Host ("    {0,10:N0} KB  {1}" -f ($_.Length / 1KB), $_.Name) }
+Write-Host ""
+Write-Host "[build-desktop] 下一步（任一机器）：node scripts/release/gen-manifest.mjs && bash scripts/release/publish.sh"

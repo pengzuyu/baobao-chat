@@ -6,5 +6,14 @@ fn main() {
         "cargo:rustc-env=BBW_TARGET_TRIPLE={}",
         std::env::var("TARGET").unwrap_or_default()
     );
+    // 发布打包注入（D21）：BBW_PUBLIC_URL（如 http://bbw.example.internal）作为
+    // bbrt 网关的编译期缺省——打包应用无进程 env 可设，两级缺省链见 agent_bridge。
+    // 本地 dev 不设此变量即回落 127.0.0.1:8090（联调语义不变）。
+    println!("cargo:rerun-if-env-changed=BBW_PUBLIC_URL");
+    if let Ok(url) = std::env::var("BBW_PUBLIC_URL") {
+        if !url.is_empty() {
+            println!("cargo:rustc-env=BBW_DEFAULT_GATEWAY={url}");
+        }
+    }
     tauri_build::build()
 }

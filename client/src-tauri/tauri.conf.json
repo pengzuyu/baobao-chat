@@ -42,7 +42,7 @@
     "updater": {
       "pubkey": "",
       "endpoints": [
-        "https://bbw.example.internal/update/latest.json"
+        "http://bbw.example.internal/update/latest.json"
       ],
       "windows": {
         "installMode": "passive"

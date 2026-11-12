@@ -8,6 +8,8 @@
 # · VITE_WS_BASE 已可选（2026-11-09 同源推导）：默认由 VITE_API_BASE 推导
 #   （去 /api/v1 → http(s)→ws(s) → 拼 /ws/connect；统一入口路径分流，16 篇）。
 #   仅当 WS 走独立域名/端口时才需显式配置覆盖。
+# · 正式出包不走本文件：scripts/release/build-desktop.sh 依 BBW_PUBLIC_URL 生成
+#   临时 .env.production（v0.1 统一 http，D21），构建完即清理。
 # =============================================================================
 
 # —— mock 开关（D18 翻转后默认连真实 API）：仅纯前端演示时显式置 1 跑桩数据 ——

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		v0.1 统一 http 内网部署（D21）：WKWebView 受 ATS 约束，非 localhost 的明文
+		请求默认被拦（dev 走 localhost 豁免掩盖了这一点，生产指向 http://内网域名
+		即触雷）。放开 ATS 后 webview 内 fetch/ws 明文可用；bbrt/updater 走自建
+		TCP/reqwest 不经 ATS 不受影响。未来转 https 后删除本文件即可。
+		Tauri v2 会自动合并本目录 Info.plist（tauri-utils config macOS.infoPlist 注释）。
+	-->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

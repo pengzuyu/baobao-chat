@@ -172,8 +172,14 @@ pub struct AgentHost {
 impl AgentHost {
     pub fn new(data_dir: PathBuf, emit: EventSink) -> Self {
         let bin = resolve_bbrt_bin();
-        let gateway =
-            std::env::var("BBW_RT_GATEWAY").unwrap_or_else(|_| "http://127.0.0.1:8090".into());
+        // 网关缺省链（D21）：进程 env BBW_RT_GATEWAY（dev/手工覆盖）>
+        // 编译期注入 BBW_DEFAULT_GATEWAY（发布打包由 BBW_PUBLIC_URL 带 build.rs 注入，
+        // 打包应用无 env 可设）> 本地裸跑服务端 127.0.0.1:8090（联调兜底）。
+        let gateway = std::env::var("BBW_RT_GATEWAY")
+            .ok()
+            .filter(|g| !g.is_empty())
+            .or_else(|| option_env!("BBW_DEFAULT_GATEWAY").map(str::to_string))
+            .unwrap_or_else(|| "http://127.0.0.1:8090".into());
         let static_token = std::env::var("BBW_RT_TOKEN").ok().filter(|t| !t.is_empty());
         Self {
             shared: Arc::new(Shared {

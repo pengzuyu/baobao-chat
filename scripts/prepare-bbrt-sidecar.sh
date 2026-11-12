@@ -35,10 +35,17 @@ esac
 TRIPLE="${BBW_BBRT_TRIPLE:-$(rustc -vV | sed -n 's/^host: //p')}"
 [ -n "$TRIPLE" ] || { echo "[prepare-bbrt-sidecar] 无法探测 host triple（rustc -vV）" >&2; exit 1; }
 
-echo "[prepare-bbrt-sidecar] cargo build -p bbrt --${PROFILE}（triple=${TRIPLE}）"
-(cd "$AGENT_DIR" && cargo build -p bbrt --"$PROFILE")
+# 显式 --target：交叉 triple（如 arm 机器出 x86_64 包，D21 双架构出包）时产物
+# 落 target/<triple>/；此前只改落位名不改 target，交叉时会拿 host 架构二进制冒名。
+if ! rustup target list --installed 2>/dev/null | grep -q "^${TRIPLE}$"; then
+  echo "[prepare-bbrt-sidecar] 缺 target 工具链 ${TRIPLE}：rustup target add ${TRIPLE}" >&2
+  exit 1
+fi
 
-BIN="$AGENT_DIR/target/$PROFILE/bbrt"
+echo "[prepare-bbrt-sidecar] cargo build -p bbrt --target ${TRIPLE} --${PROFILE}"
+(cd "$AGENT_DIR" && cargo build -p bbrt --target "$TRIPLE" --"$PROFILE")
+
+BIN="$AGENT_DIR/target/$TRIPLE/$PROFILE/bbrt"
 [ -f "$BIN" ] || { echo "[prepare-bbrt-sidecar] 构建产物缺失: $BIN" >&2; exit 1; }
 
 SIZE_MB=$(du -m "$BIN" | cut -f1)
