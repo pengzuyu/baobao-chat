@@ -303,6 +303,30 @@
 | M3 | 协议+记忆页+联调隔离 | memory.forget REQ/result 协议对（golden 锁定）+ MemoryListItem 增 globalType + bbrt list 用户段直读 global replay（带十类标签）/forget 处理臂 + 壳 memory_forget 命令 + 前端桥 forgetMemory（tauri/mock）+store 动作+记忆页 global 条目（十类 chip/撤销走 forget/meta 标注 USER.md）+ MemoryEngine::open_root（BBW_MEMORY_ROOT 覆盖） | tsc/vite build 绿；记忆页用户页签=USER.md 条目可见可删 | [x] 2026-11-12（本提交；顺修 D22 L4 遗漏的 agent_bridge 测试 Shared.user initializer） |
 | M4 | 真机验收 | D23 §9 六项走查（十类落盘/回落教训/禁止→解除更正链/压实与断 provider/记忆页/8020+BBW_MEMORY_ROOT） | 用户真机走查 | [ ] |
 
+## 批次 N：知识库博客化（D24，2026-11-12 N0 落稿待编码）
+
+> 定案（用户裁决 2026-11-12 十轮讨论）：**两维度收口**——公司知识库（公共/全员可看可投/
+> 全租户唯一）+ 我的笔记（个人/仅本人/AI 入库默认落点/不进榜单），**「空间」产品概念消失**
+> （kb_space 退化为内部两行：公共迁移种子+个人惰性），多空间/成员制/隔离后置；页面纯
+> 阅读+检索+榜单（**无写/编辑/删除 UI**，写入只留 API 给未来 AI/OBO）；目录=专栏保留
+> （公共共享树+个人每人一棵，可空=根）；**保存/投稿分离**（保存默认落我的笔记、投稿=
+> 移动后置）；浏览量**一人一天一篇计 1、作者不计**；**榜单只收公共维度**（最新/最热窗口/
+> 作者榜 Top10+个人概览卡，攀比=产品目标）；检索**三态降级**（关键词 ILIKE→RRF→rerank）；
+> 嵌入/rerank 走 ai_provider 路由（tier embed/rerank 独立、可与 LLM 不同来源、全 HTTP 接口）；
+> **嵌入切换=epoch 渐进重建+关键词兜底**（跨维度清空重建确认；rerank 切换零成本）；图片
+> v0.1 只索引 alt+上下文（VLM caption P1）；grants 三件套废弃。
+> 设计：[D24](detail/D24-知识库博客化详细设计.md)。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|---|---|---|---|
+| N1 | 迁移+维度收口 | 0037（view_count/kb_doc_view/embed_epoch/kb_settings+dept 并入 company 种子+company 唯一索引，embed.go 双登记）+ canRead/canWrite 两分支 + CreateSpace/resolveDeptBinding/grants 三件套及六闭包下线 + EnsureCompanySpace + GET /kb/spaces 固定两行 | go build+test ./internal/kb/... 绿（dept/ACL 用例改写两维度口径）；迁移幂等重放 | [ ] |
+| N2 | 浏览量/榜单/我的 | POST view（日去重+作者短路）+ GET /kb/me/summary·me/docs·rankings（三榜 Top10+窗口聚合+公共-only）+ Options.UserInfoOfMany（org 闭包装配） | go test 绿（公共-only/作者不计数/日去重/窗口聚合用例） | [ ] |
+| N3 | 检索升级（两提交） | 提交一 aigw：OpenAICompat.Embed 真实调用+registry 放开 embed/rerank 档+AliasRerank/Provider.Rerank/HandleRerank+POST /v1/rerank 注册；提交二 kb：Options.RerankFn+GatewayRerankFn+Query rerank 阶段（候选 30→topK）+epoch（kb_settings 读写/向量路过滤/重建 goroutine 直调 Router/管理端 GET·POST rebuild+7017/7018） | go test ./internal/aigw/... ./internal/kb/... 绿（TestRerank 参照 TestEmbeddings；三态降级/epoch 过滤/重建幂等用例） | [ ] |
+| N4 | 前端首页+阅读页 | /kb 子路由重构 + KbHomePage（概览卡/大搜索/榜单三列/最近查看）+ ArticlePage（MarkdownText 增强图片/链接/有序列表+view 上报+专栏面包屑+引用到 Agent） | tsc 0 错+vite build 绿 | [ ] |
+| N5 | 前端其余+管理端 | SpaceBrowsePage（目录树懒加载接通）+ MyArticlesPage + SearchPage（命中卡文章化）+ KbGovernancePage 嵌入设置面板（模型/epoch/重建进度）+ 旧件退役（UploadModal/GrantModal/旧 KbPage） | tsc+vite build 绿 | [ ] |
+| N6 | IM 收藏入库 | IngestFromIM 接路由 POST /kb/docs/from-im + IM 消息右键入口（默认落我的笔记） | go test+tsc+build 绿 | [ ] |
+| N7 | 真机验收 | D24 §10 七项走查（首页榜单/浏览量口径/阅读页渲染/维度隔离/检索三态/重建进度/IM 入库） | 用户真机走查（:8090 重启+Tauri） | [ ] |
+
 ## 批次 O：对象存储与预签名直传（D25，2026-11-12 设计定稿）
 
 > 动机=compose `nginx-lb→app×2` 双副本 + v0.1 本地盘 = 文件随机 404（部署阻塞项）；compose 内 minio/桶/env 占位已久未接。拍板六条见 D25 §1 勿重提（aws-sdk-go-v2 / nginx /oss 路径代理+Host 透传 / 空 endpoint 回落 Local / 仅 >8MB 直传 / part_size 8MB / JPEG 缩略）。
