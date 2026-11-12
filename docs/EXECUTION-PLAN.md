@@ -249,3 +249,19 @@
 | J3 | embedded 恒日常 | ChatPage ensureEmbeddedSession 删「跟随最近项目」恒 workspace=''（sessions 未加载竞态同除） | IM 发起 agent 一律日常=用户工作空间；操作项目=工作台项目会话 | [x] 2026-11-12 |
 | J4 | 文档 | D19 顶部落地注记+§2 联动口径修订+本批次 | 口径可追溯 | [x] 2026-11-12 |
 | J5 | 真机验收 | ①聊天页让 agent 跑命令→审批框 120s 内弹出（allow 后执行成功）②提问卡弹出可作答③日常会话写 ~/.baobaowork/workspace 内文件成功/写区外被拒④embedded 不再出现「跟随最近项目」目录 | 用户真机走查 | [ ] 待验收 |
+
+## 批次 K：自动更新 + 官网 + 发布打包链（D21，2026-11-12 编码完成待密钥/真机验收）
+
+> 定案（用户裁决 2026-11-12）：v0.1 **统一 http**（内网明文，https 以后再加）；
+> 不买平台签名证书（macOS 临时签名/Windows 无 Authenticode——安装包完整性由
+> minisign 保证）；macOS 双架构；三台系统机手动跑发布脚本；官网挂同域名根路径。
+> 设计与操作手册：[D21](detail/D21-自动更新与官网发布链详细设计.md)。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|---|---|---|---|
+| K1 | 打包注入链 | build.rs BBW_PUBLIC_URL→BBW_DEFAULT_GATEWAY + agent_bridge 三级缺省链（修生产包指 127.0.0.1:8090）+ Info.plist ATS 例外 + tauri.windows.conf.json 收敛 NSIS + scripts/release/{set-version.sh, build-desktop.sh/.ps1} + sidecar 交叉 --target 修复 | BBW_PUBLIC_URL 一次注入三链（前端 env/壳网关/updater 端点），域名不进库 | [x] 2026-11-12（130fbbb；壳 check/fmt+set-version 幂等+校验路径实测） |
+| K2 | updater 前端全链 | tauri-plugin-process（relaunch）+ 前端 plugin-updater/process 包 + features/settings/updater.ts（zustand store+静默 3s/6h 检查+版本去重）+ AboutPage 更新卡（检查/下载进度/重启安装/Linux deb 官网引导）+ App 静默检查挂载 | 关于页全流程可用；pubkey 填入即活 | [x] 2026-11-12（f67e1bb；tsc/vite build+壳 check 绿） |
+| K3 | 服务器侧 | nginx 80 主入口全路由（补 /v1/ /mcp/ bbrt 生产链路+官网 /；443 同步补）+ update-src bind 卷转正（no-store/immutable 分级缓存）+ website 服务 + helm ingress 补 path + gen-manifest.mjs（latest.json+release-info.json）+ publish.sh（齐套校验+rsync+回读验证） | http://域名/update/latest.json 可拉；三平台机出包→publish 全链通 | [x] 2026-11-12（0328d69；check-deploy+gen-manifest 夹具断言全过） |
+| K4 | 官网 | website/ 工程（Vite+React+TS 单页：Hero/功能九卡/路线图/下载区）+ 下载区运行时拉 release-info.json 自动跟进版本 + publish-website.sh + Makefile/CI verify 门禁接入 + D21 文档 + docs/16 落地注记 + 本批次 | http://域名/ 可访问；发新版下载区自动更新 | [x] 2026-11-12（本提交；verify-website 绿） |
+| K5 | 签名密钥启用 | 用户执行 `npm run tauri signer generate`（口令自设、私钥自管），pubkey 填 tauri.conf.json plugins.updater.pubkey 后提交——updater 壳侧条件注册即活 | lib.rs 启动不再打印「updater 未配置公钥」 | [ ] 待用户出钥 |
+| K6 | 真机验收 | ①v0.1.0 装机（Intel+M 各一）②服务器 publish v0.1.1 ③静默提示+关于页检查→下载→重启升级→版本变化 ④Windows NSIS passive/Linux AppImage/deb 引导 ⑤生产包 bbrt 走 http://域名/v1 跑通 IM agent 卡 ⑥官网下载区随发布自动更新 | 用户真机走查（清单详见 D21 §8） | [ ] 待验收 |

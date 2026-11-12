@@ -31,6 +31,7 @@
 | D18 | [IM 内嵌 Agent 卡详细设计](D18-IM内嵌Agent卡详细设计.md) | 08/D03/D08/09 | **(用户,会话) 一会话**·完整过程透明卡（思考/工具/结论，推翻 D08 轻量口径）·审批弹框聊天页（推翻 OQ-B08 白名单）·分阶段更新落流（agent_card+PATCH 通道）·升级=文本注入；安全五层纵深登记阶段二（v0.1 复用 agent 既有能力）；bbrt/协议零改动 |
 | D19 | [Agent 项目/日常双区与记忆分级详细设计](D19-Agent项目与日常对话及记忆分级详细设计.md) | 08/D08/D09/D11/D13/D15/D18 | **双区模型**：session.start workspace 空串=日常/非空=项目（realpath 归一+agent_workspace 接线+workspace_id 回填）·**沙箱按会话路由**（修全局 "." 占位缺口：项目会话各自沙箱根、日常 workspace 类工具 8020 拒绝）·**记忆分级**（memory/projects/<目录名-哈希> 分区+类型驱动路由+两段召回）·session.list 持久恢复+workspace 三 REQ·工作台过程显示对齐 change-my-life（思考卡流式展开/工具组汇总条/自动折叠） |
 | D20 | [ask-user 提问卡详细设计](D20-ask-user提问卡详细设计.md) | 08/D08/D11/D18/09 | **ZCode 式澄清机制**：ask_user 工具（loop_runner 拦截不走 pipeline）·clarify.request/response 协议对（camelCase 键，**无超时**——等用户或「停止」中断收口 cancelled）·WaitingClarify 状态（#6b/#7b）·三端提问卡（工作台 ClarifyCard/聊天页 Modal/落流卡内嵌条，ClarifyForm 共用）·答案进工具结果（结构化回给模型）·完全镜像 permission 阻塞机制 |
+| D21 | [自动更新与官网发布链详细设计](D21-自动更新与官网发布链详细设计.md) | 16/15/D01 | **发布工程**：单变量 BBW_PUBLIC_URL 三链注入（前端 env/壳编译期网关/updater 端点）·v0.1 统一 http 拍板（证书口径澄清与转 https 三步走）·updater 全链（minisign 密钥/静默 6h 检查/关于页更新卡/requireSignedVersion 拒降级）·nginx 80 主入口全路由（补 /v1/ /mcp/ bbrt 生产链路）·update-src/website 落地 bind 卷·gen-manifest/publish 脚本族·官网工程（运行时拉 release-info 自动跟进版本） |
 
 ## 模板（D01 §13）
 

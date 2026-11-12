@@ -19,6 +19,14 @@ stages:
           - npm ci --no-audit --no-fund
           - npx tsc -b --noEmit
           - npm run build
+  - name: 官网
+    tasks:
+      - task: website-gate
+        script:
+          - cd website
+          - npm ci --no-audit --no-fund
+          - npx tsc --noEmit
+          - npm run build
   - name: Agent-Runtime
     tasks:
       - task: agent-gate

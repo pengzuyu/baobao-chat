@@ -187,7 +187,7 @@ clean: ## 清理构建产物（不动数据卷）
 # 一键验证门（CI 同源；本地/流水线同一入口）
 # ---------------------------------------------------------------------------
 .PHONY: verify
-verify: verify-server verify-client verify-agent verify-deploy smoke ## 四栈硬门禁+启动冒烟（CI 同源）
+verify: verify-server verify-client verify-agent verify-website verify-deploy smoke ## 五栈硬门禁+启动冒烟（CI 同源）
 
 .PHONY: verify-server
 verify-server: ## 服务端硬门禁：build + vet + gofmt -l 须空 + go test ./...
@@ -205,6 +205,13 @@ verify-server-pg: ## 服务端 PG 集成门禁（需 BBW_PG_TEST_DSN 或本机 b
 verify-client: ## 前端硬门禁：tsc --noEmit + vite build
 	@cd client && npm run build --silent >/dev/null && npx tsc -b --noEmit
 
+.PHONY: verify-website
+verify-website: ## 官网硬门禁（D21）：tsc --noEmit + vite build
+	@if [ -d website ]; then cd website && \
+	  { [ -d node_modules ] || npm install --no-audit --no-fund --silent; } && \
+	  npm run build --silent >/dev/null && npx tsc --noEmit && echo "website ✓"; \
+	  else echo "[make] website/ 尚未创建，跳过"; fi
+
 .PHONY: verify-agent
 verify-agent: ## Agent 硬门禁：test --workspace + clippy -D warnings + fmt --check
 	@cd agent && if command -v cargo >/dev/null; then \
@@ -218,10 +225,12 @@ verify-deploy: ## 部署交付物校验：compose config（helm 若可用则 tem
 	    helm template $(HELM_DIR) >/dev/null && echo "helm ✓"; else echo "helm 未安装，跳过（compose 已过）"; fi
 
 .PHONY: verify-quick
-verify-quick: ## 快速门禁（跳过测试）：四栈 build/typecheck/clippy
+verify-quick: ## 快速门禁（跳过测试）：五栈 build/typecheck/clippy
 	@cd server && go build ./... && go vet ./... && echo "server ✓"
 	@cd client && npx tsc -b --noEmit && echo "client ✓"
 	@cd agent && if command -v cargo >/dev/null; then cargo check --workspace && cargo clippy --workspace -- -D warnings && echo "agent ✓"; fi
+	@if [ -d website ]; then cd website && { [ -d node_modules ] || npm install --no-audit --no-fund --silent; } \
+	  && npx tsc --noEmit && npm run build --silent >/dev/null && echo "website ✓"; fi
 
 .PHONY: e2e
 e2e: ## 协议级 E2E 回归套件（进程内全栈：登录→WS→IM 全流，14 篇信封契约）
