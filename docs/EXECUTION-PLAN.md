@@ -233,3 +233,19 @@
 | I5 | RT+壳+前端 | main dispatch 直读 events_after→wal_history（会话不须运行态）；壳 session_history 透传；bridge loadHistory；store selectSession 即拉 loadHistoryIfEmpty（空流才回填，直播不覆盖）+historyToStreamItem 回合气泡同构映射 | 工作台打开历史/结束/embedded 会话即见全程记录；重启后不再空白 | [x] 2026-11-11（agent 全 workspace 561 例绿+tsc/vite build+壳 fmt/check 绿；mock 历史返空=剧本内存态） |
 | I6 | 文档 | D19 落地注记（会话历史加载）+本批次 | 口径可追溯 | [x] 2026-11-11 |
 | I7 | 真机验收 | 新建任务无启动中/日常打开 embedded 会话见 IM 聊天记录/重启后工作台会话历史在/旧会话（WAL 无 text）降级不报错 | 用户真机走查 | [ ] 待验收 |
+
+## 批次 J：审批/提问卡 session_id 协议修复 + 日常默认用户工作区（2026-11-12 实施完成待真机验收）
+
+> 定案（用户裁决）：①真机定位发现 wire 协议 permission.request/clarify.request 不带
+> session_id——壳无从路由，审批弹框/提问卡在真机壳链路从未弹过（WAL 实证当日 6 次
+> 全 120s timeout；mock 桥自带 sessionId 掩盖）；②日常对话口径修订为 ZCode 式：不绑
+> 项目会话（日常/任务/IM embedded）共用用户级默认工作空间 `~/.baobaowork/workspace`，
+> 不跟随项目——原「日常=无目录整体 8020 拒绝」废除，越界仍 8020 双拦。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|---|---|---|---|
+| J1 | 协议补 session_id | envelope PermissionRequest/ClarifyRequest 加 `session_id`（serde default+空不序列化=旧宿主兼容）；bridge.rs map_event 两处透传（原「不带会话字段 D11 原样」废除）；roundtrip 构造+golden 双契约补断言 | wire 含 sessionId；壳 snake_keys 归一自动带过、前端/壳零改动 | [x] 2026-11-12（bbrt-protocol 30 例绿含 golden 新断言） |
+| J2 | 日常默认用户工作区 | bbrt-sec `sandbox::default_user_workspace()`（env BBW_RT_DEFAULT_WORKSPACE>~/.baobaowork/workspace）；ToolsConfig.default_workspace 可注入（测试 tmp 免写真实 HOME）；pipeline session_env 日常分支=项目同款沙箱覆写（首用 create_dir_all；签名收口不再 Result）；coding.delegate 日常放开（cwd=exec_ws）；loop_runner exec_ws()（委派简报/checkpoint 同口径；记忆路由 ws_path 不动）；project_line/子代理项目行文案改「用户工作空间」；SYSTEM_PROMPT 记忆段不变 | 日常会话工具可用且只困在默认工作区；越界 8020+violation；A 写 B 仍拒 | [x] 2026-11-12（tools_suite 42 绿——日常专项改「区内可用+越界仍拒」；session 12 套绿） |
+| J3 | embedded 恒日常 | ChatPage ensureEmbeddedSession 删「跟随最近项目」恒 workspace=''（sessions 未加载竞态同除） | IM 发起 agent 一律日常=用户工作空间；操作项目=工作台项目会话 | [x] 2026-11-12 |
+| J4 | 文档 | D19 顶部落地注记+§2 联动口径修订+本批次 | 口径可追溯 | [x] 2026-11-12 |
+| J5 | 真机验收 | ①聊天页让 agent 跑命令→审批框 120s 内弹出（allow 后执行成功）②提问卡弹出可作答③日常会话写 ~/.baobaowork/workspace 内文件成功/写区外被拒④embedded 不再出现「跟随最近项目」目录 | 用户真机走查 | [ ] 待验收 |

@@ -317,7 +317,7 @@ pub struct SessionRunner {
 }
 
 impl SessionRunner {
-    /// D19 会话工作目录（空串=日常对话 → None）
+    /// D19 会话工作目录（空串=日常对话 → None）。仅供记忆分级路由（日常=用户级）。
     pub fn ws_path(&self) -> Option<&std::path::Path> {
         if self.workspace.is_empty() {
             None
@@ -326,10 +326,21 @@ impl SessionRunner {
         }
     }
 
-    /// D19 [项目] 行：项目会话=目录；日常=无目录标注
+    /// 执行侧工作目录（2026-11-12 日常=默认用户工作区口径）：项目会话=目录；
+    /// 日常=ZCode 式用户级工作空间（与 tools 管线 session_env 同一解析）。
+    /// 供委派简报/checkpoint/子代理上下文等执行侧使用——记忆路由仍走 ws_path。
+    pub fn exec_ws(&self) -> std::path::PathBuf {
+        if self.workspace.is_empty() {
+            bbrt_sec::sandbox::default_user_workspace()
+        } else {
+            std::path::PathBuf::from(&self.workspace)
+        }
+    }
+
+    /// D19 [项目] 行：项目会话=目录；日常=用户工作空间标注（2026-11-12 改口径）
     fn project_line(&self) -> String {
         if self.workspace.is_empty() {
-            "日常对话（无工作目录）".to_string()
+            format!("日常对话（用户工作空间 {}）", self.exec_ws().display())
         } else {
             format!("workspace: {}", self.workspace)
         }
@@ -1157,15 +1168,8 @@ impl SessionRunner {
         masked: &str,
         _risk: &str,
     ) -> ToolOutcome {
-        // D19：委派=本地编码智能体，必须有工作目录——日常会话直接拒绝
-        if self.workspace.is_empty() {
-            return ToolOutcome::Blocked {
-                code: 8020,
-                summary:
-                    "日常对话未绑定工作目录，coding.delegate 不可用（请在项目会话中委派编码任务）"
-                        .into(),
-            };
-        }
+        // 2026-11-12：日常会话委派放开（原 8020 拒绝废除）——工作目录取
+        // exec_ws（日常=默认用户工作区，与工具沙箱同口径）
         let Some(delegator) = deps.delegator.clone() else {
             return ToolOutcome::Blocked {
                 code: 8030,
@@ -1217,7 +1221,8 @@ impl SessionRunner {
                 };
             }
         };
-        let brief = brief_override.unwrap_or_else(|| parse_brief(call, &self.workspace));
+        let brief =
+            brief_override.unwrap_or_else(|| parse_brief(call, &self.exec_ws().to_string_lossy()));
         let req = DelegateLaunchReq {
             delegate_task_id: run_id.clone(),
             // P0-2①：父会话关联接线（delegate_bridge → LaunchOpts.parent_session_id）
@@ -1288,7 +1293,11 @@ impl SessionRunner {
         // checkpoint_id 随 DelegateEnd 上行（P0-2③：审查卡回滚锚点数据源）
         let mut checkpoint_id: Option<String> = None;
         if let Some(svc) = deps.snapshots.as_ref() {
-            if let Ok(out) = svc.create(&self.session_id, &self.workspace, "delegate") {
+            if let Ok(out) = svc.create(
+                &self.session_id,
+                &self.exec_ws().to_string_lossy(),
+                "delegate",
+            ) {
                 emit_checkpoint(deps, &self.session_id, &out);
                 checkpoint_id = Some(out.checkpoint_id.clone());
             }
@@ -1857,7 +1866,7 @@ impl SessionRunner {
         let Some(svc) = deps.snapshots.as_ref() else {
             return;
         };
-        match svc.pre_edit(&self.session_id, &self.workspace) {
+        match svc.pre_edit(&self.session_id, &self.exec_ws().to_string_lossy()) {
             Ok(Some(out)) => emit_checkpoint(deps, &self.session_id, &out),
             Ok(None) => {}
             Err(_) => {}

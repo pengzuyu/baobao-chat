@@ -227,11 +227,13 @@ export function ChatPage() {
     void useAgentStore.getState().init(); // 数据预取并行（左栏/记忆页用）；不 await
     const sid = await getEmbeddedSessionId(convId!);
     if (sid) return sid; // 映射在=库里有行，RT 复活兜底
-    // D19：workspace 沿用最近一个「项目」会话的目录（跳过日常会话）；无项目历史=日常对话。
-    // 2026-11-11：创建即带来源标题（与xxx的对话/xxx · 群聊）——工作台左栏可辨识
-    const recent = useAgentStore.getState().sessions.find((x) => x.workspace)?.workspace ?? '';
+    // 2026-11-12 日常口径（ZCode 式）：IM embedded 会话恒日常——不跟随项目
+    // （旧「沿用最近项目会话目录」废除：sessions 未加载完时必落空，且口径
+    // 已改为不跟项目走）。日常=bbrt 侧默认用户工作空间 ~/.baobaowork/workspace；
+    // 要操作具体项目目录=ChatHeader 🤖 进工作台开项目会话。
+    // 创建即带来源标题（与xxx的对话/xxx · 群聊）——工作台左栏可辨识
     const created = await useAgentStore.getState().createSession({
-      workspace: recent,
+      workspace: '',
       mode: 'ask',
       title: embeddedTitle(activeConv?.name ?? '', activeConv?.type ?? 1),
     });

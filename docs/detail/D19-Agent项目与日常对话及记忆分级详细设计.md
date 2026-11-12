@@ -5,6 +5,8 @@
 - 关联：08（Agent 总体）/ D08（工作台）/ D09（工具与安全）/ D11（Runtime 内部）/ D13（沙箱）/ D15（记忆双轨）/ D18（IM 内嵌卡）
 - 范围：bbrt 协议+store+memory+session+tools、Tauri 壳、客户端 agent 工作台；**服务端零改动**（D15 口径：记忆本地文件唯一权威）
 
+> **落地注记（2026-11-12 · 日常=默认用户工作区，ZCode 式口径修订）**：原「日常对话=无目录，workspace 类工具整体 8020 拒绝」废除——真机实测 IM embedded 会话全部落日常、agent 什么工具都用不了（用户在私聊/群聊让 agent 干活是主场景）。新口径：**不绑项目的会话（日常/任务/embedded）共用同一用户级默认工作空间 `~/.baobaowork/workspace`**（env `BBW_RT_DEFAULT_WORKSPACE` 可覆盖；bbrt-sec `sandbox::default_user_workspace()`），pipeline `session_env` 日常分支走项目会话同款沙箱覆写（沙箱根=该目录，越界仍 8020 词法+内核双拦）、`coding.delegate` 日常放开（cwd=默认工作区）。**数据模型与记忆分级不动**：`workspace_id` 空=日常判定、工作台双区 UI、记忆路由（日常仍用户级，`ws_path()` 语义保留）原样。前端 ChatPage embedded 建会话废除「跟随最近项目」恒日常。子代理（SessionWorkspaces 未登记）沙箱仍兜底全局根，按主会话路由登记阶段二。
+
 > **落地注记（2026-11-11 · 会话历史加载）**：工作台打开会话此前只显本进程直播流（重启/切列表即空白）。新增协议 `session.history` REQ→`session.history.result`（HistoryItem：user/assistant 原文+tool 名与结果摘要；golden 契约已锁），RT 直读 `agent_event` WAL（会话不须在运行态，历史/结束会话同样可查，与 rename 直落库同口径）；WAL 写入点随之增补——`assistant.done` 加 `text` 回复原文、`tool.result` 加 `ok`/`summary`（旧 WAL 行缺字段渐进降级：assistant 旧轮跳过、tool name-only；recovery 仍只读旧字段不受影响，recovery 借 text 重建上下文留阶段二）。前端 store `selectSession` 即拉 `loadHistoryIfEmpty`（本进程无流时回填，直播中/乐观上屏不覆盖）。IM embedded 会话（D18 与私聊/群聊同一会话身份）在工作台打开即见全程聊天记录——跨端同会话历史互通。mock 桥剧本为内存态不落 WAL，历史返回空（真实链路专用）。
 
 ## 1. 背景与定位
@@ -33,7 +35,7 @@
   - `is_repo`=.git 探测；`name` 缺省=目录名；`trusted` 恒 true（**D19 简化口径**：系统目录选择对话框是显式动作即视为信任；D08 §4.4 精细信任确认——例外目录/AGENTS.md 声明——登记阶段二）。
 - **归属回填**：session.start 带目录时 `agent_session.workspace_id` 回填（修 D11 既留缺口）；恢复路径同样回填。
 - **移除**：`workspace.forget` 只删登记行——历史会话 `workspace_id` 置 NULL（归入日常展示）、记忆分区文件不动。
-- **IM 内嵌卡联动**（D18 口径修订）：embedded 会话 workspace=最近一个**项目**会话的目录（跳过日常），无项目历史=日常（''）。「转到工作台」沿用 createSession（默认日常）。
+- **IM 内嵌卡联动**（2026-11-12 口径再修订）：embedded 会话**恒日常（''）**——不跟随项目（旧「沿用最近项目会话目录」废除）；日常=默认用户工作区（见顶部注记）。「转到工作台」沿用同一 embedded 会话身份。
 
 ## 3. 沙箱按会话路由（安全核心）
 

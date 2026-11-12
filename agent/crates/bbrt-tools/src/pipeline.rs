@@ -55,7 +55,8 @@ pub struct PipelineExecutor {
     >,
 }
 
-/// D19 workspace 类工具（依赖会话工作目录做沙箱根；日常会话整体不可用）
+/// D19 workspace 类工具（依赖会话工作目录做沙箱根；项目会话=项目目录，
+/// 日常会话=默认用户工作区——2026-11-12 修订）
 const WORKSPACE_BOUND_TOOLS: &[&str] = &[
     "read_file",
     "list_dir",
@@ -142,28 +143,32 @@ impl PipelineExecutor {
         policy
     }
 
-    /// D19 按会话解析执行环境（workspace 类工具用）：
+    /// D19 按会话解析执行环境（workspace 类工具用；2026-11-12 修订）：
     /// - 项目会话 → 克隆 env 覆写 workspace/path_policy（沙箱根=该项目目录）；
-    /// - 日常会话 → Err（8020：未绑定工作目录）；
-    /// - 未装配表/未登记会话 → 兜底全局 env（单测/嵌入式旧行为）。
-    fn session_env(&self, session_id: &str) -> Result<ExecEnv, ToolBlock> {
+    /// - 日常会话 → 默认用户工作区（ZCode 式口径：不绑项目会话共用的用户级
+    ///   工作空间——原 8020 整体拒绝废除；沙箱根=该目录，越界仍 8020 词法+内核双拦）；
+    /// - 未装配表/未登记会话 → 兜底全局 env（单测/嵌入式旧行为；子代理按主会话
+    ///   路由沙箱登记阶段二）。
+    fn session_env(&self, session_id: &str) -> ExecEnv {
         let Some(reg) = &self.config.session_workspaces else {
-            return Ok(self.env.clone());
+            return self.env.clone();
         };
-        match reg.get(session_id) {
-            None => Ok(self.env.clone()),
-            Some(None) => Err(builtin::deny(
-                bbrt_sec::errors::CODE_SANDBOX_DENIED,
-                "日常对话未绑定工作目录，该工具不可用（请在项目会话中操作文件/命令）",
-            )),
-            Some(Some(ws)) => {
-                let real = std::fs::canonicalize(&ws).unwrap_or_else(|_| ws.clone());
-                let mut env = self.env.clone();
-                env.workspace = real.clone();
-                env.path_policy = self.policy_for(&real);
-                Ok(env)
-            }
-        }
+        let ws = match reg.get(session_id) {
+            None => return self.env.clone(),
+            Some(None) => self
+                .config
+                .default_workspace
+                .clone()
+                .unwrap_or_else(bbrt_sec::sandbox::default_user_workspace),
+            Some(Some(ws)) => ws.clone(),
+        };
+        // 首用确保目录存在（用户工作区可能尚未创建；项目目录天然存在）
+        let _ = std::fs::create_dir_all(&ws);
+        let real = std::fs::canonicalize(&ws).unwrap_or(ws);
+        let mut env = self.env.clone();
+        env.workspace = real.clone();
+        env.path_policy = self.policy_for(&real);
+        env
     }
 
     /// D19 会话项目目录（memory_save 作用域路由用）：日常/未登记 → None（用户级）
@@ -285,7 +290,8 @@ impl ToolExecutor for PipelineExecutor {
 
     /// 执行（§6 步骤 5-7：沙箱校验 + 执行 + 脱敏；权限路径由调用方保证）。
     /// D19：workspace 类工具按会话解析执行环境——项目会话沙箱根=该项目目录
-    /// （A 项目会话写 B 项目 → 预检 8020 + Seatbelt 内核双拦），日常会话整体拒绝。
+    /// （A 项目会话写 B 项目 → 预检 8020 + Seatbelt 内核双拦），日常会话=
+    /// 默认用户工作区同款覆写（2026-11-12 修订：原整体拒绝废除）。
     fn execute(&self, _mode: bbrt_sec::gate::PermissionMode, call: &ToolInvocation) -> ToolOutcome {
         let args = match Self::parse_args(call) {
             Ok(v) => v,
@@ -293,17 +299,7 @@ impl ToolExecutor for PipelineExecutor {
         };
         let ws_bound = WORKSPACE_BOUND_TOOLS.contains(&call.name.as_str());
         let env = if ws_bound {
-            match self.session_env(&call.session_id) {
-                Ok(e) => e,
-                Err(b) => {
-                    self.env.record_violation(
-                        bbrt_sec::sandbox::launcher::ViolationKind::Path,
-                        b.code,
-                        format!("{} 会话未绑定工作目录: {}", call.name, b.message),
-                    );
-                    return blocked(&b);
-                }
-            }
+            self.session_env(&call.session_id)
         } else {
             self.env.clone()
         };

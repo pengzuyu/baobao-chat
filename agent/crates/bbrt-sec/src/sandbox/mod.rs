@@ -18,3 +18,18 @@ pub use launcher::{
 pub use network::{Cidr, NetPolicy, NetworkError};
 pub use path::{PathError, PathIntent, PathPolicy};
 pub use resource::ResourceLimits;
+
+/// 默认用户工作区（2026-11-12 ZCode 式口径）：不绑项目的会话——日常对话/任务/
+/// IM embedded——共用同一用户级工作空间，不跟随项目走（要操作具体项目=项目会话）。
+/// 解析顺序：env `BBW_RT_DEFAULT_WORKSPACE`（测试/运维逃生口）> `~/.baobaowork/workspace`。
+/// 只解析路径；目录确保（create_dir_all）由使用侧在首次执行前完成。
+pub fn default_user_workspace() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("BBW_RT_DEFAULT_WORKSPACE") {
+        let p = p.trim();
+        if !p.is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::Path::new(&home).join(".baobaowork/workspace")
+}

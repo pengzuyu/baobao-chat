@@ -1064,31 +1064,68 @@ fn d19_项目会话沙箱根只认本项目() {
     );
 }
 
-/// 日常会话（无目录）：workspace 类工具整体 8020 拒绝（专用文案）。
+/// 日常会话（无目录）：2026-11-12 ZCode 式口径修订——workspace 类工具挂
+/// 默认用户工作区（cfg.default_workspace 注入 tmp 免写真实 HOME）：区内可用、
+/// 越界仍 8020 双拦（原「整体拒绝」废除）。
 #[test]
-fn d19_日常会话workspace类工具拒绝() {
+fn d19_日常会话默认用户工作区可用且越界仍拒() {
     let ws = tempfile::tempdir().expect("ws");
+    let daily = tempfile::tempdir().expect("daily");
     let sink = Arc::new(MemoryViolationSink::new());
     let mut cfg = ToolsConfig::new(ws.path());
     cfg.policy = Some(ToolPolicy::default());
     cfg.violation_sink = Some(sink.clone());
     cfg.session_workspaces = Some(ws_registry(ws.path()));
+    cfg.default_workspace = Some(daily.path().to_path_buf());
     let ex = PipelineExecutor::new(Arc::new(cfg));
 
-    for tool in ["read_file", "run_command", "git_status", "search_files"] {
-        let args = match tool {
-            "run_command" => serde_json::json!({"command": "echo hi"}),
-            _ => serde_json::json!({"path": "/etc/hostname"}),
-        };
-        let (code, msg) =
-            blocked_code(ex.execute(PermissionMode::Ask, &call_in(tool, args, "sess-daily")));
-        assert_eq!(code, 8020, "{tool} 日常会话应 8020");
-        assert!(
-            msg.contains("日常对话"),
-            "{tool} 拒绝文案应指向日常对话: {msg}"
-        );
-    }
-    assert!(sink.has_code(8020), "violation 应记录日常拦截");
+    // 区内写 + 读：应成功（沙箱根=默认用户工作区）
+    let inside = daily.path().join("note.md");
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "write_file",
+            serde_json::json!({
+                "path": inside.to_string_lossy(), "content": "hi daily"
+            }),
+            "sess-daily",
+        ),
+    ));
+    assert!(inside.exists(), "默认工作区内写应成功");
+
+    // 区内命令：cwd=默认工作区（产物落区内验证）
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "run_command",
+            serde_json::json!({"command": "touch cwd-probe.txt"}),
+            "sess-daily",
+        ),
+    ));
+    assert!(
+        daily.path().join("cwd-probe.txt").exists(),
+        "命令 cwd 应=默认用户工作区"
+    );
+
+    // 越界（兜底根外）：8020 + 不落盘 + violation
+    let outside = ws.path().join("escape.txt");
+    let (code, msg) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "write_file",
+            serde_json::json!({
+                "path": outside.to_string_lossy(), "content": "x"
+            }),
+            "sess-daily",
+        ),
+    ));
+    assert_eq!(code, 8020, "越界应 8020");
+    assert!(!outside.exists(), "越界路径不应被写入");
+    assert!(
+        msg.contains("8020") || msg.contains("越界") || msg.contains("白名单"),
+        "{msg}"
+    );
+    assert!(sink.has_code(8020), "violation 应记录越界拦截");
 }
 
 /// memory_save 分级：项目会话 project 类落项目分区、user 类落用户级；
