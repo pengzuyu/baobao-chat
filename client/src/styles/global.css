@@ -2410,11 +2410,12 @@ body {
 }
 
 /* 上翻加载提示 + 回到底部浮标（INT-IM-13） */
-.load-older-hint {
+/* 历史尽头提示（2026-11-12 用户口径：替代旧 load-older-hint 加载提醒——到底才显示） */
+.no-more-hint {
   text-align: center;
   color: var(--bbw-gray-5);
   font-size: var(--bbw-font-12);
-  padding: var(--bbw-space-2) 0;
+  padding: var(--bbw-space-2) 0 var(--bbw-space-3);
 }
 
 /* 滚动区包裹层（agent-web messages-wrap 同构）：浮标定位祖先，恒浮于输入框正上方 */

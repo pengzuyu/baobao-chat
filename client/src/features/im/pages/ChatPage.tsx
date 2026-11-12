@@ -390,7 +390,16 @@ export function ChatPage() {
     };
   }, [agentRunning]);
 
-  /** 触顶加载更早（INT-IM-13：上滑翻页 prepend；滚动触发与提示条点击共用） */
+  /** 首屏即判历史尽头：初始页不足一页（50 条）= 更早已无记录——短会话不必等触顶
+   *  尝试才知道到底（2026-11-12 用户口径：到底即顶部居中提示）。已翻过页
+   *  （oldestSeqRef 有锚）则不重置——避免会话数据刷新把已判定的尽头翻回去 */
+  useEffect(() => {
+    if (msgQuery.data && oldestSeqRef.current === null) {
+      setHasOlder(msgQuery.data.items.length >= 50);
+    }
+  }, [msgQuery.data]);
+
+  /** 触顶加载更早（INT-IM-13：上滑翻页 prepend；滚动触顶 40px 静默触发） */
   const loadOlder = useCallback(() => {
     const el = streamRef.current;
     if (!el || !convId || !hasOlder || loadingOlderRef.current) return;
@@ -865,10 +874,12 @@ export function ChatPage() {
         if (msActive && e.target === e.currentTarget) exitMultiSelect();
       }}
     >
-      {hasOlder && messages.length > 0 ? (
-        <button type="button" className="load-older-hint" onClick={loadOlder}>
-          上滑或点击加载更早消息
-        </button>
+      {/* 历史尽头提示（2026-11-12 用户口径：去掉「上滑/点击加载」提醒——滑到顶 40px
+          已静默自动加载；没有更早历史时顶部居中提示到底） */}
+      {messages.length > 0 && !hasOlder ? (
+        <div className="no-more-hint" data-testid="no-more-hint">
+          已经没有更多聊天记录了
+        </div>
       ) : null}
       {messages.map((m, i) => (
         <Fragment key={`${convId}:${m.seq}`}>
