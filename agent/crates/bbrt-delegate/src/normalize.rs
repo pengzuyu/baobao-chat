@@ -124,6 +124,8 @@ pub fn to_runtime_message(ev: &NormalizedEvent, ctx: &EventCtx) -> Option<Runtim
             ok,
             summary,
         } => RuntimeToHost::ToolResult {
+            // 2026-11-12：协议补会话字段（宿主壳路由用——同 bbrt/src/bridge.rs 注记）
+            session_id: ctx.session_id.clone(),
             call_id: call_id.clone(),
             ok: *ok,
             summary: summary.clone(),

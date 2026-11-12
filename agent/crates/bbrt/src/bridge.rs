@@ -191,6 +191,7 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             source: bbrt_protocol::ToolSource::Local,
         },
         SessionEvent::ToolResult {
+            session_id,
             call_id,
             ok,
             summary,
@@ -198,8 +199,10 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             exit_code,
             duration_ms,
             blocked_code,
-            ..
         } => RuntimeToHost::ToolResult {
+            // 2026-11-12 补：同 permission.request——wire 无会话字段则宿主壳无法
+            // 路由，前端工具行永停 running（真机「命令执行完圈圈不停」根因）
+            session_id: session_id.clone(),
             call_id: call_id.clone(),
             ok: *ok,
             summary: summary.clone(),

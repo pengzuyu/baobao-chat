@@ -187,6 +187,7 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             source: ToolSource::Local,
         },
         RuntimeToHost::ToolResult {
+            session_id: "sess-1".into(),
             call_id: "call-1".into(),
             ok: false,
             summary: "被危险命令规则阻断".into(),
@@ -511,6 +512,7 @@ fn golden_tool_call_and_result() {
     );
     golden(
         &RuntimeToHost::ToolResult {
+            session_id: "s".into(),
             call_id: "c1".into(),
             ok: false,
             summary: "命令被阻断".into(),
@@ -523,7 +525,7 @@ fn golden_tool_call_and_result() {
             duration_ms: None,
         },
         json!({
-            "type":"tool.result","callId":"c1","ok":false,"summary":"命令被阻断",
+            "type":"tool.result","sessionId":"s","callId":"c1","ok":false,"summary":"命令被阻断",
             "truncated":false,"exitCode":9,"blocked":{"rule":"sudo","kind":"rule"}
         }),
     );

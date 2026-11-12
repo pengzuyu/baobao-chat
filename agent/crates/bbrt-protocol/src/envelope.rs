@@ -783,6 +783,10 @@ pub enum RuntimeToHost {
     /// 工具结果摘要（UNT）
     #[serde(rename = "tool.result", rename_all = "camelCase")]
     ToolResult {
+        /// 发起会话（2026-11-12 补：与 permission.request 同因——wire 无会话字段
+        /// 则宿主壳无法路由，前端工具行永停 running（圈圈不停）；缺省空串兼容旧宿主）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        session_id: String,
         call_id: String,
         ok: bool,
         summary: String,
