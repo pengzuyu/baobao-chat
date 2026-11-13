@@ -681,6 +681,11 @@ pub enum HostToRuntime {
     #[serde(rename = "mcp.config", rename_all = "camelCase")]
     McpConfig { servers: Vec<McpServerWire> },
 
+    /// 个人 MCP server 连接测试（REQ→mcp.test.result；D26 §6：一次性连接即弃
+    /// ——TLS/TOKEN 动态注入/懒连接全走生产代码路径，测的就是真实链路）
+    #[serde(rename = "mcp.test", rename_all = "camelCase")]
+    McpTest { server: McpServerWire },
+
     /// 健康（REQ；宿主每 20s 发，5s 未回 pong 判不健康）
     #[serde(rename = "ping")]
     Ping,
@@ -1109,6 +1114,17 @@ pub enum RuntimeToHost {
     RunsListResult {
         #[serde(default)]
         items: Vec<Value>,
+    },
+
+    /// mcp.test 回执（D26 §6：ok=false 时 error 带原因；tools 为短名清单）
+    #[serde(rename = "mcp.test.result", rename_all = "camelCase")]
+    McpTestResult {
+        name: String,
+        ok: bool,
+        #[serde(default)]
+        tools: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
 
     // -- D19 项目/日常双区回执 --

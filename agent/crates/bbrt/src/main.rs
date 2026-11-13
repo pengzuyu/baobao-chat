@@ -952,6 +952,43 @@ fn dispatch(
             mcp.reconfigure(configs);
             None
         }
+        // 个人 MCP server 连接测试（REQ；D26 §6）：一次性 McpConnection 即弃
+        // ——TLS/TOKEN 动态注入全走生产代码路径，测的就是真实链路。stdio 冷启动
+        // （node ~1s）由宿主 request 侧超时兜底；不套租户策略（测连通与工具发现）
+        HostToRuntime::McpTest { server } => {
+            let tokens: bbrt_mcp::TokenProvider = {
+                let obo = Arc::clone(obo);
+                Arc::new(move || {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    obo.lock().ok().and_then(|c| c.get(now).map(str::to_string))
+                })
+            };
+            let cfg = wire_to_mcp_config(&server);
+            let name = server.name.clone();
+            let mk = |ok: bool, tools: Vec<String>, error: Option<String>| {
+                Some(RuntimeToHost::McpTestResult {
+                    name: name.clone(),
+                    ok,
+                    tools,
+                    error,
+                })
+            };
+            match bbrt_mcp::McpConnection::connect(&cfg, tokens) {
+                Ok(mut conn) => match conn.list_tools() {
+                    Ok(tools) => mk(
+                        true,
+                        // server 侧原工具名（短名；全名= mcp.{name}.{tool} 可推导）
+                        tools.into_iter().map(|t| t.name).collect(),
+                        None,
+                    ),
+                    Err(e) => mk(false, vec![], Some(format!("工具发现失败: {e}"))),
+                },
+                Err(e) => mk(false, vec![], Some(format!("连接失败: {e}"))),
+            }
+        }
         _ => None, // 其余 REQ 阶段二；NTF 误投忽略
     }
 }
