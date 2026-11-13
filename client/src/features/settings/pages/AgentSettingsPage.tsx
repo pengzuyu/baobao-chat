@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { Select } from 'antd';
-import { PlugZap, Plus, Trash2, Zap } from 'lucide-react';
+import { Pencil, PlugZap, Plus, Save, Trash2, Undo2, Zap } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import {
@@ -18,10 +18,12 @@ import {
   fetchMyProviders,
   fetchSharedProviders,
   patchAIDefault,
+  probeMyProvider,
   probeMyProviderRaw,
+  updateMyProvider,
   type AIDefaultSetting,
 } from '../api/ai';
-import { PROVIDER_PRESETS, type AIProvider } from '../../admin/model/types';
+import { PROVIDER_PRESETS, presetKeyOfBaseUrl, type AIProvider } from '../../admin/model/types';
 import { ProviderModelsEditor } from '../../admin/components/ProviderModelsEditor';
 import { CloudBackupCard } from '../components/CloudBackupCard';
 
@@ -180,6 +182,8 @@ function MyProvidersCard() {
   const [mine, setMine] = useState<AIProvider[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [vendor, setVendor] = useState('zhipu');
+  const [editingId, setEditingId] = useState(''); // 空=新增；有值=编辑该供应商
+  const [editingKey, setEditingKey] = useState(false); // 编辑态是否重填密钥
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -203,7 +207,20 @@ function MyProvidersCard() {
     void reload();
   }, []);
 
-  /** 选厂商：预设自动填名称与 Base URL */
+  const resetForm = () => {
+    setEditingId('');
+    setEditingKey(false);
+    setVendor('zhipu');
+    setName('');
+    setBaseUrl('');
+    setApiKey('');
+    setCandidates([]);
+    setModels([]);
+    setConnResult(null);
+    setError('');
+  };
+
+  /** 选厂商：预设自动填名称与 Base URL，清空候选与已选（切换=重来，与 admin 侧一致） */
   const pickVendor = (key: string) => {
     const preset = PROVIDER_PRESETS.find((p) => p.key === key) ?? PROVIDER_PRESETS[2];
     setVendor(key);
@@ -214,7 +231,22 @@ function MyProvidersCard() {
     setConnResult(null);
   };
 
-  /** 探测：连通验证并拉取上游模型清单（原两按钮同一接口，合一；候选缺项可手动输入） */
+  /** 行内「编辑」：载入表单（密钥占位提示已保存；探测走服务端已存密钥） */
+  const edit = (p: AIProvider) => {
+    setEditingId(p.id);
+    setEditingKey(false);
+    setVendor(presetKeyOfBaseUrl(p.baseUrl));
+    setName(p.name);
+    setBaseUrl(p.baseUrl);
+    setApiKey('');
+    setModels(p.models.map((m) => m.id));
+    setCandidates(p.models.map((m) => m.id));
+    setConnResult(null);
+    setError('');
+  };
+
+  /** 探测：连通验证并拉取上游模型清单（原两按钮同一接口，合一；候选缺项可手动输入）。
+   * 编辑态未重填密钥时用服务端已存密钥（probeMyProvider(id)） */
   const probe = async () => {
     if (!baseUrl.trim()) {
       setError('先填 Base URL');
@@ -224,7 +256,9 @@ function MyProvidersCard() {
     setError('');
     const startedAt = Date.now();
     try {
-      const list = await probeMyProviderRaw(baseUrl.trim(), apiKey.trim());
+      const list = editingId && !editingKey
+        ? await probeMyProvider(editingId)
+        : await probeMyProviderRaw(baseUrl.trim(), apiKey.trim());
       setConnResult({ ok: true, ms: Date.now() - startedAt, models: list.length });
       if (list.length === 0) setError('上游未返回模型清单（可手动输入模型 ID）');
       setCandidates(list);
@@ -246,16 +280,13 @@ function MyProvidersCard() {
     setSaving(true);
     setError('');
     try {
-      await createMyProvider({ name: n, kind: 'openai_compatible', baseUrl: b, apiKey: apiKey.trim() || undefined, models: models.map((id) => ({ id })) });
-      setName('');
-      setBaseUrl('');
-      setApiKey('');
-      setCandidates([]);
-      setModels([]);
-      setConnResult(null);
+      const input = { name: n, kind: 'openai_compatible' as const, baseUrl: b, apiKey: apiKey.trim() || undefined, models: models.map((id) => ({ id })) };
+      if (editingId) await updateMyProvider(editingId, input);
+      else await createMyProvider(input);
+      resetForm();
       await reload();
     } catch (err) {
-      setError(errText(err, '添加失败'));
+      setError(errText(err, editingId ? '保存失败' : '添加失败'));
     } finally {
       setSaving(false);
     }
@@ -265,6 +296,7 @@ function MyProvidersCard() {
     setError('');
     try {
       await deleteMyProvider(id);
+      if (editingId === id) resetForm();
       await reload();
     } catch (err) {
       setError(errText(err, '删除失败'));
@@ -286,7 +318,7 @@ function MyProvidersCard() {
                 <th>Base URL</th>
                 <th>模型</th>
                 <th>密钥</th>
-                <th style={{ width: 80 }}>操作</th>
+                <th style={{ width: 140 }}>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -297,6 +329,9 @@ function MyProvidersCard() {
                   <td>{p.models.map((m) => m.id).join('、')}</td>
                   <td className="admin-mono">{p.keyMask || '—'}</td>
                   <td>
+                    <Button variant="secondary" onClick={() => edit(p)}>
+                      <Pencil size={12} /> 编辑
+                    </Button>{' '}
                     <Button variant="danger" onClick={() => void remove(p.id)}>
                       <Trash2 size={13} /> 删除
                     </Button>
@@ -321,13 +356,28 @@ function MyProvidersCard() {
         </select>
         <input className="bbw-input" style={{ width: 130 }} value={name} placeholder="名称（随厂商自动填）" onChange={(e) => setName(e.target.value)} />
         <input className="bbw-input" style={{ width: 215 }} value={baseUrl} placeholder={vendor === 'custom' ? 'Base URL（https://…/v1）' : 'Base URL（自动填，可改）'} onChange={(e) => setBaseUrl(e.target.value)} />
-        <input className="bbw-input" style={{ width: 190 }} type="password" value={apiKey} placeholder="API Key" onChange={(e) => setApiKey(e.target.value)} />
+        <input
+          className="bbw-input"
+          style={{ width: 190 }}
+          type="password"
+          value={apiKey}
+          placeholder={editingId && !editingKey ? '密钥已保存（不改则留空）' : 'API Key'}
+          onChange={(e) => {
+            setEditingKey(true);
+            setApiKey(e.target.value);
+          }}
+        />
         <Button variant="secondary" onClick={() => void probe()} loading={probing}>
           <PlugZap size={13} /> 测试连接并拉取模型
         </Button>
         <Button onClick={() => void submit()} loading={saving}>
-          <Plus size={13} /> 添加
+          {editingId ? <Save size={13} /> : <Plus size={13} />} {editingId ? '保存修改' : '添加'}
         </Button>
+        {editingId ? (
+          <Button variant="secondary" onClick={resetForm}>
+            <Undo2 size={13} /> 取消
+          </Button>
+        ) : null}
       </div>
       {connResult ? (
         <div className="settings-row__desc" style={{ marginBottom: 6 }}>
