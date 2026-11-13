@@ -8,7 +8,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Alert, Drawer, Form, Input, Select, Table, Tag } from 'antd';
+import { Alert, Card, Drawer, Flex, Form, Input, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlugZap, Plus, Save, Trash2 } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
@@ -23,11 +23,13 @@ import { PROVIDER_PRESETS, presetKeyOfBaseUrl, type AIProvider } from '../model/
 
 export function AiProvidersPage() {
   return (
-    <div className="admin-policies">
-      <header className="admin-page__header">
-        <h2 className="admin-page__title">AI 供应商</h2>
-        <span className="admin-page__meta">公司级统一接入 · 默认模型主备路由 · 密钥服务端加密（19 篇 §6.5 v0.1）</span>
-      </header>
+    <div>
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          AI 供应商
+        </Typography.Title>
+        <Typography.Text type="secondary">公司级统一接入 · 默认模型主备路由 · 密钥服务端加密（19 篇 §6.5 v0.1）</Typography.Text>
+      </Flex>
       <ProvidersPanel />
       <RoutesPanel />
     </div>
@@ -190,9 +192,9 @@ function ProvidersPanel() {
   };
 
   const columns: ColumnsType<AIProvider> = [
-    { title: 'ID', dataIndex: 'id', width: 60, render: (v: string) => <span className="admin-mono">{v}</span> },
+    { title: 'ID', dataIndex: 'id', width: 60, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
     { title: '名称', dataIndex: 'name' },
-    { title: 'Base URL', dataIndex: 'baseUrl', render: (v: string) => <span className="admin-mono">{v}</span> },
+    { title: 'Base URL', dataIndex: 'baseUrl', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
     {
       title: '模型',
       dataIndex: 'models',
@@ -206,7 +208,7 @@ function ProvidersPanel() {
         </>
       ),
     },
-    { title: '密钥', dataIndex: 'keyMask', render: (v: string) => <span className="admin-mono">{v || '—'}</span> },
+    { title: '密钥', dataIndex: 'keyMask', render: (v: string) => (v ? <Typography.Text code>{v}</Typography.Text> : '—') },
     {
       title: '状态',
       dataIndex: 'status',
@@ -235,14 +237,20 @@ function ProvidersPanel() {
 
   return (
     <>
-      <section className="admin-panel">
-        <div className="admin-panel__title">
-          供应商（公司级）
-          <span className="admin-panel__meta">OpenAI 兼容（GLM/Qwen/DeepSeek/vLLM）· 密钥 AES-256-GCM 加密落库</span>
-          <Button style={{ marginLeft: 'auto' }} onClick={openCreate} data-testid="ai-prov-new">
+      <Card
+        size="small"
+        title={
+          <Space size={8}>
+            供应商（公司级）
+            <Typography.Text type="secondary">OpenAI 兼容（GLM/Qwen/DeepSeek/vLLM）· 密钥 AES-256-GCM 加密落库</Typography.Text>
+          </Space>
+        }
+        extra={
+          <Button onClick={openCreate} data-testid="ai-prov-new">
             <Plus size={13} /> 新增供应商
           </Button>
-        </div>
+        }
+      >
         <StateView
           state={state}
           skeleton={<SkeletonList count={4} />}
@@ -260,7 +268,7 @@ function ProvidersPanel() {
             pagination={{ pageSize: 20, hideOnSinglePage: true }}
           />
         </StateView>
-      </section>
+      </Card>
       {/* 新增/编辑抽屉：字段纵向排布，关闭即复位（destroyOnClose 清手填输入态） */}
       <Drawer
         title={form.id ? `编辑供应商 #${form.id}` : '新增供应商'}
@@ -310,16 +318,16 @@ function ProvidersPanel() {
               data-testid="ai-prov-key"
             />
           </Form.Item>
-          <div className="ai-prov-form__probe">
+          <Space size={8} style={{ marginBottom: 8 }}>
             <Button variant="secondary" onClick={() => void probe()} loading={probing} data-testid="ai-prov-probe">
               <PlugZap size={13} /> 测试连接并拉取模型
             </Button>
             {connResult ? (
-              <span className="admin-page__meta" data-testid="ai-prov-conn">
+              <Typography.Text type="secondary" data-testid="ai-prov-conn">
                 ✅ 连接成功（{connResult.ms}ms · 上游 {connResult.models} 个模型）
-              </span>
+              </Typography.Text>
             ) : null}
-          </div>
+          </Space>
           <Form.Item label="模型清单（探测点选或手动输入——上游清单常不全，如智谱免费 Flash 系须手填）">
             <ProviderModelsEditor
               models={form.models}
@@ -438,12 +446,12 @@ function RoutesPanel() {
         const d = draft[t.tier];
         return (
           <div>
-            <div className="admin-page__meta" style={{ marginBottom: 2 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
               {t.label}
-            </div>
-            <div className="admin-panel__note" style={{ marginBottom: 4 }}>
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
               {t.desc}
-            </div>
+            </Typography.Text>
             <Select
               style={{ width: 180 }}
               placeholder="选择供应商…"
@@ -495,11 +503,16 @@ function RoutesPanel() {
 
   return (
     <StateView state={state} skeleton={<SkeletonList count={2} />} emptyText="" error={provQuery.error ?? routesQuery.error} onRetry={() => { void provQuery.refetch(); void routesQuery.refetch(); }}>
-      <section className="admin-panel" style={{ marginTop: 16 }}>
-        <div className="admin-panel__title">
-          默认模型（全员路由）
-          <span className="admin-panel__meta">档位别名 bbw-fast/bbw-strong/bbw-embed/bbw-rerank → 此处主选；主选失败自动切备选（§4.4 降级链）；embed/rerank 可选——留空=沿用现有配置/内置兜底</span>
-        </div>
+      <Card
+        size="small"
+        style={{ marginTop: 16 }}
+        title={
+          <Space size={8}>
+            默认模型（全员路由）
+            <Typography.Text type="secondary">档位别名 bbw-fast/bbw-strong/bbw-embed/bbw-rerank → 此处主选；主选失败自动切备选（§4.4 降级链）；embed/rerank 可选——留空=沿用现有配置/内置兜底</Typography.Text>
+          </Space>
+        }
+      >
         <Table
           rowKey="tier"
           columns={routesColumns}
@@ -508,13 +521,13 @@ function RoutesPanel() {
           size="middle"
         />
         {error ? <Alert type="error" showIcon message={error} style={{ marginTop: 8 }} /> : null}
-        <div className="admin-loadmore" style={{ marginTop: 8 }}>
+        <Flex gap={12} align="center" style={{ marginTop: 8 }}>
           <Button onClick={submit} loading={put.isPending} data-testid="ai-routes-save">
             <Save size={13} /> 保存默认路由
           </Button>
-          {put.isSuccess && !error ? <span className="admin-page__meta" style={{ marginLeft: 10 }}>已保存（版本化生效）</span> : null}
-        </div>
-      </section>
+          {put.isSuccess && !error ? <Typography.Text type="secondary">已保存（版本化生效）</Typography.Text> : null}
+        </Flex>
+      </Card>
     </StateView>
   );
 }

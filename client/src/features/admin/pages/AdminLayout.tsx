@@ -1,11 +1,14 @@
 /**
  * 管理台壳（D10 阶段一务实版，路由 /admin/*）：
- * - 左侧二级导航（复用 settings-nav 样式骨架）：仪表盘/用户/批量导入/角色/组织/公告/Agent/知识库/策略/用量/审计
+ * - 左侧二级导航：仪表盘/用户/批量导入/角色/组织/公告/Agent/知识库/策略/用量/审计
  * - 内容区 <Outlet/>；一级"管理"入口显隐由 MainLayout 按 me.perms admin:* 判定
  * - 阶段一无 perm.changed 实时显隐/二次验证票据条（取舍登记，见 D10 §3.0 裁剪）
+ * D26-O2 补充：导航换 antd Menu（原 settings-nav 自研样式退役）；布局内联化。
  */
 
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Menu } from 'antd';
+import type { MenuProps } from 'antd';
 import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, Puzzle, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
@@ -32,30 +35,37 @@ const TABS = [
 
 export function AdminLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
   // 左栏拖拽调宽（S 档导航转横条不参与——内联宽度会击穿 width:100% 媒体规则）
   const navSplit = useSplitWidth('admin-nav', 208, 170, 300);
   const bp = useBreakpoint();
   const navResizable = bp !== 'S';
+
+  const items: MenuProps['items'] = TABS.map((tab) => ({
+    key: tab.to,
+    icon: <tab.icon size={15} strokeWidth={1.8} />,
+    label: tab.label,
+  }));
+  const selectedKey =
+    [...TABS]
+      .filter((t) => (location.pathname + '/').startsWith(t.to + '/') || ('end' in t && t.end && location.pathname === t.to))
+      .sort((a, b) => b.to.length - a.to.length)[0]?.to ?? '/admin';
+
   return (
-    <div className="settings-page admin-page">
-      <aside className="settings-nav" style={navResizable ? { width: navSplit.width } : undefined}>
-        <div className="settings-nav__title">管理后台</div>
-        <nav className="settings-nav__list">
-          {TABS.map((tab) => (
-            <NavLink
-              key={tab.to}
-              to={tab.to}
-              end={'end' in tab ? tab.end : false}
-              className={({ isActive }) => `settings-nav__item${isActive ? ' settings-nav__item--active' : ''}`}
-            >
-              <tab.icon size={16} strokeWidth={1.8} />
-              {tab.label}
-            </NavLink>
-          ))}
-        </nav>
-      </aside>
+    <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
+      {navResizable ? (
+        <Menu
+          mode="inline"
+          style={{ width: navSplit.width, flexShrink: 0 }}
+          items={items}
+          selectedKeys={[selectedKey]}
+          onClick={(e) => navigate(e.key)}
+        />
+      ) : (
+        <Menu mode="horizontal" style={{ flexShrink: 0 }} items={items} selectedKeys={[selectedKey]} onClick={(e) => navigate(e.key)} />
+      )}
       {navResizable ? <SplitHandle bind={navSplit.bind} /> : null}
-      <div className="settings-body admin-body">
+      <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '16px 20px' }}>
         <ErrorBoundary resetKey={location.pathname}>
           <Outlet />
         </ErrorBoundary>

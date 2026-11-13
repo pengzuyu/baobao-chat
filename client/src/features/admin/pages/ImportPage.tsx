@@ -8,7 +8,7 @@
 
 import { useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { Alert, Input, Table, Tag } from 'antd';
+import { Alert, Flex, Input, Space, Table, Tag, Typography } from 'antd';
 import { ArrowRight, FileUp } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
@@ -103,16 +103,18 @@ export function ImportPage() {
   };
 
   return (
-    <div className="admin-page__section" data-testid="admin-import">
-      <div className="admin-page__head">
-        <h2>批量导入用户</h2>
-        <span className="admin-import__hint">CSV 每行：工号,姓名[,邮箱] · ≤100 行/次 · 初始口令=工号+!BBW</span>
-      </div>
+    <div data-testid="admin-import">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          批量导入用户
+        </Typography.Title>
+        <Typography.Text type="secondary">CSV 每行：工号,姓名[,邮箱] · ≤100 行/次 · 初始口令=工号+!BBW</Typography.Text>
+      </Flex>
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
 
       {step === 'paste' ? (
-        <>
-          <div className="admin-import__file">
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space size={8} wrap>
             <input
               ref={fileRef}
               type="file"
@@ -126,16 +128,15 @@ export function ImportPage() {
             </Button>
             {excelRows ? (
               <>
-                <span className="admin-import__filename" data-testid="import-file-name">{fileName}</span>
+                <Typography.Text data-testid="import-file-name">{fileName}</Typography.Text>
                 <Button variant="secondary" size="small" onClick={backToPaste}>
                   改用粘贴
                 </Button>
               </>
             ) : null}
-          </div>
+          </Space>
           {excelRows ? null : (
             <Input.TextArea
-              className="admin-import__input"
               autoSize={{ minRows: 12, maxRows: 24 }}
               placeholder={'# 示例（# 开头为注释行）\n10021,张三,zhang@corp.io\n10022,李四'}
               value={text}
@@ -143,13 +144,11 @@ export function ImportPage() {
               data-testid="import-csv-input"
             />
           )}
-          <div className="admin-import__meta">
-            <FileUp size={14} /> 解析 {parsed.rows.length} 行（{excelRows ? 'Excel' : 'CSV 粘贴'}）
-            {parsed.bad > 0 ? <span className="admin-import__bad">（{parsed.bad} 行格式非法将被跳过）</span> : null}
-          </div>
-          <div className="admin-import__meta admin-import__meta--note">
-            初始口令=工号+!BBW，导入用户首登强制改密（登录后弹二步改密表单）
-          </div>
+          <Typography.Text type="secondary">
+            解析 {parsed.rows.length} 行（{excelRows ? 'Excel' : 'CSV 粘贴'}）
+            {parsed.bad > 0 ? `（${parsed.bad} 行格式非法将被跳过）` : ''}
+          </Typography.Text>
+          <Typography.Text type="secondary">初始口令=工号+!BBW，导入用户首登强制改密（登录后弹二步改密表单）</Typography.Text>
           <Button
             disabled={busy || parsed.rows.length === 0 || parsed.rows.length > 100}
             onClick={() => void submit()}
@@ -157,12 +156,13 @@ export function ImportPage() {
           >
             <ArrowRight size={14} /> {busy ? '导入中…' : `导入 ${Math.min(parsed.rows.length, 100)} 行`}
           </Button>
-        </>
+        </Space>
       ) : (
-        <>
-          <div className="admin-import__summary">
-            成功 <strong>{result?.created ?? 0}</strong> · 失败 <strong>{result?.failed ?? 0}</strong>
-          </div>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Typography.Text>
+            成功 <Typography.Text strong>{result?.created ?? 0}</Typography.Text> · 失败{' '}
+            <Typography.Text strong>{result?.failed ?? 0}</Typography.Text>
+          </Typography.Text>
           <Table
             rowKey="row"
             size="small"
@@ -181,7 +181,7 @@ export function ImportPage() {
                   r.ok ? (
                     <Tag color="geekblue">成功</Tag>
                   ) : (
-                    <span className="admin-import__fail">{r.reason}</span>
+                    <Typography.Text type="danger">{r.reason}</Typography.Text>
                   ),
               },
             ]}
@@ -195,7 +195,7 @@ export function ImportPage() {
           >
             继续导入
           </Button>
-        </>
+        </Space>
       )}
     </div>
   );

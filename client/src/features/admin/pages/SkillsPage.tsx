@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Input, Modal, Select, Table, Tag } from 'antd';
+import { Alert, Flex, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Plus, Sparkles, Upload } from 'lucide-react';
 import { http, errText } from '../../../shared/api/http';
@@ -110,10 +110,14 @@ export function SkillsPage() {
       dataIndex: 'name',
       render: (_, s) => (
         <div>
-          <span className="admin-role__name">
+          <Space size={4}>
             <Sparkles size={13} /> {s.name}
-          </span>
-          {s.description ? <div className="admin-role__desc">{s.description}</div> : null}
+          </Space>
+          {s.description ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+              {s.description}
+            </Typography.Paragraph>
+          ) : null}
         </div>
       ),
     },
@@ -163,18 +167,21 @@ export function SkillsPage() {
   ];
 
   return (
-    <div className="admin-page__section" data-testid="admin-skills">
-      <div className="admin-page__head">
-        <h2>技能包</h2>
+    <div data-testid="admin-skills">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          技能包
+        </Typography.Title>
+        <span style={{ flex: 1 }} />
         <Button onClick={() => setPubOpen((v) => !v)} data-testid="skill-pub-btn">
           <Plus size={14} /> 发布技能包
         </Button>
-      </div>
+      </Flex>
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
 
       {pubOpen ? (
-        <div className="eco-reg" style={{ marginBottom: 12 }}>
-          <div className="eco-reg__row" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Space direction="vertical" size={8} style={{ marginBottom: 12, width: '100%' }}>
+          <Space size={8} wrap>
             <Input placeholder="skill_id（如 corp.skills/weekly）" style={{ width: 240 }} value={skillID} onChange={(e) => setSkillID(e.target.value)} data-testid="skill-id-input" />
             <Input placeholder="名称" style={{ width: 180 }} value={name} onChange={(e) => setName(e.target.value)} />
             <Input placeholder="版本（x.y.z）" style={{ width: 140 }} value={version} onChange={(e) => setVersion(e.target.value)} />
@@ -190,28 +197,25 @@ export function SkillsPage() {
                 { value: 3, label: '可选（optional）' },
               ]}
             />
-          </div>
-          <Input placeholder="描述（可选）" style={{ marginTop: 8 }} value={desc} onChange={(e) => setDesc(e.target.value)} />
+          </Space>
+          <Input placeholder="描述（可选）" value={desc} onChange={(e) => setDesc(e.target.value)} />
           <Input.TextArea
-            style={{ marginTop: 8 }}
             placeholder="YAML 清单（技能/命令/agent 定义）"
             value={manifest}
             onChange={(e) => setManifest(e.target.value)}
             autoSize={{ minRows: 6, maxRows: 14 }}
             data-testid="skill-manifest-input"
           />
-          <div style={{ marginTop: 8 }}>
-            <Button loading={busy} disabled={!skillID.trim() || !name.trim()} onClick={publish} data-testid="skill-pub-submit">
-              发布（即刻上架）
-            </Button>
-          </div>
-        </div>
+          <Button loading={busy} disabled={!skillID.trim() || !name.trim()} onClick={publish} data-testid="skill-pub-submit">
+            发布（即刻上架）
+          </Button>
+        </Space>
       ) : null}
 
       {skills === null ? (
-        <div className="admin-page__empty">加载中…</div>
+        <Typography.Text type="secondary">加载中…</Typography.Text>
       ) : skills.length === 0 ? (
-        <div className="admin-page__empty">暂无技能包</div>
+        <Typography.Text type="secondary">暂无技能包</Typography.Text>
       ) : (
         <Table<SkillRow>
           rowKey="id"
@@ -226,7 +230,7 @@ export function SkillsPage() {
               setEditVer('');
             },
             expandedRowRender: (s) => (
-              <div className="eco-versions__add" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Space size={8} wrap>
                 <Input
                   placeholder="新版本号（x.y.z）"
                   style={{ width: 200 }}
@@ -237,8 +241,8 @@ export function SkillsPage() {
                 <Button loading={busy} disabled={!editVer.trim()} onClick={() => update(s.id)}>
                   <Upload size={12} /> 覆盖 manifest 并升版
                 </Button>
-                <span className="admin-role__desc">manifest 用上方发布框当前内容（改后点更新）</span>
-              </div>
+                <Typography.Text type="secondary">manifest 用上方发布框当前内容（改后点更新）</Typography.Text>
+              </Space>
             ),
           }}
         />

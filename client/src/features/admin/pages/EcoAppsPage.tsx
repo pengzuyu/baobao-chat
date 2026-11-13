@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Input, InputNumber, Modal, Table, Tag } from 'antd';
+import { Alert, Flex, Input, InputNumber, Modal, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Package, Plus, Upload } from 'lucide-react';
 import { http, errText } from '../../../shared/api/http';
@@ -174,10 +174,14 @@ export function EcoAppsPage() {
       dataIndex: 'name',
       render: (_, a) => (
         <div>
-          <span className="admin-role__name">
+          <Space size={4}>
             <Package size={13} /> {a.name}
-          </span>
-          {a.description ? <div className="admin-role__desc">{a.description}</div> : null}
+          </Space>
+          {a.description ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+              {a.description}
+            </Typography.Paragraph>
+          ) : null}
         </div>
       ),
     },
@@ -213,43 +217,43 @@ export function EcoAppsPage() {
   ];
 
   return (
-    <div className="admin-page__section" data-testid="admin-eco-apps">
-      <div className="admin-page__head">
-        <h2>应用管理</h2>
+    <div data-testid="admin-eco-apps">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          应用管理
+        </Typography.Title>
+        <span style={{ flex: 1 }} />
         <Button onClick={() => setRegOpen((v) => !v)} data-testid="eco-reg-btn">
           <Plus size={14} /> 登记应用
         </Button>
-      </div>
+      </Flex>
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
 
       {regOpen ? (
-        <div className="eco-reg" style={{ marginBottom: 12 }}>
-          <div className="eco-reg__row" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Space direction="vertical" size={8} style={{ marginBottom: 12, width: '100%' }}>
+          <Space size={8} wrap>
             <Input placeholder="app_id（如 crm.sync）" style={{ width: 220 }} value={appID} onChange={(e) => setAppID(e.target.value)} data-testid="eco-reg-appid" />
             <Input placeholder="显示名" style={{ width: 160 }} value={name} onChange={(e) => setName(e.target.value)} />
             <Input placeholder="首版版本（x.y.z）" style={{ width: 140 }} value={version} onChange={(e) => setVersion(e.target.value)} />
-          </div>
-          <Input className="eco-reg__desc" placeholder="描述（可选）" style={{ marginTop: 8, width: '100%' }} value={desc} onChange={(e) => setDesc(e.target.value)} />
+          </Space>
+          <Input placeholder="描述（可选）" value={desc} onChange={(e) => setDesc(e.target.value)} />
           <Input.TextArea
-            style={{ marginTop: 8 }}
             placeholder="AppManifest JSON（工具/技能清单）"
             value={manifest}
             onChange={(e) => setManifest(e.target.value)}
             autoSize={{ minRows: 6, maxRows: 14 }}
             data-testid="eco-reg-manifest"
           />
-          <div style={{ marginTop: 8 }}>
-            <Button loading={busy} disabled={!appID.trim() || !name.trim()} onClick={register} data-testid="eco-reg-submit">
-              登记并建首版（draft）
-            </Button>
-          </div>
-        </div>
+          <Button loading={busy} disabled={!appID.trim() || !name.trim()} onClick={register} data-testid="eco-reg-submit">
+            登记并建首版（draft）
+          </Button>
+        </Space>
       ) : null}
 
       {apps === null ? (
-        <div className="admin-page__empty">加载中…</div>
+        <Typography.Text type="secondary">加载中…</Typography.Text>
       ) : apps.length === 0 ? (
-        <div className="admin-page__empty">暂无应用——点「登记应用」发布第一个生态应用</div>
+        <Typography.Text type="secondary">暂无应用——点「登记应用」发布第一个生态应用</Typography.Text>
       ) : (
         <Table<AdminApp>
           rowKey="id"
@@ -262,9 +266,9 @@ export function EcoAppsPage() {
             onExpand: (expanded, a) => (expanded ? openVersions(a.id) : setOpenApp(null)),
             expandedRowRender: (a) =>
               versionsOfApp === a.id && versions !== null ? (
-                <div className="eco-versions">
+                <Space direction="vertical" size={4}>
                   {versions.map((v) => (
-                    <div key={v.id} className="eco-versions__row" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Space key={v.id} size={8} wrap>
                       <span>v{v.version}</span>
                       <Tag color={v.status === 'published' ? 'geekblue' : 'default'}>
                         {v.status === 'published' ? '已发布' : v.status === 'rolled_back' ? '已回滚' : '草稿'}
@@ -278,17 +282,17 @@ export function EcoAppsPage() {
                       <Button variant="text" size="small" disabled={busy} onClick={() => openRollout(a.id, v.id)} data-testid={`eco-rollout-${v.id}`}>
                         灰度
                       </Button>
-                    </div>
+                    </Space>
                   ))}
-                  <div className="eco-versions__add" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                  <Space size={8} wrap>
                     <Input placeholder="新版本号（x.y.z）" style={{ width: 200 }} value={newVer} onChange={(e) => setNewVer(e.target.value)} data-testid="eco-newver" />
                     <Button loading={busy} disabled={!newVer.trim()} onClick={() => addVersion(a.id)}>
                       <Upload size={12} /> 追加版本（draft）
                     </Button>
-                  </div>
-                </div>
+                  </Space>
+                </Space>
               ) : (
-                <div className="admin-page__empty">版本线加载中…</div>
+                <Typography.Text type="secondary">版本线加载中…</Typography.Text>
               ),
           }}
         />
@@ -313,7 +317,7 @@ export function EcoAppsPage() {
           <InputNumber min={0} max={100} precision={0} value={canaryPct} onChange={(v) => setCanaryPct(v ?? 100)} style={{ width: 160 }} data-testid="eco-canary-input" />
           <label>白名单（逗号分隔 uid，100% 豁免）</label>
           <Input value={whitelist} onChange={(e) => setWhitelist(e.target.value)} placeholder="10001,10002" data-testid="eco-whitelist-input" />
-          <span className="admin-role__desc">确定性放量 uid%100&lt;pct；未入灰度未装=不可见，已装=保持当前版；100=全量</span>
+          <span>确定性放量 uid%100&lt;pct；未入灰度未装=不可见，已装=保持当前版；100=全量</span>
         </div>
       </Modal>
     </div>

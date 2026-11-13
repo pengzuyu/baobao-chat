@@ -4,10 +4,11 @@
  * - 按日表格（requests/tokens 双列）+ 按 tier / 按 scene 两维汇总
  * - 数据源标注：PG（ai_usage_hourly）/ memory（网关 Meter 快照——无历史日，当日为准）
  * - 六态：loading 骨架 / empty（暂无用量）/ error 重试 / offline 遮罩 / forbidden 2003
+ * D26-O2 补充：总计卡→antd Card+Statistic、面板→Card、周期→Segmented（自研样式退役）。
  */
 
 import { useState } from 'react';
-import { Segmented, Table } from 'antd';
+import { Card, Flex, Segmented, Statistic, Table, Typography } from 'antd';
 import { Zap } from 'lucide-react';
 import { ApiError } from '../../../shared/api/http';
 import { SkeletonBlock } from '../../../shared/ui/Skeleton';
@@ -36,25 +37,25 @@ export function UsagePage() {
           : 'ok';
 
   return (
-    <div className="admin-usage">
-      <header className="admin-page__header">
-        <h2 className="admin-page__title">AI 用量</h2>
+    <div data-testid="admin-usage">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          AI 用量
+        </Typography.Title>
         {data ? (
-          <span className="admin-page__meta">
+          <Typography.Text type="secondary">
             统计时点 {new Date(data.as_of).toLocaleString('zh-CN')} · 数据源：{data.mode === 'pg' ? 'ai_usage_hourly' : '网关 Meter 快照（内存模式，当日）'}
-          </span>
+          </Typography.Text>
         ) : null}
-      </header>
+      </Flex>
 
-      <div className="admin-toolbar">
-        <div className="admin-toolbar__filters" data-testid="admin-usage-days">
-          <Segmented
-            value={days}
-            onChange={(v) => setDays(v as number)}
-            options={DAY_OPTIONS.map((d) => ({ value: d, label: `近 ${d} 天` }))}
-          />
-        </div>
-      </div>
+      <Flex gap={8} style={{ marginBottom: 16 }} data-testid="admin-usage-days">
+        <Segmented
+          value={days}
+          onChange={(v) => setDays(v as number)}
+          options={DAY_OPTIONS.map((d) => ({ value: d, label: `近 ${d} 天` }))}
+        />
+      </Flex>
 
       <StateView
         state={state}
@@ -64,42 +65,25 @@ export function UsagePage() {
         onRetry={() => void query.refetch()}
         forbiddenText="需要 admin:usage:read 权限"
       >
-        <div className="admin-cards admin-cards--usage">
-          <div className="admin-card admin-card--ai">
-            <div className="admin-card__icon" aria-hidden>
+        <Flex wrap="wrap" gap={12} style={{ marginBottom: 16 }}>
+          <Card size="small" style={{ width: 200 }}>
+            <Flex align="center" gap={8}>
               <Zap size={18} strokeWidth={1.8} />
-            </div>
-            <div className="admin-card__body">
-              <div className="admin-card__title">总请求</div>
-              <div className="admin-card__value" data-testid="admin-usage-total-requests">
-                {fmt(data?.total.requests)}
-              </div>
-            </div>
-          </div>
-          <div className="admin-card">
-            <div className="admin-card__body">
-              <div className="admin-card__title">prompt tokens</div>
-              <div className="admin-card__value">{fmt(data?.total.prompt_tokens)}</div>
-            </div>
-          </div>
-          <div className="admin-card">
-            <div className="admin-card__body">
-              <div className="admin-card__title">completion tokens</div>
-              <div className="admin-card__value">{fmt(data?.total.completion_tokens)}</div>
-            </div>
-          </div>
-          <div className="admin-card admin-card--ai">
-            <div className="admin-card__body">
-              <div className="admin-card__title">total tokens</div>
-              <div className="admin-card__value" data-testid="admin-usage-total-tokens">
-                {fmt(data?.total.total_tokens)}
-              </div>
-            </div>
-          </div>
-        </div>
+              <Statistic title="总请求" value={fmt(data?.total.requests)} />
+            </Flex>
+          </Card>
+          <Card size="small" style={{ width: 200 }}>
+            <Statistic title="prompt tokens" value={fmt(data?.total.prompt_tokens)} />
+          </Card>
+          <Card size="small" style={{ width: 200 }}>
+            <Statistic title="completion tokens" value={fmt(data?.total.completion_tokens)} />
+          </Card>
+          <Card size="small" style={{ width: 200 }}>
+            <Statistic title="total tokens" value={fmt(data?.total.total_tokens)} />
+          </Card>
+        </Flex>
 
-        <section className="admin-panel">
-          <div className="admin-panel__title">按日</div>
+        <Card size="small" title="按日" style={{ marginBottom: 16 }}>
           <Table
             rowKey="date"
             size="small"
@@ -108,45 +92,43 @@ export function UsagePage() {
             pagination={false}
             onRow={(d) => ({ 'data-testid': `admin-usage-row-${d.date}` } as React.HTMLAttributes<HTMLTableRowElement>)}
             columns={[
-              { title: '日期', dataIndex: 'date', render: (v: string) => <span className="admin-mono">{v}</span> },
+              { title: '日期', dataIndex: 'date', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
               { title: 'requests', dataIndex: 'requests', render: (v: number) => fmt(v) },
               { title: 'prompt tokens', dataIndex: 'prompt_tokens', render: (v: number) => fmt(v) },
               { title: 'completion tokens', dataIndex: 'completion_tokens', render: (v: number) => fmt(v) },
               { title: 'total tokens', dataIndex: 'total_tokens', render: (v: number) => fmt(v) },
             ]}
           />
-        </section>
+        </Card>
 
-        <div className="admin-usage__dims">
-          <section className="admin-panel">
-            <div className="admin-panel__title">按 tier 汇总</div>
+        <Flex gap={12} wrap="wrap">
+          <Card size="small" title="按 tier 汇总" style={{ flex: 1, minWidth: 280 }}>
             <Table
               rowKey="key"
               size="small"
               dataSource={data?.by_tier ?? []}
               pagination={false}
               columns={[
-                { title: 'tier', dataIndex: 'key', render: (v: string) => <span className="admin-mono">{v}</span> },
+                { title: 'tier', dataIndex: 'key', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
                 { title: 'requests', dataIndex: 'requests', render: (v: number) => fmt(v) },
                 { title: 'total tokens', dataIndex: 'total_tokens', render: (v: number) => fmt(v) },
               ]}
             />
-          </section>
-          <section className="admin-panel">
-            <div className="admin-panel__title">按 scene 汇总</div>
+          </Card>
+          <Card size="small" title="按 scene 汇总" style={{ flex: 1, minWidth: 280 }}>
             <Table
               rowKey="key"
               size="small"
               dataSource={data?.by_scene ?? []}
               pagination={false}
               columns={[
-                { title: 'scene', dataIndex: 'key', render: (v: string) => <span className="admin-mono">{v}</span> },
+                { title: 'scene', dataIndex: 'key', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
                 { title: 'requests', dataIndex: 'requests', render: (v: number) => fmt(v) },
                 { title: 'total tokens', dataIndex: 'total_tokens', render: (v: number) => fmt(v) },
               ]}
             />
-          </section>
-        </div>
+          </Card>
+        </Flex>
       </StateView>
     </div>
   );

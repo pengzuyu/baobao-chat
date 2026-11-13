@@ -5,16 +5,17 @@
  *       选中部门=该部门成员表（工号/姓名/邮箱/主部门/状态/操作——挂靠已有用户/移出）
  * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/邮箱/
  *   所属组织（默认=触发节点）/角色（默认不授权）——初始口令=工号+!BBW 首登强制改密
- * D26-O2：Table/Modal/Select/Input/Segmented/Alert/Tag 全量 antd 化。
+ * D26-O2：Table/Modal/Select/Input/Segmented/Alert/Tag 化；补充轮：组织树→antd Tree
+ * titleRender（内联建子部门/双击改名/行内 ops，样板对齐 kb ArticleTree——org-node 自研样式退役）。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Input, Modal, Segmented, Select, Table, Tag, Typography } from 'antd';
+import { Alert, Button as AntdButton, Card, Flex, Input, Modal, Segmented, Select, Space, Table, Tag, Tree, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import type { DataNode } from 'antd/es/tree';
 import {
   Building2,
-  ChevronDown,
-  ChevronRight,
+  FolderPlus,
   FolderTree,
   Plus,
   RefreshCw,
@@ -42,7 +43,14 @@ import {
 import type { AdminUser } from '../model/types';
 import { useUsers, useUserStatus } from '../api/hooks';
 
-/* ── 左栏：组织树（含虚拟根「全公司」） ── */
+/** 部门树 → antd Tree 节点（key=部门 id；title 由 titleRender 接管） */
+function toTreeData(nodes: DeptNode[]): DataNode[] {
+  return nodes.map((n) => ({
+    key: n.id,
+    title: n.name,
+    children: n.children?.length ? toTreeData(n.children) : undefined,
+  }));
+}
 
 function flattenTree(nodes: DeptNode[], depth = 0, out: { id: string; name: string; depth: number }[] = []): { id: string; name: string; depth: number }[] {
   for (const n of nodes) {
@@ -50,120 +58,6 @@ function flattenTree(nodes: DeptNode[], depth = 0, out: { id: string; name: stri
     if (n.children?.length) flattenTree(n.children, depth + 1, out);
   }
   return out;
-}
-
-function TreeNode({
-  node,
-  depth,
-  selected,
-  onSelect,
-  onAddChild,
-  onAddUser,
-  onRename,
-  onDelete,
-}: {
-  node: DeptNode;
-  depth: number;
-  selected: string | null;
-  onSelect: (id: string) => void;
-  onAddChild: (id: string, name: string) => void;
-  onAddUser: (id: string) => void;
-  onRename: (id: string, name: string) => void;
-  onDelete: (id: string, name: string) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(node.name);
-  const hasChildren = (node.children?.length ?? 0) > 0;
-
-  const add = () => {
-    if (!newName.trim()) return;
-    onAddChild(node.id, newName.trim());
-    setAdding(false);
-    setNewName('');
-  };
-
-  return (
-    <div className="org-node" style={{ marginLeft: depth * 16 }}>
-      <div className={`org-node__row${selected === node.id ? ' org-node__row--selected' : ''}`}>
-        <Button variant="text" size="small" onClick={() => setOpen(!open)} disabled={!hasChildren} icon={open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} />
-        <FolderTree size={14} className="org-node__icon" />
-        {editing ? (
-          <span className="org-node__edit">
-            <Input
-              size="small"
-              style={{ width: 160 }}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoFocus
-              onPressEnter={() => {
-                if (name.trim()) {
-                  onRename(node.id, name.trim());
-                  setEditing(false);
-                }
-              }}
-            />
-            <Button
-              size="small"
-              disabled={!name.trim()}
-              onClick={() => {
-                onRename(node.id, name.trim());
-                setEditing(false);
-              }}
-            >
-              保存
-            </Button>
-          </span>
-        ) : (
-          <span className="org-node__name" title={node.path} onClick={() => onSelect(node.id)} onDoubleClick={() => setEditing(true)}>
-            {node.name}
-          </span>
-        )}
-        <span className="org-node__ops">
-          <Button variant="text" size="small" onClick={() => onAddUser(node.id)} title="在此组织下新增用户" icon={<UserPlus size={12} />} />
-          <Button variant="text" size="small" onClick={() => setAdding(!adding)} title="新增子部门" icon={<Plus size={12} />} />
-          <Button
-            variant="text"
-            size="small"
-            danger
-            onClick={() => onDelete(node.id, node.name)}
-            title="删除（有子/挂人拒）"
-            icon={<Trash2 size={12} />}
-          />
-        </span>
-      </div>
-      {adding ? (
-        <div className="org-node__add" style={{ marginLeft: 24 }}>
-          <Input.Search
-            size="small"
-            style={{ width: 220 }}
-            placeholder="子部门名（≤50 字）"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            enterButton="创建"
-            onSearch={() => newName.trim() && add()}
-          />
-        </div>
-      ) : null}
-      {open && hasChildren
-        ? node.children!.map((c) => (
-            <TreeNode
-              key={c.id}
-              node={c}
-              depth={depth + 1}
-              selected={selected}
-              onSelect={onSelect}
-              onAddChild={onAddChild}
-              onAddUser={onAddUser}
-              onRename={onRename}
-              onDelete={onDelete}
-            />
-          ))
-        : null}
-    </div>
-  );
 }
 
 /* ── 创建用户弹窗 ── */
@@ -264,15 +158,15 @@ function CreateUserModal({
         </Button>,
       ]}
     >
-      <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+      <Space direction="vertical" size={4} style={{ width: '100%', marginTop: 8 }}>
         <Typography.Text>姓名 *</Typography.Text>
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="真实姓名（≤50 字）" data-testid="create-user-name" />
-        <Typography.Text>
-          工号 *（登录账号）{' '}
-          <Button variant="text" size="small" onClick={regenerate} title="按姓名重新生成拼音建议">
+        <Flex align="center" gap={8}>
+          <Typography.Text>工号 *（登录账号）</Typography.Text>
+          <AntdButton type="text" size="small" onClick={regenerate} title="按姓名重新生成拼音建议">
             <RefreshCw size={11} /> 重新生成
-          </Button>
-        </Typography.Text>
+          </AntdButton>
+        </Flex>
         <Input
           value={empno}
           onChange={(e) => {
@@ -307,7 +201,7 @@ function CreateUserModal({
         />
         <Typography.Text type="secondary">初始口令 = 工号 +“!BBW”，首次登录强制修改</Typography.Text>
         {err ? <Alert type="error" showIcon message={err} /> : null}
-      </div>
+      </Space>
     </Modal>
   );
 }
@@ -319,8 +213,11 @@ export function OrgDirectoryPage() {
   const [tree, setTree] = useState<DeptNode[] | null>(null);
   const [treeError, setTreeError] = useState('');
   const [selected, setSelected] = useState<string | null>(null); // null=全公司
-  const [rootAdding, setRootAdding] = useState(false);
-  const [rootName, setRootName] = useState('');
+  // 树内联编辑态：adding=节点 id（'root'=根层）；renaming=节点 id
+  const [adding, setAdding] = useState<string | null>(null);
+  const [addingName, setAddingName] = useState('');
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState('');
   // 弹窗
   const [modalOpen, setModalOpen] = useState(false);
   const [modalDept, setModalDept] = useState('');
@@ -491,11 +388,151 @@ export function OrgDirectoryPage() {
     return flat.find((d) => d.id === selected)?.name ?? selected;
   }, [selected, tree]);
 
+  const treeData: DataNode[] = useMemo(
+    () => [{ key: 'all', title: '全公司', children: tree ? toTreeData(tree) : [] }],
+    [tree],
+  );
+
+  /** titleRender：根=全公司+加人；部门=名称（双击改名）+ 加人/加子部门/删；adding/renaming 态换内联输入 */
+  const titleRender = (node: DataNode) => {
+    const key = String(node.key);
+    const name = node.title as string;
+    if (key === 'all') {
+      if (adding === 'root') return inlineAdd('root');
+      return (
+        <Space size={4} data-testid="dir-node-all">
+          <Building2 size={14} />
+          <span>{name}</span>
+          <AntdButton
+            type="text"
+            size="small"
+            title="新增用户（不挂部门）"
+            icon={<UserPlus size={12} />}
+            onClick={(e) => {
+              e.stopPropagation();
+              openCreate('');
+            }}
+          />
+        </Space>
+      );
+    }
+    if (renaming === key) {
+      return (
+        <Space size={4} onClick={(e) => e.stopPropagation()}>
+          <Input
+            size="small"
+            style={{ width: 140 }}
+            value={renameName}
+            autoFocus
+            onChange={(e) => setRenameName(e.target.value)}
+            onPressEnter={() => {
+              if (renameName.trim()) {
+                void renameNode(key, renameName.trim());
+                setRenaming(null);
+              }
+            }}
+            onKeyDown={(e) => e.key === 'Escape' && setRenaming(null)}
+          />
+          <AntdButton
+            size="small"
+            type="primary"
+            disabled={!renameName.trim()}
+            onClick={() => {
+              void renameNode(key, renameName.trim());
+              setRenaming(null);
+            }}
+          >
+            保存
+          </AntdButton>
+        </Space>
+      );
+    }
+    if (adding === key) return inlineAdd(key);
+    return (
+      <Space size={4}>
+        <FolderTree size={13} />
+        <span
+          title="双击改名"
+          onDoubleClick={() => {
+            setRenaming(key);
+            setRenameName(name);
+          }}
+        >
+          {name}
+        </span>
+        <AntdButton
+          type="text"
+          size="small"
+          title="在此组织下新增用户"
+          icon={<UserPlus size={12} />}
+          onClick={(e) => {
+            e.stopPropagation();
+            openCreate(key);
+          }}
+        />
+        <AntdButton
+          type="text"
+          size="small"
+          title="新增子部门"
+          icon={<FolderPlus size={12} />}
+          onClick={(e) => {
+            e.stopPropagation();
+            setAdding(key);
+            setAddingName('');
+          }}
+        />
+        <AntdButton
+          type="text"
+          size="small"
+          danger
+          title="删除（有子/挂人拒）"
+          icon={<Trash2 size={12} />}
+          onClick={(e) => {
+            e.stopPropagation();
+            deleteNode(key, name);
+          }}
+        />
+      </Space>
+    );
+  };
+
+  /** 内联建子部门输入（adding 目标处渲染；Enter/「建」提交，Esc 取消） */
+  const inlineAdd = (parentId: string) => (
+    <Space size={4} onClick={(e) => e.stopPropagation()}>
+      <Input
+        size="small"
+        style={{ width: 130 }}
+        placeholder="部门名（≤50 字）"
+        value={addingName}
+        autoFocus
+        onChange={(e) => setAddingName(e.target.value)}
+        onPressEnter={() => {
+          if (addingName.trim()) {
+            void addDept(parentId === 'root' ? '' : parentId, addingName.trim());
+            setAdding(null);
+          }
+        }}
+        onKeyDown={(e) => e.key === 'Escape' && setAdding(null)}
+      />
+      <AntdButton
+        size="small"
+        type="primary"
+        disabled={!addingName.trim()}
+        onClick={() => {
+          void addDept(parentId === 'root' ? '' : parentId, addingName.trim());
+          setAdding(null);
+        }}
+      >
+        建
+      </AntdButton>
+    </Space>
+  );
+
   const userColumns: ColumnsType<AdminUser> = [
-    { title: '工号', dataIndex: 'employee_no', width: 110, render: (v: string) => <span className="admin-mono">{v}</span> },
+    { title: '工号', dataIndex: 'employee_no', width: 110, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
     { title: '姓名', dataIndex: 'display_name', width: 110 },
-    { title: '邮箱', dataIndex: 'email', render: (v: string) => <span className="admin-mono">{v || '—'}</span> },
-    { title: '权限', key: 'scopes', render: (_, u) => <span className="admin-scope-cell">{scopesText(u.scopes)}</span> },
+    { title: '邮箱', dataIndex: 'email', render: (v: string) => (v ? <Typography.Text code>{v}</Typography.Text> : '—') },
+    { title: '权限', key: 'scopes', render: (_, u) => scopesText(u.scopes) },
     {
       title: '状态',
       dataIndex: 'status',
@@ -505,10 +542,10 @@ export function OrgDirectoryPage() {
     {
       title: '操作',
       key: 'ops',
-      width: 210,
+      width: 220,
       render: (_, u) =>
         u.status === 1 ? (
-          <>
+          <Space size={4}>
             <Button
               variant="danger"
               size="small"
@@ -516,11 +553,11 @@ export function OrgDirectoryPage() {
               onClick={() => toggle(u.id, u.display_name, u.status)}
             >
               禁用
-            </Button>{' '}
+            </Button>
             <Button variant="danger" size="small" disabled={statusMutation.isPending} onClick={() => offboard(u.id, u.display_name)}>
               离职交接
             </Button>
-          </>
+          </Space>
         ) : (
           <Button
             variant="secondary"
@@ -535,9 +572,9 @@ export function OrgDirectoryPage() {
   ];
 
   const memberColumns: ColumnsType<DeptMemberRow> = [
-    { title: '工号', key: 'empno', width: 110, render: (_, m) => <span className="admin-mono">{m.employee_no || m.user_id}</span> },
+    { title: '工号', key: 'empno', width: 110, render: (_, m) => <Typography.Text code>{m.employee_no || m.user_id}</Typography.Text> },
     { title: '姓名', key: 'name', width: 110, render: (_, m) => m.name || m.user_id },
-    { title: '邮箱', key: 'email', render: (_, m) => <span className="admin-mono">{m.email || '—'}</span> },
+    { title: '邮箱', key: 'email', render: (_, m) => (m.email ? <Typography.Text code>{m.email}</Typography.Text> : '—') },
     { title: '主部门', key: 'primary', width: 90, render: (_, m) => (m.is_primary ? <Tag color="geekblue">主部门</Tag> : '—') },
     {
       title: '状态',
@@ -548,9 +585,9 @@ export function OrgDirectoryPage() {
     {
       title: '操作',
       key: 'ops',
-      width: 230,
+      width: 240,
       render: (_, m) => (
-        <>
+        <Space size={4}>
           {m.status === 2 ? (
             <Button
               variant="secondary"
@@ -569,91 +606,67 @@ export function OrgDirectoryPage() {
             >
               禁用
             </Button>
-          )}{' '}
+          )}
           <Button variant="danger" size="small" onClick={() => offboard(m.user_id, m.name)}>
             离职
-          </Button>{' '}
+          </Button>
           <Button variant="secondary" size="small" onClick={() => detach(m.user_id, m.name)}>
             移出
           </Button>
-        </>
+        </Space>
       ),
     },
   ];
 
   return (
-    <div className="admin-directory" data-testid="admin-directory">
+    <Flex gap={16} align="flex-start" data-testid="admin-directory">
       {/* 左栏：组织树（通讯录骨架） */}
-      <aside className="admin-directory__tree">
-        <div className="admin-directory__tree-head">
-          <span>组织树</span>
-          <Button variant="text" size="small" onClick={() => setRootAdding(!rootAdding)} title="新增根部门" icon={<Plus size={12} />}>
-            根部门
-          </Button>
-        </div>
-        <div
-          className={`org-node__row org-node__row--root${selected === null ? ' org-node__row--selected' : ''}`}
-          onClick={() => setSelected(null)}
-          data-testid="dir-node-all"
-        >
-          <Building2 size={14} className="org-node__icon" />
-          <span className="org-node__name">全公司</span>
-          <span className="org-node__ops">
-            <Button variant="text" size="small" onClick={(e) => { e.stopPropagation(); openCreate(''); }} title="新增用户（不挂部门）" icon={<UserPlus size={12} />} />
-          </span>
-        </div>
-        {rootAdding ? (
-          <div className="org-node__add">
-            <Input.Search
-              size="small"
-              style={{ width: 220 }}
-              placeholder="根部门名"
-              value={rootName}
-              onChange={(e) => setRootName(e.target.value)}
-              enterButton="创建"
-              onSearch={() => {
-                if (rootName.trim()) {
-                  void addDept('', rootName.trim());
-                  setRootAdding(false);
-                  setRootName('');
-                }
-              }}
-            />
-          </div>
-        ) : null}
-        {treeError ? <Alert type="error" showIcon message={treeError} style={{ marginTop: 8 }} /> : null}
+      <Card
+        size="small"
+        title="组织树"
+        style={{ width: 300, flexShrink: 0 }}
+        extra={
+          <AntdButton
+            type="text"
+            size="small"
+            title="新增根部门"
+            icon={<Plus size={12} />}
+            onClick={() => {
+              setAdding(adding === 'root' ? null : 'root');
+              setAddingName('');
+            }}
+          />
+        }
+      >
+        {treeError ? <Alert type="error" showIcon message={treeError} style={{ marginBottom: 8 }} /> : null}
         {tree === null ? (
-          <div className="admin-directory__hint">加载中…</div>
-        ) : tree.length === 0 ? (
-          <div className="admin-directory__hint">暂无部门——点上方「根部门」开始搭建组织</div>
+          <Typography.Text type="secondary">加载中…</Typography.Text>
         ) : (
-          tree.map((n) => (
-            <TreeNode
-              key={n.id}
-              node={n}
-              depth={1}
-              selected={selected}
-              onSelect={setSelected}
-              onAddChild={(id, nm) => void addDept(id, nm)}
-              onAddUser={(id) => openCreate(id)}
-              onRename={(id, nm) => void renameNode(id, nm)}
-              onDelete={(id, nm) => deleteNode(id, nm)}
-            />
-          ))
+          <Tree
+            blockNode
+            defaultExpandAll
+            treeData={treeData}
+            titleRender={titleRender}
+            selectedKeys={[selected ?? 'all']}
+            onSelect={(keys) => setSelected(keys[0] && keys[0] !== 'all' ? String(keys[0]) : null)}
+          />
         )}
-      </aside>
+      </Card>
 
       {/* 右栏：通讯录内容 */}
-      <div className="admin-directory__main">
-        <header className="admin-page__header">
-          <h2 className="admin-page__title">{selectedName ?? '全公司'}</h2>
-          <span className="admin-page__meta">
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Flex align="center" gap={8} style={{ marginBottom: 12 }}>
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            {selectedName ?? '全公司'}
+          </Typography.Title>
+          <Typography.Text type="secondary">
             {selected ? '组织成员（含主部门标记）——可在节点上新增用户/子部门' : '全量用户（跨部门检索）——点左侧部门查看该组织通讯录'}
-          </span>
+          </Typography.Text>
+          <span style={{ flex: 1 }} />
           <Button onClick={() => openCreate(selected ?? '')} data-testid="dir-create-user">
             <UserPlus size={14} /> 新增用户
           </Button>
-        </header>
+        </Flex>
 
         {actionError ? <Alert type="error" showIcon message={actionError} style={{ marginBottom: 8 }} /> : null}
         {actionOk ? <Alert type="success" showIcon message={actionOk} style={{ marginBottom: 8 }} /> : null}
@@ -661,11 +674,11 @@ export function OrgDirectoryPage() {
         {selected === null ? (
           /* 全公司：原用户页能力（搜索/状态过滤/无限加载/行操作） */
           <>
-            <div className="admin-toolbar">
+            <Space size={8} wrap style={{ marginBottom: 12 }}>
               <Input.Search
                 allowClear
-                className="admin-toolbar__search"
                 placeholder="搜索工号 / 姓名 / 邮箱，回车检索"
+                style={{ width: 280 }}
                 value={keywordInput}
                 onChange={(e) => setKeywordInput(e.target.value)}
                 onSearch={(v) => setKeyword(v.trim())}
@@ -679,7 +692,7 @@ export function OrgDirectoryPage() {
                   { value: 2, label: '禁用' },
                 ]}
               />
-            </div>
+            </Space>
             <Table<AdminUser>
               rowKey="id"
               columns={userColumns}
@@ -693,7 +706,7 @@ export function OrgDirectoryPage() {
               <Alert
                 type="error"
                 showIcon
-                style={{ marginBottom: 8 }}
+                style={{ marginTop: 8 }}
                 message={query.error instanceof ApiError ? getErrorText(query.error.code) : '加载失败'}
                 action={
                   <Button variant="secondary" size="small" onClick={() => void query.refetch()}>
@@ -703,27 +716,25 @@ export function OrgDirectoryPage() {
               />
             ) : null}
             {lastPage?.has_more && lastPage.next_cursor ? (
-              <div className="admin-loadmore">
+              <Flex justify="center" style={{ marginTop: 8 }}>
                 <Button variant="secondary" loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
                   加载更多
                 </Button>
-              </div>
+              </Flex>
             ) : null}
           </>
         ) : (
           /* 部门：成员表 */
           <>
-            <div className="admin-toolbar">
-              <Input.Search
-                allowClear
-                className="admin-toolbar__search"
-                placeholder="挂靠已有用户：输入其用户 ID 回车"
-                value={attachUid}
-                onChange={(e) => setAttachUid(e.target.value)}
-                onSearch={() => void attach()}
-                data-testid="dir-attach-uid"
-              />
-            </div>
+            <Input.Search
+              allowClear
+              placeholder="挂靠已有用户：输入其用户 ID 回车"
+              style={{ width: 280, marginBottom: 12 }}
+              value={attachUid}
+              onChange={(e) => setAttachUid(e.target.value)}
+              onSearch={() => void attach()}
+              data-testid="dir-attach-uid"
+            />
             <Table<DeptMemberRow>
               rowKey="user_id"
               columns={memberColumns}
@@ -738,7 +749,7 @@ export function OrgDirectoryPage() {
       </div>
 
       <CreateUserModal open={modalOpen} deptId={modalDept} tree={tree ?? []} onClose={() => setModalOpen(false)} onCreated={onCreated} />
-    </div>
+    </Flex>
   );
 }
 

@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Input, Modal, Select, Table, Tag, Upload } from 'antd';
+import { Alert, Flex, Input, Modal, Select, Space, Table, Tag, Typography, Upload } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { UploadFile } from 'antd';
 import { Package, Plus, Puzzle, Upload as UploadIcon } from 'lucide-react';
@@ -158,10 +158,14 @@ export function PluginGovernancePage() {
       dataIndex: 'name',
       render: (_, p) => (
         <div>
-          <span className="admin-role__name">
+          <Space size={4}>
             <Puzzle size={13} /> {p.name}
-          </span>
-          {p.description ? <div className="admin-role__desc">{p.description}</div> : null}
+          </Space>
+          {p.description ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+              {p.description}
+            </Typography.Paragraph>
+          ) : null}
         </div>
       ),
     },
@@ -185,7 +189,11 @@ export function PluginGovernancePage() {
           {p.manifest
             ? `技能${p.manifest.components.skills}·工具${p.manifest.components.mcpServers}·命令${p.manifest.components.commands}·专家${p.manifest.components.agents}`
             : '—'}
-          {p.manifest?.usesIdentity ? <div className="admin-role__desc">⚠ 使用用户身份</div> : null}
+          {p.manifest?.usesIdentity ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+              ⚠ 使用用户身份
+            </Typography.Paragraph>
+          ) : null}
         </div>
       ),
     },
@@ -236,19 +244,24 @@ export function PluginGovernancePage() {
   ];
 
   return (
-    <div className="admin-page__section" data-testid="admin-plugins">
-      <div className="admin-page__head">
-        <h2>插件</h2>
+    <div data-testid="admin-plugins">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          插件
+        </Typography.Title>
+        <span style={{ flex: 1 }} />
         <Button onClick={() => setPubOpen((v) => !v)} data-testid="plugin-pub-btn">
           <Plus size={14} /> 上传公共插件
         </Button>
-      </div>
+      </Flex>
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
       {notice ? <Alert type="success" showIcon message={notice} style={{ marginBottom: 8 }} /> : null}
 
       {pubOpen ? (
-        <div className="eco-reg" style={{ marginBottom: 12 }}>
-          <p className="admin-role__desc">公共插件（全员可见；policy=force 时用户端免确认自动推装）。个人插件请走插件页「上传插件」</p>
+        <Space direction="vertical" size={8} style={{ marginBottom: 12 }}>
+          <Typography.Text type="secondary">
+            公共插件（全员可见；policy=force 时用户端免确认自动推装）。个人插件请走插件页「上传插件」
+          </Typography.Text>
           <Upload
             accept=".zip"
             maxCount={1}
@@ -261,7 +274,7 @@ export function PluginGovernancePage() {
           >
             <Button variant="secondary">选择插件 zip 包</Button>
           </Upload>
-          <div className="eco-reg__row" style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+          <Space size={8} wrap>
             <Input style={{ width: 220 }} placeholder="备注（可选）" value={pubNotes} onChange={(e) => setPubNotes(e.target.value)} />
             <Select
               style={{ width: 180 }}
@@ -270,19 +283,17 @@ export function PluginGovernancePage() {
               title="三档策略"
               options={POLICY_OPTIONS}
             />
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <Button loading={uploading} disabled={!pubFile} onClick={uploadPublic} data-testid="plugin-pub-submit">
-              <UploadIcon size={12} /> 上传（draft）
-            </Button>
-          </div>
-        </div>
+          </Space>
+          <Button loading={uploading} disabled={!pubFile} onClick={uploadPublic} data-testid="plugin-pub-submit">
+            <UploadIcon size={12} /> 上传（draft）
+          </Button>
+        </Space>
       ) : null}
 
       {plugins === null ? (
-        <div className="admin-page__empty">加载中…</div>
+        <Typography.Text type="secondary">加载中…</Typography.Text>
       ) : plugins.length === 0 ? (
-        <div className="admin-page__empty">暂无插件（用户个人上传也会出现在这里待审核）</div>
+        <Typography.Text type="secondary">暂无插件（用户个人上传也会出现在这里待审核）</Typography.Text>
       ) : (
         <Table<PluginRow>
           rowKey="id"
@@ -299,24 +310,24 @@ export function PluginGovernancePage() {
             },
             expandedRowRender: (p) =>
               versions.length === 0 ? (
-                <div className="admin-page__empty">无版本行（包体缺失？）</div>
+                <Typography.Text type="secondary">无版本行（包体缺失？）</Typography.Text>
               ) : (
-                <div className="eco-versions">
+                <Space direction="vertical" size={4}>
                   {versions.map((v) => (
-                    <div key={v.id} className="eco-versions__row" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Space key={v.id} size={8} wrap>
                       <span>
                         v{v.version}
                         {v.version === p.current_version ? '（当前）' : ''}
                       </span>
-                      <span className="admin-role__desc">{v.notes || '—'}</span>
+                      <Typography.Text type="secondary">{v.notes || '—'}</Typography.Text>
                       {v.version !== p.current_version || p.status !== 'published' ? (
                         <Button disabled={busy} onClick={() => publishVersion(p.plugin_id, v.version)} data-testid={`plugin-pubver-${p.plugin_id}-${v.version}`}>
                           <Package size={12} /> 发布进公共市场
                         </Button>
                       ) : null}
-                    </div>
+                    </Space>
                   ))}
-                </div>
+                </Space>
               ),
           }}
         />

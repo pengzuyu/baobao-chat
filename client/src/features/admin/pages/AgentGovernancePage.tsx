@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Modal, Table } from 'antd';
+import { Alert, Flex, Modal, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Power, ShieldOff } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
@@ -91,7 +91,9 @@ export function AgentGovernancePage() {
       render: (_, r) => (
         <div>
           {r.name || '—'}
-          <div className="admin-role__desc">{r.user_id}</div>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+            {r.user_id}
+          </Typography.Paragraph>
         </div>
       ),
     },
@@ -117,9 +119,12 @@ export function AgentGovernancePage() {
   ];
 
   return (
-    <div className="admin-page__section" data-testid="admin-agent">
-      <div className="admin-page__head">
-        <h2>Agent 治理</h2>
+    <div data-testid="admin-agent">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          Agent 治理
+        </Typography.Title>
+        <span style={{ flex: 1 }} />
         <Button
           variant={kill ? 'danger' : 'primary'}
           disabled={busy === 'kill'}
@@ -128,13 +133,13 @@ export function AgentGovernancePage() {
         >
           <Power size={14} /> 总闸：{kill ? '已拉起（紧急停止：OBO 签发拒 1013 + 网关 503）' : '运行中'}
         </Button>
-      </div>
+      </Flex>
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
 
       {rows === null ? (
-        <div className="admin-page__empty">加载中…</div>
+        <Typography.Text type="secondary">加载中…</Typography.Text>
       ) : rows.length === 0 ? (
-        <div className="admin-page__empty">暂无活跃 Agent 用量（计量窗内无请求）</div>
+        <Typography.Text type="secondary">暂无活跃 Agent 用量（计量窗内无请求）</Typography.Text>
       ) : (
         <Table<AgentUserRow>
           rowKey="user_id"

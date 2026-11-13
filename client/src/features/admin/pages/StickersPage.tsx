@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Input } from 'antd';
+import { Alert, Card, Flex, Input, Space, Typography } from 'antd';
 import { ArrowDownToLine, ArrowUpToLine, Plus, Trash2 } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
@@ -62,16 +62,18 @@ export function StickersPage() {
     sets === null && !errorText ? 'loading' : errorText ? 'error' : sets !== null && sets.length === 0 ? 'empty' : 'ok';
 
   return (
-    <div className="admin-stickers">
-      <header className="admin-page__header">
-        <h2 className="admin-page__title">表情集</h2>
-        <span className="admin-page__meta">租户公共表情包（全员可用）· 个人表情由成员在聊天面板自维护</span>
-      </header>
+    <div data-testid="admin-stickers">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          表情集
+        </Typography.Title>
+        <Typography.Text type="secondary">租户公共表情包（全员可用）· 个人表情由成员在聊天面板自维护</Typography.Text>
+      </Flex>
 
-      <div className="admin-stickers__create">
+      <Space size={8} style={{ marginBottom: 8 }}>
         <Input
-          className="admin-stickers__input"
           placeholder="新表情集名称（≤50 字）"
+          style={{ width: 260 }}
           value={newName}
           maxLength={50}
           onChange={(e) => setNewName(e.target.value)}
@@ -81,7 +83,7 @@ export function StickersPage() {
         <Button onClick={() => void doCreate()} disabled={!newName.trim() || busy}>
           <Plus size={14} /> 建集
         </Button>
-      </div>
+      </Space>
       {errorText ? <Alert type="error" showIcon message={errorText} style={{ marginBottom: 8 }} /> : null}
 
       <StateView
@@ -90,11 +92,11 @@ export function StickersPage() {
         emptyText="暂无公共表情集，先建一个"
         error={new ApiError(9004, errorText)}
       >
-        <div className="admin-stickers__list">
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
           {(sets ?? []).map((s) => (
             <SetCard key={s.id} set={s} onReload={reload} onError={setErrorText} />
           ))}
-        </div>
+        </Space>
       </StateView>
     </div>
   );
@@ -119,30 +121,30 @@ function SetCard({ set, onReload, onError }: { set: StickerSet; onReload: () => 
   };
 
   return (
-    <div className={`admin-stickers__set${live ? '' : ' admin-stickers__set--off'}`}>
-      <div className="admin-stickers__set-head">
-        <span className="admin-stickers__set-name">{set.name}</span>
-        <span className="admin-stickers__set-meta">
+    <Card size="small" style={live ? undefined : { opacity: 0.6 }}>
+      <Flex gap={8} align="center" wrap style={{ marginBottom: 8 }}>
+        <Typography.Text strong>{set.name}</Typography.Text>
+        <Typography.Text type="secondary">
           {set.items.length} 个表情 · {live ? '已上架' : '已下架'}
-        </span>
-        <div className="admin-stickers__set-ops">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="attach-input"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = '';
-              if (f) {
-                void run(async () => {
-                  const up = await uploadFileSmart(f);
-                  await addAdminStickerItem(set.id, up.id, f.name.replace(/\.[^.]+$/, ''));
-                });
-              }
-            }}
-          />
+        </Typography.Text>
+        <span style={{ flex: 1 }} />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) {
+              void run(async () => {
+                const up = await uploadFileSmart(f);
+                await addAdminStickerItem(set.id, up.id, f.name.replace(/\.[^.]+$/, ''));
+              });
+            }
+          }}
+        />
+        <Space size={4}>
           <Button size="small" title="上传表情" disabled={busy} onClick={() => fileInputRef.current?.click()}>
             <Plus size={14} /> 上传
           </Button>
@@ -157,19 +159,19 @@ function SetCard({ set, onReload, onError }: { set: StickerSet; onReload: () => 
           <Button size="small" variant="danger" title="删除表情集" disabled={busy} onClick={() => void run(() => removeAdminStickerSet(set.id))}>
             <Trash2 size={14} /> 删除
           </Button>
-        </div>
-      </div>
-      <div className="admin-stickers__thumbs">
-        {set.items.length === 0 ? (
-          <span className="admin-stickers__empty">空集，点「上传」添加表情图片</span>
-        ) : (
-          set.items.map((it) => (
-            <span key={it.id} className="admin-stickers__thumb" title={it.name ?? ''}>
+        </Space>
+      </Flex>
+      {set.items.length === 0 ? (
+        <Typography.Text type="secondary">空集，点「上传」添加表情图片</Typography.Text>
+      ) : (
+        <Flex gap={8} wrap>
+          {set.items.map((it) => (
+            <span key={it.id} title={it.name ?? ''}>
               <StickerThumb fileId={it.fileId} />
             </span>
-          ))
-        )}
-      </div>
-    </div>
+          ))}
+        </Flex>
+      )}
+    </Card>
   );
 }

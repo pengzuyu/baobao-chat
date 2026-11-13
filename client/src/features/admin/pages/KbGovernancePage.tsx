@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Input, Modal, Table, Tag } from 'antd';
+import { Alert, Card, Flex, Input, Modal, Progress, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Database, Zap } from 'lucide-react';
 import { deleteKBSpace, fetchKBEmbedding, fetchKBSpaces, rebuildKBEmbedding, setKBSpaceStatus, type KBEmbeddingSettings, type KBSpaceRow } from '../api/admin';
@@ -96,9 +96,9 @@ export function KbGovernancePage() {
       title: '空间',
       dataIndex: 'name',
       render: (_, r) => (
-        <span className="admin-role__name">
+        <Space size={4}>
           <Database size={13} /> {r.name}
-        </span>
+        </Space>
       ),
     },
     {
@@ -113,7 +113,9 @@ export function KbGovernancePage() {
       render: (_, r) => (
         <div>
           {r.owner_name || '—'}
-          <div className="admin-role__desc">{r.owner_id}</div>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+            {r.owner_id}
+          </Typography.Paragraph>
         </div>
       ),
     },
@@ -125,7 +127,7 @@ export function KbGovernancePage() {
       render: (_, r) => (
         <span>
           {formatBytes(r.used_bytes)}
-          {r.quota_bytes > 0 ? <span className="admin-role__desc"> / {formatBytes(r.quota_bytes)}</span> : null}
+          {r.quota_bytes > 0 ? <Typography.Text type="secondary"> / {formatBytes(r.quota_bytes)}</Typography.Text> : null}
         </span>
       ),
     },
@@ -153,22 +155,24 @@ export function KbGovernancePage() {
   ];
 
   return (
-    <div className="admin-page__section" data-testid="admin-kb">
-      <div className="admin-page__head">
-        <h2>知识库治理</h2>
+    <div data-testid="admin-kb">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          知识库治理
+        </Typography.Title>
         {rows ? (
-          <span className="admin-import__hint">
+          <Typography.Text type="secondary">
             {rows.length} 空间 · {rows.reduce((n, r) => n + r.doc_count, 0)} 文档 ·{' '}
             {formatBytes(rows.reduce((n, r) => n + r.used_bytes, 0))}
-          </span>
+          </Typography.Text>
         ) : null}
-      </div>
+      </Flex>
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
       {opError ? <Alert type="error" showIcon message={opError} data-testid="kb-govern-error" style={{ marginBottom: 8 }} /> : null}
       {rows === null ? (
-        <div className="admin-page__empty">加载中…</div>
+        <Typography.Text type="secondary">加载中…</Typography.Text>
       ) : rows.length === 0 ? (
-        <div className="admin-page__empty">暂无空间</div>
+        <Typography.Text type="secondary">暂无空间</Typography.Text>
       ) : (
         <>
           <Table<KBSpaceRow>
@@ -239,47 +243,43 @@ function EmbeddingPanel() {
   };
 
   return (
-    <div className="kb-embed-panel" data-testid="kb-embed-panel">
-      <div className="kb-embed-panel__head">
-        <Zap size={14} /> 嵌入设置（向量检索）
-      </div>
+    <Card size="small" style={{ marginTop: 16 }} title={<Space size={4}><Zap size={14} /> 嵌入设置（向量检索）</Space>} data-testid="kb-embed-panel">
       {emb.isError ? (
-        <Alert type="error" showIcon message={emb.error instanceof Error ? emb.error.message : '加载失败'} style={{ marginTop: 8 }} />
+        <Alert type="error" showIcon message={emb.error instanceof Error ? emb.error.message : '加载失败'} />
       ) : !st ? (
-        <div className="admin-page__empty">加载中…</div>
+        <Typography.Text type="secondary">加载中…</Typography.Text>
       ) : (
         <>
-          <div className="kb-embed-panel__row">
+          <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
             <span>当前：第 {st.embed_epoch} 代 · {st.embed_model || '（未登记）'} · {st.embed_dims} 维</span>
             <Tag color={st.rebuild_status === 'running' ? 'gold' : 'green'}>
               {st.rebuild_status === 'running' ? '重建中' : '空闲'}
             </Tag>
-          </div>
+          </Flex>
           {st.rebuild_status === 'running' ? (
-            <div className="kb-embed-panel__progress" data-testid="kb-embed-progress">
-              <div className="kb-embed-panel__progress-bar">
-                <div
-                  className="kb-embed-panel__progress-fill"
-                  style={{ width: `${st.rebuild_total > 0 ? Math.round((st.rebuild_done / st.rebuild_total) * 100) : 0}%` }}
-                />
-              </div>
+            <Flex gap={8} align="center" style={{ marginBottom: 8 }} data-testid="kb-embed-progress">
+              <Progress
+                percent={st.rebuild_total > 0 ? Math.round((st.rebuild_done / st.rebuild_total) * 100) : 0}
+                size="small"
+                style={{ flex: 1, margin: 0 }}
+              />
               <span>{st.rebuild_done}/{st.rebuild_total} 篇</span>
-            </div>
+            </Flex>
           ) : null}
-          <div className="kb-embed-panel__form">
-            <Input className="kb-embed-panel__input" placeholder="目标模型（如 embedding-3）" value={model} onChange={(e) => setModel(e.target.value)} />
-            <Input className="kb-embed-panel__input kb-embed-panel__input--dims" placeholder="维度" value={dims} onChange={(e) => setDims(e.target.value)} />
-            <Button variant="text" disabled={busy || st.rebuild_status === 'running'} data-testid="kb-embed-rebuild-btn" onClick={doRebuild}>
+          <Space size={8} wrap style={{ marginBottom: 8 }}>
+            <Input placeholder="目标模型（如 embedding-3）" style={{ width: 220 }} value={model} onChange={(e) => setModel(e.target.value)} />
+            <Input placeholder="维度" style={{ width: 120 }} value={dims} onChange={(e) => setDims(e.target.value)} />
+            <Button variant="secondary" disabled={busy || st.rebuild_status === 'running'} data-testid="kb-embed-rebuild-btn" onClick={doRebuild}>
               重建向量
             </Button>
-          </div>
-          {msg ? <div className="kb-embed-panel__msg">{msg}</div> : null}
-          <div className="kb-embed-panel__hint">
+          </Space>
+          {msg ? <Typography.Text type="danger">{msg}</Typography.Text> : null}
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
             提示：嵌入/重排上游在「AI 供应商」页配置（路由 bbw-embed/bbw-rerank 档）；切换模型后在此触发重建。
-          </div>
+          </Typography.Paragraph>
         </>
       )}
-    </div>
+    </Card>
   );
 }
 

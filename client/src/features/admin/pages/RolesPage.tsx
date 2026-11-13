@@ -4,11 +4,12 @@
  * （输入 uid → 角色下拉授权/收回）。权限点字典来自 GET /admin/perm-points
  * （服务端权威清单 D12 §2.4，API-ADM-02——前端不硬编码；字典外点服务端拒绝，
  * 旧种子裸码 admin 编辑时自动收敛）。scope 部门范围授权随 D12 组织树阶段二。
- * D26-O2：Table/Modal/Select/Input/Checkbox/Tag 全量 antd 化。
+ * D26-O2：Table/Modal/Select/Input/Checkbox/Tag 全量 antd 化；补充轮：
+ * 头部 Flex/授权区 Card+List/错误条 Alert（自研 admin-* 样式退役）。
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Checkbox, Input, Modal, Select, Table, Tag } from 'antd';
+import { Alert, Card, Checkbox, Flex, Input, List, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
@@ -158,10 +159,14 @@ export function RolesPage() {
       dataIndex: 'name',
       render: (_, r) => (
         <div>
-          <div className="admin-role__name">
+          <Space size={4}>
             <ShieldCheck size={13} /> {r.name}
-          </div>
-          {r.description ? <div className="admin-role__desc">{r.description}</div> : null}
+          </Space>
+          {r.description ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+              {r.description}
+            </Typography.Paragraph>
+          ) : null}
         </div>
       ),
     },
@@ -176,43 +181,44 @@ export function RolesPage() {
       dataIndex: 'permissions',
       width: 90,
       render: (perms: string[]) => (
-        <span className="admin-role__perms" title={perms.join('\n')}>
-          {perms.length} 项
-        </span>
+        <span title={perms.join('\n')}>{perms.length} 项</span>
       ),
     },
     { title: '授权人数', dataIndex: 'user_count', width: 90 },
     {
       title: '操作',
       key: 'ops',
-      width: 160,
+      width: 170,
       render: (_, r) => (
-        <>
-          <Button variant="secondary" onClick={() => openEdit(r)}>
+        <Space size={4}>
+          <Button variant="secondary" size="small" onClick={() => openEdit(r)}>
             {r.is_builtin ? '权限点' : '编辑'}
-          </Button>{' '}
+          </Button>
           {!r.is_builtin ? (
-            <Button variant="danger" onClick={() => remove(r)}>
+            <Button variant="danger" size="small" onClick={() => remove(r)}>
               <Trash2 size={12} /> 删除
             </Button>
           ) : null}
-        </>
+        </Space>
       ),
     },
   ];
 
   return (
-    <div className="admin-page__section" data-testid="admin-roles">
-      <div className="admin-page__head">
-        <h2>角色编辑器</h2>
+    <div data-testid="admin-roles">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          角色编辑器
+        </Typography.Title>
+        <span style={{ flex: 1 }} />
         <Button onClick={openCreate} data-testid="role-create-btn">
           <Plus size={14} /> 新建角色
         </Button>
-      </div>
-      {error ? <div className="admin-page__error">{error}</div> : null}
+      </Flex>
+      {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
 
       {roles === null ? (
-        <div className="admin-page__empty">加载中…</div>
+        <Typography.Text type="secondary">加载中…</Typography.Text>
       ) : (
         <Table<AdminRole>
           rowKey="id"
@@ -224,38 +230,43 @@ export function RolesPage() {
       )}
 
       {/* 用户授权管理 */}
-      <div className="admin-grants">
-        <div className="admin-grants__head">用户授权</div>
-        <div className="admin-grants__query">
+      <Card size="small" title="用户授权" style={{ marginTop: 16 }}>
+        <Space.Compact style={{ marginBottom: 12 }}>
           <Input
             placeholder="用户 uid"
             style={{ width: 220 }}
             value={grantUid}
             onChange={(e) => setGrantUid(e.target.value)}
+            onPressEnter={() => void loadGrants()}
             data-testid="grant-uid-input"
           />
           <Button variant="secondary" onClick={() => void loadGrants()} data-testid="grant-query-btn">
             查询
           </Button>
-        </div>
+        </Space.Compact>
         {grants !== null ? (
-          <div className="admin-grants__body">
-            {grants.length === 0 ? (
-              <div className="admin-page__empty">该用户暂无角色</div>
-            ) : (
-              grants.map((g) => (
-                <div className="admin-grants__row" key={g.id}>
-                  <span>{g.role_name}</span>
-                  <Tag>
-                    {(g.scope_type ?? 4) === 1 ? '本人' : (g.scope_type ?? 4) === 2 ? `本部门#${g.scope_dept_id ?? ''}` : (g.scope_type ?? 4) === 3 ? `本部门及以下#${g.scope_dept_id ?? ''}` : '全租户'}
-                  </Tag>
-                  <Button variant="danger" onClick={() => void doRevoke(g.id)}>
-                    收回
-                  </Button>
-                </div>
-              ))
-            )}
-            <div className="admin-grants__row admin-grants__row--add">
+          <>
+            <List
+              size="small"
+              locale={{ emptyText: '该用户暂无角色' }}
+              dataSource={grants}
+              renderItem={(g) => (
+                <List.Item style={{ padding: '6px 0' }}>
+                  <Flex justify="space-between" align="center" style={{ width: '100%' }}>
+                    <Space size={8}>
+                      <span>{g.role_name}</span>
+                      <Tag>
+                        {(g.scope_type ?? 4) === 1 ? '本人' : (g.scope_type ?? 4) === 2 ? `本部门#${g.scope_dept_id ?? ''}` : (g.scope_type ?? 4) === 3 ? `本部门及以下#${g.scope_dept_id ?? ''}` : '全租户'}
+                      </Tag>
+                    </Space>
+                    <Button variant="danger" size="small" onClick={() => void doRevoke(g.id)}>
+                      收回
+                    </Button>
+                  </Flex>
+                </List.Item>
+              )}
+            />
+            <Space size={8} wrap style={{ marginTop: 8 }}>
               <Select
                 placeholder="选择角色授予…"
                 style={{ width: 200 }}
@@ -274,7 +285,7 @@ export function RolesPage() {
               />
               {scopeType === 2 || scopeType === 3 ? (
                 <Input
-                  style={{ width: 160 }}
+                  style={{ width: 140 }}
                   data-testid="grant-scope-dept"
                   placeholder="部门 ID"
                   value={scopeDeptId}
@@ -284,10 +295,10 @@ export function RolesPage() {
               <Button disabled={!grantRoleId} onClick={() => grantRoleId && void doGrant(grantRoleId)}>
                 授予
               </Button>
-            </div>
-          </div>
+            </Space>
+          </>
         ) : null}
-      </div>
+      </Card>
 
       {/* 新建/编辑弹窗 */}
       <Modal
@@ -313,9 +324,11 @@ export function RolesPage() {
         ]}
       >
         {editor ? (
-          <div style={{ display: 'grid', gap: 12 }}>
-            <label className="gm-field__label">
-              角色名（≤50 字）{editor.role?.is_builtin ? '（内置锁定）' : ''}
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <label>
+              <Typography.Text>
+                角色名（≤50 字）{editor.role?.is_builtin ? '（内置锁定）' : ''}
+              </Typography.Text>
             </label>
             <Input
               value={editor.name}
@@ -323,43 +336,46 @@ export function RolesPage() {
               onChange={(e) => setEditor({ ...editor, name: e.target.value })}
               data-testid="role-name-input"
             />
-            <label className="gm-field__label">描述</label>
+            <Typography.Text>描述</Typography.Text>
             <Input
               value={editor.description}
               disabled={editor.role?.is_builtin}
               onChange={(e) => setEditor({ ...editor, description: e.target.value })}
             />
-            <label className="gm-field__label">
+            <Typography.Text>
               权限点（已选 {editor.permissions.size} 项；字典共 {permDoc?.total ?? '…'} 项，服务端权威清单 D12 §2.4）
-            </label>
+            </Typography.Text>
             {permDoc === null ? (
-              <div className="admin-page__empty">权限点字典加载失败（编辑需字典校验）——请稍后重开编辑器重试</div>
+              <Alert type="warning" showIcon message="权限点字典加载失败（编辑需字典校验）——请稍后重开编辑器重试" />
             ) : (
-              <div style={{ display: 'grid', gap: 12 }}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
                 {permDoc.groups.map((g) => (
                   <div key={g.domain}>
-                    <div className="admin-role__desc" style={{ marginBottom: 4 }}>
+                    <Typography.Text type="secondary">
                       {g.label}（{g.points.length} 项）
+                    </Typography.Text>
+                    <div>
+                      {g.points.map((p) => (
+                        <Checkbox
+                          key={p.code}
+                          checked={editor.permissions.has(p.code)}
+                          onChange={() => {
+                            const next = new Set(editor.permissions);
+                            if (next.has(p.code)) next.delete(p.code);
+                            else next.add(p.code);
+                            setEditor({ ...editor, permissions: next });
+                          }}
+                        >
+                          <Typography.Text code>{p.code}</Typography.Text>{' '}
+                          <Typography.Text type="secondary">{p.desc}</Typography.Text>
+                        </Checkbox>
+                      ))}
                     </div>
-                    {g.points.map((p) => (
-                      <Checkbox
-                        key={p.code}
-                        checked={editor.permissions.has(p.code)}
-                        onChange={() => {
-                          const next = new Set(editor.permissions);
-                          if (next.has(p.code)) next.delete(p.code);
-                          else next.add(p.code);
-                          setEditor({ ...editor, permissions: next });
-                        }}
-                      >
-                        <code>{p.code}</code> <span className="admin-role__desc">{p.desc}</span>
-                      </Checkbox>
-                    ))}
                   </div>
                 ))}
-              </div>
+              </Space>
             )}
-          </div>
+          </Space>
         ) : null}
       </Modal>
     </div>

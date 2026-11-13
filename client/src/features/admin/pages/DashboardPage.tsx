@@ -5,9 +5,10 @@
  * - 六态：loading 指标卡骨架 / empty（无数据卡显示 —）/ error 单页重试 /
  *   offline 缓存+遮罩 / forbidden（2003 整页锁）/ degraded（指标源缺失→0 值卡注明）
  * - 统计时点标注（as_of，PAD-02"统计时点"语义）
+ * D26-O2 补充：指标卡→antd Card+Statistic、面板→Card、趋势占比→Progress（自研样式退役）。
  */
 
-import { Table } from 'antd';
+import { Card, Flex, Progress, Statistic, Table, Typography } from 'antd';
 import { Activity, BrainCircuit, HardDrive, MessageSquare, MessagesSquare, Users, Zap } from 'lucide-react';
 import { ApiError } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
@@ -54,13 +55,13 @@ export function DashboardPage() {
   const maxTokens = Math.max(1, ...trend.map((p) => p.total_tokens));
 
   return (
-    <div className="admin-dashboard">
-      <header className="admin-page__header">
-        <h2 className="admin-page__title">仪表盘</h2>
-        {d ? (
-          <span className="admin-page__meta">统计时点 {new Date(d.as_of).toLocaleString('zh-CN')}</span>
-        ) : null}
-      </header>
+    <div data-testid="admin-dashboard">
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          仪表盘
+        </Typography.Title>
+        {d ? <Typography.Text type="secondary">统计时点 {new Date(d.as_of).toLocaleString('zh-CN')}</Typography.Text> : null}
+      </Flex>
       <StateView
         state={state}
         skeleton={<SkeletonBlock height={280} />}
@@ -69,35 +70,30 @@ export function DashboardPage() {
         onRetry={() => void query.refetch()}
         forbiddenText="需要管理员权限（admin:*）"
       >
-        <div className="admin-cards">
+        <Flex wrap="wrap" gap={12} style={{ marginBottom: 16 }}>
           {cards.map((c) => (
-            <div key={c.key} className="admin-card" data-testid={`admin-card-${c.key}`}>
-              <div className="admin-card__icon" aria-hidden>
+            <Card key={c.key} size="small" style={{ width: 200 }} data-testid={`admin-card-${c.key}`}>
+              <Flex align="center" gap={8}>
                 <c.icon size={18} strokeWidth={1.8} />
-              </div>
-              <div className="admin-card__body">
-                <div className="admin-card__title">{c.title}</div>
-                <div className="admin-card__value">{c.value}</div>
-                {c.hint ? <div className="admin-card__hint">{c.hint}</div> : null}
-              </div>
-            </div>
+                <Statistic title={c.title} value={c.value} />
+              </Flex>
+              {c.hint ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>{c.hint}</Typography.Text> : null}
+            </Card>
           ))}
-          <div className="admin-card admin-card--ai" data-testid="admin-card-ai">
-            <div className="admin-card__icon" aria-hidden>
+          <Card size="small" style={{ width: 200 }} data-testid="admin-card-ai">
+            <Flex align="center" gap={8}>
               <Zap size={18} strokeWidth={1.8} />
-            </div>
-            <div className="admin-card__body">
-              <div className="admin-card__title">今日 AI 调用</div>
-              <div className="admin-card__value">{fmtNum(d?.ai_today.requests)}</div>
-              <div className="admin-card__hint">{fmtNum(d?.ai_today.total_tokens)} tokens</div>
-            </div>
-          </div>
-        </div>
+              <Statistic title="今日 AI 调用" value={fmtNum(d?.ai_today.requests)} />
+            </Flex>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {fmtNum(d?.ai_today.total_tokens)} tokens
+            </Typography.Text>
+          </Card>
+        </Flex>
 
-        <section className="admin-panel">
-          <div className="admin-panel__title">近 7 日 AI tokens 趋势</div>
+        <Card size="small" title="近 7 日 AI tokens 趋势">
           {trend.length === 0 ? (
-            <div className="admin-empty-inline">暂无用量数据（经网关发起 embed/chat 后计入）</div>
+            <Typography.Text type="secondary">暂无用量数据（经网关发起 embed/chat 后计入）</Typography.Text>
           ) : (
             <Table
               rowKey="date"
@@ -110,16 +106,12 @@ export function DashboardPage() {
                 {
                   title: '占比',
                   key: 'bar',
-                  render: (_, p) => (
-                    <span className="admin-bar">
-                      <span className="admin-bar__fill" style={{ width: `${Math.max(2, Math.round((p.total_tokens / maxTokens) * 100))}%` }} />
-                    </span>
-                  ),
+                  render: (_, p) => <Progress percent={Math.max(2, Math.round((p.total_tokens / maxTokens) * 100))} showInfo={false} size="small" />,
                 },
               ]}
             />
           )}
-        </section>
+        </Card>
       </StateView>
     </div>
   );

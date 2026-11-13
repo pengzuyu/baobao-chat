@@ -4,12 +4,12 @@
  * - 敏感词库：分页列表 + 新增（word/category）+ 删除；写后消息域 3005 即时生效
  * - 六态：两 tab 独立 loading/empty/error；offline 只读（禁写）；forbidden 2003；
  *   degraded（新增冲突 9001 等写失败行内提示）
- * D26-O2：Tabs/Switch/Input/Table/Tag/Alert 全量 antd 化。
+ * D26-O2：Tabs/Switch/Input/Table/Tag/Alert 化；补充轮：策略行→List、面板→Card（admin-policy/admin-panel 退役）。
  */
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Alert, Input, Switch, Table, Tabs, Tag } from 'antd';
+import { Alert, Card, Flex, Input, List, Space, Switch, Table, Tabs, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Bot, Plus, ShieldAlert, Trash2 } from 'lucide-react';
 import { ApiError, errText as apiErrText } from '../../../shared/api/http';
@@ -22,11 +22,13 @@ import { deleteAgentToolPolicy, updateAgentToolPolicy } from '../api/admin';
 
 export function PoliciesPage() {
   return (
-    <div className="admin-policies">
-      <header className="admin-page__header">
-        <h2 className="admin-page__title">策略中心</h2>
-        <span className="admin-page__meta">Agent 域只读快照 · 敏感词库读写（写后即时生效）</span>
-      </header>
+    <div>
+      <Flex align="center" gap={8} style={{ marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          策略中心
+        </Typography.Title>
+        <Typography.Text type="secondary">Agent 域只读快照 · 敏感词库读写（写后即时生效）</Typography.Text>
+      </Flex>
       <Tabs
         defaultActiveKey="agent"
         items={[
@@ -108,6 +110,47 @@ function AgentPolicyPanel() {
     setNewSubject('');
   };
 
+  /** 行统一结构：label + 标注 + Switch + （已覆盖时）恢复默认 */
+  const policyItems: Array<{ key: string; label: ReactNode; tag?: ReactNode; switchNode: ReactNode; reset?: boolean }> = [
+    ...BUILTIN_SUBJECTS.map((b) => {
+      const row = rowOf(b.subject);
+      return {
+        key: b.subject,
+        label: b.label,
+        tag: row ? <Tag>已覆盖</Tag> : undefined,
+        // 内置四行默认基线不同（fs 默认允许、shell 默认禁用）
+        switchNode: (
+          <Switch
+            checked={row ? row.allowed : b.defAllowed}
+            checkedChildren="允许"
+            unCheckedChildren="禁用"
+            loading={busy === b.subject}
+            disabled={connStatus === 'offline'}
+            onChange={() => toggle(b.subject, b.defAllowed)}
+            data-testid={`admin-policy-toggle-${b.subject}`}
+          />
+        ),
+        reset: !!row,
+      };
+    }),
+    ...extraRows.map((r) => ({
+      key: r.subject,
+      label: r.subject,
+      tag: <Tag>自定义</Tag>,
+      switchNode: (
+        <Switch
+          checked={r.allowed}
+          checkedChildren="允许"
+          unCheckedChildren="禁用"
+          loading={busy === r.subject}
+          onChange={() => toggle(r.subject, true)}
+          data-testid={`admin-policy-toggle-${r.subject}`}
+        />
+      ),
+      reset: true,
+    })),
+  ];
+
   return (
     <StateView
       state={state}
@@ -117,66 +160,60 @@ function AgentPolicyPanel() {
       onRetry={() => void query.refetch()}
       forbiddenText="需要 admin:policy:manage 权限"
     >
-      <section className="admin-panel" data-testid="admin-agent-policy-editor">
-        <div className="admin-panel__title">
-          agent_tool_policy
-          <Tag>{query.data?.source === 'table' ? '表数据' : '默认策略'}</Tag>
-          <span className="admin-panel__meta">version {query.data?.version} · {query.data ? new Date(query.data.updated_at).toLocaleString('zh-CN') : ''}</span>
-          <Button variant="secondary" onClick={() => setShowJson((v) => !v)} data-testid="admin-policy-json-toggle">
+      <Card
+        size="small"
+        data-testid="admin-agent-policy-editor"
+        title={
+          <Space size={8}>
+            agent_tool_policy
+            <Tag>{query.data?.source === 'table' ? '表数据' : '默认策略'}</Tag>
+            <Typography.Text type="secondary">
+              version {query.data?.version} · {query.data ? new Date(query.data.updated_at).toLocaleString('zh-CN') : ''}
+            </Typography.Text>
+          </Space>
+        }
+        extra={
+          <Button variant="secondary" size="small" onClick={() => setShowJson((v) => !v)} data-testid="admin-policy-json-toggle">
             {showJson ? '收起快照 JSON' : '查看快照 JSON'}
           </Button>
-        </div>
-
+        }
+      >
         {errText ? <Alert type="error" showIcon message={errText} data-testid="admin-policy-error" style={{ marginBottom: 8 }} /> : null}
 
-        <div className="admin-policy-rows">
-          {BUILTIN_SUBJECTS.map((b) => {
-            const row = rowOf(b.subject);
-            const allowed = row ? row.allowed : b.defAllowed;
-            return (
-              <div key={b.subject} className="admin-policy-row" data-testid={`admin-policy-row-${b.subject}`}>
-                <span className="admin-policy-row__name">
-                  {b.label}
-                  {row ? <Tag>已覆盖</Tag> : null}
-                </span>
-                <Switch
-                  checked={allowed}
-                  checkedChildren="允许"
-                  unCheckedChildren="禁用"
-                  loading={busy === b.subject}
-                  disabled={connStatus === 'offline'}
-                  onChange={() => toggle(b.subject, b.defAllowed)}
-                  data-testid={`admin-policy-toggle-${b.subject}`}
-                />
-                {row ? (
-                  <Button variant="secondary" size="small" disabled={busy === b.subject} onClick={() => apply(deleteAgentToolPolicy(b.subject), b.subject)} title="删行回落默认">
-                    恢复默认
-                  </Button>
-                ) : null}
-              </div>
-            );
-          })}
-          {extraRows.map((r) => (
-            <div key={r.subject} className="admin-policy-row" data-testid={`admin-policy-row-${r.subject}`}>
-              <span className="admin-policy-row__name">
-                {r.subject}
-                <Tag>自定义</Tag>
-              </span>
-              <Switch
-                checked={r.allowed}
-                checkedChildren="允许"
-                unCheckedChildren="禁用"
-                loading={busy === r.subject}
-                onChange={() => toggle(r.subject, true)}
-              />
-              <Button variant="secondary" size="small" disabled={busy === r.subject} onClick={() => apply(deleteAgentToolPolicy(r.subject), r.subject)}>
-                恢复默认
-              </Button>
-            </div>
-          ))}
-        </div>
+        <List
+          size="small"
+          split
+          dataSource={policyItems}
+          renderItem={(item) => (
+            <List.Item
+              data-testid={`admin-policy-row-${item.key}`}
+              actions={[
+                item.switchNode,
+                ...(item.reset
+                  ? [
+                      <Button
+                        key="reset"
+                        variant="secondary"
+                        size="small"
+                        disabled={busy === item.key}
+                        onClick={() => apply(deleteAgentToolPolicy(item.key), item.key)}
+                        title="删行回落默认"
+                      >
+                        恢复默认
+                      </Button>,
+                    ]
+                  : []),
+              ]}
+            >
+              <Space size={8}>
+                {item.label}
+                {item.tag}
+              </Space>
+            </List.Item>
+          )}
+        />
 
-        <div className="admin-policy-add">
+        <Space size={8} wrap style={{ marginTop: 12 }}>
           <Input
             placeholder="自定义 subject（如 app:crm:*）"
             style={{ width: 280 }}
@@ -188,19 +225,19 @@ function AgentPolicyPanel() {
           <Button onClick={addSubject} loading={!!newSubject.trim() && busy === newSubject.trim()} data-testid="admin-policy-add-btn">
             添加授权行
           </Button>
-        </div>
+        </Space>
 
-        <div className="admin-panel__note">
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}>
           判定链（09 §4）：租户策略(本表) → 用户权限点 → 模式×工具矩阵 → 三级记忆 → untrusted 强制确认。
           热更事件 agent.policy.updated 与 bbrt 工具门面下发随 Agent 域阶段二接线。
-        </div>
+        </Typography.Paragraph>
 
         {showJson ? (
-          <pre className="admin-json" data-testid="admin-agent-policy-json">
+          <pre data-testid="admin-agent-policy-json" style={{ margin: '12px 0 0' }}>
             {JSON.stringify(query.data?.policy ?? {}, null, 2)}
           </pre>
         ) : null}
-      </section>
+      </Card>
     </StateView>
   );
 }
@@ -247,10 +284,10 @@ function WordsPanel() {
   };
 
   const columns: ColumnsType<(typeof items)[number]> = [
-    { title: '词', dataIndex: 'word', render: (v: string) => <span className="admin-mono">{v}</span> },
+    { title: '词', dataIndex: 'word', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
     { title: '分类', dataIndex: 'category', render: (v: string) => v || '—' },
     { title: '模式', dataIndex: 'mode', width: 90, render: (v: number) => (v === 1 ? '拦截' : v === 2 ? '替换' : '审计') },
-    { title: '添加时间', dataIndex: 'created_at', width: 180, render: (v: number) => <span className="admin-mono">{new Date(v).toLocaleString('zh-CN')}</span> },
+    { title: '添加时间', dataIndex: 'created_at', width: 180, render: (v: number) => new Date(v).toLocaleString('zh-CN') },
     {
       title: '操作',
       key: 'ops',
@@ -266,20 +303,20 @@ function WordsPanel() {
   return (
     <>
       {/* 新增表单恒渲染（空库时也能加首词——不随列表六态隐藏） */}
-      <div className="admin-word-form admin-word-form--top">
+      <Space size={8} wrap style={{ marginBottom: 8 }}>
         <Input
-          className="admin-word-form__word"
-          value={word}
           placeholder="新增敏感词（≤64 字，Enter 提交）"
+          style={{ width: 240 }}
+          value={word}
           onChange={(e) => setWord(e.target.value)}
           onPressEnter={submit}
           data-testid="admin-word-input"
         />
-        <Input className="admin-word-form__category" value={category} placeholder="分类（可选）" onChange={(e) => setCategory(e.target.value)} />
+        <Input placeholder="分类（可选）" style={{ width: 160 }} value={category} onChange={(e) => setCategory(e.target.value)} />
         <Button onClick={submit} loading={add.isPending}>
           <Plus size={13} /> 新增
         </Button>
-      </div>
+      </Space>
       {formError ? (
         <Alert type="error" showIcon message={formError} data-testid="admin-word-error" style={{ marginBottom: 8 }} />
       ) : null}
@@ -292,26 +329,22 @@ function WordsPanel() {
         forbiddenText="需要 admin:policy:manage 权限"
         offlineText="离线中：词库只读，新增/删除暂不可用"
       >
-      <section className="admin-panel">
-        <div className="admin-panel__title">
-          敏感词库
-          <span className="admin-panel__meta">共 {query.data?.pages[0]?.total ?? 0} 条 · mode=拦截（3005）· 写后消息域即时生效</span>
-        </div>
-        <Table
-          rowKey="id"
-          columns={columns}
-          dataSource={items}
-          data-testid="admin-words-table"
-          pagination={{ pageSize: 20, hideOnSinglePage: true }}
-        />
-        {lastPage?.has_more && lastPage.next_cursor ? (
-          <div className="admin-loadmore">
-            <Button variant="secondary" loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
-              加载更多
-            </Button>
-          </div>
-        ) : null}
-      </section>
+        <Card size="small" title={<Space size={8}>敏感词库<Typography.Text type="secondary">共 {query.data?.pages[0]?.total ?? 0} 条 · mode=拦截（3005）· 写后消息域即时生效</Typography.Text></Space>}>
+          <Table
+            rowKey="id"
+            columns={columns}
+            dataSource={items}
+            data-testid="admin-words-table"
+            pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          />
+          {lastPage?.has_more && lastPage.next_cursor ? (
+            <Flex justify="center" style={{ marginTop: 8 }}>
+              <Button variant="secondary" loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
+                加载更多
+              </Button>
+            </Flex>
+          ) : null}
+        </Card>
       </StateView>
     </>
   );

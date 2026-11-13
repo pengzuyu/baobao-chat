@@ -8,7 +8,7 @@
  */
 
 import { useState } from 'react';
-import { Input, Tag } from 'antd';
+import { Flex, Input, Tag } from 'antd';
 import { Plus } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 
@@ -38,7 +38,7 @@ export function ProviderModelsEditor({ models, candidates, onToggle, onAdd, test
   };
 
   return (
-    <div className="admin-provider-models" data-testid={testId}>
+    <Flex gap={4} wrap="wrap" align="center" data-testid={testId}>
       {candidates.map((m) => (
         <Tag.CheckableTag key={m} checked={models.includes(m)} onChange={() => onToggle(m)}>
           {m}
@@ -51,7 +51,7 @@ export function ProviderModelsEditor({ models, candidates, onToggle, onAdd, test
             {m}（手动）
           </Tag>
         ))}
-      <span className="admin-provider-models__entry">
+      <Flex gap={4} align="center">
         <Input
           style={{ width: 220 }}
           value={manual}
@@ -63,7 +63,7 @@ export function ProviderModelsEditor({ models, candidates, onToggle, onAdd, test
         <Button variant="secondary" onClick={addManual} disabled={!manual.trim()}>
           <Plus size={13} /> 添加
         </Button>
-      </span>
-    </div>
+      </Flex>
+    </Flex>
   );
 }
