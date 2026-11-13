@@ -326,6 +326,25 @@
 | N5 | 前端其余+管理端 | SpaceBrowsePage（目录=专栏面包屑逐层懒加载）+ MyArticlesPage（两维度分组）+ KbGovernancePage 嵌入设置面板（重建触发+进度轮询+跨维度确认）+ 旧件退役（KbPage 707 行/GrantModal/IngestBadge/createSpace+grants api） | tsc+vite build 绿 | [x] 2026-11-12（c6338e6；净 -945 行） |
 | N6 | IM 收藏入库 | IngestFromIM 接路由 POST /kb/docs/from-im（spaceID=0 自动个人维度）+ 消息右键「存入知识库」（仅 text 可见+favToast 回显） | go test+tsc+build 绿 | [x] 2026-11-13（8b0c1b6） |
 | N7 | 真机验收 | D24 §10 七项走查（首页榜单/浏览量口径/阅读页渲染/维度隔离/检索三态/重建进度/IM 入库） | 用户真机走查（:8090 重启+Tauri） | [ ] |
+
+## 批次 O：全站 UI 组件库切换 Ant Design（D26，2026-11-13 O0 落稿待编码）
+
+> 定案（用户裁决 2026-11-13）：**除 IM 气泡/消息流结构外全量切 antd 5**（Arco 否决——已在
+> 依赖/主题桥接已通/组件面最大）；风格基线=--bbw-* 令牌全量灌 antd theme（零观感漂移，
+> 只换手感）；表单=控件层替换不强推 Form 重写；24 处 window.confirm 全换 Modal.confirm；
+> toast 统一 antd message；Button/Skeleton 包装化过渡（调用点 API 零改动）；global.css
+> 10384→≈3000 行；保留自研=IM 气泡族/MarkdownText/ctx-menu/Splitter/StateView 壳/Logo。
+> 设计：[D26](detail/D26-全站UI组件库切换AntDesign详细设计.md)。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|---|---|---|---|
+| O1 | 主题基线+基础层+kb 样板 | antdThemeFrom 亮暗单源+ConfigProvider 全量令牌；Button/Skeleton/Empty/Avatar 包装化；kb 域 Tabs/Tree/Modal×2/Input 换装 | 亮暗混排无肉眼差异；kb 全链等价（开文章/建目录/建文章） | [ ] |
+| O2 | admin 域 15 页 | admin-table→Table、表单控件全换、内联弹窗×2→Modal、confirm×14→Modal.confirm | 任一表格页分页排序+表单保存+危险确认红钮 | [ ] |
+| O3 | settings+auth+contacts+mail+expert+eco | 表单件+弹窗（compose/settings-drawer/exp×2/plugin-drawer）+confirm 清零 | 各域表单等价+弹窗 Esc/遮罩关闭 | [ ] |
+| O4 | agent 工作台 | 会话列表/设置卡/报告/记忆页表单件+弹窗（过程卡/StreamMessage 保留） | 工作台全链回归 | [ ] |
+| O5 | IM 外围 | 弹窗×6→Modal/Drawer、ConvInfoSidebar 表单件、favToast→message（气泡/右键/输入区不动） | IM 回归重点走查 | [ ] |
+| O6 | CSS 清扫 | global.css 分域删至 ≈3000（基元/弹窗表单段+kb 死代码三节）；legacy 标记防误删 | 行数≤3200+全站 grep 残留=0 | [ ] |
+| O7 | 真机验收 | D26 §7 五项走查 | 用户真机走查 | [ ] |
 | N8 | 正文媒体引用权限（D24 §11 补记） | file_ref 表随 0037 建（file_id/ctx_type/ctx_id/created_by）+ file 域 canAccess 第三判据（EXISTS 可见引用上下文，kb_article 可见性闭包注入——挂门法，否掉文件行打标）+ 正文 bbwfile://{id} 引用语法与 N4 阅读页渲染换票（120s 票据现场取）+ 删除三层（静默删引用/本体删除引用计数提示/全零回收归 D06 登记项）；IM conv_id 旧径不动（message 迁 file_ref 终态另立） | 非作者读者打开公开文章正文图正常显示（旧路径 403）；编辑删图/文章移动不影响其他门 | [ ] |
 
 ## 批次 O：对象存储与预签名直传（D25，2026-11-12 设计定稿）
