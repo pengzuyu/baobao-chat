@@ -37,6 +37,7 @@
 
 | D24 | [知识库博客化详细设计](D24-知识库博客化详细设计.md) | 11/19/D10/D06 | **两维度轻量博客**（11 篇/D07 重型 RAG 冻结，重型走 D22 插件）：公司知识库+我的笔记两维度·「空间」产品概念消失（多空间/成员制后置）·纯阅读+检索+榜单（无写入 UI，API 留给 AI/OBO）·目录=专栏·保存/投稿分离·浏览量日去重+作者不计·三列榜单（最新/最热窗口/作者榜）只收公共维度·检索三态降级（ILIKE→RRF→rerank）·嵌入切换 epoch 渐进重建·aigw 补 /v1/rerank+真实 Embed+registry 放开两档 |
 | D25 | [对象存储与预签名直传设计](D25-对象存储与预签名直传设计.md) | 07/D06/13/16 | **MinIO 替换本地盘**（双副本 404 治本）：aws-sdk-go-v2·双实现回落（BBW_S3_ENDPOINT 空=Local 开发零负担）·仅 >8MB 分片预签名直传（≤8MB 中转保留，07 全量预签名修订）·part_size 4→8MB（S3 ≥5MiB 硬限）·对外端点 nginx 443 `/oss/` 路径代理（strip+Host 透传+签名按去前缀路径算、URL 拼回）·complete=CompleteMultipart+流式 sha 校验+CopyObject(>5GB UploadPartCopy 环)·ticket=预签名 GET 120s+variant(240/720 JPEG 缩略同批，webp 弃)·mc mirror 迁移脚本 file 表零改 |
+| D26 | [个人 MCP 接入面设计](D26-个人MCP接入面设计.md) | 09/D11/D14/D16/D22 | **D16 P1-5 补账**（zcode 同款用户自配 MCP）：仅个人自配面·纯客户端本地存储（personal.json+钥匙串真值不落盘，同插件 config 制）·装配第三源 corp>插件>个人（同名跳过防劫持）·变量族 D22 子集（TOKEN HTTP-only 不变）·bbrt-mcp 手写 HTTP 补 https/TLS（rustls ring+webpki-roots）·测试连接走 RT 真实链路（McpTest 协议对+一次性 McpClient）·新 server 重启会话生效（注册表快照限制沿用插件口径） |
 
 ## 模板（D01 §13）
 
