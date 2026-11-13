@@ -1,16 +1,19 @@
 /**
  * 模型 + 思考强度选择器（2026-11-11 对齐 zcode：合并为单个 Popover 两段式）：
- * - 上段「模型」：档位（快/强）+ 公司供应商 + 我的供应商，选中项行尾打勾
- * - 下段「思考强度」：三档滑杆（渐变轨道 + 白色旋钮），轮级生效随下一条消息下发
- * - 触发器 = 输入框左下角模型 chip（沿用 agent-model-chip 观感）
+ * - 上段「模型」：档位（快/强）+ 公司供应商 + 我的供应商（antd Menu 分组+选中态）
+ * - 下段「思考强度」：三档 antd Slider，轮级生效随下一条消息下发
+ * - 触发器 = 输入框左下角模型按钮（shared Button text）
+ * D26-O4：agent-mt-* / agent-model-chip 自研样式退役（面板 Menu 化、滑杆原生观感）。
  */
 
 import { useMemo } from 'react';
-import { Popover, Slider } from 'antd';
-import { Check, Sparkles } from 'lucide-react';
+import { Flex, Menu, Popover, Slider, Typography } from 'antd';
+import type { MenuProps } from 'antd';
+import { Sparkles } from 'lucide-react';
 import { MODEL_TIER_LABELS } from '../bridge/types';
 import type { AIProvider } from '../../admin/model/types';
 import { useAgentStore } from '../store/agent';
+import { Button } from '../../../shared/ui/Button';
 
 type ThinkLevel = 'low' | 'medium' | 'high';
 
@@ -61,49 +64,70 @@ export function ModelThinkPicker({ providers, policy, override, onSelect }: Mode
   const selectedKey = override ?? `tier:${policy}`;
   const chipLabel = override ? (override.split(':')[2] ?? MODEL_TIER_LABELS[policy]) : MODEL_TIER_LABELS[policy];
 
+  const items: MenuProps['items'] = sections.map((sec) => ({
+    key: sec.title,
+    type: 'group' as const,
+    label: <Typography.Text type="secondary" style={{ fontSize: 11 }}>{sec.title}</Typography.Text>,
+    children: sec.rows.map((r) => ({
+      key: r.key,
+      title: r.sub,
+      label: (
+        <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+          <span style={{ fontWeight: 500, flexShrink: 0 }}>{r.name}</span>
+          {r.sub ? (
+            <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis>
+              {r.sub}
+            </Typography.Text>
+          ) : null}
+        </span>
+      ),
+    })),
+  }));
+
   const panel = (
-    <div className="agent-mt-panel">
-      {sections.map((sec) => (
-        <div key={sec.title} className="agent-mt-sec">
-          <div className="agent-mt-sec__title">{sec.title}</div>
-          {sec.rows.map((r) => (
-            <button
-              key={r.key}
-              type="button"
-              className={`agent-mt-row${r.key === selectedKey ? ' agent-mt-row--active' : ''}`}
-              onClick={() => onSelect(r.key)}
-              title={r.sub}
-            >
-              <span className="agent-mt-row__name">{r.name}</span>
-              {r.sub ? <span className="agent-mt-row__sub">{r.sub}</span> : null}
-              {r.key === selectedKey ? <Check size={14} className="agent-mt-row__check" aria-hidden /> : null}
-            </button>
-          ))}
-        </div>
-      ))}
-      <div className="agent-mt-divider" />
-      <div className="agent-mt-think-head">
-        <span className="agent-mt-sec__title">思考强度</span>
-        <span className="agent-mt-think-val">{THINK_LABELS[thinkLevel]}</span>
-      </div>
-      <Slider
-        className="agent-mt-slider"
-        min={0}
-        max={2}
-        step={1}
-        value={THINK_LEVELS.indexOf(thinkLevel)}
-        tooltip={{ open: false }}
-        onChange={(v) => setThinkLevel(THINK_LEVELS[v as 0 | 1 | 2])}
+    <div style={{ width: 250 }}>
+      <Menu
+        mode="vertical"
+        selectable
+        items={items}
+        selectedKeys={[selectedKey]}
+        onClick={(e) => onSelect(e.key)}
+        style={{ border: 'none' }}
       />
-      <div className="agent-mt-think-desc">{THINK_DESCS[thinkLevel]}</div>
+      <div style={{ padding: '4px 12px 8px' }}>
+        <Flex justify="space-between" align="center">
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            思考强度
+          </Typography.Text>
+          <Typography.Text strong style={{ fontSize: 13 }}>
+            {THINK_LABELS[thinkLevel]}
+          </Typography.Text>
+        </Flex>
+        <Slider
+          min={0}
+          max={2}
+          step={1}
+          value={THINK_LEVELS.indexOf(thinkLevel)}
+          tooltip={{ open: false }}
+          onChange={(v) => setThinkLevel(THINK_LEVELS[v as 0 | 1 | 2])}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+          {THINK_DESCS[thinkLevel]}
+        </Typography.Text>
+      </div>
     </div>
   );
 
   return (
     <Popover trigger="click" placement="topLeft" arrow={false} content={panel}>
-      <button type="button" className="agent-model-chip" title="模型与思考强度（思考强度随下一条消息生效）">
-        <Sparkles size={13} aria-hidden /> 模型 {chipLabel}
-      </button>
+      <Button
+        variant="text"
+        size="small"
+        title="模型与思考强度（思考强度随下一条消息生效）"
+        icon={<Sparkles size={13} aria-hidden />}
+      >
+        模型 {chipLabel}
+      </Button>
     </Popover>
   );
 }

@@ -5,9 +5,12 @@
  * - 类型筛选四类：用户偏好 user / 项目事实 project / 工作反馈 feedback / 外部参考 reference
  * - 撤销（删除）即时生效；空态分"全库空"与"该类型无条目"
  * - 六态：loading/empty/error/offline（mock 桥本地无网照常）；forbidden 不适用（本域无独立权限点，准入由 /agent 页面统一）
+ * D26-O4：作用域/类型页签→Segmented、项目选择→Select、条目→List（agent-mem-*
+ * /agent-filter-* 自研样式退役）。
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { Flex, List, Segmented, Select, Space, Tag, Typography } from 'antd';
 import { Trash2 } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
@@ -27,6 +30,14 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: 'feedback', label: '工作反馈' },
   { value: 'reference', label: '外部参考' },
 ];
+
+/** 记忆类型徽标色（原 agent-mem-chip--* 四色口径） */
+function memChipColor(type: MemoryType): string | undefined {
+  if (type === 'user') return 'blue';
+  if (type === 'project') return 'green';
+  if (type === 'feedback') return 'gold';
+  return undefined;
+}
 
 function formatDay(ts: number): string {
   const d = new Date(ts);
@@ -81,114 +92,131 @@ export function AgentMemoryPage() {
               : 'ok';
 
   const listNode = (
-    <div className="agent-mem-list">
-      {filtered.map((m) => {
+    <List
+      size="small"
+      dataSource={filtered}
+      renderItem={(m) => {
         const source = sessions.find((s) => s.id === m.sessionId);
         // D23：globalType 携带=公共层 USER.md 条目——chip 用十类标签、撤销走 forget
         const isGlobal = Boolean(m.globalType);
         return (
-          <div key={`${m.scope ?? 'user'}-${m.workspaceName ?? ''}-${m.name}`} className="agent-mem-item" data-memory-name={m.name}>
-            <div className="agent-mem-item__main">
-              <div className="agent-mem-item__title-row">
-                <span className={`agent-mem-chip agent-mem-chip--${m.type}`}>{m.globalType ?? MEMORY_TYPE_LABELS[m.type]}</span>
+          <List.Item
+            data-memory-name={m.name}
+            actions={[
+              <Button
+                key="revoke"
+                variant="secondary"
+                size="small"
+                icon={<Trash2 size={12} aria-hidden />}
+                onClick={() =>
+                  isGlobal
+                    ? void forgetMemory(m.globalType ?? '', m.title)
+                    : void deleteMemory(m.name, memoryScope, memoryWorkspacePath ?? undefined)
+                }
+                title={isGlobal ? '移除该公共记忆（条目粒度，即时生效）' : '撤销该记忆（删除后即时生效）'}
+              >
+                撤销
+              </Button>,
+            ]}
+          >
+            <div style={{ minWidth: 0 }}>
+              <Space size={8} wrap>
+                <Tag color={memChipColor(m.type)}>{m.globalType ?? MEMORY_TYPE_LABELS[m.type]}</Tag>
                 {(m.scope ?? 'user') === 'project' ? (
-                  <span className="agent-mem-chip agent-mem-chip--projectscope" title={m.workspaceName}>
+                  <Tag color="blue" title={m.workspaceName}>
                     {workspaces.find((w) => (m.workspaceName ?? '').startsWith(`${w.name}-`))?.name ?? m.workspaceName ?? '项目'}
-                  </span>
+                  </Tag>
                 ) : null}
-                <span className="agent-mem-item__title">{m.title}</span>
-              </div>
-              {m.hook && m.hook !== m.title ? <div className="agent-mem-item__hook">{m.hook}</div> : null}
-              <div className="agent-mem-item__meta">
+                <Typography.Text strong ellipsis style={{ maxWidth: 420 }}>
+                  {m.title}
+                </Typography.Text>
+              </Space>
+              {m.hook && m.hook !== m.title ? (
+                <Typography.Text type="secondary" ellipsis style={{ display: 'block', fontSize: 13 }}>
+                  {m.hook}
+                </Typography.Text>
+              ) : null}
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 {m.updatedAt ? `更新 ${formatDay(m.updatedAt)}` : '公共层（USER.md 压实视图）'}
                 {source ? ` · 来源会话「${source.title}」` : m.sessionId ? ` · ${m.sessionId}` : ''}
-              </div>
+              </Typography.Text>
             </div>
-            <Button
-              variant="secondary"
-              className="agent-mem-item__revoke"
-              onClick={() =>
-                isGlobal
-                  ? void forgetMemory(m.globalType ?? '', m.title)
-                  : void deleteMemory(m.name, memoryScope, memoryWorkspacePath ?? undefined)
-              }
-              title={isGlobal ? '移除该公共记忆（条目粒度，即时生效）' : '撤销该记忆（删除后即时生效）'}
-            >
-              <Trash2 size={12} aria-hidden />
-              撤销
-            </Button>
-          </div>
+          </List.Item>
         );
-      })}
-    </div>
+      }}
+    />
   );
 
   return (
-    <div className="agent-page">
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <AgentSubNav />
-      <div className="agent-mem-page">
-        <header className="agent-mem-head">
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          padding: 24,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+          maxWidth: 860,
+          width: '100%',
+          margin: '0 auto',
+        }}
+      >
+        <Flex align="flex-start" justify="space-between" gap={16}>
           <div>
-            <h2 className="agent-mem-head__title">记忆管理</h2>
-            <p className="agent-mem-head__desc">
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              记忆管理
+            </Typography.Title>
+            <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0, fontSize: 13, maxWidth: 560 }}>
               Agent 主动沉淀的知识记忆（D15 主动轨）：会话中学到的用户偏好、项目事实、工作反馈与外部参考；撤销即时生效。
-            </p>
+            </Typography.Paragraph>
           </div>
-          <span className="agent-mem-head__count">共 {memories.length} 条</span>
-        </header>
+          <Tag style={{ flexShrink: 0 }}>共 {memories.length} 条</Tag>
+        </Flex>
         {/* D19 作用域页签：用户记忆 / 项目记忆（+ 项目选择） */}
-        <div className="agent-filter-tabs" role="tablist" aria-label="记忆作用域">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={memoryScope === 'user'}
-            className={`agent-filter-tab${memoryScope === 'user' ? ' agent-filter-tab--active' : ''}`}
-            onClick={() => void loadMemories('user', null)}
-          >
-            用户记忆
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={memoryScope === 'project'}
-            className={`agent-filter-tab${memoryScope === 'project' ? ' agent-filter-tab--active' : ''}`}
-            onClick={() => void loadMemories('project', memoryWorkspacePath ?? workspaces[0]?.path ?? null)}
-          >
-            项目记忆
-          </button>
+        <Space size={8} wrap>
+          <Segmented
+            value={memoryScope}
+            onChange={(v) =>
+              v === 'project'
+                ? void loadMemories('project', memoryWorkspacePath ?? workspaces[0]?.path ?? null)
+                : void loadMemories('user', null)
+            }
+            options={[
+              { value: 'user', label: '用户记忆' },
+              { value: 'project', label: '项目记忆' },
+            ]}
+          />
           {memoryScope === 'project' ? (
-            <select
-              className="agent-mem-proj-select bbw-input"
-              value={memoryWorkspacePath ?? ''}
-              onChange={(e) => void loadMemories('project', e.target.value || null)}
+            <Select
+              size="small"
+              style={{ width: 200 }}
+              placeholder="选择项目"
               aria-label="选择项目"
-            >
-              {workspaces.length === 0 ? <option value="">（还没有登记的项目）</option> : null}
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.path}>
-                  {w.name}
-                </option>
-              ))}
-            </select>
+              value={memoryWorkspacePath || undefined}
+              onChange={(v) => void loadMemories('project', v || null)}
+              options={workspaces.map((w) => ({ value: w.path, label: w.name }))}
+              notFoundContent="还没有登记的项目"
+            />
           ) : null}
-        </div>
-        <div className="agent-filter-tabs" role="tablist" aria-label="记忆类型筛选">
-          {FILTERS.map((f) => (
-            <button
-              key={f.value}
-              type="button"
-              role="tab"
-              aria-selected={filter === f.value}
-              className={`agent-filter-tab${filter === f.value ? ' agent-filter-tab--active' : ''}`}
-              onClick={() => setFilter(f.value)}
-            >
-              {f.label}
-              <span className="agent-filter-tab__count">
-                {f.value === 'all' ? memories.length : memories.filter((m) => m.type === f.value).length}
+        </Space>
+        <Segmented
+          value={filter}
+          onChange={(v) => setFilter(v as Filter)}
+          options={FILTERS.map((f) => ({
+            value: f.value,
+            label: (
+              <span>
+                {f.label}{' '}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {f.value === 'all' ? memories.length : memories.filter((m) => m.type === f.value).length}
+                </Typography.Text>
               </span>
-            </button>
-          ))}
-        </div>
+            ),
+          }))}
+        />
         {state === 'ok' ? (
           listNode
         ) : (

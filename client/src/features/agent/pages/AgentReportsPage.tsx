@@ -4,10 +4,12 @@
  * - 点开当日 → markdown 渲染（会话数/工具排行/拦截/文件变更/记忆条目/会话明细表）
  * - report.daily 事件到达实时更新（同日覆盖，D15 §3.2 幂等）
  * - 六态：loading/empty/error/offline（本地数据照常）；forbidden 不适用
+ * D26-O4：日报条目→antd Collapse（accordion 单开；agent-report-* 自研样式退役）。
  */
 
 import { useEffect, useState } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { Collapse, Flex, Space, Typography, theme } from 'antd';
+import type { CollapseProps } from 'antd';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
 import { useConnectionStore } from '../../../shared/store/connection';
@@ -16,6 +18,7 @@ import { AgentSubNav } from '../components/AgentSubNav';
 import { MarkdownText } from '../components/StreamMessage';
 
 export function AgentReportsPage() {
+  const { token } = theme.useToken();
   const init = useAgentStore((s) => s.init);
   const reports = useAgentStore((s) => s.reports);
   const loading = useAgentStore((s) => s.reportsLoading);
@@ -46,46 +49,65 @@ export function AgentReportsPage() {
             ? 'offline'
             : 'ok';
 
+  /** 头部：日期 + stats 概览（拦截>0 警示色，原 agent-report-item__stat--warn 口径） */
+  const headOf = (r: (typeof reports)[number]) => (
+    <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+      <Typography.Text strong style={{ fontSize: 14, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+        {r.date}
+      </Typography.Text>
+      <Space size={16} wrap style={{ marginLeft: 'auto', justifyContent: 'flex-end' }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>会话 {r.stats.sessions}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>工具 {r.stats.tools}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: 12, color: r.stats.blocked > 0 ? token.colorWarning : undefined }}>
+          拦截 {r.stats.blocked}
+        </Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>文件 {r.stats.files}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>记忆 +{r.stats.memorySaved}</Typography.Text>
+      </Space>
+    </Flex>
+  );
+
+  const collapseItems: CollapseProps['items'] = reports.map((r) => ({
+    key: r.date,
+    label: headOf(r),
+    children: <MarkdownText text={r.markdown} />,
+  }));
+
   const listNode = (
-    <div className="agent-report-list">
-      {reports.map((r) => {
-        const open = openDate === r.date;
-        return (
-          <section key={r.date} className={`agent-report-item${open ? ' agent-report-item--open' : ''}`}>
-            <button type="button" className="agent-report-item__head" onClick={() => setOpenDate(open ? null : r.date)}>
-              <ChevronRight size={13} className={`agent-report-item__chev${open ? ' agent-report-item__chev--open' : ''}`} aria-hidden />
-              <span className="agent-report-item__date">{r.date}</span>
-              <span className="agent-report-item__stats">
-                <span>会话 {r.stats.sessions}</span>
-                <span>工具 {r.stats.tools}</span>
-                <span className={r.stats.blocked > 0 ? 'agent-report-item__stat--warn' : undefined}>拦截 {r.stats.blocked}</span>
-                <span>文件 {r.stats.files}</span>
-                <span>记忆 +{r.stats.memorySaved}</span>
-              </span>
-            </button>
-            {open ? (
-              <div className="agent-report-item__body">
-                <MarkdownText text={r.markdown} />
-              </div>
-            ) : null}
-          </section>
-        );
-      })}
-    </div>
+    <Collapse
+      size="small"
+      accordion
+      items={collapseItems}
+      activeKey={openDate ?? undefined}
+      onChange={(key) => setOpenDate(Array.isArray(key) ? (key[key.length - 1] ?? null) : (key || null))}
+    />
   );
 
   return (
-    <div className="agent-page">
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <AgentSubNav />
-      <div className="agent-report-page">
-        <header className="agent-report-head">
-          <div>
-            <h2 className="agent-report-head__title">Agent 日报</h2>
-            <p className="agent-report-head__desc">
-              活动日志确定性聚合的每日总结（D15 被动轨）：会话、工具、拦截、文件变更与当日新增记忆，全部本地生成。
-            </p>
-          </div>
-        </header>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          padding: 24,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+          maxWidth: 860,
+          width: '100%',
+          margin: '0 auto',
+        }}
+      >
+        <div>
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            Agent 日报
+          </Typography.Title>
+          <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0, fontSize: 13, maxWidth: 560 }}>
+            活动日志确定性聚合的每日总结（D15 被动轨）：会话、工具、拦截、文件变更与当日新增记忆，全部本地生成。
+          </Typography.Paragraph>
+        </div>
         {state === 'ok' ? (
           listNode
         ) : (

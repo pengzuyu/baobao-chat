@@ -11,7 +11,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Dropdown, Modal, type MenuProps } from 'antd';
+import { Dropdown, Flex, Modal, Tag, Typography, theme, type MenuProps } from 'antd';
 import { MessageCircle, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, ShieldCheck, Square } from 'lucide-react';
 import { open as openDirectory } from '@tauri-apps/plugin-dialog';
 import { Button } from '../../../shared/ui/Button';
@@ -55,9 +55,18 @@ const TURN_ACTIVE_STATUSES = new Set<string>(['running', 'waiting_permission', '
 /** 空流常量（selector 稳定返回：无会话/无条目时不随渲染新建引用） */
 const EMPTY_ITEMS: StreamItem[] = [];
 
+/** 会话状态徽标色（原 agent-status-badge--* 口径：运行=绿/等待=橙/错误=红/其余灰） */
+function statusTagColor(status: string): string | undefined {
+  if (status === 'running' || status === 'subagent_fanout' || status === 'delegating') return 'success';
+  if (status === 'waiting_permission' || status === 'waiting_review' || status === 'waiting_clarify' || status === 'starting') return 'warning';
+  if (status === 'error') return 'error';
+  return undefined;
+}
+
 export function AgentWorkbenchPage() {
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const { token } = theme.useToken();
   /** 右栏上下文栏折叠态（PAG-01 E 区；L 档起可固定，M/S 浮层化的骨架阶段先做显隐） */
   const [sideOpen, setSideOpen] = useState(true);
   // 插件斜杠命令表（D22/L5：/ 渲染；失败降级空=功能关闭）
@@ -206,10 +215,12 @@ export function AgentWorkbenchPage() {
     items: AGENT_MODE_OPTIONS.map((m) => ({
       key: m.value,
       label: (
-        <span className="agent-mode-menu__item">
-          <span className="agent-mode-menu__name">{m.label}</span>
-          <span className="agent-mode-menu__desc">{m.desc}</span>
-        </span>
+        <div>
+          <div>{m.label}</div>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {m.desc}
+          </Typography.Text>
+        </div>
       ),
     })),
     onClick: ({ key }) => doSetMode(key as PermissionMode),
@@ -355,7 +366,11 @@ export function AgentWorkbenchPage() {
   const { head, turns } = useMemo(() => groupTurns(items), [items]);
   const turnActive = status !== undefined && TURN_ACTIVE_STATUSES.has(status);
   const streamNode = (
-    <div className="agent-stream" ref={streamRef} onScroll={onStreamScroll}>
+    <div
+      style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}
+      ref={streamRef}
+      onScroll={onStreamScroll}
+    >
       {/* 首个 user 前的散条（历史残留事件流；正常为空） */}
       {head.length > 0 ? <>{renderProcessItems(head, handleRespond)}</> : null}
       {turns.map((t, i) => (
@@ -375,23 +390,29 @@ export function AgentWorkbenchPage() {
   );
 
   return (
-    <div className="agent-page">
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <AgentSubNav />
-      <div className="agent-workbench">
+      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         {/* 左：会话列表（六态）；整体可折叠成细条（会话多时让宽给中栏） */}
         <section
-          className={`agent-sessions${sessionsCollapsed ? ' agent-sessions--collapsed' : ''}`}
-          style={sessionsResizable ? { width: sessionsSplit.width } : undefined}
+          style={{
+            width: sessionsCollapsed ? 44 : sessionsResizable ? sessionsSplit.width : bp === 'S' ? 180 : 232,
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: sessionsCollapsed ? 'center' : undefined,
+            gap: sessionsCollapsed ? 6 : undefined,
+            padding: sessionsCollapsed ? '8px 0' : undefined,
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            minHeight: 0,
+            background: token.colorBgContainer,
+          }}
         >
           {sessionsCollapsed ? (
-            <div className="agent-sessions__rail">
-              <button type="button" className="icon-btn" onClick={() => setSessionsCollapsed(false)} title="展开会话列表">
-                <PanelLeftOpen size={16} aria-hidden />
-              </button>
-              <button type="button" className="icon-btn" onClick={handleNewDaily} title="新建任务会话">
-                <Plus size={16} aria-hidden />
-              </button>
-            </div>
+            <>
+              <Button variant="text" icon={<PanelLeftOpen size={16} aria-hidden />} onClick={() => setSessionsCollapsed(false)} title="展开会话列表" />
+              <Button variant="text" icon={<Plus size={16} aria-hidden />} onClick={handleNewDaily} title="新建任务会话" />
+            </>
           ) : listState === 'ok' ? (
             sessionListNode
           ) : (
@@ -417,25 +438,37 @@ export function AgentWorkbenchPage() {
         {sessionsResizable ? <SplitHandle bind={sessionsSplit.bind} /> : null}
 
         {/* 中：会话视图 */}
-        <section className="agent-main">
+        <section style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {activeSession ? (
             <>
-              <header className="agent-header">
-                <div className="agent-header__title-wrap" title={activeSession.workspace || '日常对话（无工作目录）'}>
-                  <div className="agent-header__title">{activeSession.title}</div>
-                  <div className="agent-header__sub">
+              <header
+                style={{
+                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 16px',
+                  borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                  minHeight: 52,
+                  background: token.colorBgContainer,
+                }}
+              >
+                <div style={{ minWidth: 0, marginRight: 8 }} title={activeSession.workspace || '日常对话（无工作目录）'}>
+                  <Typography.Text strong ellipsis style={{ display: 'block', maxWidth: 220, fontSize: 14 }}>
+                    {activeSession.title}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" ellipsis style={{ display: 'block', maxWidth: 220, fontSize: 12 }}>
                     {activeSession.workspace
                       ? `${workspaces.find((w) => w.path === activeSession.workspace)?.name ?? activeSession.workspace.split('/').filter(Boolean).pop()} · ${activeSession.workspace}`
                       : '日常对话 · 无工作目录'}
-                  </div>
+                  </Typography.Text>
                 </div>
                 {/* 模式/模型选择 2026-11-11 挪入输入框（Composer）；头部只留状态 */}
                 {/* 状态徽标（D11 §3 枚举中文） */}
-                <span className={`agent-status-badge agent-status-badge--${activeSession.status}`}>
-                  <i className="agent-status-badge__dot" aria-hidden />
+                <Tag color={statusTagColor(activeSession.status)} style={{ flexShrink: 0 }}>
                   {SESSION_STATUS_LABELS[activeSession.status]}
-                </span>
-                <div className="agent-header__actions">
+                </Tag>
+                <Flex align="center" gap={8} style={{ marginLeft: 'auto' }}>
                   {embeddedConvId ? (
                     <Button variant="text" onClick={() => navigate(`/im/c/${embeddedConvId}`)} title="回到来源聊天会话">
                       <MessageCircle size={12} aria-hidden />
@@ -449,15 +482,14 @@ export function AgentWorkbenchPage() {
                       停止
                     </Button>
                   ) : null}
-                  <button
-                    type="button"
-                    className="icon-btn"
+                  <Button
+                    variant="text"
+                    size="small"
                     onClick={() => setSideOpen((v) => !v)}
                     title={sideOpen ? '收起上下文栏' : '展开上下文栏'}
-                  >
-                    {sideOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-                  </button>
-                </div>
+                    icon={sideOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+                  />
+                </Flex>
               </header>
 
               {streamState === 'ok' ? (
@@ -485,10 +517,14 @@ export function AgentWorkbenchPage() {
                 commands={pluginCommands}
                 modePicker={
                   <Dropdown menu={modeMenu} trigger={['click']}>
-                    <button type="button" className="agent-mode-capsule" title="切换权限模式（本会话即时生效）">
-                      <ShieldCheck size={13} aria-hidden />
+                    <Button
+                      variant="secondary"
+                      size="small"
+                      icon={<ShieldCheck size={13} aria-hidden />}
+                      title="切换权限模式（本会话即时生效）"
+                    >
                       {modeOption?.label ?? activeSession.mode}
-                    </button>
+                    </Button>
                   </Dropdown>
                 }
                 modelPicker={
@@ -505,7 +541,16 @@ export function AgentWorkbenchPage() {
 
         {/* 右：上下文栏（可折叠） */}
         {activeSession && sideOpen ? (
-          <aside className="agent-side-col">
+          <aside
+            style={{
+              width: 304,
+              flexShrink: 0,
+              borderLeft: `1px solid ${token.colorBorderSecondary}`,
+              background: token.colorBgContainer,
+              overflowY: 'auto',
+              minHeight: 0,
+            }}
+          >
             <AgentContextSidebar
               session={activeSession}
               model={modelTier}

@@ -7,9 +7,12 @@
  * - 斜杠命令（D22 §2/L5）：`/` 开头弹插件命令下拉（↑↓ 导航/Enter 选中/Esc 关）；
  *   发送时 `/name args` 命中→模板渲染（$ARGUMENTS=全部参数、$1..$9=位置参数）
  *   作为用户消息发进会话；未命中原样发送
+ * D26-O4：textarea→Input.TextArea(autoSize)、壳类 agent-composer* 退役（内联布局）；
+ * 自动聚焦/快捷键/IME 防误发/禁言态行为原样保留。
  */
 
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Flex, Input, Typography, theme } from 'antd';
 import { Send, Square } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useImeGuard } from '../../../shared/hooks/useImeGuard';
@@ -32,6 +35,7 @@ interface ComposerProps {
 }
 
 export function Composer({ disabled, disabledHint, canStop, onSend, onStop, modePicker, modelPicker, commands = [] }: ComposerProps) {
+  const { token } = theme.useToken();
   const [text, setText] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
   const { imeComposing, imeCompositionProps } = useImeGuard();
@@ -108,31 +112,75 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
   };
 
   return (
-    <div className="agent-composer">
+    <div
+      style={{
+        flexShrink: 0,
+        borderTop: `1px solid ${token.colorBorderSecondary}`,
+        padding: '8px 12px 12px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        background: token.colorBgContainer,
+      }}
+    >
       {slashCandidates.length > 0 ? (
-        <div className="agent-composer__slash" role="listbox" aria-label="插件命令">
+        <div
+          role="listbox"
+          aria-label="插件命令"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            padding: 4,
+            marginBottom: 6,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 8,
+            background: token.colorBgContainer,
+            boxShadow: token.boxShadowSecondary,
+            maxHeight: 240,
+            overflowY: 'auto',
+          }}
+        >
           {slashCandidates.map((c, i) => (
             <button
               key={`${c.pluginId}/${c.name}`}
               type="button"
               role="option"
               aria-selected={i === slashIdx}
-              className={`agent-composer__slash-item${i === slashIdx ? ' agent-composer__slash-item--active' : ''}`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '5px 8px',
+                border: 'none',
+                borderRadius: 6,
+                background: i === slashIdx ? token.controlItemBgHover : 'transparent',
+                cursor: 'pointer',
+                fontSize: 12,
+                textAlign: 'left',
+                color: 'inherit',
+                font: 'inherit',
+              }}
               onMouseEnter={() => setSlashIdx(i)}
               onClick={() => applyCommand(c)}
             >
               <b>/{c.name}</b>
-              {c.description ? <span className="agent-composer__slash-desc">{c.description}</span> : null}
-              <span className="agent-composer__slash-src">{c.pluginId}</span>
+              {c.description ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12, flex: 1, minWidth: 0 }} ellipsis>
+                  {c.description}
+                </Typography.Text>
+              ) : <span style={{ flex: 1 }} />}
+              <Typography.Text code style={{ fontSize: 11 }}>
+                {c.pluginId}
+              </Typography.Text>
             </button>
           ))}
         </div>
       ) : null}
-      <textarea
+      <Input.TextArea
         ref={taRef}
-        className="agent-composer__textarea"
         value={text}
-        rows={2}
+        autoSize={{ minRows: 2, maxRows: 8 }}
         placeholder={disabled ? (disabledHint ?? '当前状态不可输入') : '输入任务，Enter 发送（Shift+Enter 换行）；/ 唤起插件命令'}
         disabled={disabled}
         onChange={(e) => {
@@ -144,26 +192,26 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
         {...imeCompositionProps}
         aria-label="Agent 会话输入框"
       />
-      <div className="agent-composer__foot">
+      <Flex justify="space-between" align="center" gap={8} wrap>
         {modePicker}
         {/* 模型 chip 紧挨操作区（2026-11-12 用户口径：靠近发送按钮） */}
-        <div className="agent-composer__foot-right">
+        <Flex align="center" gap={8}>
           {modelPicker}
-          <div className="agent-composer__actions">
+          <Flex gap={8}>
             {/* 停止（红色）：中断当前回答，会话保留可继续 */}
             {canStop ? (
-              <Button variant="danger" onClick={onStop} className="agent-composer__stop">
+              <Button variant="danger" onClick={onStop}>
                 <Square size={12} aria-hidden />
                 停止
               </Button>
             ) : null}
-            <Button variant="primary" onClick={submit} disabled={disabled || !text.trim()}>
+            <Button onClick={submit} disabled={disabled || !text.trim()}>
               <Send size={12} aria-hidden />
               发送
             </Button>
-          </div>
-        </div>
-      </div>
+          </Flex>
+        </Flex>
+      </Flex>
     </div>
   );
 }
