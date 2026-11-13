@@ -53,6 +53,7 @@ import { GeneralSettingsPage } from '../features/settings/pages/GeneralSettingsP
 import { NotificationSettingsPage } from '../features/settings/pages/NotificationSettingsPage';
 import { TransferSettingsPage } from '../features/settings/pages/TransferSettingsPage';
 import { AgentSettingsPage } from '../features/settings/pages/AgentSettingsPage';
+import { McpSettingsPage } from '../features/settings/pages/McpSettingsPage';
 import { AboutPage } from '../features/settings/pages/AboutPage';
 import { sendSystemNotification } from '../features/agent/bridge/notify';
 import { startUpdaterAutoCheck } from '../features/settings/updater';
@@ -295,6 +296,7 @@ export function App() {
           <Route path="transfer" element={<TransferSettingsPage />} />
           <Route path="shortcuts" element={<ShortcutSettingsPage />} />
           <Route path="agent" element={<AgentSettingsPage />} />
+          <Route path="mcp" element={<McpSettingsPage />} />
           <Route path="about" element={<AboutPage />} />
         </Route>
       </Route>

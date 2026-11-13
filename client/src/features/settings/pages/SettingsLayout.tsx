@@ -5,7 +5,7 @@
 
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { t, useI18nStore } from '../../../shared/i18n';
-import { ArrowDownUp, Bell, Bot, Info, Keyboard, Settings } from 'lucide-react';
+import { ArrowDownUp, Bell, Bot, Info, Keyboard, Plug, Settings } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
@@ -18,6 +18,7 @@ function useTabs() {
   { to: '/settings/transfer', icon: ArrowDownUp, label: t('settings.tab.transfer') },
   { to: '/settings/shortcuts', icon: Keyboard, label: t('settings.tab.shortcuts') },
   { to: '/settings/agent', icon: Bot, label: t('settings.tab.agent') },
+  { to: '/settings/mcp', icon: Plug, label: t('settings.tab.mcp') },
   { to: '/settings/about', icon: Info, label: t('settings.tab.about') },
   ] as const;
 }
