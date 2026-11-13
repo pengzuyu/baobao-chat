@@ -6,7 +6,7 @@
  */
 
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
+import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, Puzzle, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
@@ -25,6 +25,7 @@ const TABS = [
   { to: '/admin/stickers', icon: SmilePlus, label: '表情集' },
   { to: '/admin/eco-apps', icon: Package, label: '应用' },
   { to: '/admin/skills', icon: Sparkles, label: '技能包' },
+  { to: '/admin/plugins', icon: Puzzle, label: '插件' },
   { to: '/admin/usage', icon: Zap, label: '用量' },
   { to: '/admin/audit', icon: ScrollText, label: '审计' },
 ] as const;

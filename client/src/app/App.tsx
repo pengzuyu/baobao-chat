@@ -38,6 +38,7 @@ import { RolesPage } from '../features/admin/pages/RolesPage';
 import { NoticesPage } from '../features/admin/pages/NoticesPage';
 import { ImportPage } from '../features/admin/pages/ImportPage';
 import { AgentGovernancePage } from '../features/admin/pages/AgentGovernancePage';
+import { PluginGovernancePage } from '../features/admin/pages/PluginGovernancePage';
 import { KbGovernancePage } from '../features/admin/pages/KbGovernancePage';
 import { PoliciesPage } from '../features/admin/pages/PoliciesPage';
 import { AiProvidersPage } from '../features/admin/pages/AiProvidersPage';
@@ -275,6 +276,7 @@ export function App() {
           <Route path="roles" element={<RolesPage />} />
           <Route path="notices" element={<NoticesPage />} />
           <Route path="agent" element={<AgentGovernancePage />} />
+          <Route path="plugins" element={<PluginGovernancePage />} />
           <Route path="org" element={<OrgDirectoryPage />} />
           <Route path="kb" element={<KbGovernancePage />} />
           <Route path="policies" element={<PoliciesPage />} />
