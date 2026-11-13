@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { Select } from 'antd';
-import { PlugZap, Plus, Search, Trash2, Zap } from 'lucide-react';
+import { PlugZap, Plus, Trash2, Zap } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import {
@@ -22,6 +22,7 @@ import {
   type AIDefaultSetting,
 } from '../api/ai';
 import { PROVIDER_PRESETS, type AIProvider } from '../../admin/model/types';
+import { ProviderModelsEditor } from '../../admin/components/ProviderModelsEditor';
 import { CloudBackupCard } from '../components/CloudBackupCard';
 
 export function AgentSettingsPage() {
@@ -213,7 +214,8 @@ function MyProvidersCard() {
     setConnResult(null);
   };
 
-  const probe = async (mode: 'conn' | 'models') => {
+  /** 探测：连通验证并拉取上游模型清单（原两按钮同一接口，合一；候选缺项可手动输入） */
+  const probe = async () => {
     if (!baseUrl.trim()) {
       setError('先填 Base URL');
       return;
@@ -224,10 +226,8 @@ function MyProvidersCard() {
     try {
       const list = await probeMyProviderRaw(baseUrl.trim(), apiKey.trim());
       setConnResult({ ok: true, ms: Date.now() - startedAt, models: list.length });
-      if (mode === 'models') {
-        if (list.length === 0) setError('上游未返回模型清单');
-        setCandidates(list);
-      }
+      if (list.length === 0) setError('上游未返回模型清单（可手动输入模型 ID）');
+      setCandidates(list);
     } catch (err) {
       setConnResult(null);
       setError(errText(err, '连接失败'));
@@ -240,7 +240,7 @@ function MyProvidersCard() {
     const n = name.trim();
     const b = baseUrl.trim().replace(/\/+$/, '');
     if (!n || !b || models.length === 0) {
-      setError('名称/Base URL/模型清单均必填（模型可「探测模型」拉取）');
+      setError('名称/Base URL/模型清单均必填（模型可探测拉取或手动输入）');
       return;
     }
     setSaving(true);
@@ -322,11 +322,8 @@ function MyProvidersCard() {
         <input className="bbw-input" style={{ width: 130 }} value={name} placeholder="名称（随厂商自动填）" onChange={(e) => setName(e.target.value)} />
         <input className="bbw-input" style={{ width: 215 }} value={baseUrl} placeholder={vendor === 'custom' ? 'Base URL（https://…/v1）' : 'Base URL（自动填，可改）'} onChange={(e) => setBaseUrl(e.target.value)} />
         <input className="bbw-input" style={{ width: 190 }} type="password" value={apiKey} placeholder="API Key" onChange={(e) => setApiKey(e.target.value)} />
-        <Button variant="secondary" onClick={() => void probe('conn')} loading={probing}>
-          <PlugZap size={13} /> 测试连接
-        </Button>
-        <Button variant="secondary" onClick={() => void probe('models')} loading={probing}>
-          <Search size={13} /> 探测模型
+        <Button variant="secondary" onClick={() => void probe()} loading={probing}>
+          <PlugZap size={13} /> 测试连接并拉取模型
         </Button>
         <Button onClick={() => void submit()} loading={saving}>
           <Plus size={13} /> 添加
@@ -337,20 +334,12 @@ function MyProvidersCard() {
           ✅ 连接成功（{connResult.ms}ms · 上游 {connResult.models} 个模型）
         </div>
       ) : null}
-      {candidates.length > 0 ? (
-        <div className="admin-provider-models">
-          {candidates.map((m) => (
-            <button
-              key={m}
-              type="button"
-              className={`admin-chip${models.includes(m) ? ' admin-chip--active' : ''}`}
-              onClick={() => setModels((arr) => (arr.includes(m) ? arr.filter((x) => x !== m) : [...arr, m]))}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      <ProviderModelsEditor
+        models={models}
+        candidates={candidates}
+        onToggle={(id) => setModels((arr) => (arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id]))}
+        onAdd={(id) => setModels((arr) => (arr.includes(id) ? arr : [...arr, id]))}
+      />
       {error ? <div className="admin-error-bar">{error}</div> : null}
     </div>
   );

@@ -8,7 +8,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { PlugZap, Plus, Save, Search, Trash2, Undo2 } from 'lucide-react';
+import { PlugZap, Plus, Save, Trash2, Undo2 } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
@@ -16,6 +16,7 @@ import { StateView, type ViewStateOrOk } from '../../../shared/ui/StateView';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { probeAIProvider, probeAIProviderRaw } from '../api/admin';
 import { useAIProviders, useAIRoutes, useDeleteAIProvider, usePutAIRoutes, useSaveAIProvider } from '../api/hooks';
+import { ProviderModelsEditor } from '../components/ProviderModelsEditor';
 import { PROVIDER_PRESETS, presetKeyOfBaseUrl, type AIProvider } from '../model/types';
 
 export function AiProvidersPage() {
@@ -75,8 +76,8 @@ function ProvidersPanel() {
     setForm((f) => ({ ...f, vendor: key, name: preset.name || f.name, baseUrl: preset.baseUrl, candidates: [], models: [] }));
   };
 
-  /** 探测共用（mode=conn 仅验证连通鉴权；mode=models 拉清单填候选） */
-  const probe = async (mode: 'conn' | 'models') => {
+  /** 探测：连通+鉴权验证并拉取上游模型清单填候选（原「测试连接/探测模型」两按钮同一接口，合一） */
+  const probe = async () => {
     const baseUrl = form.baseUrl.trim();
     if (!baseUrl) {
       setFormError('先填 Base URL');
@@ -91,10 +92,8 @@ function ProvidersPanel() {
         ? await probeAIProvider(form.id)
         : await probeAIProviderRaw(baseUrl, key);
       setConnResult({ ok: true, ms: Date.now() - startedAt, models: models.length });
-      if (mode === 'models') {
-        if (models.length === 0) setFormError('上游未返回模型清单');
-        setForm((f) => ({ ...f, candidates: models }));
-      }
+      if (models.length === 0) setFormError('上游未返回模型清单（可手动输入模型 ID）');
+      setForm((f) => ({ ...f, candidates: models }));
     } catch (err) {
       setConnResult(null);
       // 服务端 message 优先（如「供应商被 fast 档默认路由引用，先调整路由」——
@@ -124,7 +123,7 @@ function ProvidersPanel() {
       return;
     }
     if (form.models.length === 0) {
-      setFormError('至少选择 1 个模型（可先「探测可用模型」拉取清单）');
+      setFormError('至少选择 1 个模型（可「测试连接并拉取模型」或手动输入）');
       return;
     }
     if (!form.id && form.apiKey.trim() === '' ) {
@@ -207,11 +206,8 @@ function ProvidersPanel() {
             }}
             data-testid="ai-prov-key"
           />
-          <Button variant="secondary" onClick={() => void probe('conn')} loading={probing} data-testid="ai-prov-test">
-            <PlugZap size={13} /> 测试连接
-          </Button>
-          <Button variant="secondary" onClick={() => void probe('models')} loading={probing} data-testid="ai-prov-detect">
-            <Search size={13} /> 探测可用模型
+          <Button variant="secondary" onClick={() => void probe()} loading={probing} data-testid="ai-prov-probe">
+            <PlugZap size={13} /> 测试连接并拉取模型
           </Button>
           <Button onClick={submit} loading={save.isPending} data-testid="ai-prov-save">
             {form.id ? <Save size={13} /> : <Plus size={13} />} {form.id ? '保存修改' : '新增供应商'}
@@ -227,29 +223,14 @@ function ProvidersPanel() {
             ✅ 连接成功（{connResult.ms}ms · 上游 {connResult.models} 个模型）
           </div>
         ) : null}
-        {/* 模型清单：探活候选 chips 点选 + 已选手动移除；无探活结果时可手动输入 */}
-        <div className="admin-provider-models" data-testid="ai-prov-models">
-          {form.candidates.length > 0 ? (
-            form.candidates.map((m) => (
-              <button key={m} type="button" className={`admin-chip${form.models.includes(m) ? ' admin-chip--active' : ''}`} onClick={() => toggleModel(m)}>
-                {m}
-              </button>
-            ))
-          ) : (
-            <input
-              className="bbw-input"
-              style={{ width: 240 }}
-              value=""
-              placeholder="先「探测可用模型」拉取上游模型清单"
-              onChange={() => undefined}
-            />
-          )}
-          {form.models.filter((m) => !form.candidates.includes(m)).map((m) => (
-            <button key={m} type="button" className="admin-chip admin-chip--active" onClick={() => toggleModel(m)}>
-              {m} ✕
-            </button>
-          ))}
-        </div>
+        {/* 模型清单：探测候选点选 + 手动输入任意 ID（上游 /models 不全，如智谱免费档须手填） */}
+        <ProviderModelsEditor
+          models={form.models}
+          candidates={form.candidates}
+          onToggle={toggleModel}
+          onAdd={(id) => setForm((f) => ({ ...f, models: [...f.models, id] }))}
+          testId="ai-prov-models"
+        />
         {formError ? (
           <div className="admin-error-bar" data-testid="ai-prov-error">
             {formError}
@@ -258,7 +239,7 @@ function ProvidersPanel() {
         <StateView
           state={state}
           skeleton={<SkeletonList count={4} />}
-          emptyText="尚无供应商：上方选厂商录入首个（推荐先「探测可用模型」拉清单）"
+          emptyText="尚无供应商：上方选厂商录入首个（推荐先「测试连接并拉取模型」）"
           error={query.error}
           onRetry={() => void query.refetch()}
           forbiddenText="需要 admin:policy:manage 权限"
