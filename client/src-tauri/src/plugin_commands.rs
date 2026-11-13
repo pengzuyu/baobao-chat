@@ -142,7 +142,7 @@ pub fn plugin_write_files(
         }
         write_state(&root, &state)?;
         sync_plugin_experts(&root, &plugin_id);
-        if let Err(e) = host.push_plugin_mcp() {
+        if let Err(e) = host.push_mcp_assembly() {
             eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
         }
     }
@@ -167,7 +167,7 @@ pub fn plugin_remove_local(host: Host, plugin_id: String, keep_config: bool) -> 
         fs::write(root.join("config.json"), c).map_err(|e| e.to_string())?;
     }
     remove_plugin_experts(&host, &plugin_id);
-    if let Err(e) = host.push_plugin_mcp() {
+    if let Err(e) = host.push_mcp_assembly() {
         eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
@@ -188,7 +188,7 @@ pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Resul
     } else {
         remove_plugin_experts(&host, &plugin_id);
     }
-    if let Err(e) = host.push_plugin_mcp() {
+    if let Err(e) = host.push_mcp_assembly() {
         eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
@@ -289,7 +289,7 @@ pub fn plugin_write_config(
     let body = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
     fs::write(root.join("config.json"), body).map_err(|e| format!("config 写入失败: {e}"))?;
     // 配置变更 → 装配重推（CONFIG:* 已静态进 wire）
-    if let Err(e) = host.push_plugin_mcp() {
+    if let Err(e) = host.push_mcp_assembly() {
         eprintln!("[bbw-plugin] 配置变更装配重推失败（降级，重启会话后生效）: {e}");
     }
     Ok(())

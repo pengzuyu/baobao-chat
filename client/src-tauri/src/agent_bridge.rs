@@ -288,7 +288,7 @@ impl AgentHost {
             }
             *u = (user_id.to_string(), user_name.to_string());
         }
-        if let Err(e) = self.push_plugin_mcp() {
+        if let Err(e) = self.push_mcp_assembly() {
             eprintln!("[bbw-bridge] 用户变更装配重推失败（降级）: {e}");
         }
         Ok(())
@@ -335,10 +335,10 @@ impl AgentHost {
             Ok(()) => {
                 self.shared.proc.lock().unwrap().ready = true;
                 // MCP 装配持久性（D22 §5.3/L3）：spawn 后重推全量（系统级 corp
-                // env 已注入，插件级必须经 mcp.config——RT 重启不丢插件 server）。
-                // 失败仅告警不阻断（插件降级标灰，corp 链路不受影响）
-                if let Err(e) = self.push_plugin_mcp_inner() {
-                    eprintln!("[bbw-bridge] 插件 MCP 装配推送失败（降级）: {e}");
+                // env 已注入，插件级/个人级必须经 mcp.config——RT 重启不丢）。
+                // 失败仅告警不阻断（插件/个人降级标灰，corp 链路不受影响）
+                if let Err(e) = self.push_mcp_assembly_inner() {
+                    eprintln!("[bbw-bridge] MCP 装配推送失败（降级）: {e}");
                 }
                 Ok(())
             }
@@ -346,14 +346,15 @@ impl AgentHost {
         }
     }
 
-    /// 插件 MCP 装配推送（对外入口：ensure_running 前置）——装配变更后调用
-    pub fn push_plugin_mcp(&self) -> Result<(), String> {
+    /// MCP 装配推送（对外入口：ensure_running 前置）——装配变更后调用
+    /// （D26：三源全量=corp+插件+个人，插件/个人命令层共用）
+    pub fn push_mcp_assembly(&self) -> Result<(), String> {
         self.ensure_running()?;
-        self.push_plugin_mcp_inner()
+        self.push_mcp_assembly_inner()
     }
 
     /// 全量装配 → mcp.config（NTF）+ tools.reload{plugin}（skills 多根重扫）
-    fn push_plugin_mcp_inner(&self) -> Result<(), String> {
+    fn push_mcp_assembly_inner(&self) -> Result<(), String> {
         let user = self.current_user();
         let servers = assemble_mcp_servers(&self.data_dir, &self.gateway, &user);
         self.fire_inner("mcp.config", json!({ "servers": servers }))?;
@@ -787,16 +788,19 @@ fn camel_to_snake(s: &str) -> String {
     out
 }
 
-// ── 插件 MCP 装配器（D22 §5.3 / L3）──
+// ── MCP 装配器（D22 §5.3 / L3 + D26 §4 个人第三源）──
 //
-// 两源合并产出 mcp.config 全量 wire（camelCase，与协议 McpServerWire 对齐）：
+// 三源合并产出 mcp.config 全量 wire（camelCase，与协议 McpServerWire 对齐）：
 //   1. 系统级：corp（HTTP 网关，env 同源口径——RT 启动 env 兜底，本装配覆盖）；
 //   2. 插件级：各启用插件 activeVersion 目录的 .mcp.json（或 plugin.json 内联
-//      mcpServers——string 路径/内联对象双形态，与服务端 Go 校验器同口径）。
+//      mcpServers——string 路径/内联对象双形态，与服务端 Go 校验器同口径）；
+//   3. 个人级（D26）：用户自配 eco/mcp/personal.json（stdio/HTTP 双形态，
+//      secret 值钥匙串合并——mcp_commands::read_personal_servers）。
 // `${PLUGIN_ROOT}` 替换为版本目录绝对路径（装配时静态替换）；身份变量
 // （${BBW_USER_TOKEN}/${CONFIG:*}）随 L4 在 RT 调用层动态注入——HTTP
 // headers 本层暂丢弃（TransportConfig::Http 尚无自定义头，登记 L4）。
-// server 名冲突：系统级优先，插件同名跳过（防劫持 corp 命名空间）。
+// server 名冲突：系统级 > 插件级 > 个人级，同名跳过（防劫持 corp 命名空间、
+// 防个人顶替插件）。
 
 fn assemble_mcp_servers(
     data_dir: &std::path::Path,
@@ -811,6 +815,7 @@ fn assemble_mcp_servers(
 
     let plugins_dir = data_dir.join("eco/plugins");
     let Ok(rd) = std::fs::read_dir(&plugins_dir) else {
+        append_personal(data_dir, &mut out, &mut taken, user);
         return out;
     };
     let mut ids: Vec<String> = rd
@@ -861,7 +866,34 @@ fn assemble_mcp_servers(
             }
         }
     }
+    append_personal(data_dir, &mut out, &mut taken, user);
     out
+}
+
+/// 个人第三源（D26 §4）：启用的自配 server 追加（corp>插件>个人——同名
+/// 跳过防顶替）；`${BBW_USER_ID/NAME}` 经 mcp_server_wire 照常静态替换、
+/// TOKEN 留 RT 动态（无 PLUGIN_ROOT/CONFIG 语义——个人面不使用）
+fn append_personal(
+    data_dir: &std::path::Path,
+    out: &mut Vec<Value>,
+    taken: &mut Vec<String>,
+    user: &(String, String),
+) {
+    for (name, def) in crate::mcp_commands::read_personal_servers(data_dir) {
+        if taken.contains(&name) {
+            eprintln!("[bbw-bridge] 个人 MCP server 名 '{name}' 与系统级/插件级冲突，跳过");
+            continue;
+        }
+        match mcp_server_wire(&name, &def, "", user, &serde_json::Map::new()) {
+            Some(w) => {
+                taken.push(name.clone());
+                out.push(w);
+            }
+            None => eprintln!(
+                "[bbw-bridge] 个人 MCP server '{name}' 定义非法（缺 command/url），跳过"
+            ),
+        }
+    }
 }
 
 /// 插件 MCP 定义读取：.mcp.json 文件优先；缺省回落 plugin.json（三目录名）
@@ -896,8 +928,10 @@ fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
 /// `${PLUGIN_ROOT}` 版本目录 / `${BBW_USER_ID}`·`${BBW_USER_NAME}` 当前登录
 /// 用户 / `${CONFIG:key}` 插件配置（config.json+钥匙串合并）；**`${BBW_USER_TOKEN}`
 /// 仅 HTTP headers 保留给 RT 调用层动态替换**（token 15min 轮换不静态化），
-/// stdio env 遇 TOKEN 置空（HTTP-only 约定——env 是 spawn 快照，D22 决策④））
-fn mcp_server_wire(
+/// stdio env 遇 TOKEN 置空（HTTP-only 约定——env 是 spawn 快照，D22 决策④）。
+/// 个人面（D26 §6）复用：plugin_root 传空串、config 传空表——USER_ID/NAME
+/// 照常替换、TOKEN 照常留给 RT）
+pub(crate) fn mcp_server_wire(
     name: &str,
     def: &Value,
     plugin_root: &str,
