@@ -303,7 +303,7 @@
 | M3 | 协议+记忆页+联调隔离 | memory.forget REQ/result 协议对（golden 锁定）+ MemoryListItem 增 globalType + bbrt list 用户段直读 global replay（带十类标签）/forget 处理臂 + 壳 memory_forget 命令 + 前端桥 forgetMemory（tauri/mock）+store 动作+记忆页 global 条目（十类 chip/撤销走 forget/meta 标注 USER.md）+ MemoryEngine::open_root（BBW_MEMORY_ROOT 覆盖） | tsc/vite build 绿；记忆页用户页签=USER.md 条目可见可删 | [x] 2026-11-12（本提交；顺修 D22 L4 遗漏的 agent_bridge 测试 Shared.user initializer） |
 | M4 | 真机验收 | D23 §9 六项走查（十类落盘/回落教训/禁止→解除更正链/压实与断 provider/记忆页/8020+BBW_MEMORY_ROOT） | 用户真机走查 | [ ] |
 
-## 批次 N：知识库博客化（D24，2026-11-12 N0 落稿待编码）
+## 批次 N：知识库博客化（D24，2026-11-13 N0-N6 编码完成待真机验收）
 
 > 定案（用户裁决 2026-11-12 十轮讨论）：**两维度收口**——公司知识库（公共/全员可看可投/
 > 全租户唯一）+ 我的笔记（个人/仅本人/AI 入库默认落点/不进榜单），**「空间」产品概念消失**
@@ -319,12 +319,12 @@
 
 | # | 事项 | 改动点 | 验收 | 状态 |
 |---|---|---|---|---|
-| N1 | 迁移+维度收口 | 0037（view_count/kb_doc_view/embed_epoch/kb_settings+dept 并入 company 种子+company 唯一索引，embed.go 双登记）+ canRead/canWrite 两分支 + CreateSpace/resolveDeptBinding/grants 三件套及六闭包下线 + EnsureCompanySpace + GET /kb/spaces 固定两行 | go build+test ./internal/kb/... 绿（dept/ACL 用例改写两维度口径）；迁移幂等重放 | [ ] |
-| N2 | 浏览量/榜单/我的 | POST view（日去重+作者短路）+ GET /kb/me/summary·me/docs·rankings（三榜 Top10+窗口聚合+公共-only）+ Options.UserInfoOfMany（org 闭包装配） | go test 绿（公共-only/作者不计数/日去重/窗口聚合用例） | [ ] |
-| N3 | 检索升级（两提交） | 提交一 aigw：OpenAICompat.Embed 真实调用+registry 放开 embed/rerank 档+AliasRerank/Provider.Rerank/HandleRerank+POST /v1/rerank 注册；提交二 kb：Options.RerankFn+GatewayRerankFn+Query rerank 阶段（候选 30→topK）+epoch（kb_settings 读写/向量路过滤/重建 goroutine 直调 Router/管理端 GET·POST rebuild+7017/7018） | go test ./internal/aigw/... ./internal/kb/... 绿（TestRerank 参照 TestEmbeddings；三态降级/epoch 过滤/重建幂等用例） | [ ] |
-| N4 | 前端首页+阅读页 | /kb 子路由重构 + KbHomePage（概览卡/大搜索/榜单三列/最近查看）+ ArticlePage（MarkdownText 增强图片/链接/有序列表+view 上报+专栏面包屑+引用到 Agent） | tsc 0 错+vite build 绿 | [ ] |
-| N5 | 前端其余+管理端 | SpaceBrowsePage（目录树懒加载接通）+ MyArticlesPage + SearchPage（命中卡文章化）+ KbGovernancePage 嵌入设置面板（模型/epoch/重建进度）+ 旧件退役（UploadModal/GrantModal/旧 KbPage） | tsc+vite build 绿 | [ ] |
-| N6 | IM 收藏入库 | IngestFromIM 接路由 POST /kb/docs/from-im + IM 消息右键入口（默认落我的笔记） | go test+tsc+build 绿 | [ ] |
+| N1 | 迁移+维度收口 | 0037（view_count/kb_doc_view/embed_epoch/kb_settings+dept 并入 company 种子+company 唯一索引，embed.go 双登记）+ canRead/canWrite 两分支 + CreateSpace/resolveDeptBinding/grants 三件套及六闭包下线 + EnsureCompanySpace + GET /kb/spaces 固定两行 | go build+test ./internal/kb/... 绿（dept/ACL 用例改写两维度口径）；迁移幂等重放 | [x] 2026-11-12（339b9f3；净 -481 行；:5432 开发库 0036+0037 已应用入账；PG 冒烟绿） |
+| N2 | 浏览量/榜单/我的 | POST view（日去重+作者短路）+ GET /kb/me/summary·me/docs·rankings（三榜 Top10+窗口聚合+公共-only）+ Options.UserInfoOfMany（org 闭包装配） | go test 绿（公共-only/作者不计数/日去重/窗口聚合用例） | [x] 2026-11-12（655ff20；15 用例绿） |
+| N3 | 检索升级（两提交） | 提交一 aigw：OpenAICompat.Embed 真实调用+registry 放开 embed/rerank 档+AliasRerank/Provider.Rerank/HandleRerank+POST /v1/rerank 注册；提交二 kb：Options.RerankFn+GatewayRerankFn+Query rerank 阶段（候选 30→topK）+epoch（kb_settings 读写/向量路过滤/重建 goroutine/管理端 GET·POST rebuild+7017/7018） | go test ./internal/aigw/... ./internal/kb/... 绿（TestRerank；三态降级/epoch 过滤/重建幂等用例） | [x] 2026-11-12（b667551+22b3a63；aigw 12 用例+kb 17 用例；顺修 N2 docCols view_count 扫描位缺——PG 冒烟拦截） |
+| N4 | 前端首页+阅读页 | /kb 子路由重构 + KbHomePage（概览卡/大搜索/榜单三列/最近查看）+ ArticlePage（MarkdownText 增强图片/链接/有序列表+view 上报+大纲锚条）+ SearchPage（检索面板吸收为页面） | tsc 0 错+vite build 绿 | [x] 2026-11-12（dd8069e；「引用到 Agent」bus 桥随旧件退役移出——阅读页 N4 版未带，随 AI 写入批次补） |
+| N5 | 前端其余+管理端 | SpaceBrowsePage（目录=专栏面包屑逐层懒加载）+ MyArticlesPage（两维度分组）+ KbGovernancePage 嵌入设置面板（重建触发+进度轮询+跨维度确认）+ 旧件退役（KbPage 707 行/GrantModal/IngestBadge/createSpace+grants api） | tsc+vite build 绿 | [x] 2026-11-12（c6338e6；净 -945 行） |
+| N6 | IM 收藏入库 | IngestFromIM 接路由 POST /kb/docs/from-im（spaceID=0 自动个人维度）+ 消息右键「存入知识库」（仅 text 可见+favToast 回显） | go test+tsc+build 绿 | [x] 2026-11-13（8b0c1b6） |
 | N7 | 真机验收 | D24 §10 七项走查（首页榜单/浏览量口径/阅读页渲染/维度隔离/检索三态/重建进度/IM 入库） | 用户真机走查（:8090 重启+Tauri） | [ ] |
 | N8 | 正文媒体引用权限（D24 §11 补记） | file_ref 表随 0037 建（file_id/ctx_type/ctx_id/created_by）+ file 域 canAccess 第三判据（EXISTS 可见引用上下文，kb_article 可见性闭包注入——挂门法，否掉文件行打标）+ 正文 bbwfile://{id} 引用语法与 N4 阅读页渲染换票（120s 票据现场取）+ 删除三层（静默删引用/本体删除引用计数提示/全零回收归 D06 登记项）；IM conv_id 旧径不动（message 迁 file_ref 终态另立） | 非作者读者打开公开文章正文图正常显示（旧路径 403）；编辑删图/文章移动不影响其他门 | [ ] |
 
