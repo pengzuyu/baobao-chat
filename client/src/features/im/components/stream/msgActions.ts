@@ -26,6 +26,8 @@ export interface MsgActionVisibility {
   forward: boolean;
   /** 组2：收藏（INT-IM-06，幂等） */
   favorite: boolean;
+  /** 组2：存入知识库（D24 N6：text 消息转存我的笔记） */
+  saveKb: boolean;
   /** 组2：多选（INT-IM-14 批量入口） */
   multiSelect: boolean;
   /** 组3：编辑（本人 text ≤5min） */
@@ -40,6 +42,7 @@ const NONE: MsgActionVisibility = {
   copy: false,
   forward: false,
   favorite: false,
+  saveKb: false,
   multiSelect: false,
   edit: false,
   recall: false,
@@ -64,6 +67,7 @@ export function msgActionsVisible(msg: Message, myUid: string, now: number = Dat
     copy: true,
     forward: serverReachable,
     favorite: serverReachable,
+    saveKb: serverReachable && msg.type === 'text',
     multiSelect: serverReachable,
     edit: serverReachable && mine && msg.type === 'text' && now - msg.ts < MSG_EDIT_WINDOW_MS,
     recall: serverReachable && mine && now - msg.ts < MSG_RECALL_WINDOW_MS,

@@ -46,6 +46,7 @@ import type { DirectoryUser } from '../../contacts/api/contacts';
 import { FileSendPreview } from '../components/FileSendPreview';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from '../components/stream/MsgContextMenu';
+import { ingestFromIm } from '../../kb/api/kb';
 import { MessageInput } from '../components/MessageInput';
 import { EmbeddedAgentSync } from '../agent/EmbeddedAgentSync';
 import type { AgentCardBody } from '../../../shared/components/AgentProcessCard';
@@ -676,6 +677,22 @@ export function ChatPage() {
     },
     onForward: bubbleActions.onForward,
     onFavorite: bubbleActions.onFavorite,
+    // 存入知识库（D24 N6）：文本消息→我的笔记（保存/投稿分离——默认落个人维度）
+    onSaveToKb: (m) => {
+      if (m.type !== 'text' || !('text' in m.body)) return;
+      void ingestFromIm({ msg_id: m.msgId, text: m.body.text })
+        .then((doc) => {
+          setFavToast({
+            text: doc.status === 'ready' ? `已存入「我的笔记」：《${doc.title}》` : `入库失败：${doc.error_msg ?? '嵌入服务不可用'}`,
+            ok: doc.status === 'ready',
+          });
+        })
+        .catch((err: unknown) => {
+          const code = err instanceof ApiError ? err.code : 0;
+          setFavToast({ text: code > 0 ? getErrorText(code) : '入库失败，请重试', ok: false });
+        });
+      setTimeout(() => setFavToast(null), 3000);
+    },
     onMultiSelect: bubbleActions.onMultiSelect,
     onEdit: bubbleActions.onEdit,
     onRecall: bubbleActions.onRecall,

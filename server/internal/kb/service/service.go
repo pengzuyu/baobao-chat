@@ -1312,10 +1312,18 @@ func (s *Service) GovernDeleteSpace(ctx context.Context, tenantID, spaceID int64
 
 // ── 内容来源通道（D24：IM 转存；doc 同步已随 doc 域废弃移除）──
 
-// IngestFromIM IM 消息转存（E6；N6 接线 POST /kb/docs/from-im，默认落我的笔记）
+// IngestFromIM IM 消息转存（E6；POST /kb/docs/from-im，D24 拍板：保存默认落
+// 我的笔记——spaceID=0 自动取个人维度行）
 func (s *Service) IngestFromIM(ctx context.Context, tenantID, userID int64, spaceID int64, msgID int64, title, text string) (*kbapi.DocDTO, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, errx.New(errx.CodeBadRequest, "消息文本为空")
+	}
+	if spaceID == 0 { // 默认落我的笔记（保存/投稿分离：投稿=后置 AI 移动动作）
+		sp, err := s.repo.EnsurePersonalSpace(ctx, tenantID, userID, s.opts.PersonalQuotaBytes)
+		if err != nil {
+			return nil, errx.From(err)
+		}
+		spaceID = sp.ID
 	}
 	if title == "" {
 		title = "IM 消息 " + strconv.FormatInt(msgID, 10)

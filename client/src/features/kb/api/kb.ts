@@ -227,3 +227,19 @@ export async function fetchRankings(board: 'latest' | 'hot' | 'authors', window?
   if (window) q.set('window', window);
   return http.get<KbRankingsResp>(`/kb/rankings?${q.toString()}`);
 }
+
+/** IM 消息存入知识库（N6：space_id 空=默认落我的笔记；返回终态文章） */
+export async function ingestFromIm(req: { msg_id: string; text: string; title?: string; space_id?: string }): Promise<KbDoc> {
+  if (USE_MOCK) {
+    await delay(500);
+    return {
+      id: `mock-doc-${Date.now()}`, space_id: 'mock-sp-1', node_id: '', title: req.title || 'IM 消息',
+      source_type: 'im', source_ref: req.msg_id, ext: 'txt', size: req.text.length, status: 'ready',
+      version: 1, view_count: 0, space_type: 'personal', created_by: 'u-1001', created_at: Date.now(), updated_at: Date.now(),
+    };
+  }
+  const body: Record<string, unknown> = { msg_id: Number(req.msg_id), text: req.text };
+  if (req.title) body.title = req.title;
+  if (req.space_id) body.space_id = Number(req.space_id);
+  return http.post<KbDoc>('/kb/docs/from-im', body);
+}

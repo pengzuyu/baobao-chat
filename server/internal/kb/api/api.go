@@ -146,6 +146,9 @@ type KBService interface {
 	// Rankings 榜单（board=latest|hot|authors，window=7d|30d|all 仅 hot；仅公共维度）
 	Rankings(ctx context.Context, tenantID, userID int64, board, window string) (*RankingsResp, error)
 
+	// IngestFromIM IM 消息转存（N6：spaceID=0 默认落我的笔记；title 缺省「IM 消息 {id}」）
+	IngestFromIM(ctx context.Context, tenantID, userID, spaceID, msgID int64, title, text string) (*DocDTO, error)
+
 	// ── epoch 重建（D24 §5.3；管理端 admin:kb:govern 路由层守卫）──
 	// GetEmbeddingSettings 嵌入配置现状（epoch/模型/维度/重建进度）
 	GetEmbeddingSettings(ctx context.Context, tenantID int64) (*EmbeddingSettingsDTO, error)

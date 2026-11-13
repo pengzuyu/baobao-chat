@@ -7,7 +7,7 @@
 export type SpaceType = 'personal' | 'dept' | 'company';
 
 /** 文档来源（v0.1 三态：粘贴文本 / 文件引用 / markdown 文本） */
-export type SourceType = 'text' | 'file' | 'markdown';
+export type SourceType = 'text' | 'file' | 'markdown' | 'im'; // im=消息转存（D24 N6）
 
 /** 摄入状态（同步版三态；pending/parsing/embedding 细分随阶段二 job 表） */
 export type DocStatus = 'processing' | 'ready' | 'failed';

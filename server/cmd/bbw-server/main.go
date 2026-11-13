@@ -545,6 +545,7 @@ func main() {
 	mux.Handle("POST /api/v1/kb/docs/{id}/reingest", authed(handleKBReingest(kbSvc)))
 	mux.Handle("POST /api/v1/kb/query", authed(handleKBQuery(kbSvc)))
 	mux.Handle("GET /api/v1/kb/jobs", authed(handleKBJobs(kbSvc)))
+	mux.Handle("POST /api/v1/kb/docs/from-im", authed(handleKBIngestFromIM(kbSvc)))
 	// D24：浏览量/榜单/我的（首页概览卡+三列榜单+我的文章）
 	mux.Handle("POST /api/v1/kb/docs/{id}/view", authed(handleKBViewDoc(kbSvc)))
 	mux.Handle("GET /api/v1/kb/me/summary", authed(handleKBMySummary(kbSvc)))
@@ -2571,6 +2572,38 @@ func handleKBRankings(svc kbapi.KBService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, resp)
+	}
+}
+
+// handleKBIngestFromIM IM 消息转存（N6：文本消息右键「存入知识库」；
+// space_id 空=默认落我的笔记；返回终态文章）
+func handleKBIngestFromIM(svc kbapi.KBService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant, uid, err := kbActor(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			MsgID   int64  `json:"msg_id"`
+			Title   string `json:"title"`
+			Text    string `json:"text"`
+			SpaceID int64  `json:"space_id"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if req.MsgID <= 0 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "msg_id 必填"))
+			return
+		}
+		doc, err := svc.IngestFromIM(r.Context(), tenant, uid, req.SpaceID, req.MsgID, req.Title, req.Text)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, doc)
 	}
 }
 

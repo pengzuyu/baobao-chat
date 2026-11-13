@@ -11,7 +11,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, Forward, ListChecks, Pencil, Quote, Reply, Star, Undo2 } from 'lucide-react';
+import { BookMarked, Copy, Forward, ListChecks, Pencil, Quote, Reply, Star, Undo2 } from 'lucide-react';
 import type { Message, SystemBody } from '../../model/types';
 import { digestOf } from '../../store/im';
 import { systemMessageText } from '../../pages/systemMessageRegistry';
@@ -29,6 +29,8 @@ export interface MsgMenuActions {
   onCopy: (m: Message) => void;
   onForward: (m: Message) => void;
   onFavorite: (m: Message) => void;
+  /** 存入知识库（D24 N6：文本消息→我的笔记） */
+  onSaveToKb: (m: Message) => void;
   onMultiSelect: (m: Message) => void;
   onEdit: (m: Message) => void;
   onRecall: (m: Message) => void;
@@ -131,7 +133,7 @@ export function MsgContextMenu({ message, myUid, anchor, onClose, ...actions }: 
 
   // 分组存在性（决定组间分隔线）
   const hasGroup1 = vis.reply || vis.quote || vis.copy;
-  const hasGroup2 = vis.forward || vis.favorite || vis.multiSelect;
+  const hasGroup2 = vis.forward || vis.favorite || vis.saveKb || vis.multiSelect;
   const hasGroup3 = vis.edit || vis.recall;
 
   return createPortal(
@@ -162,6 +164,9 @@ export function MsgContextMenu({ message, myUid, anchor, onClose, ...actions }: 
       ) : null}
       {vis.favorite ? (
         <MenuItem icon={<Star size={14} />} label="收藏" action="favorite" onClick={() => run(actions.onFavorite)} />
+      ) : null}
+      {vis.saveKb ? (
+        <MenuItem icon={<BookMarked size={14} />} label="存入知识库" action="savekb" onClick={() => run(actions.onSaveToKb)} />
       ) : null}
       {vis.multiSelect ? (
         <MenuItem
