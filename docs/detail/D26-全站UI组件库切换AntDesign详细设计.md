@@ -1,6 +1,6 @@
 # D26 · 全站 UI 组件库切换 Ant Design 详细设计
 
-> 状态：2026-11-13 设计定稿（用户拍板：除 IM 气泡外全量切 antd）。编码进度：O1 ✅（主题基线+基础层+kb 样板，含口径修订——旧自研样式一律退役走 antd 原生观感）、O2 ✅ 2026-11-13（admin 域 15 页全量换装：Table×14/Tabs/Switch/Segmented/Modal×3/Modal.confirm×15/控件清零，data-testid 全保留；**补充轮：结构层旧类（admin-panel/card/timeline/policy-rows/grants/org-node 树/eco-reg/kb-embed-panel/settings-nav）全退役**——换 antd Card/Statistic/Progress/Timeline/List/Tree/Menu/Form/Flex，布局内联，admin 域 className 归零）、O3 ✅ 2026-11-13（settings+auth+contacts+mail+expert+eco 六域 20 文件：表单件/弹窗×6/confirm 全清+结构层旧类归零——Menu 导航/Tree 通讯录/Popover 搜索/Modal+Form 写信/Drawer×3/Card+List 面板族）；O4-O7 待编码。
+> 状态：2026-11-13 设计定稿（用户拍板：除 IM 气泡外全量切 antd）。编码进度：O1 ✅（主题基线+基础层+kb 样板，含口径修订——旧自研样式一律退役走 antd 原生观感）、O2 ✅（admin 域 15 页两轮：控件层+结构层旧类全归零）、O3 ✅（六域 20 文件同口径）、O4 ✅（agent 工作台 8 文件，过程卡族保留）、O5 ✅（IM 外围 9 文件，气泡/输入区保留）、O6 ✅（global.css **9895→4881 行** grep 驱动清扫+孤儿模块删除+keyframes 同名拆分；>3200 偏差=仍被引用的保留面：IM 核心/kb 博客体未换装页/Agent 过程卡，继续压行需 kb 博客体换装另行立项）；**仅剩 O7 用户真机走查（§7 五项）**。
 > 定位：**全站视觉与交互基座换制，非局部美化**。自研 BEM+global.css(10384 行) 体系收敛为「布局层」；antd 5 承接全部通用交互件（表单/弹窗/下拉/表格/树/页签/提示）。
 > 上游：[D01](D01-客户端总体详细设计.md)（设计系统/六态/断点——六态与断点规范继续有效）、tokens.css（--bbw-\* 令牌升格为 antd theme 唯一色源）。
 > 关联：[D24](D24-知识库博客化详细设计.md)（kb 域为样板域）、providers.tsx（ConfigProvider 主题桥接已通）、vite.config（antd 独立 chunk 已拆）。
