@@ -240,7 +240,10 @@ export async function installLocal(
   if (!downloadUrl && !USE_MOCK) {
     throw new Error('下载地址缺失');
   }
-  const blob = await downloadBlob(downloadUrl);
+  // download_url 服务端自带 /api/v1 前缀，而 downloadBlob 内部会拼 API_BASE
+  // （已含 /api/v1）——双拼 404，剥掉前缀走相对路径
+  const rel = downloadUrl.startsWith('/api/v1/') ? downloadUrl.slice(7) : downloadUrl;
+  const blob = await downloadBlob(rel);
   const buf = new Uint8Array(await blob.arrayBuffer());
   const files = unzipSync(buf);
   const found = findManifest(files);
