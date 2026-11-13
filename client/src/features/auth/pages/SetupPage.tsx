@@ -2,10 +2,11 @@
  * 初始化向导页（16 篇 §2.2 Web 化主通道）：
  * 首次部署（系统无任何用户）时引导建立首个平台管理员——只填工号/姓名/口令
  * 三项，成功后自动登录进系统。已初始化系统不出现本页（status 1014 兜底跳回）。
+ * D26-O3：login-page/login-card 自研壳退役——居中布局内联 + antd Card、错误条→Alert；向导逻辑不动。
  */
 
-import { useEffect, useState } from 'react';
-import { Button, Form, Input } from 'antd';
+import { useEffect, useState, type CSSProperties } from 'react';
+import { Alert, Button, Card, Flex, Form, Input, Typography } from 'antd';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { apiSetupBootstrap, apiSetupStatus } from '../api/auth';
 import { getErrorText } from '../../../shared/api/http';
@@ -13,6 +14,8 @@ import { Logo } from '../../../shared/ui/Logo';
 import { useAuthStore } from '../store/auth';
 
 type SetupPhase = 'checking' | 'uninitialized' | 'initialized';
+
+const AUTH_PAGE_STYLE: CSSProperties = { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 };
 
 export function SetupPage() {
   const navigate = useNavigate();
@@ -53,18 +56,19 @@ export function SetupPage() {
   };
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        <div className="login-card__brand">
+    <div style={AUTH_PAGE_STYLE}>
+      <Card style={{ width: 360 }}>
+        <Flex vertical align="center" gap={4} style={{ textAlign: 'center', marginBottom: 20 }}>
           <Logo size={44} />
-          <div className="login-card__title">欢迎使用 BaobaoWork</div>
-          <div className="login-card__sub">首次部署 · 创建平台管理员即完成初始化</div>
-        </div>
+          <Typography.Title level={4} style={{ margin: '8px 0 0' }}>
+            欢迎使用 BaobaoWork
+          </Typography.Title>
+          <Typography.Text type="secondary">首次部署 · 创建平台管理员即完成初始化</Typography.Text>
+        </Flex>
 
         {phase === 'checking' ? null : (
           <Form
             layout="vertical"
-            className="login-card__form"
             onFinish={(values) => void onFinish(values as { employeeNo: string; displayName: string; password: string })}
             disabled={submitting}
             initialValues={{ employeeNo: 'admin', displayName: '平台管理员' }}
@@ -93,19 +97,19 @@ export function SetupPage() {
               <Input.Password placeholder="再次输入口令" autoComplete="new-password" size="large" />
             </Form.Item>
 
-            {errorText ? <div className="login-card__error">{errorText}</div> : null}
+            {errorText ? <Alert type="error" showIcon message={errorText} style={{ marginBottom: 16 }} /> : null}
 
-            <Button block size="large" htmlType="submit" loading={submitting} className="login-card__submit">
+            <Button block size="large" htmlType="submit" loading={submitting}>
               完成初始化并进入
             </Button>
           </Form>
         )}
 
-        <div className="login-card__footer">
+        <Typography.Text type="secondary" style={{ display: 'block', textAlign: 'center', fontSize: 12, marginTop: 16 }}>
           创建后可登录管理台创建普通用户与部门
           <br />© 2026 BaobaoWork
-        </div>
-      </div>
+        </Typography.Text>
+      </Card>
     </div>
   );
 }

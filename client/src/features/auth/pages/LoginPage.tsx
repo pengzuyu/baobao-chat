@@ -8,16 +8,41 @@
  * 1007 错误锁定倒计时展示；错误文案按错误码映射（D01 §11）。
  * D11：登录命中 must_change_pwd（导入用户初始口令）→ 二步改密表单
  * （token 已发但被本页拦截，改密成功才放行进应用）。
+ * D26-O3：login-page/login-card 自研壳退役——居中布局内联 + antd Card，
+ * 错误/锁定提示→Alert、回车提交→onPressEnter；登录/注册/搜人逻辑不动。
  */
 
-import { useEffect, useState } from 'react';
-import { Button, Form, Input } from 'antd';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { Alert, Button, Card, Flex, Form, Input, Typography } from 'antd';
 import { Navigate } from 'react-router-dom';
 import { errText, getErrorText } from '../../../shared/api/http';
 import { Logo } from '../../../shared/ui/Logo';
 import { useAuthStore } from '../store/auth';
 import { apiRegister, apiSetupStatus, type UserCard } from '../api/auth';
 import { UserPicker } from '../components/UserPicker';
+
+/** 认证页居中壳 + 品牌区（D26-O3 内联化） */
+const AUTH_PAGE_STYLE: CSSProperties = { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 };
+
+function AuthBrand({ title, sub }: { title: string; sub: string }) {
+  return (
+    <Flex vertical align="center" gap={4} style={{ textAlign: 'center', marginBottom: 20 }}>
+      <Logo size={44} />
+      <Typography.Title level={4} style={{ margin: '8px 0 0' }}>
+        {title}
+      </Typography.Title>
+      <Typography.Text type="secondary">{sub}</Typography.Text>
+    </Flex>
+  );
+}
+
+function AuthFooter({ children }: { children: ReactNode }) {
+  return (
+    <Typography.Text type="secondary" style={{ display: 'block', textAlign: 'center', fontSize: 12, marginTop: 16 }}>
+      {children}
+    </Typography.Text>
+  );
+}
 
 /** 锁定剩余秒数（每秒心跳刷新） */
 function useLockCountdown(lockUntil: number): number {
@@ -126,14 +151,10 @@ export function LoginPage() {
         .finally(() => setPwdBusy(false));
     };
     return (
-      <div className="login-page">
-        <div className="login-card">
-          <div className="login-card__brand">
-            <Logo size={44} />
-            <div className="login-card__title">首次登录 · 修改密码</div>
-            <div className="login-card__sub">初始口令为临时口令，请设置新密码后进入</div>
-          </div>
-          <Form layout="vertical" className="login-card__form">
+      <div style={AUTH_PAGE_STYLE}>
+        <Card style={{ width: 360 }}>
+          <AuthBrand title="首次登录 · 修改密码" sub="初始口令为临时口令，请设置新密码后进入" />
+          <Form layout="vertical">
             <Form.Item label="当前口令（初始口令）">
               <Input.Password value={oldPwd} onChange={(e) => setOldPwd(e.target.value)} size="large" autoFocus />
             </Form.Item>
@@ -145,15 +166,15 @@ export function LoginPage() {
                 value={newPwd2}
                 onChange={(e) => setNewPwd2(e.target.value)}
                 size="large"
-                onKeyDown={(e) => e.key === 'Enter' && oldPwd && newPwd && submitChange()}
+                onPressEnter={() => oldPwd && newPwd && submitChange()}
               />
             </Form.Item>
-            {pwdError ? <div className="login-card__error" data-testid="must-change-error">{pwdError}</div> : null}
-            <Button block size="large" className="login-card__submit" loading={pwdBusy} disabled={!oldPwd || !newPwd || !newPwd2} onClick={submitChange} data-testid="must-change-submit">
+            {pwdError ? <Alert type="error" showIcon message={pwdError} data-testid="must-change-error" style={{ marginBottom: 16 }} /> : null}
+            <Button block size="large" loading={pwdBusy} disabled={!oldPwd || !newPwd || !newPwd2} onClick={submitChange} data-testid="must-change-submit">
               设置新密码并进入
             </Button>
           </Form>
-        </div>
+        </Card>
       </div>
     );
   }
@@ -165,21 +186,19 @@ export function LoginPage() {
   // 注册成功回执（M4）：工号即登录账号——牢记后回登录（预填账号直接输口令）
   if (mode === 'registered') {
     return (
-      <div className="login-page">
-        <div className="login-card">
-          <div className="login-card__brand">
-            <Logo size={44} />
-            <div className="login-card__title">注册成功</div>
-            <div className="login-card__sub">请牢记你的工号（登录账号）</div>
-          </div>
-          <div className="login-card__empno" data-testid="register-empno">
+      <div style={AUTH_PAGE_STYLE}>
+        <Card style={{ width: 360 }}>
+          <AuthBrand title="注册成功" sub="请牢记你的工号（登录账号）" />
+          <Typography.Text code data-testid="register-empno" style={{ display: 'block', textAlign: 'center', fontSize: 22, marginBottom: 8 }}>
             {registeredEmpno}
-          </div>
-          <div className="login-card__regnote">你已加入「未分组」，所属组织可由管理员后续调整</div>
-          <Button block size="large" className="login-card__submit" onClick={backToLogin} data-testid="register-goto-login">
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 16 }}>
+            你已加入「未分组」，所属组织可由管理员后续调整
+          </Typography.Text>
+          <Button block size="large" onClick={backToLogin} data-testid="register-goto-login">
             去登录
           </Button>
-        </div>
+        </Card>
       </div>
     );
   }
@@ -187,14 +206,10 @@ export function LoginPage() {
   // 自助注册表单（M4）：姓名+口令，工号服务端自动分配（拼音基名+重名递增）
   if (mode === 'register') {
     return (
-      <div className="login-page">
-        <div className="login-card">
-          <div className="login-card__brand">
-            <Logo size={44} />
-            <div className="login-card__title">注册账号</div>
-            <div className="login-card__sub">姓名 + 口令即可，工号将自动分配</div>
-          </div>
-          <Form layout="vertical" className="login-card__form">
+      <div style={AUTH_PAGE_STYLE}>
+        <Card style={{ width: 360 }}>
+          <AuthBrand title="注册账号" sub="姓名 + 口令即可，工号将自动分配" />
+          <Form layout="vertical">
             <Form.Item label="姓名">
               <Input
                 placeholder="真实姓名（用于通讯录与搜索）"
@@ -215,14 +230,13 @@ export function LoginPage() {
                 onChange={(e) => setRegPwd2(e.target.value)}
                 size="large"
                 autoComplete="new-password"
-                onKeyDown={(e) => e.key === 'Enter' && regName && regPwd && void submitRegister()}
+                onPressEnter={() => regName && regPwd && void submitRegister()}
               />
             </Form.Item>
-            {regError ? <div className="login-card__error" data-testid="register-error">{regError}</div> : null}
+            {regError ? <Alert type="error" showIcon message={regError} data-testid="register-error" style={{ marginBottom: 16 }} /> : null}
             <Button
               block
               size="large"
-              className="login-card__submit"
               loading={regBusy}
               disabled={!regName.trim() || !regPwd || !regPwd2}
               onClick={() => void submitRegister()}
@@ -230,30 +244,25 @@ export function LoginPage() {
             >
               注 册
             </Button>
-            <div className="login-card__switch">
-              已有账号？
-              <a onClick={() => setMode('login')} data-testid="register-back-login">
+            <div style={{ textAlign: 'center', marginTop: 12, fontSize: 13 }}>
+              <Typography.Text type="secondary">已有账号？</Typography.Text>{' '}
+              <Typography.Link onClick={() => setMode('login')} data-testid="register-back-login">
                 返回登录
-              </a>
+              </Typography.Link>
             </div>
           </Form>
-        </div>
+        </Card>
       </div>
     );
   }
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        <div className="login-card__brand">
-          <Logo size={44} />
-          <div className="login-card__title">BaobaoWork</div>
-          <div className="login-card__sub">让协作更简单 · 企业协作工作台</div>
-        </div>
+    <div style={AUTH_PAGE_STYLE}>
+      <Card style={{ width: 360 }}>
+        <AuthBrand title="BaobaoWork" sub="让协作更简单 · 企业协作工作台" />
 
         <Form
           layout="vertical"
-          className="login-card__form"
           disabled={locked}
           onFinish={(values) => {
             if (!picked) {
@@ -264,39 +273,38 @@ export function LoginPage() {
             void login(picked.employee_no, String(values.password ?? ''));
           }}
         >
-          <div className="login-card__field">
-            <label className="login-card__label">账号</label>
+          <Form.Item label="账号">
             <UserPicker selected={picked} onSelect={setPicked} disabled={locked} />
-            {pickError ? <div className="login-card__error" data-testid="login-pick-error">{pickError}</div> : null}
-          </div>
+            {pickError ? <Alert type="error" showIcon message={pickError} data-testid="login-pick-error" style={{ marginTop: 8 }} /> : null}
+          </Form.Item>
           <Form.Item name="password" label="口令" rules={[{ required: true, message: '请输入口令' }]}>
             <Input.Password placeholder="请输入口令" autoComplete="current-password" size="large" />
           </Form.Item>
 
           {/* 错误码→中文文案（不依赖服务端 message） */}
-          {error && !locked ? <div className="login-card__error">{getErrorText(error.code)}</div> : null}
+          {error && !locked ? <Alert type="error" showIcon message={getErrorText(error.code)} style={{ marginBottom: 8 }} /> : null}
           {/* 1007 错误锁定倒计时 */}
           {locked ? (
-            <div className="login-card__countdown">失败次数过多已锁定，{lockSecondsLeft} 秒后可重试</div>
+            <Alert type="warning" showIcon message={`失败次数过多已锁定，${lockSecondsLeft} 秒后可重试`} style={{ marginBottom: 8 }} />
           ) : null}
 
-          <Button block size="large" htmlType="submit" loading={loginStatus === 'submitting'} disabled={locked} className="login-card__submit">
+          <Button block size="large" htmlType="submit" loading={loginStatus === 'submitting'} disabled={locked}>
             登 录
           </Button>
 
-          <div className="login-card__switch">
-            还没有账号？
-            <a onClick={() => setMode('register')} data-testid="goto-register">
+          <div style={{ textAlign: 'center', marginTop: 12, fontSize: 13 }}>
+            <Typography.Text type="secondary">还没有账号？</Typography.Text>{' '}
+            <Typography.Link onClick={() => setMode('register')} data-testid="goto-register">
               注册
-            </a>
+            </Typography.Link>
           </div>
         </Form>
 
-        <div className="login-card__footer">
+        <AuthFooter>
           SSO / MFA 登录入口在后续阶段接入（03 篇）
           <br />© 2026 BaobaoWork
-        </div>
-      </div>
+        </AuthFooter>
+      </Card>
     </div>
   );
 }

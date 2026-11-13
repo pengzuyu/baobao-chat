@@ -1,9 +1,12 @@
 /**
  * MAI-03 邮箱设置抽屉（22 §3.5）：签名/自动转发/远程图片 + 应用专用密码
  * （命名生成·仅显示一次·即时吊销——第三方客户端 Foxmail/Outlook 接入，§3.4 路径②）。
+ * D26-O3：自研 mail-settings 壳退役，antd Drawer+Form vertical 化
+ * （专用密码区 Card+List；明文密码 Text code+复制钮）。
  */
 import { useState } from 'react';
-import { Copy, KeyRound, Trash2, X } from 'lucide-react';
+import { Card, Checkbox, Drawer, Flex, Form, Input, List, Space, Typography } from 'antd';
+import { Copy, KeyRound, Trash2 } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import type { AppPasswordPlain } from '../model/types';
 
@@ -41,87 +44,111 @@ export function SettingsDrawer({ onClose, settings, onSave, passwords, onCreateP
   };
 
   return (
-    <div className="mail-settings__mask" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className="mail-settings">
-        <div className="mail-settings__head">
-          <span>邮箱设置</span>
-          <button className="mail-settings__close" onClick={onClose} aria-label="关闭">
-            <X size={16} />
-          </button>
+    <Drawer
+      title="邮箱设置"
+      open
+      onClose={onClose}
+      width={420}
+      destroyOnClose
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button variant="secondary" onClick={onClose}>
+            关闭
+          </Button>
+          <Button
+            onClick={() => onSave({ signature: sig, auto_forward: forward, keep_copy: keepCopy, remote_images: remote })}
+          >
+            保存设置
+          </Button>
         </div>
-        <div className="mail-settings__body">
-          <section>
-            <h4>签名</h4>
-            <textarea rows={4} value={sig} onChange={(e) => setSig(e.target.value)} placeholder="随正文追加的签名" />
-          </section>
-          <section>
-            <h4>自动转发 <small>（执行随阶段二，先落配置）</small></h4>
-            <input value={forward} onChange={(e) => setForward(e.target.value)} placeholder="转发地址（空=关闭）" />
-            <label className="mail-settings__check">
-              <input type="checkbox" checked={keepCopy} onChange={(e) => setKeepCopy(e.target.checked)} />
-              转发时保留本箱副本
-            </label>
-          </section>
-          <section>
-            <h4>隐私</h4>
-            <label className="mail-settings__check">
-              <input type="checkbox" checked={remote} onChange={(e) => setRemote(e.target.checked)} />
-              自动加载远程图片（默认关闭，22 §7）
-            </label>
-          </section>
-          <div className="mail-settings__save">
-            <Button variant="primary" onClick={() => onSave({ signature: sig, auto_forward: forward, keep_copy: keepCopy, remote_images: remote })}>
-              保存设置
-            </Button>
-          </div>
+      }
+    >
+      <Form layout="vertical">
+        <Form.Item label="签名">
+          <Input.TextArea value={sig} onChange={(e) => setSig(e.target.value)} autoSize={{ minRows: 4, maxRows: 8 }} placeholder="随正文追加的签名" />
+        </Form.Item>
+        <Form.Item label="自动转发（执行随阶段二，先落配置）">
+          <Input value={forward} onChange={(e) => setForward(e.target.value)} placeholder="转发地址（空=关闭）" />
+          <Checkbox
+            checked={keepCopy}
+            onChange={(e) => setKeepCopy(e.target.checked)}
+            style={{ marginTop: 8 }}
+          >
+            转发时保留本箱副本
+          </Checkbox>
+        </Form.Item>
+        <Form.Item label="隐私">
+          <Checkbox checked={remote} onChange={(e) => setRemote(e.target.checked)}>
+            自动加载远程图片（默认关闭，22 §7）
+          </Checkbox>
+        </Form.Item>
+      </Form>
 
-          <section className="mail-settings__pwd">
-            <h4>
-              <KeyRound size={14} /> 应用专用密码
-            </h4>
-            <p className="mail-settings__pwd-tip">
-              供第三方客户端（Outlook/Foxmail）经 IMAP/SMTP 接入；仅生成时显示一次，吊销即时生效。
-            </p>
-            {plain && (
-              <div className="mail-settings__plain">
-                <code>{plain.secret}</code>
-                <button
-                  onClick={() => {
-                    void navigator.clipboard?.writeText(plain.secret);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1500);
-                  }}
-                >
-                  <Copy size={13} /> {copied ? '已复制' : '复制'}
-                </button>
-                <small>「{plain.name}」的密码仅此一次展示，请立即抄录</small>
-              </div>
-            )}
-            <div className="mail-settings__pwd-create">
-              <input
-                value={pwdName}
-                onChange={(e) => setPwdName(e.target.value)}
-                placeholder="命名（如 Foxmail）"
-              />
-              <Button variant="secondary" loading={creating} onClick={() => void create()}>
-                生成
+      <Card
+        size="small"
+        title={
+          <Space size={4}>
+            <KeyRound size={14} /> 应用专用密码
+          </Space>
+        }
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          供第三方客户端（Outlook/Foxmail）经 IMAP/SMTP 接入；仅生成时显示一次，吊销即时生效。
+        </Typography.Paragraph>
+        {plain && (
+          <div style={{ marginBottom: 12 }}>
+            <Space size={8} align="center" wrap>
+              <Typography.Text code>{plain.secret}</Typography.Text>
+              <Button
+                variant="secondary"
+                size="small"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(plain.secret);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                }}
+              >
+                <Copy size={12} /> {copied ? '已复制' : '复制'}
               </Button>
-            </div>
-            <ul className="mail-settings__pwd-list">
-              {passwords.map((p) => (
-                <li key={p.id}>
-                  <span>{p.name}</span>
-                  <time>{new Date(p.created_at).toLocaleDateString()}</time>
-                  <button className="mail-settings__revoke" onClick={() => onRevokePassword(p.id)} aria-label="吊销">
-                    <Trash2 size={13} /> 吊销
-                  </button>
-                </li>
-              ))}
-              {passwords.length === 0 && <li className="mail-settings__pwd-empty">暂无专用密码</li>}
-            </ul>
-          </section>
-        </div>
-      </aside>
-    </div>
+            </Space>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+              「{plain.name}」的密码仅此一次展示，请立即抄录
+            </Typography.Paragraph>
+          </div>
+        )}
+        <Space.Compact style={{ marginBottom: 12 }}>
+          <Input
+            style={{ width: 220 }}
+            value={pwdName}
+            onChange={(e) => setPwdName(e.target.value)}
+            onPressEnter={() => void create()}
+            placeholder="命名（如 Foxmail）"
+          />
+          <Button loading={creating} onClick={() => void create()}>
+            生成
+          </Button>
+        </Space.Compact>
+        <List
+          size="small"
+          dataSource={passwords}
+          locale={{ emptyText: '暂无专用密码' }}
+          renderItem={(p) => (
+            <List.Item style={{ padding: '6px 0' }}>
+              <Flex justify="space-between" align="center" style={{ width: '100%' }}>
+                <span>{p.name}</span>
+                <Space size={8}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {new Date(p.created_at).toLocaleDateString()}
+                  </Typography.Text>
+                  <Button variant="danger" size="small" onClick={() => onRevokePassword(p.id)} aria-label="吊销">
+                    <Trash2 size={12} /> 吊销
+                  </Button>
+                </Space>
+              </Flex>
+            </List.Item>
+          )}
+        />
+      </Card>
+    </Drawer>
   );
 }

@@ -3,12 +3,14 @@
  * 三项：会话消息通知/@我强提醒/免打扰时段；dnd 即刻生效于 agent 完成系统
  * 通知（notify.ts 静默），红点保留；IM 桌面通知触发点随通知中心深度接（登记）。
  * 六态：loading / error 重试 / ok 服务端态即时保存（乐观更新+失败回滚）。
+ * D26-O3：卡片壳→Card、行→List.Item、错误条→Alert（settings-* 退役）。
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Select, Switch } from 'antd';
-import { ApiError, getErrorText , errText } from '../../../shared/api/http';
+import { Alert, Card, List, Select, Space, Switch, Typography } from 'antd';
+import { ApiError, getErrorText, errText } from '../../../shared/api/http';
+import { Button } from '../../../shared/ui/Button';
 import { fetchNotifyPref, patchNotifyPref, type NotifyPref } from '../api/notifyPref';
 
 const DEFAULT_PREF: NotifyPref = { msg_notify: true, mention_notify: true, dnd_range: 'off' };
@@ -42,75 +44,106 @@ export function NotificationSettingsPage() {
 
   if (query.isPending) {
     return (
-      <div className="settings-section">
-        <h2 className="settings-section__title">通知</h2>
-        <div className="settings-card">加载中…</div>
+      <div>
+        <Typography.Title level={5} style={{ margin: 0, marginBottom: 16 }}>
+          通知
+        </Typography.Title>
+        <Typography.Text type="secondary">加载中…</Typography.Text>
       </div>
     );
   }
   if (query.isError) {
     return (
-      <div className="settings-section">
-        <h2 className="settings-section__title">通知</h2>
-        <div className="settings-card">
-          {query.error instanceof ApiError ? getErrorText(query.error.code) : '加载失败'}
-          <button type="button" className="doc-link-btn" onClick={() => void query.refetch()}>
+      <div>
+        <Typography.Title level={5} style={{ margin: 0, marginBottom: 16 }}>
+          通知
+        </Typography.Title>
+        <Space size={8} wrap>
+          <Typography.Text type="secondary">
+            {query.error instanceof ApiError ? getErrorText(query.error.code) : '加载失败'}
+          </Typography.Text>
+          <Button variant="secondary" size="small" onClick={() => void query.refetch()}>
             重试
-          </button>
-        </div>
+          </Button>
+        </Space>
       </div>
     );
   }
 
-  return (
-    <div className="settings-section" data-testid="settings-notification">
-      <h2 className="settings-section__title">通知</h2>
-      {error ? <div className="settings-card__error" data-testid="notify-pref-error">{error}</div> : null}
+  const rows: Array<{ key: string; name: string; desc: string; control: ReactNode }> = [
+    {
+      key: 'msg',
+      name: '会话消息通知',
+      desc: '新消息桌面通知与红点提醒',
+      control: (
+        <Switch
+          checked={local.msg_notify}
+          size="small"
+          data-testid="notify-msg-switch"
+          onChange={(v) => save({ ...local, msg_notify: v })}
+        />
+      ),
+    },
+    {
+      key: 'mention',
+      name: '@我特别提醒',
+      desc: '被提及（含 @所有人）时强提醒',
+      control: (
+        <Switch
+          checked={local.mention_notify}
+          size="small"
+          data-testid="notify-mention-switch"
+          onChange={(v) => save({ ...local, mention_notify: v })}
+        />
+      ),
+    },
+    {
+      key: 'dnd',
+      name: '免打扰时段',
+      desc: '时段内系统通知静默，红点保留（即刻生效于 Agent 完成通知）',
+      control: (
+        <Select
+          size="small"
+          style={{ width: 200 }}
+          value={local.dnd_range}
+          data-testid="notify-dnd-select"
+          onChange={(v) => save({ ...local, dnd_range: v })}
+          options={[
+            { value: 'off', label: '关闭' },
+            { value: 'work-night', label: '每天 22:00 - 次日 08:00' },
+            { value: 'all-day', label: '全天免打扰' },
+          ]}
+        />
+      ),
+    },
+  ];
 
-      <div className="settings-card">
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <div className="settings-row__name">会话消息通知</div>
-            <div className="settings-row__desc">新消息桌面通知与红点提醒</div>
-          </div>
-          <Switch
-            checked={local.msg_notify}
-            size="small"
-            data-testid="notify-msg-switch"
-            onChange={(v) => save({ ...local, msg_notify: v })}
-          />
-        </div>
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <div className="settings-row__name">@我特别提醒</div>
-            <div className="settings-row__desc">被提及（含 @所有人）时强提醒</div>
-          </div>
-          <Switch
-            checked={local.mention_notify}
-            size="small"
-            data-testid="notify-mention-switch"
-            onChange={(v) => save({ ...local, mention_notify: v })}
-          />
-        </div>
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <div className="settings-row__name">免打扰时段</div>
-            <div className="settings-row__desc">时段内系统通知静默，红点保留（即刻生效于 Agent 完成通知）</div>
-          </div>
-          <Select
-            size="small"
-            style={{ width: 200 }}
-            value={local.dnd_range}
-            data-testid="notify-dnd-select"
-            onChange={(v) => save({ ...local, dnd_range: v })}
-            options={[
-              { value: 'off', label: '关闭' },
-              { value: 'work-night', label: '每天 22:00 - 次日 08:00' },
-              { value: 'all-day', label: '全天免打扰' },
-            ]}
-          />
-        </div>
-      </div>
+  return (
+    <div data-testid="settings-notification">
+      <Typography.Title level={5} style={{ margin: 0, marginBottom: 16 }}>
+        通知
+      </Typography.Title>
+      {error ? (
+        <Alert type="error" showIcon message={error} data-testid="notify-pref-error" style={{ marginBottom: 16 }} />
+      ) : null}
+
+      <Card size="small">
+        <List
+          size="small"
+          split
+          dataSource={rows}
+          renderItem={(row) => (
+            <List.Item key={row.key} actions={[row.control]}>
+              <div>
+                <div>{row.name}</div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {row.desc}
+                </Typography.Text>
+              </div>
+            </List.Item>
+          )}
+        />
+      </Card>
     </div>
   );
 }

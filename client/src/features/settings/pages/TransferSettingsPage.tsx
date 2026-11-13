@@ -6,11 +6,13 @@
  *   下载走系统目录，目录值先随配置就位，登记）。
  * - 上/下载限速：Select 挂 onChange 真下发到 transfer store（持久化）；
  *   分块节流实现随 Rust 传输引擎（fetch/XHR 无原生限速，登记）。
+ * D26-O3：卡片壳→Card、行→List.Item、目录输入→Input（settings- 系自研类与 doc-link-btn 退役）。
  */
 
-import { useState } from 'react';
-import { Select } from 'antd';
+import { useState, type ReactNode } from 'react';
+import { Card, Input, List, Select, Typography } from 'antd';
 import { FolderOpen } from 'lucide-react';
+import { Button } from '../../../shared/ui/Button';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useTransferStore, type SpeedLimit } from '../../../shared/store/transfer';
 
@@ -46,76 +48,94 @@ export function TransferSettingsPage() {
 
   const shownDir = pref.downloadDir || '~/Downloads/BaobaoWork';
 
-  return (
-    <div className="settings-section" data-testid="settings-transfer">
-      <h2 className="settings-section__title">传输</h2>
+  const dirControl: ReactNode = isTauri() ? (
+    <Button
+      variant="secondary"
+      size="small"
+      icon={<FolderOpen size={12} />}
+      onClick={() => void pickDir()}
+      data-testid="transfer-dir-pick"
+      title={shownDir}
+    >
+      {shownDir}
+    </Button>
+  ) : (
+    <Input
+      size="small"
+      style={{ width: 220 }}
+      placeholder="~/Downloads/BaobaoWork"
+      value={dirInput || pref.downloadDir}
+      onChange={(e) => setDirInput(e.target.value)}
+      onBlur={() => dirInput && setDownloadDir(dirInput.trim())}
+      onPressEnter={() => dirInput && setDownloadDir(dirInput.trim())}
+      data-testid="transfer-dir-input"
+    />
+  );
 
-      <div className="settings-card">
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <div className="settings-row__name">默认下载目录</div>
-            <div className="settings-row__desc">
-              {pref.downloadDir
-                ? '接收文件与图片的落盘位置（Rust 传输引擎落盘通道随阶段二消费此配置）'
-                : '未设置——当前沿用系统下载目录；Tauri 宿主可点选自定义'}
-            </div>
-          </div>
-          {isTauri() ? (
-            <span className="settings-row__value" style={{ gap: 6 }}>
-              <FolderOpen size={14} />
-              <button
-                type="button"
-                className="doc-link-btn"
-                onClick={() => void pickDir()}
-                data-testid="transfer-dir-pick"
-                title={shownDir}
-              >
-                {shownDir}
-              </button>
-            </span>
-          ) : (
-            <span className="settings-row__value" style={{ gap: 6 }}>
-              <input
-                className="settings-dir-input"
-                placeholder="~/Downloads/BaobaoWork"
-                value={dirInput || pref.downloadDir}
-                onChange={(e) => setDirInput(e.target.value)}
-                onBlur={() => dirInput && setDownloadDir(dirInput.trim())}
-                onKeyDown={(e) => e.key === 'Enter' && dirInput && setDownloadDir(dirInput.trim())}
-                data-testid="transfer-dir-input"
-              />
-            </span>
+  const rows: Array<{ key: string; name: string; desc: string; control: ReactNode }> = [
+    {
+      key: 'dir',
+      name: '默认下载目录',
+      desc: pref.downloadDir
+        ? '接收文件与图片的落盘位置（Rust 传输引擎落盘通道随阶段二消费此配置）'
+        : '未设置——当前沿用系统下载目录；Tauri 宿主可点选自定义',
+      control: dirControl,
+    },
+    {
+      key: 'up',
+      name: '上传限速',
+      desc: '大文件上传对带宽的占用上限（引擎分块节流随阶段二生效）',
+      control: (
+        <Select
+          size="small"
+          value={pref.upLimit}
+          style={{ width: 140 }}
+          options={LIMIT_OPTIONS}
+          data-testid="transfer-up-limit"
+          onChange={(v) => setUpLimit(v as SpeedLimit)}
+        />
+      ),
+    },
+    {
+      key: 'down',
+      name: '下载限速',
+      desc: '同步/下载流量的带宽上限（引擎分块节流随阶段二生效）',
+      control: (
+        <Select
+          size="small"
+          value={pref.downLimit}
+          style={{ width: 140 }}
+          options={LIMIT_OPTIONS}
+          data-testid="transfer-down-limit"
+          onChange={(v) => setDownLimit(v as SpeedLimit)}
+        />
+      ),
+    },
+  ];
+
+  return (
+    <div data-testid="settings-transfer">
+      <Typography.Title level={5} style={{ margin: 0, marginBottom: 16 }}>
+        传输
+      </Typography.Title>
+
+      <Card size="small">
+        <List
+          size="small"
+          split
+          dataSource={rows}
+          renderItem={(row) => (
+            <List.Item key={row.key} actions={[row.control]}>
+              <div>
+                <div>{row.name}</div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {row.desc}
+                </Typography.Text>
+              </div>
+            </List.Item>
           )}
-        </div>
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <div className="settings-row__name">上传限速</div>
-            <div className="settings-row__desc">大文件上传对带宽的占用上限（引擎分块节流随阶段二生效）</div>
-          </div>
-          <Select
-            size="small"
-            value={pref.upLimit}
-            style={{ width: 140 }}
-            options={LIMIT_OPTIONS}
-            data-testid="transfer-up-limit"
-            onChange={(v) => setUpLimit(v as SpeedLimit)}
-          />
-        </div>
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <div className="settings-row__name">下载限速</div>
-            <div className="settings-row__desc">同步/下载流量的带宽上限（引擎分块节流随阶段二生效）</div>
-          </div>
-          <Select
-            size="small"
-            value={pref.downLimit}
-            style={{ width: 140 }}
-            options={LIMIT_OPTIONS}
-            data-testid="transfer-down-limit"
-            onChange={(v) => setDownLimit(v as SpeedLimit)}
-          />
-        </div>
-      </div>
+        />
+      </Card>
     </div>
   );
 }

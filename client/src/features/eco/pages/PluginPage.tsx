@@ -3,11 +3,18 @@
  * + 详情抽屉（组件清单/权限声明/版本线/配置表单）。
  * 技能=单组件插件，本页为技能市场超集（SkillTab 已删并入；旧 /eco/skills 接口保留）。
  * 装配生效（skills 注入/MCP 工具面）随 L3——安装后提示重启会话兜底。
+ * D26-O3：eco- / bbw-plugin- 前缀自研结构退役——tabs→Tabs、卡片→Card、上传→Upload
+ * （beforeUpload return false + 受控 fileList）、plugin-drawer→Drawer、
+ * window.confirm×2→Modal.confirm（危险卸载 danger 红钮）。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  Bot, CheckCircle2, Download, Package, Puzzle, RefreshCw, ShieldAlert, Sparkles, Terminal, Trash2, Upload, Wrench,
+  Alert, Card, Drawer, Flex, Form, Input, List, Modal, Select, Space, Switch, Tabs, Tag, Typography, Upload,
+} from 'antd';
+import type { UploadFile } from 'antd';
+import {
+  Bot, CheckCircle2, Download, Package, Puzzle, RefreshCw, Search, ShieldAlert, Sparkles, Terminal, Trash2, Upload as UploadIcon, Wrench,
 } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { Empty } from '../../../shared/ui/Empty';
@@ -27,10 +34,10 @@ const COMPONENTS: { value: NonNullable<CatalogQuery['component']>; label: string
   { value: 'agent', label: '带专家' },
 ];
 
-const POLICY_META: Record<number, { label: string; tone: string }> = {
-  1: { label: '企业已推', tone: 'ok' },
-  2: { label: '推荐', tone: 'warn' },
-  3: { label: '', tone: '' },
+const POLICY_META: Record<number, { label: string; color: string }> = {
+  1: { label: '企业已推', color: 'green' },
+  2: { label: '推荐', color: 'gold' },
+  3: { label: '', color: '' },
 };
 
 function componentBadges(e: PluginEntry): { label: string; icon: typeof Wrench }[] {
@@ -43,6 +50,20 @@ function componentBadges(e: PluginEntry): { label: string; icon: typeof Wrench }
   if (c.agents > 0) out.push({ label: `专家×${c.agents}`, icon: Bot });
   if (c.hooks) out.push({ label: 'hooks', icon: Puzzle });
   return out;
+}
+
+function BadgeTags({ e }: { e: PluginEntry }) {
+  const badges = componentBadges(e);
+  if (badges.length === 0) return null;
+  return (
+    <Space size={4} wrap style={{ marginTop: 4 }}>
+      {badges.map((b) => (
+        <Tag key={b.label} icon={<b.icon size={11} aria-hidden />}>
+          {b.label}
+        </Tag>
+      ))}
+    </Space>
+  );
 }
 
 export function PluginPage() {
@@ -100,19 +121,33 @@ export function PluginPage() {
     // 权限确认（D22 §6.3：身份使用显著提示；force 免确认由服务端策略面控制，此处统一提示）
     const usesIdentity = e.manifest?.usesIdentity;
     const net = e.manifest?.netAllow?.length ? `将访问：${e.manifest.netAllow.join('、')}` : '';
+    const proceed = () => {
+      setBusyId(e.plugin_id);
+      setNotice('');
+      return installPlugin(e.plugin_id, e.installed && e.has_update ? e.current_version : undefined)
+        .then(() => {
+          setNotice(`${e.name} 已安装（即时生效——工具与技能已装配，进行中会话下轮生效）`);
+          reload();
+        })
+        .catch((err) => setError(`安装失败：${err instanceof Error ? err.message : '未知错误'}`))
+        .finally(() => setBusyId(null));
+    };
     if (usesIdentity || net) {
-      const idMsg = usesIdentity ? '\n⚠️ 该插件将以你的身份调用系统（自动注入登录凭证）' : '';
-      if (!window.confirm(`安装 ${e.name}？${idMsg}\n${net}`)) return;
+      Modal.confirm({
+        title: `安装 ${e.name}？`,
+        content: (
+          <div>
+            {usesIdentity ? <div>⚠️ 该插件将以你的身份调用系统（自动注入登录凭证）</div> : null}
+            {net ? <div>{net}</div> : null}
+          </div>
+        ),
+        okText: '安装',
+        cancelText: '取消',
+        onOk: proceed,
+      });
+      return;
     }
-    setBusyId(e.plugin_id);
-    setNotice('');
-    void installPlugin(e.plugin_id, e.installed && e.has_update ? e.current_version : undefined)
-      .then(() => {
-        setNotice(`${e.name} 已安装（即时生效——工具与技能已装配，进行中会话下轮生效）`);
-        reload();
-      })
-      .catch((err) => setError(`安装失败：${err instanceof Error ? err.message : '未知错误'}`))
-      .finally(() => setBusyId(null));
+    void proceed();
   };
 
   const doUpload = () => {
@@ -131,15 +166,20 @@ export function PluginPage() {
   };
 
   const doUninstall = (e: PluginEntry) => {
-    if (!window.confirm(`卸载 ${e.name}？本地文件与配置（默认保留）将移除，能力即时失效`)) return;
-    setBusyId(e.plugin_id);
-    void uninstallPlugin(e.plugin_id, true)
-      .then(() => {
-        setNotice(`${e.name} 已卸载`);
-        reload();
-      })
-      .catch((err) => setError(`卸载失败：${err instanceof Error ? err.message : '未知错误'}`))
-      .finally(() => setBusyId(null));
+    Modal.confirm({
+      title: `卸载 ${e.name}？`,
+      content: '本地文件与配置（默认保留）将移除，能力即时失效',
+      okText: '卸载',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () =>
+        uninstallPlugin(e.plugin_id, true)
+          .then(() => {
+            setNotice(`${e.name} 已卸载`);
+            reload();
+          })
+          .catch((err) => setError(`卸载失败：${err instanceof Error ? err.message : '未知错误'}`)),
+    });
   };
 
   const doToggle = (e: PluginEntry, enabled: boolean) => {
@@ -177,213 +217,318 @@ export function PluginPage() {
   const shown = useMemo(() => entries ?? null, [entries]);
 
   return (
-    <div className="eco-store bbw-plugin" data-testid="bbw-plugin">
-      <header className="eco-store__head">
-        <h2>
-          <Puzzle size={16} /> 插件
-        </h2>
-        <span className="eco-store__hint">安装即得 Agent 新能力：技能 / 工具 / 命令 / 专家一包携带（生效随新会话）</span>
-      </header>
+    <div data-testid="bbw-plugin">
+      <Flex align="center" gap={8} style={{ marginBottom: 8 }} wrap>
+        <Puzzle size={16} />
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          插件
+        </Typography.Title>
+        <Typography.Text type="secondary">安装即得 Agent 新能力：技能 / 工具 / 命令 / 专家一包携带（生效随新会话）</Typography.Text>
+      </Flex>
 
-      <div className="admin-tabs" role="tablist" style={{ paddingBottom: 8 }}>
-        <button type="button" role="tab" aria-selected={tab === 'market'} className={`admin-tab${tab === 'market' ? ' admin-tab--active' : ''}`} onClick={() => setTab('market')}>
-          <Package size={14} /> 市场
-        </button>
-        <button type="button" role="tab" aria-selected={tab === 'installed'} className={`admin-tab${tab === 'installed' ? ' admin-tab--active' : ''}`} onClick={() => setTab('installed')}>
-          <CheckCircle2 size={14} /> 已安装{entries?.length !== undefined && tab === 'installed' ? `（${entries.length}）` : ''}
-        </button>
-      </div>
+      <Tabs
+        activeKey={tab}
+        onChange={(k) => setTab(k as 'market' | 'installed')}
+        items={[
+          {
+            key: 'market',
+            label: (
+              <Space size={4}>
+                <Package size={14} /> 市场
+              </Space>
+            ),
+          },
+          {
+            key: 'installed',
+            label: (
+              <Space size={4}>
+                <CheckCircle2 size={14} /> 已安装
+                {entries?.length !== undefined && tab === 'installed' ? `（${entries.length}）` : ''}
+              </Space>
+            ),
+          },
+        ]}
+      />
 
       {tab === 'market' ? (
-        <div className="bbw-plugin__filters">
-          <input
-            className="bbw-plugin__search"
-            type="search"
+        <Flex gap={8} wrap style={{ marginBottom: 12 }}>
+          <Input
+            allowClear
+            prefix={<Search size={14} />}
             placeholder="搜索名称 / 描述（支持拼音待接入）"
             onChange={(e) => handleSearch(e.target.value)}
             aria-label="搜索插件"
+            style={{ width: 220 }}
           />
-          <select value={category} onChange={(e) => setCategory(e.target.value)} aria-label="分类">
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>{c === '' ? '全部分类' : c}</option>
-            ))}
-          </select>
-          <select value={component} onChange={(e) => setComponent(e.target.value as NonNullable<CatalogQuery['component']>)} aria-label="组件类型">
-            {COMPONENTS.map((c) => (
-              <option key={c.value} value={c.value}>{c.label}</option>
-            ))}
-          </select>
+          <Select
+            style={{ width: 130 }}
+            value={category}
+            onChange={setCategory}
+            aria-label="分类"
+            options={CATEGORIES.map((c) => ({ value: c, label: c === '' ? '全部分类' : c }))}
+          />
+          <Select<NonNullable<CatalogQuery['component']>>
+            style={{ width: 130 }}
+            value={component}
+            onChange={(v) => setComponent(v)}
+            aria-label="组件类型"
+            options={COMPONENTS.map((c) => ({ value: c.value, label: c.label }))}
+          />
           <Button variant="secondary" onClick={() => setUploadOpen(true)} data-testid="bbw-plugin-upload">
-            <Upload size={12} /> 上传插件
+            <UploadIcon size={12} /> 上传插件
           </Button>
-        </div>
+        </Flex>
       ) : null}
 
       {uploadOpen ? (
-        <div className="bbw-plugin__upload">
-          <h4>上传个人插件（zip ≤10MB）</h4>
-          <p className="bbw-plugin__muted">上传后进入个人区：仅自己可见可装；进公共市场需管理员审核发布</p>
-          <input
-            type="file"
-            accept=".zip"
-            aria-label="选择插件 zip 包"
-            onChange={(ev) => setUploadFile(ev.target.files?.[0] ?? null)}
-          />
-          <input
-            type="text"
-            className="bbw-plugin__upload-notes"
-            placeholder="备注（可选，如：发版流程助手）"
-            value={uploadNotes}
-            onChange={(ev) => setUploadNotes(ev.target.value)}
-          />
-          <div className="bbw-plugin__upload-ops">
-            <Button disabled={!uploadFile || uploading} loading={uploading} onClick={doUpload}>上传</Button>
-            <Button variant="secondary" disabled={uploading} onClick={() => setUploadOpen(false)}>取消</Button>
-          </div>
-        </div>
+        <Card size="small" title="上传个人插件（zip ≤10MB）" style={{ marginBottom: 12 }}>
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              上传后进入个人区：仅自己可见可装；进公共市场需管理员审核发布
+            </Typography.Text>
+            <Space size={8} wrap>
+              <Upload
+                accept=".zip"
+                maxCount={1}
+                beforeUpload={(file) => {
+                  setUploadFile(file);
+                  return false;
+                }}
+                onRemove={() => setUploadFile(null)}
+                fileList={uploadFile ? ([{ uid: '-1', name: uploadFile.name, status: 'done' }] as UploadFile[]) : []}
+              >
+                <Button variant="secondary">选择插件 zip 包</Button>
+              </Upload>
+              <Input
+                style={{ width: 260 }}
+                placeholder="备注（可选，如：发版流程助手）"
+                value={uploadNotes}
+                onChange={(e) => setUploadNotes(e.target.value)}
+              />
+            </Space>
+            <Space size={8}>
+              <Button disabled={!uploadFile || uploading} loading={uploading} onClick={doUpload}>
+                <UploadIcon size={12} /> 上传
+              </Button>
+              <Button variant="secondary" disabled={uploading} onClick={() => setUploadOpen(false)}>
+                取消
+              </Button>
+            </Space>
+          </Space>
+        </Card>
       ) : null}
 
-      {error ? <div className="eco-store__error">{error}</div> : null}
-      {notice ? <div className="bbw-plugin__notice">{notice}</div> : null}
+      {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
+      {notice ? <Alert type="success" showIcon message={notice} style={{ marginBottom: 8 }} /> : null}
 
       {shown === null ? (
         <SkeletonList count={4} />
       ) : shown.length === 0 ? (
         <Empty text={tab === 'market' ? '暂无匹配插件（管理员可在管理端发布插件包）' : '尚未安装任何插件'} />
       ) : (
-        <div className="eco-store__grid">
+        <Flex wrap="wrap" gap={12}>
           {shown.map((e) => {
-            const badges = componentBadges(e);
             const policy = POLICY_META[e.policy];
             return (
-              <div key={e.plugin_id} className="eco-card bbw-plugin__card" data-testid={`bbw-plugin-card-${e.plugin_id}`}>
-                <div className="eco-card__head">
-                  <b className="bbw-plugin__name" onClick={() => openDetail(e)} role="button" tabIndex={0} onKeyDown={(ev) => ev.key === 'Enter' && openDetail(e)}>
+              <Card
+                key={e.plugin_id}
+                size="small"
+                hoverable
+                style={{ width: 320 }}
+                onClick={() => openDetail(e)}
+                data-testid={`bbw-plugin-card-${e.plugin_id}`}
+              >
+                <Flex align="center" gap={8} wrap>
+                  <Typography.Text strong ellipsis style={{ minWidth: 0 }}>
                     {e.name}
-                  </b>
-                  {policy?.label ? <span className={`tag tag--${policy.tone}`}>{policy.label}</span> : null}
-                  {e.manifest?.usesIdentity ? <span className="tag tag--warn" title="将以你的身份调用系统"><ShieldAlert size={11} /> 身份</span> : null}
-                  {e.owner_user_id ? <span className="tag tag--muted" title="个人插件：仅自己可见可装；管理员审核后进公共市场">个人</span> : null}
-                  {e.owner_user_id && e.status === 'draft' ? <span className="tag tag--warn" title="未发布：仅自用沙盒">自用</span> : null}
-                </div>
-                <div className="eco-card__meta">
+                  </Typography.Text>
+                  {policy?.label ? <Tag color={policy.color}>{policy.label}</Tag> : null}
+                  {e.manifest?.usesIdentity ? (
+                    <Tag color="gold" title="将以你的身份调用系统">
+                      <ShieldAlert size={11} /> 身份
+                    </Tag>
+                  ) : null}
+                  {e.owner_user_id ? (
+                    <Tag title="个人插件：仅自己可见可装；管理员审核后进公共市场">个人</Tag>
+                  ) : null}
+                  {e.owner_user_id && e.status === 'draft' ? (
+                    <Tag color="gold" title="未发布：仅自用沙盒">
+                      自用
+                    </Tag>
+                  ) : null}
+                </Flex>
+                <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
                   {e.plugin_id} · v{e.current_version}
                   {e.installed && e.version ? `（本地 v${e.version}）` : ''}
-                </div>
-                {e.description ? <p className="eco-card__desc">{e.description}</p> : null}
-                {badges.length ? (
-                  <div className="bbw-plugin__badges">
-                    {badges.map((b) => (
-                      <span key={b.label} className="bbw-plugin__badge"><b.icon size={11} aria-hidden />{b.label}</span>
-                    ))}
-                  </div>
+                </Typography.Text>
+                {e.description ? (
+                  <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                    {e.description}
+                  </Typography.Paragraph>
                 ) : null}
-                <div className="eco-card__ops">
+                <BadgeTags e={e} />
+                <Space size={8} wrap style={{ marginTop: 8 }}>
                   {!e.installed || e.has_update ? (
-                    <Button loading={busyId === e.plugin_id} onClick={() => doInstall(e)} data-testid={`bbw-plugin-install-${e.plugin_id}`}>
+                    <Button
+                      loading={busyId === e.plugin_id}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        doInstall(e);
+                      }}
+                      data-testid={`bbw-plugin-install-${e.plugin_id}`}
+                    >
                       {e.has_update ? <RefreshCw size={12} /> : <Download size={12} />}
                       {e.has_update ? '更新' : '安装'}
                     </Button>
                   ) : null}
                   {e.installed ? (
-                    <Button variant="secondary" disabled={busyId === e.plugin_id} onClick={() => doUninstall(e)}>
+                    <Button
+                      variant="secondary"
+                      disabled={busyId === e.plugin_id}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        doUninstall(e);
+                      }}
+                    >
                       <Trash2 size={12} /> 卸载
                     </Button>
                   ) : null}
-                  <Button variant="secondary" onClick={() => openDetail(e)}>详情</Button>
-                </div>
-              </div>
+                  <Button
+                    variant="secondary"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      openDetail(e);
+                    }}
+                  >
+                    详情
+                  </Button>
+                </Space>
+              </Card>
             );
           })}
-        </div>
+        </Flex>
       )}
 
-      {detail ? (
-        <div className="bbw-plugin__drawer" role="dialog" aria-label={`${detail.plugin.name} 详情`}>
-          <div className="bbw-plugin__drawer-mask" onClick={() => setDetail(null)} />
-          <div className="bbw-plugin__drawer-body">
-            <header className="bbw-plugin__drawer-head">
-              <h3>{detail.plugin.name} <small>{detail.plugin.plugin_id}</small></h3>
-              <button type="button" className="bbw-plugin__drawer-close" onClick={() => setDetail(null)} aria-label="关闭">×</button>
-            </header>
-            <p className="bbw-plugin__drawer-desc">{detail.plugin.manifest?.description || detail.plugin.description}</p>
+      <Drawer
+        open={!!detail}
+        onClose={() => setDetail(null)}
+        width={480}
+        destroyOnClose
+        title={
+          detail ? (
+            <Space size={8}>
+              {detail.plugin.name}
+              <Typography.Text type="secondary" code>
+                {detail.plugin.plugin_id}
+              </Typography.Text>
+            </Space>
+          ) : ''
+        }
+        aria-label={detail ? `${detail.plugin.name} 详情` : undefined}
+      >
+        {detail ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              {detail.plugin.manifest?.description || detail.plugin.description}
+            </Typography.Paragraph>
 
             {detail.plugin.installed && local ? (
-              <section className="bbw-plugin__section">
-                <h4>本地状态</h4>
-                <label className="bbw-plugin__switch">
-                  <input
-                    type="checkbox"
-                    checked={local.enabled}
-                    disabled={busyId === detail.plugin.plugin_id}
-                    onChange={(ev) => doToggle(detail.plugin, ev.target.checked)}
-                  />
-                  {local.enabled ? '已启用' : '已禁用'}（v{local.activeVersion}{local.versions.length > 1 ? `，共 ${local.versions.length} 版` : ''}）
-                </label>
-              </section>
+              <div>
+                <Typography.Text strong>本地状态</Typography.Text>
+                <div style={{ marginTop: 8 }}>
+                  <Space size={8} align="center">
+                    <Switch
+                      checked={local.enabled}
+                      disabled={busyId === detail.plugin.plugin_id}
+                      onChange={(checked) => doToggle(detail.plugin, checked)}
+                    />
+                    <span>
+                      {local.enabled ? '已启用' : '已禁用'}（v{local.activeVersion}
+                      {local.versions.length > 1 ? `，共 ${local.versions.length} 版` : ''}）
+                    </span>
+                  </Space>
+                </div>
+              </div>
             ) : null}
 
-            <section className="bbw-plugin__section">
-              <h4>组件</h4>
-              {(() => {
-                const badges = componentBadges(detail.plugin);
-                return badges.length ? (
-                  <div className="bbw-plugin__badges">
-                    {badges.map((b) => <span key={b.label} className="bbw-plugin__badge"><b.icon size={11} aria-hidden />{b.label}</span>)}
-                  </div>
-                ) : <span className="bbw-plugin__muted">无（信息缺失）</span>;
-              })()}
-            </section>
+            <div>
+              <Typography.Text strong>组件</Typography.Text>
+              <div style={{ marginTop: 8 }}>
+                <BadgeTags e={detail.plugin} />
+                {componentBadges(detail.plugin).length === 0 ? (
+                  <Typography.Text type="secondary">无（信息缺失）</Typography.Text>
+                ) : null}
+              </div>
+            </div>
 
-            <section className="bbw-plugin__section">
-              <h4>权限声明</h4>
-              <ul className="bbw-plugin__perm">
-                <li>风险级：{detail.plugin.manifest?.risk ?? 'medium'}</li>
-                {detail.plugin.manifest?.usesIdentity ? (
-                  <li className="bbw-plugin__perm-warn"><ShieldAlert size={12} /> 将以你的身份调用系统（自动注入登录凭证）</li>
-                ) : null}
-                {detail.plugin.manifest?.netAllow?.length ? (
-                  <li>网络访问：{detail.plugin.manifest.netAllow.join('、')}（v0.1 声明展示，强制执行阶段二）</li>
-                ) : null}
-                {detail.plugin.manifest?.configKeys?.length ? (
-                  <li>需要配置：{detail.plugin.manifest.configKeys.join('、')}</li>
-                ) : null}
-                <li>全部工具调用与内置工具同一审批门控（无特权）</li>
-              </ul>
-            </section>
+            <div>
+              <Typography.Text strong>权限声明</Typography.Text>
+              <List
+                size="small"
+                split={false}
+                style={{ marginTop: 4 }}
+                dataSource={[
+                  <span key="risk">风险级：{detail.plugin.manifest?.risk ?? 'medium'}</span>,
+                  ...(detail.plugin.manifest?.usesIdentity
+                    ? [
+                        <Typography.Text key="identity" type="warning">
+                          <ShieldAlert size={12} /> 将以你的身份调用系统（自动注入登录凭证）
+                        </Typography.Text>,
+                      ]
+                    : []),
+                  ...(detail.plugin.manifest?.netAllow?.length
+                    ? [<span key="net">网络访问：{detail.plugin.manifest.netAllow.join('、')}（v0.1 声明展示，强制执行阶段二）</span>]
+                    : []),
+                  ...(detail.plugin.manifest?.configKeys?.length
+                    ? [<span key="cfg">需要配置：{detail.plugin.manifest.configKeys.join('、')}</span>]
+                    : []),
+                  <span key="gate">全部工具调用与内置工具同一审批门控（无特权）</span>,
+                ]}
+                renderItem={(item: ReactNode) => (
+                  <List.Item style={{ padding: '2px 0', fontSize: 13 }}>{item}</List.Item>
+                )}
+              />
+            </div>
 
             {detail.plugin.manifest?.configKeys?.length ? (
-              <section className="bbw-plugin__section">
-                <h4>配置</h4>
-                {detail.plugin.manifest.configKeys.map((key) => (
-                  <label key={key} className="bbw-plugin__config-row">
-                    <span>{key}</span>
-                    <input
-                      type="password"
-                      value={configDraft[key] ?? ''}
-                      placeholder={/token|secret|key/i.test(key) ? '敏感值，保存后存入系统钥匙串' : ''}
-                      onChange={(ev) => setConfigDraft((prev) => ({ ...prev, [key]: ev.target.value }))}
-                    />
-                  </label>
-                ))}
-                <Button disabled={busyId === detail.plugin.plugin_id} onClick={() => saveConfig(detail.plugin.plugin_id)}>保存配置</Button>
-              </section>
+              <div>
+                <Typography.Text strong>配置</Typography.Text>
+                <Form layout="vertical" style={{ marginTop: 8 }}>
+                  {detail.plugin.manifest.configKeys.map((key) => (
+                    <Form.Item key={key} label={<Typography.Text code>{key}</Typography.Text>}>
+                      <Input.Password
+                        value={configDraft[key] ?? ''}
+                        placeholder={/token|secret|key/i.test(key) ? '敏感值，保存后存入系统钥匙串' : ''}
+                        onChange={(ev) => setConfigDraft((prev) => ({ ...prev, [key]: ev.target.value }))}
+                      />
+                    </Form.Item>
+                  ))}
+                </Form>
+                <Button disabled={busyId === detail.plugin.plugin_id} onClick={() => saveConfig(detail.plugin.plugin_id)}>
+                  保存配置
+                </Button>
+              </div>
             ) : null}
 
-            <section className="bbw-plugin__section">
-              <h4>版本</h4>
-              <ul className="bbw-plugin__versions">
-                {detail.versions.map((v) => (
-                  <li key={v.id}>
-                    v{v.version}{v.version === detail.plugin.current_version ? '（当前）' : ''}
+            <div>
+              <Typography.Text strong>版本</Typography.Text>
+              <List
+                size="small"
+                style={{ marginTop: 4 }}
+                dataSource={detail.versions}
+                rowKey="id"
+                renderItem={(v) => (
+                  <List.Item style={{ padding: '4px 0', fontSize: 13 }}>
+                    v{v.version}
+                    {v.version === detail.plugin.current_version ? '（当前）' : ''}
                     {v.notes ? ` — ${v.notes}` : ''}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          </div>
-        </div>
-      ) : null}
+                  </List.Item>
+                )}
+              />
+            </div>
+          </Space>
+        ) : null}
+      </Drawer>
     </div>
   );
 }

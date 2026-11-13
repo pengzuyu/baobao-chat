@@ -6,19 +6,42 @@
  * - 交互：双击用户 → 发起单聊直达（conv.create type=1 幂等）；hover 用户 → 详情卡
  *   （姓名/工号/组织链路 + 发消息）；管理动作仍在 /admin/org
  * 数据源：GET /org/tree + GET /org/users（全量翻页拉齐后端内组树）。
+ * D26-O3 antd 换装：树→antd Tree（titleRender 图标/人数 Tag/hover Popover 详情卡/徽标）；
+ * 搜索下拉→Popover+Menu（分组段+禁用占位行）；右侧档案→Card+Descriptions+Breadcrumb；
+ * 头像→Avatar、等宽字→Text code、提示→Text secondary、alert→Modal.error；
+ * 布局内联 style + antd token（bbw-contacts / org-node / icon-btn 等自研样式全退役，
+ * 定位闪烁由 CSS 类改 WAAPI el.animate——无 CSS 依赖）。
  */
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Input, Popover } from 'antd';
-import { Building2, ChevronDown, ChevronRight, FolderTree, MessageCircle, Search, Users } from 'lucide-react';
+import {
+  Avatar,
+  Breadcrumb,
+  Card,
+  Descriptions,
+  Flex,
+  Input,
+  Menu,
+  Modal,
+  Popover,
+  Space,
+  Tag,
+  Tree,
+  Typography,
+  theme,
+} from 'antd';
+import type { DataNode } from 'antd/es/tree';
+import type { MenuProps } from 'antd';
+import { Building2, FolderTree, MessageCircle, Search, Users } from 'lucide-react';
 import { fetchDirectoryUsers, fetchOrgTree } from '../api/contacts';
 import type { DirectoryUser } from '../api/contacts';
 import type { DeptNode } from '../../admin/api/admin';
 import { convCreate } from '../../im/api/im';
 import { qk } from '../../../shared/api/keys';
 import { errText } from '../../../shared/api/http';
+import { Button } from '../../../shared/ui/Button';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useAuthStore } from '../../auth/store/auth';
 
@@ -28,7 +51,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 const RESULT_MAX_ROWS = 5;
 /** 定位闪烁时长（ms） */
 const FLASH_MS = 1200;
-/** DOM 节点键（定位/选中/闪烁共用） */
+/** DOM 节点键（定位/选中/闪烁共用；同时作 Tree 节点 key） */
 const deptDomId = (id: string) => `dept-${id}`;
 const userDomId = (uid: string) => `user-${uid}`;
 
@@ -49,9 +72,11 @@ export function ContactsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const myUid = useAuthStore((s) => s.user?.uid);
+  const { token } = theme.useToken();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [dmBusy, setDmBusy] = useState(false);
+  /** 展开集（antd Tree controlled expandedKeys；键=dept-* domId） */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // 左树拖拽调宽（全站左侧栏统一能力；按页记忆）
   const split = useSplitWidth('contacts-tree', 320, 220, 480);
@@ -60,6 +85,7 @@ export function ContactsPage() {
   const tree = useQuery({ queryKey: ['org', 'tree'], queryFn: fetchOrgTree });
   const usersQuery = useQuery({ queryKey: ['org', 'users', 'all'], queryFn: fetchAllUsers });
   const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data]);
+  const usersByUid = useMemo(() => new Map(users.map((u) => [u.uid, u])), [users]);
 
   /** deptId → 节点与父链（定位展开祖先用；path 物化路径 /1/7/23/ 直拆） */
   const deptIndex = useMemo(() => {
@@ -110,7 +136,7 @@ export function ContactsPage() {
 
   // 树首载：默认全展开（部门量小；「看一看都有谁」是本页主诉求）
   useEffect(() => {
-    if (tree.data) setExpanded(new Set([...deptIndex.byId.keys(), 'ungrouped']));
+    if (tree.data) setExpanded(new Set([...deptIndex.byId.keys()].map(deptDomId).concat(deptDomId('ungrouped'))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tree.data]);
 
@@ -121,7 +147,6 @@ export function ContactsPage() {
   const [people, setPeople] = useState<DirectoryUser[]>([]);
   const [peopleLoading, setPeopleLoading] = useState(false);
   const seqRef = useRef(0);
-  const headRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setQ(qInput.trim()), SEARCH_DEBOUNCE_MS);
@@ -167,16 +192,7 @@ export function ContactsPage() {
     return out.slice(0, RESULT_MAX_ROWS);
   }, [q, tree.data]);
 
-  // 点击外部收起下拉
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (headRef.current && !headRef.current.contains(e.target as Node)) setDdOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
-
-  // Esc 收起
+  // Esc 收起（Popover 不接管 Esc）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setDdOpen(false);
@@ -192,7 +208,7 @@ export function ContactsPage() {
     setFlashId(domId);
     setExpanded((prev) => {
       const next = new Set(prev);
-      for (const id of deptIdsToExpand) next.add(id);
+      for (const id of deptIdsToExpand) next.add(deptDomId(id));
       return next;
     });
   };
@@ -216,14 +232,20 @@ export function ContactsPage() {
     locate(userDomId(u.uid), chain);
   };
 
-  // 闪烁节点滚动入视（展开重渲染后生效）
+  // 闪烁节点滚动入视（展开重渲染后生效；闪烁=WAAPI 内联动画，无 CSS 类依赖）
   useEffect(() => {
     if (!flashId) return;
     const raf = requestAnimationFrame(() => {
       const el = document.querySelector(`[data-node-id="${flashId}"]`);
       el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      el?.classList.add('bbw-contacts__flash');
-      setTimeout(() => el?.classList.remove('bbw-contacts__flash'), FLASH_MS);
+      el?.animate(
+        [
+          { backgroundColor: 'rgba(46, 107, 230, 0.18)', boxShadow: 'inset 0 0 0 1px rgba(46, 107, 230, 0.55)' },
+          { backgroundColor: 'rgba(46, 107, 230, 0.18)', boxShadow: 'inset 0 0 0 1px rgba(46, 107, 230, 0.55)', offset: 0.6 },
+          { backgroundColor: 'transparent', boxShadow: 'none' },
+        ],
+        { duration: FLASH_MS, easing: 'ease-out' },
+      );
     });
     return () => cancelAnimationFrame(raf);
   }, [flashId, expanded, tree.data, users]);
@@ -237,140 +259,283 @@ export function ContactsPage() {
       await queryClient.invalidateQueries({ queryKey: qk.im.convs() });
       navigate(`/im/c/${conv.id}`);
     } catch (e) {
-      window.alert(errText(e, '发起会话失败，请稍后重试'));
+      Modal.error({ title: '发起会话失败', content: errText(e, '发起会话失败，请稍后重试') });
     } finally {
       setDmBusy(false);
     }
   };
 
-  /** 用户叶子行（hover 详情卡 + 双击进聊 + 点击选中） */
-  const renderUserRow = (u: DirectoryUser, depth: number) => (
+  /** 树数据：root（全公司）→ 部门递归（用户叶子 + 子部门）→ 虚拟「未分组」 */
+  const treeData: DataNode[] = useMemo(() => {
+    const userLeaf = (u: DirectoryUser): DataNode => ({ key: userDomId(u.uid), title: u.display_name, isLeaf: true });
+    const branch = (n: DeptNode): DataNode => ({
+      key: deptDomId(n.id),
+      title: n.name,
+      isLeaf: false,
+      children: [
+        ...(grouped.deptUsers.get(n.id) ?? []).map(userLeaf),
+        ...(n.children ?? []).map(branch),
+      ],
+    });
+    const children: DataNode[] = (tree.data ?? []).map(branch);
+    // 虚拟「未分组」：未挂部门用户（自助注册默认落此组），管理员挂部门后自动离开
+    if (grouped.ungrouped.length > 0) {
+      children.push({ key: deptDomId('ungrouped'), title: '未分组', isLeaf: false, children: grouped.ungrouped.map(userLeaf) });
+    }
+    return [{ key: deptDomId('root'), title: '全公司', isLeaf: false, children }];
+  }, [tree.data, grouped]);
+
+  /** 用户叶子行（Tree title 内：hover 详情卡 + 双击进聊；点击选中由 Tree onSelect 接管） */
+  const renderUserRow = (u: DirectoryUser) => (
     <Popover
-      key={u.uid}
       trigger="hover"
       mouseEnterDelay={0.35}
       mouseLeaveDelay={0.15}
       placement="right"
       content={
-        <div className="bbw-contacts__card" data-testid="contacts-user-card">
-          <span className="bbw-contacts__avatar bbw-contacts__avatar--lg">{(u.display_name || '?').slice(0, 1)}</span>
-          <div className="bbw-contacts__card-main">
-            <div className="bbw-contacts__card-name">
-              {u.display_name}
-              <span className="bbw-contacts__card-empno">{u.employee_no}</span>
-            </div>
-            <div className="bbw-contacts__card-path">{u.org_path || '未分组'}</div>
+        <Flex gap={12} data-testid="contacts-user-card" style={{ minWidth: 220 }}>
+          <Avatar size={44} style={{ flex: 'none' }}>
+            {(u.display_name || '?').slice(0, 1)}
+          </Avatar>
+          <Flex vertical gap={4} style={{ minWidth: 0 }}>
+            <Space size={8}>
+              <span style={{ fontWeight: 500 }}>{u.display_name}</span>
+              <Typography.Text code>{u.employee_no}</Typography.Text>
+            </Space>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {u.org_path || '未分组'}
+            </Typography.Text>
             {u.uid === myUid ? (
-              <span className="bbw-contacts__card-self">我自己</span>
+              <Tag style={{ marginInlineEnd: 0 }}>我自己</Tag>
             ) : (
-              <button
-                type="button"
-                className="bbw-contacts__msg-btn"
+              <Button
+                size="small"
+                icon={<MessageCircle size={13} />}
                 disabled={dmBusy}
                 onClick={() => void startDm(u)}
                 data-testid="contacts-card-msg"
               >
-                <MessageCircle size={13} />
                 发消息
-              </button>
+              </Button>
             )}
-          </div>
-        </div>
+          </Flex>
+        </Flex>
       }
     >
-      <div
-        className={`bbw-contacts__user-row${selectedId === userDomId(u.uid) ? ' bbw-contacts__user-row--selected' : ''}`}
-        style={{ marginLeft: depth * 16 + 26 }}
+      <span
         data-node-id={userDomId(u.uid)}
         data-testid="contacts-user-row"
-        onClick={() => setSelectedId(userDomId(u.uid))}
-        onDoubleClick={() => void startDm(u)}
         title="双击发消息"
+        onDoubleClick={() => void startDm(u)}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, width: '100%' }}
       >
-        <span className="bbw-contacts__avatar bbw-contacts__avatar--sm">{(u.display_name || '?').slice(0, 1)}</span>
-        <span className="bbw-contacts__user-name">{u.display_name}</span>
-        <span className="bbw-contacts__user-empno">{u.employee_no}</span>
-      </div>
+        <Avatar size={22} style={{ flex: 'none', fontSize: 12 }}>
+          {(u.display_name || '?').slice(0, 1)}
+        </Avatar>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.display_name}</span>
+        <Typography.Text code type="secondary" style={{ fontSize: 12, flex: 'none' }}>
+          {u.employee_no}
+        </Typography.Text>
+      </span>
     </Popover>
   );
 
-  const renderUsers = (list: DirectoryUser[], depth: number) => list.map((u) => renderUserRow(u, depth));
+  /** titleRender：根=全公司（人数）/未分组（人数）/部门（子树人数 + 路径 tooltip）/用户叶子（hover 卡） */
+  const titleRender = (node: DataNode) => {
+    const key = String(node.key);
+    const title = node.title as string;
+    if (key === deptDomId('root')) {
+      return (
+        <Space size={6}>
+          <Building2 size={14} />
+          <span>{title}</span>
+          <Tag style={{ marginInlineEnd: 0 }}>{users.length}</Tag>
+        </Space>
+      );
+    }
+    if (key === deptDomId('ungrouped')) {
+      return (
+        <Space size={6}>
+          <Users size={14} />
+          <span>{title}</span>
+          <Tag style={{ marginInlineEnd: 0 }}>{grouped.ungrouped.length}</Tag>
+        </Space>
+      );
+    }
+    if (key.startsWith('user-')) {
+      const u = usersByUid.get(key.slice('user-'.length));
+      if (!u) return <span>{title}</span>;
+      return renderUserRow(u);
+    }
+    const cnt = subtreeCount.get(key.slice('dept-'.length)) ?? 0;
+    return (
+      <Space size={6}>
+        <FolderTree size={14} />
+        <span title={deptIndex.byId.get(key.slice('dept-'.length))?.path}>{title}</span>
+        {cnt > 0 ? <Tag style={{ marginInlineEnd: 0 }}>{cnt}</Tag> : null}
+      </Space>
+    );
+  };
+
+  // ── 搜索下拉行（Popover+Menu；分组段=Menu group，加载/空态=禁用占位行） ──
+  const ddUserLabel = (u: DirectoryUser) => (
+    <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+      <Avatar size={22} style={{ flex: 'none', fontSize: 12 }}>
+        {(u.display_name || '?').slice(0, 1)}
+      </Avatar>
+      <span style={{ flex: 'none' }}>{u.display_name}</span>
+      <Typography.Text code type="secondary" style={{ fontSize: 12, flex: 'none' }}>
+        {u.employee_no}
+      </Typography.Text>
+      <Typography.Text type="secondary" ellipsis style={{ flex: 1, minWidth: 0, fontSize: 12, textAlign: 'right' }}>
+        {u.org_path || '未分组'}
+      </Typography.Text>
+    </Flex>
+  );
+
+  const ddDeptLabel = (name: string, pathLabel: string) => (
+    <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+      <FolderTree size={14} style={{ flex: 'none' }} />
+      <span style={{ flex: 'none' }}>{name}</span>
+      <Typography.Text type="secondary" ellipsis style={{ flex: 1, minWidth: 0, fontSize: 12, textAlign: 'right' }}>
+        {pathLabel}
+      </Typography.Text>
+    </Flex>
+  );
+
+  const ddItems: MenuProps['items'] = (() => {
+    if (peopleLoading && people.length === 0 && deptHits.length === 0) {
+      return [{ key: 'dd-loading', disabled: true, label: '搜索中…' }];
+    }
+    if (people.length === 0 && deptHits.length === 0) {
+      return [{ key: 'dd-empty', disabled: true, label: '未找到相关的人或部门' }];
+    }
+    return [
+      ...(people.length > 0
+        ? [
+            {
+              type: 'group' as const,
+              label: '联系人',
+              children: people.map((u) => ({ key: userDomId(u.uid), label: ddUserLabel(u) })),
+            },
+          ]
+        : []),
+      ...(deptHits.length > 0
+        ? [
+            {
+              type: 'group' as const,
+              label: '部门',
+              children: deptHits.map(({ node, pathLabel }) => ({
+                key: deptDomId(node.id),
+                label: ddDeptLabel(node.name, pathLabel),
+              })),
+            },
+          ]
+        : []),
+    ];
+  })();
+
+  const onDdSelect: MenuProps['onClick'] = ({ key }) => {
+    if (key.startsWith('user-')) {
+      const u = people.find((p) => userDomId(p.uid) === key);
+      if (u) locateUser(u);
+    } else if (key.startsWith('dept-')) {
+      locateDept(key.slice('dept-'.length));
+    }
+  };
 
   const loading = tree.isLoading || usersQuery.isLoading;
   const error = tree.isError || usersQuery.isError;
+
+  /** 详情栏空态/缺失提示（居中次要文字） */
+  const hint = (text: string) => (
+    <div style={{ padding: 24, textAlign: 'center' }}>
+      <Typography.Text type="secondary">{text}</Typography.Text>
+    </div>
+  );
 
   /** 右侧详情·整页档案风：用户档案（头图+基础信息+组织链路）/ 部门档案（成员/子部门卡片网格） */
   const renderDetail = () => {
     // ── 用户档案页（发消息等操作落位区，后续操作继续加在头图 actions 行） ──
     if (selectedId?.startsWith('user-')) {
       const u = users.find((x) => x.uid === selectedId.slice('user-'.length));
-      if (!u) return <div className="bbw-contacts__hint">用户不存在</div>;
+      if (!u) return hint('用户不存在');
       const crumbs = u.org_path ? u.org_path.split('/').filter(Boolean) : [];
       return (
-        <div className="bbw-contacts__profile" data-testid="contacts-detail-user">
-          <div className="bbw-contacts__profile-head">
-            <span className="bbw-contacts__avatar bbw-contacts__avatar--xxl">{(u.display_name || '?').slice(0, 1)}</span>
-            <div className="bbw-contacts__profile-main">
-              <div className="bbw-contacts__profile-name">
-                {u.display_name}
-                {u.uid === myUid ? <span className="bbw-contacts__badge">我自己</span> : null}
-              </div>
-              <div className="bbw-contacts__profile-sub">
-                <span>{u.employee_no}</span>
-                <span>·</span>
-                <span>{u.org_path || '未分组'}</span>
-                <span>·</span>
-                <span className="bbw-contacts__badge">在职</span>
-              </div>
-              <div className="bbw-contacts__profile-actions">
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }} data-testid="contacts-detail-user">
+          <Flex
+            gap={20}
+            align="center"
+            wrap="wrap"
+            style={{ padding: '28px 32px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
+          >
+            <Avatar size={72} style={{ flex: 'none', fontSize: 26 }}>
+              {(u.display_name || '?').slice(0, 1)}
+            </Avatar>
+            <Flex vertical gap={8} style={{ minWidth: 0 }}>
+              <Flex align="center" gap={10} wrap="wrap">
+                <Typography.Title level={4} style={{ margin: 0 }}>
+                  {u.display_name}
+                </Typography.Title>
+                {u.uid === myUid ? <Tag style={{ marginInlineEnd: 0 }}>我自己</Tag> : null}
+              </Flex>
+              <Space size={6} wrap>
+                <Typography.Text code>{u.employee_no}</Typography.Text>
+                <Typography.Text type="secondary">·</Typography.Text>
+                <Typography.Text type="secondary">{u.org_path || '未分组'}</Typography.Text>
+                <Typography.Text type="secondary">·</Typography.Text>
+                <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                  在职
+                </Tag>
+              </Space>
+              <Space size={12} wrap align="center" style={{ marginTop: 4 }}>
                 {u.uid === myUid ? (
-                  <span className="bbw-contacts__profile-hint">这是你自己的账号</span>
+                  <Typography.Text type="secondary">这是你自己的账号</Typography.Text>
                 ) : (
-                  <button
-                    type="button"
-                    className="bbw-contacts__msg-btn bbw-contacts__msg-btn--lg"
+                  <Button
+                    icon={<MessageCircle size={14} />}
                     disabled={dmBusy}
                     onClick={() => void startDm(u)}
                     data-testid="contacts-detail-msg"
                   >
-                    <MessageCircle size={14} />
                     发消息
-                  </button>
+                  </Button>
                 )}
-                <span className="bbw-contacts__profile-hint">双击左侧树中用户可直接发起聊天</span>
-              </div>
-            </div>
-          </div>
-          <div className="bbw-contacts__profile-body">
-            <section className="bbw-contacts__profile-card">
-              <h4>基础信息</h4>
-              <div className="bbw-contacts__kv">
-                <span className="bbw-contacts__kv-key">姓名</span>
-                <span className="bbw-contacts__kv-val">{u.display_name}</span>
-                <span className="bbw-contacts__kv-key">工号</span>
-                <span className="bbw-contacts__kv-val">{u.employee_no}</span>
-                <span className="bbw-contacts__kv-key">所属组织</span>
-                <span className="bbw-contacts__kv-val">{u.org_path || '未分组'}</span>
-                <span className="bbw-contacts__kv-key">账号状态</span>
-                <span className="bbw-contacts__kv-val">启用</span>
-              </div>
-            </section>
-            <section className="bbw-contacts__profile-card">
-              <h4>组织链路</h4>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  双击左侧树中用户可直接发起聊天
+                </Typography.Text>
+              </Space>
+            </Flex>
+          </Flex>
+          <Flex vertical gap={16} style={{ padding: '20px 32px 32px', flex: 1 }}>
+            <Card size="small" title="基础信息">
+              <Descriptions
+                size="small"
+                column={1}
+                items={[
+                  { key: 'name', label: '姓名', children: u.display_name },
+                  { key: 'empno', label: '工号', children: <Typography.Text code>{u.employee_no}</Typography.Text> },
+                  { key: 'org', label: '所属组织', children: u.org_path || '未分组' },
+                  {
+                    key: 'status',
+                    label: '账号状态',
+                    children: (
+                      <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                        启用
+                      </Tag>
+                    ),
+                  },
+                ]}
+              />
+            </Card>
+            <Card size="small" title="组织链路">
               {crumbs.length > 0 ? (
-                <div className="bbw-contacts__crumbs">
-                  {crumbs.map((c, i) => (
-                    <Fragment key={`${i}-${c}`}>
-                      {i > 0 ? <span className="bbw-contacts__crumb-sep">/</span> : null}
-                      <span className="bbw-contacts__crumb">{c}</span>
-                    </Fragment>
-                  ))}
-                </div>
+                <Breadcrumb items={crumbs.map((c) => ({ title: c }))} />
               ) : (
-                <div className="bbw-contacts__kv-val">未挂部门——归入「未分组」，可由管理员调整归属</div>
+                <Typography.Text type="secondary">未挂部门——归入「未分组」，可由管理员调整归属</Typography.Text>
               )}
-            </section>
-          </div>
+            </Card>
+          </Flex>
         </div>
       );
     }
@@ -395,230 +560,179 @@ export function ContactsPage() {
     } else if (selectedId) {
       const id = selectedId.slice('dept-'.length);
       const node = deptIndex.byId.get(id);
-      if (!node) return <div className="bbw-contacts__hint">部门不存在</div>;
+      if (!node) return hint('部门不存在');
       name = node.name;
       pathLabel = node.path;
       members = grouped.deptUsers.get(id) ?? [];
       subDepts = deptIndex.childDepts.get(id) ?? [];
       count = subtreeCount.get(id) ?? 0;
     } else {
-      return <div className="bbw-contacts__hint">从左侧选择用户或部门查看详情</div>;
+      return hint('从左侧选择用户或部门查看详情');
     }
     return (
-      <div className="bbw-contacts__profile" data-testid="contacts-detail-dept">
-        <div className="bbw-contacts__profile-head">
-          <span className="bbw-contacts__avatar bbw-contacts__avatar--xxl bbw-contacts__avatar--dept">
-            <FolderTree size={26} />
-          </span>
-          <div className="bbw-contacts__profile-main">
-            <div className="bbw-contacts__profile-name">
-              {name}
-              <span className="bbw-contacts__badge">{count} 人</span>
-            </div>
-            {pathLabel ? <div className="bbw-contacts__profile-sub">{pathLabel}</div> : null}
-          </div>
-        </div>
-        <div className="bbw-contacts__profile-body">
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }} data-testid="contacts-detail-dept">
+        <Flex
+          gap={20}
+          align="center"
+          wrap="wrap"
+          style={{ padding: '28px 32px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
+        >
+          <Avatar size={72} icon={<FolderTree size={30} />} style={{ flex: 'none' }} />
+          <Flex vertical gap={8} style={{ minWidth: 0 }}>
+            <Flex align="center" gap={10} wrap="wrap">
+              <Typography.Title level={4} style={{ margin: 0 }}>
+                {name}
+              </Typography.Title>
+              <Tag style={{ marginInlineEnd: 0 }}>{count} 人</Tag>
+            </Flex>
+            {pathLabel ? <Typography.Text type="secondary">{pathLabel}</Typography.Text> : null}
+          </Flex>
+        </Flex>
+        <Flex vertical gap={16} style={{ padding: '20px 32px 32px', flex: 1 }}>
           {members.length > 0 ? (
-            <section className="bbw-contacts__profile-card">
-              <h4>{memberSection}（{members.length}）</h4>
-              <div className="bbw-contacts__grid">
+            <Card size="small" title={`${memberSection}（${members.length}）`}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 10 }}>
                 {members.map((u) => (
-                  <button
+                  <Card
                     key={u.uid}
-                    type="button"
-                    className="bbw-contacts__grid-card"
+                    size="small"
+                    hoverable
                     onClick={() => setSelectedId(userDomId(u.uid))}
                     onDoubleClick={() => void startDm(u)}
                   >
-                    <span className="bbw-contacts__avatar bbw-contacts__avatar--sm">{(u.display_name || '?').slice(0, 1)}</span>
-                    <span className="bbw-contacts__grid-main">
-                      <span className="bbw-contacts__grid-name">{u.display_name}</span>
-                      <span className="bbw-contacts__grid-sub">{u.employee_no}</span>
-                    </span>
-                  </button>
+                    <Flex align="center" gap={10} style={{ minWidth: 0 }}>
+                      <Avatar size={32} style={{ flex: 'none' }}>
+                        {(u.display_name || '?').slice(0, 1)}
+                      </Avatar>
+                      <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {u.display_name}
+                        </span>
+                        <Typography.Text code type="secondary" style={{ fontSize: 12 }} ellipsis>
+                          {u.employee_no}
+                        </Typography.Text>
+                      </Flex>
+                    </Flex>
+                  </Card>
                 ))}
               </div>
-            </section>
+            </Card>
           ) : null}
           {subDepts.length > 0 ? (
-            <section className="bbw-contacts__profile-card">
-              <h4>子部门（{subDepts.length}）</h4>
-              <div className="bbw-contacts__grid">
+            <Card size="small" title={`子部门（${subDepts.length}）`}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 10 }}>
                 {subDepts.map((d) => (
-                  <button key={d.id} type="button" className="bbw-contacts__grid-card" onClick={() => setSelectedId(deptDomId(d.id))}>
-                    <span className="bbw-contacts__avatar bbw-contacts__avatar--sm bbw-contacts__avatar--dept">
-                      <FolderTree size={13} />
-                    </span>
-                    <span className="bbw-contacts__grid-main">
-                      <span className="bbw-contacts__grid-name">{d.name}</span>
-                      <span className="bbw-contacts__grid-sub">{subtreeCount.get(d.id) ?? 0} 人</span>
-                    </span>
-                  </button>
+                  <Card key={d.id} size="small" hoverable onClick={() => setSelectedId(deptDomId(d.id))}>
+                    <Flex align="center" gap={10} style={{ minWidth: 0 }}>
+                      <Avatar size={32} icon={<FolderTree size={16} />} style={{ flex: 'none' }} />
+                      <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {subtreeCount.get(d.id) ?? 0} 人
+                        </Typography.Text>
+                      </Flex>
+                    </Flex>
+                  </Card>
                 ))}
               </div>
-            </section>
+            </Card>
           ) : null}
-          {members.length === 0 && subDepts.length === 0 ? <div className="bbw-contacts__hint">暂无成员</div> : null}
-        </div>
+          {members.length === 0 && subDepts.length === 0 ? hint('暂无成员') : null}
+        </Flex>
       </div>
     );
   };
 
   return (
-    <div className="bbw-contacts" data-testid="contacts-page">
-      <div className="bbw-contacts__head" ref={headRef}>
-        <span className="bbw-contacts__title">通讯录</span>
-        <div className="bbw-contacts__search">
-          <Input
-            allowClear
-            placeholder="搜索 联系人/部门"
-            prefix={<Search size={14} />}
-            value={qInput}
-            onChange={(e) => setQInput(e.target.value)}
-            onFocus={() => q && setDdOpen(true)}
-          />
-          {ddOpen && q ? (
-            <div className="bbw-contacts__search-dd" data-testid="contacts-search-dd">
-              {peopleLoading && people.length === 0 && deptHits.length === 0 ? (
-                <div className="bbw-contacts__hint">搜索中…</div>
-              ) : people.length === 0 && deptHits.length === 0 ? (
-                <div className="bbw-contacts__hint">未找到相关的人或部门</div>
-              ) : (
-                <>
-                  {people.length > 0 ? (
-                    <>
-                      <div className="bbw-contacts__dd-section">联系人</div>
-                      {people.map((u) => (
-                        <button key={u.uid} type="button" className="bbw-contacts__dd-row" onClick={() => locateUser(u)}>
-                          <span className="bbw-contacts__avatar bbw-contacts__avatar--sm">{(u.display_name || '?').slice(0, 1)}</span>
-                          <span className="bbw-contacts__user-name">{u.display_name}</span>
-                          <span className="bbw-contacts__user-empno">{u.employee_no}</span>
-                          <span className="bbw-contacts__dd-path">{u.org_path || '未分组'}</span>
-                        </button>
-                      ))}
-                    </>
-                  ) : null}
-                  {deptHits.length > 0 ? (
-                    <>
-                      <div className="bbw-contacts__dd-section">部门</div>
-                      {deptHits.map(({ node, pathLabel }) => (
-                        <button key={node.id} type="button" className="bbw-contacts__dd-row" onClick={() => locateDept(node.id)}>
-                          <FolderTree size={16} className="org-node__icon" />
-                          <span className="bbw-contacts__user-name">{node.name}</span>
-                          <span className="bbw-contacts__dd-path">{pathLabel}</span>
-                        </button>
-                      ))}
-                    </>
-                  ) : null}
-                </>
-              )}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="bbw-contacts__body">
-      <div className="bbw-contacts__tree" style={{ width: split.width }}>
-        {loading ? (
-          <div className="bbw-contacts__hint">加载中…</div>
-        ) : error ? (
-          <div className="bbw-contacts__hint">通讯录加载失败（{errText(tree.error ?? usersQuery.error)}）</div>
-        ) : (
-          <>
-            <div
-              className={`org-node__row org-node__row--root${selectedId === deptDomId('root') ? ' org-node__row--selected' : ''}`}
-              data-node-id={deptDomId('root')}
-              style={{ cursor: 'pointer' }}
-              onClick={() => setSelectedId(deptDomId('root'))}
-            >
-              <Building2 size={14} className="org-node__icon" />
-              <span className="org-node__name">全公司</span>
-              <span className="bbw-contacts__badge">{users.length}</span>
-            </div>
-            {(tree.data ?? []).map((n) => renderDept(n, 1))}
-            {/* 虚拟「未分组」：未挂部门用户（自助注册默认落此组），管理员挂部门后自动离开 */}
-            {grouped.ungrouped.length > 0 ? (
-              <div>
-                <div
-                  className={`org-node__row org-node__row--root${selectedId === deptDomId('ungrouped') ? ' org-node__row--selected' : ''}`}
-                  style={{ cursor: 'pointer' }}
-                  data-node-id={deptDomId('ungrouped')}
-                  onClick={() => setExpanded((prev) => toggleIn(prev, 'ungrouped'))}
-                >
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setExpanded((prev) => toggleIn(prev, 'ungrouped'));
-                    }}
-                  >
-                    {expanded.has('ungrouped') ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                  </button>
-                  <Users size={14} className="org-node__icon" />
-                  <span className="org-node__name">未分组</span>
-                  <span className="bbw-contacts__badge">{grouped.ungrouped.length}</span>
-                </div>
-                {expanded.has('ungrouped') ? renderUsers(grouped.ungrouped, 1) : null}
+    <div
+      data-testid="contacts-page"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
+        flex: 1,
+        minWidth: 0,
+        background: token.colorBgLayout,
+      }}
+    >
+      {/* 头：标题 + 搜索（输入防抖；下拉=Popover+Menu，点击外部由 Popover 接管收起） */}
+      <Flex
+        align="center"
+        gap={16}
+        style={{ padding: '12px 20px', borderBottom: `1px solid ${token.colorBorderSecondary}`, flex: 'none' }}
+      >
+        <Typography.Title level={5} style={{ margin: 0, flex: 'none' }}>
+          通讯录
+        </Typography.Title>
+        <span style={{ position: 'relative', width: 280 }}>
+          <Popover
+            open={ddOpen && !!q}
+            trigger="click"
+            placement="bottomLeft"
+            arrow={false}
+            destroyTooltipOnHide
+            onOpenChange={(o) => {
+              if (!o) setDdOpen(false);
+            }}
+            styles={{ body: { padding: 4 } }}
+            content={
+              <div data-testid="contacts-search-dd" style={{ minWidth: 280, maxWidth: 380 }}>
+                <Menu selectable={false} mode="vertical" style={{ border: 'none' }} items={ddItems} onClick={onDdSelect} />
               </div>
-            ) : null}
-          </>
-        )}
-      </div>
-      <SplitHandle bind={split.bind} />
+            }
+          >
+            <Input
+              allowClear
+              placeholder="搜索 联系人/部门"
+              prefix={<Search size={14} />}
+              value={qInput}
+              onChange={(e) => setQInput(e.target.value)}
+              onFocus={() => q && setDdOpen(true)}
+            />
+          </Popover>
+        </span>
+      </Flex>
+
+      <Flex align="stretch" style={{ flex: 1, minHeight: 0 }}>
+        {/* 左：组织+用户树（antd Tree；controlled 展开/选中） */}
+        <div
+          style={{
+            width: split.width,
+            flex: 'none',
+            minHeight: 0,
+            overflow: 'auto',
+            padding: '8px 6px 24px',
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            background: token.colorBgContainer,
+          }}
+        >
+          {loading ? (
+            hint('加载中…')
+          ) : error ? (
+            hint(`通讯录加载失败（${errText(tree.error ?? usersQuery.error)}）`)
+          ) : (
+            <Tree
+              blockNode
+              treeData={treeData}
+              titleRender={titleRender}
+              expandedKeys={[...expanded]}
+              selectedKeys={selectedId ? [selectedId] : []}
+              onExpand={(keys) => setExpanded(new Set(keys.map(String)))}
+              onSelect={(_, info) => setSelectedId(String(info.node.key))}
+            />
+          )}
+        </div>
+        <SplitHandle bind={split.bind} />
 
         {/* 右侧详情栏：用户卡（发消息等操作落位区）/ 部门概览（成员+子部门可点切换） */}
-        <aside className="bbw-contacts__detail" data-testid="contacts-detail">
+        <aside
+          data-testid="contacts-detail"
+          style={{ flex: 1, minWidth: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}
+        >
           {renderDetail()}
         </aside>
-      </div>
+      </Flex>
     </div>
   );
-
-  /** 部门节点渲染（闭包拿 grouped/deptIndex/subtreeCount，替代上面的占位组件） */
-  function renderDept(node: DeptNode, depth: number) {
-    const open = expanded.has(node.id);
-    const childUsers = grouped.deptUsers.get(node.id) ?? [];
-    return (
-      <div key={node.id}>
-        <div
-          className={`org-node__row${selectedId === deptDomId(node.id) ? ' org-node__row--selected' : ''}`}
-          style={{ marginLeft: depth * 16, cursor: 'pointer' }}
-          data-node-id={deptDomId(node.id)}
-          onClick={() => setExpanded((prev) => toggleIn(prev, node.id))}
-        >
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              setExpanded((prev) => toggleIn(prev, node.id));
-            }}
-          >
-            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </button>
-          <FolderTree size={14} className="org-node__icon" />
-          <span className="org-node__name" title={node.path}>
-            {node.name}
-          </span>
-          {(subtreeCount.get(node.id) ?? 0) > 0 ? <span className="bbw-contacts__badge">{subtreeCount.get(node.id)}</span> : null}
-        </div>
-        {open ? (
-          <div>
-            {renderUsers(childUsers, depth + 1)}
-            {(node.children ?? []).map((c) => renderDept(c, depth + 1))}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-}
-
-/** 展开集不可变切换 */
-function toggleIn(prev: Set<string>, id: string): Set<string> {
-  const next = new Set(prev);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  return next;
 }

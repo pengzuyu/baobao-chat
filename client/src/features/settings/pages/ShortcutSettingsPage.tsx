@@ -3,7 +3,12 @@
  * v0.1 =权威速查表（只读，仅列已生效键位）——键位为 D01 §9 全局冻结约定，
  * 自定义键位映射随全局快捷键框架阶段二（当前各组件 onKeyDown 硬编码消费；
  * 框架化后本页开放改键+冲突检测，登记）。
+ * D26-O3：速查表→antd Table（键位→Typography.Text keyboard；settings-* 退役）。
  */
+
+import type React from 'react';
+import { Card, Table, Typography } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const MOD = isMac ? '⌘' : 'Ctrl';
@@ -18,37 +23,34 @@ const SHORTCUTS: Array<{ keys: string; label: string; scope: string }> = [
   { keys: `Enter / ⇧+Enter`, label: '发送 / 换行（会话输入框）', scope: '输入框' },
 ];
 
+const columns: ColumnsType<(typeof SHORTCUTS)[number]> = [
+  { title: '键位', dataIndex: 'keys', width: 170, render: (v: string) => <Typography.Text keyboard>{v}</Typography.Text> },
+  { title: '作用', dataIndex: 'label' },
+  { title: '作用域', dataIndex: 'scope', width: 90 },
+];
+
 export function ShortcutSettingsPage() {
   return (
-    <div className="settings-section" data-testid="settings-shortcuts">
-      <h2 className="settings-section__title">快捷键</h2>
+    <div data-testid="settings-shortcuts">
+      <Typography.Title level={5} style={{ margin: 0, marginBottom: 16 }}>
+        快捷键
+      </Typography.Title>
 
-      <div className="settings-card">
-        <div className="settings-row__desc" style={{ paddingBottom: 8 }}>
+      <Card size="small">
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 12, fontSize: 12 }}>
           以下为 D01 §9 全局冻结键位；自定义改键随全局快捷键框架开放（各组件散落
           onKeyDown 收敛为统一注册表后本页开放改键+冲突检测）。
-        </div>
-        <table className="settings-shortcut-table" data-testid="shortcut-table">
-          <thead>
-            <tr>
-              <th>键位</th>
-              <th>作用</th>
-              <th>作用域</th>
-            </tr>
-          </thead>
-          <tbody>
-            {SHORTCUTS.map((s) => (
-              <tr key={s.keys} data-testid="shortcut-row">
-                <td>
-                  <kbd className="settings-kbd">{s.keys}</kbd>
-                </td>
-                <td>{s.label}</td>
-                <td>{s.scope}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+        </Typography.Paragraph>
+        <Table
+          rowKey="keys"
+          size="small"
+          columns={columns}
+          dataSource={SHORTCUTS}
+          pagination={false}
+          data-testid="shortcut-table"
+          onRow={() => ({ 'data-testid': 'shortcut-row' } as React.HTMLAttributes<HTMLTableRowElement>)}
+        />
+      </Card>
     </div>
   );
 }

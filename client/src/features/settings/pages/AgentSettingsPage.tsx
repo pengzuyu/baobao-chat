@@ -4,10 +4,12 @@
  *   发起会话时客户端解析为 p:<providerId>:<model> 直达引用）
  * - 我的供应商：个人 BYOK CRUD（≤5 个；密钥服务端加密落库，仅本人可用）
  * - 权限模式/紧急停止为 D08 既定约定（骨架）；三级记忆管理入口在 /agent/memory 实现后开放
+ * D26-O3：卡片壳→Card、行→List.Item、BYOK 表→Table、表单控件→Input/Select（settings-、admin-、bbw- 系自研类退役）。
  */
 
-import { useEffect, useState } from 'react';
-import { Select } from 'antd';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Alert, Card, Input, List, Select, Space, Table, Typography, theme } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { Pencil, PlugZap, Plus, Save, Trash2, Undo2, Zap } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
@@ -27,34 +29,52 @@ import { PROVIDER_PRESETS, presetKeyOfBaseUrl, type AIProvider } from '../../adm
 import { ProviderModelsEditor } from '../../admin/components/ProviderModelsEditor';
 import { CloudBackupCard } from '../components/CloudBackupCard';
 
-export function AgentSettingsPage() {
+/** 设置行统一渲染：名称（可带图标）+ 描述 + 右侧控件 */
+function SettingRow({ name, desc, control }: { name: ReactNode; desc: ReactNode; control: ReactNode }) {
   return (
-    <div className="settings-section">
-      <h2 className="settings-section__title">Agent</h2>
+    <List.Item actions={[control]}>
+      <div>
+        <div>{name}</div>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {desc}
+        </Typography.Text>
+      </div>
+    </List.Item>
+  );
+}
+
+export function AgentSettingsPage() {
+  const { token } = theme.useToken();
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Typography.Title level={5} style={{ margin: 0 }}>
+        Agent
+      </Typography.Title>
 
       <DefaultModelCard />
       <MyProvidersCard />
       <CloudBackupCard />
 
-      <div className="settings-card">
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <div className="settings-row__name">
-              <Zap size={14} className="settings-row__danger-icon" /> 紧急停止
-            </div>
-            <div className="settings-row__desc">全局快捷键立即中止所有 Agent 任务（D08 紧急停止）</div>
-          </div>
-          <kbd className="settings-row__kbd">⌘ ⇧ .</kbd>
-        </div>
-      </div>
+      <Card size="small">
+        <List size="small">
+          <SettingRow
+            name={
+              <Space size={6}>
+                <Zap size={14} style={{ color: token.colorWarning }} /> 紧急停止
+              </Space>
+            }
+            desc="全局快捷键立即中止所有 Agent 任务（D08 紧急停止）"
+            control={<Typography.Text keyboard>⌘ ⇧ .</Typography.Text>}
+          />
+        </List>
+      </Card>
 
-      <div className="settings-card settings-card--static">
-        <div className="settings-card__head">
-          <div className="settings-card__name">三级记忆管理</div>
-        </div>
-        <div className="settings-card__desc">会话记忆 / 长期偏好 / 企业知识的查看与清除，入口在 /agent/memory（D08）实现后开放</div>
-      </div>
-    </div>
+      <Card size="small" title="三级记忆管理">
+        <Typography.Text type="secondary">
+          会话记忆 / 长期偏好 / 企业知识的查看与清除，入口在 /agent/memory（D08）实现后开放
+        </Typography.Text>
+      </Card>
+    </Space>
   );
 }
 
@@ -130,13 +150,12 @@ function DefaultModelCard() {
     }
   };
 
-  return (
-    <div className="settings-card" data-testid="agent-default-model">
-      <div className="settings-row">
-        <div className="settings-row__text">
-          <div className="settings-row__name">默认模型</div>
-          <div className="settings-row__desc">新会话使用的模型；未指定时跟随公司默认（快/强档位自动路由），选择后自动保存</div>
-        </div>
+  const rows: Array<{ key: string; name: ReactNode; desc: ReactNode; control: ReactNode }> = [
+    {
+      key: 'mode',
+      name: '默认模型',
+      desc: '新会话使用的模型；未指定时跟随公司默认（快/强档位自动路由），选择后自动保存',
+      control: (
         <Select
           size="small"
           style={{ width: 170 }}
@@ -148,52 +167,65 @@ function DefaultModelCard() {
             { value: 'provider', label: '指定供应商与模型' },
           ]}
         />
-      </div>
-      {mode === 'provider' ? (
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <div className="settings-row__name">供应商 / 模型</div>
-            <div className="settings-row__desc">公司统一接入或「我的供应商」；会话内可临时切换</div>
-          </div>
-          <Select
-            size="small"
-            style={{ width: 170, marginRight: 8 }}
-            placeholder="选择供应商"
-            value={provId || undefined}
-            onChange={(v) => {
-              setProvId(v);
-              setModel('');
-              setSaved(false);
-            }}
-            options={all.map((p) => ({ value: p.id, label: `${p.mine ? '我的 · ' : ''}${p.name}` }))}
-          />
-          <Select
-            size="small"
-            style={{ width: 190 }}
-            placeholder="选择模型"
-            value={model || undefined}
-            onChange={(v) => {
-              setModel(v);
-              setSaved(false);
-              if (provId && v) void persist({ mode: 'provider', providerId: provId, model: v });
-            }}
-            disabled={!provId}
-            options={models.map((m) => ({ value: m.id, label: m.label ? `${m.label}（${m.id}）` : m.id }))}
-          />
-        </div>
+      ),
+    },
+    ...(mode === 'provider'
+      ? [
+          {
+            key: 'pm',
+            name: '供应商 / 模型',
+            desc: '公司统一接入或「我的供应商」；会话内可临时切换',
+            control: (
+              <Space size={8} wrap>
+                <Select
+                  size="small"
+                  style={{ width: 170 }}
+                  placeholder="选择供应商"
+                  value={provId || undefined}
+                  onChange={(v) => {
+                    setProvId(v);
+                    setModel('');
+                    setSaved(false);
+                  }}
+                  options={all.map((p) => ({ value: p.id, label: `${p.mine ? '我的 · ' : ''}${p.name}` }))}
+                />
+                <Select
+                  size="small"
+                  style={{ width: 190 }}
+                  placeholder="选择模型"
+                  value={model || undefined}
+                  onChange={(v) => {
+                    setModel(v);
+                    setSaved(false);
+                    if (provId && v) void persist({ mode: 'provider', providerId: provId, model: v });
+                  }}
+                  disabled={!provId}
+                  options={models.map((m) => ({ value: m.id, label: m.label ? `${m.label}（${m.id}）` : m.id }))}
+                />
+              </Space>
+            ),
+          },
+        ]
+      : []),
+  ];
+
+  return (
+    <Card size="small" data-testid="agent-default-model">
+      <List
+        size="small"
+        dataSource={rows}
+        renderItem={(row) => <SettingRow key={row.key} name={row.name} desc={row.desc} control={row.control} />}
+      />
+      {saving ? (
+        <Typography.Text type="secondary">保存中…</Typography.Text>
+      ) : error ? (
+        <Alert type="error" showIcon message={error} />
+      ) : saved ? (
+        <Typography.Text type="secondary">已保存 ✓</Typography.Text>
+      ) : mode === 'provider' && (!provId || !model) ? (
+        <Typography.Text type="secondary">选好供应商与模型后自动保存</Typography.Text>
       ) : null}
-      <div className="settings-row">
-        {saving ? (
-          <span className="settings-row__desc">保存中…</span>
-        ) : error ? (
-          <span className="settings-form-error">{error}</span>
-        ) : saved ? (
-          <span className="settings-row__desc">已保存 ✓</span>
-        ) : mode === 'provider' && (!provId || !model) ? (
-          <span className="settings-row__desc">选好供应商与模型后自动保存</span>
-        ) : null}
-      </div>
-    </div>
+    </Card>
   );
 }
 
@@ -324,63 +356,58 @@ function MyProvidersCard() {
     }
   };
 
+  const columns: ColumnsType<AIProvider> = [
+    { title: '名称', dataIndex: 'name' },
+    { title: 'Base URL', dataIndex: 'baseUrl', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
+    { title: '模型', dataIndex: 'models', render: (ms: AIProvider['models']) => ms.map((m) => m.id).join('、') },
+    { title: '密钥', dataIndex: 'keyMask', render: (v: string) => (v ? <Typography.Text code>{v}</Typography.Text> : '—') },
+    {
+      title: '操作',
+      key: 'ops',
+      width: 150,
+      render: (_, p) => (
+        <Space size={4}>
+          <Button variant="secondary" size="small" onClick={() => edit(p)}>
+            <Pencil size={12} /> 编辑
+          </Button>
+          <Button variant="danger" size="small" onClick={() => void remove(p.id)}>
+            <Trash2 size={12} /> 删除
+          </Button>
+        </Space>
+      ),
+    },
+  ];
+
   return (
-    <div className="settings-card" data-testid="agent-my-providers">
-      <div className="settings-card__head">
-        <div className="settings-card__name">我的供应商</div>
-        <div className="settings-card__desc">自带 API Key 的个人模型接入（≤5 个；仅自己可用，密钥服务端加密）</div>
-      </div>
+    <Card size="small" data-testid="agent-my-providers" title="我的供应商">
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+        自带 API Key 的个人模型接入（≤5 个；仅自己可用，密钥服务端加密）
+      </Typography.Paragraph>
       {loaded ? (
         mine.length > 0 ? (
-          <table className="admin-table" style={{ marginBottom: 10 }}>
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>Base URL</th>
-                <th>模型</th>
-                <th>密钥</th>
-                <th style={{ width: 140 }}>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {mine.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.name}</td>
-                  <td className="admin-mono">{p.baseUrl}</td>
-                  <td>{p.models.map((m) => m.id).join('、')}</td>
-                  <td className="admin-mono">{p.keyMask || '—'}</td>
-                  <td>
-                    <Button variant="secondary" onClick={() => edit(p)}>
-                      <Pencil size={12} /> 编辑
-                    </Button>{' '}
-                    <Button variant="danger" onClick={() => void remove(p.id)}>
-                      <Trash2 size={13} /> 删除
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <Table<AIProvider> rowKey="id" size="small" columns={columns} dataSource={mine} pagination={false} style={{ marginBottom: 10 }} />
         ) : (
-          <div className="settings-row__desc" style={{ marginBottom: 10 }}>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 10 }}>
             尚未添加个人供应商——在下方录入（如 DeepSeek/Qwen/智谱的个人 Key）
-          </div>
+          </Typography.Text>
         )
       ) : null}
-      <div className="admin-word-form">
-        <select className="bbw-input" style={{ width: 150 }} value={vendor} onChange={(e) => pickVendor(e.target.value)}>
-          {PROVIDER_PRESETS.map((p) => (
-            <option key={p.key} value={p.key}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <input className="bbw-input" style={{ width: 130 }} value={name} placeholder="名称（随厂商自动填）" onChange={(e) => setName(e.target.value)} />
-        <input className="bbw-input" style={{ width: 215 }} value={baseUrl} placeholder={vendor === 'custom' ? 'Base URL（https://…/v1）' : 'Base URL（自动填，可改）'} onChange={(e) => setBaseUrl(e.target.value)} />
-        <input
-          className="bbw-input"
+      <Space size={8} wrap style={{ marginBottom: 8 }}>
+        <Select
+          style={{ width: 150 }}
+          value={vendor}
+          onChange={pickVendor}
+          options={PROVIDER_PRESETS.map((p) => ({ value: p.key, label: p.label }))}
+        />
+        <Input style={{ width: 130 }} value={name} placeholder="名称（随厂商自动填）" onChange={(e) => setName(e.target.value)} />
+        <Input
+          style={{ width: 215 }}
+          value={baseUrl}
+          placeholder={vendor === 'custom' ? 'Base URL（https://…/v1）' : 'Base URL（自动填，可改）'}
+          onChange={(e) => setBaseUrl(e.target.value)}
+        />
+        <Input.Password
           style={{ width: 190 }}
-          type="password"
           value={apiKey}
           placeholder={editingId && !editingKey ? '密钥已保存（不改则留空）' : 'API Key'}
           onChange={(e) => {
@@ -399,11 +426,11 @@ function MyProvidersCard() {
             <Undo2 size={13} /> 取消
           </Button>
         ) : null}
-      </div>
+      </Space>
       {connResult ? (
-        <div className="settings-row__desc" style={{ marginBottom: 6 }}>
+        <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>
           ✅ 连接成功（{connResult.ms}ms · 上游 {connResult.models} 个模型）
-        </div>
+        </Typography.Text>
       ) : null}
       <ProviderModelsEditor
         models={models}
@@ -411,7 +438,7 @@ function MyProvidersCard() {
         onToggle={(id) => setModels((arr) => (arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id]))}
         onAdd={(id) => setModels((arr) => (arr.includes(id) ? arr : [...arr, id]))}
       />
-      {error ? <div className="admin-error-bar">{error}</div> : null}
-    </div>
+      {error ? <Alert type="error" showIcon message={error} style={{ marginTop: 8 }} /> : null}
+    </Card>
   );
 }

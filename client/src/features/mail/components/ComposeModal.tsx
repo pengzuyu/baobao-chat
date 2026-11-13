@@ -2,9 +2,12 @@
  * MAI-02 写信窗（22 §3.5）：收件人/抄送/主题/正文/附件 + 发件身份
  * （本人/共享邮箱 owner 代发）。D15：附件经文件域 uploadFileSmart 上传
  * （file_id 引用复用 D06），列表可移除，send 携带 attachments。
+ * D26-O3：自研 mail-compose 壳退役，antd Modal+Form vertical 化
+ * （附件仍走隐藏 file input；发送结果 → Alert）。
  */
 import { useMemo, useRef, useState } from 'react';
-import { FileText, Paperclip, Send, X } from 'lucide-react';
+import { Alert, Form, Input, Modal, Select, Space, Tag } from 'antd';
+import { FileText, Paperclip, Send } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import type { MailAttachment, SendMailResp, SharedMailboxView } from '../model/types';
 import { uploadFileSmart } from '../../im/api/files';
@@ -55,7 +58,7 @@ export function ComposeModal({ onClose, onSend, sharedOwnerBoxes = [], onSendAs,
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
     }
-  };
+  }
   const [result, setResult] = useState<SendMailResp | null>(null);
 
   const ownerBoxes = useMemo(() => sharedOwnerBoxes.filter((b) => b.is_owner), [sharedOwnerBoxes]);
@@ -97,91 +100,96 @@ export function ComposeModal({ onClose, onSend, sharedOwnerBoxes = [], onSendAs,
   };
 
   return (
-    <div className="mail-compose__mask" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="mail-compose">
-        <div className="mail-compose__head">
-          <span>写信</span>
-          <button className="mail-compose__close" onClick={onClose} aria-label="关闭">
-            <X size={16} />
-          </button>
-        </div>
-        {result ? (
-          <div className="mail-compose__result">
-            {result.undelivered.length === 0
-              ? `已发送（${result.delivered.length} 位收件人）`
-              : `部分送达：${result.delivered.length} 成功 / ${result.undelivered.length} 未送达`}
-          </div>
-        ) : (
-          <div className="mail-compose__body">
-            <label className="mail-compose__row">
-              <span>发件身份</span>
-              <select value={identity} onChange={(e) => setIdentity(e.target.value)}>
-                <option value="me">我的邮箱</option>
-                {ownerBoxes.map((b) => (
-                  <option key={b.id} value={`shared:${b.id}`}>
-                    {b.address}（代发）
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="mail-compose__row">
-              <span>收件人</span>
-              <input value={to} onChange={(e) => setTo(e.target.value)} placeholder="多人以逗号分隔（本域地址）" autoFocus />
-            </label>
-            <label className="mail-compose__row">
-              <span>抄送</span>
-              <input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="可选" />
-            </label>
-            <label className="mail-compose__row">
-              <span>主题</span>
-              <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="必填" />
-            </label>
-            <textarea
-              className="mail-compose__text"
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="正文…"
-              rows={10}
-            />
-            {attachments.length > 0 ? (
-              <div className="mail-compose__atts" data-testid="mail-atts">
-                {attachments.map((a) => (
-                  <span key={a.file_id} className="mail-compose__att" data-testid="mail-att">
-                    <FileText size={12} /> {a.name}（{a.size > 1048576 ? `${(a.size / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(a.size / 1024))}KB`}）
-                    <button
-                      type="button"
-                      className="mail-compose__att-x"
-                      aria-label={`移除附件 ${a.name}`}
-                      onClick={() => setAttachments((prev) => prev.filter((x) => x.file_id !== a.file_id))}
-                    >
-                      <X size={11} />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            <div className="mail-compose__foot">
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                style={{ display: 'none' }}
-                onChange={(e) => void pickFiles(e.target.files)}
-                data-testid="mail-att-input"
-              />
-              <button type="button" className="mail-compose__att-btn" onClick={() => fileRef.current?.click()} disabled={uploading} data-testid="mail-att-btn">
-                <Paperclip size={13} /> {uploading ? '上传中…' : `附件${attachments.length ? `（${attachments.length}）` : ''}`}
-              </button>
-              <Button variant="secondary" loading={uploading} onClick={() => void saveAsDraft()}>
+    <Modal
+      open
+      title="写信"
+      width={640}
+      onCancel={onClose}
+      destroyOnClose
+      data-testid="mail-compose"
+      footer={
+        result
+          ? null
+          : [
+              <Button key="cancel" variant="secondary" onClick={onClose}>
+                取消
+              </Button>,
+              <Button key="draft" variant="secondary" onClick={() => void saveAsDraft()}>
                 存草稿
-              </Button>
-              <Button variant="primary" loading={sending} onClick={() => void send()} disabled={uploading}>
+              </Button>,
+              <Button key="send" loading={sending} disabled={uploading} onClick={() => void send()} data-testid="mail-send">
                 <Send size={14} /> 发送
+              </Button>,
+            ]
+      }
+    >
+      {result ? (
+        <Alert
+          type={result.undelivered.length === 0 ? 'success' : 'warning'}
+          showIcon
+          message={
+            result.undelivered.length === 0
+              ? `已发送（${result.delivered.length} 位收件人）`
+              : `部分送达：${result.delivered.length} 成功 / ${result.undelivered.length} 未送达`
+          }
+        />
+      ) : (
+        <Form layout="vertical">
+          <Form.Item label="发件身份" style={{ marginBottom: 12 }}>
+            <Select
+              value={identity}
+              onChange={setIdentity}
+              options={[
+                { value: 'me', label: '我的邮箱' },
+                ...ownerBoxes.map((b) => ({ value: `shared:${b.id}`, label: `${b.address}（代发）` })),
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="收件人" style={{ marginBottom: 12 }}>
+            <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder="多人以逗号分隔（本域地址）" autoFocus />
+          </Form.Item>
+          <Form.Item label="抄送" style={{ marginBottom: 12 }}>
+            <Input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="可选" />
+          </Form.Item>
+          <Form.Item label="主题" style={{ marginBottom: 12 }}>
+            <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="必填" />
+          </Form.Item>
+          <Form.Item label="正文" style={{ marginBottom: 12 }}>
+            <Input.TextArea value={body} onChange={(e) => setBody(e.target.value)} autoSize={{ minRows: 10, maxRows: 18 }} placeholder="正文…" />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            {/* 附件多选通用文件：保留隐藏 file input（antd Upload 留给 zip 包上传场景） */}
+            <input
+              ref={fileRef}
+              type="file"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => void pickFiles(e.target.files)}
+              data-testid="mail-att-input"
+            />
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Button variant="secondary" onClick={() => fileRef.current?.click()} disabled={uploading} data-testid="mail-att-btn">
+                <Paperclip size={13} /> {uploading ? '上传中…' : `附件${attachments.length ? `（${attachments.length}）` : ''}`}
               </Button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+              {attachments.length > 0 ? (
+                <Space size={4} wrap data-testid="mail-atts">
+                  {attachments.map((a) => (
+                    <Tag
+                      key={a.file_id}
+                      closable
+                      onClose={() => setAttachments((prev) => prev.filter((x) => x.file_id !== a.file_id))}
+                      icon={<FileText size={11} />}
+                      data-testid="mail-att"
+                    >
+                      {a.name}（{a.size > 1048576 ? `${(a.size / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(a.size / 1024))}KB`}）
+                    </Tag>
+                  ))}
+                </Space>
+              ) : null}
+            </Space>
+          </Form.Item>
+        </Form>
+      )}
+    </Modal>
   );
 }

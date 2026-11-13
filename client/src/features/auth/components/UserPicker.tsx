@@ -6,12 +6,15 @@
  * - 滚动分页：触底加载下一页（cursor=当页末条工号），搜索态与翻页叠加
  * - 键盘：↑↓ 移动高亮、Enter 选中、Esc 关闭；防抖 300ms 检索
  * - 加载失败显式报错+重试（旧服务端 404 不再伪装成「无匹配用户」）
+ * D26-O3：user-picker 自研样式退役——下拉壳/两行卡改内联 style + antd 主题 token，
+ * 重试钮换 shared Button；检索/翻页/键盘逻辑不动。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Input } from 'antd';
+import { Input, Typography, theme } from 'antd';
 import { Search } from 'lucide-react';
 import { ApiError } from '../../../shared/api/http';
+import { Button } from '../../../shared/ui/Button';
 import { apiSearchUsers, type UserCard } from '../api/auth';
 
 const PAGE_SIZE = 20;
@@ -26,6 +29,7 @@ export function UserPicker({
   onSelect: (u: UserCard | null) => void;
   disabled?: boolean;
 }) {
+  const { token } = theme.useToken();
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<UserCard[]>([]);
@@ -135,8 +139,10 @@ export function UserPicker({
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40) void loadMore();
   };
 
+  const hintStyle: React.CSSProperties = { padding: '8px 12px', fontSize: token.fontSizeSM, color: token.colorTextSecondary };
+
   return (
-    <div className="user-picker" ref={rootRef}>
+    <div style={{ position: 'relative' }} ref={rootRef}>
       <Input
         size="large"
         value={display}
@@ -145,7 +151,7 @@ export function UserPicker({
         autoComplete="off"
         allowClear={!!selected}
         data-testid="login-user-search"
-        prefix={<Search size={15} aria-hidden style={{ color: 'var(--bbw-text-3, #8f9aae)' }} />}
+        prefix={<Search size={15} aria-hidden />}
         onChange={(e) => {
           setText(e.target.value);
           if (selected) onSelect(null); // 手改文本=放弃已选，回到检索态
@@ -158,39 +164,71 @@ export function UserPicker({
         onKeyDown={onKeyDown}
       />
       {open ? (
-        <div className="user-picker__dropdown" data-testid="login-user-dropdown">
-          <div className="user-picker__list" onScroll={onScroll} ref={listRef}>
+        <div
+          data-testid="login-user-dropdown"
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            marginTop: 4,
+            zIndex: token.zIndexPopupBase,
+            background: token.colorBgElevated,
+            borderRadius: token.borderRadiusLG,
+            boxShadow: token.boxShadowSecondary,
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ maxHeight: 260, overflowY: 'auto' }} onScroll={onScroll} ref={listRef}>
             {loadError ? (
-              <div className="user-picker__empty">
+              <div style={{ ...hintStyle, display: 'flex', alignItems: 'center' }}>
                 用户列表加载失败（服务端可能未重启到新版）
-                <button type="button" className="btn btn--sm" style={{ marginLeft: 8 }} onClick={() => void search(text.trim())}>
+                <Button variant="secondary" size="small" style={{ marginLeft: 8 }} onClick={() => void search(text.trim())}>
                   重试
-                </button>
+                </Button>
               </div>
             ) : items.length === 0 && !loading ? (
-              <div className="user-picker__empty">无匹配用户（支持工号 / 拼音 / 名字）</div>
+              <div style={hintStyle}>无匹配用户（支持工号 / 拼音 / 名字）</div>
             ) : null}
             {items.map((u, i) => (
               <button
                 type="button"
                 key={u.employee_no}
                 data-idx={i}
-                className={`user-picker__card${i === activeIdx ? ' user-picker__card--active' : ''}`}
                 onMouseEnter={() => setActiveIdx(i)}
                 onClick={() => pick(u)}
                 data-testid={`login-user-option-${u.employee_no}`}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '8px 12px',
+                  border: 'none',
+                  background: i === activeIdx ? token.colorPrimaryBg : 'transparent',
+                  cursor: 'pointer',
+                }}
               >
-                <span className="user-picker__line1">
-                  <span className="user-picker__empno">{u.employee_no}</span>
-                  <span className="user-picker__name">{u.display_name}</span>
+                <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <Typography.Text code>{u.employee_no}</Typography.Text>
+                  <span style={{ fontWeight: 500 }}>{u.display_name}</span>
                 </span>
-                <span className="user-picker__org" title={u.org_path || '未挂部门'}>
+                <span
+                  style={{
+                    display: 'block',
+                    fontSize: token.fontSizeSM,
+                    color: token.colorTextTertiary,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                  title={u.org_path || '未挂部门'}
+                >
                   {u.org_path || '未挂部门'}
                 </span>
               </button>
             ))}
-            {loadingMore ? <div className="user-picker__more">加载中…</div> : null}
-            {!cursor && items.length > 0 ? <div className="user-picker__more">已到底</div> : null}
+            {loadingMore ? <div style={hintStyle}>加载中…</div> : null}
+            {!cursor && items.length > 0 ? <div style={hintStyle}>已到底</div> : null}
           </div>
         </div>
       ) : null}

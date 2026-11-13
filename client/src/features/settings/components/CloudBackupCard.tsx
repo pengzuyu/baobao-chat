@@ -5,10 +5,13 @@
  * - 备份列表：时间/大小/标题；[恢复]（票据下载 → 口令或恢复码解密 → 明文 JSON 导出）
  * - 跨设备：本机无 DEK 时凭口令/恢复码解包（envelope 随备份行取回）
  * v0.1 取舍：备份体=壳侧会话缓存快照（事件级 JSONL 导出随 RT 协议导出命令扩展，登记）。
+ * D26-O3：卡片壳→Card、备份列表→List、口令/通道控件→Input.Password/Select（settings-* 退役）。
  */
 
 import { useEffect, useState } from 'react';
+import { Alert, Card, Flex, Input, List, Select, Space, Typography } from 'antd';
 import { CloudUpload, Download, KeyRound, ShieldCheck, Trash2 } from 'lucide-react';
+import { Button } from '../../../shared/ui/Button';
 import { getErrorText } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
 import {
@@ -167,128 +170,162 @@ export function CloudBackupCard() {
   };
 
   return (
-    <div className="settings-card" data-testid="cloud-backup-card">
-      <div className="settings-card__title">
-        <ShieldCheck size={15} /> 会话云备份（端侧加密）
-      </div>
-      <p className="settings-card__desc">
+    <Card
+      size="small"
+      data-testid="cloud-backup-card"
+      title={
+        <Space size={6}>
+          <ShieldCheck size={15} /> 会话云备份（端侧加密）
+        </Space>
+      }
+    >
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
         会话数据在本机以口令派生密钥加密后上传，服务器零知识（不可读明文）；恢复码可跨设备找回。
         不含工作区文件内容（08 篇 §5.2）。租户级开关随 feature_flag 表接入（登记）。
-      </p>
+      </Typography.Paragraph>
 
-      {errText ? <div className="settings-card__error">{errText}</div> : null}
-      {note ? <div className="settings-card__note">{note}</div> : null}
+      {errText ? <Alert type="error" showIcon message={errText} style={{ marginBottom: 8 }} /> : null}
+      {note ? <Alert type="success" showIcon message={note} style={{ marginBottom: 8 }} /> : null}
 
       {!local && !recoveryCode ? (
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <div className="settings-row__name">
-              <KeyRound size={14} /> 设置备份口令
-            </div>
-            <div className="settings-row__desc">口令 ≥8 位；设置后生成恢复码（仅显示一次，请妥善保存）</div>
-            <input
-              type="password"
+        <Flex vertical gap={8} style={{ marginBottom: 8 }}>
+          <Space size={6}>
+            <KeyRound size={14} /> <span>设置备份口令</span>
+          </Space>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            口令 ≥8 位；设置后生成恢复码（仅显示一次，请妥善保存）
+          </Typography.Text>
+          <Space size={8} wrap>
+            <Input.Password
+              style={{ width: 180 }}
               placeholder="备份口令"
               value={pw}
               onChange={(e) => setPw(e.target.value)}
               autoComplete="new-password"
             />
-            <input type="password" placeholder="再次输入" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" />
-          </div>
-          <button type="button" className="btn" disabled={busy} onClick={() => void setup()}>
-            生成密钥与恢复码
-          </button>
-        </div>
+            <Input.Password
+              style={{ width: 180 }}
+              placeholder="再次输入"
+              value={pw2}
+              onChange={(e) => setPw2(e.target.value)}
+              autoComplete="new-password"
+            />
+            <Button variant="secondary" disabled={busy} onClick={() => void setup()}>
+              生成密钥与恢复码
+            </Button>
+          </Space>
+        </Flex>
       ) : null}
 
       {recoveryCode ? (
-        <div className="settings-row" data-testid="recovery-code-box">
-          <div className="settings-row__text">
-            <div className="settings-row__name">恢复码（仅此一次展示）</div>
-            <div className="settings-row__desc">
-              <code>{recoveryCode}</code>
-              <button type="button" className="btn btn--sm" onClick={() => void navigator.clipboard?.writeText(recoveryCode)}>
-                复制
-              </button>
-            </div>
-          </div>
+        <div data-testid="recovery-code-box" style={{ marginBottom: 8 }}>
+          <span>恢复码（仅此一次展示）</span>
+          <Flex align="center" gap={8} style={{ marginTop: 4 }}>
+            <Typography.Text code style={{ fontSize: 14 }}>
+              {recoveryCode}
+            </Typography.Text>
+            <Button variant="secondary" size="small" onClick={() => void navigator.clipboard?.writeText(recoveryCode)}>
+              复制
+            </Button>
+          </Flex>
         </div>
       ) : null}
 
       {local ? (
-        <>
-          <div className="settings-row">
-            <div className="settings-row__text">
-              <div className="settings-row__name">
-                <CloudUpload size={14} /> 立即备份全部会话
-              </div>
-              <div className="settings-row__desc">备份体=本机会话列表快照（v0.1；事件级导出随 RT 协议扩展）</div>
-            </div>
-            <button type="button" className="btn" disabled={busy} onClick={() => void backupNow()}>
-              {busy ? '处理中…' : '备份'}
-            </button>
-          </div>
-          <div className="settings-row">
-            <div className="settings-row__text">
-              <div className="settings-row__name">恢复密钥（跨设备/清缓存后）</div>
-              <div className="settings-row__desc">
-                <select value={restoreChannel} onChange={(e) => setRestoreChannel(e.target.value as 'password' | 'recovery')}>
-                  <option value="password">口令</option>
-                  <option value="recovery">恢复码</option>
-                </select>
-                <input
-                  type="password"
-                  placeholder={restoreChannel === 'password' ? '备份口令' : '恢复码（XXXX-XXXX-…）'}
-                  value={restoreSecret}
-                  onChange={(e) => setRestoreSecret(e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <List size="small">
+            <List.Item actions={[<Button key="backup" variant="secondary" disabled={busy} onClick={() => void backupNow()}>{busy ? '处理中…' : '备份'}</Button>]}>
+              <List.Item.Meta
+                title={
+                  <Space size={6}>
+                    <CloudUpload size={14} /> 立即备份全部会话
+                  </Space>
+                }
+                description="备份体=本机会话列表快照（v0.1；事件级导出随 RT 协议扩展）"
+              />
+            </List.Item>
+            <List.Item>
+              <List.Item.Meta
+                title="恢复密钥（跨设备/清缓存后）"
+                description={
+                  <Space size={8} wrap>
+                    <Select
+                      size="small"
+                      style={{ width: 100 }}
+                      value={restoreChannel}
+                      onChange={(v) => setRestoreChannel(v as 'password' | 'recovery')}
+                      options={[
+                        { value: 'password', label: '口令' },
+                        { value: 'recovery', label: '恢复码' },
+                      ]}
+                    />
+                    <Input.Password
+                      size="small"
+                      style={{ width: 200 }}
+                      placeholder={restoreChannel === 'password' ? '备份口令' : '恢复码（XXXX-XXXX-…）'}
+                      value={restoreSecret}
+                      onChange={(e) => setRestoreSecret(e.target.value)}
+                    />
+                  </Space>
+                }
+              />
+            </List.Item>
+          </List>
+
           {items === null ? (
-            <div className="settings-row__desc">加载备份列表…</div>
+            <Typography.Text type="secondary">加载备份列表…</Typography.Text>
           ) : items.length === 0 ? (
-            <div className="settings-row__desc">暂无备份</div>
+            <Typography.Text type="secondary">暂无备份</Typography.Text>
           ) : (
-            <div className="settings-card__list">
-              {items.map((it) => (
-                <div className="settings-row" key={it.id} data-testid="backup-item">
-                  <div className="settings-row__text">
-                    <div className="settings-row__name">{it.title || it.localSessionId}</div>
-                    <div className="settings-row__desc">
-                      {new Date(it.createdAt).toLocaleString('zh-CN', { hour12: false })} · {formatBytes(it.size)} · {it.encAlg}
-                    </div>
-                  </div>
-                  <div className="settings-row__ops">
-                    <button type="button" className="btn btn--sm" disabled={busy} onClick={() => void restore(it)} title="解密并导出 JSON">
-                      <Download size={13} /> 恢复
-                    </button>
-                    <button type="button" className="btn btn--sm" disabled={busy} onClick={() => void remove(it.id)}>
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <List
+              size="small"
+              split
+              dataSource={items}
+              renderItem={(it) => (
+                <List.Item
+                  data-testid="backup-item"
+                  actions={[
+                    <Button
+                      key="restore"
+                      variant="secondary"
+                      size="small"
+                      disabled={busy}
+                      onClick={() => void restore(it)}
+                      title="解密并导出 JSON"
+                      icon={<Download size={12} />}
+                    >
+                      恢复
+                    </Button>,
+                    <Button key="del" variant="secondary" size="small" disabled={busy} onClick={() => void remove(it.id)} icon={<Trash2 size={12} />} />,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={it.title || it.localSessionId}
+                    description={`${new Date(it.createdAt).toLocaleString('zh-CN', { hour12: false })} · ${formatBytes(it.size)} · ${it.encAlg}`}
+                  />
+                </List.Item>
+              )}
+            />
           )}
-          <div className="settings-row">
-            <div className="settings-row__desc">
+
+          <Flex align="center" gap={8} wrap>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               本机已缓存密钥（备份免输口令）。清除本机缓存：
-              <button
-                type="button"
-                className="btn btn--sm"
-                onClick={() => {
-                  clearLocalBackupKeys();
-                  setLocal(null);
-                  setNote('本机密钥已清除；下次恢复需口令或恢复码');
-                }}
-              >
-                清除
-              </button>
-            </div>
-          </div>
-        </>
+            </Typography.Text>
+            <Button
+              variant="secondary"
+              size="small"
+              onClick={() => {
+                clearLocalBackupKeys();
+                setLocal(null);
+                setNote('本机密钥已清除；下次恢复需口令或恢复码');
+              }}
+            >
+              清除
+            </Button>
+          </Flex>
+        </Space>
       ) : null}
-    </div>
+    </Card>
   );
 }

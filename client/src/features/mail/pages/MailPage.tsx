@@ -1,9 +1,13 @@
 /**
  * MAI-01 邮箱主页（22 §3.5 三栏）：文件夹树（本人+共享邮箱）→ 列表
  * （过滤/翻页）→ 阅读 pane；顶栏搜索（MAI-04 内嵌）+ 写信 + 设置。
+ * D26-O3：mail-* 自研结构退役——左栏 Menu+Progress 配额、过滤 chip→Segmented、
+ * 邮件列表→List、阅读 pane Typography 化；布局走内联 flex/grid + theme token。
  */
 import { useMemo, useState } from 'react';
-import { Archive, FileText, Inbox, Mail, Pencil, Search, Send, Settings, Star, Trash2, Users } from 'lucide-react';
+import { Badge, Button as AntdButton, Flex, Input, List, Menu, Progress, Segmented, Space, theme, Typography } from 'antd';
+import type { MenuProps } from 'antd';
+import { Archive, FileText, Inbox, Mail, Pencil, Search, Send, Settings, Star, Trash2, Users, X } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { StateView } from '../../../shared/ui/StateView';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
@@ -53,6 +57,7 @@ const FILTERS: { key: string; label: string }[] = [
 ];
 
 export function MailPage() {
+  const { token } = theme.useToken();
   // 左栏拖拽调宽（grid 首列；全站左侧栏统一能力）
   const mailSplit = useSplitWidth('mail-tree', 216, 170, 340);
   const [folder, setFolder] = useState('inbox');
@@ -127,160 +132,262 @@ export function MailPage() {
     return detail.data ?? cached ?? null;
   }, [selected, detail.data, list]);
 
+  // 左栏文件夹树（antd Menu group）：我的邮箱 + 部门邮箱（共享）
+  const menuItems: MenuProps['items'] = useMemo(
+    () => [
+      {
+        key: 'group-mine',
+        type: 'group' as const,
+        label: '我的邮箱',
+        children: folders.map((f) => ({
+          key: f.name,
+          icon: FOLDER_ICONS[f.name] ?? <Archive size={14} />,
+          label: (
+            <Flex align="center" justify="space-between" style={{ minWidth: 0 }}>
+              <span>{FOLDER_LABEL[f.name] ?? f.name}</span>
+              {f.unread_count > 0 ? <Badge count={f.unread_count} size="small" /> : null}
+            </Flex>
+          ),
+        })),
+      },
+      ...(shared.data ?? []).length > 0
+        ? [
+            {
+              key: 'group-shared',
+              type: 'group' as const,
+              label: (
+                <Space size={4}>
+                  <Users size={12} /> 部门邮箱（共享）
+                </Space>
+              ),
+              children: (shared.data ?? []).map((b) => ({
+                key: `shared:${b.id}`,
+                icon: <Inbox size={14} />,
+                title: b.address,
+                label: (
+                  <Flex align="center" justify="space-between" style={{ minWidth: 0 }}>
+                    <span>{b.address.split('@')[0]}</span>
+                    {b.unread > 0 ? <Badge count={b.unread} size="small" /> : null}
+                  </Flex>
+                ),
+              })),
+            },
+          ]
+        : [],
+    ],
+    [folders, shared.data],
+  );
+
+  const onMenuClick: MenuProps['onClick'] = ({ key }) => {
+    setSelected(null);
+    setSearching(false);
+    if (key.startsWith('shared:')) setSharedSel(key);
+    else {
+      setSharedSel(null);
+      setFolder(key);
+    }
+  };
+
   return (
-    <div className="mail-page" style={{ gridTemplateColumns: `${mailSplit.width}px 5px 340px 1fr` }}>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `${mailSplit.width}px 5px 340px 1fr`,
+        height: '100%',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
       {/* 文件夹树（左栏） */}
-      <aside className="mail-tree">
-        <div className="mail-tree__head">
+      <aside
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          padding: '12px 10px',
+          minHeight: 0,
+          borderRight: `1px solid ${token.colorBorderSecondary}`,
+        }}
+      >
+        <Flex align="center" gap={6}>
           <Mail size={15} />
-          <span className="mail-tree__addr">{summary.data?.address ?? '…'}</span>
-          <button className="mail-tree__gear" onClick={() => setSettingsOpen(true)} aria-label="邮箱设置">
-            <Settings size={15} />
-          </button>
-        </div>
-        <Button variant="primary" className="mail-tree__compose" onClick={() => { setReplyTo(null); setComposeOpen(true); }}>
+          <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }} title={summary.data?.address}>
+            {summary.data?.address ?? '…'}
+          </Typography.Text>
+          <AntdButton
+            type="text"
+            size="small"
+            icon={<Settings size={15} />}
+            onClick={() => setSettingsOpen(true)}
+            aria-label="邮箱设置"
+          />
+        </Flex>
+        <Button style={{ width: '100%' }} onClick={() => { setReplyTo(null); setComposeOpen(true); }}>
           <Pencil size={14} /> 写信
         </Button>
-        <nav className="mail-tree__folders">
-          <div className="mail-tree__group">我的邮箱</div>
-          {folders.map((f) => (
-            <button
-              key={f.name}
-              className={`mail-tree__folder${!sharedSel && folder === f.name ? ' is-active' : ''}`}
-              onClick={() => { setSharedSel(null); setFolder(f.name); setSelected(null); setSearching(false); }}
-            >
-              {FOLDER_ICONS[f.name] ?? <Archive size={14} />}
-              <span>{FOLDER_LABEL[f.name] ?? f.name}</span>
-              {f.unread_count > 0 && <em>{f.unread_count}</em>}
-            </button>
-          ))}
-          {(shared.data ?? []).length > 0 && (
-            <>
-              <div className="mail-tree__group">
-                <Users size={12} /> 部门邮箱（共享）
-              </div>
-              {(shared.data ?? []).map((b) => (
-                <button
-                  key={b.id}
-                  className={`mail-tree__folder${sharedSel === `shared:${b.id}` ? ' is-active' : ''}`}
-                  onClick={() => { setSharedSel(`shared:${b.id}`); setSelected(null); setSearching(false); }}
-                  title={b.address}
-                >
-                  <Inbox size={14} />
-                  <span>{b.address.split('@')[0]}</span>
-                  {b.unread > 0 && <em>{b.unread}</em>}
-                </button>
-              ))}
-            </>
-          )}
-        </nav>
-        <div className="mail-tree__quota">
-          <div className="mail-tree__quota-bar">
-            <i style={{ width: `${quotaPct}%` }} />
-          </div>
-          <span>{quotaPct}% 已用（{summary.data ? (summary.data.quota_used / (1 << 20)).toFixed(0) : '…'} MB / 5 GB）</span>
+        <Menu
+          mode="inline"
+          items={menuItems}
+          selectedKeys={[sharedSel ?? folder]}
+          onClick={onMenuClick}
+          style={{ flex: 1, overflowY: 'auto', minHeight: 0, borderInlineEnd: 'none', minWidth: 0 }}
+        />
+        <div style={{ padding: '0 4px' }}>
+          <Progress percent={quotaPct} showInfo={false} size="small" style={{ marginBottom: 4 }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {quotaPct}% 已用（{summary.data ? (summary.data.quota_used / (1 << 20)).toFixed(0) : '…'} MB / 5 GB）
+          </Typography.Text>
         </div>
       </aside>
       <SplitHandle bind={mailSplit.bind} style={{ marginLeft: 0 }} />
 
       {/* 列表（中栏） */}
-      <section className="mail-list">
-        <div className="mail-list__toolbar">
-          <div className="mail-list__search">
-            <Search size={14} />
-            <input
-              value={searchQ}
-              onChange={(e) => setSearchQ(e.target.value)}
-              onFocus={() => setSearching(true)}
-              placeholder="搜索邮件（主题/发件人/正文）"
+      <section
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+          borderRight: `1px solid ${token.colorBorderSecondary}`,
+        }}
+      >
+        <Flex align="center" gap={8} style={{ padding: 10, borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+          <Input
+            prefix={<Search size={14} />}
+            allowClear
+            style={{ flex: 1, minWidth: 0 }}
+            value={searchQ}
+            onChange={(e) => setSearchQ(e.target.value)}
+            onFocus={() => setSearching(true)}
+            placeholder="搜索邮件（主题/发件人/正文）"
+          />
+          {searching && (
+            <AntdButton
+              type="text"
+              size="small"
+              icon={<X size={14} />}
+              onClick={() => { setSearching(false); setSearchQ(''); }}
+              aria-label="退出搜索"
             />
-            {searching && (
-              <button onClick={() => { setSearching(false); setSearchQ(''); }} aria-label="退出搜索">
-                ×
-              </button>
-            )}
-          </div>
-          {!searching && !sharedSel && (
-            <div className="mail-list__filters">
-              {FILTERS.map((f) => (
-                <button
-                  key={f.key}
-                  className={filter === f.key ? 'is-active' : ''}
-                  onClick={() => setFilter(f.key)}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
           )}
-        </div>
+          {!searching && !sharedSel && (
+            <Segmented
+              value={filter}
+              onChange={(v) => setFilter(v as string)}
+              options={FILTERS.map((f) => ({ value: f.key, label: f.label }))}
+            />
+          )}
+        </Flex>
         <StateView state={listState === 'ok' && list.length === 0 ? 'empty' : listState} emptyText={searching ? '无匹配邮件' : '此文件夹为空'}>
-          <ul className="mail-list__items">
-            {list.map((m) => (
-              <li
-                key={m.id}
-                className={`mail-item${selected === m.id ? ' is-active' : ''}${(m.flags & 1) === 0 ? ' is-unread' : ''}`}
-                onClick={() => openMessage(m)}
-              >
-                <div className="mail-item__main">
-                  <span className="mail-item__from">{m.from_addr.split('@')[0]}</span>
-                  <span className="mail-item__subject">{m.subject}</span>
-                  {m.has_attachment && <small className="mail-item__att">📎</small>}
-                </div>
-                <div className="mail-item__meta">
-                  <time>{new Date(m.received_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>
-                </div>
-                <div className="mail-item__snippet">{m.snippet}</div>
-              </li>
-            ))}
-          </ul>
+          <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            <List
+              dataSource={list}
+              rowKey="id"
+              renderItem={(m) => {
+                const unread = (m.flags & 1) === 0;
+                return (
+                  <List.Item
+                    onClick={() => openMessage(m)}
+                    style={{
+                      padding: '10px 12px',
+                      cursor: 'pointer',
+                      display: 'block',
+                      background: selected === m.id ? token.colorPrimaryBg : undefined,
+                    }}
+                  >
+                    <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+                      <Typography.Text strong={unread} ellipsis style={{ flexShrink: 0, maxWidth: 96 }}>
+                        {m.from_addr.split('@')[0]}
+                      </Typography.Text>
+                      <Typography.Text strong={unread} ellipsis style={{ flex: 1, minWidth: 0 }}>
+                        {m.subject}
+                      </Typography.Text>
+                      {m.has_attachment && <span style={{ fontSize: 12 }}>📎</span>}
+                      <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
+                        {new Date(m.received_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </Typography.Text>
+                    </Flex>
+                    <Typography.Text type="secondary" ellipsis style={{ fontSize: 12, display: 'block', maxWidth: '100%' }}>
+                      {m.snippet}
+                    </Typography.Text>
+                  </List.Item>
+                );
+              }}
+            />
+          </div>
         </StateView>
       </section>
 
       {/* 阅读（右栏） */}
-      <section className="mail-view">
+      <section style={{ minWidth: 0, display: 'flex', minHeight: 0 }}>
         {shownDetail ? (
-          <article className="mail-view__inner">
-            <header className="mail-view__head">
-              <h3>{shownDetail.subject}</h3>
-              <div className="mail-view__actions">
-                <button
-                  className={(shownDetail.flags & 2) !== 0 ? 'is-starred' : ''}
+          <article style={{ flex: 1, padding: '20px 24px', overflowY: 'auto', minWidth: 0 }}>
+            <Flex align="flex-start" gap={12}>
+              <Typography.Title level={5} style={{ flex: 1, margin: 0, minWidth: 0 }}>
+                {shownDetail.subject}
+              </Typography.Title>
+              <Space size={0}>
+                <AntdButton
+                  type="text"
+                  size="small"
+                  icon={<Star size={15} color={(shownDetail.flags & 2) !== 0 ? '#f7ba1e' : undefined} />}
                   onClick={() => setStar.mutate({ id: shownDetail.id, on: (shownDetail.flags & 2) === 0 })}
                   aria-label="星标"
-                >
-                  <Star size={15} />
-                </button>
-                <button onClick={() => { setReplyTo({ addr: shownDetail.from_addr, subject: shownDetail.subject }); setComposeOpen(true); }} aria-label="回复">
+                />
+                <Button variant="secondary" size="small" onClick={() => { setReplyTo({ addr: shownDetail.from_addr, subject: shownDetail.subject }); setComposeOpen(true); }}>
                   回复
-                </button>
-                <button onClick={() => { move.mutate({ id: shownDetail.id, folder: 'trash' }); setSelected(null); }} aria-label="移入垃圾">
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </header>
-            <div className="mail-view__meta">
-              <span>发件人：{shownDetail.from_addr}</span>
-              <span>收件人：{shownDetail.to_addrs.join('、')}</span>
-              <time>{new Date(shownDetail.received_at).toLocaleString('zh-CN')}</time>
+                </Button>
+                <AntdButton
+                  type="text"
+                  size="small"
+                  icon={<Trash2 size={15} />}
+                  onClick={() => { move.mutate({ id: shownDetail.id, folder: 'trash' }); setSelected(null); }}
+                  aria-label="移入垃圾"
+                />
+              </Space>
+            </Flex>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                margin: '12px 0',
+                paddingBottom: 12,
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+              }}
+            >
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>发件人：{shownDetail.from_addr}</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>收件人：{shownDetail.to_addrs.join('、')}</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {new Date(shownDetail.received_at).toLocaleString('zh-CN')}
+              </Typography.Text>
             </div>
             {(shownDetail.attachments ?? []).length > 0 && (
-              <ul className="mail-view__atts">
-                {shownDetail.attachments.map((a) => (
-                  <li key={a.file_id}>
-                    <FileText size={13} /> {a.name}
-                    <small>（{(a.size / 1024).toFixed(0)} KB · 存文件域阶段二）</small>
-                  </li>
-                ))}
-              </ul>
+              <List
+                size="small"
+                style={{ marginBottom: 12 }}
+                dataSource={shownDetail.attachments}
+                rowKey="file_id"
+                renderItem={(a) => (
+                  <List.Item style={{ padding: '4px 0', fontSize: 12 }}>
+                    <Space size={6}>
+                      <FileText size={13} /> {a.name}
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        （{(a.size / 1024).toFixed(0)} KB · 存文件域阶段二）
+                      </Typography.Text>
+                    </Space>
+                  </List.Item>
+                )}
+              />
             )}
-            <pre className="mail-view__body">{shownDetail.body ?? shownDetail.snippet}</pre>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, fontSize: 14, lineHeight: 1.7, fontFamily: 'inherit' }}>
+              {shownDetail.body ?? shownDetail.snippet}
+            </pre>
           </article>
         ) : (
-          <div className="mail-view__placeholder">
+          <Flex flex={1} vertical align="center" justify="center" gap={10}>
             <Mail size={40} strokeWidth={1.2} />
-            <p>选择一封邮件开始阅读</p>
-          </div>
+            <Typography.Text type="secondary">选择一封邮件开始阅读</Typography.Text>
+          </Flex>
         )}
       </section>
 
