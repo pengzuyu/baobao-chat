@@ -94,12 +94,13 @@ function DefaultModelCard() {
   const all = [...shared.map((p) => ({ ...p, mine: false })), ...mine.map((p) => ({ ...p, mine: true }))];
   const models = all.find((p) => p.id === provId)?.models ?? [];
 
-  const save = async () => {
+  /** 选择即存（无保存按钮）：org 切换即存；provider 需供应商+模型齐备才落库（半截引用会被路由校验拒） */
+  const persist = async (next: AIDefaultSetting) => {
     setSaving(true);
     setError('');
     setSaved(false);
     try {
-      await patchAIDefault(mode === 'org' ? { mode: 'org' } : { mode: 'provider', providerId: provId, model });
+      await patchAIDefault(next);
       setSaved(true);
     } catch (err) {
       setError(errText(err, '保存失败'));
@@ -108,26 +109,40 @@ function DefaultModelCard() {
     }
   };
 
+  const changeMode = (v: 'org' | 'provider') => {
+    setMode(v);
+    setSaved(false);
+    if (v === 'org') {
+      void persist({ mode: 'org' });
+      return;
+    }
+    let pid = provId;
+    if (!pid) {
+      const first = all[0];
+      if (first) {
+        pid = first.id;
+        setProvId(pid);
+      }
+    }
+    // 已有完整且仍有效的配对才立即存，否则等模型选完
+    if (pid && model && all.find((p) => p.id === pid)?.models.some((m) => m.id === model)) {
+      void persist({ mode: 'provider', providerId: pid, model });
+    }
+  };
+
   return (
     <div className="settings-card" data-testid="agent-default-model">
       <div className="settings-row">
         <div className="settings-row__text">
           <div className="settings-row__name">默认模型</div>
-          <div className="settings-row__desc">新会话使用的模型；未指定时跟随公司默认（快/强档位自动路由）</div>
+          <div className="settings-row__desc">新会话使用的模型；未指定时跟随公司默认（快/强档位自动路由），选择后自动保存</div>
         </div>
         <Select
           size="small"
           style={{ width: 170 }}
           loading={!loaded}
           value={mode}
-          onChange={(v) => {
-            setMode(v);
-            setSaved(false);
-            if (v === 'provider' && !provId) {
-              const first = all[0];
-              if (first) setProvId(first.id);
-            }
-          }}
+          onChange={changeMode}
           options={[
             { value: 'org', label: '跟随公司默认' },
             { value: 'provider', label: '指定供应商与模型' },
@@ -160,6 +175,7 @@ function DefaultModelCard() {
             onChange={(v) => {
               setModel(v);
               setSaved(false);
+              if (provId && v) void persist({ mode: 'provider', providerId: provId, model: v });
             }}
             disabled={!provId}
             options={models.map((m) => ({ value: m.id, label: m.label ? `${m.label}（${m.id}）` : m.id }))}
@@ -167,10 +183,15 @@ function DefaultModelCard() {
         </div>
       ) : null}
       <div className="settings-row">
-        {error ? <span className="settings-form-error">{error}</span> : saved ? <span className="settings-row__desc">已保存</span> : null}
-        <Button onClick={() => void save()} loading={saving} disabled={mode === 'provider' && (!provId || !model)}>
-          保存
-        </Button>
+        {saving ? (
+          <span className="settings-row__desc">保存中…</span>
+        ) : error ? (
+          <span className="settings-form-error">{error}</span>
+        ) : saved ? (
+          <span className="settings-row__desc">已保存 ✓</span>
+        ) : mode === 'provider' && (!provId || !model) ? (
+          <span className="settings-row__desc">选好供应商与模型后自动保存</span>
+        ) : null}
       </div>
     </div>
   );

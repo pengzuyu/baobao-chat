@@ -1,14 +1,15 @@
 /**
  * AI 供应商治理（0023 表驱动多供应商，路由 /admin/ai-providers）：
  * - 供应商（公司级）CRUD：名称/BaseURL/密钥（服务端 KMS 加密落库，回显仅掩码）/
- *   模型清单（探活从上游 /models 拉取 + 手动补充）
+ *   模型清单（探活从上游 /models 拉取 + 手动补充）——新增/编辑走右侧抽屉
  * - 默认模型路由：fast/strong 各配主备（priority 逐候选降级，全尽 8051）
- * - 六态：列表独立 loading/empty/error/forbidden/offline；写失败行内提示（degraded）
+ * - 六态：列表独立 loading/empty/error/forbidden/offline；行操作失败不认领 → 全局 toast 兜底
  * 蓝图：19 篇 §3.1/§3.3/§6.5 v0.1 子集。
  */
 
 import { useMemo, useState } from 'react';
-import { PlugZap, Plus, Save, Trash2, Undo2 } from 'lucide-react';
+import { Drawer } from 'antd';
+import { PlugZap, Plus, Save, Trash2 } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
@@ -53,6 +54,7 @@ function ProvidersPanel() {
   const connStatus = useConnectionStore((s) => s.status);
 
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [open, setOpen] = useState(false); // 新增/编辑抽屉
   const [formError, setFormError] = useState('');
   const [probing, setProbing] = useState(false);
   const [connResult, setConnResult] = useState<{ ok: boolean; ms: number; models: number } | null>(null); // 测试连接/探测结果
@@ -145,10 +147,20 @@ function ProvidersPanel() {
         onSuccess: () => {
           setForm(emptyForm);
           setEditingKey(false);
+          setOpen(false);
         },
         onError: (err) => setFormError(err instanceof ApiError ? err.message : '保存失败'), // 服务端具体报错透传（http.ts 已优先取 message）
       },
     );
+  };
+
+  /** 新增：表单复位后开抽屉 */
+  const openCreate = () => {
+    setForm(emptyForm);
+    setEditingKey(false);
+    setFormError('');
+    setConnResult(null);
+    setOpen(true);
   };
 
   const edit = (p: AIProvider) => {
@@ -164,17 +176,16 @@ function ProvidersPanel() {
     setEditingKey(false);
     setFormError('');
     setConnResult(null);
+    setOpen(true);
   };
 
+  // 行内启停/删除失败不在此认领——ApiError 未认领由全局 toast 兜底（main.tsx），就近可见
   const toggleStatus = (p: AIProvider) => {
-    save.mutate(
-      { id: p.id, input: { name: p.name, status: p.status === 1 ? 2 : 1 } },
-      { onError: (err) => setFormError(err instanceof ApiError ? err.message || getErrorText(err.code) : '操作失败') },
-    );
+    save.mutate({ id: p.id, input: { name: p.name, status: p.status === 1 ? 2 : 1 } });
   };
 
   const remove = (p: AIProvider) => {
-    del.mutate(p.id, { onError: (err) => setFormError(err instanceof ApiError ? err.message || getErrorText(err.code) : '删除失败') });
+    del.mutate(p.id);
   };
 
   return (
@@ -183,59 +194,10 @@ function ProvidersPanel() {
         <div className="admin-panel__title">
           供应商（公司级）
           <span className="admin-panel__meta">OpenAI 兼容（GLM/Qwen/DeepSeek/vLLM）· 密钥 AES-256-GCM 加密落库</span>
-        </div>
-        <div className="admin-word-form admin-word-form--top">
-          <select className="bbw-input" style={{ width: 150 }} value={form.vendor} onChange={(e) => pickVendor(e.target.value)} data-testid="ai-prov-vendor">
-            {PROVIDER_PRESETS.map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          <input className="bbw-input" style={{ width: 150 }} value={form.name} placeholder={form.id ? '名称' : '名称（随厂商自动填）'} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} data-testid="ai-prov-name" />
-          <input className="bbw-input" style={{ width: 250 }} value={form.baseUrl} placeholder={form.vendor === 'custom' ? 'Base URL（https://…/v1）' : 'Base URL（随厂商自动填，可改）'} onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))} data-testid="ai-prov-base" />
-          <input
-            className="bbw-input"
-            style={{ width: 200 }}
-            type="password"
-            value={form.apiKey}
-            placeholder={form.id && !editingKey ? '密钥已保存（不改则留空）' : 'API Key'}
-            onChange={(e) => {
-              setEditingKey(true);
-              setForm((f) => ({ ...f, apiKey: e.target.value }));
-            }}
-            data-testid="ai-prov-key"
-          />
-          <Button variant="secondary" onClick={() => void probe()} loading={probing} data-testid="ai-prov-probe">
-            <PlugZap size={13} /> 测试连接并拉取模型
+          <Button style={{ marginLeft: 'auto' }} onClick={openCreate} data-testid="ai-prov-new">
+            <Plus size={13} /> 新增供应商
           </Button>
-          <Button onClick={submit} loading={save.isPending} data-testid="ai-prov-save">
-            {form.id ? <Save size={13} /> : <Plus size={13} />} {form.id ? '保存修改' : '新增供应商'}
-          </Button>
-          {form.id ? (
-            <Button variant="secondary" onClick={() => { setForm(emptyForm); setEditingKey(false); setConnResult(null); }}>
-              <Undo2 size={13} /> 取消
-            </Button>
-          ) : null}
         </div>
-        {connResult ? (
-          <div className="admin-page__meta" style={{ marginBottom: 8 }} data-testid="ai-prov-conn">
-            ✅ 连接成功（{connResult.ms}ms · 上游 {connResult.models} 个模型）
-          </div>
-        ) : null}
-        {/* 模型清单：探测候选点选 + 手动输入任意 ID（上游 /models 不全，如智谱免费档须手填） */}
-        <ProviderModelsEditor
-          models={form.models}
-          candidates={form.candidates}
-          onToggle={toggleModel}
-          onAdd={(id) => setForm((f) => ({ ...f, models: [...f.models, id] }))}
-          testId="ai-prov-models"
-        />
-        {formError ? (
-          <div className="admin-error-bar" data-testid="ai-prov-error">
-            {formError}
-          </div>
-        ) : null}
         <StateView
           state={state}
           skeleton={<SkeletonList count={4} />}
@@ -291,6 +253,75 @@ function ProvidersPanel() {
           </table>
         </StateView>
       </section>
+      {/* 新增/编辑抽屉：字段纵向排布，关闭即复位（destroyOnClose 清手填输入态） */}
+      <Drawer
+        title={form.id ? `编辑供应商 #${form.id}` : '新增供应商'}
+        open={open}
+        onClose={() => setOpen(false)}
+        width={520}
+        destroyOnClose
+        footer={
+          <div className="ai-prov-form__footer">
+            <Button onClick={submit} loading={save.isPending} data-testid="ai-prov-save">
+              <Save size={13} /> {form.id ? '保存修改' : '创建'}
+            </Button>
+            <Button variant="secondary" onClick={() => setOpen(false)}>
+              取消
+            </Button>
+          </div>
+        }
+      >
+        <div className="ai-prov-form">
+          <label htmlFor="ai-prov-vendor">厂商预设（自动填名称与 Base URL，可改）</label>
+          <select id="ai-prov-vendor" className="bbw-input" value={form.vendor} onChange={(e) => pickVendor(e.target.value)} data-testid="ai-prov-vendor">
+            {PROVIDER_PRESETS.map((p) => (
+              <option key={p.key} value={p.key}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="ai-prov-name">名称</label>
+          <input id="ai-prov-name" className="bbw-input" value={form.name} placeholder="名称（随厂商自动填）" onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} data-testid="ai-prov-name" />
+          <label htmlFor="ai-prov-base">Base URL（OpenAI 兼容根地址）</label>
+          <input id="ai-prov-base" className="bbw-input" value={form.baseUrl} placeholder={form.vendor === 'custom' ? 'https://…/v1' : '随厂商自动填，可改'} onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))} data-testid="ai-prov-base" />
+          <label htmlFor="ai-prov-key">API Key（内网无鉴权上游可留空）</label>
+          <input
+            id="ai-prov-key"
+            className="bbw-input"
+            type="password"
+            value={form.apiKey}
+            placeholder={form.id && !editingKey ? '密钥已保存（不改则留空）' : 'API Key'}
+            onChange={(e) => {
+              setEditingKey(true);
+              setForm((f) => ({ ...f, apiKey: e.target.value }));
+            }}
+            data-testid="ai-prov-key"
+          />
+          <div className="ai-prov-form__probe">
+            <Button variant="secondary" onClick={() => void probe()} loading={probing} data-testid="ai-prov-probe">
+              <PlugZap size={13} /> 测试连接并拉取模型
+            </Button>
+            {connResult ? (
+              <span className="admin-page__meta" data-testid="ai-prov-conn">
+                ✅ 连接成功（{connResult.ms}ms · 上游 {connResult.models} 个模型）
+              </span>
+            ) : null}
+          </div>
+          <label>模型清单（探测点选或手动输入——上游清单常不全，如智谱免费 Flash 系须手填）</label>
+          <ProviderModelsEditor
+            models={form.models}
+            candidates={form.candidates}
+            onToggle={toggleModel}
+            onAdd={(id) => setForm((f) => ({ ...f, models: [...f.models, id] }))}
+            testId="ai-prov-models"
+          />
+          {formError ? (
+            <div className="admin-error-bar" data-testid="ai-prov-error">
+              {formError}
+            </div>
+          ) : null}
+        </div>
+      </Drawer>
     </>
   );
 }
