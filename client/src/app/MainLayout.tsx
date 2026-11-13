@@ -133,12 +133,14 @@ export function MainLayout() {
     <div className="app-shell">
       <nav className="nav-rail">
         <div className="nav-rail__logo" title="BaobaoWork">
-          <Logo size={30} />
+          <Logo size={26} />
         </div>
         <div className="nav-rail__divider" />
         {navItems.map((item) => (
           <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav-rail__item${isActive ? ' nav-rail__item--active' : ''}`} title={item.label}>
-            <item.icon size={20} strokeWidth={1.8} />
+            <item.icon size={19} strokeWidth={1.8} />
+            {/* 图标下文字（2026-11-13 用户反馈：纯图标不可辨识） */}
+            <span className="nav-rail__label">{item.label}</span>
             {/* 消息项未读总数徽标 */}
             {item.to === '/im' && totalUnread > 0 ? <span className="nav-rail__badge">{totalUnread > 99 ? '99+' : totalUnread}</span> : null}
             {/* 通知中心未读徽标（99+ 封顶同规则） */}
@@ -150,7 +152,8 @@ export function MainLayout() {
         {/* 管理入口：仅 admin:* 权限可见（perm.changed 动态显隐，D01 §4.1） */}
         {isAdmin ? (
           <NavLink to="/admin" className={({ isActive }) => `nav-rail__item${isActive ? ' nav-rail__item--active' : ''}`} title="管理">
-            <Gauge size={20} strokeWidth={1.8} />
+            <Gauge size={19} strokeWidth={1.8} />
+            <span className="nav-rail__label">管理</span>
           </NavLink>
         ) : null}
         <div className="nav-rail__spacer" />

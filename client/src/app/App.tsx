@@ -14,8 +14,7 @@ import { ChatPage } from '../features/im/pages/ChatPage';
 import { FavoritesPage } from '../features/im/pages/FavoritesPage';
 import { NotificationCenterPage } from '../features/im/pages/NotificationCenterPage';
 import { ContactsPage } from '../features/contacts/pages/ContactsPage';
-import { ArticlePage } from '../features/kb/pages/ArticlePage';
-import { KbHomePage } from '../features/kb/pages/KbHomePage';
+import { KbShellPage } from '../features/kb/pages/KbShellPage';
 import { MyArticlesPage } from '../features/kb/pages/MyArticlesPage';
 import { SearchPage } from '../features/kb/pages/SearchPage';
 import { SpaceBrowsePage } from '../features/kb/pages/SpaceBrowsePage';
@@ -249,9 +248,9 @@ export function App() {
         <Route path="/notifications" element={<NotificationCenterPage />} />
         <Route path="/im/notifications" element={<Navigate to="/notifications" replace />} />
         {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
-        <Route path="/kb" element={<KbHomePage />} />
+        <Route path="/kb" element={<KbShellPage />} />
         <Route path="/kb/search" element={<SearchPage />} />
-        <Route path="/kb/d/:docId" element={<ArticlePage />} />
+        <Route path="/kb/d/:docId" element={<KbShellPage />} />
         <Route path="/kb/s/:spaceId" element={<SpaceBrowsePage />} />
         <Route path="/kb/my" element={<MyArticlesPage />} />
         {/* 邮箱（22 篇 MAI-01~04：三栏/写信/设置/搜索） */}

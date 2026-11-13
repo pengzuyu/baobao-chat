@@ -1,12 +1,11 @@
 /**
- * 文章阅读页（D24）：markdown 全文渲染（chunk 拼接+MarkdownText 增强）+打开即 view 上报
- * （作者本人服务端短路）+大纲锚条+维度徽章/作者/时间/浏览量；砍摄入状态/重摄入/分块流水
- * （管线是基础设施，读者无感）。「引用到 Agent 输入框」bus 桥保留（成本极低且与 AI 定位呼应）。
+ * 文章内容面板（D24 真机修正轮 2026-11-13）：KbShell tab 容器内渲染——
+ * 标题/维度徽章/作者/创建·更新时间/浏览量 + 大纲锚条 + markdown 全文；
+ * 打开即 view 上报（作者本人服务端短路；日去重幂等）。由 pages/ArticlePage 抽组件化。
  */
 
 import { useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Eye } from 'lucide-react';
+import { Eye } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchChunks, fetchDoc, fetchOutline } from '../api/kb';
 import { useViewDoc } from '../api/hooks';
@@ -15,12 +14,10 @@ import { MarkdownText } from '../../../shared/components/MarkdownText';
 import { StateView } from '../../../shared/ui/StateView';
 import { SkeletonBlock, SkeletonList } from '../../../shared/ui/Skeleton';
 import { formatListTime } from '../../../shared/utils/time';
-import { pushKbRecent } from './KbHomePage';
+import { pushKbRecent } from '../pages/KbHomePage';
 
-export function ArticlePage() {
-  const { docId = '' } = useParams();
-  const navigate = useNavigate();
-
+export function ArticlePanel(props: { docId: string }) {
+  const { docId } = props;
   const doc = useQuery({ queryKey: qk.kb.doc(docId), queryFn: () => fetchDoc(docId), enabled: !!docId });
   const chunks = useQuery({ queryKey: qk.kb.chunks(docId), queryFn: () => fetchChunks(docId), enabled: !!docId });
   const outline = useQuery({
@@ -30,7 +27,7 @@ export function ArticlePage() {
   });
   const view = useViewDoc();
 
-  // 打开即上报（含作者本人——服务端短路；日去重幂等）+ 最近查看落本地
+  // 打开即上报（含作者本人——服务端短路）+ 最近查看落本地
   useEffect(() => {
     if (docId) void view.mutate(docId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -45,11 +42,6 @@ export function ArticlePage() {
 
   return (
     <div className="kb-article" data-testid="kb-article">
-      <div className="kb-article__topbar">
-        <button type="button" className="kb-link-btn" onClick={() => navigate(-1)}>
-          <ArrowLeft size={14} /> 返回
-        </button>
-      </div>
       <StateView
         state={state}
         skeleton={
@@ -74,7 +66,9 @@ export function ArticlePage() {
                     key={`${o.heading_path}-${o.seq}`}
                     type="button"
                     className="kb-article__outline-item"
-                    onClick={() => document.querySelector(`[data-chunk-seq="${o.seq}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                    onClick={() =>
+                      document.querySelector(`[data-chunk-seq="${o.seq}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    }
                   >
                     {o.heading_path}
                   </button>
@@ -91,7 +85,8 @@ export function ArticlePage() {
                     {doc.data.space_type === 'personal' ? '我的笔记' : '公司知识库'}
                   </span>
                   <span>作者 {doc.data.created_by}</span>
-                  <span>{formatListTime(doc.data.created_at)}</span>
+                  <span>创建 {formatListTime(doc.data.created_at)}</span>
+                  <span>更新 {formatListTime(doc.data.updated_at)}</span>
                   <span className="kb-article__views">
                     <Eye size={13} /> {fmtViews(view.data?.view_count ?? doc.data.view_count ?? 0)}
                   </span>
