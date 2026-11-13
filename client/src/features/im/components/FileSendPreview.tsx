@@ -6,11 +6,15 @@
  *   位图断点续传 → complete）→ msg.send type=image|file|video body{file_id,...}
  * - 失败红态可重试（分片重试经位图跳过已传分片；file_id 幂等由服务端 sha 去重兜底）
  * - 传输管理器/多选 阶段二后续（登记）；视频单文件上限沿用 file 域 20MB（放宽随阶段二）
+ * D26-O5：仅外壳换 antd Modal（头/尾/关闭由 Modal 承载，按钮→footer）；
+ * 预览内容区（图片/视频/文件卡）原样保留；caption→Input、进度条→Progress、错误→Alert。
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { FileText, ImageIcon, X } from 'lucide-react';
+import { Alert, Flex, Input, Modal, Progress, Typography } from 'antd';
+import { FileText, ImageIcon } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
+import { Button } from '../../../shared/ui/Button';
 import { formatBytes } from '../../../shared/utils/format';
 import { uploadFileSmart } from '../api/files';
 import { sendFileMessage } from '../api/im';
@@ -130,15 +134,6 @@ export function FileSendPreview({ convId, file, onClose }: FileSendPreviewProps)
     return () => URL.revokeObjectURL(url);
   }, [file, isImage, isVideo]);
 
-  // Esc 关闭（仅确认/失败态；上传中关闭=放弃）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const doSend = async () => {
     setPhase('uploading');
     setProgress(0);
@@ -162,105 +157,97 @@ export function FileSendPreview({ convId, file, onClose }: FileSendPreviewProps)
   };
 
   return (
-    <div className="modal-mask" data-testid="file-send-preview" onClick={onClose}>
-      <div className="file-send-preview" onClick={(e) => e.stopPropagation()}>
-        <div className="file-send-preview__head">
-          <span>发送{isImage ? '图片' : isVideo ? '视频' : '文件'}</span>
-          <button type="button" className="file-send-preview__close" title="关闭 (Esc)" onClick={onClose}>
-            <X size={14} />
-          </button>
-        </div>
-
-        <div className="file-send-preview__body">
-          {isImage && previewUrl ? (
-            <img className="file-send-preview__thumb" src={previewUrl} alt={file.name} data-testid="file-send-preview-thumb" />
-          ) : isVideo && previewUrl ? (
-            <video
-              ref={videoRef}
-              className="file-send-preview__video"
-              src={previewUrl}
-              controls
-              muted
-              preload="metadata"
-              data-testid="file-send-preview-video"
-              onLoadedMetadata={(e) => {
-                const v = e.currentTarget;
-                if (v.duration && Number.isFinite(v.duration)) {
-                  setVideoMeta({ durationMs: Math.round(v.duration * 1000), width: v.videoWidth, height: v.videoHeight });
-                }
-              }}
-            />
-          ) : (
-            <div className="file-send-preview__file-icon">
-              <FileText size={22} />
-            </div>
-          )}
-          <div className="file-send-preview__meta">
-            <div className="file-send-preview__name" title={file.name}>
-              {isImage ? <ImageIcon size={13} /> : null}
-              {file.name}
-            </div>
-            <div className="file-send-preview__size">
-              {formatBytes(file.size)}
-              {isVideo && videoMeta ? ` · ${Math.round(videoMeta.durationMs / 1000)}s` : ''}
-            </div>
-          </div>
-        </div>
-
-        {/* caption 附言（image 专用，04 §1.2 第 5 类：随图说明渲染于缩略图下方） */}
-        {isImage ? (
-          <input
-            className="file-send-preview__caption"
-            data-testid="file-send-caption"
-            placeholder="添加随图说明（可选，≤500 字）"
-            value={caption}
-            maxLength={CAPTION_MAX}
-            disabled={phase === 'uploading'}
-            onChange={(e) => setCaption(e.target.value)}
-          />
-        ) : null}
-
-        {phase === 'uploading' ? (
-          <div className="file-send-preview__progress" data-testid="file-send-progress">
-            <div className="file-send-preview__progress-bar">
-              <div className="file-send-preview__progress-fill" style={{ width: `${progress}%` }} />
-            </div>
-            <span className="file-send-preview__progress-text">
-              {progress >= 100 ? '发送中…' : `${phaseText(upPhase)} ${progress}%`}
-            </span>
-          </div>
-        ) : null}
-
-        {phase === 'error' ? (
-          <div className="file-send-preview__error" data-testid="file-send-error">
-            {errorText}
-          </div>
-        ) : null}
-
-        <div className="file-send-preview__foot">
-          <span className="file-send-preview__hint">不压缩原图 · ≤20MB · 大文件自动分片续传{isVideo ? ' · 自动截取封面帧' : ''}</span>
-          <div className="file-send-preview__actions">
-            <button type="button" className="file-send-preview__btn" onClick={onClose}>
+    <Modal
+      open
+      title={`发送${isImage ? '图片' : isVideo ? '视频' : '文件'}`}
+      width={440}
+      onCancel={onClose}
+      destroyOnClose
+      data-testid="file-send-preview"
+      footer={
+        <Flex align="center" justify="space-between" gap={12}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            不压缩原图 · ≤20MB · 大文件自动分片续传{isVideo ? ' · 自动截取封面帧' : ''}
+          </Typography.Text>
+          <Flex gap={8}>
+            <Button variant="secondary" onClick={onClose}>
               取消
-            </button>
+            </Button>
             {phase === 'error' ? (
-              <button type="button" className="file-send-preview__btn file-send-preview__btn--primary" data-testid="file-send-retry" onClick={doSend}>
+              <Button data-testid="file-send-retry" onClick={doSend}>
                 重试
-              </button>
+              </Button>
             ) : (
-              <button
-                type="button"
-                className="file-send-preview__btn file-send-preview__btn--primary"
-                data-testid="file-send-confirm"
-                disabled={phase === 'uploading'}
-                onClick={doSend}
-              >
+              <Button disabled={phase === 'uploading'} data-testid="file-send-confirm" onClick={doSend}>
                 发送
-              </button>
+              </Button>
             )}
+          </Flex>
+        </Flex>
+      }
+    >
+      {/* 预览内容区（图片/视频/文件卡，保留项——原样不动） */}
+      <div className="file-send-preview__body">
+        {isImage && previewUrl ? (
+          <img className="file-send-preview__thumb" src={previewUrl} alt={file.name} data-testid="file-send-preview-thumb" />
+        ) : isVideo && previewUrl ? (
+          <video
+            ref={videoRef}
+            className="file-send-preview__video"
+            src={previewUrl}
+            controls
+            muted
+            preload="metadata"
+            data-testid="file-send-preview-video"
+            onLoadedMetadata={(e) => {
+              const v = e.currentTarget;
+              if (v.duration && Number.isFinite(v.duration)) {
+                setVideoMeta({ durationMs: Math.round(v.duration * 1000), width: v.videoWidth, height: v.videoHeight });
+              }
+            }}
+          />
+        ) : (
+          <div className="file-send-preview__file-icon">
+            <FileText size={22} />
+          </div>
+        )}
+        <div className="file-send-preview__meta">
+          <div className="file-send-preview__name" title={file.name}>
+            {isImage ? <ImageIcon size={13} /> : null}
+            {file.name}
+          </div>
+          <div className="file-send-preview__size">
+            {formatBytes(file.size)}
+            {isVideo && videoMeta ? ` · ${Math.round(videoMeta.durationMs / 1000)}s` : ''}
           </div>
         </div>
       </div>
-    </div>
+
+      {/* caption 附言（image 专用，04 §1.2 第 5 类：随图说明渲染于缩略图下方） */}
+      {isImage ? (
+        <Input
+          data-testid="file-send-caption"
+          placeholder="添加随图说明（可选，≤500 字）"
+          value={caption}
+          maxLength={CAPTION_MAX}
+          disabled={phase === 'uploading'}
+          onChange={(e) => setCaption(e.target.value)}
+          style={{ marginTop: 12 }}
+        />
+      ) : null}
+
+      {phase === 'uploading' ? (
+        <Flex align="center" gap={8} data-testid="file-send-progress" style={{ marginTop: 12 }}>
+          <Progress percent={progress} showInfo={false} style={{ flex: 1, margin: 0 }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {progress >= 100 ? '发送中…' : `${phaseText(upPhase)} ${progress}%`}
+          </Typography.Text>
+        </Flex>
+      ) : null}
+
+      {phase === 'error' ? (
+        <Alert type="error" showIcon message={errorText} data-testid="file-send-error" style={{ marginTop: 12 }} />
+      ) : null}
+    </Modal>
   );
 }

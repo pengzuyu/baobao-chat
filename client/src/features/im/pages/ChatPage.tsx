@@ -9,7 +9,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Dropdown } from 'antd';
+import { Alert, Dropdown, Modal, message } from 'antd';
 import { ArrowDown, Bell, Megaphone, Plus, Star, UserPlus, Users } from 'lucide-react';
 import { ApiError, errText, getErrorText } from '../../../shared/api/http';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
@@ -95,12 +95,36 @@ export function ChatPage() {
   const [dmPickerOpen, setDmPickerOpen] = useState(false);
   /** 附件发送（D06 阶段一）：file input → 预览弹层 → upload+msg.send */
   const [pickedFile, setPickedFile] = useState<File | null>(null);
-  /** @全体被策略拦截的提示条（3014，3s 自动消失） */
-  const [mentionAllBlocked, setMentionAllBlocked] = useState(false);
-  /** 收藏结果提示条（INT-IM-06 摘要 toast：已收藏/失败原因，3s 自动消失） */
-  const [favToast, setFavToast] = useState<{ text: string; ok: boolean } | null>(null);
-  /** 批量转发结果提示（INT-IM-05：成功 N 条/失败明细；点击跳目标会话，3.5s 自动消失） */
-  const [fwdToast, setFwdToast] = useState<{ text: string; ok: boolean; targetConvId?: string } | null>(null);
+  /**
+   * 提示条 D26-O5 antd message 化（原 ann-banner 自研条退役）：
+   * - showFavToast：收藏/入库/复制结果（INT-IM-06 摘要 toast；成功带「去收藏页」入口）
+   * - showFwdToast：转发/置顶上限/发送失败结果（INT-IM-05；成功带「查看」跳目标会话）
+   * - @全体被 3014 拦截 → message.warning（原 3s 提示条等价）
+   */
+  const showFavToast = (text: string, ok: boolean, duration = 3) => {
+    (ok ? message.success : message.error)(
+      <span data-testid="fav-toast" onClick={() => navigate('/im/favorites')} style={{ cursor: 'pointer' }}>
+        {text}
+        {ok ? <span style={{ marginInlineStart: 8, textDecoration: 'underline' }}>去收藏页</span> : null}
+      </span>,
+      duration,
+    );
+  };
+  const showFwdToast = (text: string, ok: boolean, targetConvId?: string, duration = 3.5) => {
+    (ok ? message.success : message.error)(
+      <span
+        data-testid="fwd-toast"
+        onClick={() => {
+          if (targetConvId) navigate(`/im/c/${targetConvId}`);
+        }}
+        style={targetConvId ? { cursor: 'pointer' } : undefined}
+      >
+        {text}
+        {ok && targetConvId ? <span style={{ marginInlineStart: 8, textDecoration: 'underline' }}>查看</span> : null}
+      </span>,
+      duration,
+    );
+  };
   /** 编辑中随 @ 面板选择的提及（随发送携带；正式版按 range 精确重算） */
   const pendingMentionsRef = useRef<Array<{ uid: string; name: string }>>([]);
   /** PIM-07 全局搜索框（⌘K 聚焦目标） */
@@ -132,12 +156,11 @@ export function ChatPage() {
   const sendText = useImStore((s) => s.sendText);
   const retrySend = useImStore((s) => s.retrySend);
   const togglePin = useImStore((s) => s.togglePin);
-  /** 置顶 3023 上限提示（OQ-B06：拒绝不替换最旧；复用 ann-banner 提示条 3s） */
+  /** 置顶 3023 上限提示（OQ-B06：拒绝不替换最旧；antd message 3s） */
   const handleTogglePin = (convId: string) => {
     void togglePin(convId).then((ok) => {
       if (!ok) {
-        setFwdToast({ text: '置顶会话已达上限 30，先取消其他置顶再试', ok: false });
-        setTimeout(() => setFwdToast(null), 3000);
+        showFwdToast('置顶会话已达上限 30，先取消其他置顶再试', false, undefined, 3);
       }
     });
   };
@@ -569,16 +592,15 @@ export function ChatPage() {
       }
       void queryClient.invalidateQueries({ queryKey: ['im', 'favorites'] });
       const failed = targets.length - ok;
-      setFavToast({
-        text:
-          failed > 0
-            ? `已收藏 ${ok}/${targets.length} 条，${failed} 条失败：${failText}`
-            : `已收藏 ${ok} 条${dup > 0 ? `（${dup} 条已在收藏中）` : ''}，可在收藏页查看`,
-        ok: failed === 0,
-      });
-      setTimeout(() => setFavToast(null), 3500);
+      showFavToast(
+        failed > 0
+          ? `已收藏 ${ok}/${targets.length} 条，${failed} 条失败：${failText}`
+          : `已收藏 ${ok} 条${dup > 0 ? `（${dup} 条已在收藏中）` : ''}，可在收藏页查看`,
+        failed === 0,
+        3.5,
+      );
     })();
-  }, [selectedMsgs, queryClient]);
+  }, [selectedMsgs, queryClient, showFavToast]);
 
   /** 批量复制（仅全 text）：拼接选中文本写剪贴板 */
   const doBatchCopy = useCallback(() => {
@@ -588,9 +610,8 @@ export function ChatPage() {
       .filter(Boolean)
       .join('\n');
     void navigator.clipboard?.writeText(text).catch(() => undefined);
-    setFavToast({ text: `已复制 ${selectedMsgs.length} 条文本`, ok: true });
-    setTimeout(() => setFavToast(null), 3000);
-  }, [copyEnabled, selectedMsgs]);
+    showFavToast(`已复制 ${selectedMsgs.length} 条文本`, true);
+  }, [copyEnabled, selectedMsgs, showFavToast]);
 
   /** 打开转发弹窗（批量条「转发」=默认逐条；「合并转发」=默认合并） */
   const openForward = useCallback(
@@ -638,16 +659,12 @@ export function ChatPage() {
           useImStore.getState().applyFavorite(m.msgId, true);
           // 前缀失效全部 type 筛选下的收藏缓存（['im','favorites',type]）
           void queryClient.invalidateQueries({ queryKey: ['im', 'favorites'] });
-          setFavToast({
-            text: r.duplicate ? '已在收藏中' : '已收藏，可在收藏页查看',
-            ok: true,
-          });
+          showFavToast(r.duplicate ? '已在收藏中' : '已收藏，可在收藏页查看', true);
         })
         .catch((err: unknown) => {
           const code = err instanceof ApiError ? err.code : 0;
-          setFavToast({ text: code > 0 ? getErrorText(code) : '收藏失败，请重试', ok: false });
+          showFavToast(code > 0 ? getErrorText(code) : '收藏失败，请重试', false);
         });
-      setTimeout(() => setFavToast(null), 3000);
     },
   };
 
@@ -672,8 +689,7 @@ export function ChatPage() {
     // 复制：text 全文；非 text 类型化 digest；system 模板文案（copyTextOf 统一）
     onCopy: (m) => {
       void navigator.clipboard?.writeText(copyTextOf(m)).catch(() => undefined);
-      setFwdToast({ text: '已复制到剪贴板', ok: true });
-      setTimeout(() => setFwdToast(null), 2500);
+      showFwdToast('已复制到剪贴板', true, undefined, 2.5);
     },
     onForward: bubbleActions.onForward,
     onFavorite: bubbleActions.onFavorite,
@@ -682,16 +698,15 @@ export function ChatPage() {
       if (m.type !== 'text' || !('text' in m.body)) return;
       void ingestFromIm({ msg_id: m.msgId, text: m.body.text })
         .then((doc) => {
-          setFavToast({
-            text: doc.status === 'ready' ? `已存入「我的笔记」：《${doc.title}》` : `入库失败：${doc.error_msg ?? '嵌入服务不可用'}`,
-            ok: doc.status === 'ready',
-          });
+          showFavToast(
+            doc.status === 'ready' ? `已存入「我的笔记」：《${doc.title}》` : `入库失败：${doc.error_msg ?? '嵌入服务不可用'}`,
+            doc.status === 'ready',
+          );
         })
         .catch((err: unknown) => {
           const code = err instanceof ApiError ? err.code : 0;
-          setFavToast({ text: code > 0 ? getErrorText(code) : '入库失败，请重试', ok: false });
+          showFavToast(code > 0 ? getErrorText(code) : '入库失败，请重试', false);
         });
-      setTimeout(() => setFavToast(null), 3000);
     },
     onMultiSelect: bubbleActions.onMultiSelect,
     onEdit: bubbleActions.onEdit,
@@ -716,7 +731,7 @@ export function ChatPage() {
         await queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });
         navigate(`/im/c/${conv.id}`);
       } catch (e) {
-        window.alert(errText(e, '发起会话失败，请稍后重试'));
+        Modal.error({ title: '发起会话失败', content: errText(e, '请稍后重试') });
       }
     },
     [queryClient, navigate],
@@ -732,8 +747,7 @@ export function ChatPage() {
     const at = text.indexOf('@全体');
     if (at >= 0) {
       if (!allowMentionAll) {
-        setMentionAllBlocked(true);
-        setTimeout(() => setMentionAllBlocked(false), 3000);
+        message.warning(<span data-testid="mention-all-blocked">当前群策略不允许你使用 @全体</span>, 3);
         return;
       }
       mentions.push({ uid: '', all: true, range: [at, at + 3] });
@@ -776,8 +790,7 @@ export function ChatPage() {
         ...(up.contentType ? { contentType: up.contentType } : {}),
       });
     } catch {
-      setFwdToast({ text: '语音发送失败，请重试', ok: false, targetConvId: '' });
-      setTimeout(() => setFwdToast(null), 3500);
+      showFwdToast('语音发送失败，请重试', false);
     }
   };
 
@@ -1000,63 +1013,21 @@ export function ChatPage() {
         />
       ) : null}
 
-      {/* 公告横幅（INT-IM-18：更新即时红点+摘要，全文在详情栏公告 tab） */}
+      {/* 公告横幅（INT-IM-18：更新即时摘要，全文在详情栏公告 tab；D26-O5→antd Alert banner） */}
       {activeConv?.groupSetting?.announcement && activeConv.status === 1 ? (
-        <button
-          type="button"
-          className="ann-banner"
+        <Alert
+          banner
+          type="info"
+          icon={<Megaphone size={14} />}
+          message={activeConv.groupSetting.announcement}
+          action={<span>查看全文</span>}
           data-testid="ann-banner"
+          style={{ cursor: 'pointer' }}
           onClick={() => {
             setDetailOpen(true);
             setDetailTab('announcement');
           }}
-          title="点击查看全文"
-        >
-          <Megaphone size={14} />
-          <span className="ann-banner__dot" aria-hidden />
-          <span className="ann-banner__text">{activeConv.groupSetting.announcement}</span>
-          <span className="ann-banner__more">查看全文</span>
-        </button>
-      ) : null}
-
-      {/* @全体被策略拦截提示（3014，INT-IM-24） */}
-      {mentionAllBlocked ? (
-        <div className="ann-banner ann-banner--warn" data-testid="mention-all-blocked">
-          当前群策略不允许你使用 @全体
-        </div>
-      ) : null}
-
-      {/* 收藏结果提示（PIM-08 INT-IM-06：摘要 toast；失败携带 3022 等错误文案） */}
-      {favToast ? (
-        <button
-          type="button"
-          className={`ann-banner${favToast.ok ? '' : ' ann-banner--warn'}`}
-          data-testid="fav-toast"
-          onClick={() => navigate('/im/favorites')}
-          title="查看收藏"
-        >
-          {favToast.text}
-          {favToast.ok ? <span className="ann-banner__more">去收藏页</span> : null}
-        </button>
-      ) : null}
-
-      {/* 批量转发结果提示（INT-IM-05：成功/失败明细；点击跳目标会话查看） */}
-      {fwdToast ? (
-        <button
-          type="button"
-          className={`ann-banner${fwdToast.ok ? '' : ' ann-banner--warn'}`}
-          data-testid="fwd-toast"
-          onClick={() => {
-            if (fwdToast.targetConvId) {
-              setFwdToast(null);
-              navigate(`/im/c/${fwdToast.targetConvId}`);
-            }
-          }}
-          title={fwdToast.targetConvId ? '查看目标会话' : undefined}
-        >
-          {fwdToast.text}
-          {fwdToast.ok && fwdToast.targetConvId ? <span className="ann-banner__more">查看</span> : null}
-        </button>
+        />
       ) : null}
 
       {streamState === 'none' ? (
@@ -1107,8 +1078,7 @@ export function ChatPage() {
           onPickSticker={(item) => {
             if (!convId) return;
             sendStickerMessage(convId, item).catch(() => {
-              setFwdToast({ text: '表情发送失败，请重试', ok: false, targetConvId: '' });
-              setTimeout(() => setFwdToast(null), 3500);
+              showFwdToast('表情发送失败，请重试', false);
             });
           }}
         />
@@ -1181,15 +1151,13 @@ export function ChatPage() {
             // INT-IM-05：成功 toast（含跳目标会话入口）；有成功即退出多选（选择已完成使命）
             setForwardIds(null);
             if (res.sent > 0) exitMultiSelect();
-            setFwdToast({
-              text:
-                res.failed > 0
-                  ? `已转发 ${res.sent} 条，${res.failed} 条失败（已撤回/无权限的消息不可转发）`
-                  : `已转发 ${res.sent} 条消息`,
-              ok: res.failed === 0,
-              targetConvId: res.targetConvId,
-            });
-            setTimeout(() => setFwdToast(null), 3500);
+            showFwdToast(
+              res.failed > 0
+                ? `已转发 ${res.sent} 条，${res.failed} 条失败（已撤回/无权限的消息不可转发）`
+                : `已转发 ${res.sent} 条消息`,
+              res.failed === 0,
+              res.targetConvId,
+            );
           }}
         />
       ) : null}

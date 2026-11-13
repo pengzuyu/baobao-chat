@@ -6,9 +6,12 @@
  * - Esc / 遮罩关闭
  * - 六态：loading=子条快照 spinner / empty 不适用（登记） / error=置灰+可重试 /
  *   offline=请求失败同样置灰（只读已缓存 digest） / forbidden=条目级置灰（不整页锁）/ degraded 不适用（登记）
+ * D26-O5：自研 merge-drawer 壳退役，antd Drawer 化（遮罩/Esc 由 Drawer 承载；
+ * 子条目列表/快照展开区属内容渲染，原样保留）。
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { Drawer, Typography } from 'antd';
 import { Ban, ChevronDown, ChevronRight, RotateCcw, X } from 'lucide-react';
 import { fetchOriginSnapshot } from '../api/im';
 import { digestOf } from '../store/im';
@@ -34,15 +37,6 @@ export function MergeForwardDrawer({ message, onClose }: MergeForwardDrawerProps
   const items: MergeItem[] = body.items ?? [];
   /** 展开态：子条目下标 → 快照 */
   const [expanded, setExpanded] = useState<Record<number, ItemState>>({});
-
-  // Esc 关闭（遮罩点击同）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   /** 子条目点击：已展开 → 收起；否则拉快照展开全文上下文 */
   const onItemClick = async (idx: number, item: MergeItem) => {
@@ -87,67 +81,67 @@ export function MergeForwardDrawer({ message, onClose }: MergeForwardDrawerProps
   };
 
   return (
-    <>
-      <div className="merge-drawer__mask" onClick={onClose} />
-      <aside className="merge-drawer" data-testid="merge-drawer" aria-label="合并转发详情">
-        <header className="merge-drawer__head">
-          <div className="merge-drawer__title" data-testid="merge-drawer-title">
-            {body.title ?? '聊天记录'} · {body.count ?? items.length} 条消息
-          </div>
-          <button type="button" className="icon-btn" onClick={onClose} title="关闭" data-testid="merge-drawer-close">
-            <X size={16} />
-          </button>
-        </header>
-        <div className="merge-drawer__body">
-          {items.map((it, idx) => {
-            const st = expanded[idx];
-            const isOpen = st?.status === 'ok' || st?.status === 'error';
-            return (
-              <div key={idx} className="merge-drawer__entry">
+    <Drawer
+      open
+      placement="right"
+      width={400}
+      onClose={onClose}
+      destroyOnClose
+      data-testid="merge-drawer"
+      title={
+        <span data-testid="merge-drawer-title">
+          {body.title ?? '聊天记录'} · {body.count ?? items.length} 条消息
+        </span>
+      }
+      closeIcon={<X size={16} data-testid="merge-drawer-close" />}
+      footer={<Typography.Text type="secondary">点击条目可展开原文及上下文</Typography.Text>}
+    >
+      {items.map((it, idx) => {
+        const st = expanded[idx];
+        const isOpen = st?.status === 'ok' || st?.status === 'error';
+        return (
+          <div key={idx} className="merge-drawer__entry">
+            <button
+              type="button"
+              className="merge-drawer__item"
+              data-testid={`merge-drawer-item-${idx}`}
+              onClick={() => void onItemClick(idx, it)}
+              title="点击展开原文上下文"
+            >
+              {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              <span className="merge-drawer__sender">{it.sender_name || it.sender_id}</span>
+              <span className="merge-drawer__digest">
+                {mergeTypeIcon(it.type)}
+                {it.digest}
+              </span>
+            </button>
+            {/* 快照展开区 */}
+            {st?.status === 'loading' ? (
+              <div className="merge-drawer__snap merge-drawer__snap--loading">
+                <span className="skeleton-block" /> 拉取原文…
+              </div>
+            ) : st?.status === 'error' ? (
+              <div className="merge-drawer__snap merge-drawer__snap--error" data-testid={`merge-drawer-error-${idx}`}>
+                <Ban size={13} />
+                原消息不可见（无权限、已退群或已清理）
                 <button
                   type="button"
-                  className="merge-drawer__item"
-                  data-testid={`merge-drawer-item-${idx}`}
+                  className="merge-drawer__retry"
                   onClick={() => void onItemClick(idx, it)}
-                  title="点击展开原文上下文"
+                  title="重试"
                 >
-                  {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  <span className="merge-drawer__sender">{it.sender_name || it.sender_id}</span>
-                  <span className="merge-drawer__digest">
-                    {mergeTypeIcon(it.type)}
-                    {it.digest}
-                  </span>
+                  <RotateCcw size={12} />
+                  重试
                 </button>
-                {/* 快照展开区 */}
-                {st?.status === 'loading' ? (
-                  <div className="merge-drawer__snap merge-drawer__snap--loading">
-                    <span className="skeleton-block" /> 拉取原文…
-                  </div>
-                ) : st?.status === 'error' ? (
-                  <div className="merge-drawer__snap merge-drawer__snap--error" data-testid={`merge-drawer-error-${idx}`}>
-                    <Ban size={13} />
-                    原消息不可见（无权限、已退群或已清理）
-                    <button
-                      type="button"
-                      className="merge-drawer__retry"
-                      onClick={() => void onItemClick(idx, it)}
-                      title="重试"
-                    >
-                      <RotateCcw size={12} />
-                      重试
-                    </button>
-                  </div>
-                ) : st?.status === 'ok' && st.msgs ? (
-                  <div className="merge-drawer__snap" data-testid={`merge-drawer-snapshot-${idx}`}>
-                    {st.msgs.map((m, i) => renderSnapshotMsg(m, i === st.targetIdx))}
-                  </div>
-                ) : null}
               </div>
-            );
-          })}
-        </div>
-        <footer className="merge-drawer__foot">点击条目可展开原文及上下文</footer>
-      </aside>
-    </>
+            ) : st?.status === 'ok' && st.msgs ? (
+              <div className="merge-drawer__snap" data-testid={`merge-drawer-snapshot-${idx}`}>
+                {st.msgs.map((m, i) => renderSnapshotMsg(m, i === st.targetIdx))}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </Drawer>
   );
 }

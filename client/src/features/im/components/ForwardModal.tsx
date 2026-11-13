@@ -5,10 +5,13 @@
  * - 合并 >30 条前端拦截（3021 文案 toast，不发请求）；目标广播群非 publisher 前置隐藏（3013）
  * - 六态：loading=发送中按钮态 / empty=无会话提示 / error=3013 等错误码文案 + 逐条失败明细 /
  *   offline=禁发提示 / forbidden=广播群目标过滤 / degraded 不适用（登记）
+ * D26-O5：自研 forward-modal 壳退役，antd Modal 化（搜索→Input.Search、chip→CheckableTag、
+ * 列表行内联化、radio→Radio.Group、附言→Input.TextArea showCount、error/offline→Alert）。
  */
 
-import { useEffect, useMemo, useState } from 'react';
-import { Search, Send, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Alert, Flex, Input, Modal, Radio, Tag, Typography, theme } from 'antd';
+import { Send } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import { useConnectionStore } from '../../../shared/store/connection';
@@ -35,6 +38,7 @@ interface ForwardModalProps {
 }
 
 export function ForwardModal({ convs, msgIds, defaultMode, onClose, onDone }: ForwardModalProps) {
+  const { token } = theme.useToken();
   // 单条转发无方式选择（合并无意义），>1 条默认合并（飞书同款）
   const [mode, setMode] = useState<'merge' | 'one_by_one'>(
     defaultMode ?? (msgIds.length > 1 ? 'merge' : 'one_by_one'),
@@ -45,15 +49,6 @@ export function ForwardModal({ convs, msgIds, defaultMode, onClose, onDone }: Fo
   const [sending, setSending] = useState(false);
   const [errorText, setErrorText] = useState('');
   const offline = useConnectionStore((s) => s.status) === 'offline';
-
-  // Esc 关闭（弹窗自身优先；多选模式的 Esc 由 ChatPage 在弹窗关闭后接管）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   // 目标候选：active 会话；广播群前置隐藏（非 publisher 转发必被 3013 拦截，PIM-10 六态 forbidden）
   const candidates = useMemo(
@@ -94,127 +89,127 @@ export function ForwardModal({ convs, msgIds, defaultMode, onClose, onDone }: Fo
   const convLabel = (c: Conversation) => (c.type === 1 ? c.name : `${c.name} (${c.memberCount})`);
 
   return (
-    <div className="modal-mask" onClick={onClose}>
-      <div className="forward-modal" data-testid="forward-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="forward-modal__head">
-          <span>转发 {msgIds.length > 1 ? `${msgIds.length} 条消息` : '消息'}</span>
-          <button type="button" className="icon-btn" onClick={onClose} title="关闭">
-            <X size={16} />
-          </button>
-        </div>
+    <Modal
+      open
+      title={`转发 ${msgIds.length > 1 ? `${msgIds.length} 条消息` : '消息'}`}
+      width={480}
+      onCancel={onClose}
+      destroyOnClose
+      data-testid="forward-modal"
+      footer={[
+        <Button key="cancel" variant="secondary" disabled={sending} onClick={onClose}>
+          取消
+        </Button>,
+        <Button
+          key="ok"
+          loading={sending}
+          disabled={!target || offline}
+          onClick={() => void doForward()}
+          data-testid="forward-send"
+        >
+          <Send size={14} />
+          {sending ? '转发中…' : '发送'}
+        </Button>,
+      ]}
+    >
+      {/* 搜索会话（PIM-10 弹窗规格） */}
+      <Input.Search
+        placeholder="搜索会话"
+        value={keyword}
+        onChange={(e) => setKeyword(e.target.value)}
+        onSearch={(v) => setKeyword(v)}
+        allowClear
+        data-testid="forward-search"
+        style={{ marginBottom: 12 }}
+      />
 
-        {/* 搜索会话（PIM-10 弹窗规格） */}
-        <div className="forward-modal__search">
-          <Search size={14} />
-          <input
-            data-testid="forward-search"
-            placeholder="搜索会话"
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-          />
-        </div>
+      {/* 最近会话 chip */}
+      {recents.length > 0 ? (
+        <Flex gap={4} wrap style={{ marginBottom: 8 }}>
+          {recents.map((c) => (
+            <Tag.CheckableTag
+              key={c.id}
+              checked={target === c.id}
+              onChange={() => setTarget(c.id)}
+              data-testid="forward-chip"
+            >
+              {convLabel(c)}
+            </Tag.CheckableTag>
+          ))}
+        </Flex>
+      ) : null}
 
-        {/* 最近会话 chip */}
-        {recents.length > 0 ? (
-          <div className="forward-modal__chips">
-            {recents.map((c) => (
+      {/* 会话列表（单选；empty 六态） */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 264, overflowY: 'auto', marginBottom: 12 }}>
+        {filtered.length === 0 ? (
+          <Typography.Text type="secondary" style={{ textAlign: 'center', padding: '16px 0' }}>
+            没有可转发的会话
+          </Typography.Text>
+        ) : (
+          filtered.map((c) => {
+            const active = target === c.id;
+            return (
               <button
                 key={c.id}
                 type="button"
-                className={`forward-modal__chip${target === c.id ? ' forward-modal__chip--active' : ''}`}
-                data-testid="forward-chip"
-                title={convLabel(c)}
-                onClick={() => setTarget(c.id)}
-              >
-                {convLabel(c)}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        {/* 会话列表（单选；empty 六态） */}
-        <div className="forward-modal__list">
-          {filtered.length === 0 ? (
-            <div className="forward-modal__empty">没有可转发的会话</div>
-          ) : (
-            filtered.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                className={`forward-modal__item${target === c.id ? ' forward-modal__item--active' : ''}`}
                 data-testid="forward-item"
                 onClick={() => setTarget(c.id)}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  gap: 2,
+                  padding: '6px 10px',
+                  borderRadius: token.borderRadius,
+                  border: `1px solid ${active ? token.colorPrimary : token.colorBorderSecondary}`,
+                  background: active ? token.colorPrimaryBg : 'transparent',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
               >
-                <span className="forward-modal__name">{convLabel(c)}</span>
-                <span className="forward-modal__hint">{c.lastMsgDigest?.slice(0, 20) ?? ''}</span>
+                <span>{convLabel(c)}</span>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {c.lastMsgDigest?.slice(0, 20) ?? ''}
+                </Typography.Text>
               </button>
-            ))
-          )}
-        </div>
-
-        {/* 方式 radio：>1 条时出现（D03 §3.10） */}
-        {msgIds.length > 1 ? (
-          <div className="forward-modal__mode" role="radiogroup" aria-label="转发方式">
-            <label className="forward-modal__radio" data-testid="forward-mode-merge">
-              <input
-                type="radio"
-                name="forward-mode"
-                checked={mode === 'merge'}
-                onChange={() => setMode('merge')}
-              />
-              合并转发（≤30 条）
-            </label>
-            <label className="forward-modal__radio" data-testid="forward-mode-one">
-              <input
-                type="radio"
-                name="forward-mode"
-                checked={mode === 'one_by_one'}
-                onChange={() => setMode('one_by_one')}
-              />
-              逐条转发
-            </label>
-          </div>
-        ) : null}
-
-        {/* 附言 ≤500（INT-IM-05；随首条发送，服务端同规则兜底） */}
-        <div className="forward-modal__note-wrap">
-          <textarea
-            className="forward-modal__note"
-            data-testid="forward-note"
-            rows={2}
-            maxLength={NOTE_MAX}
-            placeholder="附言（可选）"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
-          <span className="forward-modal__note-meta">
-            {note.length}/{NOTE_MAX}
-          </span>
-        </div>
-
-        {/* 错误/离线提示（error/offline 六态） */}
-        {errorText ? (
-          <div className="forward-modal__error" data-testid="forward-error">
-            {errorText}
-          </div>
-        ) : offline ? (
-          <div className="forward-modal__error">离线中，暂不能转发</div>
-        ) : null}
-
-        <div className="forward-modal__foot">
-          <Button onClick={onClose} disabled={sending}>
-            取消
-          </Button>
-          <Button
-            onClick={() => void doForward()}
-            disabled={!target || sending || offline}
-            data-testid="forward-send"
-          >
-            <Send size={14} />
-            {sending ? '转发中…' : '发送'}
-          </Button>
-        </div>
+            );
+          })
+        )}
       </div>
-    </div>
+
+      {/* 方式 radio：>1 条时出现（D03 §3.10） */}
+      {msgIds.length > 1 ? (
+        <Radio.Group
+          value={mode}
+          onChange={(e) => setMode(e.target.value as 'merge' | 'one_by_one')}
+          style={{ marginBottom: 12 }}
+        >
+          <Radio value="merge" data-testid="forward-mode-merge">
+            合并转发（≤30 条）
+          </Radio>
+          <Radio value="one_by_one" data-testid="forward-mode-one">
+            逐条转发
+          </Radio>
+        </Radio.Group>
+      ) : null}
+
+      {/* 附言 ≤500（INT-IM-05；随首条发送，服务端同规则兜底） */}
+      <Input.TextArea
+        rows={2}
+        maxLength={NOTE_MAX}
+        showCount
+        placeholder="附言（可选）"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        data-testid="forward-note"
+      />
+
+      {/* 错误/离线提示（error/offline 六态） */}
+      {errorText ? (
+        <Alert type="error" showIcon message={errorText} data-testid="forward-error" style={{ marginTop: 12 }} />
+      ) : offline ? (
+        <Alert type="warning" showIcon message="离线中，暂不能转发" style={{ marginTop: 12 }} />
+      ) : null}
+    </Modal>
   );
 }

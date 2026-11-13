@@ -2,10 +2,12 @@
  * 建群弹窗（D03 INT-IM-15；M3 2026-11-12 改版）：
  * - 单聊不再走本弹窗——「+」菜单「发起单聊」直达选人器（ChatPage PersonPickerModal）
  * - 群聊：群名 + 通讯录多选人（PersonPickerCore 内嵌，替代手输 uid 兜底）≤499
+ * D26-O5：自研 forward-modal 壳退役，antd Modal+Form vertical 化
+ * （群名→Input、已选成员 chip→Tag closable、错误→Alert）。
  */
 
 import { useState } from 'react';
-import { X } from 'lucide-react';
+import { Alert, Form, Input, Modal, Space, Tag } from 'antd';
 import { Button } from '../../../shared/ui/Button';
 import { errText } from '../../../shared/api/http';
 import { convCreate } from '../api/im';
@@ -51,62 +53,52 @@ export function CreateConvModal({ onClose, onCreated }: CreateConvModalProps) {
   };
 
   return (
-    <div className="modal-mask" onClick={onClose}>
-      <div className="forward-modal" onClick={(e) => e.stopPropagation()} data-testid="create-conv-modal">
-        <div className="forward-modal__head">
-          <span>发起群聊</span>
-          <button type="button" className="icon-btn" onClick={onClose} title="关闭">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className="gm-create__body">
-          <div className="gm-field">
-            <label className="gm-field__label">群名称（≤50 字）</label>
-            <div className="bbw-input">
-              <input
-                autoFocus
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="如：产品研发群"
-                data-testid="create-conv-name"
-              />
-            </div>
-          </div>
-
-          <div className="gm-field">
-            <label className="gm-field__label">选择成员（已选 {members.length}/499）</label>
-          </div>
+    <Modal
+      open
+      title="发起群聊"
+      width={480}
+      onCancel={onClose}
+      destroyOnClose
+      data-testid="create-conv-modal"
+      footer={[
+        <Button key="cancel" variant="secondary" onClick={onClose}>
+          取消
+        </Button>,
+        <Button key="ok" loading={busy} disabled={members.length === 0} onClick={() => void submit()} data-testid="create-conv-submit">
+          {busy ? '创建中…' : '创建群聊'}
+        </Button>,
+      ]}
+    >
+      <Form layout="vertical">
+        <Form.Item label="群名称（≤50 字）">
+          <Input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="如：产品研发群"
+            onPressEnter={() => void submit()}
+            data-testid="create-conv-name"
+          />
+        </Form.Item>
+        <Form.Item label={`选择成员（已选 ${members.length}/499）`}>
           {members.length > 0 ? (
-            <div className="bbw-pp__chips" data-testid="create-conv-chips">
+            <Space size={4} wrap style={{ marginBottom: 8 }} data-testid="create-conv-chips">
               {members.map((m) => (
-                <button
+                <Tag
                   key={m.uid}
-                  type="button"
-                  className="bbw-pp__chip"
+                  closable
                   title={`移除 ${m.display_name}`}
-                  onClick={() => setMembers((prev) => prev.filter((p) => p.uid !== m.uid))}
+                  onClose={() => setMembers((prev) => prev.filter((p) => p.uid !== m.uid))}
                 >
                   {m.display_name}
-                  <X size={11} />
-                </button>
+                </Tag>
               ))}
-            </div>
+            </Space>
           ) : null}
           <PersonPickerCore multiple selected={members} onToggle={(u) => setMembers((prev) => (prev.some((p) => p.uid === u.uid) ? prev.filter((p) => p.uid !== u.uid) : [...prev, u]))} />
-
-          {error ? <div className="gm-error">{error}</div> : null}
-
-          <div className="gm-create__foot">
-            <Button variant="text" onClick={onClose}>
-              取消
-            </Button>
-            <Button variant="primary" disabled={busy || members.length === 0} onClick={() => void submit()} data-testid="create-conv-submit">
-              {busy ? '创建中…' : '创建群聊'}
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
+        </Form.Item>
+        {error ? <Alert type="error" showIcon message={error} /> : null}
+      </Form>
+    </Modal>
   );
 }

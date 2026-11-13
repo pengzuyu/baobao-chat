@@ -5,10 +5,13 @@
  * - PersonPickerModal：弹窗壳（发起单聊 ChatPage / 邀请成员 ConvInfoSidebar），
  *   single 点行即回调；multiple 底栏「确认（n）」
  * 数据源 GET /org/users（登录后含 uid 口径）；excludeUids 客户端过滤（如已有成员）。
+ * D26-O5：仅外壳换 antd Modal（遮罩/Esc/底栏由 Modal 承载）；搜索框→antd Input；
+ * 结果列表行属内容渲染，保守保留（列表行内联化随气泡域批次另行处理）。
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Check, Search, X } from 'lucide-react';
+import { Input, Modal } from 'antd';
+import { Check, Search } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { errText } from '../../../shared/api/http';
 import { fetchDirectoryUsers } from '../../contacts/api/contacts';
@@ -87,16 +90,16 @@ export function PersonPickerCore({ multiple, selected, onToggle, onPick, exclude
 
   return (
     <div className="bbw-pp" data-testid="person-picker">
-      <div className="bbw-input bbw-input--search">
-        <Search size={14} aria-hidden />
-        <input
-          autoFocus
-          placeholder="搜索 工号/姓名/拼音"
-          value={qInput}
-          data-testid="person-picker-input"
-          onChange={(e) => setQInput(e.target.value)}
-        />
-      </div>
+      <Input
+        autoFocus
+        allowClear
+        prefix={<Search size={14} aria-hidden />}
+        placeholder="搜索 工号/姓名/拼音"
+        value={qInput}
+        data-testid="person-picker-input"
+        onChange={(e) => setQInput(e.target.value)}
+        style={{ marginBottom: 8 }}
+      />
       <div className="bbw-pp__list">
         {error ? (
           <div className="bbw-pp__hint bbw-pp__hint--warn">{error}</div>
@@ -153,52 +156,51 @@ export function PersonPickerModal({ open, title, multiple, onConfirm, onClose, e
     setSelected((prev) => (prev.some((p) => p.uid === u.uid) ? prev.filter((p) => p.uid !== u.uid) : [...prev, u]));
 
   return (
-    <div className="modal-mask" onClick={onClose}>
-      <div className="forward-modal" onClick={(e) => e.stopPropagation()} data-testid="person-picker-modal">
-        <div className="forward-modal__head">
-          <span>{title}</span>
-          <button type="button" className="icon-btn" onClick={onClose} title="关闭">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="bbw-pp__body">
-          {multiple ? (
-            <PersonPickerCore
-              multiple
-              selected={selected}
-              onToggle={toggle}
-              excludeUids={excludeUids}
-            />
-          ) : (
-            <PersonPickerCore
-              selected={selected}
-              onPick={(u) => {
-                onConfirm([u]);
-                onClose();
-              }}
-              excludeUids={excludeUids}
-            />
-          )}
-        </div>
-        {multiple ? (
-          <div className="gm-create__foot">
-            <Button variant="text" onClick={onClose}>
-              取消
-            </Button>
-            <Button
-              variant="primary"
-              disabled={selected.length === 0}
-              data-testid="person-picker-confirm"
-              onClick={() => {
-                onConfirm(selected);
-                onClose();
-              }}
-            >
-              确认（{selected.length}）
-            </Button>
-          </div>
-        ) : null}
-      </div>
-    </div>
+    <Modal
+      open={open}
+      title={title}
+      width={480}
+      onCancel={onClose}
+      destroyOnClose
+      data-testid="person-picker-modal"
+      footer={
+        multiple
+          ? [
+              <Button key="cancel" variant="secondary" onClick={onClose}>
+                取消
+              </Button>,
+              <Button
+                key="ok"
+                disabled={selected.length === 0}
+                data-testid="person-picker-confirm"
+                onClick={() => {
+                  onConfirm(selected);
+                  onClose();
+                }}
+              >
+                确认（{selected.length}）
+              </Button>,
+            ]
+          : null
+      }
+    >
+      {multiple ? (
+        <PersonPickerCore
+          multiple
+          selected={selected}
+          onToggle={toggle}
+          excludeUids={excludeUids}
+        />
+      ) : (
+        <PersonPickerCore
+          selected={selected}
+          onPick={(u) => {
+            onConfirm([u]);
+            onClose();
+          }}
+          excludeUids={excludeUids}
+        />
+      )}
+    </Modal>
   );
 }

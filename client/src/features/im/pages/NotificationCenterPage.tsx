@@ -8,11 +8,13 @@
  * - 「全部已读」+ 分页加载更多（cursor）
  * - 六态：loading 骨架 / empty「暂无通知」/ error 重试 / offline 显示本地已缓存项（新事件停聚）/
  *   forbidden、degraded 不适用（通知列表无 7xxx/降级语义，登记）。
+ * D26-O5：公告全文弹层→antd Modal（列表区结构内联化；页头/分组 tab 为页面骨架，保留）。
  */
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { Modal, Typography, theme } from 'antd';
 import { ArrowLeft, AtSign, BadgeCheck, Bell, Bot, CheckCheck, Megaphone, Reply, X } from 'lucide-react';
 import { formatListTime } from '../../../shared/utils/time';
 import { Button } from '../../../shared/ui/Button';
@@ -51,6 +53,7 @@ const KIND_LABEL: Record<NotificationKind, string> = {
 };
 
 export function NotificationCenterPage() {
+  const { token } = theme.useToken();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [kind, setKind] = useState<NotificationKind | 'all'>('all');
@@ -172,7 +175,7 @@ export function NotificationCenterPage() {
       <div className="notif-page__body">
         {state === 'ok' ? (
           <>
-            <div className="notif-list" data-testid="notif-list">
+            <div style={{ display: 'flex', flexDirection: 'column' }} data-testid="notif-list">
               {items.map((item) => {
                 const Icon = KIND_ICON[item.kind] ?? Bell;
                 const unread = !item.readAt;
@@ -180,25 +183,51 @@ export function NotificationCenterPage() {
                   <button
                     type="button"
                     key={item.id}
-                    className={`notif-item${unread ? ' notif-item--unread' : ''}`}
                     data-testid="notif-item"
                     data-kind={item.kind}
                     onClick={() => onItemClick(item)}
                     title="点击查看"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      width: '100%',
+                      padding: '10px 12px',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      borderTop: `1px solid ${token.colorSplit}`,
+                    }}
                   >
-                    <span className={`notif-item__icon notif-item__icon--${item.kind}`}>
-                      <Icon size={16} aria-hidden />
-                    </span>
-                    <span className="notif-item__main">
-                      <span className="notif-item__row">
-                        <span className="notif-item__kind">{KIND_LABEL[item.kind] ?? item.kind}</span>
-                        {item.count > 1 ? <span className="notif-item__count">×{item.count}</span> : null}
-                        <span className="notif-item__time">{formatListTime(item.createdAt)}</span>
+                    <Icon size={16} aria-hidden color={token.colorPrimary} style={{ flexShrink: 0 }} />
+                    <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {KIND_LABEL[item.kind] ?? item.kind}
+                        </Typography.Text>
+                        {item.count > 1 ? (
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            ×{item.count}
+                          </Typography.Text>
+                        ) : null}
+                        <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto' }}>
+                          {formatListTime(item.createdAt)}
+                        </Typography.Text>
                       </span>
-                      <span className="notif-item__title">{item.title}</span>
-                      {item.digest ? <span className="notif-item__digest">{item.digest}</span> : null}
+                      <span>{item.title}</span>
+                      {item.digest ? (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis>
+                          {item.digest}
+                        </Typography.Text>
+                      ) : null}
                     </span>
-                    {unread ? <span className="notif-item__dot" aria-label="未读" /> : null}
+                    {unread ? (
+                      <span
+                        aria-label="未读"
+                        style={{ width: 8, height: 8, borderRadius: '50%', background: token.colorError, flexShrink: 0 }}
+                      />
+                    ) : null}
                   </button>
                 );
               })}
@@ -226,29 +255,29 @@ export function NotificationCenterPage() {
             offlineText="离线中，展示本地已缓存的通知（新事件暂停聚合）"
             degradedText={degradedText ?? undefined}
           >
-            <div className="notif-list" />
+            <div />
           </StateView>
         )}
       </div>
 
-      {/* 公告全文弹层（简版 Modal，D03 §3.9 系统公告点击路由） */}
+      {/* 公告全文弹层（antd Modal，D03 §3.9 系统公告点击路由） */}
       {annModal ? (
-        <div className="notif-modal-mask" data-testid="ann-modal" onClick={() => setAnnModal(null)}>
-          <div className="notif-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="公告全文">
-            <header className="notif-modal__header">
-              <span className="notif-modal__title">
-                <Megaphone size={15} aria-hidden />
-                {annModal.title}
-              </span>
-              <button type="button" className="icon-btn" onClick={() => setAnnModal(null)} aria-label="关闭" data-testid="ann-modal-close">
-                <X size={15} />
-              </button>
-            </header>
-            <div className="notif-modal__body" data-testid="ann-modal-text">
-              {annLoading ? '加载全文…' : annModal.text || '（空公告）'}
-            </div>
-          </div>
-        </div>
+        <Modal
+          open
+          width={520}
+          onCancel={() => setAnnModal(null)}
+          destroyOnClose
+          footer={null}
+          data-testid="ann-modal"
+          title={
+            <span>
+              <Megaphone size={15} aria-hidden /> {annModal.title}
+            </span>
+          }
+          closeIcon={<X size={15} data-testid="ann-modal-close" />}
+        >
+          <div data-testid="ann-modal-text">{annLoading ? '加载全文…' : annModal.text || '（空公告）'}</div>
+        </Modal>
       ) : null}
     </div>
   );

@@ -6,10 +6,14 @@
  *   设/取消管理员、单人禁言（预设时长）、移出、群名/策略/全员禁言、公告编辑、
  *   群文件列表+票据下载（GET /files/convs/{id}，D06 阶段二）
  * - conv.updated 推送经 conv 摘要变化触发详情重拉（memberCount/groupSetting 依赖）
+ * D26-O5：仅换表单件与确认——7 个原生 input/select/textarea→antd
+ * Input/Select/Input.TextArea、3 处原生 confirm 弹窗→Modal.confirm（danger）；
+ * 布局结构类（detail-panel/gm-*）保留（本批唯一允许保留类名的文件）。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Input, Modal, Select } from 'antd';
 import { FileText, Hash, Megaphone, ScrollText, Settings2, Shield, Tag, Users, VolumeX, X } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { Button } from '../../../shared/ui/Button';
@@ -330,22 +334,28 @@ function InfoTab({
       {iAmOwner && conv.status === 1 ? (
         <div className="gm-op">
           <div className="gm-op__label">转让群主</div>
-          <div className="bbw-input">
-            <input
-              placeholder="目标成员 uid"
-              value={transferUid}
-              onChange={(e) => setTransferUid(e.target.value)}
-              data-testid="transfer-uid"
-            />
-          </div>
+          <Input
+            placeholder="目标成员 uid"
+            value={transferUid}
+            onChange={(e) => setTransferUid(e.target.value)}
+            data-testid="transfer-uid"
+          />
           <Button
             variant="secondary"
             disabled={busy || !transferUid.trim()}
             onClick={() => {
-              if (window.confirm(`确认将群主转让给 ${transferUid.trim()}？转让后你变为普通成员`)) {
-                onTransfer(transferUid.trim());
-                setTransferUid('');
-              }
+              const uid = transferUid.trim();
+              Modal.confirm({
+                title: `确认将群主转让给 ${uid}？`,
+                content: '转让后你变为普通成员',
+                okText: '转让',
+                okButtonProps: { danger: true },
+                cancelText: '取消',
+                onOk: () => {
+                  onTransfer(uid);
+                  setTransferUid('');
+                },
+              });
             }}
           >
             转让
@@ -462,7 +472,15 @@ function MembersTab({
                       type="button"
                       className="gm-op-btn gm-op-btn--danger"
                       disabled={busy}
-                      onClick={() => window.confirm(`确认将群主转让给 ${m.displayName}？`) && onTransferMember(m.uid)}
+                      onClick={() =>
+                        Modal.confirm({
+                          title: `确认将群主转让给 ${m.displayName}？`,
+                          okText: '转让',
+                          okButtonProps: { danger: true },
+                          cancelText: '取消',
+                          onOk: () => onTransferMember(m.uid),
+                        })
+                      }
                     >
                       转让
                     </button>
@@ -493,7 +511,15 @@ function MembersTab({
                   type="button"
                   className="gm-op-btn gm-op-btn--danger"
                   disabled={busy}
-                  onClick={() => window.confirm(`确认将 ${m.displayName} 移出群聊？`) && onRemove(m.uid)}
+                  onClick={() =>
+                    Modal.confirm({
+                      title: `确认将 ${m.displayName} 移出群聊？`,
+                      okText: '移出',
+                      okButtonProps: { danger: true },
+                      cancelText: '取消',
+                      onOk: () => onRemove(m.uid),
+                    })
+                  }
                 >
                   移出
                 </button>
@@ -616,6 +642,8 @@ function SettingTab({
 }) {
   const gs = conv.groupSetting;
   const [name, setName] = useState(conv.name);
+  /** 全员禁言时长预设（受控；开启时取此值——替代旧 DOM 取 select.value 路径） */
+  const [muteAllPreset, setMuteAllPreset] = useState(3600_000);
   const muteAllOn = (gs?.muteAllUntil ?? 0) > Date.now();
 
   return (
@@ -623,9 +651,7 @@ function SettingTab({
       <div className="gm-field">
         <label className="gm-field__label">群名（≤50 字）</label>
         <div className="gm-field__row">
-          <div className="bbw-input">
-            <input value={name} onChange={(e) => setName(e.target.value)} data-testid="group-name-input" />
-          </div>
+          <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="group-name-input" />
           <Button variant="secondary" disabled={busy || !name.trim() || name === conv.name} onClick={() => onPatch({ name: name.trim() })}>
             改名
           </Button>
@@ -634,53 +660,63 @@ function SettingTab({
 
       <div className="gm-field">
         <label className="gm-field__label">入群方式</label>
-        <select
-          className="gm-select"
+        <Select
+          style={{ width: '100%' }}
           value={gs?.joinMode ?? 1}
           disabled={busy}
-          onChange={(e) => onPatch({ join_mode: Number(e.target.value) as 1 | 2 | 3 })}
-        >
-          <option value={1}>直接加入</option>
-          <option value={2}>需要审批</option>
-          <option value={3}>仅邀请</option>
-        </select>
+          onChange={(v) => onPatch({ join_mode: v as 1 | 2 | 3 })}
+          options={[
+            { value: 1, label: '直接加入' },
+            { value: 2, label: '需要审批' },
+            { value: 3, label: '仅邀请' },
+          ]}
+        />
       </div>
 
       <div className="gm-field">
         <label className="gm-field__label">邀请权限</label>
-        <select
-          className="gm-select"
+        <Select
+          style={{ width: '100%' }}
           value={gs?.invitePolicy ?? 1}
           disabled={busy}
-          onChange={(e) => onPatch({ invite_policy: Number(e.target.value) as 1 | 2 })}
-        >
-          <option value={1}>全员可邀</option>
-          <option value={2}>仅管理员</option>
-        </select>
+          onChange={(v) => onPatch({ invite_policy: v as 1 | 2 })}
+          options={[
+            { value: 1, label: '全员可邀' },
+            { value: 2, label: '仅管理员' },
+          ]}
+        />
       </div>
 
       <div className="gm-field">
         <label className="gm-field__label">@全体权限（3014）</label>
-        <select
-          className="gm-select"
+        <Select
+          style={{ width: '100%' }}
           value={gs?.mentionAllPolicy ?? 2}
           disabled={busy}
-          onChange={(e) => onPatch({ mention_all_policy: Number(e.target.value) as 1 | 2 | 3 })}
-        >
-          <option value={1}>全员可用</option>
-          <option value={2}>仅管理员</option>
-          <option value={3}>禁用</option>
-        </select>
+          onChange={(v) => onPatch({ mention_all_policy: v as 1 | 2 | 3 })}
+          options={[
+            { value: 1, label: '全员可用' },
+            { value: 2, label: '仅管理员' },
+            { value: 3, label: '禁用' },
+          ]}
+        />
       </div>
 
       <div className="gm-field">
         <label className="gm-field__label">全员禁言（owner/admin 豁免）</label>
         <div className="gm-field__row">
-          <select className="gm-select" disabled={busy || muteAllOn} defaultValue={3600_000} data-testid="mute-all-select">
-            <option value={600_000}>10 分钟</option>
-            <option value={3600_000}>1 小时</option>
-            <option value={24 * 3600_000}>1 天</option>
-          </select>
+          <Select
+            style={{ width: 140 }}
+            disabled={busy || muteAllOn}
+            value={muteAllPreset}
+            onChange={setMuteAllPreset}
+            data-testid="mute-all-select"
+            options={[
+              { value: 600_000, label: '10 分钟' },
+              { value: 3600_000, label: '1 小时' },
+              { value: 24 * 3600_000, label: '1 天' },
+            ]}
+          />
           {muteAllOn ? (
             <Button variant="secondary" disabled={busy} onClick={() => onPatch({ mute_all_until: 0 })}>
               解除全员禁言
@@ -689,10 +725,7 @@ function SettingTab({
             <Button
               variant="primary"
               disabled={busy}
-              onClick={() => {
-                const sel = document.querySelector<HTMLSelectElement>('[data-testid="mute-all-select"]');
-                onPatch({ mute_all_until: Date.now() + Number(sel?.value ?? 3600_000) });
-              }}
+              onClick={() => onPatch({ mute_all_until: Date.now() + muteAllPreset })}
             >
               开启
             </Button>
@@ -749,8 +782,7 @@ function AnnouncementTab({
         editing ? (
           <div className="gm-op">
             <div className="gm-op__label">编辑公告（≤2000 字）</div>
-            <textarea
-              className="gm-textarea"
+            <Input.TextArea
               rows={5}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
