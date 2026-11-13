@@ -120,6 +120,7 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
       const level = heading[1].length;
       const Tag = (level === 1 ? 'h4' : level === 2 ? 'h5' : 'h6') as 'h4' | 'h5' | 'h6';
       blocks.push(<Tag key={key++} className={`agent-md__h agent-md__h--${level}`}>{renderInline(heading[2], `h${key}`)}</Tag>);
+      i += 1; // 根因修复（2026-11-13 真机「打开文章整页卡死」）：漏此行则 # 开头行 continue 后 i 永不推进 → 无限 push 主线程死循环
       continue;
     }
 
