@@ -1,9 +1,9 @@
 /**
- * 设计基元：多彩字母头像（哑组件）。
+ * 设计基元：多彩字母头像（D26-O1 包装化：内部换 antd Avatar，取色/字母逻辑保留）。
  * 名字 djb2 hash → 10 色企业系色板稳定取色；群聊/广播群显示图标底。
- * 形态遵循飞书式 8px 圆角方形（会话 40 / 消息 32 / 详情大号 64）。
  */
 
+import { Avatar as AntdAvatar } from 'antd';
 import { Megaphone, Users } from 'lucide-react';
 
 /** 色板：饱和度对企业场景、白字对比可用（亮暗主题通用） */
@@ -43,10 +43,11 @@ export function Avatar({ name, size = 40, group = null, className }: AvatarProps
   const iconSize = Math.round(size * 0.5);
 
   return (
-    <div
-      className={className ? `bbw-avatar ${className}` : 'bbw-avatar'}
-      style={{ width: size, height: size, background: color, fontSize: Math.round(size * 0.38), borderRadius: size >= 64 ? 12 : 8 }}
-      aria-hidden
+    <AntdAvatar
+      className={className}
+      shape="square"
+      size={size}
+      style={{ backgroundColor: color, color: '#fff', fontSize: Math.round(size * 0.38), fontWeight: 500 }}
     >
       {group === 'group' ? (
         <Users size={iconSize} strokeWidth={2} />
@@ -55,6 +56,6 @@ export function Avatar({ name, size = 40, group = null, className }: AvatarProps
       ) : (
         name.slice(0, 1)
       )}
-    </div>
+    </AntdAvatar>
   );
 }

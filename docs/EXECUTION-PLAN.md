@@ -338,7 +338,7 @@
 
 | # | 事项 | 改动点 | 验收 | 状态 |
 |---|---|---|---|---|
-| O1 | 主题基线+基础层+kb 样板 | antdThemeFrom 亮暗单源+ConfigProvider 全量令牌；Button/Skeleton/Empty/Avatar 包装化；kb 域 Tabs/Tree/Modal×2/Input 换装 | 亮暗混排无肉眼差异；kb 全链等价（开文章/建目录/建文章） | [ ] |
+| O1 | 主题基线+基础层+kb 样板 | antdThemeFrom 亮暗单源+ConfigProvider 全量令牌；Button/Skeleton/Empty/Avatar 包装化；kb 域 Tabs/Tree/Modal×2/Input 换装 | 亮暗混排无肉眼差异；kb 全链等价（开文章/建目录/建文章） | [x] 2026-11-13（**口径修订：用户拍板旧组件自研样式一律退役走 antd 原生观感、不仿旧观感**，零漂移仅保主题令牌基线；antd 5.29 无 Tabs cardGap 令牌已略；global.css 10384→9895；真机走查归 D26 §7） |
 | O2 | admin 域 15 页 | admin-table→Table、表单控件全换、内联弹窗×2→Modal、confirm×14→Modal.confirm | 任一表格页分页排序+表单保存+危险确认红钮 | [ ] |
 | O3 | settings+auth+contacts+mail+expert+eco | 表单件+弹窗（compose/settings-drawer/exp×2/plugin-drawer）+confirm 清零 | 各域表单等价+弹窗 Esc/遮罩关闭 | [ ] |
 | O4 | agent 工作台 | 会话列表/设置卡/报告/记忆页表单件+弹窗（过程卡/StreamMessage 保留） | 工作台全链回归 | [ ] |

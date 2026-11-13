@@ -6,6 +6,7 @@
 
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { Button as AntdButton, Input } from 'antd';
 import { ChevronRight, Eye, Folder, RotateCcw } from 'lucide-react';
 import { useCreateDir, useNodes, useSpaces } from '../api/hooks';
 import { StateView } from '../../../shared/ui/StateView';
@@ -84,18 +85,17 @@ export function SpaceBrowsePage() {
             </button>
           ) : null}
           <span className="kb-browse-page__newdir">
-            <input
-              className="kb-browse-page__newdir-input"
+            <Input
+              size="small"
               placeholder="新建专栏目录"
               value={newDir}
+              style={{ width: 160 }}
               onChange={(e) => setNewDir(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void submitDir();
-              }}
+              onPressEnter={() => void submitDir()}
             />
-            <button type="button" className="kb-link-btn" onClick={() => void submitDir()} disabled={creating || !newDir.trim()}>
+            <AntdButton size="small" type="primary" onClick={() => void submitDir()} loading={creating} disabled={!newDir.trim()}>
               创建
-            </button>
+            </AntdButton>
           </span>
           {dirErr ? <span className="kb-browse-page__dir-err">{dirErr}</span> : null}
         </div>

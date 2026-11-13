@@ -1,7 +1,9 @@
 /**
- * 骨架屏基元（D01 §7 loading 态：列表=条形骨架×8；详情=块骨架；流式区域=shimmer 行）。
- * shimmer 动画见 global.css .bbw-skeleton；布局类 skl-* 同在 global.css。
+ * 骨架屏基元（D26-O1 包装化）：SkeletonList/SkeletonBlock 内部换 antd Skeleton（原生观感，API 不动）。
+ * 单条 Skeleton 保留自研条 + SkeletonStream 整体保留——IM 消息流骨架属 D26 §4 保留域。
  */
+
+import { Skeleton as AntdSkeleton } from 'antd';
 
 interface SkeletonProps {
   width?: string | number;
@@ -9,40 +11,30 @@ interface SkeletonProps {
   className?: string;
 }
 
-/** 单条骨架 */
+/** 单条骨架（保留自研：IM 流式气泡等保留域专用） */
 export function Skeleton({ width = '100%', height = 14, className }: SkeletonProps) {
   return <div className={className ? `bbw-skeleton ${className}` : 'bbw-skeleton'} style={{ width, height }} />;
 }
 
-/** 列表骨架（条形×N，默认 8 条，对应会话列表 loading 态） */
+/** 列表骨架（条形×N，默认 8 条；antd 段落骨架驱动） */
 export function SkeletonList({ count = 8 }: { count?: number }) {
   return (
     <div className="skl-list">
-      {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="skl-list__row">
-          <Skeleton width={40} height={40} className="skl-avatar" />
-          <div className="skl-list__col">
-            <Skeleton width="55%" height={14} />
-            <Skeleton width="85%" height={12} />
-          </div>
-        </div>
-      ))}
+      <AntdSkeleton active title={false} paragraph={{ rows: count }} />
     </div>
   );
 }
 
-/** 详情/内容块骨架 */
+/** 详情/内容块骨架（antd 标题+段落骨架，行数按高度折算） */
 export function SkeletonBlock({ height = 200 }: { height?: number }) {
   return (
-    <div className="skl-block">
-      <Skeleton width="40%" height={16} />
-      <Skeleton height={height} />
-      <Skeleton width="70%" height={14} />
+    <div className="skl-list">
+      <AntdSkeleton active title paragraph={{ rows: Math.max(2, Math.round(height / 24)) }} />
     </div>
   );
 }
 
-/** 消息流 shimmer 行（×N，默认 6） */
+/** 消息流 shimmer 行（×N，默认 6；IM 保留域，自研不动） */
 export function SkeletonStream({ count = 6 }: { count?: number }) {
   return (
     <div className="skl-stream">

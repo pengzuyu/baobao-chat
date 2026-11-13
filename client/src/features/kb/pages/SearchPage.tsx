@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search } from 'lucide-react';
+import { Input } from 'antd';
 import { useMutation } from '@tanstack/react-query';
 import { fetchChunksAround, queryKb } from '../api/kb';
 import type { KbChunk, KbQueryHit } from '../model/types';
@@ -72,20 +72,14 @@ export function SearchPage() {
   return (
     <div className="kb-search-page" data-testid="kb-search-page">
       <div className="kb-search-page__bar">
-        <Search size={16} className="kb-search-page__icon" />
-        <input
-          className="kb-search-page__input"
+        <Input.Search
           value={input}
           placeholder="搜索公司知识"
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') submit();
-          }}
+          onSearch={submit}
+          enterButton="搜索"
           autoFocus
         />
-        <button type="button" className="kb-search-page__btn" onClick={submit} disabled={!input.trim()}>
-          搜索
-        </button>
       </div>
 
       {state === 'ok' ? (

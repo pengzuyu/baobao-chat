@@ -6,7 +6,8 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, Flame, ListOrdered, Search, Trophy } from 'lucide-react';
+import { Input, Segmented } from 'antd';
+import { Eye, Flame, ListOrdered, Trophy } from 'lucide-react';
 import { useMySummary, useRankings } from '../api/hooks';
 import { StateView } from '../../../shared/ui/StateView';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
@@ -105,24 +106,18 @@ export function KbHomePage() {
         </StateView>
       </section>
 
-      {/* B2 大搜索 */}
+      {/* B2 大搜索（D26-O1 换装 antd Input.Search） */}
       <section className="kb-home__search">
-        <div className="kb-bigsearch" data-testid="kb-bigsearch">
-          <Search size={20} className="kb-bigsearch__icon" />
-          <input
-            className="kb-bigsearch__input"
-            placeholder="搜索公司知识：例如「登录 token 过期怎么处理」"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submit();
-            }}
-            autoFocus
-          />
-          <button type="button" className="kb-bigsearch__btn" onClick={submit} disabled={!q.trim()}>
-            搜索
-          </button>
-        </div>
+        <Input.Search
+          size="large"
+          data-testid="kb-bigsearch"
+          placeholder="搜索公司知识：例如「登录 token 过期怎么处理」"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onSearch={submit}
+          enterButton="搜索"
+          autoFocus
+        />
       </section>
 
       {/* B3 榜单三列 */}
@@ -157,18 +152,17 @@ export function KbHomePage() {
         <div className="kb-board" data-testid="kb-board-hot">
           <div className="kb-board__head">
             <Flame size={15} /> 最热文章 Top10
-            <span className="kb-board__tabs">
-              {(['7d', '30d', 'all'] as const).map((w) => (
-                <button
-                  key={w}
-                  type="button"
-                  className={`kb-board__tab${hotWindow === w ? ' kb-board__tab--on' : ''}`}
-                  onClick={() => setHotWindow(w)}
-                >
-                  {w === '7d' ? '7 天' : w === '30d' ? '30 天' : '总榜'}
-                </button>
-              ))}
-            </span>
+            <Segmented
+              size="small"
+              style={{ marginLeft: 'auto' }}
+              value={hotWindow}
+              onChange={(v) => setHotWindow(v as '7d' | '30d' | 'all')}
+              options={[
+                { value: '7d', label: '7 天' },
+                { value: '30d', label: '30 天' },
+                { value: 'all', label: '总榜' },
+              ]}
+            />
           </div>
           <StateView
             state={hot.isPending ? 'loading' : hot.isError ? 'error' : (hot.data?.docs?.length ?? 0) === 0 ? 'empty' : 'ok'}

@@ -1,6 +1,6 @@
-/** 空态基元（D01 §7 empty：图标 + 一行说明 + 主 CTA） */
+/** 空态基元（D26-O1 包装化）：内部换 antd Empty（simple 线稿+原生观感），API 不动 */
 
-import { Inbox } from 'lucide-react';
+import { Empty as AntdEmpty } from 'antd';
 import type { ReactNode } from 'react';
 
 interface EmptyProps {
@@ -11,12 +11,8 @@ interface EmptyProps {
 
 export function Empty({ text, action }: EmptyProps) {
   return (
-    <div className="state-view__inner">
-      <div className="state-view__icon" aria-hidden>
-        <Inbox size={40} strokeWidth={1.4} />
-      </div>
-      <div className="state-view__text">{text}</div>
-      {action ? <div className="state-view__action">{action}</div> : null}
-    </div>
+    <AntdEmpty image={AntdEmpty.PRESENTED_IMAGE_SIMPLE} description={text}>
+      {action ? <div>{action}</div> : undefined}
+    </AntdEmpty>
   );
 }

@@ -3,12 +3,15 @@
  * 右=tab 页签容器——首页 tab 固定第 0 位不可关，点开的文章各占一 tab。
  * 路由驱动：/kb=首页 tab、/kb/d/:docId=打开/激活对应 tab（深链/刷新恢复当前）；
  * tab 列表为会话级（刷新重建，登记）。搜索页仍独立路由（全屏语义）。
+ * D26-O1：页签条换 antd Tabs（card 式，仅作条用——内容仍由下方条件渲染，
+ * 保持「仅活动 tab 挂载」的现有语义）；树头按钮换 antd Button。
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { FilePlus2, FolderPlus, Home, X } from 'lucide-react';
+import { Button as AntdButton, Tabs } from 'antd';
+import { FilePlus2, FolderPlus, Home } from 'lucide-react';
 import { fetchDoc } from '../api/kb';
 import { ArticleTree } from '../components/ArticleTree';
 import { ArticlePanel } from '../components/ArticlePanel';
@@ -91,12 +94,12 @@ export function KbShellPage() {
         <div className="kb-shell__tree-head">
           <span>文章树</span>
           <span className="kb-shell__tree-actions">
-            <button type="button" className="kb-shell__tree-btn" title="新建文章" data-testid="kb-btn-create-doc" onClick={() => setDlg('doc')}>
-              <FilePlus2 size={13} /> 文章
-            </button>
-            <button type="button" className="kb-shell__tree-btn" title="新建目录（专栏）" data-testid="kb-btn-create-dir" onClick={() => setDlg('dir')}>
-              <FolderPlus size={13} /> 目录
-            </button>
+            <AntdButton type="text" size="small" icon={<FilePlus2 size={13} />} data-testid="kb-btn-create-doc" onClick={() => setDlg('doc')}>
+              文章
+            </AntdButton>
+            <AntdButton type="text" size="small" icon={<FolderPlus size={13} />} data-testid="kb-btn-create-dir" onClick={() => setDlg('dir')}>
+              目录
+            </AntdButton>
           </span>
         </div>
         <div className="kb-shell__tree-body">
@@ -116,36 +119,32 @@ export function KbShellPage() {
       ) : null}
       {dlg === 'dir' ? <CreateDirDialog onClose={() => setDlg(null)} /> : null}
       <div className="kb-shell__main">
-        <div className="kb-tabs" role="tablist" data-testid="kb-tabs">
-          {tabs.map((t) => (
-            <div
-              key={t.key}
-              role="tab"
-              aria-selected={t.key === activeKey}
-              className={`kb-tabs__item${t.key === activeKey ? ' kb-tabs__item--active' : ''}${t.key === 'home' ? ' kb-tabs__item--home' : ''}`}
-              data-testid="kb-tab"
-              onClick={() => goTab(t.key)}
-            >
-              {t.key === 'home' ? <Home size={12} className="kb-tabs__home-icon" /> : null}
-              <span className="kb-tabs__label" title={t.title}>
-                {t.title}
-              </span>
-              {t.key !== 'home' ? (
-                <button
-                  type="button"
-                  className="kb-tabs__close"
-                  title="关闭"
-                  data-testid="kb-tab-close"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onCloseTab(t.key);
-                  }}
-                >
-                  <X size={11} />
-                </button>
-              ) : null}
-            </div>
-          ))}
+        <div className="kb-tabs" data-testid="kb-tabs">
+          <Tabs
+            type="card"
+            hideAdd
+            size="small"
+            activeKey={activeKey}
+            onChange={goTab}
+            onEdit={(key, action) => {
+              if (action === 'remove') onCloseTab(String(key));
+            }}
+            items={tabs.map((t) => ({
+              key: t.key,
+              label:
+                t.key === 'home' ? (
+                  <span data-testid="kb-tab">
+                    <Home size={12} style={{ marginRight: 4, verticalAlign: -1 }} />
+                    {t.title}
+                  </span>
+                ) : (
+                  <span data-testid="kb-tab" title={t.title}>
+                    {t.title}
+                  </span>
+                ),
+              closable: t.key !== 'home',
+            }))}
+          />
         </div>
         <div className="kb-shell__content">
           {/* 首页 tab=原 KbHomePage 整页复用（概览卡/大搜索/榜单三列/最近查看） */}
