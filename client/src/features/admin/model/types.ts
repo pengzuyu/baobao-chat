@@ -134,16 +134,16 @@ export interface AIProvider {
   status: 1 | 2;
 }
 
-/** 路由候选（fast/strong 主备；priority 小者先） */
+/** 路由候选（各档主备；priority 小者先） */
 export interface AIRouteCandidate {
   providerId: string;
   model: string;
   priority: number;
 }
 
-/** 一条 active 路由 */
+/** 一条 active 路由（embed/rerank 为可选档：不提交该档=不覆盖现有 active，D24 N3a 四档） */
 export interface AIRouteRule {
-  tier: 'fast' | 'strong';
+  tier: 'fast' | 'strong' | 'embed' | 'rerank';
   candidates: AIRouteCandidate[];
 }
 

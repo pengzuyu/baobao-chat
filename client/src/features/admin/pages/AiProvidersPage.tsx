@@ -2,7 +2,7 @@
  * AI 供应商治理（0023 表驱动多供应商，路由 /admin/ai-providers）：
  * - 供应商（公司级）CRUD：名称/BaseURL/密钥（服务端 KMS 加密落库，回显仅掩码）/
  *   模型清单（探活从上游 /models 拉取 + 手动补充）——新增/编辑走右侧抽屉
- * - 默认模型路由：fast/strong 各配主备（priority 逐候选降级，全尽 8051）
+ * - 默认模型路由：fast/strong 必配主备 + embed/rerank 可选档（D24 N3a；priority 逐候选降级，全尽 8051）
  * - 六态：列表独立 loading/empty/error/forbidden/offline；行操作失败不认领 → 全局 toast 兜底
  * 蓝图：19 篇 §3.1/§3.3/§6.5 v0.1 子集。
  */
@@ -326,7 +326,9 @@ function ProvidersPanel() {
   );
 }
 
-/* ── 默认路由面板（fast/strong 主备） ── */
+/* ── 默认路由面板（fast/strong 必配 + embed/rerank 可选档） ── */
+
+type Tier = 'fast' | 'strong' | 'embed' | 'rerank';
 
 interface TierDraft {
   mainProv: string;
@@ -345,7 +347,7 @@ function RoutesPanel() {
 
   const initial = useMemo(() => {
     const byTier = new Map((routesQuery.data ?? []).map((r) => [r.tier, r.candidates] as const));
-    const draft = (tier: 'fast' | 'strong'): TierDraft => {
+    const draft = (tier: Tier): TierDraft => {
       const cands = byTier.get(tier) ?? [];
       const [main, backup] = cands;
       return {
@@ -355,7 +357,7 @@ function RoutesPanel() {
         backupModel: backup?.model ?? '',
       };
     };
-    return { fast: draft('fast'), strong: draft('strong') };
+    return { fast: draft('fast'), strong: draft('strong'), embed: draft('embed'), rerank: draft('rerank') };
   }, [routesQuery.data]);
 
   const [draft, setDraft] = useState(initial);
@@ -368,13 +370,21 @@ function RoutesPanel() {
 
   const modelsOf = (provId: string) => enabled.find((p) => p.id === provId)?.models ?? [];
 
-  const setTier = (tier: 'fast' | 'strong', patch: Partial<TierDraft>) => {
+  const setTier = (tier: Tier, patch: Partial<TierDraft>) => {
     setDraft((d) => ({ ...d, [tier]: { ...d[tier], ...patch } }));
     setError('');
   };
 
   const submit = () => {
-    const items = (['fast', 'strong'] as const)
+    // 可选档主选半截（选了供应商没选模型/反之）直接拦——静默丢弃会让用户误以为已生效
+    for (const tier of ['embed', 'rerank'] as const) {
+      const d = draft[tier];
+      if ((d.mainProv || d.mainModel) && !(d.mainProv && d.mainModel)) {
+        setError(`${tier} 档主选须供应商与模型同选（同空=沿用现有配置）`);
+        return;
+      }
+    }
+    const items = (['fast', 'strong', 'embed', 'rerank'] as const)
       .map((tier) => {
         const d = draft[tier];
         const candidates = [];
@@ -393,7 +403,7 @@ function RoutesPanel() {
 
   const state: ViewStateOrOk = provQuery.isPending || routesQuery.isPending ? 'loading' : provQuery.isError || routesQuery.isError ? 'error' : 'ok';
 
-  const tierRow = (tier: 'fast' | 'strong', label: string, desc: string) => {
+  const tierRow = (tier: Tier, label: string, desc: string) => {
     const d = draft[tier];
     return (
       <tr key={tier}>
@@ -451,7 +461,7 @@ function RoutesPanel() {
       <section className="admin-panel" style={{ marginTop: 16 }}>
         <div className="admin-panel__title">
           默认模型（全员路由）
-          <span className="admin-panel__meta">档位别名 bbw-fast/bbw-strong → 此处主选；主选失败自动切备选（§4.4 降级链）</span>
+          <span className="admin-panel__meta">档位别名 bbw-fast/bbw-strong/bbw-embed/bbw-rerank → 此处主选；主选失败自动切备选（§4.4 降级链）；embed/rerank 可选——留空=沿用现有配置/内置兜底</span>
         </div>
         <table className="admin-table">
           <thead>
@@ -464,6 +474,8 @@ function RoutesPanel() {
           <tbody>
             {tierRow('fast', '快速档', '轻量任务/工具调用循环')}
             {tierRow('strong', '强力档', '复杂推理/长文写作')}
+            {tierRow('embed', '嵌入档', '知识库向量化（bbw-embed；可选，未配走 mock 兜底向量）')}
+            {tierRow('rerank', '重排档', '知识库检索重排（bbw-rerank；可选，未配走词面重排兜底）')}
           </tbody>
         </table>
         {error ? <div className="admin-error-bar">{error}</div> : null}
