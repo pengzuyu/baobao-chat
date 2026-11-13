@@ -5,13 +5,15 @@
  * tab 列表为会话级（刷新重建，登记）。搜索页仍独立路由（全屏语义）。
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Home, X } from 'lucide-react';
+import { FilePlus2, FolderPlus, Home, X } from 'lucide-react';
 import { fetchDoc } from '../api/kb';
 import { ArticleTree } from '../components/ArticleTree';
 import { ArticlePanel } from '../components/ArticlePanel';
+import { CreateDocDialog } from '../components/CreateDocDialog';
+import { CreateDirDialog } from '../components/CreateDirDialog';
 import { useKbTabs } from '../store/kbTabs';
 import { qk } from '../../../shared/api/keys';
 import { KbHomePage } from './KbHomePage';
@@ -20,6 +22,8 @@ export function KbShellPage() {
   const { docId } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  // 创建文章/目录弹窗（修正轮二：页面恢复写入入口——用户拍板修订 D24 原零写入口径）
+  const [dlg, setDlg] = useState<null | 'doc' | 'dir'>(null);
   const tabs = useKbTabs((s) => s.tabs);
   const activeKey = useKbTabs((s) => s.activeKey);
   const open = useKbTabs((s) => s.open);
@@ -75,11 +79,33 @@ export function KbShellPage() {
   return (
     <div className="kb-shell" data-testid="kb-shell">
       <aside className="kb-shell__tree">
-        <div className="kb-shell__tree-head">文章树</div>
+        <div className="kb-shell__tree-head">
+          <span>文章树</span>
+          <span className="kb-shell__tree-actions">
+            <button type="button" className="kb-shell__tree-btn" title="新建文章" data-testid="kb-btn-create-doc" onClick={() => setDlg('doc')}>
+              <FilePlus2 size={13} /> 文章
+            </button>
+            <button type="button" className="kb-shell__tree-btn" title="新建目录（专栏）" data-testid="kb-btn-create-dir" onClick={() => setDlg('dir')}>
+              <FolderPlus size={13} /> 目录
+            </button>
+          </span>
+        </div>
         <div className="kb-shell__tree-body">
           <ArticleTree onOpenDoc={onOpenDoc} />
         </div>
       </aside>
+
+      {dlg === 'doc' ? (
+        <CreateDocDialog
+          onClose={() => setDlg(null)}
+          onCreated={(doc) => {
+            setDlg(null);
+            open(doc.id, doc.title);
+            navigate(`/kb/d/${doc.id}`);
+          }}
+        />
+      ) : null}
+      {dlg === 'dir' ? <CreateDirDialog onClose={() => setDlg(null)} /> : null}
       <div className="kb-shell__main">
         <div className="kb-tabs" role="tablist" data-testid="kb-tabs">
           {tabs.map((t) => (

@@ -1,5 +1,5 @@
 /**
- * 我的文章页（D24）：/kb/my——概览卡数字的落点；两维度分组（公司知识库/我的笔记）
+ * 我的文章页（D24）：/kb/my——概览卡数字的落点；两维度分组（公司知识库/我的文章）
  * 列出我写的全部文章（含浏览量）；无编辑操作（写入只留 API 给 AI 拍板）。
  */
 
@@ -29,7 +29,7 @@ export function MyArticlesPage() {
         emptyText="还没有文章——让 AI 帮你把会话结论沉淀进知识库"
       >
         <Section title="公司知识库" docs={company} badge="company" navigate={navigate} />
-        <Section title="我的笔记" docs={personal} badge="personal" navigate={navigate} />
+        <Section title="我的文章" docs={personal} badge="personal" navigate={navigate} />
       </StateView>
     </div>
   );

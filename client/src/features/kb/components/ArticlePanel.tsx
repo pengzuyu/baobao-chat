@@ -82,7 +82,7 @@ export function ArticlePanel(props: { docId: string }) {
                 <h1 className="kb-article__title">{doc.data.title}</h1>
                 <div className="kb-article__meta">
                   <span className={`kb-space-badge kb-space-badge--${doc.data.space_type ?? 'company'}`}>
-                    {doc.data.space_type === 'personal' ? '我的笔记' : '公司知识库'}
+                    {doc.data.space_type === 'personal' ? '我的文章' : '公司知识库'}
                   </span>
                   <span>作者 {doc.data.created_by}</span>
                   <span>创建 {formatListTime(doc.data.created_at)}</span>

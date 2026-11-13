@@ -228,7 +228,7 @@ export async function fetchRankings(board: 'latest' | 'hot' | 'authors', window?
   return http.get<KbRankingsResp>(`/kb/rankings?${q.toString()}`);
 }
 
-/** IM 消息存入知识库（N6：space_id 空=默认落我的笔记；返回终态文章） */
+/** IM 消息存入知识库（N6：space_id 空=默认落我的文章；返回终态文章） */
 export async function ingestFromIm(req: { msg_id: string; text: string; title?: string; space_id?: string }): Promise<KbDoc> {
   if (USE_MOCK) {
     await delay(500);

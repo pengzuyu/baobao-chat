@@ -22,7 +22,7 @@ export function SpaceBrowsePage() {
   const navigate = useNavigate();
   const spaces = useSpaces('all');
   const space = spaces.data?.find((s) => s.id === spaceId);
-  const spaceName = space ? (space.space_type === 'personal' ? '我的笔记' : space.name) : '知识库';
+  const spaceName = space ? (space.space_type === 'personal' ? '我的文章' : space.name) : '知识库';
 
   const [dirStack, setDirStack] = useState<DirCrumb[]>([]);
   const parentId = dirStack.length > 0 ? dirStack[dirStack.length - 1].id : '';

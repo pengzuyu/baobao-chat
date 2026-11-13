@@ -1,5 +1,5 @@
 /**
- * 文章树（D24 真机修正轮 2026-11-13）：知识库左栏——两维度根（公司知识库/我的笔记）
+ * 文章树（D24 真机修正轮 2026-11-13）：知识库左栏——两维度根（公司知识库/我的文章）
  * → 专栏目录递归嵌套（fetchNodes 懒加载逐层展开）→ 文章叶子（点击开 tab）。
  * 目录节点 hover「+」新建子目录（唯一写入动作——文章本体无写入 UI 拍板）。
  */
@@ -35,7 +35,7 @@ export function ArticleTree(props: { onOpenDoc: (docId: string, title: string) =
     return <SkeletonList count={5} />;
   }
 
-  // 两维度根：公司在前（公共分享主场），我的笔记在后
+  // 两维度根：公司在前（公共分享主场），我的文章在后
   const ordered = [...(spaces.data ?? [])].sort((a, b) => (a.space_type === 'company' ? -1 : b.space_type === 'company' ? 1 : 0));
 
   return (
@@ -44,7 +44,7 @@ export function ArticleTree(props: { onOpenDoc: (docId: string, title: string) =
         <SpaceRoot
           key={sp.id}
           spaceId={sp.id}
-          name={sp.space_type === 'personal' ? '我的笔记' : sp.name}
+          name={sp.space_type === 'personal' ? '我的文章' : sp.name}
           docCount={sp.doc_count}
           onOpenDoc={props.onOpenDoc}
         />
