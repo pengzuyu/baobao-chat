@@ -5,8 +5,8 @@
  * tab 列表为会话级（刷新重建，登记）。搜索页仍独立路由（全屏语义）。
  */
 
-import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { FilePlus2, FolderPlus, Home, X } from 'lucide-react';
 import { fetchDoc } from '../api/kb';
@@ -18,8 +18,14 @@ import { useKbTabs } from '../store/kbTabs';
 import { qk } from '../../../shared/api/keys';
 import { KbHomePage } from './KbHomePage';
 
+/** 从 location 解析当前文章 tab（/kb 或 /kb/d/:id）——单路由 splat 形态，切换零重挂 */
+function docIdOf(pathname: string): string | undefined {
+  return /^\/kb\/d\/([^/]+)/.exec(pathname)?.[1];
+}
+
 export function KbShellPage() {
-  const { docId } = useParams();
+  const location = useLocation();
+  const docId = docIdOf(location.pathname);
   const navigate = useNavigate();
   const qc = useQueryClient();
   // 创建文章/目录弹窗（修正轮二：页面恢复写入入口——用户拍板修订 D24 原零写入口径）
@@ -70,11 +76,14 @@ export function KbShellPage() {
     if (next !== activeKey) navigate(next === 'home' ? '/kb' : `/kb/d/${next}`);
   };
 
-  /** 左树点击文章：开 tab + 路由跟随 */
-  const onOpenDoc = (id: string, title: string) => {
-    open(id, title);
-    navigate(`/kb/d/${id}`);
-  };
+  /** 左树点击文章：开 tab + 路由跟随（useCallback 稳定引用——ArticleTree memo 生效前提） */
+  const onOpenDoc = useCallback(
+    (id: string, title: string) => {
+      open(id, title);
+      navigate(`/kb/d/${id}`);
+    },
+    [open, navigate],
+  );
 
   return (
     <div className="kb-shell" data-testid="kb-shell">

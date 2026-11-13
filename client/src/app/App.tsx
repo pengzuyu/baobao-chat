@@ -248,9 +248,10 @@ export function App() {
         <Route path="/notifications" element={<NotificationCenterPage />} />
         <Route path="/im/notifications" element={<Navigate to="/notifications" replace />} />
         {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
-        <Route path="/kb" element={<KbShellPage />} />
+        {/* kb/* 单条 splat：/kb 与 /kb/d/:id 同组件零重挂（tab 切换不销毁壳/树/首页，
+            双路由版本切 tab 整壳重挂——真机「打开文章整页卡死」根因）；search/my/s 静态段优先匹配 */}
+        <Route path="/kb/*" element={<KbShellPage />} />
         <Route path="/kb/search" element={<SearchPage />} />
-        <Route path="/kb/d/:docId" element={<KbShellPage />} />
         <Route path="/kb/s/:spaceId" element={<SpaceBrowsePage />} />
         <Route path="/kb/my" element={<MyArticlesPage />} />
         {/* 邮箱（22 篇 MAI-01~04：三栏/写信/设置/搜索） */}

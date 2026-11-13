@@ -4,7 +4,7 @@
  * 目录节点 hover「+」新建子目录（唯一写入动作——文章本体无写入 UI 拍板）。
  */
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ChevronDown, ChevronRight, FileText, FolderPlus, Plus } from 'lucide-react';
 import { useCreateDir, useNodes, useSpaces } from '../api/hooks';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
@@ -25,7 +25,7 @@ interface DirNodeProps {
   onOpenDoc: (docId: string, title: string) => void;
 }
 
-export function ArticleTree(props: { onOpenDoc: (docId: string, title: string) => void }) {
+function ArticleTreeInner(props: { onOpenDoc: (docId: string, title: string) => void }) {
   const spaces = useSpaces('all');
 
   if (spaces.isError) {
@@ -165,3 +165,6 @@ function DirNode(props: DirNodeProps) {
     </div>
   );
 }
+
+/** memo：tab 切换/弹窗开合时左树整棵跳过重渲染（onOpenDoc 由 KbShell useCallback 稳定化） */
+export const ArticleTree = memo(ArticleTreeInner);
