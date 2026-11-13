@@ -517,6 +517,34 @@ export async function fetchKBSpaces(): Promise<KBSpaceRow[]> {
   return data.items;
 }
 
+/* ── KB 嵌入设置与向量重建（D24 §5.3；admin:kb:govern） ── */
+
+/** 嵌入配置与重建进度（治理页轮询） */
+export interface KBEmbeddingSettings {
+  embed_epoch: number;
+  embed_model: string;
+  embed_dims: number;
+  rebuild_status: 'idle' | 'running';
+  rebuild_done: number;
+  rebuild_total: number;
+}
+
+export async function fetchKBEmbedding(): Promise<KBEmbeddingSettings> {
+  if (USE_MOCK) {
+    return { embed_epoch: 1, embed_model: 'mock-embed', embed_dims: 1024, rebuild_status: 'idle', rebuild_done: 0, rebuild_total: 0 };
+  }
+  return http.get<KBEmbeddingSettings>('/admin/kb/embedding');
+}
+
+/** 触发重建（跨维度=清空向量+改列——调用方二次确认；7017 running/7018 维度不符） */
+export async function rebuildKBEmbedding(req: { model: string; dims: number; force?: boolean }): Promise<KBEmbeddingSettings> {
+  if (USE_MOCK) {
+    await new Promise((r) => setTimeout(r, 400));
+    return { embed_epoch: 2, embed_model: req.model, embed_dims: req.dims, rebuild_status: 'running', rebuild_done: 0, rebuild_total: 12 };
+  }
+  return http.post<KBEmbeddingSettings>('/admin/kb/embedding/rebuild', req);
+}
+
 /* ── 单建用户 + 工号建议（2026-11-12 通讯录合并页） ── */
 
 /** 单建输入：employee_no 空=服务端按姓名全拼自动生成（重名两位补零递增） */

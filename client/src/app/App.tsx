@@ -16,7 +16,9 @@ import { NotificationCenterPage } from '../features/im/pages/NotificationCenterP
 import { ContactsPage } from '../features/contacts/pages/ContactsPage';
 import { ArticlePage } from '../features/kb/pages/ArticlePage';
 import { KbHomePage } from '../features/kb/pages/KbHomePage';
+import { MyArticlesPage } from '../features/kb/pages/MyArticlesPage';
 import { SearchPage } from '../features/kb/pages/SearchPage';
+import { SpaceBrowsePage } from '../features/kb/pages/SpaceBrowsePage';
 import { MailPage } from '../features/mail/pages/MailPage';
 import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
 import { AppStorePage } from '../features/eco/pages/AppStorePage';
@@ -249,6 +251,8 @@ export function App() {
         <Route path="/kb" element={<KbHomePage />} />
         <Route path="/kb/search" element={<SearchPage />} />
         <Route path="/kb/d/:docId" element={<ArticlePage />} />
+        <Route path="/kb/s/:spaceId" element={<SpaceBrowsePage />} />
+        <Route path="/kb/my" element={<MyArticlesPage />} />
         {/* 邮箱（22 篇 MAI-01~04：三栏/写信/设置/搜索） */}
         <Route path="/mail" element={<MailPage />} />
         {/* 专家库（D14 PAG-13~15：公司/个人库/编辑器；协作图视图随 agent_* 接线） */}

@@ -6,7 +6,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { qk } from '../../../shared/api/keys';
 import {
   createDir,
-  createSpace,
   fetchChunks,
   fetchJobs,
   fetchNodes,
@@ -16,7 +15,6 @@ import {
   reingestDoc,
   type IngestPayload,
 } from './kb';
-import type { KbSpace } from '../model/types';
 
 /** 可见空间列表（?type= 过滤） */
 export function useSpaces(type: string = 'all') {
@@ -59,15 +57,6 @@ export function useJobs(spaceId: string | null, status: string = 'all') {
     queryKey: qk.kb.jobs(spaceId ?? 'none', status),
     queryFn: () => fetchJobs(spaceId as string, status === 'all' ? undefined : status),
     enabled: !!spaceId,
-  });
-}
-
-/** 新建空间（成功后失效空间列表） */
-export function useCreateSpace() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ type, name }: { type: KbSpace['space_type']; name: string }) => createSpace(type, name),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['kb', 'spaces'] }),
   });
 }
 
