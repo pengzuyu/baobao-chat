@@ -1,5 +1,6 @@
-//! 手写 HTTP/1.1 客户端传输原语（v0.1 口径与 bbrt-aigw 一致：std::net::TcpStream，
-//! 不引任何 HTTP 库依赖；`https://` 为已登记开放问题——待网关上 TLS 后换 rustls）。
+//! 手写 HTTP/1.1 客户端传输原语（v0.1 口径与 bbrt-aigw 一致：不引任何 HTTP
+//! 库依赖）。https/TLS 已补（D26 §5）：rustls(ring) + webpki-roots 在裸
+//! TcpStream 之上包 `StreamOwned`，其余读写逻辑 http/https 同一套。
 //!
 //! 单请求单连接（`Connection: close`）：POST + Bearer + JSON body +
 //! Content-Length；响应整读后按 `Content-Length` / `Transfer-Encoding: chunked` /
@@ -8,26 +9,35 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::McpError;
 
-/// 解析后的端点 URL（`http://host:port/path`；path 缺省 `/`）。
+/// 解析后的端点 URL（`http(s)://host:port/path`；path 缺省 `/`，端口缺省
+/// http=80 / https=443）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedUrl {
+    pub secure: bool,
     pub host: String,
     pub port: u16,
     pub path: String,
 }
 
-/// 解析端点。仅支持 `http://`（`https://` → Protocol，开放问题登记同 aigw）。
+/// 解析端点。`http://` 与 `https://`（D26 §5 TLS 补齐）；其余协议报错。
 pub(crate) fn parse_url(base: &str) -> Result<ParsedUrl, McpError> {
     let trimmed = base.trim();
-    let rest = trimmed.strip_prefix("http://").ok_or_else(|| {
-        McpError::Protocol(format!(
-            "base_url 必须形如 http://127.0.0.1:8090/mcp/corp，得到 {base:?}（https 待网关 TLS）"
-        ))
-    })?;
+    let (secure, rest) = match trimmed.strip_prefix("https://") {
+        Some(r) => (true, r),
+        None => match trimmed.strip_prefix("http://") {
+            Some(r) => (false, r),
+            None => {
+                return Err(McpError::Protocol(format!(
+                    "base_url 必须形如 http(s)://host:port/path，得到 {base:?}"
+                )))
+            }
+        },
+    };
     if rest.is_empty() {
         return Err(McpError::Protocol("base_url 缺少主机名".into()));
     }
@@ -47,9 +57,48 @@ pub(crate) fn parse_url(base: &str) -> Result<ParsedUrl, McpError> {
                 .map_err(|_| McpError::Protocol(format!("base_url 端口非法：{base:?}")))?;
             (h.to_string(), port)
         }
-        None => (host_port.to_string(), 80),
+        None => (host_port.to_string(), if secure { 443 } else { 80 }),
     };
-    Ok(ParsedUrl { host, port, path })
+    Ok(ParsedUrl {
+        secure,
+        host,
+        port,
+        path,
+    })
+}
+
+/// 读写流组合 trait（裸 TCP 或 TLS 包装），供 post_json/get_text 统一消费
+/// （`Box<dyn Read + Write>` 非法——双主 trait，故收拢为一个超 trait）
+trait ReadWriteStream: Read + Write {}
+impl<T: Read + Write> ReadWriteStream for T {}
+type BoxStream = Box<dyn ReadWriteStream>;
+
+/// 建立连接并设置读写超时：http=裸 `TcpStream`；https=TcpStream + rustls
+/// `StreamOwned`（ServerName 取 host 作 SNI，webpki Mozilla 根校验——
+/// D26 §5；IP 主机 ServerName 亦支持）。
+fn connect_stream(url: &ParsedUrl, timeout: Duration) -> Result<BoxStream, McpError> {
+    let tcp = TcpStream::connect((url.host.as_str(), url.port)).map_err(|e| {
+        McpError::Connect(format!(
+            "MCP server 连接失败（{}:{}）: {e}",
+            url.host, url.port
+        ))
+    })?;
+    let _ = tcp.set_read_timeout(Some(timeout));
+    let _ = tcp.set_write_timeout(Some(timeout));
+    if !url.secure {
+        return Ok(Box::new(tcp));
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let server_name = rustls::pki_types::ServerName::try_from(url.host.clone()).map_err(|e| {
+        McpError::Connect(format!("TLS ServerName 无效（{}）: {e}", url.host))
+    })?;
+    let conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+        .map_err(|e| McpError::Connect(format!("TLS 初始化失败: {e}")))?;
+    Ok(Box::new(rustls::StreamOwned::new(conn, tcp)))
 }
 
 /// 单次 POST 交换：返回 (状态码, body 文本)。IO 失败/超时 → Connect。
@@ -61,14 +110,7 @@ pub(crate) fn post_json(
     body: &str,
     timeout: Duration,
 ) -> Result<(u16, String), McpError> {
-    let mut stream = TcpStream::connect((url.host.as_str(), url.port)).map_err(|e| {
-        McpError::Connect(format!(
-            "MCP 网关连接失败（{}:{}）: {e}",
-            url.host, url.port
-        ))
-    })?;
-    let _ = stream.set_read_timeout(Some(timeout));
-    let _ = stream.set_write_timeout(Some(timeout));
+    let mut stream = connect_stream(url, timeout)?;
 
     // 自动 Bearer 之上叠自定义头；同名 Authorization 覆盖由调用方
     // （HttpTransport::exchange）决定 bearer 传 None 实现，本层不做头去重
@@ -106,7 +148,7 @@ pub(crate) fn post_json(
         .write_all(head.as_bytes())
         .and_then(|_| stream.write_all(body.as_bytes()))
         .and_then(|_| stream.flush())
-        .map_err(|e| McpError::Connect(format!("MCP 网关写入失败: {e}")))?;
+        .map_err(|e| McpError::Connect(format!("MCP server 写入失败: {e}")))?;
 
     // 整读响应（Connection: close 保证终止；1MB 上限防御异常 server）
     let mut raw = Vec::new();
@@ -121,7 +163,7 @@ pub(crate) fn post_json(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(McpError::Connect(format!("MCP 网关读取失败: {e}"))),
+            Err(e) => return Err(McpError::Connect(format!("MCP server 读取失败: {e}"))),
         }
     }
     split_response(&raw)
@@ -129,13 +171,13 @@ pub(crate) fn post_json(
 
 /// 拆响应：状态行 + 头部 + body（Content-Length / chunked / 原样兜底）。
 /// body 按**字节**截取/解码（chunk 大小是字节计数，中文正文跨块也正确）。
-/// GET 文本（Agent 拉取生态分发：专家清单/定义包；http:// 内网口径，
-/// https 随 TLS 依赖阶段二登记；Connection: close 单请求单连接惯例同 post_json）
+/// GET 文本（Agent 拉取生态分发：专家清单/定义包；http(s):// 均可——TLS 与
+/// post_json 同一层 connect_stream，D26 §5；Connection: close 单请求单连接惯例同）
 pub fn get_text(url: &str) -> Result<String, String> {
     use std::io::{Read, Write as _};
 
     let parsed = parse_url(url).map_err(|e| format!("url 非法: {e}"))?;
-    let mut stream = std::net::TcpStream::connect((parsed.host.as_str(), parsed.port))
+    let mut stream = connect_stream(&parsed, Duration::from_secs(30))
         .map_err(|e| format!("连接失败: {e}"))?;
     let req = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: text/yaml, application/json\r\nConnection: close\r\n\r\n",
@@ -232,6 +274,7 @@ mod tests {
         assert_eq!(
             parse_url("http://127.0.0.1:8090/mcp/corp").unwrap(),
             ParsedUrl {
+                secure: false,
                 host: "127.0.0.1".into(),
                 port: 8090,
                 path: "/mcp/corp".into()
@@ -240,12 +283,32 @@ mod tests {
         assert_eq!(
             parse_url("http://localhost").unwrap(),
             ParsedUrl {
+                secure: false,
                 host: "localhost".into(),
                 port: 80,
                 path: "/".into()
             }
         );
-        assert!(parse_url("https://gw").is_err());
+        // https（D26 §5）：缺省 443；显式端口照解析
+        assert_eq!(
+            parse_url("https://mcp.example.com").unwrap(),
+            ParsedUrl {
+                secure: true,
+                host: "mcp.example.com".into(),
+                port: 443,
+                path: "/".into()
+            }
+        );
+        assert_eq!(
+            parse_url("https://mcp.example.com:8443/mcp").unwrap(),
+            ParsedUrl {
+                secure: true,
+                host: "mcp.example.com".into(),
+                port: 8443,
+                path: "/mcp".into()
+            }
+        );
+        assert!(parse_url("ftp://gw").is_err());
         assert!(parse_url("http://").is_err());
     }
 

@@ -1067,8 +1067,8 @@ fn wire_to_mcp_config(w: &bbrt_protocol::McpServerWire) -> bbrt_mcp::McpServerCo
 }
 
 /// BBW_RT_MCP_SERVERS="corp=http://127.0.0.1:8090/mcp/corp;fake=fake-server --flag"
-/// （值 http:// 前缀=远程 MCP 网关（公司域 mcpgw，D14 §6.1 连接期发现
-/// mcp.{name}.*）；否则=stdio 本地子进程命令行）
+/// （值 http(s):// 前缀=远程 MCP 端点（公司域 mcpgw 或外部 https server——
+/// D26 §5 TLS）；否则=stdio 本地子进程命令行）
 fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
     raw.split(';')
         .filter_map(|seg| {
@@ -1081,7 +1081,8 @@ fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
             if name.is_empty() {
                 return None;
             }
-            let transport = if target.trim_start().starts_with("http://") {
+            let t = target.trim_start();
+            let transport = if t.starts_with("http://") || t.starts_with("https://") {
                 bbrt_mcp::TransportConfig::Http {
                     base_url: target.trim().to_string(),
                     headers: vec![], // env 通道无自定义头（插件级经 mcp.config wire 携带）
@@ -1292,5 +1293,12 @@ mod tests {
                 if command == "fake-server" && args == &vec!["--flag".to_string(), "--v".to_string()],
         ));
         assert!(parse_mcp_servers("").is_empty());
+        // https 前缀（D26 §5）同样归 Http 形态
+        let cfgs = parse_mcp_servers("ext=https://mcp.example.com/mcp");
+        assert!(matches!(
+            &cfgs[0].transport,
+            bbrt_mcp::TransportConfig::Http { base_url, .. }
+                if base_url == "https://mcp.example.com/mcp",
+        ));
     }
 }

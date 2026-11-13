@@ -12,3 +12,7 @@ bbrt-protocol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# https/TLS（D26 §5）：ring 后端（default-features 关掉 aws-lc-rs，避开其
+# cmake 构建链——纯 cargo 可编）；webpki-roots=Mozilla 根证书集，免系统证书库依赖
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "0.26"
