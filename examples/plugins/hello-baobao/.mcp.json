@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "hello-baobao": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server.mjs"],
+      "env": {
+        "BBW_CONFIG_GREET_NAME": "${CONFIG:greet_name}",
+        "BBW_DEMO_USER_ID": "${BBW_USER_ID}"
+      }
+    }
+  }
+}

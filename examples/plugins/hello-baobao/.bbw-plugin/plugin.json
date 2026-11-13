@@ -1,0 +1,29 @@
+{
+  "name": "hello-baobao",
+  "version": "1.0.0",
+  "description": "官方示例插件：四类组件全携带（技能/工具/命令/专家）——开发参考见 examples/plugins/README.md",
+  "author": { "name": "BaobaoWork" },
+  "skills": "./skills",
+  "commands": "./commands",
+  "agents": "./agents",
+  "mcpServers": "./.mcp.json",
+  "bbw": {
+    "risk": "low",
+    "category": "other",
+    "netAllow": [],
+    "config": [
+      {
+        "key": "greet_name",
+        "label": "默认称呼",
+        "type": "string",
+        "required": false
+      },
+      {
+        "key": "greet_secret",
+        "label": "演示密钥（存系统钥匙串）",
+        "type": "secret",
+        "required": false
+      }
+    ]
+  }
+}
