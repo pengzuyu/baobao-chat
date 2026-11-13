@@ -1,6 +1,6 @@
 # D26 · 全站 UI 组件库切换 Ant Design 详细设计
 
-> 状态：2026-11-13 设计定稿（用户拍板：除 IM 气泡外全量切 antd），待编码（EXECUTION-PLAN 批次 O）。
+> 状态：2026-11-13 设计定稿（用户拍板：除 IM 气泡外全量切 antd）。编码进度：O1 ✅（主题基线+基础层+kb 样板，含口径修订——旧自研样式一律退役走 antd 原生观感）、O2 ✅ 2026-11-13（admin 域 15 页全量换装：Table×14/Tabs/Switch/Segmented/Modal×3/Modal.confirm×15/控件清零，data-testid 全保留）；O3-O7 待编码。
 > 定位：**全站视觉与交互基座换制，非局部美化**。自研 BEM+global.css(10384 行) 体系收敛为「布局层」；antd 5 承接全部通用交互件（表单/弹窗/下拉/表格/树/页签/提示）。
 > 上游：[D01](D01-客户端总体详细设计.md)（设计系统/六态/断点——六态与断点规范继续有效）、tokens.css（--bbw-\* 令牌升格为 antd theme 唯一色源）。
 > 关联：[D24](D24-知识库博客化详细设计.md)（kb 域为样板域）、providers.tsx（ConfigProvider 主题桥接已通）、vite.config（antd 独立 chunk 已拆）。

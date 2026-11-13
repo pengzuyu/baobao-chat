@@ -5,10 +5,14 @@
  * - 版本线展开 → 逐版本「发布进公共市场」（方案 A 审核动作：个人插件 draft
  *   经此进公共；owner 视角不变）
  * - 下架 / policy 调整（force=全员推发免确认、recommend 置顶、optional）
+ * D26-O2：Table（expandable 版本线）/Upload/Select/Tag/Alert/Modal.confirm 化。
  */
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
-import { Package, Plus, Puzzle, Upload } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Alert, Input, Modal, Select, Table, Tag, Upload } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import type { UploadFile } from 'antd';
+import { Package, Plus, Puzzle, Upload as UploadIcon } from 'lucide-react';
 import { errText, http, postMultipart } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 
@@ -37,6 +41,12 @@ interface VersionRow {
 
 const POLICY_LABEL: Record<number, string> = { 1: '强制（force）', 2: '推荐（recommend）', 3: '可选（optional）' };
 
+const POLICY_OPTIONS = [
+  { value: 1, label: POLICY_LABEL[1] },
+  { value: 2, label: POLICY_LABEL[2] },
+  { value: 3, label: POLICY_LABEL[3] },
+];
+
 export function PluginGovernancePage() {
   const [plugins, setPlugins] = useState<PluginRow[] | null>(null);
   const [error, setError] = useState('');
@@ -48,7 +58,7 @@ export function PluginGovernancePage() {
   const [pubNotes, setPubNotes] = useState('');
   const [pubPolicy, setPubPolicy] = useState(3);
   const [uploading, setUploading] = useState(false);
-  // 版本线展开行
+  // 版本线展开行（Table expandable）
   const [verRow, setVerRow] = useState<string | null>(null);
   const [versions, setVersions] = useState<VersionRow[]>([]);
 
@@ -84,10 +94,6 @@ export function PluginGovernancePage() {
   };
 
   const openVersions = (p: PluginRow) => {
-    if (verRow === p.plugin_id) {
-      setVerRow(null);
-      return;
-    }
     setVerRow(p.plugin_id);
     setVersions([]);
     http
@@ -97,29 +103,44 @@ export function PluginGovernancePage() {
   };
 
   const publishVersion = (pluginId: string, version: string) => {
-    if (!window.confirm(`发布 ${pluginId} v${version} 进公共市场？所有用户将可见可装`)) return;
-    setBusy(true);
-    void http
-      .post(`/admin/eco/plugins/${encodeURIComponent(pluginId)}/versions/${encodeURIComponent(version)}/publish`, {})
-      .then(() => {
-        setNotice(`${pluginId} v${version} 已发布进公共市场`);
-        reload();
-      })
-      .catch((e) => setError(`发布失败：${errText(e, '未知错误')}`))
-      .finally(() => setBusy(false));
+    Modal.confirm({
+      title: `发布 ${pluginId} v${version} 进公共市场？`,
+      content: '所有用户将可见可装',
+      okText: '发布',
+      cancelText: '取消',
+      onOk: () =>
+        http
+          .post(`/admin/eco/plugins/${encodeURIComponent(pluginId)}/versions/${encodeURIComponent(version)}/publish`, {})
+          .then(() => {
+            setNotice(`${pluginId} v${version} 已发布进公共市场`);
+            reload();
+          })
+          .catch((e) => {
+            setError(`发布失败：${errText(e, '未知错误')}`);
+            throw e;
+          }),
+    });
   };
 
   const delist = (p: PluginRow) => {
-    if (!window.confirm(`下架「${p.name}？已装用户本地副本失效（catalog 不再可见）`)) return;
-    setBusy(true);
-    void http
-      .post(`/admin/eco/plugins/${encodeURIComponent(p.plugin_id)}/delist`, {})
-      .then(() => {
-        setNotice(`${p.name} 已下架`);
-        reload();
-      })
-      .catch((e) => setError(`下架失败：${errText(e, '未知错误')}`))
-      .finally(() => setBusy(false));
+    Modal.confirm({
+      title: `下架「${p.name}」？`,
+      content: '已装用户本地副本失效（catalog 不再可见）',
+      okText: '下架',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () =>
+        http
+          .post(`/admin/eco/plugins/${encodeURIComponent(p.plugin_id)}/delist`, {})
+          .then(() => {
+            setNotice(`${p.name} 已下架`);
+            reload();
+          })
+          .catch((e) => {
+            setError(`下架失败：${errText(e, '未知错误')}`);
+            throw e;
+          }),
+    });
   };
 
   const setPolicy = (pluginId: string, policy: number) => {
@@ -131,6 +152,89 @@ export function PluginGovernancePage() {
       .finally(() => setBusy(false));
   };
 
+  const columns: ColumnsType<PluginRow> = [
+    {
+      title: '插件',
+      dataIndex: 'name',
+      render: (_, p) => (
+        <div>
+          <span className="admin-role__name">
+            <Puzzle size={13} /> {p.name}
+          </span>
+          {p.description ? <div className="admin-role__desc">{p.description}</div> : null}
+        </div>
+      ),
+    },
+    { title: 'plugin_id', dataIndex: 'plugin_id' },
+    {
+      title: '来源',
+      key: 'owner',
+      width: 130,
+      render: (_, p) =>
+        p.owner_user_id ? (
+          <Tag color="gold">个人（uid {p.owner_user_id}）</Tag>
+        ) : (
+          <Tag color="geekblue">公共</Tag>
+        ),
+    },
+    {
+      title: '组件',
+      key: 'components',
+      render: (_, p) => (
+        <div>
+          {p.manifest
+            ? `技能${p.manifest.components.skills}·工具${p.manifest.components.mcpServers}·命令${p.manifest.components.commands}·专家${p.manifest.components.agents}`
+            : '—'}
+          {p.manifest?.usesIdentity ? <div className="admin-role__desc">⚠ 使用用户身份</div> : null}
+        </div>
+      ),
+    },
+    {
+      title: '策略',
+      dataIndex: 'policy',
+      width: 170,
+      render: (_, p) => (
+        <Select
+          size="small"
+          style={{ width: 150 }}
+          value={p.policy}
+          disabled={busy || p.owner_user_id !== 0}
+          onChange={(v) => setPolicy(p.plugin_id, v)}
+          options={POLICY_OPTIONS}
+          title={p.owner_user_id !== 0 ? '个人插件恒 optional' : undefined}
+        />
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 90,
+      render: (v: string) => (
+        <Tag color={v === 'published' ? 'geekblue' : v === 'delisted' ? 'red' : 'default'}>
+          {v === 'published' ? '已上架' : v === 'delisted' ? '已下架' : '草稿'}
+        </Tag>
+      ),
+    },
+    { title: '版本', dataIndex: 'current_version', width: 90, render: (v: string) => `v${v || '—'}` },
+    {
+      title: '操作',
+      key: 'ops',
+      width: 150,
+      render: (_, p) => (
+        <>
+          <Button variant="text" size="small" onClick={() => (verRow === p.plugin_id ? setVerRow(null) : openVersions(p))} data-testid={`plugin-vers-${p.plugin_id}`}>
+            版本线
+          </Button>
+          {p.status !== 'delisted' ? (
+            <Button variant="danger" size="small" disabled={busy} onClick={() => delist(p)}>
+              下架
+            </Button>
+          ) : null}
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="admin-page__section" data-testid="admin-plugins">
       <div className="admin-page__head">
@@ -139,24 +243,39 @@ export function PluginGovernancePage() {
           <Plus size={14} /> 上传公共插件
         </Button>
       </div>
-      {error ? <div className="admin-page__error">{error}</div> : null}
-      {notice ? <div className="bbw-plugin__notice">{notice}</div> : null}
+      {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
+      {notice ? <Alert type="success" showIcon message={notice} style={{ marginBottom: 8 }} /> : null}
 
       {pubOpen ? (
-        <div className="eco-reg">
+        <div className="eco-reg" style={{ marginBottom: 12 }}>
           <p className="admin-role__desc">公共插件（全员可见；policy=force 时用户端免确认自动推装）。个人插件请走插件页「上传插件」</p>
-          <input type="file" accept=".zip" aria-label="选择插件 zip 包" onChange={(e) => setPubFile(e.target.files?.[0] ?? null)} />
-          <div className="eco-reg__row">
-            <input placeholder="备注（可选）" value={pubNotes} onChange={(e) => setPubNotes(e.target.value)} />
-            <select value={pubPolicy} onChange={(e) => setPubPolicy(Number(e.target.value))} title="三档策略">
-              <option value={1}>强制（force）</option>
-              <option value={2}>推荐（recommend）</option>
-              <option value={3}>可选（optional）</option>
-            </select>
+          <Upload
+            accept=".zip"
+            maxCount={1}
+            beforeUpload={(file) => {
+              setPubFile(file);
+              return false;
+            }}
+            onRemove={() => setPubFile(null)}
+            fileList={pubFile ? ([{ uid: '-1', name: pubFile.name, status: 'done' }] as UploadFile[]) : []}
+          >
+            <Button variant="secondary">选择插件 zip 包</Button>
+          </Upload>
+          <div className="eco-reg__row" style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <Input style={{ width: 220 }} placeholder="备注（可选）" value={pubNotes} onChange={(e) => setPubNotes(e.target.value)} />
+            <Select
+              style={{ width: 180 }}
+              value={pubPolicy}
+              onChange={setPubPolicy}
+              title="三档策略"
+              options={POLICY_OPTIONS}
+            />
           </div>
-          <Button loading={uploading} disabled={!pubFile} onClick={uploadPublic} data-testid="plugin-pub-submit">
-            <Upload size={12} /> 上传（draft）
-          </Button>
+          <div style={{ marginTop: 8 }}>
+            <Button loading={uploading} disabled={!pubFile} onClick={uploadPublic} data-testid="plugin-pub-submit">
+              <UploadIcon size={12} /> 上传（draft）
+            </Button>
+          </div>
         </div>
       ) : null}
 
@@ -165,91 +284,42 @@ export function PluginGovernancePage() {
       ) : plugins.length === 0 ? (
         <div className="admin-page__empty">暂无插件（用户个人上传也会出现在这里待审核）</div>
       ) : (
-        <table className="admin-table" data-testid="admin-plugins-table">
-          <thead>
-            <tr>
-              <th>插件</th>
-              <th>plugin_id</th>
-              <th>来源</th>
-              <th>组件</th>
-              <th>策略</th>
-              <th>状态</th>
-              <th>版本</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {plugins.map((p) => (
-              <Fragment key={p.id}>
-                <tr>
-                  <td>
-                    <span className="admin-role__name">
-                      <Puzzle size={13} /> {p.name}
-                    </span>
-                    {p.description ? <div className="admin-role__desc">{p.description}</div> : null}
-                  </td>
-                  <td>{p.plugin_id}</td>
-                  <td>{p.owner_user_id ? <span className="tag tag--warn">个人（uid {p.owner_user_id}）</span> : <span className="tag tag--builtin">公共</span>}</td>
-                  <td>
-                    {p.manifest
-                      ? `技能${p.manifest.components.skills}·工具${p.manifest.components.mcpServers}·命令${p.manifest.components.commands}·专家${p.manifest.components.agents}`
-                      : '—'}
-                    {p.manifest?.usesIdentity ? <div className="admin-role__desc">⚠ 使用用户身份</div> : null}
-                  </td>
-                  <td>
-                    <select value={p.policy} disabled={busy || p.owner_user_id !== 0} onChange={(e) => setPolicy(p.plugin_id, Number(e.target.value))} title={p.owner_user_id !== 0 ? '个人插件恒 optional' : undefined}>
-                      <option value={1}>{POLICY_LABEL[1]}</option>
-                      <option value={2}>{POLICY_LABEL[2]}</option>
-                      <option value={3}>{POLICY_LABEL[3]}</option>
-                    </select>
-                  </td>
-                  <td>
-                    <span className={`tag${p.status === 'published' ? ' tag--builtin' : p.status === 'delisted' ? ' tag--danger' : ''}`}>
-                      {p.status === 'published' ? '已上架' : p.status === 'delisted' ? '已下架' : '草稿'}
-                    </span>
-                  </td>
-                  <td>v{p.current_version || '—'}</td>
-                  <td>
-                    <button type="button" className="admin-link-btn" onClick={() => openVersions(p)} data-testid={`plugin-vers-${p.plugin_id}`}>
-                      版本线
-                    </button>
-                    {p.status !== 'delisted' ? (
-                      <button type="button" className="admin-link-btn admin-link-btn--danger" disabled={busy} onClick={() => delist(p)}>
-                        下架
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-                {verRow === p.plugin_id ? (
-                  <tr className="eco-versions-row">
-                    <td colSpan={8}>
-                      {versions.length === 0 ? (
-                        <div className="admin-page__empty">无版本行（包体缺失？）</div>
-                      ) : (
-                        <div className="eco-versions">
-                          {versions.map((v) => (
-                            <div key={v.id} className="eco-versions__row">
-                              <span>
-                                v{v.version}
-                                {v.version === p.current_version ? '（当前）' : ''}
-                              </span>
-                              <span className="admin-role__desc">{v.notes || '—'}</span>
-                              {v.version !== p.current_version || p.status !== 'published' ? (
-                                <Button disabled={busy} onClick={() => publishVersion(p.plugin_id, v.version)} data-testid={`plugin-pubver-${p.plugin_id}-${v.version}`}>
-                                  <Package size={12} /> 发布进公共市场
-                                </Button>
-                              ) : null}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ) : null}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
+        <Table<PluginRow>
+          rowKey="id"
+          columns={columns}
+          dataSource={plugins}
+          data-testid="admin-plugins-table"
+          scroll={{ x: 1100 }}
+          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          expandable={{
+            expandedRowKeys: verRow ? [verRow] : [],
+            onExpand: (expanded, p) => {
+              if (expanded) openVersions(p);
+              else setVerRow(null);
+            },
+            expandedRowRender: (p) =>
+              versions.length === 0 ? (
+                <div className="admin-page__empty">无版本行（包体缺失？）</div>
+              ) : (
+                <div className="eco-versions">
+                  {versions.map((v) => (
+                    <div key={v.id} className="eco-versions__row" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span>
+                        v{v.version}
+                        {v.version === p.current_version ? '（当前）' : ''}
+                      </span>
+                      <span className="admin-role__desc">{v.notes || '—'}</span>
+                      {v.version !== p.current_version || p.status !== 'published' ? (
+                        <Button disabled={busy} onClick={() => publishVersion(p.plugin_id, v.version)} data-testid={`plugin-pubver-${p.plugin_id}-${v.version}`}>
+                          <Package size={12} /> 发布进公共市场
+                        </Button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ),
+          }}
+        />
       )}
     </div>
   );

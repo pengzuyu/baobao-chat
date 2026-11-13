@@ -5,9 +5,12 @@
  *       选中部门=该部门成员表（工号/姓名/邮箱/主部门/状态/操作——挂靠已有用户/移出）
  * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/邮箱/
  *   所属组织（默认=触发节点）/角色（默认不授权）——初始口令=工号+!BBW 首登强制改密
+ * D26-O2：Table/Modal/Select/Input/Segmented/Alert/Tag 全量 antd 化。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Input, Modal, Segmented, Select, Table, Tag, Typography } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import {
   Building2,
   ChevronDown,
@@ -17,9 +20,8 @@ import {
   RefreshCw,
   Trash2,
   UserPlus,
-  X,
 } from 'lucide-react';
-import { ApiError, getErrorText , errText } from '../../../shared/api/http';
+import { ApiError, getErrorText, errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import {
   attachDeptMember,
@@ -39,12 +41,6 @@ import {
 } from '../api/admin';
 import type { AdminUser } from '../model/types';
 import { useUsers, useUserStatus } from '../api/hooks';
-
-const STATUS_FILTERS = [
-  { value: 0, label: '全部' },
-  { value: 1, label: '启用' },
-  { value: 2, label: '禁用' },
-] as const;
 
 /* ── 左栏：组织树（含虚拟根「全公司」） ── */
 
@@ -73,7 +69,7 @@ function TreeNode({
   onAddChild: (id: string, name: string) => void;
   onAddUser: (id: string) => void;
   onRename: (id: string, name: string) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string, name: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -92,27 +88,25 @@ function TreeNode({
   return (
     <div className="org-node" style={{ marginLeft: depth * 16 }}>
       <div className={`org-node__row${selected === node.id ? ' org-node__row--selected' : ''}`}>
-        <button type="button" className="icon-btn" onClick={() => setOpen(!open)} disabled={!hasChildren}>
-          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        </button>
+        <Button variant="text" size="small" onClick={() => setOpen(!open)} disabled={!hasChildren} icon={open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} />
         <FolderTree size={14} className="org-node__icon" />
         {editing ? (
           <span className="org-node__edit">
-            <input
-              className="bbw-input"
+            <Input
+              size="small"
+              style={{ width: 160 }}
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && name.trim()) {
+              onPressEnter={() => {
+                if (name.trim()) {
                   onRename(node.id, name.trim());
                   setEditing(false);
                 }
               }}
             />
-            <button
-              type="button"
-              className="btn btn--sm btn--primary"
+            <Button
+              size="small"
               disabled={!name.trim()}
               onClick={() => {
                 onRename(node.id, name.trim());
@@ -120,7 +114,7 @@ function TreeNode({
               }}
             >
               保存
-            </button>
+            </Button>
           </span>
         ) : (
           <span className="org-node__name" title={node.path} onClick={() => onSelect(node.id)} onDoubleClick={() => setEditing(true)}>
@@ -128,37 +122,29 @@ function TreeNode({
           </span>
         )}
         <span className="org-node__ops">
-          <button type="button" className="btn btn--sm" onClick={() => onAddUser(node.id)} title="在此组织下新增用户">
-            <UserPlus size={12} />
-          </button>
-          <button type="button" className="btn btn--sm" onClick={() => setAdding(!adding)} title="新增子部门">
-            <Plus size={12} />
-          </button>
-          <button
-            type="button"
-            className="btn btn--sm btn--danger"
-            onClick={() => {
-              if (window.confirm(`确认删除部门「${node.name}」？（有子部门或挂人时服务端拒绝）`)) onDelete(node.id);
-            }}
+          <Button variant="text" size="small" onClick={() => onAddUser(node.id)} title="在此组织下新增用户" icon={<UserPlus size={12} />} />
+          <Button variant="text" size="small" onClick={() => setAdding(!adding)} title="新增子部门" icon={<Plus size={12} />} />
+          <Button
+            variant="text"
+            size="small"
+            danger
+            onClick={() => onDelete(node.id, node.name)}
             title="删除（有子/挂人拒）"
-          >
-            <Trash2 size={12} />
-          </button>
+            icon={<Trash2 size={12} />}
+          />
         </span>
       </div>
       {adding ? (
         <div className="org-node__add" style={{ marginLeft: 24 }}>
-          <input
-            className="bbw-input"
+          <Input.Search
+            size="small"
+            style={{ width: 220 }}
             placeholder="子部门名（≤50 字）"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            autoFocus
-            onKeyDown={(e) => e.key === 'Enter' && newName.trim() && void add()}
+            enterButton="创建"
+            onSearch={() => newName.trim() && add()}
           />
-          <button type="button" className="btn btn--sm btn--primary" disabled={!newName.trim()} onClick={() => void add()}>
-            创建
-          </button>
         </div>
       ) : null}
       {open && hasChildren
@@ -231,8 +217,6 @@ function CreateUserModal({
     };
   }, [open, name, empnoDirty]);
 
-  if (!open) return null;
-
   const regenerate = () => {
     setEmpnoDirty(false);
     const trimmed = name.trim();
@@ -265,79 +249,66 @@ function CreateUserModal({
   };
 
   return (
-    <div className="admin-modal" onClick={onClose}>
-      <div className="admin-modal__card" onClick={(e) => e.stopPropagation()} data-testid="create-user-modal">
-        <div className="admin-modal__head">
-          <h3>新增用户</h3>
-          <button type="button" className="icon-btn" onClick={onClose} title="关闭">
-            <X size={15} />
-          </button>
-        </div>
-        <div className="admin-modal__body">
-          <label className="admin-modal__field">
-            <span>姓名 *</span>
-            <input className="bbw-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="真实姓名（≤50 字）" data-testid="create-user-name" />
-          </label>
-          <label className="admin-modal__field">
-            <span>
-              工号 *（登录账号）
-              <button type="button" className="btn btn--sm" onClick={regenerate} title="按姓名重新生成拼音建议">
-                <RefreshCw size={11} /> 重新生成
-              </button>
-            </span>
-            <input
-              className="bbw-input"
-              value={empno}
-              onChange={(e) => {
-                setEmpno(e.target.value);
-                setEmpnoDirty(true);
-              }}
-              placeholder="留空=按姓名全拼自动生成"
-              data-testid="create-user-empno"
-            />
-            <em className="admin-modal__hint">建议值=姓名全拼，重名自动补零递增（zhangsan02）；多音字/生僻字可手改</em>
-          </label>
-          <label className="admin-modal__field">
-            <span>邮箱</span>
-            <input className="bbw-input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="选填" />
-          </label>
-          <label className="admin-modal__field">
-            <span>所属组织</span>
-            <select className="bbw-input" value={dept} onChange={(e) => setDept(e.target.value)} data-testid="create-user-dept">
-              <option value="">不挂部门</option>
-              {flat.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {'　'.repeat(d.depth)}
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="admin-modal__field">
-            <span>角色</span>
-            <select className="bbw-input" value={roleId} onChange={(e) => setRoleId(e.target.value)} data-testid="create-user-role">
-              <option value="0">不授权（普通成员）</option>
-              {roles.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                  {r.is_builtin ? '（内置）' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="admin-modal__hint">初始口令 = 工号 + “!BBW”，首次登录强制修改</div>
-          {err ? <div className="admin-error-bar">{err}</div> : null}
-        </div>
-        <div className="admin-modal__foot">
-          <Button variant="secondary" onClick={onClose}>
-            取消
+    <Modal
+      open={open}
+      title="新增用户"
+      onCancel={onClose}
+      destroyOnClose
+      data-testid="create-user-modal"
+      footer={[
+        <Button key="cancel" variant="secondary" onClick={onClose}>
+          取消
+        </Button>,
+        <Button key="ok" loading={submitting} disabled={!name.trim()} onClick={() => void submit()} data-testid="create-user-submit">
+          创建
+        </Button>,
+      ]}
+    >
+      <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+        <Typography.Text>姓名 *</Typography.Text>
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="真实姓名（≤50 字）" data-testid="create-user-name" />
+        <Typography.Text>
+          工号 *（登录账号）{' '}
+          <Button variant="text" size="small" onClick={regenerate} title="按姓名重新生成拼音建议">
+            <RefreshCw size={11} /> 重新生成
           </Button>
-          <Button variant="primary" loading={submitting} disabled={!name.trim()} onClick={() => void submit()} data-testid="create-user-submit">
-            创建
-          </Button>
-        </div>
+        </Typography.Text>
+        <Input
+          value={empno}
+          onChange={(e) => {
+            setEmpno(e.target.value);
+            setEmpnoDirty(true);
+          }}
+          placeholder="留空=按姓名全拼自动生成"
+          data-testid="create-user-empno"
+        />
+        <Typography.Text type="secondary">建议值=姓名全拼，重名自动补零递增（zhangsan02）；多音字/生僻字可手改</Typography.Text>
+        <Typography.Text>邮箱</Typography.Text>
+        <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="选填" />
+        <Typography.Text>所属组织</Typography.Text>
+        <Select
+          value={dept}
+          onChange={setDept}
+          data-testid="create-user-dept"
+          options={[
+            { value: '', label: '不挂部门' },
+            ...flat.map((d) => ({ value: d.id, label: `${'　'.repeat(d.depth)}${d.name}` })),
+          ]}
+        />
+        <Typography.Text>角色</Typography.Text>
+        <Select
+          value={roleId}
+          onChange={setRoleId}
+          data-testid="create-user-role"
+          options={[
+            { value: '0', label: '不授权（普通成员）' },
+            ...roles.map((r) => ({ value: r.id, label: `${r.name}${r.is_builtin ? '（内置）' : ''}` })),
+          ]}
+        />
+        <Typography.Text type="secondary">初始口令 = 工号 +“!BBW”，首次登录强制修改</Typography.Text>
+        {err ? <Alert type="error" showIcon message={err} /> : null}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -415,14 +386,23 @@ export function OrgDirectoryPage() {
     }
   };
 
-  const deleteNode = async (id: string) => {
-    try {
-      await deleteDept(id);
-      if (selected === id) setSelected(null);
-      await reloadTree();
-    } catch (e) {
-      setActionError(errText(e, '删除失败（有子部门或挂人）'));
-    }
+  const deleteNode = (id: string, deptName: string) => {
+    Modal.confirm({
+      title: `删除部门「${deptName}」？`,
+      content: '有子部门或挂人时服务端拒绝',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteDept(id);
+          if (selected === id) setSelected(null);
+          await reloadTree();
+        } catch (e) {
+          setActionError(errText(e, '删除失败（有子部门或挂人）'));
+        }
+      },
+    });
   };
 
   const openCreate = (deptId: string) => {
@@ -453,18 +433,26 @@ export function OrgDirectoryPage() {
     );
   };
 
-  const offboard = async (userId: string, uname: string) => {
-    if (!window.confirm(`离职交接 ${uname}？\n将执行：禁用账号 + 全端下线 + 令牌吊销（已记审计）。`)) return;
-    setActionError('');
-    setActionOk('');
-    try {
-      await offboardUser(userId);
-      setActionOk(`已离职交接 ${uname}：账号禁用并全端下线`);
-      void query.refetch();
-      if (selected) void reloadMembers(selected);
-    } catch (e) {
-      setActionError(errText(e, '操作失败，请稍后重试'));
-    }
+  const offboard = (userId: string, uname: string) => {
+    Modal.confirm({
+      title: `离职交接 ${uname}？`,
+      content: '将执行：禁用账号 + 全端下线 + 令牌吊销（已记审计）。',
+      okText: '离职交接',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setActionError('');
+        setActionOk('');
+        try {
+          await offboardUser(userId);
+          setActionOk(`已离职交接 ${uname}：账号禁用并全端下线`);
+          void query.refetch();
+          if (selected) void reloadMembers(selected);
+        } catch (e) {
+          setActionError(errText(e, '操作失败，请稍后重试'));
+        }
+      },
+    });
   };
 
   const attach = async () => {
@@ -479,15 +467,22 @@ export function OrgDirectoryPage() {
     }
   };
 
-  const detach = async (uid: string, uname: string) => {
+  const detach = (uid: string, uname: string) => {
     if (!selected) return;
-    if (!window.confirm(`将 ${uname || uid} 移出该部门？`)) return;
-    try {
-      await detachDeptMember(selected, uid);
-      await reloadMembers(selected);
-    } catch {
-      setActionError('移出失败');
-    }
+    Modal.confirm({
+      title: `将 ${uname || uid} 移出该部门？`,
+      okText: '移出',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await detachDeptMember(selected, uid);
+          await reloadMembers(selected);
+        } catch {
+          setActionError('移出失败');
+        }
+      },
+    });
   };
 
   const selectedName = useMemo(() => {
@@ -496,15 +491,105 @@ export function OrgDirectoryPage() {
     return flat.find((d) => d.id === selected)?.name ?? selected;
   }, [selected, tree]);
 
+  const userColumns: ColumnsType<AdminUser> = [
+    { title: '工号', dataIndex: 'employee_no', width: 110, render: (v: string) => <span className="admin-mono">{v}</span> },
+    { title: '姓名', dataIndex: 'display_name', width: 110 },
+    { title: '邮箱', dataIndex: 'email', render: (v: string) => <span className="admin-mono">{v || '—'}</span> },
+    { title: '权限', key: 'scopes', render: (_, u) => <span className="admin-scope-cell">{scopesText(u.scopes)}</span> },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 80,
+      render: (v: number) => <Tag color={v === 1 ? 'green' : 'red'}>{v === 1 ? '启用' : '禁用'}</Tag>,
+    },
+    {
+      title: '操作',
+      key: 'ops',
+      width: 210,
+      render: (_, u) =>
+        u.status === 1 ? (
+          <>
+            <Button
+              variant="danger"
+              size="small"
+              loading={statusMutation.isPending && statusMutation.variables?.userId === u.id}
+              onClick={() => toggle(u.id, u.display_name, u.status)}
+            >
+              禁用
+            </Button>{' '}
+            <Button variant="danger" size="small" disabled={statusMutation.isPending} onClick={() => offboard(u.id, u.display_name)}>
+              离职交接
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="secondary"
+            size="small"
+            loading={statusMutation.isPending && statusMutation.variables?.userId === u.id}
+            onClick={() => toggle(u.id, u.display_name, u.status)}
+          >
+            启用
+          </Button>
+        ),
+    },
+  ];
+
+  const memberColumns: ColumnsType<DeptMemberRow> = [
+    { title: '工号', key: 'empno', width: 110, render: (_, m) => <span className="admin-mono">{m.employee_no || m.user_id}</span> },
+    { title: '姓名', key: 'name', width: 110, render: (_, m) => m.name || m.user_id },
+    { title: '邮箱', key: 'email', render: (_, m) => <span className="admin-mono">{m.email || '—'}</span> },
+    { title: '主部门', key: 'primary', width: 90, render: (_, m) => (m.is_primary ? <Tag color="geekblue">主部门</Tag> : '—') },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 80,
+      render: (v: number | null) => <Tag color={v === 1 ? 'green' : v === 2 ? 'red' : 'default'}>{v === 1 ? '启用' : v === 2 ? '禁用' : '—'}</Tag>,
+    },
+    {
+      title: '操作',
+      key: 'ops',
+      width: 230,
+      render: (_, m) => (
+        <>
+          {m.status === 2 ? (
+            <Button
+              variant="secondary"
+              size="small"
+              loading={statusMutation.isPending && statusMutation.variables?.userId === m.user_id}
+              onClick={() => toggle(m.user_id, m.name, m.status ?? 1)}
+            >
+              启用
+            </Button>
+          ) : (
+            <Button
+              variant="danger"
+              size="small"
+              loading={statusMutation.isPending && statusMutation.variables?.userId === m.user_id}
+              onClick={() => toggle(m.user_id, m.name, m.status ?? 1)}
+            >
+              禁用
+            </Button>
+          )}{' '}
+          <Button variant="danger" size="small" onClick={() => offboard(m.user_id, m.name)}>
+            离职
+          </Button>{' '}
+          <Button variant="secondary" size="small" onClick={() => detach(m.user_id, m.name)}>
+            移出
+          </Button>
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="admin-directory" data-testid="admin-directory">
       {/* 左栏：组织树（通讯录骨架） */}
       <aside className="admin-directory__tree">
         <div className="admin-directory__tree-head">
           <span>组织树</span>
-          <button type="button" className="btn btn--sm" onClick={() => setRootAdding(!rootAdding)} title="新增根部门">
-            <Plus size={12} /> 根部门
-          </button>
+          <Button variant="text" size="small" onClick={() => setRootAdding(!rootAdding)} title="新增根部门" icon={<Plus size={12} />}>
+            根部门
+          </Button>
         </div>
         <div
           className={`org-node__row org-node__row--root${selected === null ? ' org-node__row--selected' : ''}`}
@@ -514,42 +599,29 @@ export function OrgDirectoryPage() {
           <Building2 size={14} className="org-node__icon" />
           <span className="org-node__name">全公司</span>
           <span className="org-node__ops">
-            <button type="button" className="btn btn--sm" onClick={(e) => { e.stopPropagation(); openCreate(''); }} title="新增用户（不挂部门）">
-              <UserPlus size={12} />
-            </button>
+            <Button variant="text" size="small" onClick={(e) => { e.stopPropagation(); openCreate(''); }} title="新增用户（不挂部门）" icon={<UserPlus size={12} />} />
           </span>
         </div>
         {rootAdding ? (
           <div className="org-node__add">
-            <input
-              className="bbw-input"
+            <Input.Search
+              size="small"
+              style={{ width: 220 }}
               placeholder="根部门名"
               value={rootName}
               onChange={(e) => setRootName(e.target.value)}
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && rootName.trim()) {
+              enterButton="创建"
+              onSearch={() => {
+                if (rootName.trim()) {
                   void addDept('', rootName.trim());
                   setRootAdding(false);
                   setRootName('');
                 }
               }}
             />
-            <button
-              type="button"
-              className="btn btn--sm btn--primary"
-              disabled={!rootName.trim()}
-              onClick={() => {
-                void addDept('', rootName.trim());
-                setRootAdding(false);
-                setRootName('');
-              }}
-            >
-              创建
-            </button>
           </div>
         ) : null}
-        {treeError ? <div className="admin-error-bar">{treeError}</div> : null}
+        {treeError ? <Alert type="error" showIcon message={treeError} style={{ marginTop: 8 }} /> : null}
         {tree === null ? (
           <div className="admin-directory__hint">加载中…</div>
         ) : tree.length === 0 ? (
@@ -565,7 +637,7 @@ export function OrgDirectoryPage() {
               onAddChild={(id, nm) => void addDept(id, nm)}
               onAddUser={(id) => openCreate(id)}
               onRename={(id, nm) => void renameNode(id, nm)}
-              onDelete={(id) => void deleteNode(id)}
+              onDelete={(id, nm) => deleteNode(id, nm)}
             />
           ))
         )}
@@ -578,182 +650,89 @@ export function OrgDirectoryPage() {
           <span className="admin-page__meta">
             {selected ? '组织成员（含主部门标记）——可在节点上新增用户/子部门' : '全量用户（跨部门检索）——点左侧部门查看该组织通讯录'}
           </span>
-          <Button variant="primary" onClick={() => openCreate(selected ?? '')} data-testid="dir-create-user">
+          <Button onClick={() => openCreate(selected ?? '')} data-testid="dir-create-user">
             <UserPlus size={14} /> 新增用户
           </Button>
         </header>
 
-        {actionError ? <div className="admin-error-bar">{actionError}</div> : null}
-        {actionOk ? <div className="admin-ok-bar">{actionOk}</div> : null}
+        {actionError ? <Alert type="error" showIcon message={actionError} style={{ marginBottom: 8 }} /> : null}
+        {actionOk ? <Alert type="success" showIcon message={actionOk} style={{ marginBottom: 8 }} /> : null}
 
         {selected === null ? (
           /* 全公司：原用户页能力（搜索/状态过滤/无限加载/行操作） */
           <>
             <div className="admin-toolbar">
-              <div className="bbw-input bbw-input--search admin-toolbar__search">
-                <input
-                  value={keywordInput}
-                  placeholder="搜索工号 / 姓名 / 邮箱，回车检索"
-                  onChange={(e) => setKeywordInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') setKeyword(keywordInput.trim());
-                  }}
-                />
-              </div>
-              <div className="admin-toolbar__filters">
-                {STATUS_FILTERS.map((f) => (
-                  <button key={f.value} type="button" className={`admin-chip${status === f.value ? ' admin-chip--active' : ''}`} onClick={() => setStatus(f.value)}>
-                    {f.label}
-                  </button>
-                ))}
-              </div>
+              <Input.Search
+                allowClear
+                className="admin-toolbar__search"
+                placeholder="搜索工号 / 姓名 / 邮箱，回车检索"
+                value={keywordInput}
+                onChange={(e) => setKeywordInput(e.target.value)}
+                onSearch={(v) => setKeyword(v.trim())}
+              />
+              <Segmented
+                value={status}
+                onChange={(v) => setStatus(v as number)}
+                options={[
+                  { value: 0, label: '全部' },
+                  { value: 1, label: '启用' },
+                  { value: 2, label: '禁用' },
+                ]}
+              />
             </div>
+            <Table<AdminUser>
+              rowKey="id"
+              columns={userColumns}
+              dataSource={items}
+              loading={query.isPending}
+              data-testid="admin-users-table"
+              locale={{ emptyText: query.isError ? ' ' : '无匹配用户' }}
+              pagination={{ pageSize: 20, hideOnSinglePage: true }}
+            />
             {query.isError ? (
-              <div className="admin-error-bar">
-                {query.error instanceof ApiError ? getErrorText(query.error.code) : '加载失败'}
-                <button type="button" className="btn btn--sm" onClick={() => void query.refetch()}>
-                  重试
-                </button>
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginBottom: 8 }}
+                message={query.error instanceof ApiError ? getErrorText(query.error.code) : '加载失败'}
+                action={
+                  <Button variant="secondary" size="small" onClick={() => void query.refetch()}>
+                    重试
+                  </Button>
+                }
+              />
+            ) : null}
+            {lastPage?.has_more && lastPage.next_cursor ? (
+              <div className="admin-loadmore">
+                <Button variant="secondary" loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
+                  加载更多
+                </Button>
               </div>
-            ) : items.length === 0 && !query.isPending ? (
-              <div className="admin-directory__hint">无匹配用户</div>
-            ) : (
-              <>
-                <table className="admin-table" data-testid="admin-users-table">
-                  <thead>
-                    <tr>
-                      <th>工号</th>
-                      <th>姓名</th>
-                      <th>邮箱</th>
-                      <th>权限</th>
-                      <th>状态</th>
-                      <th style={{ width: 132 }}>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((u) => (
-                      <tr key={u.id} data-testid={`admin-user-${u.employee_no}`}>
-                        <td className="admin-mono">{u.employee_no}</td>
-                        <td>{u.display_name}</td>
-                        <td className="admin-mono">{u.email || '—'}</td>
-                        <td className="admin-scope-cell">{scopesText(u.scopes)}</td>
-                        <td>
-                          <span className={`admin-status${u.status === 1 ? ' admin-status--active' : ' admin-status--disabled'}`}>
-                            {u.status === 1 ? '启用' : '禁用'}
-                          </span>
-                        </td>
-                        <td>
-                          {u.status === 1 ? (
-                            <span className="admin-role__ops">
-                              <Button
-                                variant="danger"
-                                loading={statusMutation.isPending && statusMutation.variables?.userId === u.id}
-                                onClick={() => toggle(u.id, u.display_name, u.status)}
-                              >
-                                禁用
-                              </Button>
-                              <Button variant="danger" disabled={statusMutation.isPending} onClick={() => void offboard(u.id, u.display_name)}>
-                                离职交接
-                              </Button>
-                            </span>
-                          ) : (
-                            <Button
-                              variant="secondary"
-                              loading={statusMutation.isPending && statusMutation.variables?.userId === u.id}
-                              onClick={() => toggle(u.id, u.display_name, u.status)}
-                            >
-                              启用
-                            </Button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {lastPage?.has_more && lastPage.next_cursor ? (
-                  <div className="admin-loadmore">
-                    <Button variant="secondary" loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
-                      加载更多
-                    </Button>
-                  </div>
-                ) : null}
-              </>
-            )}
+            ) : null}
           </>
         ) : (
           /* 部门：成员表 */
           <>
             <div className="admin-toolbar">
-              <div className="bbw-input bbw-input--search admin-toolbar__search">
-                <input
-                  value={attachUid}
-                  placeholder="挂靠已有用户：输入其用户 ID 回车"
-                  onChange={(e) => setAttachUid(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && void attach()}
-                  data-testid="dir-attach-uid"
-                />
-              </div>
+              <Input.Search
+                allowClear
+                className="admin-toolbar__search"
+                placeholder="挂靠已有用户：输入其用户 ID 回车"
+                value={attachUid}
+                onChange={(e) => setAttachUid(e.target.value)}
+                onSearch={() => void attach()}
+                data-testid="dir-attach-uid"
+              />
             </div>
-            {members === null ? (
-              <div className="admin-directory__hint">加载中…</div>
-            ) : members.length === 0 ? (
-              <div className="admin-directory__hint">该组织暂无成员——点节点上 ＋ 用户 直接开人</div>
-            ) : (
-              <table className="admin-table" data-testid="dir-members-table">
-                <thead>
-                  <tr>
-                    <th>工号</th>
-                    <th>姓名</th>
-                    <th>邮箱</th>
-                    <th>主部门</th>
-                    <th>状态</th>
-                    <th style={{ width: 180 }}>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {members.map((m) => (
-                    <tr key={m.user_id}>
-                      <td className="admin-mono">{m.employee_no || m.user_id}</td>
-                      <td>{m.name || m.user_id}</td>
-                      <td className="admin-mono">{m.email || '—'}</td>
-                      <td>{m.is_primary ? <span className="tag tag--builtin">主部门</span> : '—'}</td>
-                      <td>
-                        <span className={`admin-status${m.status === 1 ? ' admin-status--active' : ' admin-status--disabled'}`}>
-                          {m.status === 1 ? '启用' : m.status === 2 ? '禁用' : '—'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="admin-role__ops">
-                          {m.status === 2 ? (
-                            <Button
-                              variant="secondary"
-                              loading={statusMutation.isPending && statusMutation.variables?.userId === m.user_id}
-                              onClick={() => toggle(m.user_id, m.name, m.status ?? 1)}
-                            >
-                              启用
-                            </Button>
-                          ) : (
-                            <Button
-                              variant="danger"
-                              loading={statusMutation.isPending && statusMutation.variables?.userId === m.user_id}
-                              onClick={() => toggle(m.user_id, m.name, m.status ?? 1)}
-                            >
-                              禁用
-                            </Button>
-                          )}
-                          <Button variant="danger" onClick={() => void offboard(m.user_id, m.name)}>
-                            离职
-                          </Button>
-                          <Button variant="secondary" onClick={() => void detach(m.user_id, m.name)}>
-                            移出
-                          </Button>
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+            <Table<DeptMemberRow>
+              rowKey="user_id"
+              columns={memberColumns}
+              dataSource={members ?? []}
+              loading={members === null}
+              data-testid="dir-members-table"
+              locale={{ emptyText: '该组织暂无成员——点节点上 ＋ 用户 直接开人' }}
+              pagination={{ pageSize: 20, hideOnSinglePage: true }}
+            />
           </>
         )}
       </div>

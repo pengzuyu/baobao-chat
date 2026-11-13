@@ -1,11 +1,14 @@
 /**
  * 公告发布（D10 PAD-15）：发布表单（标题/正文，全员通知中心触达）+ 历史列表
  * （触达快照 reach）。发布通道=kind=announcement 系统公告分组（PIM-09 既有）。
+ * D26-O2：Input/Input.TextArea/Button/Alert 化。
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { Alert, Input, Tag } from 'antd';
 import { Megaphone } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
+import { Button } from '../../../shared/ui/Button';
 import { fetchNotices, publishNotice, type AdminNotice } from '../api/admin';
 
 export function NoticesPage() {
@@ -52,34 +55,31 @@ export function NoticesPage() {
       <div className="admin-page__head">
         <h2>公告发布</h2>
       </div>
-      {error ? <div className="admin-page__error">{error}</div> : null}
-      {ok ? <div className="admin-notice__ok">已发布并广播全员通知中心</div> : null}
+      {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
+      {ok ? <Alert type="success" showIcon message="已发布并广播全员通知中心" style={{ marginBottom: 8 }} /> : null}
 
       <div className="admin-notice__form">
-        <input
-          className="bbw-input"
+        <Input
           placeholder="标题（≤100 字）"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           data-testid="notice-title-input"
         />
-        <textarea
-          className="gm-textarea"
-          rows={5}
+        <Input.TextArea
+          autoSize={{ minRows: 5, maxRows: 12 }}
           placeholder="正文（≤4000 字；全员将通过通知中心「系统公告」分组收到）"
           value={content}
           onChange={(e) => setContent(e.target.value)}
           data-testid="notice-content-input"
         />
-        <button
-          type="button"
-          className="btn btn--primary"
-          disabled={busy || !title.trim() || !content.trim()}
+        <Button
+          loading={busy}
+          disabled={!title.trim() || !content.trim()}
           onClick={() => void publish()}
           data-testid="notice-publish-btn"
         >
           <Megaphone size={14} /> {busy ? '发布中…' : '发布并广播'}
-        </button>
+        </Button>
       </div>
 
       <div className="admin-notice__history">
@@ -93,9 +93,7 @@ export function NoticesPage() {
             <div className="admin-notice__item" key={n.id} data-testid="notice-item">
               <div className="admin-notice__item-head">
                 <strong>{n.title}</strong>
-                <span className="admin-notice__reach" title="发布时全员触达快照">
-                  触达 {n.reach}
-                </span>
+                <Tag title="发布时全员触达快照">触达 {n.reach}</Tag>
               </div>
               <pre className="admin-notice__content">{n.content}</pre>
               <div className="admin-notice__ts">{new Date(n.created_at).toLocaleString()}</div>

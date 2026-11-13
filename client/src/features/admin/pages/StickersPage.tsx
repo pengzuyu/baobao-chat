@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, Input } from 'antd';
 import { ArrowDownToLine, ArrowUpToLine, Plus, Trash2 } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
@@ -68,20 +69,20 @@ export function StickersPage() {
       </header>
 
       <div className="admin-stickers__create">
-        <input
+        <Input
           className="admin-stickers__input"
           placeholder="新表情集名称（≤50 字）"
           value={newName}
           maxLength={50}
           onChange={(e) => setNewName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && void doCreate()}
+          onPressEnter={() => void doCreate()}
           disabled={USE_MOCK}
         />
         <Button onClick={() => void doCreate()} disabled={!newName.trim() || busy}>
           <Plus size={14} /> 建集
         </Button>
       </div>
-      {errorText ? <div className="admin-stickers__error">{errorText}</div> : null}
+      {errorText ? <Alert type="error" showIcon message={errorText} style={{ marginBottom: 8 }} /> : null}
 
       <StateView
         state={state}
@@ -130,6 +131,7 @@ function SetCard({ set, onReload, onError }: { set: StickerSet; onReload: () => 
             type="file"
             accept="image/*"
             className="attach-input"
+            style={{ display: 'none' }}
             onChange={(e) => {
               const f = e.target.files?.[0];
               e.target.value = '';
@@ -141,21 +143,20 @@ function SetCard({ set, onReload, onError }: { set: StickerSet; onReload: () => 
               }
             }}
           />
-          <button type="button" className="admin-stickers__op" title="上传表情" disabled={busy} onClick={() => fileInputRef.current?.click()}>
+          <Button size="small" title="上传表情" disabled={busy} onClick={() => fileInputRef.current?.click()}>
             <Plus size={14} /> 上传
-          </button>
-          <button
-            type="button"
-            className="admin-stickers__op"
+          </Button>
+          <Button
+            size="small"
             title={live ? '下架（全员不可用）' : '上架'}
             disabled={busy}
             onClick={() => void run(() => setAdminStickerStatus(set.id, live ? 2 : 1))}
           >
             {live ? <ArrowDownToLine size={14} /> : <ArrowUpToLine size={14} />} {live ? '下架' : '上架'}
-          </button>
-          <button type="button" className="admin-stickers__op admin-stickers__op--danger" title="删除表情集" disabled={busy} onClick={() => void run(() => removeAdminStickerSet(set.id))}>
+          </Button>
+          <Button size="small" variant="danger" title="删除表情集" disabled={busy} onClick={() => void run(() => removeAdminStickerSet(set.id))}>
             <Trash2 size={14} /> 删除
-          </button>
+          </Button>
         </div>
       </div>
       <div className="admin-stickers__thumbs">

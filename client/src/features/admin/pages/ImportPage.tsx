@@ -3,12 +3,15 @@
  * 解析首表，表头列：工号/姓名/邮箱——顺序同 CSV）→ 预览解析 → 提交导入。
  * v0.1 同步 ≤100 行/次；初始口令=工号+!BBW，**导入即置首登强制改密**（D11：
  * 登录响应 must_change_pwd → 登录页二步改密表单，改密成功清位）。
+ * D26-O2：Input.TextArea/Button/Table/Tag 化（隐藏 file input 保留——antd Upload 不参与）。
  */
 
 import { useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
+import { Alert, Input, Table, Tag } from 'antd';
 import { ArrowRight, FileUp } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
+import { Button } from '../../../shared/ui/Button';
 import { batchImportUsers, type ImportInputRow, type ImportResult } from '../api/admin';
 
 type Step = 'paste' | 'result';
@@ -105,7 +108,7 @@ export function ImportPage() {
         <h2>批量导入用户</h2>
         <span className="admin-import__hint">CSV 每行：工号,姓名[,邮箱] · ≤100 行/次 · 初始口令=工号+!BBW</span>
       </div>
-      {error ? <div className="admin-page__error">{error}</div> : null}
+      {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
 
       {step === 'paste' ? (
         <>
@@ -118,27 +121,27 @@ export function ImportPage() {
               onChange={(e) => void pickFile(e.target.files?.[0])}
               data-testid="import-file-input"
             />
-            <button type="button" className="btn btn--secondary" onClick={() => fileRef.current?.click()} data-testid="import-file-btn">
+            <Button variant="secondary" onClick={() => fileRef.current?.click()} data-testid="import-file-btn">
               <FileUp size={14} /> 上传 Excel（.xlsx/.xls）
-            </button>
+            </Button>
             {excelRows ? (
               <>
                 <span className="admin-import__filename" data-testid="import-file-name">{fileName}</span>
-                <button type="button" className="btn btn--sm" onClick={backToPaste}>
+                <Button variant="secondary" size="small" onClick={backToPaste}>
                   改用粘贴
-                </button>
+                </Button>
               </>
             ) : null}
           </div>
           {excelRows ? null : (
-          <textarea
-            className="gm-textarea admin-import__input"
-            rows={12}
-            placeholder={'# 示例（# 开头为注释行）\n10021,张三,zhang@corp.io\n10022,李四'}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            data-testid="import-csv-input"
-          />
+            <Input.TextArea
+              className="admin-import__input"
+              autoSize={{ minRows: 12, maxRows: 24 }}
+              placeholder={'# 示例（# 开头为注释行）\n10021,张三,zhang@corp.io\n10022,李四'}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              data-testid="import-csv-input"
+            />
           )}
           <div className="admin-import__meta">
             <FileUp size={14} /> 解析 {parsed.rows.length} 行（{excelRows ? 'Excel' : 'CSV 粘贴'}）
@@ -147,51 +150,51 @@ export function ImportPage() {
           <div className="admin-import__meta admin-import__meta--note">
             初始口令=工号+!BBW，导入用户首登强制改密（登录后弹二步改密表单）
           </div>
-          <button
-            type="button"
-            className="btn btn--primary"
+          <Button
             disabled={busy || parsed.rows.length === 0 || parsed.rows.length > 100}
             onClick={() => void submit()}
             data-testid="import-submit-btn"
           >
             <ArrowRight size={14} /> {busy ? '导入中…' : `导入 ${Math.min(parsed.rows.length, 100)} 行`}
-          </button>
+          </Button>
         </>
       ) : (
         <>
           <div className="admin-import__summary">
             成功 <strong>{result?.created ?? 0}</strong> · 失败 <strong>{result?.failed ?? 0}</strong>
           </div>
-          <table className="admin-table" data-testid="import-result-table">
-            <thead>
-              <tr>
-                <th>行</th>
-                <th>工号</th>
-                <th>姓名</th>
-                <th>结果</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(result?.rows ?? []).map((r) => (
-                <tr key={r.row} data-testid="import-result-row">
-                  <td>{r.row}</td>
-                  <td>{r.empno}</td>
-                  <td>{r.name}</td>
-                  <td>{r.ok ? <span className="tag tag--builtin">成功</span> : <span className="admin-import__fail">{r.reason}</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <button
-            type="button"
-            className="btn"
+          <Table
+            rowKey="row"
+            size="small"
+            data-testid="import-result-table"
+            dataSource={result?.rows ?? []}
+            pagination={false}
+            onRow={() => ({ 'data-testid': 'import-result-row' } as React.HTMLAttributes<HTMLTableRowElement>)}
+            columns={[
+              { title: '行', dataIndex: 'row', width: 60 },
+              { title: '工号', dataIndex: 'empno', width: 120 },
+              { title: '姓名', dataIndex: 'name', width: 140 },
+              {
+                title: '结果',
+                key: 'ok',
+                render: (_, r) =>
+                  r.ok ? (
+                    <Tag color="geekblue">成功</Tag>
+                  ) : (
+                    <span className="admin-import__fail">{r.reason}</span>
+                  ),
+              },
+            ]}
+          />
+          <Button
+            variant="secondary"
             onClick={() => {
               setStep('paste');
               setResult(null);
             }}
           >
             继续导入
-          </button>
+          </Button>
         </>
       )}
     </div>

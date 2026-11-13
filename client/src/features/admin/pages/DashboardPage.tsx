@@ -7,6 +7,7 @@
  * - 统计时点标注（as_of，PAD-02"统计时点"语义）
  */
 
+import { Table } from 'antd';
 import { Activity, BrainCircuit, HardDrive, MessageSquare, MessagesSquare, Users, Zap } from 'lucide-react';
 import { ApiError } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
@@ -98,28 +99,25 @@ export function DashboardPage() {
           {trend.length === 0 ? (
             <div className="admin-empty-inline">暂无用量数据（经网关发起 embed/chat 后计入）</div>
           ) : (
-            <table className="admin-table admin-table--trend">
-              <thead>
-                <tr>
-                  <th>日期</th>
-                  <th>tokens</th>
-                  <th style={{ width: '55%' }}>占比</th>
-                </tr>
-              </thead>
-              <tbody>
-                {trend.map((p) => (
-                  <tr key={p.date}>
-                    <td>{p.date}</td>
-                    <td>{fmtNum(p.total_tokens)}</td>
-                    <td>
-                      <span className="admin-bar">
-                        <span className="admin-bar__fill" style={{ width: `${Math.max(2, Math.round((p.total_tokens / maxTokens) * 100))}%` }} />
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Table
+              rowKey="date"
+              size="small"
+              dataSource={trend}
+              pagination={false}
+              columns={[
+                { title: '日期', dataIndex: 'date', width: 120 },
+                { title: 'tokens', dataIndex: 'total_tokens', width: 120, render: (v: number) => fmtNum(v) },
+                {
+                  title: '占比',
+                  key: 'bar',
+                  render: (_, p) => (
+                    <span className="admin-bar">
+                      <span className="admin-bar__fill" style={{ width: `${Math.max(2, Math.round((p.total_tokens / maxTokens) * 100))}%` }} />
+                    </span>
+                  ),
+                },
+              ]}
+            />
           )}
         </section>
       </StateView>

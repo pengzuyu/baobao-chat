@@ -17,17 +17,25 @@ interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'typ
   children?: ReactNode;
   /** 原生 button type（submit/reset），默认 button */
   type?: 'submit' | 'reset' | 'button';
+  /** antd 尺寸（D26-O2 增补：树行/表单内紧凑按钮用 small；HTML number 型冲突已 Omit） */
+  size?: 'small' | 'middle' | 'large';
+  /** antd 图标位（D26-O2 增补：树行 icon-only 按钮） */
+  icon?: ReactNode;
+  /** antd 危险色（D26-O2 增补：配合 text/secondary 变体做红字/红边，非实底） */
+  danger?: boolean;
 }
 
 /** variant → antd：primary→primary、secondary→default、text→text、danger→primary+danger（实底红） */
-export function Button({ variant = 'primary', loading = false, disabled, children, type = 'button', ...rest }: ButtonProps) {
+export function Button({ variant = 'primary', loading = false, disabled, children, type = 'button', size, icon, danger, ...rest }: ButtonProps) {
   return (
     <AntdButton
       type={variant === 'secondary' ? 'default' : variant === 'danger' ? 'primary' : variant}
-      danger={variant === 'danger'}
+      danger={danger || variant === 'danger'}
       loading={loading}
       disabled={disabled}
       htmlType={type}
+      size={size}
+      icon={icon}
       {...rest}
     >
       {children}

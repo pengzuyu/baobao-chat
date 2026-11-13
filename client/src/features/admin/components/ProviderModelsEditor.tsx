@@ -1,12 +1,14 @@
 /**
  * 供应商模型清单编辑器（0023；admin 供应商面板与个人 BYOK 表单共享）：
- * - 探测候选 chips 点选/取消（选中高亮）
+ * - 探测候选 Tag.CheckableTag 点选/取消（选中高亮）
  * - 手动输入任意模型 ID（回车/「添加」）——上游 /models 清单不全时的唯一入口
  *   （如智谱只返回付费模型，glm-4.7-flash 等免费档须手填）
- * - 已选但不在候选中的项带「手动」小标（虚线描边），✕ 移除
+ * - 已选但不在候选中的项为 closable Tag（带「手动」标注），✕ 移除
+ * D26-O2：chips/input 换 antd（CheckableTag/Tag closable/Input）。
  */
 
 import { useState } from 'react';
+import { Input, Tag } from 'antd';
 import { Plus } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 
@@ -38,43 +40,24 @@ export function ProviderModelsEditor({ models, candidates, onToggle, onAdd, test
   return (
     <div className="admin-provider-models" data-testid={testId}>
       {candidates.map((m) => (
-        <button
-          key={m}
-          type="button"
-          className={`admin-chip${models.includes(m) ? ' admin-chip--active' : ''}`}
-          onClick={() => onToggle(m)}
-          title={models.includes(m) ? '点击取消选择' : '点击选择'}
-        >
+        <Tag.CheckableTag key={m} checked={models.includes(m)} onChange={() => onToggle(m)}>
           {m}
-        </button>
+        </Tag.CheckableTag>
       ))}
       {models
         .filter((m) => !candidates.includes(m))
         .map((m) => (
-          <button
-            key={m}
-            type="button"
-            className="admin-chip admin-chip--active admin-chip--manual"
-            onClick={() => onToggle(m)}
-            title="手动添加的模型，点击移除"
-          >
-            {m}
-            <i className="admin-chip__tag">手动</i>✕
-          </button>
+          <Tag key={m} color="blue" closable onClose={(e) => { e.preventDefault(); onToggle(m); }}>
+            {m}（手动）
+          </Tag>
         ))}
       <span className="admin-provider-models__entry">
-        <input
-          className="bbw-input"
+        <Input
           style={{ width: 220 }}
           value={manual}
           placeholder="手动输入模型 ID（上游清单缺省时）"
           onChange={(e) => setManual(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              addManual();
-            }
-          }}
+          onPressEnter={addManual}
           data-testid={testId ? `${testId}-input` : undefined}
         />
         <Button variant="secondary" onClick={addManual} disabled={!manual.trim()}>

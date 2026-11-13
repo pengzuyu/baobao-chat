@@ -8,7 +8,8 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Drawer } from 'antd';
+import { Alert, Drawer, Form, Input, Select, Table, Tag } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { PlugZap, Plus, Save, Trash2 } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
@@ -188,6 +189,50 @@ function ProvidersPanel() {
     del.mutate(p.id);
   };
 
+  const columns: ColumnsType<AIProvider> = [
+    { title: 'ID', dataIndex: 'id', width: 60, render: (v: string) => <span className="admin-mono">{v}</span> },
+    { title: '名称', dataIndex: 'name' },
+    { title: 'Base URL', dataIndex: 'baseUrl', render: (v: string) => <span className="admin-mono">{v}</span> },
+    {
+      title: '模型',
+      dataIndex: 'models',
+      render: (models: AIProvider['models']) => (
+        <>
+          {models.map((m) => (
+            <Tag key={m.id} style={{ marginInlineEnd: 4 }}>
+              {m.id}
+            </Tag>
+          ))}
+        </>
+      ),
+    },
+    { title: '密钥', dataIndex: 'keyMask', render: (v: string) => <span className="admin-mono">{v || '—'}</span> },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 80,
+      render: (v: number) => <Tag color={v === 1 ? 'green' : 'default'}>{v === 1 ? '启用' : '停用'}</Tag>,
+    },
+    {
+      title: '操作',
+      key: 'ops',
+      width: 230,
+      render: (_, p) => (
+        <>
+          <Button variant="secondary" size="small" onClick={() => edit(p)}>
+            编辑
+          </Button>{' '}
+          <Button variant="secondary" size="small" loading={save.isPending && save.variables?.id === p.id} onClick={() => toggleStatus(p)}>
+            {p.status === 1 ? '停用' : '启用'}
+          </Button>{' '}
+          <Button variant="danger" size="small" loading={del.isPending && del.variables === p.id} onClick={() => remove(p)}>
+            <Trash2 size={12} /> 删除
+          </Button>
+        </>
+      ),
+    },
+  ];
+
   return (
     <>
       <section className="admin-panel">
@@ -207,50 +252,13 @@ function ProvidersPanel() {
           forbiddenText="需要 admin:policy:manage 权限"
           offlineText="离线中：供应商只读"
         >
-          <table className="admin-table" data-testid="ai-providers-table">
-            <thead>
-              <tr>
-                <th style={{ width: 40 }}>ID</th>
-                <th>名称</th>
-                <th>Base URL</th>
-                <th>模型</th>
-                <th>密钥</th>
-                <th style={{ width: 70 }}>状态</th>
-                <th style={{ width: 210 }}>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((p) => (
-                <tr key={p.id} data-testid={`ai-provider-${p.id}`}>
-                  <td className="admin-mono">{p.id}</td>
-                  <td>{p.name}</td>
-                  <td className="admin-mono">{p.baseUrl}</td>
-                  <td>
-                    {p.models.map((m) => (
-                      <span key={m.id} className="admin-tag" style={{ marginRight: 4 }}>
-                        {m.id}
-                      </span>
-                    ))}
-                  </td>
-                  <td className="admin-mono">{p.keyMask || '—'}</td>
-                  <td>
-                    <span className={`admin-status${p.status === 1 ? ' admin-status--ok' : ''}`}>{p.status === 1 ? '启用' : '停用'}</span>
-                  </td>
-                  <td>
-                    <Button variant="secondary" onClick={() => edit(p)}>
-                      编辑
-                    </Button>{' '}
-                    <Button variant="secondary" loading={save.isPending && save.variables?.id === p.id} onClick={() => toggleStatus(p)}>
-                      {p.status === 1 ? '停用' : '启用'}
-                    </Button>{' '}
-                    <Button variant="danger" loading={del.isPending && del.variables === p.id} onClick={() => remove(p)}>
-                      <Trash2 size={12} /> 删除
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <Table<AIProvider>
+            rowKey="id"
+            columns={columns}
+            dataSource={items}
+            data-testid="ai-providers-table"
+            pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          />
         </StateView>
       </section>
       {/* 新增/编辑抽屉：字段纵向排布，关闭即复位（destroyOnClose 清手填输入态） */}
@@ -261,42 +269,47 @@ function ProvidersPanel() {
         width={520}
         destroyOnClose
         footer={
-          <div className="ai-prov-form__footer">
-            <Button onClick={submit} loading={save.isPending} data-testid="ai-prov-save">
-              <Save size={13} /> {form.id ? '保存修改' : '创建'}
-            </Button>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <Button variant="secondary" onClick={() => setOpen(false)}>
               取消
+            </Button>
+            <Button onClick={submit} loading={save.isPending} data-testid="ai-prov-save">
+              <Save size={13} /> {form.id ? '保存修改' : '创建'}
             </Button>
           </div>
         }
       >
-        <div className="ai-prov-form">
-          <label htmlFor="ai-prov-vendor">厂商预设（自动填名称与 Base URL，可改）</label>
-          <select id="ai-prov-vendor" className="bbw-input" value={form.vendor} onChange={(e) => pickVendor(e.target.value)} data-testid="ai-prov-vendor">
-            {PROVIDER_PRESETS.map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          <label htmlFor="ai-prov-name">名称</label>
-          <input id="ai-prov-name" className="bbw-input" value={form.name} placeholder="名称（随厂商自动填）" onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} data-testid="ai-prov-name" />
-          <label htmlFor="ai-prov-base">Base URL（OpenAI 兼容根地址）</label>
-          <input id="ai-prov-base" className="bbw-input" value={form.baseUrl} placeholder={form.vendor === 'custom' ? 'https://…/v1' : '随厂商自动填，可改'} onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))} data-testid="ai-prov-base" />
-          <label htmlFor="ai-prov-key">API Key（内网无鉴权上游可留空）</label>
-          <input
-            id="ai-prov-key"
-            className="bbw-input"
-            type="password"
-            value={form.apiKey}
-            placeholder={form.id && !editingKey ? '密钥已保存（不改则留空）' : 'API Key'}
-            onChange={(e) => {
-              setEditingKey(true);
-              setForm((f) => ({ ...f, apiKey: e.target.value }));
-            }}
-            data-testid="ai-prov-key"
-          />
+        <Form layout="vertical">
+          <Form.Item label="厂商预设（自动填名称与 Base URL，可改）">
+            <Select
+              value={form.vendor}
+              onChange={pickVendor}
+              options={PROVIDER_PRESETS.map((p) => ({ value: p.key, label: p.label }))}
+              data-testid="ai-prov-vendor"
+            />
+          </Form.Item>
+          <Form.Item label="名称">
+            <Input value={form.name} placeholder="名称（随厂商自动填）" onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} data-testid="ai-prov-name" />
+          </Form.Item>
+          <Form.Item label="Base URL（OpenAI 兼容根地址）">
+            <Input
+              value={form.baseUrl}
+              placeholder={form.vendor === 'custom' ? 'https://…/v1' : '随厂商自动填，可改'}
+              onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))}
+              data-testid="ai-prov-base"
+            />
+          </Form.Item>
+          <Form.Item label="API Key（内网无鉴权上游可留空）">
+            <Input.Password
+              value={form.apiKey}
+              placeholder={form.id && !editingKey ? '密钥已保存（不改则留空）' : 'API Key'}
+              onChange={(e) => {
+                setEditingKey(true);
+                setForm((f) => ({ ...f, apiKey: e.target.value }));
+              }}
+              data-testid="ai-prov-key"
+            />
+          </Form.Item>
           <div className="ai-prov-form__probe">
             <Button variant="secondary" onClick={() => void probe()} loading={probing} data-testid="ai-prov-probe">
               <PlugZap size={13} /> 测试连接并拉取模型
@@ -307,20 +320,17 @@ function ProvidersPanel() {
               </span>
             ) : null}
           </div>
-          <label>模型清单（探测点选或手动输入——上游清单常不全，如智谱免费 Flash 系须手填）</label>
-          <ProviderModelsEditor
-            models={form.models}
-            candidates={form.candidates}
-            onToggle={toggleModel}
-            onAdd={(id) => setForm((f) => ({ ...f, models: [...f.models, id] }))}
-            testId="ai-prov-models"
-          />
-          {formError ? (
-            <div className="admin-error-bar" data-testid="ai-prov-error">
-              {formError}
-            </div>
-          ) : null}
-        </div>
+          <Form.Item label="模型清单（探测点选或手动输入——上游清单常不全，如智谱免费 Flash 系须手填）">
+            <ProviderModelsEditor
+              models={form.models}
+              candidates={form.candidates}
+              onToggle={toggleModel}
+              onAdd={(id) => setForm((f) => ({ ...f, models: [...f.models, id] }))}
+              testId="ai-prov-models"
+            />
+          </Form.Item>
+          {formError ? <Alert type="error" showIcon message={formError} data-testid="ai-prov-error" /> : null}
+        </Form>
       </Drawer>
     </>
   );
@@ -403,58 +413,85 @@ function RoutesPanel() {
 
   const state: ViewStateOrOk = provQuery.isPending || routesQuery.isPending ? 'loading' : provQuery.isError || routesQuery.isError ? 'error' : 'ok';
 
-  const tierRow = (tier: Tier, label: string, desc: string) => {
-    const d = draft[tier];
-    return (
-      <tr key={tier}>
-        <td>
-          <span className="admin-tag">{tier}</span>
-        </td>
-        <td>
-          <div className="admin-page__meta" style={{ marginBottom: 2 }}>
-            {label}
+  const provOptions = enabled.map((p) => ({ value: p.id, label: p.name }));
+  const modelOptions = (provId: string) =>
+    modelsOf(provId).map((m) => ({ value: m.id, label: m.label ? `${m.label}（${m.id}）` : m.id }));
+
+  const TIERS: Array<{ tier: Tier; label: string; desc: string }> = [
+    { tier: 'fast', label: '快速档', desc: '轻量任务/工具调用循环' },
+    { tier: 'strong', label: '强力档', desc: '复杂推理/长文写作' },
+    { tier: 'embed', label: '嵌入档', desc: '知识库向量化（bbw-embed；可选，未配走 mock 兜底向量）' },
+    { tier: 'rerank', label: '重排档', desc: '知识库检索重排（bbw-rerank；可选，未配走词面重排兜底）' },
+  ];
+
+  const routesColumns: ColumnsType<(typeof TIERS)[number]> = [
+    {
+      title: '档位',
+      dataIndex: 'tier',
+      width: 90,
+      render: (tier: string) => <Tag>{tier}</Tag>,
+    },
+    {
+      title: '主选',
+      key: 'main',
+      render: (_, t) => {
+        const d = draft[t.tier];
+        return (
+          <div>
+            <div className="admin-page__meta" style={{ marginBottom: 2 }}>
+              {t.label}
+            </div>
+            <div className="admin-panel__note" style={{ marginBottom: 4 }}>
+              {t.desc}
+            </div>
+            <Select
+              style={{ width: 180 }}
+              placeholder="选择供应商…"
+              value={d.mainProv || undefined}
+              onChange={(v) => setTier(t.tier, { mainProv: v, mainModel: '' })}
+              options={provOptions}
+              allowClear
+            />{' '}
+            <Select
+              style={{ width: 200 }}
+              placeholder="选择模型…"
+              value={d.mainModel || undefined}
+              onChange={(v) => setTier(t.tier, { mainModel: v ?? '' })}
+              options={modelOptions(d.mainProv)}
+              allowClear
+            />
           </div>
-          <div className="admin-panel__note" style={{ marginBottom: 4 }}>
-            {desc}
-          </div>
-          <select className="bbw-input" style={{ width: 170 }} value={d.mainProv} onChange={(e) => setTier(tier, { mainProv: e.target.value, mainModel: '' })}>
-            <option value="">选择供应商…</option>
-            {enabled.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>{' '}
-          <select className="bbw-input" style={{ width: 160 }} value={d.mainModel} onChange={(e) => setTier(tier, { mainModel: e.target.value })}>
-            <option value="">选择模型…</option>
-            {modelsOf(d.mainProv).map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label ? `${m.label}（${m.id}）` : m.id}
-              </option>
-            ))}
-          </select>
-        </td>
-        <td>
-          <select className="bbw-input" style={{ width: 170 }} value={d.backupProv} onChange={(e) => setTier(tier, { backupProv: e.target.value, backupModel: '' })}>
-            <option value="">（可选）备用供应商…</option>
-            {enabled.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>{' '}
-          <select className="bbw-input" style={{ width: 160 }} value={d.backupModel} onChange={(e) => setTier(tier, { backupModel: e.target.value })} disabled={!d.backupProv}>
-            <option value="">选择模型…</option>
-            {modelsOf(d.backupProv).map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label ? `${m.label}（${m.id}）` : m.id}
-              </option>
-            ))}
-          </select>
-        </td>
-      </tr>
-    );
-  };
+        );
+      },
+    },
+    {
+      title: '备选',
+      key: 'backup',
+      render: (_, t) => {
+        const d = draft[t.tier];
+        return (
+          <>
+            <Select
+              style={{ width: 180 }}
+              placeholder="（可选）备用供应商…"
+              value={d.backupProv || undefined}
+              onChange={(v) => setTier(t.tier, { backupProv: v ?? '', backupModel: '' })}
+              options={provOptions}
+              allowClear
+            />{' '}
+            <Select
+              style={{ width: 200 }}
+              placeholder="选择模型…"
+              value={d.backupModel || undefined}
+              onChange={(v) => setTier(t.tier, { backupModel: v ?? '' })}
+              options={modelOptions(d.backupProv)}
+              disabled={!d.backupProv}
+            />
+          </>
+        );
+      },
+    },
+  ];
 
   return (
     <StateView state={state} skeleton={<SkeletonList count={2} />} emptyText="" error={provQuery.error ?? routesQuery.error} onRetry={() => { void provQuery.refetch(); void routesQuery.refetch(); }}>
@@ -463,22 +500,14 @@ function RoutesPanel() {
           默认模型（全员路由）
           <span className="admin-panel__meta">档位别名 bbw-fast/bbw-strong/bbw-embed/bbw-rerank → 此处主选；主选失败自动切备选（§4.4 降级链）；embed/rerank 可选——留空=沿用现有配置/内置兜底</span>
         </div>
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th style={{ width: 80 }}>档位</th>
-              <th>主选</th>
-              <th>备选</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tierRow('fast', '快速档', '轻量任务/工具调用循环')}
-            {tierRow('strong', '强力档', '复杂推理/长文写作')}
-            {tierRow('embed', '嵌入档', '知识库向量化（bbw-embed；可选，未配走 mock 兜底向量）')}
-            {tierRow('rerank', '重排档', '知识库检索重排（bbw-rerank；可选，未配走词面重排兜底）')}
-          </tbody>
-        </table>
-        {error ? <div className="admin-error-bar">{error}</div> : null}
+        <Table
+          rowKey="tier"
+          columns={routesColumns}
+          dataSource={TIERS}
+          pagination={false}
+          size="middle"
+        />
+        {error ? <Alert type="error" showIcon message={error} style={{ marginTop: 8 }} /> : null}
         <div className="admin-loadmore" style={{ marginTop: 8 }}>
           <Button onClick={submit} loading={put.isPending} data-testid="ai-routes-save">
             <Save size={13} /> 保存默认路由

@@ -1,14 +1,18 @@
 /**
  * 角色编辑器（D10 PAD-08 阶段二）：角色列表（内置徽标/授权人数/权限点数）+
- * 新建/编辑抽屉（名称/描述/权限点分组勾选）+ 删除（内置拒）+ 用户授权管理
+ * 新建/编辑弹窗（名称/描述/权限点分组勾选）+ 删除（内置拒）+ 用户授权管理
  * （输入 uid → 角色下拉授权/收回）。权限点字典来自 GET /admin/perm-points
  * （服务端权威清单 D12 §2.4，API-ADM-02——前端不硬编码；字典外点服务端拒绝，
  * 旧种子裸码 admin 编辑时自动收敛）。scope 部门范围授权随 D12 组织树阶段二。
+ * D26-O2：Table/Modal/Select/Input/Checkbox/Tag 全量 antd 化。
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, ShieldCheck, Trash2, X } from 'lucide-react';
+import { Checkbox, Input, Modal, Select, Table, Tag } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import { Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
+import { Button } from '../../../shared/ui/Button';
 import {
   createRole,
   deleteRole,
@@ -31,6 +35,13 @@ interface EditorState {
   permissions: Set<string>;
 }
 
+const SCOPE_OPTIONS = [
+  { value: 4, label: '范围：全租户' },
+  { value: 1, label: '范围：本人' },
+  { value: 2, label: '范围：本部门' },
+  { value: 3, label: '范围：本部门及以下' },
+];
+
 export function RolesPage() {
   const [roles, setRoles] = useState<AdminRole[] | null>(null);
   const [permDoc, setPermDoc] = useState<PermPointsDoc | null>(null);
@@ -39,6 +50,7 @@ export function RolesPage() {
   const [busy, setBusy] = useState(false);
   // 授权管理（按 uid 查询）
   const [grantUid, setGrantUid] = useState('');
+  const [grantRoleId, setGrantRoleId] = useState<string | undefined>(undefined);
   // D10：数据范围四档（授予时携带；2/3 需部门 ID）
   const [scopeType, setScopeType] = useState(4);
   const [scopeDeptId, setScopeDeptId] = useState('');
@@ -88,15 +100,23 @@ export function RolesPage() {
     }
   };
 
-  const remove = async (r: AdminRole) => {
-    if (!window.confirm(`确认删除角色「${r.name}」？已授权用户将一并收回`)) return;
-    setError(null);
-    try {
-      await deleteRole(r.id);
-      await reload();
-    } catch (e) {
-      setError(errText(e, '删除失败'));
-    }
+  const remove = (r: AdminRole) => {
+    Modal.confirm({
+      title: `删除角色「${r.name}」？`,
+      content: '已授权用户将一并收回',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setError(null);
+        try {
+          await deleteRole(r.id);
+          await reload();
+        } catch (e) {
+          setError(errText(e, '删除失败'));
+        }
+      },
+    });
   };
 
   const loadGrants = async () => {
@@ -132,85 +152,91 @@ export function RolesPage() {
     }
   };
 
-  const togglePerm = (p: string) => {
-    if (!editor) return;
-    const next = new Set(editor.permissions);
-    if (next.has(p)) next.delete(p);
-    else next.add(p);
-    setEditor({ ...editor, permissions: next });
-  };
+  const columns: ColumnsType<AdminRole> = [
+    {
+      title: '角色',
+      dataIndex: 'name',
+      render: (_, r) => (
+        <div>
+          <div className="admin-role__name">
+            <ShieldCheck size={13} /> {r.name}
+          </div>
+          {r.description ? <div className="admin-role__desc">{r.description}</div> : null}
+        </div>
+      ),
+    },
+    {
+      title: '类型',
+      dataIndex: 'is_builtin',
+      width: 90,
+      render: (v: boolean) => (v ? <Tag color="geekblue">内置</Tag> : <Tag>自定义</Tag>),
+    },
+    {
+      title: '权限点',
+      dataIndex: 'permissions',
+      width: 90,
+      render: (perms: string[]) => (
+        <span className="admin-role__perms" title={perms.join('\n')}>
+          {perms.length} 项
+        </span>
+      ),
+    },
+    { title: '授权人数', dataIndex: 'user_count', width: 90 },
+    {
+      title: '操作',
+      key: 'ops',
+      width: 160,
+      render: (_, r) => (
+        <>
+          <Button variant="secondary" onClick={() => openEdit(r)}>
+            {r.is_builtin ? '权限点' : '编辑'}
+          </Button>{' '}
+          {!r.is_builtin ? (
+            <Button variant="danger" onClick={() => remove(r)}>
+              <Trash2 size={12} /> 删除
+            </Button>
+          ) : null}
+        </>
+      ),
+    },
+  ];
 
   return (
     <div className="admin-page__section" data-testid="admin-roles">
       <div className="admin-page__head">
         <h2>角色编辑器</h2>
-        <button type="button" className="btn btn--primary" onClick={openCreate} data-testid="role-create-btn">
+        <Button onClick={openCreate} data-testid="role-create-btn">
           <Plus size={14} /> 新建角色
-        </button>
+        </Button>
       </div>
       {error ? <div className="admin-page__error">{error}</div> : null}
 
       {roles === null ? (
         <div className="admin-page__empty">加载中…</div>
       ) : (
-        <table className="admin-table" data-testid="roles-table">
-          <thead>
-            <tr>
-              <th>角色</th>
-              <th>类型</th>
-              <th>权限点</th>
-              <th>授权人数</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {roles.map((r) => (
-              <tr key={r.id} data-testid="role-row">
-                <td>
-                  <div className="admin-role__name">
-                    <ShieldCheck size={13} /> {r.name}
-                  </div>
-                  {r.description ? <div className="admin-role__desc">{r.description}</div> : null}
-                </td>
-                <td>{r.is_builtin ? <span className="tag tag--builtin">内置</span> : <span className="tag">自定义</span>}</td>
-                <td>
-                  <span className="admin-role__perms" title={r.permissions.join('\n')}>
-                    {r.permissions.length} 项
-                  </span>
-                </td>
-                <td>{r.user_count}</td>
-                <td>
-                  <div className="admin-role__ops">
-                    <button type="button" className="btn btn--sm" onClick={() => openEdit(r)}>
-                      {r.is_builtin ? '权限点' : '编辑'}
-                    </button>
-                    {!r.is_builtin ? (
-                      <button type="button" className="btn btn--sm btn--danger" onClick={() => void remove(r)}>
-                        <Trash2 size={12} /> 删除
-                      </button>
-                    ) : null}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <Table<AdminRole>
+          rowKey="id"
+          columns={columns}
+          dataSource={roles}
+          data-testid="roles-table"
+          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+        />
       )}
 
       {/* 用户授权管理 */}
       <div className="admin-grants">
         <div className="admin-grants__head">用户授权</div>
         <div className="admin-grants__query">
-          <input
-            className="bbw-input"
+          <Input
             placeholder="用户 uid"
+            style={{ width: 220 }}
             value={grantUid}
             onChange={(e) => setGrantUid(e.target.value)}
             data-testid="grant-uid-input"
           />
-          <button type="button" className="btn" onClick={() => void loadGrants()} data-testid="grant-query-btn">
+          <Button variant="secondary" onClick={() => void loadGrants()} data-testid="grant-query-btn">
             查询
-          </button>
+          </Button>
         </div>
         {grants !== null ? (
           <div className="admin-grants__body">
@@ -220,129 +246,122 @@ export function RolesPage() {
               grants.map((g) => (
                 <div className="admin-grants__row" key={g.id}>
                   <span>{g.role_name}</span>
-                  <span className="tag">
+                  <Tag>
                     {(g.scope_type ?? 4) === 1 ? '本人' : (g.scope_type ?? 4) === 2 ? `本部门#${g.scope_dept_id ?? ''}` : (g.scope_type ?? 4) === 3 ? `本部门及以下#${g.scope_dept_id ?? ''}` : '全租户'}
-                  </span>
-                  <button type="button" className="btn btn--sm btn--danger" onClick={() => void doRevoke(g.id)}>
+                  </Tag>
+                  <Button variant="danger" onClick={() => void doRevoke(g.id)}>
                     收回
-                  </button>
+                  </Button>
                 </div>
               ))
             )}
             <div className="admin-grants__row admin-grants__row--add">
-              <select className="gm-select" data-testid="grant-role-select" defaultValue="">
-                <option value="" disabled>
-                  选择角色授予…
-                </option>
-                {(roles ?? []).map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="gm-select"
-                data-testid="grant-scope-select"
+              <Select
+                placeholder="选择角色授予…"
+                style={{ width: 200 }}
+                value={grantRoleId}
+                onChange={setGrantRoleId}
+                options={(roles ?? []).map((r) => ({ value: r.id, label: r.name }))}
+                data-testid="grant-role-select"
+              />
+              <Select
+                style={{ width: 200 }}
                 value={scopeType}
-                onChange={(e) => setScopeType(Number(e.target.value))}
+                onChange={setScopeType}
+                options={SCOPE_OPTIONS}
+                data-testid="grant-scope-select"
                 title="数据范围（D12 §S5；权限判定按范围收敛随引擎接线）"
-              >
-                <option value={4}>范围：全租户</option>
-                <option value={1}>范围：本人</option>
-                <option value={2}>范围：本部门</option>
-                <option value={3}>范围：本部门及以下</option>
-              </select>
+              />
               {scopeType === 2 || scopeType === 3 ? (
-                <input
-                  className="gm-input"
+                <Input
+                  style={{ width: 160 }}
                   data-testid="grant-scope-dept"
                   placeholder="部门 ID"
                   value={scopeDeptId}
                   onChange={(e) => setScopeDeptId(e.target.value)}
                 />
               ) : null}
-              <button
-                type="button"
-                className="btn btn--sm btn--primary"
-                onClick={() => {
-                  const sel = document.querySelector<HTMLSelectElement>('[data-testid="grant-role-select"]');
-                  if (sel?.value) void doGrant(sel.value);
-                }}
-              >
+              <Button disabled={!grantRoleId} onClick={() => grantRoleId && void doGrant(grantRoleId)}>
                 授予
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}
       </div>
 
-      {/* 新建/编辑抽屉 */}
-      {editor ? (
-        <div className="modal-mask" onClick={() => setEditor(null)}>
-          <div className="role-editor" onClick={(e) => e.stopPropagation()} data-testid="role-editor">
-            <div className="role-editor__head">
-              <span>{editor.mode === 'create' ? '新建角色' : `编辑角色 · ${editor.role?.name}`}</span>
-              <button type="button" className="icon-btn" onClick={() => setEditor(null)}>
-                <X size={14} />
-              </button>
-            </div>
-            <div className="role-editor__body">
-              <label className="gm-field__label">角色名（≤50 字）{editor.role?.is_builtin ? '（内置锁定）' : ''}</label>
-              <input
-                className="bbw-input"
-                value={editor.name}
-                disabled={editor.role?.is_builtin}
-                onChange={(e) => setEditor({ ...editor, name: e.target.value })}
-                data-testid="role-name-input"
-              />
-              <label className="gm-field__label">描述</label>
-              <input
-                className="bbw-input"
-                value={editor.description}
-                disabled={editor.role?.is_builtin}
-                onChange={(e) => setEditor({ ...editor, description: e.target.value })}
-              />
-              <label className="gm-field__label">
-                权限点（已选 {editor.permissions.size} 项；字典共 {permDoc?.total ?? '…'} 项，服务端权威清单 D12 §2.4）
-              </label>
-              {permDoc === null ? (
-                <div className="admin-page__empty">权限点字典加载失败（编辑需字典校验）——请稍后重开编辑器重试</div>
-              ) : (
-                <div className="role-editor__perms">
-                  {permDoc.groups.map((g) => (
-                    <div className="role-editor__group" key={g.domain}>
-                      <div className="role-editor__group-label">
-                        {g.label} <span className="admin-role__perms">{g.points.length} 项</span>
-                      </div>
-                      {g.points.map((p) => (
-                        <label key={p.code} className={`role-editor__perm${editor.permissions.has(p.code) ? ' role-editor__perm--on' : ''}`}>
-                          <input type="checkbox" checked={editor.permissions.has(p.code)} onChange={() => togglePerm(p.code)} />
-                          <code>{p.code}</code>
-                          <span className="admin-role__desc">{p.desc}</span>
-                        </label>
-                      ))}
+      {/* 新建/编辑弹窗 */}
+      <Modal
+        open={!!editor}
+        title={editor ? (editor.mode === 'create' ? '新建角色' : `编辑角色 · ${editor.role?.name}`) : ''}
+        width={560}
+        onCancel={() => setEditor(null)}
+        destroyOnClose
+        data-testid="role-editor"
+        footer={[
+          <Button key="cancel" variant="secondary" onClick={() => setEditor(null)}>
+            取消
+          </Button>,
+          <Button
+            key="ok"
+            loading={busy}
+            disabled={!editor?.name.trim() || editor?.permissions.size === 0}
+            onClick={() => void save()}
+            data-testid="role-save-btn"
+          >
+            保存
+          </Button>,
+        ]}
+      >
+        {editor ? (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <label className="gm-field__label">
+              角色名（≤50 字）{editor.role?.is_builtin ? '（内置锁定）' : ''}
+            </label>
+            <Input
+              value={editor.name}
+              disabled={editor.role?.is_builtin}
+              onChange={(e) => setEditor({ ...editor, name: e.target.value })}
+              data-testid="role-name-input"
+            />
+            <label className="gm-field__label">描述</label>
+            <Input
+              value={editor.description}
+              disabled={editor.role?.is_builtin}
+              onChange={(e) => setEditor({ ...editor, description: e.target.value })}
+            />
+            <label className="gm-field__label">
+              权限点（已选 {editor.permissions.size} 项；字典共 {permDoc?.total ?? '…'} 项，服务端权威清单 D12 §2.4）
+            </label>
+            {permDoc === null ? (
+              <div className="admin-page__empty">权限点字典加载失败（编辑需字典校验）——请稍后重开编辑器重试</div>
+            ) : (
+              <div style={{ display: 'grid', gap: 12 }}>
+                {permDoc.groups.map((g) => (
+                  <div key={g.domain}>
+                    <div className="admin-role__desc" style={{ marginBottom: 4 }}>
+                      {g.label}（{g.points.length} 项）
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="role-editor__foot">
-              <button type="button" className="btn" onClick={() => setEditor(null)}>
-                取消
-              </button>
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={busy || !editor.name.trim() || editor.permissions.size === 0}
-                onClick={() => void save()}
-                data-testid="role-save-btn"
-              >
-                {busy ? '保存中…' : '保存'}
-              </button>
-            </div>
+                    {g.points.map((p) => (
+                      <Checkbox
+                        key={p.code}
+                        checked={editor.permissions.has(p.code)}
+                        onChange={() => {
+                          const next = new Set(editor.permissions);
+                          if (next.has(p.code)) next.delete(p.code);
+                          else next.add(p.code);
+                          setEditor({ ...editor, permissions: next });
+                        }}
+                      >
+                        <code>{p.code}</code> <span className="admin-role__desc">{p.desc}</span>
+                      </Checkbox>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
-      ) : null}
+        ) : null}
+      </Modal>
     </div>
   );
 }

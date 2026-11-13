@@ -7,6 +7,7 @@
  */
 
 import { useState } from 'react';
+import { Segmented, Table } from 'antd';
 import { Zap } from 'lucide-react';
 import { ApiError } from '../../../shared/api/http';
 import { SkeletonBlock } from '../../../shared/ui/Skeleton';
@@ -47,11 +48,11 @@ export function UsagePage() {
 
       <div className="admin-toolbar">
         <div className="admin-toolbar__filters" data-testid="admin-usage-days">
-          {DAY_OPTIONS.map((d) => (
-            <button key={d} type="button" className={`admin-chip${days === d ? ' admin-chip--active' : ''}`} onClick={() => setDays(d)}>
-              近 {d} 天
-            </button>
-          ))}
+          <Segmented
+            value={days}
+            onChange={(v) => setDays(v as number)}
+            options={DAY_OPTIONS.map((d) => ({ value: d, label: `近 ${d} 天` }))}
+          />
         </div>
       </div>
 
@@ -99,72 +100,51 @@ export function UsagePage() {
 
         <section className="admin-panel">
           <div className="admin-panel__title">按日</div>
-          <table className="admin-table" data-testid="admin-usage-daily">
-            <thead>
-              <tr>
-                <th>日期</th>
-                <th>requests</th>
-                <th>prompt tokens</th>
-                <th>completion tokens</th>
-                <th>total tokens</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data?.daily ?? []).map((d) => (
-                <tr key={d.date} data-testid={`admin-usage-row-${d.date}`}>
-                  <td className="admin-mono">{d.date}</td>
-                  <td>{fmt(d.requests)}</td>
-                  <td>{fmt(d.prompt_tokens)}</td>
-                  <td>{fmt(d.completion_tokens)}</td>
-                  <td>{fmt(d.total_tokens)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <Table
+            rowKey="date"
+            size="small"
+            data-testid="admin-usage-daily"
+            dataSource={data?.daily ?? []}
+            pagination={false}
+            onRow={(d) => ({ 'data-testid': `admin-usage-row-${d.date}` } as React.HTMLAttributes<HTMLTableRowElement>)}
+            columns={[
+              { title: '日期', dataIndex: 'date', render: (v: string) => <span className="admin-mono">{v}</span> },
+              { title: 'requests', dataIndex: 'requests', render: (v: number) => fmt(v) },
+              { title: 'prompt tokens', dataIndex: 'prompt_tokens', render: (v: number) => fmt(v) },
+              { title: 'completion tokens', dataIndex: 'completion_tokens', render: (v: number) => fmt(v) },
+              { title: 'total tokens', dataIndex: 'total_tokens', render: (v: number) => fmt(v) },
+            ]}
+          />
         </section>
 
         <div className="admin-usage__dims">
           <section className="admin-panel">
             <div className="admin-panel__title">按 tier 汇总</div>
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>tier</th>
-                  <th>requests</th>
-                  <th>total tokens</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data?.by_tier ?? []).map((t) => (
-                  <tr key={t.key}>
-                    <td className="admin-mono">{t.key}</td>
-                    <td>{fmt(t.requests)}</td>
-                    <td>{fmt(t.total_tokens)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Table
+              rowKey="key"
+              size="small"
+              dataSource={data?.by_tier ?? []}
+              pagination={false}
+              columns={[
+                { title: 'tier', dataIndex: 'key', render: (v: string) => <span className="admin-mono">{v}</span> },
+                { title: 'requests', dataIndex: 'requests', render: (v: number) => fmt(v) },
+                { title: 'total tokens', dataIndex: 'total_tokens', render: (v: number) => fmt(v) },
+              ]}
+            />
           </section>
           <section className="admin-panel">
             <div className="admin-panel__title">按 scene 汇总</div>
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>scene</th>
-                  <th>requests</th>
-                  <th>total tokens</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data?.by_scene ?? []).map((t) => (
-                  <tr key={t.key}>
-                    <td className="admin-mono">{t.key}</td>
-                    <td>{fmt(t.requests)}</td>
-                    <td>{fmt(t.total_tokens)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Table
+              rowKey="key"
+              size="small"
+              dataSource={data?.by_scene ?? []}
+              pagination={false}
+              columns={[
+                { title: 'scene', dataIndex: 'key', render: (v: string) => <span className="admin-mono">{v}</span> },
+                { title: 'requests', dataIndex: 'requests', render: (v: number) => fmt(v) },
+                { title: 'total tokens', dataIndex: 'total_tokens', render: (v: number) => fmt(v) },
+              ]}
+            />
           </section>
         </div>
       </StateView>
