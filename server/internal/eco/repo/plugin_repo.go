@@ -27,6 +27,8 @@ type Plugin struct {
 	Status         string
 	CurrentVersion string
 	Manifest       string
+	/// 0=公共（管理员发布）；>0=个人插件归属（0037/方案 A：draft 仅 owner 可见可装）
+	OwnerUserID    int64
 	CreatedBy      int64
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -62,6 +64,8 @@ type PluginRepo interface {
 	GetPluginByPluginID(ctx context.Context, tenantID int64, pluginID string) (*Plugin, error)
 	// ListPlugins status 空=全量（管理端）；否则精确匹配（catalog 用 published）
 	ListPlugins(ctx context.Context, tenantID int64, status string) ([]Plugin, error)
+	// ListPluginsByOwner 个人插件全集（方案 A：owner 的 draft+published；管理端审计）
+	ListPluginsByOwner(ctx context.Context, tenantID, userID int64) ([]Plugin, error)
 	UpdatePluginMeta(ctx context.Context, tenantID, id int64, name, description, category string, policy int) error
 	SetPluginStatus(ctx context.Context, tenantID, id int64, status string) error
 	// SetPluginCurrent publish 切当前版（manifest=该版快照）

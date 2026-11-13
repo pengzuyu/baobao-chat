@@ -7,14 +7,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bot, CheckCircle2, Download, Package, Puzzle, RefreshCw, ShieldAlert, Sparkles, Terminal, Trash2, Wrench,
+  Bot, CheckCircle2, Download, Package, Puzzle, RefreshCw, ShieldAlert, Sparkles, Terminal, Trash2, Upload, Wrench,
 } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { Empty } from '../../../shared/ui/Empty';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
 import {
   fetchLocalState, fetchMyPlugins, fetchPluginCatalog, fetchPluginDetail,
-  installPlugin, setPluginEnabled, uninstallPlugin, writePluginConfig,
+  installPlugin, setPluginEnabled, uninstallPlugin, uploadMyPlugin, writePluginConfig,
   type CatalogQuery, type PluginEntry, type PluginLocalState, type PluginVersion,
 } from '../api/plugins';
 
@@ -53,6 +53,11 @@ export function PluginPage() {
   const [entries, setEntries] = useState<PluginEntry[] | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+  // 个人上传（方案 A）：选 zip + 备注 → POST multipart → 刷新列表
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadNotes, setUploadNotes] = useState('');
+  const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState('');
   // 详情抽屉
   const [detail, setDetail] = useState<{ plugin: PluginEntry; versions: PluginVersion[] } | null>(null);
@@ -108,6 +113,21 @@ export function PluginPage() {
       })
       .catch((err) => setError(`安装失败：${err instanceof Error ? err.message : '未知错误'}`))
       .finally(() => setBusyId(null));
+  };
+
+  const doUpload = () => {
+    if (!uploadFile) return;
+    setUploading(true);
+    void uploadMyPlugin(uploadFile, uploadNotes.trim())
+      .then((dto) => {
+        setNotice(`已上传 ${dto.plugin_id}（个人区仅自己可见可装；进公共市场需管理员审核发布）`);
+        setUploadOpen(false);
+        setUploadFile(null);
+        setUploadNotes('');
+        reload();
+      })
+      .catch((err) => setError(`上传失败：${err instanceof Error ? err.message : '未知错误'}`))
+      .finally(() => setUploading(false));
   };
 
   const doUninstall = (e: PluginEntry) => {
@@ -193,6 +213,33 @@ export function PluginPage() {
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
           </select>
+          <Button variant="secondary" onClick={() => setUploadOpen(true)} data-testid="bbw-plugin-upload">
+            <Upload size={12} /> 上传插件
+          </Button>
+        </div>
+      ) : null}
+
+      {uploadOpen ? (
+        <div className="bbw-plugin__upload">
+          <h4>上传个人插件（zip ≤10MB）</h4>
+          <p className="bbw-plugin__muted">上传后进入个人区：仅自己可见可装；进公共市场需管理员审核发布</p>
+          <input
+            type="file"
+            accept=".zip"
+            aria-label="选择插件 zip 包"
+            onChange={(ev) => setUploadFile(ev.target.files?.[0] ?? null)}
+          />
+          <input
+            type="text"
+            className="bbw-plugin__upload-notes"
+            placeholder="备注（可选，如：发版流程助手）"
+            value={uploadNotes}
+            onChange={(ev) => setUploadNotes(ev.target.value)}
+          />
+          <div className="bbw-plugin__upload-ops">
+            <Button disabled={!uploadFile || uploading} loading={uploading} onClick={doUpload}>上传</Button>
+            <Button variant="secondary" disabled={uploading} onClick={() => setUploadOpen(false)}>取消</Button>
+          </div>
         </div>
       ) : null}
 
@@ -216,6 +263,8 @@ export function PluginPage() {
                   </b>
                   {policy?.label ? <span className={`tag tag--${policy.tone}`}>{policy.label}</span> : null}
                   {e.manifest?.usesIdentity ? <span className="tag tag--warn" title="将以你的身份调用系统"><ShieldAlert size={11} /> 身份</span> : null}
+                  {e.owner_user_id ? <span className="tag tag--muted" title="个人插件：仅自己可见可装；管理员审核后进公共市场">个人</span> : null}
+                  {e.owner_user_id && e.status === 'draft' ? <span className="tag tag--warn" title="未发布：仅自用沙盒">自用</span> : null}
                 </div>
                 <div className="eco-card__meta">
                   {e.plugin_id} · v{e.current_version}

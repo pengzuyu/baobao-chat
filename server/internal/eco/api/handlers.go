@@ -29,8 +29,9 @@ func RegisterUserRoutes(mux *http.ServeMux, authed func(http.HandlerFunc) http.H
 	mux.Handle("POST /api/v1/eco/skills/{id}/install", authed(handleSkillInstall(svc)))
 	mux.Handle("DELETE /api/v1/eco/skills/{id}/install", authed(handleSkillUninstall(svc)))
 	mux.Handle("GET /api/v1/eco/skills/mine", authed(handleMySkills(svc)))
-	// 插件市场用户面（D22 §3.2/L1：检索/详情/安装/下载/卸载/我的；mine/catalog
-	// 精确段优先于 {plugin_id} 通配——Go 1.22 ServeMux 语义）
+	// 插件市场用户面（D22 §3.2/L1：检索/详情/安装/下载/卸载/我的/个人上传（方案 A）；
+	// mine/catalog 精确段优先于 {plugin_id} 通配——Go 1.22 ServeMux 语义）
+	mux.Handle("POST /api/v1/eco/plugins", authed(handlePluginUploadPrivate(svc)))
 	mux.Handle("GET /api/v1/eco/plugins/catalog", authed(handlePluginCatalog(svc)))
 	mux.Handle("GET /api/v1/eco/plugins/mine", authed(handleMyPlugins(svc)))
 	mux.Handle("GET /api/v1/eco/plugins/{plugin_id}", authed(handlePluginDetail(svc)))

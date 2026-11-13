@@ -9,7 +9,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { unzipSync, strFromU8 } from 'fflate';
-import { downloadBlob, http } from '../../../shared/api/http';
+import { downloadBlob, http, postMultipart } from '../../../shared/api/http';
 
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
@@ -56,6 +56,8 @@ export interface PluginEntry {
   status: string;
   current_version: string;
   manifest?: PluginManifest;
+  /** >0=个人插件归属（方案 A：仅本人与管理员可见；0=公共） */
+  owner_user_id?: number;
   created_at: number;
   installed: boolean;
   version?: string;
@@ -168,6 +170,22 @@ export async function installOnServer(pluginId: string, version?: string): Promi
     return { plugin_id: pluginId, version: version ?? '1.2.0', download_url: '' };
   }
   return http.post<PluginInstallResp>(`/eco/plugins/${encodeURIComponent(pluginId)}/install`, { version });
+}
+
+/** 个人上传（方案 A：draft 即仅本人可见可装；管理员审核 publish 后进公共市场） */
+export async function uploadMyPlugin(file: File, notes: string): Promise<PluginEntry> {
+  if (USE_MOCK) {
+    await delay(300);
+    return {
+      id: '99', plugin_id: file.name.replace(/\.zip$/, ''), name: file.name.replace(/\.zip$/, ''),
+      description: notes || '（个人上传 mock）', category: '', policy: 3, status: 'draft',
+      current_version: '0.1.0', created_at: Date.now(), installed: false, has_update: false, owner_user_id: 1,
+    };
+  }
+  const fd = new FormData();
+  fd.append('package', file);
+  if (notes) fd.append('notes', notes);
+  return postMultipart<PluginEntry>('/eco/plugins', fd);
 }
 
 export async function uninstallOnServer(pluginId: string): Promise<void> {

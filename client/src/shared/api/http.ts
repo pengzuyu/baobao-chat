@@ -264,3 +264,37 @@ export async function downloadBlob(path: string): Promise<Blob> {
   }
   return res.blob();
 }
+
+/**
+ * multipart 上传（D22 方案 A 个人插件）：同 token/错误口径；formData 原样
+ * 透传（浏览器自动设 Content-Type boundary），服务端信封解包同 request。
+ */
+export async function postMultipart<T>(path: string, formData: FormData): Promise<T> {
+  const headers = new Headers();
+  const token = tokenProvider();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers, body: formData });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
+  }
+  let envelope: ApiEnvelope<T>;
+  try {
+    envelope = (await res.json()) as ApiEnvelope<T>;
+  } catch {
+    throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
+  }
+  if (envelope.code !== 0) {
+    const err = new ApiError(envelope.code, envelope.message?.trim() || getErrorText(envelope.code), {
+      traceId: envelope.trace_id,
+    });
+    if (envelope.code === 1003 || envelope.code === 1004) {
+      err.claim();
+      unauthorizedHandler?.(err);
+    }
+    throw scheduleFallback(err);
+  }
+  return envelope.data;
+}

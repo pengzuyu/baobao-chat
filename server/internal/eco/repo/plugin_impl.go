@@ -215,6 +215,20 @@ func (m *PluginMemory) UpsertPluginInstall(_ context.Context, i PluginInstall) e
 	return nil
 }
 
+// ListPluginsByOwner 个人插件全集
+func (m *PluginMemory) ListPluginsByOwner(_ context.Context, tenantID, userID int64) ([]Plugin, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Plugin{}
+	for _, p := range m.plugins {
+		if p.TenantID == tenantID && p.OwnerUserID == userID {
+			out = append(out, *p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
 // ListPluginInstallsByUser 用户安装集
 func (m *PluginMemory) ListPluginInstallsByUser(_ context.Context, tenantID, userID int64) ([]PluginInstall, error) {
 	m.mu.Lock()
@@ -258,12 +272,13 @@ const (
 )
 
 const pluginCols = `id, tenant_id, plugin_id, name, COALESCE(description,''), COALESCE(category,''),
-	policy, status, COALESCE(current_version,''), COALESCE(manifest,''), created_by, created_at, updated_at`
+	policy, status, COALESCE(current_version,''), COALESCE(manifest,''),
+	COALESCE(owner_user_id,0), created_by, created_at, updated_at`
 
 func scanPlugin(row pgx.Row) (*Plugin, error) {
 	var p Plugin
 	if err := row.Scan(&p.ID, &p.TenantID, &p.PluginID, &p.Name, &p.Description, &p.Category,
-		&p.Policy, &p.Status, &p.CurrentVersion, &p.Manifest, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.Policy, &p.Status, &p.CurrentVersion, &p.Manifest, &p.OwnerUserID, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrPluginNotFound
 		}
@@ -285,10 +300,10 @@ func (p *PluginPostgres) InsertPlugin(ctx context.Context, v Plugin) (Plugin, er
 		}
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO eco_plugin (id, tenant_id, plugin_id, name, description, category, policy, status, current_version, manifest, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,'draft','','',$8)
+		INSERT INTO eco_plugin (id, tenant_id, plugin_id, name, description, category, policy, status, current_version, manifest, owner_user_id, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,'draft','','',$8,$9)
 		RETURNING created_at, updated_at`,
-		v.ID, v.TenantID, v.PluginID, v.Name, v.Description, v.Category, v.Policy, v.CreatedBy).
+		v.ID, v.TenantID, v.PluginID, v.Name, v.Description, v.Category, v.Policy, v.OwnerUserID, v.CreatedBy).
 		Scan(&v.CreatedAt, &v.UpdatedAt)
 	if err != nil {
 		if isAppDup(err) {
@@ -325,6 +340,25 @@ func (p *PluginPostgres) ListPlugins(ctx context.Context, tenantID int64, status
 		v, err := scanPlugin(rows)
 		if err != nil {
 			return nil, err
+		}
+		out = append(out, *v)
+	}
+	return out, rows.Err()
+}
+
+// ListPluginsByOwner 个人插件全集（PG）
+func (p *PluginPostgres) ListPluginsByOwner(ctx context.Context, tenantID, userID int64) ([]Plugin, error) {
+	rows, err := p.pool.Query(ctx, `SELECT `+pluginCols+` FROM eco_plugin
+		WHERE tenant_id=$1 AND owner_user_id=$2 ORDER BY created_at DESC`, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Plugin{}
+	for rows.Next() {
+		v, serr := scanPlugin(rows)
+		if serr != nil {
+			return nil, serr
 		}
 		out = append(out, *v)
 	}

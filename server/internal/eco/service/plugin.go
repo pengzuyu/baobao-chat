@@ -29,6 +29,8 @@ type PluginDTO struct {
 	Status         string          `json:"status"`
 	CurrentVersion string          `json:"current_version"`
 	Manifest       *PluginManifest `json:"manifest,omitempty"`
+	// >0=个人插件归属（方案 A：仅 owner 与管理员可见；0=公共）
+	OwnerUserID    int64           `json:"owner_user_id,omitempty"`
 	CreatedAt      int64           `json:"created_at"`
 }
 
@@ -64,9 +66,21 @@ func (s *Service) plugins() (ecorepo.PluginRepo, error) {
 	return s.pluginsRepo, nil
 }
 
-// UploadPlugin 管理面：上传 zip → 校验 → draft 入库 + 版本行
+// UploadPlugin 管理面：上传 zip → 校验 → 公共插件入库（owner=0）+ 版本行
 //（已存在则追加版本；name/description/category 以清单快照为准覆盖元数据）
 func (s *Service) UploadPlugin(ctx context.Context, tenantID, userID int64, pkg []byte, notes string, policy int) (*PluginDTO, error) {
+	return s.uploadPluginAs(ctx, tenantID, userID, pkg, notes, policy, 0)
+}
+
+// UploadPluginPrivate 个人上传（方案 A，2026-11-13 拍板）：zip → 校验 →
+// 个人插件入库（owner=userID，policy 恒 optional）——**draft 即仅本人可见可装**
+// （自用沙盒）；管理员 publish 审核后进公共市场。归属校验：
+// 同名插件已存在时仅 owner 本人可追加版本（他人插件不可覆盖）
+func (s *Service) UploadPluginPrivate(ctx context.Context, tenantID, userID int64, pkg []byte, notes string) (*PluginDTO, error) {
+	return s.uploadPluginAs(ctx, tenantID, userID, pkg, notes, PluginPolicyOptional, userID)
+}
+
+func (s *Service) uploadPluginAs(ctx context.Context, tenantID, userID int64, pkg []byte, notes string, policy int, owner int64) (*PluginDTO, error) {
 	repo, err := s.plugins()
 	if err != nil {
 		return nil, err
@@ -91,7 +105,7 @@ func (s *Service) UploadPlugin(ctx context.Context, tenantID, userID int64, pkg 
 		created, cerr := repo.InsertPlugin(ctx, ecorepo.Plugin{
 			TenantID: tenantID, PluginID: m.Name, Name: m.Name,
 			Description: m.Description, Category: m.Category, Policy: policy,
-			CreatedBy: userID,
+			OwnerUserID: owner, CreatedBy: userID,
 		})
 		if cerr != nil {
 			return nil, errx.From(cerr)
@@ -99,6 +113,8 @@ func (s *Service) UploadPlugin(ctx context.Context, tenantID, userID int64, pkg 
 		existing = &created
 	} else if existing.Status == "delisted" {
 		return nil, errx.New(errx.CodeBadRequest, "插件已下架，不可追加版本（重新发布请新 plugin_id）")
+	} else if owner != 0 && existing.OwnerUserID != owner {
+		return nil, errx.New(errx.CodePermACLDenied, "plugin_id 已被占用（个人插件不可覆盖他人）")
 	} else {
 		// 元数据随最新上传对齐（清单为准）
 		if uerr := repo.UpdatePluginMeta(ctx, tenantID, existing.ID, m.Name, m.Description, m.Category, 0); uerr != nil {
@@ -232,9 +248,14 @@ func (s *Service) PluginCatalog(ctx context.Context, tenantID, userID int64, q, 
 	default:
 		return nil, errx.New(errx.CodeBadRequest, "component ∈ tool|skill|command|agent")
 	}
+	// 方案 A：公共 published ∪ 本人个人插件（draft+published）
 	pub, err := repo.ListPlugins(ctx, tenantID, "published")
 	if err != nil {
 		return nil, errx.From(err)
+	}
+	mine, merr := repo.ListPluginsByOwner(ctx, tenantID, userID)
+	if merr != nil {
+		return nil, errx.From(merr)
 	}
 	insts, err := repo.ListPluginInstallsByUser(ctx, tenantID, userID)
 	if err != nil {
@@ -245,8 +266,14 @@ func (s *Service) PluginCatalog(ctx context.Context, tenantID, userID int64, q, 
 		instOf[i.PkgID] = i
 	}
 	q = strings.ToLower(strings.TrimSpace(q))
-	out := make([]PluginCatalogEntry, 0, len(pub))
-	for _, p := range pub {
+	seen := map[int64]bool{}
+	all := append(pub, mine...)
+	out := make([]PluginCatalogEntry, 0, len(all))
+	for _, p := range all {
+		if seen[p.ID] {
+			continue // 个人插件 publish 后两源重叠去重
+		}
+		seen[p.ID] = true
 		dto := toPluginDTO(p)
 		if q != "" && !strings.Contains(strings.ToLower(p.Name+p.Description+p.PluginID), q) {
 			continue
@@ -282,7 +309,7 @@ func (s *Service) PluginDetail(ctx context.Context, tenantID, userID int64, plug
 		return nil, nil, err
 	}
 	p, err := repo.GetPluginByPluginID(ctx, tenantID, pluginID)
-	if err != nil || p.Status != "published" {
+	if err != nil || !visibleTo(p, userID) {
 		return nil, nil, errx.New(errx.CodeNotFound, "插件不存在或未发布")
 	}
 	e := PluginCatalogEntry{PluginDTO: toPluginDTO(*p)}
@@ -306,18 +333,24 @@ func (s *Service) PluginDetail(ctx context.Context, tenantID, userID int64, plug
 	return &e, vd, nil
 }
 
-// InstallPlugin 安装/升级（version 缺省=当前发布版；published only）
+// InstallPlugin 安装/升级（version 缺省=当前发布版；个人插件仅 owner 可装）
 func (s *Service) InstallPlugin(ctx context.Context, tenantID, userID int64, pluginID, version string) (*PluginInstallResp, error) {
 	repo, err := s.plugins()
 	if err != nil {
 		return nil, err
 	}
 	p, err := repo.GetPluginByPluginID(ctx, tenantID, pluginID)
-	if err != nil || p.Status != "published" {
+	if err != nil || !visibleTo(p, userID) {
 		return nil, errx.New(errx.CodeNotFound, "插件不存在或未发布")
 	}
 	if version == "" {
 		version = p.CurrentVersion
+	}
+	if version == "" {
+		// draft（未 publish）无 current：回落最新版本行（方案 A 个人沙盒自装）
+		if vers, verr := repo.ListVersions(ctx, tenantID, p.ID); verr == nil && len(vers) > 0 {
+			version = vers[0].Version
+		}
 	}
 	if _, verr := repo.GetVersion(ctx, tenantID, p.ID, version); verr != nil {
 		return nil, errx.New(errx.CodeNotFound, "版本不存在: "+version)
@@ -335,17 +368,23 @@ func (s *Service) InstallPlugin(ctx context.Context, tenantID, userID int64, plu
 }
 
 // DownloadPlugin 包体（published only；客户端落盘前须复跑校验器——D22 §5.2）
-func (s *Service) DownloadPlugin(ctx context.Context, tenantID int64, pluginID, version string) ([]byte, string, error) {
+func (s *Service) DownloadPlugin(ctx context.Context, tenantID, userID int64, pluginID, version string) ([]byte, string, error) {
 	repo, err := s.plugins()
 	if err != nil {
 		return nil, "", err
 	}
 	p, err := repo.GetPluginByPluginID(ctx, tenantID, pluginID)
-	if err != nil || p.Status != "published" {
+	if err != nil || !visibleTo(p, userID) {
 		return nil, "", errx.New(errx.CodeNotFound, "插件不存在或未发布")
 	}
 	if version == "" {
 		version = p.CurrentVersion
+	}
+	if version == "" {
+		// draft 个人沙盒同款回落（方案 A）
+		if vers, verr := repo.ListVersions(ctx, tenantID, p.ID); verr == nil && len(vers) > 0 {
+			version = vers[0].Version
+		}
 	}
 	pkg, err := repo.GetVersionPackage(ctx, tenantID, p.ID, version)
 	if err != nil {
@@ -415,7 +454,7 @@ func toPluginDTO(p ecorepo.Plugin) PluginDTO {
 	dto := PluginDTO{
 		ID: i64s(p.ID), PluginID: p.PluginID, Name: p.Name, Description: p.Description,
 		Category: p.Category, Policy: p.Policy, Status: p.Status,
-		CurrentVersion: p.CurrentVersion, CreatedAt: p.CreatedAt.UnixMilli(),
+		CurrentVersion: p.CurrentVersion, OwnerUserID: p.OwnerUserID, CreatedAt: p.CreatedAt.UnixMilli(),
 	}
 	if p.Manifest != "" {
 		var m PluginManifest
@@ -424,6 +463,15 @@ func toPluginDTO(p ecorepo.Plugin) PluginDTO {
 		}
 	}
 	return dto
+}
+
+// visibleTo 方案 A 可见性：公共插件仅 published；个人插件（owner>0）对
+// 本人恒可见（draft 自用沙盒 + published 已进公共市场）
+func visibleTo(p *ecorepo.Plugin, userID int64) bool {
+	if p.OwnerUserID == 0 {
+		return p.Status == "published"
+	}
+	return p.OwnerUserID == userID
 }
 
 // matchComponent 组件类型过滤（tool=mcpServers）

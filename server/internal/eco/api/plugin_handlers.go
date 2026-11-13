@@ -13,6 +13,30 @@ import (
 
 // ── 用户面 ──
 
+// handlePluginUploadPrivate 个人上传（方案 A：draft 仅本人可见可装；管理员
+// publish 审核后进公共市场；multipart package=zip+notes）
+func handlePluginUploadPrivate(svc *ecoservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(ecoservice.PluginMaxPackageBytes + 1<<20); err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "multipart 解析失败（包体 ≤10MB）"))
+			return
+		}
+		file, _, err := r.FormFile("package")
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "缺 package 文件域（zip）"))
+			return
+		}
+		defer file.Close()
+		pkg, err := io.ReadAll(io.LimitReader(file, ecoservice.PluginMaxPackageBytes+1))
+		if err != nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "包体读取失败"))
+			return
+		}
+		dto, err := svc.UploadPluginPrivate(r.Context(), tenantOf(r), actorOf(r), pkg, r.FormValue("notes"))
+		respond(w, r, dto, err)
+	}
+}
+
 func handlePluginCatalog(svc *ecoservice.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -44,7 +68,7 @@ func handlePluginInstall(svc *ecoservice.Service) http.HandlerFunc {
 
 func handlePluginDownload(svc *ecoservice.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		pkg, version, err := svc.DownloadPlugin(r.Context(), tenantOf(r), r.PathValue("plugin_id"), r.URL.Query().Get("version"))
+		pkg, version, err := svc.DownloadPlugin(r.Context(), tenantOf(r), actorOf(r), r.PathValue("plugin_id"), r.URL.Query().Get("version"))
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return

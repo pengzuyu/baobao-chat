@@ -265,7 +265,7 @@ func TestPluginLifecycle(t *testing.T) {
 	}
 
 	// 下载闭环：包体一致
-	got, ver, err := svc.DownloadPlugin(ctx, 1, "deploy-helper", "")
+	got, ver, err := svc.DownloadPlugin(ctx, 1, 7, "deploy-helper", "")
 	if err != nil || ver != "1.2.0" || !bytes.Equal(got, pkg) {
 		t.Fatalf("下载闭环错: %v", err)
 	}
@@ -365,5 +365,54 @@ func TestPluginManifestJSONRoundtrip(t *testing.T) {
 	}
 	if back.Components != m.Components || back.UsesIdentity != m.UsesIdentity || len(back.ConfigKeys) != len(m.ConfigKeys) {
 		t.Fatalf("快照往返不一致: %+v vs %+v", back, m)
+	}
+}
+
+// 方案 A（2026-11-13 拍板）：个人插件可见性/归属/审核流转
+func TestPluginPersonalSandbox(t *testing.T) {
+	svc := newPluginSvc(t)
+	ctx := context.Background()
+	// alice(7) 个人上传（draft）
+	if _, err := svc.UploadPluginPrivate(ctx, 1, 7, zipOf(t, fullPlugin(".bbw-plugin")), "我的自用"); err != nil {
+		t.Fatalf("个人上传失败: %v", err)
+	}
+	// owner(7) 可见可装（draft 即自用沙盒）；他人(8) 不可见不可装
+	l7, _ := svc.PluginCatalog(ctx, 1, 7, "", "", "")
+	if len(l7) != 1 || l7[0].OwnerUserID != 7 {
+		t.Fatalf("owner 应见个人插件: %+v", l7)
+	}
+	l8, _ := svc.PluginCatalog(ctx, 1, 8, "", "", "")
+	if len(l8) != 0 {
+		t.Fatal("他人不应见 draft 个人插件")
+	}
+	if _, err := svc.InstallPlugin(ctx, 1, 8, "deploy-helper", ""); err == nil {
+		t.Fatal("他人装个人插件应拒")
+	}
+	if _, err := svc.InstallPlugin(ctx, 1, 7, "deploy-helper", ""); err != nil {
+		t.Fatalf("owner 装 draft 应过: %v", err)
+	}
+	if _, _, err := svc.PluginDetail(ctx, 1, 8, "deploy-helper"); err == nil {
+		t.Fatal("他人详情应 404")
+	}
+	// 他人(8) 同名上传 → 拒（plugin_id 占用）
+	if _, err := svc.UploadPluginPrivate(ctx, 1, 8, zipOf(t, fullPlugin(".bbw-plugin")), ""); err == nil {
+		t.Fatal("他人覆盖个人插件应拒")
+	}
+	// owner 追加版本 ✓；管理员 publish → 进公共（8 也可见）
+	files := fullPlugin(".bbw-plugin")
+	files[".bbw-plugin/plugin.json"] = strings.Replace(files[".bbw-plugin/plugin.json"], "1.2.0", "1.3.0", 1)
+	if _, err := svc.UploadPluginPrivate(ctx, 1, 7, zipOf(t, files), "v2"); err != nil {
+		t.Fatalf("owner 追加版本应过: %v", err)
+	}
+	if err := svc.PublishPluginVersion(ctx, 1, "deploy-helper", "1.2.0"); err != nil {
+		t.Fatalf("审核发布失败: %v", err)
+	}
+	l8b, _ := svc.PluginCatalog(ctx, 1, 8, "", "", "")
+	if len(l8b) != 1 {
+		t.Fatalf("审核后他人应见: %+v", l8b)
+	}
+	// owner 视角不重复（两源去重）
+	if l7b, _ := svc.PluginCatalog(ctx, 1, 7, "", "", ""); len(l7b) != 1 {
+		t.Fatalf("owner 两源去重失败: %d", len(l7b))
 	}
 }
