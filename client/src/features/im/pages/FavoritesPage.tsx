@@ -6,11 +6,14 @@
  * - 六态：loading 骨架×6 / empty「暂无收藏，右键消息可收藏」+CTA 去消息 / error 重试 /
  *   offline 读缓存（Query 缓存保留） / forbidden 不适用 / degraded 不适用（登记）。
  * 上限 1000 条由服务端校验（3022，14 篇 §7）。
+ * D26 antd 换装：页头 Flex+Title、筛选→Segmented、卡片→antd Card+Row/Col 响应式网格、
+ * 快照→Typography 段落截断，fav-* 自研类退役。
  */
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { Card, Col, Flex, Row, Segmented, Typography, theme } from 'antd';
 import { ArrowLeft, Star, StarOff } from 'lucide-react';
 import { qk } from '../../../shared/api/keys';
 import { formatListTime } from '../../../shared/utils/time';
@@ -34,25 +37,43 @@ const TYPE_FILTERS: Array<{ value: string; label: string }> = [
   { value: 'merge_forward', label: '合并转发' },
 ];
 
-/** 快照渲染：text 缩略 / 已撤回占位（status=2，D03 INT-IM-06）/ 类型化占位 */
+/** 快照渲染：text 缩略（≤4 行截断）/ 已撤回占位（status=2，D03 INT-IM-06）/ 类型化占位 */
 function FavoriteBody({ item }: { item: FavoriteItem }) {
   const msg = item.msg;
+  const bodyStyle: React.CSSProperties = { marginBottom: 0, fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-word' };
   if (!msg) {
-    return <div className="fav-card__text fav-card__text--muted">消息快照不可用</div>;
+    return (
+      <Typography.Paragraph type="secondary" italic ellipsis={{ rows: 4 }} style={bodyStyle}>
+        消息快照不可用
+      </Typography.Paragraph>
+    );
   }
   if (msg.status === 2) {
     // 撤回消息可收藏：列表渲染占位（快照只存 msg_id+conv_id，详情实时取）
-    return <div className="fav-card__text fav-card__text--muted">原消息已撤回</div>;
+    return (
+      <Typography.Paragraph type="secondary" italic ellipsis={{ rows: 4 }} style={bodyStyle}>
+        原消息已撤回
+      </Typography.Paragraph>
+    );
   }
   if (msg.type === 'text' && 'text' in msg.body) {
-    return <div className="fav-card__text">{msg.body.text}</div>;
+    return (
+      <Typography.Paragraph ellipsis={{ rows: 4 }} style={bodyStyle}>
+        {msg.body.text}
+      </Typography.Paragraph>
+    );
   }
-  return <div className="fav-card__text fav-card__text--typed">{digestOf(msg)}</div>;
+  return (
+    <Typography.Paragraph type="secondary" ellipsis={{ rows: 4 }} style={bodyStyle}>
+      {digestOf(msg)}
+    </Typography.Paragraph>
+  );
 }
 
 export function FavoritesPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { token } = theme.useToken();
   const [type, setType] = useState('all');
   const favQuery = useFavorites(type);
   const connStatus = useConnectionStore((s) => s.status);
@@ -92,61 +113,80 @@ export function FavoritesPage() {
   };
 
   return (
-    <div className="fav-page" data-testid="fav-page">
-      <header className="fav-page__header">
-        <Button variant="text" onClick={() => navigate('/im')} aria-label="返回消息">
-          <ArrowLeft size={16} />
-        </Button>
-        <h1 className="fav-page__title">
+    <div
+      data-testid="fav-page"
+      style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: token.colorBgLayout }}
+    >
+      <Flex
+        align="center"
+        gap={12}
+        wrap="wrap"
+        style={{ padding: '12px 16px', borderBottom: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgContainer }}
+      >
+        <Button variant="text" size="small" icon={<ArrowLeft size={16} />} onClick={() => navigate('/im')} aria-label="返回消息" />
+        <Flex align="center" gap={6} style={{ flexShrink: 0 }}>
           <Star size={16} aria-hidden />
-          我的收藏
-        </h1>
-        <div className="fav-page__filters" role="tablist" aria-label="类型筛选">
-          {TYPE_FILTERS.map((f) => (
-            <button
-              key={f.value}
-              type="button"
-              role="tab"
-              aria-selected={type === f.value}
-              className={`fav-filter${type === f.value ? ' fav-filter--active' : ''}`}
-              data-testid={`fav-filter-${f.value}`}
-              onClick={() => setType(f.value)}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </header>
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            我的收藏
+          </Typography.Title>
+        </Flex>
+        <Segmented
+          value={type}
+          onChange={(v) => setType(v as string)}
+          options={TYPE_FILTERS.map((f) => ({
+            value: f.value,
+            label: (
+              <span data-testid={`fav-filter-${f.value}`}>{f.label}</span>
+            ),
+          }))}
+        />
+      </Flex>
 
-      <div className="fav-page__body">
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 16 }}>
         {state === 'ok' ? (
-          <div className="fav-grid" data-testid="fav-grid">
+          <Row gutter={[12, 12]} data-testid="fav-grid">
             {items.map((item) => (
-              <div key={item.id} className="fav-card" data-testid="fav-card">
-                <button type="button" className="fav-card__main" onClick={() => doJump(item)} title="跳到原消息">
-                  <FavoriteBody item={item} />
-                  <div className="fav-card__meta">
-                    <span className="fav-card__conv">{item.conv.name || '会话'}</span>
-                    <span className="fav-card__sender">{item.msg?.senderName ?? ''}</span>
-                  </div>
-                </button>
-                <div className="fav-card__foot">
-                  <span className="fav-card__time">{formatListTime(item.createdAt)}</span>
-                  <button
-                    type="button"
-                    className="fav-card__unfav"
-                    data-testid="fav-unfav-btn"
-                    disabled={removing === item.id}
-                    onClick={() => doUnfavorite(item)}
-                    title="取消收藏"
+              <Col key={item.id} xs={24} lg={12} xl={8} style={{ minWidth: 0 }}>
+                <Card size="small" data-testid="fav-card" styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column' } }}>
+                  {/* 点击主体：快照 + 来源元信息（跳原消息锚点） */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => doJump(item)}
+                    onKeyDown={(e) => e.key === 'Enter' && doJump(item)}
+                    title="跳到原消息"
+                    style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, cursor: 'pointer', flex: 1, textAlign: 'left' }}
                   >
-                    <StarOff size={14} />
-                    {removing === item.id ? '移除中…' : '取消收藏'}
-                  </button>
-                </div>
-              </div>
+                    <FavoriteBody item={item} />
+                    <Flex gap={8} align="center" style={{ fontSize: 12 }}>
+                      <Typography.Text ellipsis style={{ color: token.colorPrimary, fontWeight: 500, fontSize: 12 }}>
+                        {item.conv.name || '会话'}
+                      </Typography.Text>
+                      <Typography.Text type="secondary" ellipsis style={{ fontSize: 12 }}>
+                        {item.msg?.senderName ?? ''}
+                      </Typography.Text>
+                    </Flex>
+                  </div>
+                  <Flex align="center" justify="space-between" style={{ padding: '8px 12px', borderTop: `1px solid ${token.colorBorderSecondary}` }}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {formatListTime(item.createdAt)}
+                    </Typography.Text>
+                    <Button
+                      variant="text"
+                      size="small"
+                      icon={<StarOff size={14} />}
+                      data-testid="fav-unfav-btn"
+                      disabled={removing === item.id}
+                      onClick={() => doUnfavorite(item)}
+                      title="取消收藏"
+                    >
+                      {removing === item.id ? '移除中…' : '取消收藏'}
+                    </Button>
+                  </Flex>
+                </Card>
+              </Col>
             ))}
-          </div>
+          </Row>
         ) : (
           <StateView
             state={state}
@@ -162,7 +202,7 @@ export function FavoritesPage() {
             offlineText="离线中，展示本地缓存的收藏"
             degradedText={degradedText ?? undefined}
           >
-            <div className="fav-grid" />
+            <div />
           </StateView>
         )}
       </div>

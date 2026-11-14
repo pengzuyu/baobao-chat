@@ -3,10 +3,13 @@
  * 嵌入系统消息流内（kind=apply.submitted）——申请人（姓名）+ 申请理由 +
  * [同意][拒绝]（仅 owner/admin 可见按钮；member 视角只见文案）。
  * 终态回显：已通过 / 已拒绝 / 已过期（7 天未处理）。
+ * D26 antd 换装：Card+Flex+Tag+shared Button、错误→Alert（apply-card 自研类退役）。
  */
 
 import { useEffect, useState } from 'react';
+import { Alert, Card, Flex, Space, Tag, Typography } from 'antd';
 import { Avatar } from '../../../shared/ui/Avatar';
+import { Button } from '../../../shared/ui/Button';
 import { getErrorText } from '../../../shared/api/http';
 import { handleApply } from '../api/im';
 import type { MemberRole, SystemBody } from '../model/types';
@@ -58,27 +61,45 @@ export function ApplyCard({ body, submittedAt, myRole, handled, onHandled }: App
       : null;
 
   return (
-    <div className="apply-card" data-apply-id={body.apply_id}>
-      <Avatar name={body.actor_name || body.actor || '申请人'} size={24} />
-      <div className="apply-card__main">
-        <div className="apply-card__title">
-          <strong>{body.actor_name || body.actor}</strong> 申请加入群聊
-        </div>
-        {body.extra ? <div className="apply-card__reason">{body.extra}</div> : null}
-        {error ? <div className="apply-card__error">{getErrorText(error)}</div> : null}
-      </div>
-      {statusLine ? (
-        <span className="apply-card__state">{statusLine}</span>
-      ) : canHandle ? (
-        <div className="apply-card__actions">
-          <button type="button" className="apply-card__btn apply-card__btn--reject" disabled={busy} onClick={() => submit('reject')}>
-            拒绝
-          </button>
-          <button type="button" className="apply-card__btn apply-card__btn--approve" disabled={busy} onClick={() => submit('approve')}>
-            同意
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <Card
+      size="small"
+      data-apply-id={body.apply_id}
+      style={{ width: 'min(480px, 84%)', margin: '4px auto' }}
+      styles={{ body: { padding: '10px 12px' } }}
+    >
+      <Flex align="center" gap={8} wrap="wrap">
+        <Avatar name={body.actor_name || body.actor || '申请人'} size={24} />
+        <Flex vertical gap={2} style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ fontSize: 13 }}>
+            <strong>{body.actor_name || body.actor}</strong> 申请加入群聊
+          </span>
+          {body.extra ? (
+            <Typography.Text type="secondary" ellipsis style={{ fontSize: 12 }}>
+              {body.extra}
+            </Typography.Text>
+          ) : null}
+          {error ? (
+            <Alert type="error" showIcon style={{ marginTop: 4 }} message={getErrorText(error)} />
+          ) : null}
+        </Flex>
+        {statusLine ? (
+          <Tag
+            color={handled === 'approved' ? 'success' : handled === 'rejected' ? 'error' : 'default'}
+            style={{ marginInlineEnd: 0, flexShrink: 0 }}
+          >
+            {statusLine}
+          </Tag>
+        ) : canHandle ? (
+          <Space size={6} style={{ flexShrink: 0 }}>
+            <Button variant="secondary" size="small" disabled={busy} onClick={() => submit('reject')}>
+              拒绝
+            </Button>
+            <Button size="small" disabled={busy} onClick={() => submit('approve')}>
+              同意
+            </Button>
+          </Space>
+        ) : null}
+      </Flex>
+    </Card>
   );
 }

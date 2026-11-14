@@ -8,13 +8,14 @@
  * - 「全部已读」+ 分页加载更多（cursor）
  * - 六态：loading 骨架 / empty「暂无通知」/ error 重试 / offline 显示本地已缓存项（新事件停聚）/
  *   forbidden、degraded 不适用（通知列表无 7xxx/降级语义，登记）。
- * D26-O5：公告全文弹层→antd Modal（列表区结构内联化；页头/分组 tab 为页面骨架，保留）。
+ * D26-O5：公告全文弹层→antd Modal（列表区结构内联化）。
+ * D26 收尾：页头→Flex+Title、分组 tab→Segmented（notif-page/notif-tab 自研类退役）。
  */
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Modal, Typography, theme } from 'antd';
+import { Flex, Modal, Segmented, Space, Typography, theme } from 'antd';
 import { ArrowLeft, AtSign, BadgeCheck, Bell, Bot, CheckCheck, Megaphone, Reply, X } from 'lucide-react';
 import { formatListTime } from '../../../shared/utils/time';
 import { Button } from '../../../shared/ui/Button';
@@ -135,32 +136,36 @@ export function NotificationCenterPage() {
   };
 
   return (
-    <div className="notif-page" data-testid="notif-page">
-      <header className="notif-page__header">
-        <Button variant="text" onClick={() => navigate(-1)} aria-label="返回">
-          <ArrowLeft size={16} />
-        </Button>
-        <h1 className="notif-page__title">
-          <Bell size={16} aria-hidden />
-          通知中心
-        </h1>
-        <div className="notif-page__tabs" role="tablist" aria-label="通知分组">
-          {KIND_TABS.map((tab) => (
-            <button
-              key={tab.value}
-              type="button"
-              role="tab"
-              aria-selected={kind === tab.value}
-              className={`notif-tab${kind === tab.value ? ' notif-tab--active' : ''}`}
-              data-testid={`notif-tab-${tab.value}`}
-              disabled={tab.disabled}
-              title={tab.disabled ? 'Agent 完成通知待 D08 接入（预留）' : undefined}
-              onClick={() => setKind(tab.value)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+    <div
+      data-testid="notif-page"
+      style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: token.colorBgLayout }}
+    >
+      <Flex
+        component="header"
+        align="center"
+        gap={12}
+        wrap="wrap"
+        style={{ padding: '12px 16px', borderBottom: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgContainer }}
+      >
+        <Button variant="text" size="small" icon={<ArrowLeft size={16} />} onClick={() => navigate(-1)} aria-label="返回" />
+        <Typography.Title level={5} style={{ margin: 0, flexShrink: 0 }}>
+          <Space size={6}>
+            <Bell size={16} aria-hidden />
+            通知中心
+          </Space>
+        </Typography.Title>
+        {/* 分组 tab（D03 §3.9 五分组；Agent 完成事件源已接） */}
+        <Segmented
+          value={kind}
+          onChange={(v) => setKind(v as NotificationKind | 'all')}
+          aria-label="通知分组"
+          options={KIND_TABS.map((tab) => ({
+            value: tab.value,
+            disabled: tab.disabled,
+            label: <span data-testid={`notif-tab-${tab.value}`}>{tab.label}</span>,
+          }))}
+        />
+        <span style={{ flex: 1 }} />
         <Button
           variant="text"
           data-testid="notif-read-all-btn"
@@ -170,9 +175,9 @@ export function NotificationCenterPage() {
           <CheckCheck size={15} />
           {markingAll ? '处理中…' : '全部已读'}
         </Button>
-      </header>
+      </Flex>
 
-      <div className="notif-page__body">
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: 16, maxWidth: 720, width: '100%', margin: '0 auto' }}>
         {state === 'ok' ? (
           <>
             <div style={{ display: 'flex', flexDirection: 'column' }} data-testid="notif-list">
@@ -233,7 +238,7 @@ export function NotificationCenterPage() {
               })}
             </div>
             {listQuery.hasNextPage ? (
-              <div className="notif-page__more">
+              <Flex justify="center" style={{ padding: '12px 0' }}>
                 <Button
                   variant="secondary"
                   data-testid="notif-load-more"
@@ -242,7 +247,7 @@ export function NotificationCenterPage() {
                 >
                   {listQuery.isFetchingNextPage ? '加载中…' : '加载更多'}
                 </Button>
-              </div>
+              </Flex>
             ) : null}
           </>
         ) : (

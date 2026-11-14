@@ -4,9 +4,12 @@
  * - 复制仅选中全为 text 时可用（否则 disabled+tooltip）
  * - 转发=弹窗默认逐条；合并转发=弹窗默认合并（方式 radio 在弹窗内可改）
  * - Esc/点空白退出由 ChatPage 接线（本组件只发取消动作）
+ * D26 antd 换装：Flex+Tag 计数+shared Button（multi-select-* 自研类退役）。
  */
 
+import { Flex, Tag, theme } from 'antd';
 import { Copy, CornerUpRight, ListOrdered, Star, X } from 'lucide-react';
+import { Button } from '../../../shared/ui/Button';
 
 interface MultiSelectBarProps {
   /** 已选条数 */
@@ -29,67 +32,83 @@ export function MultiSelectBar({
   onCopy,
   onCancel,
 }: MultiSelectBarProps) {
+  const { token } = theme.useToken();
   return (
-    <header className="multi-select-bar" data-testid="multi-select-bar">
-      <span className="multi-select-bar__count" data-testid="ms-count">
+    <Flex
+      component="header"
+      align="center"
+      gap={12}
+      data-testid="multi-select-bar"
+      style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 'var(--bbw-z-sticky)',
+        flexShrink: 0,
+        height: 52,
+        padding: '0 16px',
+        borderBottom: `1px solid ${token.colorBorderSecondary}`,
+        background: token.colorPrimaryBg,
+      }}
+    >
+      <Tag data-testid="ms-count" style={{ marginInlineEnd: 0, flexShrink: 0 }}>
         已选 {count} 条
-      </span>
-      <div className="multi-select-bar__actions">
-        <button
-          type="button"
-          className="multi-select-bar__btn"
+      </Tag>
+      <Flex align="center" gap={4} wrap="wrap" style={{ flex: 1, minWidth: 0 }}>
+        <Button
+          variant="text"
+          size="small"
+          icon={<CornerUpRight size={14} />}
           data-testid="ms-forward"
           disabled={count === 0}
           onClick={onForward}
           title="逐条转发所选消息"
         >
-          <CornerUpRight size={14} />
           转发
-        </button>
-        <button
-          type="button"
-          className="multi-select-bar__btn"
+        </Button>
+        <Button
+          variant="text"
+          size="small"
+          icon={<ListOrdered size={14} />}
           data-testid="ms-merge"
           disabled={count === 0}
           onClick={onMergeForward}
           title="合并为一条聊天记录转发（≤30 条）"
         >
-          <ListOrdered size={14} />
           合并转发
-        </button>
-        <button
-          type="button"
-          className="multi-select-bar__btn"
+        </Button>
+        <Button
+          variant="text"
+          size="small"
+          icon={<Star size={14} />}
           data-testid="ms-favorite"
           disabled={count === 0}
           onClick={onFavorite}
           title="收藏所选消息"
         >
-          <Star size={14} />
           收藏
-        </button>
-        <button
-          type="button"
-          className="multi-select-bar__btn"
+        </Button>
+        <Button
+          variant="text"
+          size="small"
+          icon={<Copy size={14} />}
           data-testid="ms-copy"
           disabled={count === 0 || !copyEnabled}
           onClick={onCopy}
           title={copyEnabled ? '复制所选文本' : '仅支持全部为文本消息时复制'}
         >
-          <Copy size={14} />
           复制
-        </button>
-      </div>
-      <button
-        type="button"
-        className="multi-select-bar__cancel"
+        </Button>
+      </Flex>
+      <Button
+        variant="text"
+        size="small"
+        icon={<X size={15} />}
         data-testid="ms-cancel"
         onClick={onCancel}
         title="退出多选（Esc）"
       >
-        <X size={15} />
         取消
-      </button>
-    </header>
+      </Button>
+    </Flex>
   );
 }

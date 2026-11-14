@@ -8,9 +8,13 @@
  * - 六态（服务端态简版）：loading shimmer×5 / empty「未找到相关的人或消息」/ error 黄条
  *   「服务端搜索不可用」/ offline 提示仅服务端态可用 / forbidden、degraded 不适用（登记）。
  * 本地 FTS5 态属 Tauri/Rust 侧（D03 L1），本组件不覆盖。
+ * D26 antd 换装：检索条→antd Input（ref 桥接 ChatPage 原生 input ref）、shimmer→antd Skeleton、
+ * error→Alert、命中列表→antd Menu 分组（片段高亮 mark 保留），search-* 自研类退役。
  */
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { Alert, Input, Menu, Skeleton, Typography, theme } from 'antd';
+import type { InputRef, MenuProps } from 'antd';
 import { Search } from 'lucide-react';
 import { ApiError } from '../../../shared/api/http';
 import { useConnectionStore } from '../../../shared/store/connection';
@@ -23,7 +27,7 @@ import type { Message } from '../model/types';
 
 /** 防抖窗口（D03 §3.7：输入即搜的服务端态节流） */
 const SEARCH_DEBOUNCE_MS = 400;
-/** 搜索中态 shimmer 行数（六态 loading=shimmer×5） */
+/** 搜索中态骨架行数（六态 loading=shimmer×5） */
 const SEARCH_SHIMMER_ROWS = 5;
 /** 联系人段最多展示行数（M3：置顶导流搜人即聊） */
 const PEOPLE_MAX_ROWS = 5;
@@ -46,10 +50,23 @@ function searchableText(msg: Message): string {
 
 /** 命中片段高亮：取首个命中位前后窗口（前 12/后 24 字），大小写不敏感 substring */
 function HighlightSnippet({ text, keyword }: { text: string; keyword: string }) {
+  const { token } = theme.useToken();
+  const snippetStyle: React.CSSProperties = {
+    fontSize: 13,
+    lineHeight: 1.4,
+    overflow: 'hidden',
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+  };
   const lower = text.toLowerCase();
   const idx = lower.indexOf(keyword.toLowerCase());
   if (idx < 0) {
-    return <span className="search-hit__snippet">{text.slice(0, 40) || '（无文本预览）'}</span>;
+    return (
+      <span style={snippetStyle}>
+        {text.slice(0, 40) || '（无文本预览）'}
+      </span>
+    );
   }
   const start = Math.max(0, idx - 12);
   const end = Math.min(text.length, idx + keyword.length + 24);
@@ -57,9 +74,9 @@ function HighlightSnippet({ text, keyword }: { text: string; keyword: string }) 
   const hit = text.slice(idx, idx + keyword.length);
   const after = text.slice(idx + keyword.length, end) + (end < text.length ? '…' : '');
   return (
-    <span className="search-hit__snippet">
+    <span style={snippetStyle}>
       {before}
-      <mark className="search-hit__mark" data-testid="search-hit-mark">
+      <mark data-testid="search-hit-mark" style={{ background: 'transparent', color: token.colorPrimary, fontWeight: 600 }}>
         {hit}
       </mark>
       {after}
@@ -68,6 +85,7 @@ function HighlightSnippet({ text, keyword }: { text: string; keyword: string }) 
 }
 
 export function SearchPanel({ inputRef, onSelect, onPickPerson }: SearchPanelProps) {
+  const { token } = theme.useToken();
   const [keyword, setKeyword] = useState('');
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -131,99 +149,125 @@ export function SearchPanel({ inputRef, onSelect, onPickPerson }: SearchPanelPro
 
   const kw = keyword.trim();
 
+  /** 命中列表（antd Menu 分组：联系人段置顶 + 消息段；key 前缀分发点击） */
+  const resultItems: MenuProps['items'] = [
+    ...(people.length > 0
+      ? [
+          {
+            type: 'group' as const,
+            label: '联系人',
+            children: people.slice(0, PEOPLE_MAX_ROWS).map((u) => ({
+              key: `p:${u.uid}`,
+              label: (
+                <span data-testid="search-people-hit" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: 13 }}>
+                    {u.display_name}
+                    <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                      {u.employee_no}
+                    </Typography.Text>
+                  </span>
+                  <span style={{ display: 'flex', gap: 8, fontSize: 12, alignItems: 'center', color: token.colorTextSecondary }}>
+                    <span style={{ fontWeight: 500 }}>{u.org_path || '未分组'}</span>
+                    <span>发消息</span>
+                  </span>
+                </span>
+              ),
+            })),
+          },
+        ]
+      : []),
+    ...(hits.length > 0
+      ? [
+          {
+            type: 'group' as const,
+            /* 联系人段在前时才需要「消息」小节头 */
+            ...(people.length > 0 ? { label: '消息' } : {}),
+            children: hits.map((hit) => ({
+              key: `m:${hit.msg.msgId}`,
+              label: (
+                <span data-testid="search-hit" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {hit.msg.status === 2 ? (
+                    <span style={{ fontSize: 13 }}>已撤回的消息</span>
+                  ) : (
+                    <HighlightSnippet text={searchableText(hit.msg) || digestOf(hit.msg)} keyword={kw} />
+                  )}
+                  <span style={{ display: 'flex', gap: 8, fontSize: 12, alignItems: 'center', color: token.colorTextSecondary }}>
+                    <span style={{ fontWeight: 500 }}>{hit.convName || '会话'}</span>
+                    <span>{hit.senderName}</span>
+                    <span>{formatListTime(hit.msg.ts)}</span>
+                  </span>
+                </span>
+              ),
+            })),
+          },
+        ]
+      : []),
+  ];
+
+  const onResultClick: MenuProps['onClick'] = ({ key }) => {
+    if (key.startsWith('p:')) {
+      const u = people.find((p) => `p:${p.uid}` === key);
+      if (!u) return;
+      setOpen(false);
+      onPickPerson(u);
+      return;
+    }
+    const hit = hits.find((h) => `m:${h.msg.msgId}` === key);
+    if (!hit) return;
+    setOpen(false);
+    onSelect(hit);
+  };
+
   return (
-    <div className="search-panel" data-testid="search-panel">
-      <div className="bbw-input bbw-input--search">
-        <Search size={14} aria-hidden />
-        <input
-          ref={inputRef}
-          placeholder="搜索联系人/消息（⌘K）"
-          value={keyword}
-          data-testid="global-search-input"
-          onChange={(e) => setKeyword(e.target.value)}
-          onFocus={() => kw.length >= 1 && setOpen(true)}
-        />
-        <kbd>⌘K</kbd>
-      </div>
+    <div data-testid="search-panel" style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+      <Input
+        ref={(inst: InputRef | null) => {
+          // 桥接：ChatPage 持有原生 input ref（仅 focus 用）——antd Input 暴露 InputRef.nativeElement
+          (inputRef as React.MutableRefObject<HTMLInputElement | null>).current =
+            (inst?.nativeElement as HTMLInputElement | undefined) ?? null;
+        }}
+        prefix={<Search size={14} aria-hidden />}
+        suffix={<Typography.Text keyboard>⌘K</Typography.Text>}
+        placeholder="搜索联系人/消息（⌘K）"
+        value={keyword}
+        data-testid="global-search-input"
+        onChange={(e) => setKeyword(e.target.value)}
+        onFocus={() => kw.length >= 1 && setOpen(true)}
+      />
       {open && kw.length >= 1 ? (
-        <div className="search-panel__dropdown" data-testid="search-dropdown">
+        <div
+          data-testid="search-dropdown"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            left: 0,
+            right: 0,
+            zIndex: 30,
+            background: token.colorBgElevated,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: token.borderRadiusLG,
+            boxShadow: token.boxShadowSecondary,
+            maxHeight: 420,
+            overflowY: 'auto',
+            padding: 4,
+          }}
+        >
           {!online ? (
-            <div className="search-panel__hint">离线中：服务端搜索不可用（本地索引暂未接入）</div>
+            <Typography.Text type="secondary" style={{ display: 'block', padding: 12, fontSize: 12, textAlign: 'center' }}>
+              离线中：服务端搜索不可用（本地索引暂未接入）
+            </Typography.Text>
           ) : loading ? (
-            <div className="search-panel__shimmer" aria-label="搜索中">
-              {Array.from({ length: SEARCH_SHIMMER_ROWS }, (_, i) => (
-                <div key={i} className="search-panel__shimmer-row" />
-              ))}
+            <div style={{ padding: 8 }} aria-label="搜索中" role="status">
+              <Skeleton active title={false} paragraph={{ rows: SEARCH_SHIMMER_ROWS }} />
             </div>
           ) : error ? (
-            <div className="search-panel__hint search-panel__hint--warn" data-testid="search-error">
-              服务端搜索不可用，请稍后重试
-            </div>
+            <Alert type="warning" showIcon data-testid="search-error" message="服务端搜索不可用，请稍后重试" style={{ margin: 4 }} />
           ) : hits.length === 0 && people.length === 0 ? (
-            <div className="search-panel__hint" data-testid="search-empty">
+            <Typography.Text type="secondary" data-testid="search-empty" style={{ display: 'block', padding: 12, fontSize: 12, textAlign: 'center' }}>
               未找到相关的人或消息
-            </div>
+            </Typography.Text>
           ) : (
-            <div className="search-panel__list">
-              {/* M3 联系人段：置顶导流搜人即聊（点人发起单聊直达） */}
-              {people.length > 0 ? (
-                <>
-                  <div className="search-panel__section">联系人</div>
-                  {people.slice(0, PEOPLE_MAX_ROWS).map((u) => (
-                    <button
-                      key={u.uid}
-                      type="button"
-                      className="search-hit"
-                      data-testid="search-people-hit"
-                      onClick={() => {
-                        setOpen(false);
-                        onPickPerson(u);
-                      }}
-                    >
-                      <span className="search-hit__snippet">
-                        {u.display_name}
-                        <span className="search-people__empno">{u.employee_no}</span>
-                      </span>
-                      <span className="search-hit__meta">
-                        <span className="search-hit__conv">{u.org_path || '未分组'}</span>
-                        <span className="search-hit__time">发消息</span>
-                      </span>
-                    </button>
-                  ))}
-                </>
-              ) : null}
-              {hits.length > 0 ? (
-                <>
-                  {people.length > 0 ? <div className="search-panel__section">消息</div> : null}
-                  {hits.map((hit) => (
-                    <button
-                      key={hit.msg.msgId}
-                      type="button"
-                      className="search-hit"
-                      data-testid="search-hit"
-                      onClick={() => {
-                        setOpen(false);
-                        onSelect(hit);
-                      }}
-                    >
-                      {hit.msg.status === 2 ? (
-                        <span className="search-hit__snippet">已撤回的消息</span>
-                      ) : (
-                        <HighlightSnippet
-                          text={searchableText(hit.msg) || digestOf(hit.msg)}
-                          keyword={kw}
-                        />
-                      )}
-                      <span className="search-hit__meta">
-                        <span className="search-hit__conv">{hit.convName || '会话'}</span>
-                        <span className="search-hit__sender">{hit.senderName}</span>
-                        <span className="search-hit__time">{formatListTime(hit.msg.ts)}</span>
-                      </span>
-                    </button>
-                  ))}
-                </>
-              ) : null}
-            </div>
+            <Menu selectable={false} mode="vertical" style={{ border: 'none', boxShadow: 'none' }} items={resultItems} onClick={onResultClick} />
           )}
         </div>
       ) : null}
