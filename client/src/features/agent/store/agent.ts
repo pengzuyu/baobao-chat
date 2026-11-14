@@ -139,6 +139,10 @@ interface AgentState {
   /** 打开会话加载历史（session.history 直读 WAL）：本进程尚无流时拉取回填
    *  （重启后/列表切回；IM embedded 会话在工作台打开即见全程聊天记录） */
   loadHistoryIfEmpty: (sessionId: string) => Promise<void>;
+  /** 给最后一条未收口 user 补打 turnDoneAt（2026-11-14 隐私裁决重载对账用：
+   *  历史水合不带收口标记，壳关闭期间跑完的轮由 IM 侧按会话非运行态+已有结论
+   *  判定补打点——否则私密实时卡会永远呈运行中） */
+  stampTurnDoneIfOpen: (sessionId: string) => void;
   startSession: (mode: PermissionMode, model?: string) => Promise<void>;
   /** 显式建会话并返回 meta（D18 内嵌卡：不切换 activeSessionId 之外还供 im 侧直接持有引用；
    *  title 可选初始标题——IM embedded 来源名「与xxx的对话」/「xxx · 群聊」） */
@@ -443,6 +447,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         ? s
         : { streams: { ...s.streams, [sid]: items.map((it, i) => historyToStreamItem(sid, it, i)) } },
     );
+  },
+
+  stampTurnDoneIfOpen: (sessionId) => {
+    set((s) => ({ streams: stampTurnDone(s.streams, sessionId) }));
   },
 
   setThinkLevel: (level) => set({ thinkLevel: level }),

@@ -1,30 +1,26 @@
 /**
- * IM 内嵌 Agent 同步控制器（2026-11-11 改版：无头化——输入框上方活动卡取消，
- * 回复落流卡承载全部交互，本组件只负责「写路径」与审批弹框）：
- * - 一轮一卡：流内 user 条目数变化=新回合 → **立即** msg.send 落流 running 卡
- *   （0 阶段也落——消息流即时出现反馈，不等首个 LLM 事件；clientMsgId 用
- *   agentCardRoundToken：轮内稳定（重试幂等）/跨轮跨重启唯一——旧 agc-{sid}-r{N}
- *   确定性键壳重启后撞历史轮号，被幂等去重回旧卡致回答气泡跑到最新消息上方）
- * - 重挂重同步：不再重新落流，只认领流内本会话 running 卡续 PATCH（见 effect 注）
- * - 阶段边界 PATCH：粗粒度签名+互斥锁（防落流风暴口径不变，不含结论文本长度）；
- *   终态/idle 最后一次 PATCH 收口后静默（新回合自然落新卡）
- * - 审批弹框（antd Modal）：本组件**常驻挂载**（会话映射存在即挂，不随回合退场）
- *   ——修「审批弹框没显示」：旧活动卡 idle 退休卸载后 permissionRequest 无宿主
- * - 流式实时显示由落流卡 AgentCardMsg 订阅 store 直渲（读路径与写路径解耦，
- *   此前共用粗签名导致文本不随 delta 刷新、「一下子全输出」）
+ * IM 内嵌 Agent 同步控制器（2026-11-14 隐私裁决改版：默认零落流）：
+ * - 旧写路径整体退役——回合开始立即落 running 卡 + 阶段边界 PATCH 扇出，会让
+ *   Agent 执行过程（思考/工具/中间输出）对会话全体成员实时可见（D18 威胁模型
+ *   自认的「泄洪口」）。现默认问题/过程/回答全程仅本机可见，回合收口后由用户
+ *   手动「同步」才把仅结论 agent_card 发进会话（embedded.ts syncRoundToConv）
+ * - 本组件职责收敛为三件无头事：
+ *   ① 回合收口写入器：turnDoneAt 权威口径（终态 stateChanged 打点，含 interrupt），
+ *      done 且有结论 → 入待同步池（IndexedDB 持久，重载不丢；幂等）
+ *   ② 重载对账：挂载水合历史后，壳关闭期间跑完的轮（无 turnDoneAt 且会话行
+ *      非运行态且本轮已有结论）补打收口 → 写入器随之补入池
+ *   ③ 审批/澄清弹框常驻宿主（会话映射存在即挂，不随回合退场——弹框不失宿主）
+ * - 实时过程与待同步卡的渲染见 EmbeddedPrivateCards（消息流底部，仅本人可见）
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal, Radio } from 'antd';
-import type { AgentCardBody } from '../../../shared/components/AgentProcessCard';
 import { useAgentStore, type StreamItem } from '../../agent/store/agent';
 import { getAgentBridge } from '../../agent/bridge';
 import type { GrantScope } from '../../agent/bridge/types';
 import { ClarifyForm, type ClarifySubmit } from '../../agent/components/ClarifyCard';
-import { useImStore } from '../store/im';
-import { agentCardRoundToken, currentRoundItems, landAgentCard, patchAgentCard, roundQuestionOf, stagesFromStream, stagesSignature } from './embedded';
-
-const TERMINAL_STATES = new Set(['error', 'ended']);
+import { AGENT_LIVE_STATUSES, agentCardClientMsgId, currentRoundItems, roundQuestionOf } from './embedded';
+import { usePendingRounds } from './pending';
 
 const EMPTY_STREAM: StreamItem[] = [];
 
@@ -37,21 +33,6 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
   const stream = useAgentStore((s) => s.streams[sessionId] ?? EMPTY_STREAM);
   const session = useAgentStore((s) => s.sessions.find((m) => m.id === sessionId));
   const respondPermission = useAgentStore((s) => s.respondPermission);
-
-  /** 已落流回合号（流内 user 条目数）；≠当前值=新回合 → 重置落流目标 */
-  const landedRoundRef = useRef<number | null>(null);
-  const landedMsgRef = useRef<string | null>(null);
-  /** 本回合落流 token（轮内稳定/跨轮唯一；见 embedded.ts agentCardRoundToken） */
-  const roundTokenRef = useRef<string | null>(null);
-  const lastSigRef = useRef('');
-  const retiredRef = useRef(false);
-  /** 本回合起点（最后一条 user 的 ts；卡头已用时显示） */
-  const roundStartRef = useRef(Date.now());
-  const syncLockRef = useRef(false);
-  /** 锁占用期间有新同步请求挂起；释放后立即补跑（新回合 0 阶段卡不等流事件） */
-  const retrySyncRef = useRef(false);
-  /** 最新同步函数（finally 补跑用——effect 闭包会随依赖更新，取最新版） */
-  const syncFnRef = useRef<() => void>(() => {});
 
   // 最近一条待决审批（Modal 数据源；本组件常驻 → 弹框不会因回合结束失宿主）
   const pendingPerm = useMemo<StreamItem | null>(() => {
@@ -71,8 +52,6 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
     return null;
   }, [stream]);
 
-  const terminal = !!session && (TERMINAL_STATES.has(session.status) || session.endedAt != null);
-  const failed = session?.status === 'error';
   // 回合收口判定（权威，2026-11-11）：最后一条 user 的 turnDoneAt——store 仅在终态
   // stateChanged 打点（回合结束必有终态收口，含 interrupt；中途 streamDone/瞬态
   // idle 不打点）。比盯会话 status 稳：status 瞬态（revive 镜像/ready 迟到）不会误收口
@@ -86,93 +65,47 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
   }
   const roundClosed = !!lastUser?.turnDoneAt;
 
-  // ── 落流/更新（写路径；阶段边界节流，读路径实时性由 AgentCardMsg 订阅保证）──
+  // ── 水合：本进程无流时拉历史（重载后收口判定/待同步对账的数据源） ──
   useEffect(() => {
-    const doSync = () => {
+    void useAgentStore.getState().loadHistoryIfEmpty(sessionId);
+  }, [sessionId]);
+
+  // ── 重载对账（2026-11-14 隐私裁决新增）：壳关闭期间跑完的轮补收口 ──
+  // 历史水合不带 turnDoneAt（historyToStreamItem 无此字段）且已无直播事件来补打——
+  // 会话行非运行态 + 本轮已有结论 = 实际早已收口。补打点后下方写入器随之入池、
+  // EmbeddedPrivateCards 的实时卡随之退场（否则永远呈运行中）。运行中会话不碰。
+  useEffect(() => {
+    if (!session || AGENT_LIVE_STATUSES.has(session.status)) return;
+    if (!lastUser || lastUser.turnDoneAt) return;
+    const hasConclusion = currentRoundItems(stream).some(
+      (it) => it.kind === 'agentText' && !!it.text.trim(),
+    );
+    if (!hasConclusion) return;
+    useAgentStore.getState().stampTurnDoneIfOpen(sessionId);
+  }, [stream, session, sessionId, lastUser]);
+
+  // ── 回合收口写入器：done 且有结论 → 待同步池（幂等；失败/中断轮不入池） ──
+  useEffect(() => {
+    if (!roundClosed) return;
+    const items = currentRoundItems(stream);
+    let conclusion = '';
+    for (const it of items) {
+      if (it.kind === 'agentText') conclusion = it.text; // 取本轮最后一段正文
+    }
+    if (!conclusion.trim()) return;
     const userCount = stream.filter((it) => it.kind === 'user').length;
-    if (userCount === 0) return; // 空流（未提问）不落卡
-    if (landedRoundRef.current === null) {
-      // 挂载重同步（2026-11-11 口径变更）：不再按确定性键重新落流——旧口径
-      // agc-{sid}-r{N} 的 N 取内存流 user 条数，壳重启后计数归零，重新落流会与
-      // 历史轮撞号、被 client_msg_id 幂等去重回旧轮卡（回答气泡跑到最新消息上方）。
-      // 现只认领流内本会话仍在 running 的最新卡为 PATCH 目标：自愈「失宿主期间
-      // 轮次收口、终态 PATCH 丢失」卡停 running；无 running 卡（历史轮均已收口，
-      // 或本轮在工作台发起本就不落卡）静默等新回合
-      landedRoundRef.current = userCount;
-      const list = useImStore.getState().messagesByConv[convId] ?? [];
-      for (let i = list.length - 1; i >= 0; i -= 1) {
-        const m = list[i];
-        if (m.type !== 'agent_card') continue;
-        const b = m.body as AgentCardBody | undefined;
-        if (b && b.session_id === sessionId && b.status === 'running') {
-          landedMsgRef.current = m.msgId;
-          // 回合起点对齐卡身（补终态 PATCH 的用时口径不被挂载时刻覆盖）
-          if (typeof b.started_at === 'number') roundStartRef.current = b.started_at;
-          break;
-        }
-      }
-      if (!landedMsgRef.current) return;
-    } else if (landedRoundRef.current !== userCount) {
-      // 新回合：唯一 token 落新卡（0 阶段 running 也落）+ 重置落流目标（一轮一卡）
-      const lastUser = [...stream].reverse().find((it) => it.kind === 'user');
-      landedRoundRef.current = userCount;
-      landedMsgRef.current = null;
-      roundTokenRef.current = agentCardRoundToken(sessionId, userCount);
-      retiredRef.current = false;
-      roundStartRef.current = lastUser && lastUser.kind === 'user' ? lastUser.ts : Date.now();
-      lastSigRef.current = '';
-    }
-    if (syncLockRef.current) {
-      // 上一次落流/PATCH 仍在飞：挂起标记，锁释放后立即重跑（修「新回合卡不立即
-      // 落」——此前直接 return 且无重试，快速连续对话时 0 阶段卡要等首个模型事件
-      // 才补落，用户看到"发了消息没反应"+误读旧卡计时）
-      retrySyncRef.current = true;
-      return;
-    }
-    // 只投影当前轮（最后一条 user 之后）——喂全会话流会让新卡在模型响应前
-    // 顶着上一轮的 conclusion（2026-11-11「新卡带旧答案」修复）
-    const { stages, sources, rounds } = stagesFromStream(currentRoundItems(stream));
-    const status: AgentCardBody['status'] = terminal ? (failed ? 'failed' : 'done') : roundClosed ? 'done' : 'running';
-    const sig = `${stagesSignature(stages)}#${status}#${rounds}`;
-    if (sig === lastSigRef.current) return;
-    lastSigRef.current = sig;
-    syncLockRef.current = true;
-    const body: AgentCardBody = {
-      kind: 'embedded_agent',
-      session_id: sessionId,
-      status,
-      // streaming 是 live 投影瞬态旗标（落库即过时——历史卡思考恒折叠），剥除不落
-      stages: stages.map((s) => (s.streaming == null ? s : { ...s, streaming: undefined })),
-      sources,
-      rounds,
-      started_at: roundStartRef.current,
-      ended_at: status !== 'running' ? Date.now() : undefined,
+    // 池内 id 用确定性轮键（幂等去重；落流 client_msg_id 另用带盐 token，勿混）
+    void usePendingRounds.getState().add(convId, {
+      id: agentCardClientMsgId(sessionId, userCount),
+      sessionId,
+      round: userCount,
       question: roundQuestionOf(stream),
-    };
-    void (async () => {
-      try {
-        if (!landedMsgRef.current) {
-          landedMsgRef.current = await landAgentCard(convId, roundTokenRef.current ?? agentCardRoundToken(sessionId, userCount), body);
-        } else if (status !== 'running' && !retiredRef.current) {
-          retiredRef.current = true;
-          await patchAgentCard(landedMsgRef.current, body);
-        } else if (status === 'running') {
-          await patchAgentCard(landedMsgRef.current, body);
-        }
-      } catch {
-        lastSigRef.current = ''; // 落流为辅链路：失败不阻断，下个阶段边界重试
-      } finally {
-        syncLockRef.current = false;
-        if (retrySyncRef.current) {
-          retrySyncRef.current = false;
-          syncFnRef.current(); // 释放即补跑（新回合落卡不再等流事件）
-        }
-      }
-    })();
-    };
-    syncFnRef.current = doSync;
-    doSync();
-  }, [stream, terminal, failed, roundClosed, convId, sessionId]);
+      conclusionMd: conclusion,
+      // 水合历史 user 条目 ts=0（historyToStreamItem 口径）→ 起点退化取收口时刻
+      startedAt: lastUser?.ts || lastUser?.turnDoneAt || Date.now(),
+      endedAt: lastUser?.turnDoneAt || Date.now(),
+    });
+  }, [roundClosed, stream, convId, sessionId, lastUser]);
 
   // ── 审批弹框动作 ──
   const [scope, setScope] = useState<GrantScope>('once');

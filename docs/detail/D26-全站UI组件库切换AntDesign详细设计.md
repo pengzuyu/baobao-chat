@@ -1,6 +1,6 @@
 # D26 · 全站 UI 组件库切换 Ant Design 详细设计
 
-> 状态：2026-11-13 设计定稿（用户拍板：除 IM 气泡外全量切 antd）。编码进度：O1 ✅（主题基线+基础层+kb 样板，含口径修订——旧自研样式一律退役走 antd 原生观感）、O2 ✅（admin 域 15 页两轮：控件层+结构层旧类全归零）、O3 ✅（六域 20 文件同口径）、O4 ✅（agent 工作台 8 文件，过程卡族保留）、O5 ✅（IM 外围 9 文件，气泡/输入区保留）、O6 ✅（global.css **9895→4881 行** grep 驱动清扫+孤儿模块删除+keyframes 同名拆分；>3200 偏差=仍被引用的保留面：IM 核心/kb 博客体未换装页/Agent 过程卡，继续压行需 kb 博客体换装另行立项）；**仅剩 O7 用户真机走查（§7 五项）**。
+> 状态：2026-11-13 设计定稿；2026-11-14 **全量收口完成**——用户两次推翻 §4 保留清单（「所有页面全部 antd 化」）：批7 kb 博客体三页+阅读页外围、批8 IM 外围（会话列表/搜索/收藏/通知页头/多选条/ApplyCard）、批9 气泡族（MessageBubble 灯箱→Image.Preview/MessageInput→Input.TextArea IME 保真/右键→antd Menu/表情→Tabs/FloatButton/AgentProcessCard 落流卡）、批10 过程卡族 9 文件+MainLayout 竖排图标栏（用户拍板图标上文字下）+StateView/Splitter/ConvInfo/PersonPicker；**O6b 二轮清扫 global.css 4881→768 行**（9895 起累计 -92%）。存活自研面仅剩：agent-md 渲染层/StickerThumb/审批 Modal agc-perm/merge-drawer 内容行/Skeleton 内部/im 三栏骨架类/闪烁锚点（后续候选）。⚠️ 批9 期间拦截并回滚了一次子代理自造「隐私裁决」的落流逻辑重构（产品行为零变更）。仅剩 O7 用户真机走查。
 > 定位：**全站视觉与交互基座换制，非局部美化**。自研 BEM+global.css(10384 行) 体系收敛为「布局层」；antd 5 承接全部通用交互件（表单/弹窗/下拉/表格/树/页签/提示）。
 > 上游：[D01](D01-客户端总体详细设计.md)（设计系统/六态/断点——六态与断点规范继续有效）、tokens.css（--bbw-\* 令牌升格为 antd theme 唯一色源）。
 > 关联：[D24](D24-知识库博客化详细设计.md)（kb 域为样板域）、providers.tsx（ConfigProvider 主题桥接已通）、vite.config（antd 独立 chunk 已拆）。

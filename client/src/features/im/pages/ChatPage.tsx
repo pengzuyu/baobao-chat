@@ -49,8 +49,9 @@ import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from
 import { ingestFromIm } from '../../kb/api/kb';
 import { MessageInput } from '../components/MessageInput';
 import { EmbeddedAgentSync } from '../agent/EmbeddedAgentSync';
+import { EmbeddedPrivateCards } from '../agent/EmbeddedPrivateCards';
 import type { AgentCardBody } from '../../../shared/components/AgentProcessCard';
-import { embeddedTitle, getEmbeddedSessionId, setEmbeddedSessionId } from '../agent/embedded';
+import { AGENT_LIVE_STATUSES, embeddedTitle, getEmbeddedSessionId, setEmbeddedSessionId } from '../agent/embedded';
 import { useAgentStore } from '../../agent/store/agent';
 import { ForwardModal } from '../components/ForwardModal';
 import { ReadReceiptModal } from '../components/ReadReceiptModal';
@@ -235,10 +236,11 @@ export function ChatPage() {
 
   const activeConv = convs.find((c) => c.id === convId) ?? null;
   const messages = convId ? (messagesByConv[convId] ?? []) : [];
-  // ── 内嵌 Agent（D18；2026-11-11 改版：活动卡取消，回复落流卡承载全部交互，
-  //    EmbeddedAgentSync 常驻（映射存在即挂，不随回合退场）管落流与审批弹框；
-  //    落流卡=纯展示+审批/提问应答条——发消息走输入框（🤖 按钮//agent 命令），
-  //    进工作台走 ChatHeader 🤖 图标） ──
+  // ── 内嵌 Agent（D18；2026-11-14 隐私裁决：默认零落流——问题/过程/回答全程
+  //    仅本机可见，回合收口入待同步池，手动「同步」才把仅结论卡发进会话；
+  //    EmbeddedAgentSync 常驻（映射存在即挂）管收口写入/重载对账/审批弹框，
+  //    EmbeddedPrivateCards 在消息流尾部渲染私密实时卡与待同步卡；
+  //    发消息走输入框（🤖 按钮//agent 命令），进工作台走 ChatHeader 🤖 图标） ──
   const [agentMode, setAgentMode] = useState(false);
   const [embeddedActive, setEmbeddedActive] = useState<string | null>(null);
   useEffect(() => {
@@ -275,7 +277,9 @@ export function ChatPage() {
     return created.id;
   };
 
-  /** Agent 流程（D18 §2/§3.1）：问题交本会话 embedded Agent 处理，回复经落流卡回流 */
+  /** Agent 流程（D18 §2/§3.1；2026-11-14 隐私裁决）：问题**不落流**，仅交本会话
+   *  embedded Agent（本机处理）——实时过程与回答只在 EmbeddedPrivateCards 私密卡
+   *  可见；收口入待同步池，用户手动同步才把仅结论卡发进会话 */
   const agentFlow = async (rawText: string) => {
     if (!convId) return;
     const question = rawText.replace(/^\/agent\s*/, '').trim() || rawText;
@@ -396,9 +400,14 @@ export function ChatPage() {
   // AI 回答期间周期跟随（agent-web 同款）：agent 卡原地长高不增条数，length/
   // 尾键 effect 触发不了——300ms 轮询补跟随；内部判贴底才滚，用户上滚即自然
   // 停跟（不抢滚动条），滚回底部恢复跟随。cleanup 补滚一次兜住收口的最后一次长高。
+  // 2026-11-14 隐私裁决：私密实时卡不再落流（messages 恒无 running agent_card，
+  // 旧存量卡除外）——判定并入 embedded 会话运行态，滚动跟随/浮标口径不变。
+  const embeddedSession = useAgentStore((s) => (embeddedActive ? s.sessions.find((x) => x.id === embeddedActive) : undefined));
   const agentRunning = useMemo(
-    () => messages.some((m) => m.type === 'agent_card' && (m.body as AgentCardBody).status === 'running'),
-    [messages],
+    () =>
+      messages.some((m) => m.type === 'agent_card' && (m.body as AgentCardBody).status === 'running') ||
+      (!!embeddedActive && AGENT_LIVE_STATUSES.has(embeddedSession?.status ?? '')),
+    [messages, embeddedActive, embeddedSession],
   );
   useEffect(() => {
     if (!agentRunning) return;
@@ -742,6 +751,14 @@ export function ChatPage() {
 
   const doSend = (text: string) => {
     if (!convId) return;
+    // Agent 模式 / /agent 前缀（2026-11-11 命令口径；@Agent 触发已下线留作他用）。
+    // 2026-11-14 隐私裁决：**完全私密**——问题不落流（mentions/回复引用对不存在的
+    // 消息无意义，一并跳过），仅交本机 embedded Agent；回答收口后经私密卡手动同步
+    if (agentMode || /^\/agent([\s　]|$)/.test(text)) {
+      setReplyTo(null);
+      void agentFlow(text);
+      return;
+    }
     // @全体：文本包含「@全体」即携带 all mention（服务端按 mention_all_policy 校验 3014）
     const mentions: Mention[] = [];
     const at = text.indexOf('@全体');
@@ -760,12 +777,8 @@ export function ChatPage() {
       if (idx < 0) continue; // 用户已删掉 @文本：视为放弃提及
       mentions.push({ uid: p.uid, all: false, range: [idx, idx + p.name.length + 1] });
     }
-    // Agent 模式 / /agent 前缀（2026-11-11 命令口径；@Agent 触发已下线留作他用）：
-    // 问题照常作为文本消息落流，另交 embedded Agent
-    const toAgent = agentMode || /^\/agent([\s　]|$)/.test(text);
     void sendText(convId, text, replyTo?.seq, mentions.length > 0 ? mentions : undefined);
     setReplyTo(null);
-    if (toAgent) void agentFlow(text);
   };
   const doEditSubmit = (text: string) => {
     if (!editing) return;
@@ -969,6 +982,9 @@ export function ChatPage() {
           />
         </Fragment>
       ))}
+      {/* 私密卡区（2026-11-14 隐私裁决）：embedded Agent 实时过程卡 + 待同步轮卡，
+          仅本人可见的本地渲染（非消息、不落库不扇出）；流尾常驻，收口后可手动同步 */}
+      {convId && embeddedActive ? <EmbeddedPrivateCards convId={convId} sessionId={embeddedActive} /> : null}
     </div>
   );
 
