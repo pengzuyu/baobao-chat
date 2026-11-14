@@ -1,17 +1,20 @@
 /**
  * Agent 过程折叠卡（2026-11-11 六改：外层消息卡片+头部恢复——用户反馈「原来最外层
  * 的消息卡片变没了，还有标题那些」；v5 的折叠结构保留为其内区块）：
- * - 最外层 = 消息卡片（agc-card：🤖 Agent 标题 + 正在处理/已处理：本轮问题 +
- *   状态 chip（运行中·实时走秒/已完成/失败/已中断）；运行中边框主色高亮）
- * - 卡内「过程折叠区块」（agc-proc）：摘要条（思考中/已深度思考 + 用时·N次LLM调用·
- *   N次工具执行·N个子agent）= 整块折叠开关——思考小卡×N/工具/中间正文全收此块
+ * - 最外层 = 消息卡片（🤖 Agent 标题 + 正在处理/已处理：本轮问题 + 状态 chip
+ *   （运行中·实时走秒/已完成/失败/已中断）；运行中边框主色高亮）
+ * - 卡内「过程折叠区块」：摘要条（思考中/已深度思考 + 用时·N次LLM调用·N次工具执行·
+ *   N个子agent）= 整块折叠开关——思考小卡×N/工具/中间正文全收此块
  * - 最终结论在卡内、过程块下方常开（markdown+流式光标）；actions 卡尾
  * - 工作台（TurnBubble children=富交互明细）与 IM 落流卡（缺省 stages 投影）
  *   共用本组件，调整一处两端同步
+ * D26 全量收口（2026-11-14）：agc-* 自研类退役——antd Collapse/Tag/Spin/Button +
+ * theme.useToken() 内联；行为（折叠语义/流式光标/孤儿降级/统计口径）零改动。
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bot, ChevronDown, ChevronRight, ChevronUp, Code2, Lightbulb, Loader2, Terminal } from 'lucide-react';
+import { Collapse, Spin, Tag, Typography, theme } from 'antd';
+import { Bot, ChevronRight, ChevronUp, Code2, Lightbulb, Terminal } from 'lucide-react';
 import { MarkdownText } from './MarkdownText';
 
 /** 落流卡 stages 条目（D18 §4.1；服务端不透明透传，此为客户端投影类型） */
@@ -38,7 +41,7 @@ export interface AgentStage {
 }
 
 /** 工具调用 → 行内命令/关键参数摘要（2026-11-12 终端行口径，落流卡 ToolRow 与
- *  工作台 ToolCard 共用）：run_command=命令原文；其他工具=首个字符串参数（path/query） */
+ * 工作台 ToolCard 共用）：run_command=命令原文；其他工具=首个字符串参数（path/query） */
 export function toolCallCommand(tool: string, args: Record<string, unknown> | undefined): string | undefined {
   if (!args) return undefined;
   if (tool === 'run_command') {
@@ -62,11 +65,12 @@ export interface AgentCardBody {
   question?: string;
 }
 
-/** 思考卡：流式强制展开+呼吸动画；本段思考结束自动折叠（change-my-life ThinkingCard
- *  模式）。折叠态随卸载重置：外层（IM 迷你卡/过程区摘要条）折叠即卸载本卡，再展开
+/** 思考卡：流式强制展开；本段思考结束自动折叠（change-my-life ThinkingCard 模式）。
+ *  折叠态随卸载重置：外层（IM 迷你卡/过程区摘要条）折叠即卸载本卡，再展开
  *  重挂回初始态——已完成=折叠（省空间，2026-11-11 用户口径），仍在流式=展开。
  *  2026-11-11 导出共享：工作台回合气泡过程区同款复用（每段思考一张折叠小卡） */
 export function ThinkingCollapse({ text, streaming }: { text: string; streaming: boolean }) {
+  const { token } = theme.useToken();
   const [expanded, setExpanded] = useState(streaming);
   const bodyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -84,53 +88,88 @@ export function ThinkingCollapse({ text, streaming }: { text: string; streaming:
     return () => cancelAnimationFrame(raf);
   }, [text, expanded, streaming]);
   return (
-    <div className={`agc-thinking${streaming ? ' agc-thinking--streaming' : ''}`}>
-      <button type="button" className="agc-thinking__head" onClick={() => setExpanded((v) => !v)}>
-        <Lightbulb size={13} />
-        <span className={`agc-thinking__title${streaming ? ' agc-thinking__title--streaming' : ''}`}>{streaming ? '思考中...' : '思考过程'}</span>
-        <ChevronDown size={13} className={`agc-chev${expanded ? ' agc-chev--open' : ''}`} />
-      </button>
-      <div ref={bodyRef} className="agc-thinking__body" style={{ maxHeight: expanded ? 300 : 0 }}>
-        <pre className="agc-thinking__text">{text}</pre>
-      </div>
-    </div>
+    <Collapse
+      ghost
+      size="small"
+      activeKey={expanded ? ['t'] : []}
+      onChange={() => setExpanded((v) => !v)}
+      style={{ background: token.colorFillQuaternary, borderRadius: token.borderRadius, margin: '4px 0' }}
+      items={[
+        {
+          key: 't',
+          label: (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: streaming ? token.colorPrimary : token.colorTextSecondary }}>
+              <Lightbulb size={13} />
+              {streaming ? '思考中...' : '思考过程'}
+            </span>
+          ),
+          children: (
+            <div ref={bodyRef} style={{ maxHeight: 300, overflowY: 'auto' }}>
+              <pre style={{ margin: 0, fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', color: token.colorTextSecondary }}>{text}</pre>
+            </div>
+          ),
+        },
+      ]}
+    />
   );
 }
 
 /** 工具行（2026-11-12 终端行口径）：run_command 显示「终端」+ 命令（单行截断），
  *  其他工具=name+关键参数；有命令/结果可点开查看完整命令与执行结果（等宽块） */
 function ToolRow({ s }: { s: AgentStage }) {
-  const [open, setOpen] = useState(false);
+  const { token } = theme.useToken();
   const running = s.status === 'running';
+  const failed = s.status === 'fail';
   const isTerm = s.name === 'run_command';
   const inline = s.command ?? (isTerm ? undefined : s.summary);
   const expandable = !!(s.command || s.result || (!isTerm && s.summary));
+  const mono = { fontFamily: 'var(--bbw-font-mono)', fontSize: 12 } as const;
   return (
-    <div
-      className={`agc-tool${running ? ' agc-tool--running' : ''}${s.status === 'fail' ? ' agc-tool--fail' : ''}${expandable ? ' agc-tool--expandable' : ''}`}
-    >
-      <button
-        type="button"
-        className="agc-tool__head"
-        onClick={expandable ? () => setOpen((v) => !v) : undefined}
-        disabled={!expandable}
-        aria-expanded={expandable ? open : undefined}
-      >
-        {running ? <Loader2 size={12} className="agc-spin" /> : isTerm ? <Terminal size={12} /> : <Code2 size={12} />}
-        <span className="agc-tool__name">{isTerm ? '终端' : s.name}</span>
-        {inline ? <code className="agc-tool__cmd">{inline}</code> : null}
-        {s.ms != null && s.ms > 0 ? <span className="agc-tool__ms">{(s.ms / 1000).toFixed(1)}s</span> : null}
-        {s.status === 'fail' ? <span className="agc-tool__fail">失败</span> : null}
-        {expandable ? <ChevronDown size={12} className={`agc-chev${open ? ' agc-chev--open' : ''}`} /> : null}
-      </button>
-      {open && expandable ? (
-        <div className="agc-tool__body">
-          {s.command ? <pre className="agc-tool__line">{isTerm ? `$ ${s.command}` : s.command}</pre> : null}
-          {s.result ? <pre className="agc-tool__line agc-tool__line--out">{s.result}</pre> : null}
-          {!s.command && !s.result && !isTerm && s.summary ? <pre className="agc-tool__line agc-tool__line--out">{s.summary}</pre> : null}
-        </div>
-      ) : null}
-    </div>
+    <Collapse
+      ghost
+      size="small"
+      style={{
+        margin: '2px 0',
+        borderRadius: token.borderRadius,
+        border: `1px solid ${failed ? token.colorErrorBorder : running ? token.colorPrimaryBorder : token.colorBorderSecondary}`,
+      }}
+      items={[
+        {
+          key: 'tool',
+          collapsible: expandable ? 'header' : 'disabled',
+          label: (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, fontSize: 12 }}>
+              {running ? <Spin size="small" /> : isTerm ? <Terminal size={12} /> : <Code2 size={12} />}
+              <span style={{ fontWeight: 500 }}>{isTerm ? '终端' : s.name}</span>
+              {inline ? (
+                <Typography.Text code style={{ ...mono, maxInlineSize: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} ellipsis>
+                  {inline}
+                </Typography.Text>
+              ) : null}
+              {s.ms != null && s.ms > 0 ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 'auto', paddingLeft: 8 }}>
+                  {(s.ms / 1000).toFixed(1)}s
+                </Typography.Text>
+              ) : null}
+              {failed ? <Tag color="error" style={{ marginInlineEnd: 0 }}>失败</Tag> : null}
+            </span>
+          ),
+          children: expandable ? (
+            <div style={{ display: 'grid', gap: 4 }}>
+              {s.command ? (
+                <pre style={{ ...mono, margin: 0, whiteSpace: 'pre-wrap', color: token.colorText }}>{isTerm ? `$ ${s.command}` : s.command}</pre>
+              ) : null}
+              {s.result ? (
+                <pre style={{ ...mono, margin: 0, whiteSpace: 'pre-wrap', color: token.colorTextSecondary }}>{s.result}</pre>
+              ) : null}
+              {!s.command && !s.result && !isTerm && s.summary ? (
+                <pre style={{ ...mono, margin: 0, whiteSpace: 'pre-wrap', color: token.colorTextSecondary }}>{s.summary}</pre>
+              ) : null}
+            </div>
+          ) : null,
+        },
+      ]}
+    />
   );
 }
 
@@ -151,7 +190,7 @@ function Elapsed({ startedAt }: { startedAt: number }) {
     return () => clearInterval(t);
   }, []);
   const sec = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-  return <span className="agc-elapsed">{formatDuration(sec)}</span>;
+  return <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatDuration(sec)}</span>;
 }
 
 /**
@@ -216,6 +255,7 @@ export interface AgentProcessCardProps {
 }
 
 export function AgentProcessCard({ body, live, startedAt, staleAfterMs, actions, testId, forceExpand, onCollapse, children }: AgentProcessCardProps) {
+  const { token } = theme.useToken();
   // 孤儿降级：非 live 视图的 running 卡超龄 → 视作中断终态
   const stale =
     live !== true && staleAfterMs != null && body.status === 'running' &&
@@ -236,12 +276,42 @@ export function AgentProcessCard({ body, live, startedAt, staleAfterMs, actions,
   // 空终态（无过程无结论且非运行）不渲染——历史残留空卡不占位
   if (!hasProcess && !lastConclusion && !running) return null;
 
+  const stateTag = running ? (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: token.colorPrimary }}>
+      <Spin size="small" /> 运行中{startedAt != null ? <> · <Elapsed startedAt={startedAt} /></> : null}
+    </span>
+  ) : (
+    <Tag
+      color={stale || body.status === 'cancelled' ? 'default' : body.status === 'done' ? 'success' : 'error'}
+      style={{ marginInlineEnd: 0 }}
+    >
+      {stale ? '已中断' : body.status === 'done' ? '已完成' : body.status === 'failed' ? '失败' : '已取消'}
+    </Tag>
+  );
+
   return (
-    <div className={`agc-card${running ? ' agc-card--running' : ''}`} data-testid={testId}>
-      {/* 头部：标题 + 本轮问题 + 状态（2026-11-11 六改恢复）。onCollapse 在时整条
-          头部行=收起触发区（2026-11-11 用户口径：title 区域都可点，箭头仅指示） */}
+    <div
+      data-testid={testId}
+      style={{
+        borderRadius: 12,
+        border: `1px solid ${running ? token.colorPrimary : token.colorBorderSecondary}`,
+        background: token.colorBgContainer,
+        overflow: 'hidden',
+        maxWidth: 680,
+      }}
+    >
+      {/* 头部：标题 + 本轮问题 + 状态。onCollapse 在时整条头部行=收起触发区
+          （2026-11-11 用户口径：title 区域都可点，箭头仅指示） */}
       <div
-        className={onCollapse ? 'agc-card__head agc-card__head--toggle' : 'agc-card__head'}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 12px',
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          background: token.colorFillQuaternary,
+          cursor: onCollapse ? 'pointer' : undefined,
+        }}
         {...(onCollapse
           ? {
               role: 'button',
@@ -261,51 +331,57 @@ export function AgentProcessCard({ body, live, startedAt, staleAfterMs, actions,
           : undefined)}
       >
         <Bot size={14} />
-        <span className="agc-card__title">Agent</span>
+        <span style={{ fontWeight: 600 }}>Agent</span>
         {body.question ? (
-          <span className="agc-card__question" title={onCollapse ? undefined : body.question}>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: token.colorTextSecondary }} title={onCollapse ? undefined : body.question}>
             {running ? '正在处理：' : '已处理：'}{body.question}
           </span>
-        ) : null}
-        {running ? (
-          <span className="agc-card__state">
-            <Loader2 size={11} className="agc-spin" /> 运行中{startedAt != null ? <> · <Elapsed startedAt={startedAt} /></> : null}
-          </span>
-        ) : (
-          <span className={`agc-card__state agc-card__state--${stale ? 'cancelled' : body.status}`}>
-            {stale ? '已中断' : body.status === 'done' ? '已完成' : body.status === 'failed' ? '失败' : '已取消'}
-          </span>
-        )}
-        {onCollapse ? <ChevronUp size={13} className="agc-card__head-chev" aria-hidden /> : null}
+        ) : <span style={{ flex: 1 }} />}
+        {stateTag}
+        {onCollapse ? <ChevronUp size={13} aria-hidden /> : null}
       </div>
 
-      <div className="agc-card__body">
+      <div style={{ padding: '8px 12px' }}>
         {/* 0 阶段占位（新回合落卡即渲染：消息一发出就见「处理中」气泡，不等模型） */}
         {running && !hasProcess && !lastConclusion ? (
-          <div className="agc-waiting">
-            <span className="agc-waiting__dot" />
-            <span className="agc-waiting__dot" />
-            <span className="agc-waiting__dot" />
-            正在等待 AI 响应…
-          </div>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: token.colorTextSecondary }}>
+            <Spin size="small" /> 正在等待 AI 响应…
+          </span>
         ) : null}
         {/* 过程折叠区块：摘要条=整块折叠开关（思考小卡/工具/中间正文全收此块） */}
         {hasProcess ? (
-          <div className="agc-proc">
+          <div>
             <button
               type="button"
-              className="agc-proc__bar"
               onClick={() => setExpanded((v) => !v)}
               title={showProcess ? '收起过程' : '展开过程'}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                width: '100%',
+                padding: '4px 0',
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: 13,
+                color: token.colorText,
+              }}
             >
-              <ChevronRight size={12} className={`agc-proc__chev${showProcess ? ' agc-proc__chev--open' : ''}`} aria-hidden />
-              <span className={`agc-proc__title${running ? ' agc-proc__title--streaming' : ''}`}>
+              <ChevronRight
+                size={12}
+                style={{ transform: showProcess ? 'rotate(90deg)' : 'none', transition: 'transform .2s', color: token.colorTextTertiary }}
+                aria-hidden
+              />
+              <span style={{ fontWeight: 500, color: running ? token.colorPrimary : undefined }}>
                 {running ? '思考中' : stale ? '已中断' : '已深度思考'}
               </span>
-              <span className="agc-proc__stats">{statsText}</span>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {statsText}
+              </Typography.Text>
             </button>
             {showProcess ? (
-              <div className="agc-proc__body">
+              <div style={{ padding: '4px 0' }}>
                 {children ??
                   processStages.map((s, j) =>
                     s.t === 'thinking' ? (
@@ -315,7 +391,7 @@ export function AgentProcessCard({ body, live, startedAt, staleAfterMs, actions,
                     ) : s.t === 'tool' ? (
                       <ToolRow key={j} s={s} />
                     ) : (
-                      <div key={j} className="agc-conclusion agc-conclusion--mid">
+                      <div key={j} style={{ margin: '6px 0' }}>
                         <MarkdownText text={s.md ?? ''} />
                       </div>
                     ),
@@ -326,13 +402,26 @@ export function AgentProcessCard({ body, live, startedAt, staleAfterMs, actions,
         ) : null}
         {/* 最终结论：卡内过程块下方常开（流式光标只挂末段结论） */}
         {lastConclusion ? (
-          <div className="agc-conclusion">
+          <div style={{ position: 'relative' }}>
             <MarkdownText text={lastConclusion.md ?? ''} />
-            {running && lastConclusionIdx === body.stages.length - 1 ? <span className="agc-cursor" /> : null}
+            {running && lastConclusionIdx === body.stages.length - 1 ? (
+              <span
+                aria-hidden
+                style={{
+                  display: 'inline-block',
+                  width: 7,
+                  height: 15,
+                  marginLeft: 2,
+                  verticalAlign: 'text-bottom',
+                  background: token.colorPrimary,
+                  animation: 'agc-pulse 0.9s steps(2) infinite',
+                }}
+              />
+            ) : null}
           </div>
         ) : null}
       </div>
-      {actions ? <div className="agc-card__actions">{actions}</div> : null}
+      {actions ? <div style={{ padding: '6px 12px', borderTop: `1px solid ${token.colorBorderSecondary}` }}>{actions}</div> : null}
     </div>
   );
 }

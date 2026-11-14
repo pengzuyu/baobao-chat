@@ -1,14 +1,18 @@
 /**
- * 消息输入区（D03 §3.1）：
- * - Enter 发送 / Shift+Enter 换行（D01 §9）
- * - 引用回复条（INT-IM-04）：replyTo 悬浮于输入框上，可关闭
+ * 消息输入区（D03 §3.1；D26-O7 全量 antd 换装）：
+ * - Enter 发送 / Shift+Enter 换行（D01 §9）；IME 组合窗防误发（useImeGuard 原样保留）
+ * - textarea → antd Input.TextArea（autoSize；键盘/光标/选区操作经 ref 直达原生 textarea 保真）
+ * - 引用回复条（INT-IM-04）：replyTo 悬浮于输入框上，可关闭（内联 Flex + token）
  * - 编辑态（INT-IM-02）：原 bubble 文本转入输入框，Enter 提交 PATCH
  * - 正在输入（INT-IM-11）：输入事件 2.5s 节流发 msg.typing（stop 不发，静默；群聊默认关，OQ-B03）
  * - @提及（INT-IM-24）：输入 @ 触发成员过滤面板（参与者取自已加载消息的去重发送者）
  * - 草稿存 feature store（500ms 防抖 PATCH state 多端同步，INT-IM-10）
+ * - 禁言态 → antd Alert；工具条 → Button(text/icon)+Tooltip；@/斜杠面板自绘内联（键盘导航保真）
  */
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { Alert, Flex, Input, Tooltip, Typography, theme } from 'antd';
+import type { InputRef } from 'antd';
 import { AtSign, Bot, Mic, Paperclip, Smile, Square, Trash2, X } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useImeGuard } from '../../../shared/hooks/useImeGuard';
@@ -16,6 +20,8 @@ import { sendTyping } from '../api/im';
 import type { Message } from '../model/types';
 import { EmojiPicker } from './EmojiPicker';
 import type { StickerItem } from '../api/stickers';
+
+const { Text } = Typography;
 
 /** 语音条上限（60s；服务端 Send 同规则兜底） */
 const VOICE_MAX_MS = 60_000;
@@ -33,6 +39,15 @@ function voiceExtOf(mime: string): string {
 const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: '/agent', desc: '进入与机器人对话模式（再次执行取消）' },
 ];
+
+/**
+ * antd TextArea ref（结构子集）：focus 走 antd 封装，光标/选区直达底层原生
+ * textarea——insertText/@回填/斜杠补全的光标操作与原生路径完全一致（保真）。
+ */
+interface TaRefLike {
+  focus: (options?: unknown) => void;
+  resizableTextArea?: { textArea: HTMLTextAreaElement | null };
+}
 
 interface MessageInputProps {
   convId: string;
@@ -87,6 +102,7 @@ export function MessageInput({
   agentMode,
   onToggleAgentMode,
 }: MessageInputProps) {
+  const { token } = theme.useToken();
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   /** 录音态（recorder 引用经 ref 持有，state 仅驱动 UI） */
@@ -104,15 +120,19 @@ export function MessageInput({
   const [mentionIdx, setMentionIdx] = useState(0);
   /** 斜杠命令面板（2026-11-11：/ 开头且未断词时开启） */
   const [slashOpen, setSlashOpen] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  const taRef = useRef<TaRefLike>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingAt = useRef(0);
+
+  /** 底层原生 textarea（光标/选区操作直达；antd 封装下同样持有 selectionStart 等） */
+  const taEl = () => taRef.current?.resizableTextArea?.textArea ?? null;
+  const focusTa = () => taRef.current?.focus();
 
   // 编辑态：原文本转入输入框（离开编辑态不动草稿）
   useEffect(() => {
     if (editing && 'text' in editing.body) {
       onDraftChange(editing.body.text);
-      taRef.current?.focus();
+      focusTa();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing?.msgId]);
@@ -243,16 +263,17 @@ export function MessageInput({
   };
 
   const insertText = (insert: string) => {
-    const ta = taRef.current;
-    if (!ta) return;
-    const start = ta.selectionStart ?? draft.length;
-    const end = ta.selectionEnd ?? draft.length;
+    const ta = taEl();
+    const start = ta?.selectionStart ?? draft.length;
+    const end = ta?.selectionEnd ?? draft.length;
     const next = draft.slice(0, start) + insert + draft.slice(end);
     onDraftChange(next);
     if (insert.includes('@')) detectMention(next, start + insert.length); // 工具条插入同触发面板
     requestAnimationFrame(() => {
-      ta.selectionStart = ta.selectionEnd = start + insert.length;
-      ta.focus();
+      if (ta) {
+        ta.selectionStart = ta.selectionEnd = start + insert.length;
+        ta.focus();
+      }
     });
   };
 
@@ -264,7 +285,7 @@ export function MessageInput({
       const rest = v.slice(cmd[0].length);
       onDraftChange(rest);
       requestAnimationFrame(() => {
-        const ta = taRef.current;
+        const ta = taEl();
         if (ta) {
           ta.selectionStart = ta.selectionEnd = rest.length;
           ta.focus();
@@ -274,7 +295,7 @@ export function MessageInput({
     }
     onDraftChange(v);
     maybeTyping();
-    const pos = taRef.current?.selectionStart ?? v.length;
+    const pos = taEl()?.selectionStart ?? v.length;
     detectMention(v, pos);
     setSlashOpen(/^\/[a-z]*$/i.test(v));
   };
@@ -290,12 +311,12 @@ export function MessageInput({
     if (cmd === '/agent') onToggleAgentMode?.();
     onDraftChange('');
     setSlashOpen(false);
-    requestAnimationFrame(() => taRef.current?.focus());
+    requestAnimationFrame(() => focusTa());
   };
 
   const pickMention = (uid: string, name: string) => {
     if (mention) {
-      const pos = taRef.current?.selectionStart ?? draft.length;
+      const pos = taEl()?.selectionStart ?? draft.length;
       const before = draft.slice(0, pos);
       const after = draft.slice(pos);
       const replaced = `${before.slice(0, mention.start)}@${name} ${after}`;
@@ -303,7 +324,7 @@ export function MessageInput({
       onMentionPicked?.(uid, name);
       setMention(null);
       requestAnimationFrame(() => {
-        const ta = taRef.current;
+        const ta = taEl();
         if (ta) {
           const caret = mention.start + name.length + 2;
           ta.selectionStart = ta.selectionEnd = caret;
@@ -365,68 +386,140 @@ export function MessageInput({
     }
   };
 
+  /** 面板浮层公共内联样式（锚定输入区容器 absolute；原自研面板类退役） */
+  const panelStyle: React.CSSProperties = {
+    position: 'absolute',
+    bottom: '100%',
+    left: 12,
+    zIndex: 20,
+    minWidth: 220,
+    background: token.colorBgContainer,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: token.borderRadius,
+    boxShadow: token.boxShadowSecondary,
+    overflow: 'hidden',
+  };
+
   if (disabled) {
     return (
-      <div className="message-input">
-        <div className="message-input__muted">{disabledHint ?? '该会话仅发布者可发言'}</div>
+      <div style={{ flexShrink: 0, borderTop: `1px solid ${token.colorBorderSecondary}`, padding: '8px 12px' }}>
+        <Alert type="info" showIcon message={disabledHint ?? '该会话仅发布者可发言'} />
       </div>
     );
   }
 
   return (
-    <div className={`message-input${agentMode ? ' message-input--agent' : ''}`}>
+    <div
+      style={{
+        position: 'relative', // @提及/表情/斜杠面板 absolute 锚定基准（缺失则漂到窗口左上，2026-11-10 真机）
+        flexShrink: 0,
+        borderTop: `1px solid ${agentMode ? `color-mix(in srgb, ${token.colorPrimary} 45%, transparent)` : token.colorBorderSecondary}`,
+        padding: '8px 12px 12px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        background: agentMode ? `color-mix(in srgb, ${token.colorPrimary} 6%, transparent)` : undefined,
+      }}
+    >
       {/* 引用回复条 / 编辑条（互斥；编辑优先） */}
       {editing ? (
-        <div className="input-context-bar input-context-bar--edit">
-          <span className="input-context-bar__label">编辑消息</span>
-          <button type="button" className="input-context-bar__close" onClick={onCancelEdit} title="取消编辑 (Esc)">
+        <Flex
+          align="center"
+          gap={8}
+          style={{
+            padding: '4px 8px',
+            background: token.colorFillQuaternary,
+            borderLeft: `3px solid ${token.colorWarning}`,
+            borderRadius: 4,
+            fontSize: 12,
+          }}
+        >
+          <span style={{ color: token.colorWarning, fontWeight: 500, flexShrink: 0 }}>编辑消息</span>
+          <Button variant="text" size="small" title="取消编辑 (Esc)" style={{ padding: 2, height: 'auto', color: token.colorTextQuaternary }} onClick={onCancelEdit}>
             <X size={13} />
-          </button>
-        </div>
+          </Button>
+        </Flex>
       ) : replyTo ? (
-        <div className="input-context-bar">
-          <span className="input-context-bar__label">回复 {replyTo.senderName}</span>
-          <span className="input-context-bar__digest">
+        <Flex
+          align="center"
+          gap={8}
+          style={{
+            padding: '4px 8px',
+            background: token.colorFillQuaternary,
+            borderLeft: `3px solid ${token.colorPrimary}`,
+            borderRadius: 4,
+            fontSize: 12,
+          }}
+        >
+          <span style={{ color: token.colorPrimary, fontWeight: 500, flexShrink: 0 }}>回复 {replyTo.senderName}</span>
+          <span style={{ color: token.colorTextSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
             {replyTo.ext?.reply_digest ? '' : 'text' in replyTo.body ? replyTo.body.text.slice(0, 60) : ''}
           </span>
-          <button type="button" className="input-context-bar__close" onClick={onCancelReply} title="取消回复">
+          <Button variant="text" size="small" title="取消回复" style={{ padding: 2, height: 'auto', color: token.colorTextQuaternary }} onClick={onCancelReply}>
             <X size={13} />
-          </button>
-        </div>
+          </Button>
+        </Flex>
       ) : null}
 
-      <div className="message-input__tools">
+      <Flex gap={4} align="center">
         {onToggleAgentMode ? (
-          <button
-            className={`tool-btn${agentMode ? ' tool-btn--active' : ''}`}
-            title={agentMode ? 'Agent 模式已开启（点击关闭）' : 'Agent 模式：本条消息交给 AI 处理'}
-            type="button"
-            data-testid="agent-mode-btn"
-            onClick={() => onToggleAgentMode()}
-          >
-            <Bot size={17} />
-          </button>
+          <Tooltip title={agentMode ? 'Agent 模式已开启（点击关闭）' : 'Agent 模式：本条消息交给 AI 处理'}>
+            <Button
+              variant="text"
+              size="small"
+              data-testid="agent-mode-btn"
+              style={{
+                width: 28,
+                height: 28,
+                padding: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: agentMode ? token.colorPrimary : token.colorTextSecondary,
+                background: agentMode ? 'var(--bbw-primary-light)' : 'transparent',
+              }}
+              onClick={() => onToggleAgentMode()}
+            >
+              <Bot size={17} />
+            </Button>
+          </Tooltip>
         ) : null}
-        <button className="tool-btn" title="表情" type="button" onClick={() => setEmojiOpen((v) => !v)}>
-          <Smile size={17} />
-        </button>
-        <button className="tool-btn" title="提及 @（输入 @ 也触发）" type="button" onClick={() => insertText('@')}>
-          <AtSign size={17} />
-        </button>
-        <button
-          className="tool-btn"
-          title="发送文件/图片"
-          type="button"
-          data-testid="attach-btn"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <Paperclip size={17} />
-        </button>
+        <Tooltip title="表情">
+          <Button
+            variant="text"
+            size="small"
+            style={{ width: 28, height: 28, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
+            onClick={() => setEmojiOpen((v) => !v)}
+          >
+            <Smile size={17} />
+          </Button>
+        </Tooltip>
+        <Tooltip title="提及 @（输入 @ 也触发）">
+          <Button
+            variant="text"
+            size="small"
+            style={{ width: 28, height: 28, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
+            onClick={() => insertText('@')}
+          >
+            <AtSign size={17} />
+          </Button>
+        </Tooltip>
+        <Tooltip title="发送文件/图片">
+          <Button
+            variant="text"
+            size="small"
+            data-testid="attach-btn"
+            style={{ width: 28, height: 28, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Paperclip size={17} />
+          </Button>
+        </Tooltip>
         {/* 附件选择（D06）：选中后进 FileSendPreview 预览弹层；value 置空允许重选同一文件 */}
         <input
           ref={fileInputRef}
           type="file"
-          className="attach-input"
+          style={{ display: 'none' }}
           data-testid="attach-input"
           accept="*/*"
           onChange={(e) => {
@@ -435,66 +528,115 @@ export function MessageInput({
             if (f) onPickFile?.(f);
           }}
         />
-        <button className="tool-btn" title="语音（最长 60 秒）" type="button" data-testid="voice-btn" onClick={() => void startVoice()}>
-          <Mic size={17} />
-        </button>
+        <Tooltip title="语音（最长 60 秒）">
+          <Button
+            variant="text"
+            size="small"
+            data-testid="voice-btn"
+            style={{ width: 28, height: 28, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
+            onClick={() => void startVoice()}
+          >
+            <Mic size={17} />
+          </Button>
+        </Tooltip>
         {/* 机器人模式徽标（行末右上角；margin-left:auto 只推自己，操作按钮保持原位） */}
         {agentMode ? (
-          <button
-            type="button"
-            className="message-input__agent-badge"
-            onClick={() => onToggleAgentMode?.()}
-            title="机器人对话模式中，点击退出"
+          <Button
+            size="small"
             data-testid="agent-mode-badge"
+            title="机器人对话模式中，点击退出"
+            style={{
+              marginInlineStart: 'auto',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 11,
+              padding: '2px 8px',
+              height: 'auto',
+              borderRadius: 999,
+              color: token.colorPrimary,
+              background: `color-mix(in srgb, ${token.colorPrimary} 10%, transparent)`,
+              border: `1px solid color-mix(in srgb, ${token.colorPrimary} 35%, transparent)`,
+            }}
+            onClick={() => onToggleAgentMode?.()}
           >
             <Bot size={12} />
             机器人对话模式
-          </button>
+          </Button>
         ) : null}
-      </div>
+      </Flex>
 
       {/* 录音条（语音进行中替代输入提示；完成=上抛发送，取消/超短丢弃） */}
       {recording ? (
-        <div className="voice-bar" data-testid="voice-bar">
-          <span className="voice-bar__dot" />
-          <span className="voice-bar__time">
+        <Flex
+          align="center"
+          gap={8}
+          data-testid="voice-bar"
+          style={{
+            padding: '6px 10px',
+            background: token.colorFillQuaternary,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: token.borderRadius,
+            fontSize: 13,
+          }}
+        >
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: token.colorError }} />
+          <span style={{ flex: 1, fontVariantNumeric: 'tabular-nums', color: token.colorTextSecondary }}>
             录音中 {Math.floor(voiceSec / 60)}:{String(voiceSec % 60).padStart(2, '0')} / 1:00
           </span>
-          <button type="button" className="voice-bar__btn" title="取消（丢弃）" onClick={() => stopVoice(true)}>
-            <Trash2 size={14} />
-          </button>
-          <button
-            type="button"
-            className="voice-bar__btn voice-bar__btn--send"
+          <Button variant="text" size="small" title="取消（丢弃）" style={{ color: token.colorTextSecondary }} icon={<Trash2 size={14} />} onClick={() => stopVoice(true)} />
+          <Button
+            variant="primary"
+            size="small"
             title="完成并发送"
             data-testid="voice-send"
+            style={{ width: 24, height: 24, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            icon={<Square size={12} fill="currentColor" />}
             onClick={() => stopVoice(false)}
-          >
-            <Square size={12} fill="currentColor" />
-          </button>
-        </div>
+          />
+        </Flex>
       ) : null}
-      {voiceErr ? <div className="voice-bar__error">{voiceErr}</div> : null}
+      {voiceErr ? (
+        <Alert type="error" message={voiceErr} style={{ fontSize: 12 }} />
+      ) : null}
 
       {/* 分栏 emoji 选择器（INT-IM-25 完整版 + 0022 表情包）：插入/发送后不关面板，Smile 按钮/Esc 关闭 */}
       {emojiOpen ? (
-        <div className="emoji-panel">
+        <div
+          style={{
+            padding: 4,
+            background: token.colorBgContainer,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: token.borderRadius,
+          }}
+        >
           <EmojiPicker onPick={(e) => insertText(e)} onPickSticker={onPickSticker} />
         </div>
       ) : null}
 
       {mention && mentionList.length > 0 ? (
-        <div className="mention-panel">
+        <div style={panelStyle}>
           {mentionList.map((c, i) => (
             <button
               key={c.uid}
               type="button"
-              className={`mention-panel__item${i === mentionIdx ? ' mention-panel__item--active' : ''}`}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                padding: '6px 10px',
+                border: 'none',
+                background: i === mentionIdx ? token.colorFillTertiary : 'transparent',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
               onMouseEnter={() => setMentionIdx(i)}
               onClick={() => pickMention(c.uid, c.name)}
             >
-              <span className="mention-panel__name">{c.name}</span>
-              <span className="mention-panel__uid">{c.uid}</span>
+              <span style={{ color: token.colorText }}>{c.name}</span>
+              <span style={{ color: token.colorTextQuaternary, fontSize: 12 }}>{c.uid}</span>
             </button>
           ))}
         </div>
@@ -502,40 +644,55 @@ export function MessageInput({
 
       {/* 斜杠命令面板（2026-11-11：/ 提示；Enter/点击执行） */}
       {slashMatches.length > 0 ? (
-        <div className="mention-panel slash-panel" data-testid="slash-panel">
+        <div style={panelStyle} data-testid="slash-panel">
           {slashMatches.map((c) => (
             <button
               key={c.cmd}
               type="button"
-              className="mention-panel__item"
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                padding: '6px 10px',
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
               onClick={() => execSlash(c.cmd)}
             >
-              <span className="mention-panel__name">
+              <span style={{ color: token.colorText, display: 'inline-flex', alignItems: 'center' }}>
                 <Bot size={12} style={{ marginRight: 4, verticalAlign: -1 }} />
                 {c.cmd}
               </span>
-              <span className="mention-panel__uid">{agentMode ? '当前已在机器人模式，执行=退出' : c.desc}</span>
+              <span style={{ color: token.colorTextQuaternary, fontSize: 12 }}>
+                {agentMode ? '当前已在机器人模式，执行=退出' : c.desc}
+              </span>
             </button>
           ))}
         </div>
       ) : null}
 
-      <textarea
-        ref={taRef}
-        className="message-input__textarea"
-        rows={3}
+      <Input.TextArea
+        ref={taRef as React.Ref<InputRef>}
+        data-testid="chat-input-textarea"
+        autoSize={{ minRows: 3, maxRows: 10 }}
         placeholder={editing ? '编辑消息…（Esc 取消）' : `写入 ${convId} …`}
         value={draft}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
         {...imeCompositionProps}
       />
-      <div className="message-input__foot">
-        <span className="message-input__hint">{editing ? 'Enter 保存编辑，Esc 取消' : 'Enter 发送，Shift + Enter 换行'}</span>
+      <Flex justify="space-between" align="center" gap={8}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {editing ? 'Enter 保存编辑，Esc 取消' : 'Enter 发送，Shift + Enter 换行'}
+        </Text>
         <Button onClick={doSend} disabled={!draft.trim() || sending}>
           {editing ? '保存' : '发送'}
         </Button>
-      </div>
+      </Flex>
     </div>
   );
 }

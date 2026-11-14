@@ -1,18 +1,24 @@
 /**
- * 消息气泡族（D03 §3.2）：
- * - text：己方 primary 浅底 / 对方 gray-2，圆角 12 带 4 尾巴
+ * 消息气泡族（D03 §3.2；D26-O7 全量 antd 换装）：
+ * - text：己方 var(--bbw-bubble-self) / 对方 var(--bbw-bubble-peer)，圆角 12 带 4 尾巴
+ *   （壳体内联 + theme.useToken 取色；自研 msg-bubble 族样式退役）
+ * - 图片/表情灯箱 → antd Image preview（缩放/旋转/下载工具条免费获得；原图
+ *   票据仍按需懒加载——preview 打开才取 origin，失败回落缩略）
  * - 引用条：reply_to_seq + ext.reply_digest 快照，点击定位原消息（INT-IM-04）
- * - 表情回应条：ext.reactions 全量快照渲染，点击增删本人（INT-IM-23）
+ * - 表情回应条：ext.reactions 全量快照渲染，Tag 化，点击增删本人（INT-IM-23）
  * - 已编辑角标 / 撤回占位（store 已转 system 形态）/ merge_forward 卡片
  * - @提及高亮：mentions.range 内文本主色+底纹（INT-IM-24）
- * - 悬浮操作条（瘦身，INT-IM-25）：快捷 emoji + 回复 + ⋯（打开统一右键菜单；
- *   编辑/撤回/转发/收藏/多选移入菜单，显隐与菜单共用 msgActionsVisible）
+ * - 悬浮操作条（瘦身，INT-IM-25）：快捷 emoji + 回复 + ⋯（打开统一右键菜单）；
+ *   更多表情走 antd Popover；hover 显隐改 React hover 态（原 CSS :hover 退役）
  * - 右键/长按 500ms 打开统一菜单（system 仅复制、撤回占位无菜单——hasAnyMsgAction 判定）
  * - 文件卡片可拖出（draggable → dataTransfer 文件 id，拖到系统=下载票据触发，D06 承接）
- * - 本地态尾标：sending 灰钟 → sent ✓ → 对方已读 ✓✓（msg.receipt，04 篇 §4.2）；failed 红叹号（点击重试，INT-IM-01a）
+ * - 本地态尾标：sending 灰钟 → sent ✓ → 对方已读 ✓✓（msg.receipt，04 篇 §4.2）；
+ *   failed 红叹号（点击重试，INT-IM-01a）
+ * - 行级锚点保真：data-seq（ChatPage 定位闪烁 querySelector）与全部 data-testid 原样保留
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Flex, Image, Popover, Tag, Typography, theme } from 'antd';
 import { useAgentStore } from '../../agent/store/agent';
 import { getAgentBridge } from '../../agent/bridge';
 import { currentRoundItems, roundQuestionOf, stagesFromStream } from '../agent/embedded';
@@ -37,6 +43,7 @@ import {
   Video,
 } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
+import { Button } from '../../../shared/ui/Button';
 import { AgentProcessCard, agentStatsText, type AgentCardBody } from '../../../shared/components/AgentProcessCard';
 import { getErrorText } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
@@ -55,6 +62,8 @@ import type {
   MergeForwardBody,
   SystemBody,
 } from '../model/types';
+
+const { Text } = Typography;
 
 /** 快捷回应候选（与飞书同款常用集，选择器全集在 MsgActions） */
 export const QUICK_EMOJIS = ['👍', '❤️', '😂', '🎉', '🙏'] as const;
@@ -166,10 +175,11 @@ function StateTag({
   peerReadSeq?: number;
   onOpenReceipts?: (m: Message) => void;
 }) {
+  const { token } = theme.useToken();
   if (!message.localState) return null;
   if (message.localState === 'sending')
     return (
-      <span className="msg-state" title="发送中">
+      <span title="发送中" style={{ fontSize: 12, color: token.colorTextTertiary, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
         <Clock3 size={13} />
       </span>
     );
@@ -186,30 +196,34 @@ function StateTag({
     // 群聊（onOpenReceipts 存在）：尾标可点开已读/未读名单面板（API-IM-06）
     if (onOpenReceipts) {
       return (
-        <button
-          type="button"
-          className="msg-state msg-state--clickable"
+        <Button
+          variant="text"
+          size="small"
           title={title}
           data-testid="receipt-tag"
+          style={{ padding: 0, height: 'auto', fontSize: 12, color: token.colorTextTertiary }}
           onClick={(e) => {
             e.stopPropagation();
             onOpenReceipts(message);
           }}
         >
           {icon}
-        </button>
+        </Button>
       );
     }
     return (
-      <span className="msg-state" title={title}>
+      <span title={title} style={{ fontSize: 12, color: token.colorTextTertiary, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
         {icon}
       </span>
     );
   }
   return (
-    <span
-      className="msg-state msg-state--failed"
+    <Button
+      variant="text"
+      danger
+      size="small"
       title={getErrorText(3007)}
+      style={{ padding: 0, height: 'auto', fontSize: 12 }}
       onClick={(e) => {
         e.stopPropagation();
         onRetry(message.clientMsgId);
@@ -218,12 +232,13 @@ function StateTag({
       <AlertCircle size={14} />
       <RotateCcw size={12} />
       重试
-    </span>
+    </Button>
   );
 }
 
 /** @提及高亮渲染：mentions.range（INT-IM-24） */
 function TextWithMentions({ text, mentions }: { text: string; mentions?: Mention[] }) {
+  const { token } = theme.useToken();
   if (!mentions || mentions.length === 0) return <>{text}</>;
   const parts: Array<{ s: string; mention?: Mention }> = [];
   let cursor = 0;
@@ -240,7 +255,10 @@ function TextWithMentions({ text, mentions }: { text: string; mentions?: Mention
     <>
       {parts.map((p, i) =>
         p.mention ? (
-          <span key={i} className="msg-mention">
+          <span
+            key={i}
+            style={{ color: token.colorPrimary, background: 'var(--bbw-primary-light)', borderRadius: 3, padding: '0 2px' }}
+          >
             {p.s}
           </span>
         ) : (
@@ -253,75 +271,120 @@ function TextWithMentions({ text, mentions }: { text: string; mentions?: Mention
 
 /** 引用条：ext.reply_digest 快照（点击定位；源已撤回时 digest 为固定文案） */
 function ReplyQuote({ message, onLocate }: { message: Message; onLocate?: (seq: number) => void }) {
+  const { token } = theme.useToken();
   const d = message.ext?.reply_digest;
   if (!d) return null;
   return (
-    <div className="msg-quote" onClick={() => onLocate?.(d.seq)} role="button" tabIndex={0}>
-      <span className="msg-quote__sender">{d.sender_name || d.sender_id}</span>
-      <span className="msg-quote__digest">{d.digest}</span>
+    <div
+      onClick={() => onLocate?.(d.seq)}
+      role="button"
+      tabIndex={0}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1,
+        background: 'var(--bbw-quote-bg)',
+        borderLeft: `3px solid ${token.colorPrimary}`,
+        borderRadius: 4,
+        padding: '4px 8px',
+        marginBottom: 4,
+        cursor: 'pointer',
+        maxWidth: 360,
+      }}
+    >
+      <Text style={{ fontSize: 12, color: token.colorPrimary, fontWeight: 500 }}>{d.sender_name || d.sender_id}</Text>
+      <span
+        style={{
+          fontSize: 12,
+          color: token.colorTextSecondary,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {d.digest}
+      </span>
     </div>
   );
 }
 
-/** 表情回应条（INT-IM-23：不占 seq/不计未读；点击切换本人增删） */
+/** 表情回应条（INT-IM-23：不占 seq/不计未读；Tag 化，点击切换本人增删） */
 function ReactionBar({ message, myUid, onReact }: { message: Message; myUid: string; onReact?: (emoji: string) => void }) {
+  const { token } = theme.useToken();
   const reactions = message.ext?.reactions;
   if (!reactions || Object.keys(reactions).length === 0) return null;
   return (
-    <div className="msg-reactions">
-      {Object.entries(reactions).map(([emoji, uids]) => (
-        <button
-          key={emoji}
-          className={`msg-reactions__item${uids.includes(myUid) ? ' msg-reactions__item--mine' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onReact?.(emoji);
-          }}
-          title={uids.join('、')}
-          type="button"
-        >
-          <span>{emoji}</span>
-          {uids.length > 1 ? <span className="msg-reactions__count">{uids.length}</span> : null}
-        </button>
-      ))}
-    </div>
+    <Flex gap={4} wrap style={{ marginTop: 4 }}>
+      {Object.entries(reactions).map(([emoji, uids]) => {
+        const mine = uids.includes(myUid);
+        return (
+          <Tag
+            key={emoji}
+            title={uids.join('、')}
+            onClick={(e) => {
+              e.stopPropagation();
+              onReact?.(emoji);
+            }}
+            style={{
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              marginInlineEnd: 0,
+              padding: '1px 7px',
+              borderRadius: 10,
+              fontSize: 13,
+              lineHeight: 1.5,
+              userSelect: 'none',
+              ...(mine
+                ? { color: token.colorPrimary, background: 'var(--bbw-primary-light)', borderColor: token.colorPrimary }
+                : { color: token.colorText, background: token.colorBgContainer, borderColor: token.colorBorderSecondary }),
+            }}
+          >
+            <span>{emoji}</span>
+            {uids.length > 1 ? <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{uids.length}</span> : null}
+          </Tag>
+        );
+      })}
+    </Flex>
   );
 }
 
 /** 合并转发卡片（PIM-10/PIM-11，D03 §3.2）：标题+count+前 3 条 digest 预览，点击 → PIM-11 抽屉 */
 function MergeForwardCard({ message, onOpen }: { message: Message; onOpen?: (m: Message) => void }) {
+  const { token } = theme.useToken();
   const b = 'items' in message.body ? (message.body as MergeForwardBody) : {};
   const items = b.items ?? [];
   const preview = items.slice(0, 3);
   return (
     <div
-      className="msg-merge"
       data-testid="merge-forward-card"
       role="button"
       tabIndex={0}
       title="点击查看合并转发详情"
+      style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 180, cursor: 'pointer' }}
       onClick={(e) => {
         e.stopPropagation();
         onOpen?.(message);
       }}
       onKeyDown={(e) => e.key === 'Enter' && onOpen?.(message)}
     >
-      <div className="msg-merge__title">
+      <Flex align="center" gap={5} style={{ fontWeight: 500, fontSize: 13 }}>
         <ListOrdered size={14} />
         {b.title ?? '聊天记录'} · {b.count ?? items.length} 条消息
-      </div>
+      </Flex>
       {preview.map((it, i) => (
-        <div className="msg-merge__item" key={i}>
-          <span className="msg-merge__sender">{it.sender_name || it.sender_id}</span>
-          <span className="msg-merge__digest">
+        <Flex key={i} align="center" gap={6} style={{ minWidth: 0 }}>
+          <span style={{ fontSize: 12, color: token.colorTextSecondary, flexShrink: 0 }}>{it.sender_name || it.sender_id}</span>
+          <Flex align="center" gap={3} style={{ minWidth: 0, fontSize: 13, overflow: 'hidden' }}>
             {mergeTypeIcon(it.type)}
-            {it.digest}
-          </span>
-        </div>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.digest}</span>
+          </Flex>
+        </Flex>
       ))}
-      <div className="msg-merge__hint">
+      <Text type="secondary" style={{ fontSize: 12 }}>
         {items.length > 3 ? `共 ${items.length} 条，` : ''}点击查看详情
-      </div>
+      </Text>
     </div>
   );
 }
@@ -339,6 +402,7 @@ function onFileDragOut(fileId: string): void {
 
 /** 文件卡片（D06 阶段一真实化）：名/大小人性化(B/KB/MB)/ext 图标 + ⤓ 票据下载 + 拖出（INT-IM-25） */
 function FileCard({ body }: { body: FileMessageBody }) {
+  const { token } = theme.useToken();
   const [downloading, setDownloading] = useState(false);
   const doDownload = () => {
     if (downloading) return;
@@ -353,10 +417,10 @@ function FileCard({ body }: { body: FileMessageBody }) {
   };
   return (
     <div
-      className="file-card file-card--draggable"
       data-testid="file-card"
       draggable
       title="点击 ⤓ 下载；可拖出到桌面/文件夹（拖出=下载）"
+      style={{ display: 'flex', gap: 12, alignItems: 'center', minWidth: 200, padding: '4px 8px', cursor: 'grab' }}
       onDragStart={(e) => {
         // 拖出（INT-IM-25）：dataTransfer 携带文件标识（自描述 JSON + 纯文本名兜底）
         e.dataTransfer.effectAllowed = 'copy';
@@ -368,30 +432,44 @@ function FileCard({ body }: { body: FileMessageBody }) {
         onFileDragOut(body.file_id); // 下载承接占位（见上）
       }}
     >
-      <div className="file-card__icon">
+      <Flex
+        align="center"
+        justify="center"
+        style={{
+          width: 36,
+          height: 36,
+          flexShrink: 0,
+          borderRadius: token.borderRadius,
+          background: 'var(--bbw-primary-light)',
+          color: token.colorPrimary,
+        }}
+      >
         <FileText size={20} />
-      </div>
-      <div className="file-card__meta">
-        <div className="file-card__name" title={body.name}>
+      </Flex>
+      <div style={{ minWidth: 0 }}>
+        <div
+          title={body.name}
+          style={{ fontSize: 13, color: token.colorText, maxWidth: 220, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+        >
           {body.name ?? '未命名文件'}
         </div>
-        <div className="file-card__hint">
+        <Text type="secondary" style={{ fontSize: 12 }}>
           {body.size !== undefined ? formatBytes(body.size) : '—'}
           {body.ext ? ` · ${body.ext.toUpperCase()}` : ''}
-        </div>
+        </Text>
       </div>
-      <button
-        type="button"
-        className="file-card__download"
+      <Button
+        variant="text"
+        size="small"
         data-testid="file-card-download"
         title="下载"
+        style={{ marginInlineStart: 'auto', color: token.colorTextSecondary }}
+        icon={<ArrowDownToLine size={15} />}
         onClick={(e) => {
           e.stopPropagation();
           doDownload();
         }}
-      >
-        <ArrowDownToLine size={15} />
-      </button>
+      />
     </div>
   );
 }
@@ -401,6 +479,7 @@ function FileCard({ body }: { body: FileMessageBody }) {
  * 原生控件内联播放（preload=metadata）；时长角标；失败红态可重试。
  */
 function VideoCard({ body }: { body: FileMessageBody }) {
+  const { token } = theme.useToken();
   const [src, setSrc] = useState<string | null>(null);
   const [poster, setPoster] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -451,40 +530,61 @@ function VideoCard({ body }: { body: FileMessageBody }) {
 
   if (failed) {
     return (
-      <div className="msg-image msg-image--error" data-testid="video-error">
+      <Flex
+        align="center"
+        gap={6}
+        data-testid="video-error"
+        style={{ padding: '8px 12px', fontSize: 12, color: token.colorError, background: token.colorFillQuaternary, borderRadius: 12 }}
+      >
         <Video size={16} />
         <span>视频加载失败</span>
-      </div>
+      </Flex>
     );
   }
   return (
-    <div className="msg-video-card" data-testid="msg-video-card">
+    <div data-testid="msg-video-card" style={{ position: 'relative', display: 'inline-block', maxWidth: 280 }}>
       {src ? (
         <video
-          className="msg-video"
           src={src}
           poster={poster ?? undefined}
           controls
           preload="metadata"
+          style={{ display: 'block', width: 280, maxHeight: 320, borderRadius: 12, background: '#000' }}
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
-        <span className="msg-video msg-video--loading" />
+        <span style={{ display: 'block', width: 240, height: 160, background: token.colorBgLayout }} />
       )}
-      {body.duration_ms ? <span className="msg-video__dur">{Math.round(body.duration_ms / 1000)}s</span> : null}
+      {body.duration_ms ? (
+        <span
+          style={{
+            position: 'absolute',
+            right: 8,
+            bottom: 28,
+            padding: '1px 6px',
+            borderRadius: 4,
+            background: 'rgba(0, 0, 0, 0.55)',
+            color: '#fff',
+            fontSize: 12,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {Math.round(body.duration_ms / 1000)}s
+        </span>
+      ) : null}
     </div>
   );
 }
 
 /**
  * 表情包气泡（0022 sticker）：票据 → blob → objectURL 大图渲染（≤120px 等比，
- * 无气泡底，点击灯箱复用图片口径）；失败占位不阻塞布局。
+ * 无气泡底，点击 antd Image preview 放大）；失败占位不阻塞布局。
  */
 function StickerCard({ body }: { body: FileMessageBody }) {
+  const { token } = theme.useToken();
   const [objUrl, setObjUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const urlRef = useRef<string | null>(null);
-  const [zoom, setZoom] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -508,46 +608,33 @@ function StickerCard({ body }: { body: FileMessageBody }) {
     };
   }, [body.file_id]);
 
-  useEffect(() => {
-    if (!zoom) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setZoom(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [zoom]);
-
   if (failed) {
     return (
-      <div className="msg-image msg-image--error" data-testid="sticker-error">
+      <Flex
+        align="center"
+        gap={6}
+        data-testid="sticker-error"
+        style={{ padding: '8px 12px', fontSize: 12, color: token.colorError, background: token.colorFillQuaternary, borderRadius: 12 }}
+      >
         <ImageIcon size={16} />
         <span>表情加载失败</span>
-      </div>
+      </Flex>
     );
   }
-  return (
-    <>
-      {objUrl ? (
-        <img
-          className="msg-sticker"
-          data-testid="msg-sticker"
-          src={objUrl}
-          alt="表情"
-          title={body.name}
-          onClick={(e) => {
-            e.stopPropagation();
-            setZoom(true);
-          }}
-        />
-      ) : (
-        <span className="msg-sticker msg-sticker--loading" />
-      )}
-      {zoom ? (
-        <div className="image-lightbox" onClick={() => setZoom(false)}>
-          <img className="image-lightbox__img" src={objUrl ?? ''} alt="表情" />
-        </div>
-      ) : null}
-    </>
+  return objUrl ? (
+    // 包裹层拦冒泡：预览点击不透传到消息行（多选行点击切换）
+    <span onClick={(e) => e.stopPropagation()} style={{ lineHeight: 0 }}>
+      <Image
+        data-testid="msg-sticker"
+        src={objUrl}
+        alt="表情"
+        title={body.name}
+        style={{ maxWidth: 120, maxHeight: 120, borderRadius: 8, objectFit: 'contain' }}
+        preview={{ src: objUrl, rootClassName: 'bbw-image-lightbox' }}
+      />
+    </span>
+  ) : (
+    <span style={{ display: 'block', width: 96, height: 96, background: token.colorBgLayout }} />
   );
 }
 
@@ -557,6 +644,7 @@ function StickerCard({ body }: { body: FileMessageBody }) {
  * 加载失败红态可重试（票据一次性，同图片口径）。
  */
 function AudioClipCard({ body, mine }: { body: FileMessageBody; mine: boolean }) {
+  const { token } = theme.useToken();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
   const [objUrl, setObjUrl] = useState<string | null>(null);
@@ -599,13 +687,18 @@ function AudioClipCard({ body, mine }: { body: FileMessageBody; mine: boolean })
 
   if (failed) {
     return (
-      <div className="msg-image msg-image--error" data-testid="voice-error">
+      <Flex
+        align="center"
+        gap={6}
+        data-testid="voice-error"
+        style={{ padding: '8px 12px', fontSize: 12, color: token.colorError, background: token.colorFillQuaternary, borderRadius: 12 }}
+      >
         <Mic size={16} />
         <span>语音加载失败</span>
-        <button type="button" className="msg-image__retry" onClick={() => void load(body.file_id)}>
+        <Button variant="text" danger size="small" style={{ padding: '0 4px', height: 'auto', fontSize: 12 }} onClick={() => void load(body.file_id)}>
           重试
-        </button>
-      </div>
+        </Button>
+      </Flex>
     );
   }
 
@@ -620,9 +713,22 @@ function AudioClipCard({ body, mine }: { body: FileMessageBody; mine: boolean })
   };
 
   const label = body.duration_ms ? `${Math.round(body.duration_ms / 1000)}″` : durSec ? `${durSec}″` : '…';
+  const barHeights = [8, 14, 20, 14, 8];
 
   return (
-    <span className={`voice-msg${mine ? ' voice-msg--mine' : ''}`} data-testid="voice-msg">
+    <span
+      data-testid="voice-msg"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        maxWidth: 260,
+        minWidth: 150,
+        padding: '8px 12px',
+        borderRadius: 12,
+        background: mine ? 'var(--bbw-bubble-self)' : 'var(--bbw-bubble-peer)',
+      }}
+    >
       {objUrl ? (
         <audio
           ref={audioRef}
@@ -640,25 +746,42 @@ function AudioClipCard({ body, mine }: { body: FileMessageBody; mine: boolean })
           }}
         />
       ) : null}
-      <button type="button" className="voice-msg__play" data-testid="voice-play" onClick={toggle} disabled={!objUrl}>
-        {playing ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
-      </button>
-      <span className="voice-msg__wave" aria-hidden>
-        {[0, 1, 2, 3, 4].map((i) => (
-          <i key={i} className={playing && progress * 5 > i ? ' voice-msg__bar--lit' : undefined} />
+      <Button
+        variant="primary"
+        size="small"
+        data-testid="voice-play"
+        style={{ flex: 'none', width: 24, height: 24, minWidth: 24, padding: 0, borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+        icon={playing ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+        onClick={toggle}
+        disabled={!objUrl}
+      />
+      {/* 伪波纹（内联进度条）：lit 段随播放进度点亮 */}
+      <span aria-hidden style={{ display: 'inline-flex', alignItems: 'center', gap: 2, flex: 1 }}>
+        {barHeights.map((h, i) => (
+          <i
+            key={i}
+            style={{
+              width: 2,
+              height: h,
+              borderRadius: 1,
+              display: 'inline-block',
+              background: playing && progress * 5 > i ? token.colorPrimary : token.colorTextQuaternary,
+            }}
+          />
         ))}
       </span>
-      <span className="voice-msg__dur">{label}</span>
+      <span style={{ fontSize: 12, color: token.colorTextSecondary, fontVariantNumeric: 'tabular-nums' }}>{label}</span>
     </span>
   );
 }
 
 /**
  * 图片气泡（D06+D25）：气泡取 240 缩略变体票据（服务端惰性生成、无变体自动回退
- * 原图——首屏先糊后清）；点击灯箱懒加载原图（origin 票据按需取，未加载完回落缩略）；
- * 4014/加载失败红态可重试。
+ * 原图——首屏先糊后清）；点击 antd Image preview 灯箱（缩放/旋转/下载工具条），
+ * preview 打开才懒取 origin 票据（失败静默回落缩略）；4014/加载失败红态可重试。
  */
 function ImageCard({ body }: { body: FileMessageBody }) {
+  const { token } = theme.useToken();
   const [objUrl, setObjUrl] = useState<string | null>(null);
   const [originUrl, setOriginUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -692,7 +815,7 @@ function ImageCard({ body }: { body: FileMessageBody }) {
     };
   }, [load, body.file_id]);
 
-  // 灯箱原图懒加载（zoom 时才取 origin 票据；失败静默用缩略）
+  // 灯箱原图懒加载（preview 打开才取 origin 票据；失败静默用缩略）
   useEffect(() => {
     if (!zoom || originUrl) return;
     let alive = true;
@@ -715,60 +838,67 @@ function ImageCard({ body }: { body: FileMessageBody }) {
     };
   }, [zoom, originUrl, body.file_id]);
 
-  // 灯箱 Esc 关闭
-  useEffect(() => {
-    if (!zoom) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setZoom(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [zoom]);
-
   if (failed) {
     return (
-      <div className="msg-image msg-image--error" data-testid="msg-image-error">
+      <Flex
+        align="center"
+        gap={6}
+        data-testid="msg-image-error"
+        style={{ padding: '8px 12px', fontSize: 12, color: token.colorError, background: token.colorFillQuaternary, borderRadius: 12 }}
+      >
         <ImageIcon size={16} />
         <span>图片加载失败（票据可能已失效）</span>
-        <button type="button" className="msg-image__retry" onClick={() => void load(body.file_id)}>
+        <Button variant="text" danger size="small" style={{ padding: '0 4px', height: 'auto', fontSize: 12 }} onClick={() => void load(body.file_id)}>
           重试
-        </button>
-      </div>
+        </Button>
+      </Flex>
     );
   }
   if (!objUrl) {
     return (
-      <div className="msg-image msg-image--loading" data-testid="msg-image-loading" title={body.name}>
-        <span className="skeleton-block" />
-      </div>
+      <div data-testid="msg-image-loading" title={body.name} style={{ width: 180, height: 130, background: token.colorBgLayout, borderRadius: 12 }} />
     );
   }
   return (
     <>
-      <img
-        className="msg-image"
-        data-testid="msg-image"
-        src={objUrl}
-        alt={body.name ?? '图片'}
-        title={body.name}
-        /* 预留宽高（2026-11-11）：blob 加载前浏览器即可按比例占位——首屏跳底后
-         * 图片加载不再撑高把视口顶离最新消息（.msg-image max-width/height + object-fit 截幅） */
-        width={body.width || undefined}
-        height={body.height || undefined}
-        onClick={(e) => {
-          e.stopPropagation();
-          setZoom(true);
-        }}
-      />
+      {/* 包裹层拦冒泡：预览点击不透传到消息行（多选行点击切换） */}
+      <span onClick={(e) => e.stopPropagation()} style={{ lineHeight: 0 }}>
+        <Image
+          data-testid="msg-image"
+          src={objUrl}
+          alt={body.name ?? '图片'}
+          title={body.name}
+          /* 预留宽高（2026-11-11）：blob 加载前浏览器即可按比例占位——首屏跳底后
+           * 图片加载不再撑高把视口顶离最新消息（maxWidth/maxHeight + object-fit 截幅） */
+          width={body.width || undefined}
+          height={body.height || undefined}
+          style={{ maxWidth: 240, maxHeight: 320, objectFit: 'contain', borderRadius: 12 }}
+          preview={{
+            visible: zoom,
+            onVisibleChange: (v) => setZoom(v),
+            src: originUrl ?? objUrl,
+            rootClassName: 'bbw-image-lightbox',
+          }}
+        />
+      </span>
       {/* caption 随图说明（04 §1.2 第 5 类；渲染于缩略图下方） */}
-      {body.caption ? <span className="msg-image__caption">{body.caption}</span> : null}
-      {zoom ? (
-        <div className="image-lightbox" data-testid="image-lightbox" onClick={() => setZoom(false)}>
-          <img className="image-lightbox__img" src={originUrl ?? objUrl} alt={body.name ?? '图片'} />
-          <div className="image-lightbox__caption">
-            {body.name} {body.width && body.height ? `${body.width}×${body.height}` : ''}
-          </div>
-        </div>
+      {body.caption ? (
+        <span
+          style={{
+            display: 'block',
+            maxWidth: 240,
+            marginTop: 4,
+            padding: '6px 10px',
+            borderRadius: 12,
+            background: 'var(--bbw-gray-2)',
+            fontSize: 13,
+            lineHeight: 1.5,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          {body.caption}
+        </span>
       ) : null}
     </>
   );
@@ -789,15 +919,11 @@ export function MessageBubble({
   onOpenMsgMenu,
   onOpenReceipts,
 }: MessageBubbleProps) {
-  /** 完整表情选择器 popover（INT-IM-25：悬浮条「更多表情」真选择器，替换旧固定🎉） */
+  const { token } = theme.useToken();
+  /** 完整表情选择器 popover（INT-IM-25：悬浮条「更多表情」真选择器，antd Popover 承载） */
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
-  // popover 打开时点外部关闭（capture 阶段，按钮自身已 stopPropagation 不误触）
-  useEffect(() => {
-    if (!emojiPickerOpen) return;
-    const close = () => setEmojiPickerOpen(false);
-    document.addEventListener('click', close, true);
-    return () => document.removeEventListener('click', close, true);
-  }, [emojiPickerOpen]);
+  /** 悬浮操作条显隐（原 CSS :hover 退役）：行 hover 或 popover 打开时可见 */
+  const [hovered, setHovered] = useState(false);
   // 右键/长按可开菜单判定（INT-IM-25 与悬浮条/菜单同源 msgActionsVisible）：
   // 撤回占位（status=2）无任何项不开；system 仅「复制」可开
   const canOpenMenu = !!onOpenMsgMenu && hasAnyMsgAction(msgActionsVisible(message, myUid));
@@ -822,7 +948,7 @@ export function MessageBubble({
       if (body.kind === 'apply.submitted' && body.apply_id && onApplyHandled) {
         // 审批卡（PIM-06）：owner/admin 可见按钮，member 只读
         return (
-          <div className="msg-system msg-system--card" {...menuTriggerProps}>
+          <div style={{ alignSelf: 'center' }} {...menuTriggerProps}>
             <ApplyCard
               body={body}
               submittedAt={message.ts}
@@ -834,7 +960,11 @@ export function MessageBubble({
         );
       }
       return (
-        <div className="msg-system" data-testid="msg-system" {...menuTriggerProps}>
+        <div
+          data-testid="msg-system"
+          style={{ alignSelf: 'center', color: 'var(--bbw-system-msg)', fontSize: 12, padding: '8px 0' }}
+          {...menuTriggerProps}
+        >
           {systemMessageText(body)}
         </div>
       );
@@ -842,7 +972,11 @@ export function MessageBubble({
     // 撤回占位等本地生成的 system 形态（body={text}）——status=2 时 canOpenMenu 已为 false
     const text = 'text' in message.body ? message.body.text : '群通知';
     return (
-      <div className="msg-system" data-testid="msg-system" {...menuTriggerProps}>
+      <div
+        data-testid="msg-system"
+        style={{ alignSelf: 'center', color: 'var(--bbw-system-msg)', fontSize: 12, padding: '8px 0' }}
+        {...menuTriggerProps}
+      >
         {text}
       </div>
     );
@@ -851,7 +985,7 @@ export function MessageBubble({
   // 与实时 msg.recall 推送同款占位（实时路径由 store 转 system 形态，此处兜底）；无菜单
   if (message.status === 2) {
     return (
-      <div className="msg-system">
+      <div style={{ alignSelf: 'center', color: 'var(--bbw-system-msg)', fontSize: 12, padding: '8px 0' }}>
         {mine ? '你撤回了一条消息' : `${message.senderName} 撤回了一条消息`}
       </div>
     );
@@ -884,59 +1018,115 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
 /** 回应切换：add/remove 由调用方按 ext.reactions 现态判定（全量快照回收保证一致） */
   const doReact = (emoji: string) => actions?.onReact(message, emoji);
 
-  // 多选模式（INT-IM-14）：整行可点切换勾选；气泡内容经 CSS pointer-events:none 收敛交互
+  // 多选模式（INT-IM-14）：整行可点切换勾选；气泡内容经 pointerEvents:none 收敛交互
   const selecting = multiSelect?.active === true;
   const selected = multiSelect?.selected === true;
   const doToggle = () => onSelectToggle?.(message);
 
+  /** 气泡壳内联样式（己方/对方灰阶气泡；卡片型同底、内边距收紧） */
+  const bubbleStyle = (card: boolean): React.CSSProperties => ({
+    display: 'inline-block',
+    padding: card ? 4 : '8px 12px',
+    borderRadius: 12,
+    background: mine ? 'var(--bbw-bubble-self)' : 'var(--bbw-bubble-peer)',
+    ...(mine ? { borderTopRightRadius: 4 } : { borderTopLeftRadius: 4 }),
+  });
+
   return (
     <div
-      className={`msg-row${mine ? ' msg-row--mine' : ''}${selecting ? ' msg-row--selecting' : ''}${selected ? ' msg-row--selected' : ''}`}
       data-seq={message.seq}
       data-testid="msg-row"
+      style={{
+        display: 'flex',
+        gap: 8,
+        maxWidth: '86%',
+        ...(mine ? { alignSelf: 'flex-end', flexDirection: 'row-reverse' } : undefined),
+        ...(selecting
+          ? {
+              cursor: 'pointer',
+              borderRadius: 8,
+              background: selected ? 'var(--bbw-primary-light)' : hovered ? token.colorFillQuaternary : undefined,
+            }
+          : undefined),
+      }}
       onClick={selecting ? doToggle : undefined}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       {...menuTriggerProps}
     >
-      {/* 多选复选框浮层（system/撤回占位已在上方早退，不参与多选） */}
+      {/* 多选复选框浮层（system/撤回占位已在上方早退，不参与多选；
+          mine 行 row-reverse 下 order 10 保持视觉左侧） */}
       {selecting ? (
-        <button
-          type="button"
-          className={`msg-check${selected ? ' msg-check--on' : ''}`}
+        <Button
+          variant="text"
+          size="small"
           data-testid="msg-check"
           aria-pressed={selected}
           title={selected ? '取消选择' : '选择'}
+          style={{
+            flexShrink: 0,
+            alignSelf: 'flex-start',
+            marginTop: 7,
+            width: 18,
+            height: 18,
+            padding: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 5,
+            border: `1.5px solid ${selected ? token.colorPrimary : token.colorTextQuaternary}`,
+            background: selected ? token.colorPrimary : token.colorBgContainer,
+            color: '#fff',
+            ...(mine ? { order: 10 } : undefined),
+          }}
           onClick={(e) => {
             e.stopPropagation();
             doToggle();
           }}
         >
           {selected ? <Check size={12} /> : null}
-        </button>
+        </Button>
       ) : null}
       <Avatar name={message.senderName} size={32} />
-      <div className="msg-row__body">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         {/* agent_card 恒左对齐（2026-11-11）：本人发起的卡不显示发送者名（回答主体是
          * Agent，卡头已标识）；他人卡保留名字（群聊归属有意义） */}
         {mine || (message.type === 'agent_card' && message.senderId === myUid) ? null : (
-          <span className="msg-row__sender">{message.senderName}</span>
+          <Text style={{ fontSize: 12, color: token.colorTextTertiary, textAlign: mine ? 'right' : undefined }}>
+            {message.senderName}
+          </Text>
         )}
-        <div className="msg-row__bubble-wrap">
+        <div
+          style={{
+            position: 'relative',
+            display: 'inline-flex',
+            flexDirection: 'column',
+            maxWidth: '100%',
+            ...(selecting ? { pointerEvents: 'none' } : undefined),
+          }}
+        >
           {isText ? (
-            <span className={`bubble ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+            <span style={{ ...bubbleStyle(false), fontSize: token.fontSize, color: token.colorText, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>
               <ReplyQuote message={message} onLocate={actions?.onLocate} />
-              <TextWithMentions text={text} mentions={message.mentions} />
-              {message.status === 3 ? <span className="msg-edited-tag">已编辑</span> : null}
+              <Text>
+                <TextWithMentions text={text} mentions={message.mentions} />
+              </Text>
+              {message.status === 3 ? (
+                <Text style={{ fontSize: 10, color: token.colorTextQuaternary, marginInlineStart: 6 }}>
+                  已编辑
+                </Text>
+              ) : null}
             </span>
           ) : isMerge ? (
-            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+            <span style={bubbleStyle(true)}>
               <MergeForwardCard message={message} onOpen={actions?.onOpenMergeDetail} />
             </span>
           ) : isImage && fileBody ? (
-            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+            <span style={bubbleStyle(true)}>
               <ImageCard body={fileBody} />
             </span>
           ) : isFile && fileBody ? (
-            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+            <span style={bubbleStyle(true)}>
               <FileCard body={fileBody} />
             </span>
           ) : isAudio && audioBody ? (
@@ -946,87 +1136,133 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
           ) : isVideo && videoBody ? (
             <VideoCard body={videoBody} />
           ) : message.type === 'agent_card' && isAgentCardBody(message.body) ? (
-            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
+            <span style={bubbleStyle(true)}>
               <AgentCardMsg body={message.body as AgentCardBody} />
             </span>
           ) : (
-            <span className={`bubble bubble--card ${mine ? 'bubble--mine' : 'bubble--peer'}`}>
-              <div className="file-card">
-                <div className="file-card__icon">
-                  <FileText size={20} />
-                </div>
-                <div className="file-card__meta">
-                  <div className="file-card__name">{'name' in message.body && message.body.name ? message.body.name : digestOf(message)}</div>
-                  <div className="file-card__hint">附件 · 查看器后续接入（D06）</div>
-                </div>
-              </div>
+            <span style={bubbleStyle(true)}>
+              <FileCardFallback name={'name' in message.body && message.body.name ? message.body.name : digestOf(message)} />
             </span>
           )}
 
           {/* 悬浮操作条（瘦身，INT-IM-25）：快捷 emoji + 回复 + ⋯（开统一菜单；
               编辑/撤回/转发/收藏/多选移入菜单，减少重复入口——快捷表情区无菜单语义，保留原样） */}
-          {actions ? (
-            <div className="msg-actions">
+          {actions && !selecting && (hovered || emojiPickerOpen) ? (
+            <Flex
+              align="center"
+              gap={2}
+              style={{
+                position: 'absolute',
+                top: -22,
+                right: 4,
+                padding: '2px 4px',
+                background: token.colorBgContainer,
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: 8,
+                boxShadow: token.boxShadowSecondary,
+                zIndex: 5,
+              }}
+            >
               {QUICK_EMOJIS.slice(0, 3).map((e) => (
-                <button
+                <Button
                   key={e}
-                  type="button"
-                  className="msg-actions__emoji"
+                  variant="text"
+                  size="small"
+                  style={{ fontSize: 14, padding: '2px 3px', height: 'auto', lineHeight: 1 }}
                   onClick={(ev) => {
                     ev.stopPropagation();
                     doReact(e);
                   }}
                 >
                   {e}
-                </button>
+                </Button>
               ))}
-              <button
-                type="button"
-                className="msg-actions__btn"
-                title="更多表情"
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  setEmojiPickerOpen((v) => !v);
-                }}
-              >
-                <SmilePlus size={14} />
-              </button>
-              {emojiPickerOpen ? (
-                <div className="msg-emoji-popover">
+              <Popover
+                open={emojiPickerOpen}
+                onOpenChange={setEmojiPickerOpen}
+                trigger="click"
+                placement="topRight"
+                content={
                   <EmojiPicker
                     onPick={(e) => {
                       doReact(e);
                       setEmojiPickerOpen(false);
                     }}
                   />
-                </div>
-              ) : null}
-              <button type="button" className="msg-actions__btn" title="回复" onClick={() => actions.onReply(message)}>
+                }
+              >
+                <Button
+                  variant="text"
+                  size="small"
+                  title="更多表情"
+                  style={{ padding: 2, height: 'auto' }}
+                  icon={<SmilePlus size={14} />}
+                  onClick={(ev) => ev.stopPropagation()}
+                />
+              </Popover>
+              <Button
+                variant="text"
+                size="small"
+                title="回复"
+                style={{ fontSize: 12, color: token.colorTextSecondary }}
+                onClick={() => actions.onReply(message)}
+              >
                 回复
-              </button>
+              </Button>
               {/* ⋯ 打开统一右键菜单（锚定按钮左下角；菜单内动作复用同一套 handlers） */}
               {onOpenMsgMenu ? (
-                <button
-                  type="button"
-                  className="msg-actions__btn"
+                <Button
+                  variant="text"
+                  size="small"
                   data-testid="msg-more-btn"
                   title="更多操作（右键消息同款菜单）"
+                  style={{ padding: 2, height: 'auto' }}
+                  icon={<MoreHorizontal size={14} />}
                   onClick={(ev) => {
                     ev.stopPropagation();
                     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
                     onOpenMsgMenu(message, { x: r.left, y: r.bottom + 4 });
                   }}
-                >
-                  <MoreHorizontal size={14} />
-                </button>
+                />
               ) : null}
-            </div>
+            </Flex>
           ) : null}
         </div>
         <ReactionBar message={message} myUid={myUid} onReact={(e) => doReact(e)} />
         {mine ? <StateTag message={message} onRetry={onRetry} peerReadSeq={peerReadSeq} onOpenReceipts={onOpenReceipts} /> : null}
       </div>
     </div>
+  );
+}
+
+/** 兜底附件卡（未知消息类型）：名 + 提示（D06 查看器接入前） */
+function FileCardFallback({ name }: { name: string }) {
+  const { token } = theme.useToken();
+  return (
+    <Flex align="center" gap={12} style={{ minWidth: 200, padding: '4px 8px' }}>
+      <Flex
+        align="center"
+        justify="center"
+        style={{
+          width: 36,
+          height: 36,
+          flexShrink: 0,
+          borderRadius: token.borderRadius,
+          background: 'var(--bbw-primary-light)',
+          color: token.colorPrimary,
+        }}
+      >
+        <FileText size={20} />
+      </Flex>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: token.colorText, maxWidth: 220, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {name}
+        </div>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          附件 · 查看器后续接入（D06）
+        </Text>
+      </div>
+    </Flex>
   );
 }
 
@@ -1041,11 +1277,11 @@ const AGENT_LIVE_STATUSES = new Set<string>([
 ]);
 
 /** 落流卡完成后保持展开的宽限（2026-11-11 用户口径）：到点后台自动折叠成摘要卡
- *  （无倒计时 UI）；期间用户再向 agent 发消息=新回合开始，旧卡立即折叠 */
+ * （无倒计时 UI）；期间用户再向 agent 发消息=新回合开始，旧卡立即折叠 */
 const AGC_COLLAPSE_GRACE_MS = 120_000;
 
 /** 结论 markdown → 纯文本（折叠摘要正文用）：剥标题/代码围栏/表格分隔行与常见
- *  行内记号后拼接，行数由 CSS 两行截断收口 */
+ *  行内记号后拼接，行数由两行截断收口 */
 function agentCardPlainText(md: string): string {
   return md
     .split('\n')
@@ -1059,17 +1295,14 @@ function agentCardPlainText(md: string): string {
 
 /** 落流卡（2026-11-11 改版）：
  * - 实时投影（活动卡取消后本卡即实时界面）：本会话运行中且本卡为当前轮
- *   （landed running）→ 直接以 agent store 流投影渲染（随 delta 平滑流式；
- *   写路径 PATCH 仍走阶段边界——读/写路径解耦，此前共用粗签名致文本一次性全出）
+ *   （landed running）→ 直接以 agent store 流投影渲染（随 delta 平滑流式）
  * - 状态校正兜底：落流停在 running 而会话实际已收口（无人 PATCH 场景）→ 按 done 渲染
  * - 摘要折叠（2026-11-11 用户拍板，仅 IM 聊天页、工作台不走本组件）：收口后折叠为
- *   迷你卡——首行「Agent 状态：本轮问题」+ 思考过程行 + 正文两行截断，等宽统一、
- *   点开完整内容；运行中恒展开，完成起 2 分钟宽限到点自动折叠，宽限期内新回合
- *   开始（流内 user 条目增加）立即折叠，重新进入聊天（重挂）即折叠；手动展开/
- *   收起清宽限定时器（手动优先）
+ *   迷你卡——完成起 2 分钟宽限到点自动折叠，宽限期内新回合开始立即折叠
  * - 应答条（仅回答 agent 的交互）：待审批黄条 + D20 提问蓝条——与聊天页弹框同感
- * - 发起交互一律走输入框（🤖 按钮//agent 命令/@Agent 前缀）；进工作台=ChatHeader 🤖 */
-function AgentCardMsg({ body }: { body: AgentCardBody }) {
+ */
+export function AgentCardMsg({ body }: { body: AgentCardBody }) {
+  const { token } = theme.useToken();
   // 订阅只取引用（2026-11-11 卡顿修复）：此前 4 个 selector 内各做 O(流长) 扫描，
   // store 每次 set（流式期每 delta）都会执行——聊天里每轮一张历史卡，成本 ×卡数；
   // 现 selector 全部 O(1) 取引用，派生计算移入 useMemo（仅相关引用变化时重算）
@@ -1126,11 +1359,13 @@ function AgentCardMsg({ body }: { body: AgentCardBody }) {
     return { ...body, stages, sources, rounds, question: roundQuestionOf(stream) ?? body.question };
   }, [live, body, stream]);
   const display: AgentCardBody =
-    liveProj ?? (body.status === 'running' && !live ? { ...body, status: 'done', ended_at: body.ended_at ?? Date.now() } : body);
+    liveProj ??
+    // 状态校正兜底（无人 PATCH 场景）：落流停在 running 而会话已收口 → 按 done 渲染
+    (body.status === 'running' && !live ? { ...body, status: 'done', ended_at: body.ended_at ?? Date.now() } : body);
 
   // ---- 一行折叠态（仅 IM；口径见组件头注）----
   const done = display.status !== 'running';
-  const [expanded, setExpanded] = useState(() => !done);
+  const [expanded, setExpanded] = useState(!done);
   const graceTimerRef = useRef<number | null>(null);
   const clearGrace = useCallback(() => {
     if (graceTimerRef.current != null) {
@@ -1183,10 +1418,12 @@ function AgentCardMsg({ body }: { body: AgentCardBody }) {
     }
   };
   // 折叠摘要卡（2026-11-11 用户口径）：首行「Agent 状态：本轮问题」+ 思考过程行 +
-  // 正文两行截断省略号——等宽统一、结构固定，点开完整内容
+  // 正文两行截断省略号——等宽统一、结构固定，点开完整内容（壳体 inline+token）
   if (!expanded) {
     const stateLabel =
       display.status === 'done' ? '已完成' : display.status === 'failed' ? '失败' : display.status === 'cancelled' ? '已取消' : '运行中';
+    const stateColor =
+      display.status === 'done' ? token.colorSuccess : display.status === 'failed' || display.status === 'cancelled' ? token.colorError : token.colorTextSecondary;
     const hasThinking = display.stages.some((s) => s.t === 'thinking');
     const durMs = display.started_at && display.ended_at ? display.ended_at - display.started_at : null;
     let conclusionText = '';
@@ -1198,11 +1435,26 @@ function AgentCardMsg({ body }: { body: AgentCardBody }) {
     }
     return (
       <div
-        className="agc-collapsed"
         data-testid="agent-card-collapsed"
         role="button"
         tabIndex={0}
         title="点击展开完整内容"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          width: 448,
+          maxWidth: '100%',
+          height: 112,
+          overflow: 'hidden',
+          padding: '8px 10px',
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: 10,
+          background: token.colorBgContainer,
+          color: token.colorText,
+          fontSize: 12,
+          cursor: 'pointer',
+        }}
         onClick={(e) => {
           e.stopPropagation();
           toggleExpanded();
@@ -1214,61 +1466,118 @@ function AgentCardMsg({ body }: { body: AgentCardBody }) {
           }
         }}
       >
-        <div className="agc-collapsed__head">
+        <Flex align="center" gap={5} style={{ minWidth: 0, flexShrink: 0 }}>
           <Bot size={13} />
-          <span className="agc-collapsed__title">Agent</span>
-          <span className={`agc-collapsed__state agc-collapsed__state--${display.status}`}>{stateLabel}</span>
-          <span className="agc-collapsed__sep">：</span>
-          <span className="agc-collapsed__question">{body.question?.trim() || '本轮对话'}</span>
-          <ChevronDown size={13} className="agc-collapsed__chev" />
-        </div>
+          <span style={{ fontWeight: 600, flexShrink: 0 }}>Agent</span>
+          <span style={{ flexShrink: 0, color: stateColor }}>{stateLabel}</span>
+          <span style={{ flexShrink: 0, color: token.colorTextSecondary }}>：</span>
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              textAlign: 'left',
+              color: token.colorTextSecondary,
+            }}
+          >
+            {body.question?.trim() || '本轮对话'}
+          </span>
+          <ChevronDown size={13} style={{ flexShrink: 0, color: token.colorTextQuaternary }} />
+        </Flex>
         {hasThinking ? (
-          <div className="agc-collapsed__think">
+          <Flex
+            align="center"
+            gap={5}
+            style={{ flexShrink: 0, color: token.colorPrimary, background: 'var(--bbw-primary-light)', borderRadius: 6, padding: '3px 8px', minWidth: 0 }}
+          >
             <Lightbulb size={12} />
-            <span className="agc-collapsed__think-text">思考过程 · {agentStatsText(display.stages, durMs)}</span>
+            <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'left' }}>
+              思考过程 · {agentStatsText(display.stages, durMs)}
+            </span>
+          </Flex>
+        ) : null}
+        {conclusionText ? (
+          <div
+            style={{
+              fontSize: 13,
+              lineHeight: 1.6,
+              whiteSpace: 'normal',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              lineClamp: 2,
+              overflow: 'hidden',
+              wordBreak: 'break-word',
+            }}
+          >
+            {conclusionText}
           </div>
         ) : null}
-        {conclusionText ? <div className="agc-collapsed__body">{conclusionText}</div> : null}
       </div>
     );
   }
   return (
-    <AgentProcessCard
-      body={display}
-      startedAt={display.started_at}
-      testId="agent-card-msg"
-      onCollapse={toggleExpanded}
-      actions={
-        <div className="agc-card__footer-row" onClick={(e) => e.stopPropagation()}>
-          {pendingPerm && pendingPerm.kind === 'permission' && live ? (
-            <div className="agc-perm-sync">
-              <span className="agc-perm-sync__label">待你审批：{pendingPerm.request.tool}</span>
-              <button type="button" className="agc-act-btn" onClick={() => respond('allow')}>
+    <>
+      <AgentProcessCard
+        body={display}
+        startedAt={display.started_at}
+        testId="agent-card-msg"
+        onCollapse={toggleExpanded}
+        actions={
+          <Flex gap={6} onClick={(e) => e.stopPropagation()}>
+            {pendingPerm && pendingPerm.kind === 'permission' && live ? (
+            <Flex
+              align="center"
+              gap={8}
+              style={{
+                marginTop: 6,
+                padding: '6px 10px',
+                borderRadius: 8,
+                width: '100%',
+                background: token.colorWarningBg,
+                border: `1px solid ${token.colorWarningBorder}`,
+              }}
+            >
+              <span style={{ flex: 1, fontSize: 12, color: token.colorWarning, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                待你审批：{pendingPerm.request.tool}
+              </span>
+              <Button size="small" onClick={() => respond('allow')}>
                 允许
-              </button>
-              <button type="button" className="agc-act-btn" onClick={() => respond('deny')}>
+              </Button>
+              <Button size="small" variant="secondary" danger onClick={() => respond('deny')}>
                 拒绝
-              </button>
-            </div>
+              </Button>
+            </Flex>
           ) : null}
           {pendingClarify && pendingClarify.kind === 'clarify' && live ? (
-            <div className="agc-perm-sync agc-perm-sync--clarify">
-              <span className="agc-perm-sync__label">Agent 提问：{pendingClarify.request.question}</span>
+            <Flex
+              align="center"
+              gap={8}
+              wrap="wrap"
+              style={{
+                marginTop: 6,
+                padding: '6px 10px',
+                borderRadius: 8,
+                width: '100%',
+                background: token.colorInfoBg,
+                border: `1px solid ${token.colorInfoBorder}`,
+              }}
+            >
+              <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: token.colorInfo, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                Agent 提问：{pendingClarify.request.question}
+              </span>
               {pendingClarify.request.options.map((o) => (
-                <button
-                  key={o.label}
-                  type="button"
-                  className="agc-act-btn"
-                  title={o.description}
-                  onClick={() => respondClarify([o.label])}
-                >
+                <Button key={o.label} size="small" title={o.description} onClick={() => respondClarify([o.label])}>
                   {o.label}
-                </button>
+                </Button>
               ))}
-            </div>
+            </Flex>
           ) : null}
-        </div>
-      }
-    />
+          </Flex>
+        }
+      />
+    </>
   );
 }

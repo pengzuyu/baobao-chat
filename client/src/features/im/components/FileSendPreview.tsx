@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Flex, Input, Modal, Progress, Typography } from 'antd';
+import { Alert, Flex, Image, Input, Modal, Progress, Typography, theme } from 'antd';
 import { FileText, ImageIcon } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
@@ -112,6 +112,7 @@ async function sendWholeFlow(
 }
 
 export function FileSendPreview({ convId, file, onClose }: FileSendPreviewProps) {
+  const { token } = theme.useToken();
   const isImage = file.type.startsWith('image/');
   const isVideo = file.type.startsWith('video/');
   const kind: SendKind = isImage ? 'image' : isVideo ? 'video' : 'file';
@@ -186,19 +187,28 @@ export function FileSendPreview({ convId, file, onClose }: FileSendPreviewProps)
         </Flex>
       }
     >
-      {/* 预览内容区（图片/视频/文件卡，保留项——原样不动） */}
-      <div className="file-send-preview__body">
+      {/* 预览内容区（图片/视频/文件卡——内联 + token；图片缩略→antd Image 点击放大） */}
+      <Flex
+        gap={12}
+        align="center"
+        style={{ background: token.colorFillQuaternary, borderRadius: token.borderRadius, padding: 12 }}
+      >
         {isImage && previewUrl ? (
-          <img className="file-send-preview__thumb" src={previewUrl} alt={file.name} data-testid="file-send-preview-thumb" />
+          <Image
+            src={previewUrl}
+            alt={file.name}
+            data-testid="file-send-preview-thumb"
+            style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: token.borderRadius }}
+          />
         ) : isVideo && previewUrl ? (
           <video
             ref={videoRef}
-            className="file-send-preview__video"
             src={previewUrl}
             controls
             muted
             preload="metadata"
             data-testid="file-send-preview-video"
+            style={{ width: 220, maxHeight: 160, borderRadius: token.borderRadius, background: '#000', flexShrink: 0 }}
             onLoadedMetadata={(e) => {
               const v = e.currentTarget;
               if (v.duration && Number.isFinite(v.duration)) {
@@ -207,21 +217,37 @@ export function FileSendPreview({ convId, file, onClose }: FileSendPreviewProps)
             }}
           />
         ) : (
-          <div className="file-send-preview__file-icon">
+          <Flex
+            align="center"
+            justify="center"
+            style={{
+              width: 52,
+              height: 52,
+              flexShrink: 0,
+              borderRadius: token.borderRadius,
+              background: 'var(--bbw-primary-light)',
+              color: token.colorPrimary,
+            }}
+          >
             <FileText size={22} />
-          </div>
+          </Flex>
         )}
-        <div className="file-send-preview__meta">
-          <div className="file-send-preview__name" title={file.name}>
+        <div style={{ minWidth: 0 }}>
+          <Typography.Text
+            ellipsis={{ tooltip: file.name }}
+            style={{ fontSize: 13, maxWidth: 240, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
             {isImage ? <ImageIcon size={13} /> : null}
             {file.name}
-          </div>
-          <div className="file-send-preview__size">
-            {formatBytes(file.size)}
-            {isVideo && videoMeta ? ` · ${Math.round(videoMeta.durationMs / 1000)}s` : ''}
+          </Typography.Text>
+          <div style={{ marginTop: 4 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {formatBytes(file.size)}
+              {isVideo && videoMeta ? ` · ${Math.round(videoMeta.durationMs / 1000)}s` : ''}
+            </Typography.Text>
           </div>
         </div>
-      </div>
+      </Flex>
 
       {/* caption 附言（image 专用，04 §1.2 第 5 类：随图说明渲染于缩略图下方） */}
       {isImage ? (

@@ -4,13 +4,17 @@
  * - 分组（条件显隐共用 msgActionsVisible）：
  *   组1 回复 / 引用 / 复制；组2 转发 / 收藏 / 多选；组3 编辑（本人 text ≤5min）/ 撤回（本人 ≤24h）
  * - system 仅「复制」、撤回占位无菜单（由调用方判定后不打开）
- * - 定位：视口坐标 + 渲染后测量翻转（靠右→左移、靠底→上移），Esc / 点空白 / 滚动关闭
+ * - 定位：antd 无 context menu 组件——portal 到 body + 视口坐标 + 渲染后测量翻转
+ *   （靠右→左移、靠底→上移）由本组件自持；菜单内容走 antd Menu（items/divider/danger）
+ * - 关闭：Esc / 点空白（pointerdown，长按后合成 click 不误关）/ 任意滚动 / 视口变化
  * - 菜单项点击：先关菜单再执行动作（动作全部复用 ChatPage 传入的 handlers）
  * - 菜单开合为局部 useState（ChatPage 持有），不入全局 store
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Menu, theme } from 'antd';
+import type { MenuProps } from 'antd';
 import { BookMarked, Copy, Forward, ListChecks, Pencil, Quote, Reply, Star, Undo2 } from 'lucide-react';
 import type { Message, SystemBody } from '../../model/types';
 import { digestOf } from '../../store/im';
@@ -56,38 +60,22 @@ export function copyTextOf(msg: Message): string {
   return digestOf(msg);
 }
 
-/** 单个菜单项（图标 + 文案；danger=撤回红态） */
-function MenuItem({
-  icon,
-  label,
-  danger = false,
-  action,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  danger?: boolean;
-  action: string;
-  onClick: () => void;
-}) {
+/** 菜单项 label（图标 + 文案；testid/data-action 锚点随 label 走，真机回归用） */
+function MenuItemLabel({ icon, label, action }: { icon: React.ReactNode; label: string; action: string }) {
   return (
-    <button
-      type="button"
-      className={`ctx-menu__item${danger ? ' ctx-menu__item--danger' : ''}`}
+    <span
       data-testid="msg-context-menu-item"
       data-action={action}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
     >
       {icon}
       {label}
-    </button>
+    </span>
   );
 }
 
 export function MsgContextMenu({ message, myUid, anchor, onClose, ...actions }: MsgContextMenuProps) {
+  const { token } = theme.useToken();
   const menuRef = useRef<HTMLDivElement>(null);
   /** 翻转后的实际位置（先按锚点渲染，测量后校正） */
   const [pos, setPos] = useState({ x: anchor.x, y: anchor.y });
@@ -136,60 +124,88 @@ export function MsgContextMenu({ message, myUid, anchor, onClose, ...actions }: 
   const hasGroup2 = vis.forward || vis.favorite || vis.saveKb || vis.multiSelect;
   const hasGroup3 = vis.edit || vis.recall;
 
+  // antd Menu items（key=动作名；divider=组间分隔；danger=撤回红态）
+  const items: MenuProps['items'] = [
+    ...(vis.reply
+      ? [{ key: 'reply', label: <MenuItemLabel icon={<Reply size={14} />} label="回复" action="reply" /> }]
+      : []),
+    ...(vis.quote
+      ? [{ key: 'quote', label: <MenuItemLabel icon={<Quote size={14} />} label="引用" action="quote" /> }]
+      : []),
+    ...(vis.copy
+      ? [{ key: 'copy', label: <MenuItemLabel icon={<Copy size={14} />} label="复制" action="copy" /> }]
+      : []),
+    ...(hasGroup2 && hasGroup1 ? [{ type: 'divider' as const }] : []),
+    ...(vis.forward
+      ? [{ key: 'forward', label: <MenuItemLabel icon={<Forward size={14} />} label="转发" action="forward" /> }]
+      : []),
+    ...(vis.favorite
+      ? [{ key: 'favorite', label: <MenuItemLabel icon={<Star size={14} />} label="收藏" action="favorite" /> }]
+      : []),
+    ...(vis.saveKb
+      ? [{ key: 'savekb', label: <MenuItemLabel icon={<BookMarked size={14} />} label="存入知识库" action="savekb" /> }]
+      : []),
+    ...(vis.multiSelect
+      ? [{ key: 'multiselect', label: <MenuItemLabel icon={<ListChecks size={14} />} label="多选" action="multiselect" /> }]
+      : []),
+    ...(hasGroup3 && (hasGroup1 || hasGroup2) ? [{ type: 'divider' as const }] : []),
+    ...(vis.edit ? [{ key: 'edit', label: <MenuItemLabel icon={<Pencil size={14} />} label="编辑" action="edit" /> }] : []),
+    ...(vis.recall
+      ? [{ key: 'recall', danger: true, label: <MenuItemLabel icon={<Undo2 size={14} />} label="撤回" action="recall" /> }]
+      : []),
+  ];
+
+  const onMenuClick: MenuProps['onClick'] = ({ key, domEvent }) => {
+    domEvent.stopPropagation();
+    switch (key) {
+      case 'reply':
+        run(actions.onReply);
+        break;
+      case 'quote':
+        run(actions.onQuote);
+        break;
+      case 'copy':
+        run(actions.onCopy);
+        break;
+      case 'forward':
+        run(actions.onForward);
+        break;
+      case 'favorite':
+        run(actions.onFavorite);
+        break;
+      case 'savekb':
+        run(actions.onSaveToKb);
+        break;
+      case 'multiselect':
+        run(actions.onMultiSelect);
+        break;
+      case 'edit':
+        run(actions.onEdit);
+        break;
+      case 'recall':
+        run(actions.onRecall);
+        break;
+      default:
+        break;
+    }
+  };
+
   return createPortal(
     <div
       ref={menuRef}
-      className="ctx-menu ctx-menu--msg"
       data-testid="msg-context-menu"
       role="menu"
-      style={{ left: pos.x, top: pos.y }}
+      style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: token.zIndexPopupBase + 50 }}
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* 组1：回复 / 引用 / 复制 */}
-      {vis.reply ? (
-        <MenuItem icon={<Reply size={14} />} label="回复" action="reply" onClick={() => run(actions.onReply)} />
-      ) : null}
-      {vis.quote ? (
-        <MenuItem icon={<Quote size={14} />} label="引用" action="quote" onClick={() => run(actions.onQuote)} />
-      ) : null}
-      {vis.copy ? (
-        <MenuItem icon={<Copy size={14} />} label="复制" action="copy" onClick={() => run(actions.onCopy)} />
-      ) : null}
-      {/* 组间分隔线（前组有项才渲染） */}
-      {hasGroup2 && hasGroup1 ? <div className="ctx-menu__sep" role="separator" /> : null}
-      {/* 组2：转发 / 收藏 / 多选 */}
-      {vis.forward ? (
-        <MenuItem icon={<Forward size={14} />} label="转发" action="forward" onClick={() => run(actions.onForward)} />
-      ) : null}
-      {vis.favorite ? (
-        <MenuItem icon={<Star size={14} />} label="收藏" action="favorite" onClick={() => run(actions.onFavorite)} />
-      ) : null}
-      {vis.saveKb ? (
-        <MenuItem icon={<BookMarked size={14} />} label="存入知识库" action="savekb" onClick={() => run(actions.onSaveToKb)} />
-      ) : null}
-      {vis.multiSelect ? (
-        <MenuItem
-          icon={<ListChecks size={14} />}
-          label="多选"
-          action="multiselect"
-          onClick={() => run(actions.onMultiSelect)}
-        />
-      ) : null}
-      {hasGroup3 && (hasGroup1 || hasGroup2) ? <div className="ctx-menu__sep" role="separator" /> : null}
-      {/* 组3：编辑 / 撤回（本人窗口内；与悬浮条同一判定 msgActionsVisible） */}
-      {vis.edit ? (
-        <MenuItem icon={<Pencil size={14} />} label="编辑" action="edit" onClick={() => run(actions.onEdit)} />
-      ) : null}
-      {vis.recall ? (
-        <MenuItem
-          icon={<Undo2 size={14} />}
-          label="撤回"
-          action="recall"
-          danger
-          onClick={() => run(actions.onRecall)}
-        />
-      ) : null}
+      <Menu
+        selectable={false}
+        mode="vertical"
+        items={items}
+        onClick={onMenuClick}
+        style={{ minWidth: 168, borderInlineEnd: 'none', borderRadius: token.borderRadius, background: token.colorBgContainer }}
+      />
     </div>,
     document.body,
   );

@@ -9,7 +9,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Alert, Dropdown, Modal, message } from 'antd';
+import { Alert, Divider, Dropdown, FloatButton, Modal, Typography, message } from 'antd';
 import { ArrowDown, Bell, Megaphone, Plus, Star, UserPlus, Users } from 'lucide-react';
 import { ApiError, errText, getErrorText } from '../../../shared/api/http';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
@@ -237,8 +237,8 @@ export function ChatPage() {
   const messages = convId ? (messagesByConv[convId] ?? []) : [];
   // ── 内嵌 Agent（D18；2026-11-11 改版：活动卡取消，回复落流卡承载全部交互，
   //    EmbeddedAgentSync 常驻（映射存在即挂，不随回合退场）管落流与审批弹框；
-  //    2026-11-11 晚再收敛：落流卡=纯展示+审批/提问应答条——发消息走输入框
-  //    （🤖 按钮//agent 命令/@Agent），进工作台走 ChatHeader 🤖 图标） ──
+  //    落流卡=纯展示+审批/提问应答条——发消息走输入框（🤖 按钮//agent 命令），
+  //    进工作台走 ChatHeader 🤖 图标） ──
   const [agentMode, setAgentMode] = useState(false);
   const [embeddedActive, setEmbeddedActive] = useState<string | null>(null);
   useEffect(() => {
@@ -246,7 +246,7 @@ export function ChatPage() {
     setEmbeddedActive(null);
     if (!convId) return;
     void getEmbeddedSessionId(convId).then((sid) => {
-      // 任意状态均挂载：idle 静默（不落卡），新一轮自然落新卡；审批弹框恒有宿主
+      // 任意状态均挂载：idle 静默，新一轮自然出实时卡；审批弹框恒有宿主
       if (sid) setEmbeddedActive(sid);
     });
   }, [convId]);
@@ -275,7 +275,7 @@ export function ChatPage() {
     return created.id;
   };
 
-  /** Agent 流程（D18 §2/§3.1）：问题照常落流为文本消息 + 交本会话 embedded Agent 处理 */
+  /** Agent 流程（D18 §2/§3.1）：问题交本会话 embedded Agent 处理，回复经落流卡回流 */
   const agentFlow = async (rawText: string) => {
     if (!convId) return;
     const question = rawText.replace(/^\/agent\s*/, '').trim() || rawText;
@@ -395,8 +395,7 @@ export function ChatPage() {
 
   // AI 回答期间周期跟随（agent-web 同款）：agent 卡原地长高不增条数，length/
   // 尾键 effect 触发不了——300ms 轮询补跟随；内部判贴底才滚，用户上滚即自然
-  // 停跟（不抢滚动条），滚回底部恢复跟随。cleanup 补滚一次兜住终态 PATCH 的
-  // 最后一次长高（status 翻终态后 interval 已停）。
+  // 停跟（不抢滚动条），滚回底部恢复跟随。cleanup 补滚一次兜住收口的最后一次长高。
   const agentRunning = useMemo(
     () => messages.some((m) => m.type === 'agent_card' && (m.body as AgentCardBody).status === 'running'),
     [messages],
@@ -678,7 +677,8 @@ export function ChatPage() {
     onReply: (m) => {
       bubbleActions.onReply(m);
       requestAnimationFrame(() => {
-        document.querySelector<HTMLTextAreaElement>('.message-input__textarea')?.focus();
+        // D26-O7：textarea 已换 antd Input.TextArea（data-testid 直挂 textarea），聚焦锚点同口径迁移
+        document.querySelector<HTMLTextAreaElement>('textarea[data-testid="chat-input-textarea"]')?.focus();
       });
     },
     // 引用=只插入引用条，不预填文本不抢焦点（现 MessageInput 引用条支持）
@@ -894,10 +894,19 @@ export function ChatPage() {
     </section>
   );
 
+  // 消息流容器（D26-O7 自研类退役：内联滚动容器；定位闪烁锚点 data-seq 不变）
   const messageStream = (
     <div
-      className="message-stream"
       ref={streamRef}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        overflowY: 'auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
       onScroll={onStreamScroll}
       onClick={(e) => {
         // 多选模式点空白退出（INT-IM-14；气泡行自身 stopPropagation 之外的空白区）
@@ -907,19 +916,27 @@ export function ChatPage() {
       {/* 历史尽头提示（2026-11-12 用户口径：去掉「上滑/点击加载」提醒——滑到顶 40px
           已静默自动加载；没有更早历史时顶部居中提示到底） */}
       {messages.length > 0 && !hasOlder ? (
-        <div className="no-more-hint" data-testid="no-more-hint">
+        <Typography.Text
+          type="secondary"
+          data-testid="no-more-hint"
+          style={{ display: 'block', textAlign: 'center', fontSize: 12, padding: '8px 0 12px' }}
+        >
           已经没有更多聊天记录了
-        </div>
+        </Typography.Text>
       ) : null}
       {messages.map((m, i) => (
         <Fragment key={`${convId}:${m.seq}`}>
-          {/* 日期分隔条 */}
+          {/* 日期分隔条（D26-O7：antd Divider plain 化） */}
           {i === 0 || dayKey(m.ts) !== dayKey(messages[i - 1].ts) ? (
-            <div className="date-divider">{formatDayDivider(m.ts)}</div>
+            <Divider plain style={{ margin: '4px 0', fontSize: 12 }}>
+              {formatDayDivider(m.ts)}
+            </Divider>
           ) : null}
-          {/* 未读分隔线（INT-IM-08 简版：首条未读之前插入一次） */}
+          {/* 未读分隔线（INT-IM-08 简版：首条未读之前插入一次；主色文案） */}
           {unreadAnchorSeq !== null && m.seq > unreadAnchorSeq && (i === 0 || messages[i - 1].seq <= unreadAnchorSeq) ? (
-            <div className="unread-divider">以下为未读消息</div>
+            <Divider style={{ margin: '8px 0' }}>
+              <span style={{ color: 'var(--bbw-primary)', fontSize: 12 }}>以下为未读消息</span>
+            </Divider>
           ) : null}
           <MessageBubble
             message={m}
@@ -955,13 +972,26 @@ export function ChatPage() {
     </div>
   );
 
-  // 回到底部浮标（agent-web 口径）：上滚即常显不依赖有无新消息；三态文案 =
-  // 新消息计数 / AI 回答中 / 回到底部；点击回底并恢复贴底跟随
+  // 回到底部浮标（agent-web 口径，D26-O7 antd FloatButton 化）：上滚即常显；
+  // 未读计数 Badge / AI 回答中红点 / tooltip 三态文案；点击回底并恢复贴底跟随
   const scrollFab = !atBottom ? (
-    <button
-      type="button"
-      className="scroll-bottom-fab"
+    <FloatButton
       data-testid="scroll-bottom-fab"
+      icon={<ArrowDown size={14} />}
+      tooltip={
+        awayCount > 0
+          ? `${awayCount > 99 ? '99+' : awayCount} 条新消息`
+          : agentRunning
+            ? 'AI 回答中 · 回到底部'
+            : '回到底部'
+      }
+      badge={
+        awayCount > 0
+          ? { count: awayCount > 99 ? '99+' : awayCount, size: 'small' }
+          : agentRunning
+            ? { count: 0, dot: true, size: 'small' }
+            : undefined
+      }
       onClick={() => {
         const el = streamRef.current;
         stickBottomRef.current = true;
@@ -969,21 +999,14 @@ export function ChatPage() {
         setAwayCount(0);
         if (el) el.scrollTop = el.scrollHeight;
       }}
-    >
-      {agentRunning ? <span className="scroll-bottom-fab__dot" aria-hidden /> : null}
-      <ArrowDown size={14} />
-      {awayCount > 0
-        ? `${awayCount > 99 ? '99+' : awayCount} 条新消息`
-        : agentRunning
-          ? 'AI 回答中 · 回到底部'
-          : '回到底部'}
-    </button>
+      style={{ position: 'absolute', right: 24, bottom: 12, zIndex: 10 }}
+    />
   ) : null;
 
   // 滚动区包裹层（agent-web messages-wrap 同构）：浮标以此为定位祖先，恒浮于
-  // 输入框正上方（不猜输入区高度）；ok 与 degraded/offline 两分支共用
+  // 输入框正上方（不猜输入区高度）；ok 与 degraded/offline 两分支共用（内联化）
   const messageStreamWrap = (
-    <div className="message-stream-wrap">
+    <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {messageStream}
       {scrollFab}
     </div>
@@ -1049,7 +1072,7 @@ export function ChatPage() {
         </StateView>
       )}
 
-      {/* 内嵌 Agent 同步控制器（无头：落流/阶段 PATCH/审批弹框；回复落流卡即实时界面） */}
+      {/* 内嵌 Agent 同步控制器（无头：回合收口入待同步池/重载对账/审批与提问弹框） */}
       {convId && embeddedActive ? <EmbeddedAgentSync convId={convId} sessionId={embeddedActive} /> : null}
 
       {convId ? (

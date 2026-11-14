@@ -1,11 +1,15 @@
 /**
- * 表情选择器（INT-IM-25 完整版 + 0022 自定义表情包）：
+ * 表情选择器（INT-IM-25 完整版 + 0022 自定义表情包；D26-O7 antd 化）：
  * 双模式——emoji 分类面板（插入文本/消息回应）与表情包面板（我的+公共集，
  * 点击即发送 sticker 消息，上传经 file 域两步流）。
+ * 换装：模式/分类 → antd Tabs；「常用」页签 Tag 化；网格内联 grid；
+ * StickerThumb（票据缩略图）组件原样不动（管理页复用）。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Flex, Tabs, Tag, Typography, theme } from 'antd';
 import { Plus, X } from 'lucide-react';
+import { Button } from '../../../shared/ui/Button';
 import { getErrorText } from '../../../shared/api/http';
 import { downloadUrl, getDownloadTicket, uploadFileSmart } from '../api/files';
 import {
@@ -16,6 +20,8 @@ import {
   type StickerItem,
   type StickerLibrary,
 } from '../api/stickers';
+
+const { Text } = Typography;
 
 interface Category {
   key: string;
@@ -82,55 +88,91 @@ interface EmojiPickerProps {
   className?: string;
 }
 
-export function EmojiPicker({ onPick, onPickSticker, className = '' }: EmojiPickerProps) {
+export function EmojiPicker({ onPick, onPickSticker }: EmojiPickerProps) {
+  const { token } = theme.useToken();
   const [mode, setMode] = useState<'emoji' | 'sticker'>('emoji');
-  const [tab, setTab] = useState(0);
-  const cat = CATEGORIES[tab];
-  return (
-    <div className={`emoji-picker ${className}`} data-testid="emoji-picker">
-      <div className="emoji-picker__mode">
-        <button
-          type="button"
-          className={`emoji-picker__mode-btn${mode === 'emoji' ? ' emoji-picker__mode-btn--active' : ''}`}
-          onClick={() => setMode('emoji')}
-        >
-          Emoji
-        </button>
-        {onPickSticker ? (
-          <button
-            type="button"
-            className={`emoji-picker__mode-btn${mode === 'sticker' ? ' emoji-picker__mode-btn--active' : ''}`}
-            onClick={() => setMode('sticker')}
+  const [tab, setTab] = useState(CATEGORIES[0].key);
+
+  /** 分类页签内容：常用=Tag 化，其余=内联 grid 按钮 */
+  const gridOf = (c: Category) =>
+    c.key === 'recent' ? (
+      <Flex gap={4} wrap style={{ padding: 6, maxHeight: 176, overflowY: 'auto' }}>
+        {c.emojis.map((e, i) => (
+          <Tag
+            key={`${e}-${i}`}
+            onClick={() => onPick(e)}
+            style={{
+              cursor: 'pointer',
+              marginInlineEnd: 0,
+              fontSize: 18,
+              lineHeight: 1.4,
+              padding: '2px 6px',
+              borderRadius: 6,
+              background: 'transparent',
+              border: '1px solid transparent',
+              userSelect: 'none',
+            }}
           >
-            表情包
+            {e}
+          </Tag>
+        ))}
+      </Flex>
+    ) : (
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(8, 1fr)',
+          gap: 2,
+          padding: 6,
+          maxHeight: 176,
+          overflowY: 'auto',
+        }}
+      >
+        {c.emojis.map((e, i) => (
+          <button
+            key={`${e}-${i}`}
+            type="button"
+            style={{
+              border: 'none',
+              background: 'transparent',
+              fontSize: 18,
+              padding: 3,
+              borderRadius: 4,
+              cursor: 'pointer',
+              lineHeight: 1.4,
+            }}
+            onClick={() => onPick(e)}
+          >
+            {e}
           </button>
-        ) : null}
+        ))}
       </div>
+    );
+
+  return (
+    <div data-testid="emoji-picker" style={{ width: 312 }}>
+      <Tabs
+        activeKey={mode}
+        onChange={(k) => setMode(k as 'emoji' | 'sticker')}
+        size="small"
+        destroyInactiveTabPane
+        style={{ color: token.colorText }}
+        items={[
+          { key: 'emoji', label: 'Emoji' },
+          ...(onPickSticker ? [{ key: 'sticker', label: '表情包' }] : []),
+        ]}
+      />
       {mode === 'emoji' ? (
-        <>
-          <div className="emoji-picker__tabs" role="tablist">
-            {CATEGORIES.map((c, i) => (
-              <button
-                key={c.key}
-                type="button"
-                role="tab"
-                aria-selected={i === tab}
-                title={c.label}
-                className={`emoji-picker__tab${i === tab ? ' emoji-picker__tab--active' : ''}`}
-                onClick={() => setTab(i)}
-              >
-                {c.icon}
-              </button>
-            ))}
-          </div>
-          <div className="emoji-picker__grid">
-            {cat.emojis.map((e, i) => (
-              <button key={`${e}-${i}`} type="button" className="emoji-picker__item" onClick={() => onPick(e)}>
-                {e}
-              </button>
-            ))}
-          </div>
-        </>
+        <Tabs
+          activeKey={tab}
+          onChange={setTab}
+          size="small"
+          items={CATEGORIES.map((c) => ({
+            key: c.key,
+            label: <span title={c.label}>{c.icon}</span>,
+            children: gridOf(c),
+          }))}
+        />
       ) : (
         <StickerPanel onPickSticker={onPickSticker!} />
       )}
@@ -138,8 +180,9 @@ export function EmojiPicker({ onPick, onPickSticker, className = '' }: EmojiPick
   );
 }
 
-/** 表情包面板（首次进入懒加载；我的集+公共集；上传/删除即时刷新） */
+/** 表情包面板（首次进入懒加载；我的集+公共集；上传/删除即时刷新；内联 grid 化） */
 function StickerPanel({ onPickSticker }: { onPickSticker: (item: StickerItem) => void }) {
+  const { token } = theme.useToken();
   const [lib, setLib] = useState<StickerLibrary | null>(null);
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState('');
@@ -185,8 +228,18 @@ function StickerPanel({ onPickSticker }: { onPickSticker: (item: StickerItem) =>
     }
   };
 
-  if (errorText && !lib) return <div className="sticker-panel__empty">{errorText}</div>;
-  if (!lib) return <div className="sticker-panel__empty">加载中…</div>;
+  if (errorText && !lib)
+    return (
+      <Text type="secondary" style={{ display: 'block', padding: 16, textAlign: 'center', fontSize: 12 }}>
+        {errorText}
+      </Text>
+    );
+  if (!lib)
+    return (
+      <Text type="secondary" style={{ display: 'block', padding: 16, textAlign: 'center', fontSize: 12 }}>
+        加载中…
+      </Text>
+    );
 
   const sections: Array<{ title: string; sets: typeof lib.mine; removable: boolean }> = [
     { title: '我的表情', sets: lib.mine, removable: true },
@@ -194,28 +247,34 @@ function StickerPanel({ onPickSticker }: { onPickSticker: (item: StickerItem) =>
   ];
 
   return (
-    <div className="sticker-panel" data-testid="sticker-panel">
+    <div
+      data-testid="sticker-panel"
+      style={{ maxHeight: 232, overflowY: 'auto', padding: 6, display: 'flex', flexDirection: 'column', gap: 8 }}
+    >
       {sections.map(({ title, sets, removable }) =>
         sets.length === 0 && title === '公共表情' ? null : (
-          <div key={title} className="sticker-panel__section">
-            <div className="sticker-panel__head">
-              <span className="sticker-panel__title">{title}</span>
+          <div key={title} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <Flex align="center" gap={8}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {title}
+              </Text>
               {removable ? (
                 <>
-                  <button
-                    type="button"
-                    className="sticker-panel__add"
+                  <Button
+                    variant="text"
+                    size="small"
                     title="上传表情图片（≤20MB）"
                     disabled={busy}
+                    style={{ fontSize: 12, padding: '2px 6px', height: 'auto', color: token.colorPrimary }}
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <Plus size={13} /> 上传
-                  </button>
+                  </Button>
                   <input
                     ref={fileInputRef}
                     type="file"
                     accept="image/*"
-                    className="attach-input"
+                    style={{ display: 'none' }}
                     onChange={(e) => {
                       const f = e.target.files?.[0];
                       e.target.value = '';
@@ -224,37 +283,60 @@ function StickerPanel({ onPickSticker }: { onPickSticker: (item: StickerItem) =>
                   />
                 </>
               ) : null}
-            </div>
-            <div className="sticker-panel__grid">
+            </Flex>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 4 }}>
               {sets.flatMap((s) =>
                 s.items.map((it) => (
-                  <div key={it.id} className="sticker-panel__item">
-                    <button type="button" title={it.name ?? '表情'} onClick={() => onPickSticker(it)}>
+                  <div key={it.id} style={{ position: 'relative' }}>
+                    <button
+                      type="button"
+                      title={it.name ?? '表情'}
+                      style={{ border: 'none', background: 'transparent', padding: 2, borderRadius: 6, cursor: 'pointer', display: 'flex', width: '100%' }}
+                      onClick={() => onPickSticker(it)}
+                    >
                       <StickerThumb fileId={it.fileId} />
                     </button>
                     {removable ? (
-                      <button
-                        type="button"
-                        className="sticker-panel__del"
+                      <Button
+                        variant="text"
+                        size="small"
                         title="删除"
+                        style={{
+                          position: 'absolute',
+                          top: -4,
+                          right: -4,
+                          width: 16,
+                          height: 16,
+                          minWidth: 16,
+                          padding: 0,
+                          borderRadius: '50%',
+                          background: token.colorTextTertiary,
+                          color: '#fff',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        icon={<X size={10} />}
                         onClick={() => void doRemove(it.id)}
-                      >
-                        <X size={10} />
-                      </button>
+                      />
                     ) : null}
                   </div>
                 )),
               )}
               {sets.every((s) => s.items.length === 0) ? (
-                <div className="sticker-panel__empty sticker-panel__empty--inline">
+                <Text type="secondary" style={{ gridColumn: '1 / -1', padding: '4px 0', fontSize: 12 }}>
                   {removable ? '还没有表情，点「上传」添加' : '暂无'}
-                </div>
+                </Text>
               ) : null}
             </div>
           </div>
         ),
       )}
-      {errorText ? <div className="sticker-panel__error">{errorText}</div> : null}
+      {errorText ? (
+        <Text type="danger" style={{ padding: 4, fontSize: 12 }}>
+          {errorText}
+        </Text>
+      ) : null}
     </div>
   );
 }
