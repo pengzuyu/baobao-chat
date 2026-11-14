@@ -1,8 +1,9 @@
 /**
  * 全局 Provider 组合层（app/）：React Query + AntD 主题融合 + i18n locale（E12）。
  * antd 内置文案随 bbw-locale 切换；应用文案经 shared/i18n t()。
- * AntD token 融合（D26 §2）：全量令牌走 themeConstants.antdThemeFrom(mode) 单源，
- * 亮/暗随 useThemeStore.resolved 动态切换，与 --bbw-* 令牌双轨合一。
+ * AntD token 融合（D27 主题机制与色彩规范）：
+ * - antd 组件：ConfigProvider theme=antdThemeFrom(mode) 单源；
+ * - 残余自研 CSS：cssVarsFrom(mode) 注入 document root --bbw-*，与 antd 同源联动。
  */
 
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
@@ -14,7 +15,7 @@ import { useThemeStore } from '../shared/store/theme';
 import { useI18nStore } from '../shared/i18n';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useKbTabs } from '../features/kb/store/kbTabs';
-import { antdThemeFrom } from '../shared/ui/themeConstants';
+import { antdThemeFrom, cssVarsFrom } from '../shared/ui/themeConstants';
 
 // Query 全局默认：不自动重试（错误态由用户点重试，六态 error）；窗口聚焦不自动刷
 const queryClient = new QueryClient({
@@ -55,11 +56,18 @@ function AuthCacheBoundary({ children }: { children: ReactNode }) {
 export function AppProviders({ children }: { children: ReactNode }) {
   const resolved = useThemeStore((s) => s.resolved);
   const locale = useI18nStore((s) => s.locale);
+  const mode = resolved === 'dark' ? 'dark' : 'light';
+
+  // D27 机制核心：--bbw-* CSS 变量随 antd 主题单源注入（残余自研 CSS 与 antd 组件同源联动）
+  useEffect(() => {
+    const root = document.documentElement;
+    for (const [k, v] of Object.entries(cssVarsFrom(mode))) root.style.setProperty(k, v);
+  }, [mode]);
 
   return (
     <QueryClientProvider client={queryClient}>
       <AuthCacheBoundary>
-        <ConfigProvider locale={locale === 'en' ? enUS : zhCN} theme={antdThemeFrom(resolved === 'dark' ? 'dark' : 'light')}>
+        <ConfigProvider locale={locale === 'en' ? enUS : zhCN} theme={antdThemeFrom(mode)}>
           {children}
         </ConfigProvider>
       </AuthCacheBoundary>

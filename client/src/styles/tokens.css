@@ -7,28 +7,28 @@
 :root {
   color-scheme: light;
 
-  /* ---- 主色（2026-11-14 用户拍板：黑白反色系——亮色主色纯黑）---- */
+  /* ---- 主色（D27 黑白反色系——亮色主色纯黑；运行时由 providers 按 antd 主题单源注入覆盖）---- */
   --bbw-primary: #000000;
   --bbw-primary-hover: #262626;
-  --bbw-primary-light: #ececec; /* 己方气泡底 / 选中态浅底（黑主色浅灰） */
+  --bbw-primary-light: #f0f0f0; /* 己方气泡底 / 选中态浅底 */
 
-  /* ---- 中性阶 10 阶（语义：1=最浅表面 … 10=最强文字；文字主用 gray-8，次用 gray-6）---- */
+  /* ---- 中性阶 10 阶（D27 全中性化去蓝调；语义：1=最浅表面 … 10=最强文字）---- */
   --bbw-gray-1: #ffffff;
-  --bbw-gray-2: #f2f3f5; /* 对方气泡底 */
-  --bbw-gray-3: #e5e6eb; /* 分隔线/边框 */
-  --bbw-gray-4: #c9cdd4; /* 系统消息文本（弱化） */
-  --bbw-gray-5: #a9aeb8;
-  --bbw-gray-6: #86909c; /* 次要文字 */
-  --bbw-gray-7: #6b7787;
-  --bbw-gray-8: #4e5969; /* 正文主色 */
-  --bbw-gray-9: #272e3b;
-  --bbw-gray-10: #1f2329;
+  --bbw-gray-2: #f5f5f5; /* 对方气泡底 / 布局底 */
+  --bbw-gray-3: #e5e5e5; /* 分隔线/边框 */
+  --bbw-gray-4: #d4d4d4; /* 系统消息文本（弱化） */
+  --bbw-gray-5: #a3a3a3;
+  --bbw-gray-6: #737373; /* 次要文字 */
+  --bbw-gray-7: #525252;
+  --bbw-gray-8: #3f3f3f; /* 正文主色 */
+  --bbw-gray-9: #262626;
+  --bbw-gray-10: #171717;
 
-  /* ---- 语义色 ---- */
-  --bbw-success: #23a55b;
-  --bbw-warning: #e6a23c;
-  --bbw-danger: #e5484d;
-  --bbw-info: #2e6be6;
+  /* ---- 语义色（白底压深一档）---- */
+  --bbw-success: #16a34a;
+  --bbw-warning: #d97706;
+  --bbw-danger: #dc2626;
+  --bbw-info: #000000; /* 黑白反色系 info 跟随主色 */
 
   /* ---- 语义浅底（横幅/提示条底色，随主题映射）---- */
   --bbw-danger-light: #fdecec;
@@ -120,21 +120,21 @@
   --bbw-primary-hover: #d4d4d4;
   --bbw-primary-light: #1f1f1f; /* 己方气泡底 / 选中态（黑底上一档灰） */
 
-  --bbw-gray-1: #141414; /* 页面/卡片表面（纯黑底上一档） */
-  --bbw-gray-2: #1a1a1a; /* 次级表面 / 对方气泡（须与纯黑布局底拉开一档） */
+  --bbw-gray-1: #141414; /* 页面/卡片表面（分层黑：布局 #0a0a0a 上一档） */
+  --bbw-gray-2: #1a1a1a; /* 次级表面 / 对方气泡（须与布局底拉开一档） */
   --bbw-gray-3: #262626; /* 分隔线/边框 */
   --bbw-gray-4: #333333;
-  --bbw-gray-5: #5f6773;
-  --bbw-gray-6: #8a919d; /* 次要文字 */
-  --bbw-gray-7: #a5adb8;
-  --bbw-gray-8: #c9ced6; /* 正文主色 */
-  --bbw-gray-9: #e2e6ea;
-  --bbw-gray-10: #f0f1f3;
+  --bbw-gray-5: #4d4d4d;
+  --bbw-gray-6: #6f6f6f; /* 次要文字 */
+  --bbw-gray-7: #8f8f8f;
+  --bbw-gray-8: #b8b8b8; /* 正文主色 */
+  --bbw-gray-9: #dcdcdc;
+  --bbw-gray-10: #f0f0f0;
 
-  --bbw-success: #3cbf74;
-  --bbw-warning: #f0b45c;
-  --bbw-danger: #f0656a;
-  --bbw-info: #4c84f0;
+  --bbw-success: #4ade80; /* 黑底提亮一档 */
+  --bbw-warning: #fbbf24;
+  --bbw-danger: #f87171;
+  --bbw-info: #ffffff; /* 黑白反色系 info 跟随主色 */
 
   --bbw-danger-light: #3d2729;
   --bbw-warning-light: #3b3106;

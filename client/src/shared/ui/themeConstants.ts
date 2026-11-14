@@ -1,40 +1,44 @@
 /**
- * 主题单源（D26 §2）：antd theme 亮/暗令牌全部由本文件产出，providers 只调 antdThemeFrom(mode)。
- * 色值与 src/styles/tokens.css --bbw-* 对齐（修改需双侧同步）。
- * 口径（2026-11-13 用户补充拍板）：组件级自研样式一律退役走 antd 原生观感，
- * 本层只保留品牌基线（主色/灰阶/圆角/字号/控件高）——后续观感微调改这里即可。
- * 2026-11-14 用户拍板：主题色改**黑**（黑白反色系，Vercel 风）——
- * 亮色主色纯黑、暗色主色纯白且底色纯黑（colorBgBase #000）；默认主题=暗色。
+ * 主题单源（D27 主题机制与色彩规范——见 docs/detail/D27-主题机制与色彩规范.md）：
+ * 1) antd theme：providers 只调 antdThemeFrom(mode)，antd 组件取色全走 ConfigProvider；
+ * 2) CSS 变量：cssVarsFrom(mode) 由 providers 注入 document root 的 --bbw-*，
+ *    残余自研 CSS（气泡/markdown 等）与 antd 组件**同一份令牌源**，切主题即时联动。
+ * tokens.css 仅作 React 挂载前的首屏兜底基线（值与本文件一致）。
+ *
+ * 色彩方向（2026-11-14 用户拍板「主题色黑」+「毛坯感」修正）：
+ * - 黑白反色系（Vercel 风）：亮色主色纯黑 / 暗色主色纯白；
+ * - 暗色做**分层黑**（布局 #0a0a0a → 容器 #141414 → 浮层推导 ~#1c1c1c），非一平纯黑；
+ * - 灰阶全中性化（去蓝调）；语义色按底色调亮度（黑底提亮、白底压深）。
  */
 
 import { theme as antdTheme } from 'antd';
 import type { ThemeConfig } from 'antd';
 
-/** 亮色基线（= tokens.css :root；主色黑） */
+/** 亮色基线（= tokens.css :root；主色黑、灰阶中性） */
 const LIGHT = {
   primary: '#000000',
-  success: '#23a55b',
-  warning: '#e6a23c',
-  danger: '#e5484d',
-  gray1: '#ffffff', // 容器表面
-  gray2: '#f2f3f5', // 布局底
-  gray3: '#e5e6eb', // 边框
-  gray8: '#4e5969', // 次要文字
-  gray9: '#272e3b', // 主文字
+  success: '#16a34a',
+  warning: '#d97706',
+  danger: '#dc2626',
+  bgLayout: '#f5f5f5',
+  bgContainer: '#ffffff',
+  gray: ['#ffffff', '#f5f5f5', '#e5e5e5', '#d4d4d4', '#a3a3a3', '#737373', '#525252', '#3f3f3f', '#262626', '#171717'],
 } as const;
 
-/** 暗色（= tokens.css [data-theme='dark']；纯黑底 + 白主色反色） */
+/** 暗色（= tokens.css [data-theme='dark']；分层黑 + 白主色反色） */
 const DARK = {
   primary: '#ffffff',
-  success: '#3cbf74',
-  warning: '#f0b45c',
-  danger: '#f0656a',
-  gray1: '#141414', // 容器表面（黑底上一档）
-  gray2: '#000000', // 布局底=纯黑
-  gray3: '#262626', // 边框
-  gray8: '#a6a6a6', // 次要文字
-  gray9: '#ededed', // 主文字
+  success: '#4ade80',
+  warning: '#fbbf24',
+  danger: '#f87171',
+  bgLayout: '#0a0a0a',
+  bgContainer: '#141414',
+  gray: ['#141414', '#1a1a1a', '#262626', '#333333', '#4d4d4d', '#6f6f6f', '#8f8f8f', '#b8b8b8', '#dcdcdc', '#f0f0f0'],
 } as const;
+
+type Mode = 'light' | 'dark';
+
+const of = (mode: Mode) => (mode === 'dark' ? DARK : LIGHT);
 
 export const THEME = {
   primary: LIGHT.primary,
@@ -45,9 +49,13 @@ export const THEME = {
   fontFamily: `-apple-system, 'PingFang SC', 'Microsoft YaHei', 'Inter', sans-serif`,
 } as const;
 
-/** antd ThemeConfig 单源工厂：亮/暗同一映射函数读对应令牌组（D26 §2） */
-export function antdThemeFrom(mode: 'light' | 'dark'): ThemeConfig {
-  const c = mode === 'dark' ? DARK : LIGHT;
+/** 主色 hover/light 派生（气泡底/选中浅底；亮=灰阶 2 档、暗=黑底上一档） */
+const primaryHoverOf = (mode: Mode) => (mode === 'dark' ? '#d4d4d4' : '#262626');
+const primaryLightOf = (mode: Mode) => (mode === 'dark' ? '#1f1f1f' : '#f0f0f0');
+
+/** antd ThemeConfig 单源工厂（D26 §2 起沿用；D27 分层黑修订） */
+export function antdThemeFrom(mode: Mode): ThemeConfig {
+  const c = of(mode);
   return {
     algorithm: mode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     token: {
@@ -56,13 +64,13 @@ export function antdThemeFrom(mode: 'light' | 'dark'): ThemeConfig {
       colorSuccess: c.success,
       colorWarning: c.warning,
       colorError: c.danger,
-      colorText: c.gray9,
-      colorTextSecondary: c.gray8,
-      colorBorder: c.gray3,
-      colorBorderSecondary: mode === 'dark' ? '#1a1a1a' : c.gray2,
-      colorBgContainer: c.gray1,
-      colorBgLayout: c.gray2,
-      colorBgBase: mode === 'dark' ? '#000000' : '#ffffff',
+      colorText: c.gray[9],
+      colorTextSecondary: c.gray[6],
+      colorBorder: c.gray[2],
+      colorBorderSecondary: mode === 'dark' ? '#1f1f1f' : '#f0f0f0',
+      colorBgContainer: c.bgContainer,
+      colorBgLayout: c.bgLayout,
+      colorBgBase: mode === 'dark' ? '#0a0a0a' : '#ffffff',
       borderRadius: 6, // = --bbw-radius-control
       fontSize: 14, // = --bbw-font-14
       controlHeight: 32,
@@ -71,7 +79,28 @@ export function antdThemeFrom(mode: 'light' | 'dark'): ThemeConfig {
     components: {
       Button: { borderRadius: 6 },
       Modal: { titleFontSize: 16 }, // = --bbw-font-16
-      Table: { headerBg: c.gray2 },
+      Table: { headerBg: mode === 'dark' ? '#1a1a1a' : '#f5f5f5' },
     },
   };
+}
+
+/**
+ * CSS 变量注入源（D27 机制核心）：providers 在主题切换时把本表写入 document root，
+ * 使残余自研 CSS（var(--bbw-*)）与 antd 组件同源取色。键名与 tokens.css 对齐。
+ */
+export function cssVarsFrom(mode: Mode): Record<string, string> {
+  const c = of(mode);
+  const vars: Record<string, string> = {
+    '--bbw-primary': c.primary,
+    '--bbw-primary-hover': primaryHoverOf(mode),
+    '--bbw-primary-light': primaryLightOf(mode),
+    '--bbw-success': c.success,
+    '--bbw-warning': c.warning,
+    '--bbw-danger': c.danger,
+    '--bbw-info': c.primary, // 黑白反色系 info 跟随主色
+  };
+  c.gray.forEach((v, i) => {
+    vars[`--bbw-gray-${i + 1}`] = v;
+  });
+  return vars;
 }

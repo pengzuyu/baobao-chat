@@ -39,6 +39,7 @@
 | D25 | [对象存储与预签名直传设计](D25-对象存储与预签名直传设计.md) | 07/D06/13/16 | **MinIO 替换本地盘**（双副本 404 治本）：aws-sdk-go-v2·双实现回落（BBW_S3_ENDPOINT 空=Local 开发零负担）·仅 >8MB 分片预签名直传（≤8MB 中转保留，07 全量预签名修订）·part_size 4→8MB（S3 ≥5MiB 硬限）·对外端点 nginx 443 `/oss/` 路径代理（strip+Host 透传+签名按去前缀路径算、URL 拼回）·complete=CompleteMultipart+流式 sha 校验+CopyObject(>5GB UploadPartCopy 环)·ticket=预签名 GET 120s+variant(240/720 JPEG 缩略同批，webp 弃)·mc mirror 迁移脚本 file 表零改 |
 | D26 | [全站 UI 组件库切换 Ant Design 详细设计](D26-全站UI组件库切换AntDesign详细设计.md) | D01/D24 | **antd 5 换制（除 IM 气泡全量）**：--bbw-* 令牌全量灌 theme 零漂移·表单控件层替换（不强推 Form）·24 处 confirm→Modal.confirm·Button/Skeleton 包装化过渡·15+ 弹窗→Modal/Drawer·kb-tabs/树→Tabs/Tree·toast 统一 message·global.css 10384→≈3000·IM 气泡族/MarkdownText/ctx-menu/Splitter/StateView 保留 |
 | D26 | [个人 MCP 接入面设计](D26-个人MCP接入面设计.md) | 09/D11/D14/D16/D22 | **D16 P1-5 补账**（zcode 同款用户自配 MCP）：仅个人自配面·纯客户端本地存储（personal.json+钥匙串真值不落盘，同插件 config 制）·装配第三源 corp>插件>个人（同名跳过防劫持）·变量族 D22 子集（TOKEN HTTP-only 不变）·bbrt-mcp 手写 HTTP 补 https/TLS（rustls ring+webpki-roots）·测试连接走 RT 真实链路（McpTest 协议对+一次性 McpClient）·新 server 重启会话生效（注册表快照限制沿用插件口径） |
+| D27 | [主题机制与色彩规范](D27-主题机制与色彩规范.md) | D26/D01 | **黑白反色主题+取色单源机制**（用户拍板「主题色黑」+去毛坯修正）：themeConstants 唯一色源（antdThemeFrom→ConfigProvider / cssVarsFrom→注入 --bbw-* 双轨同源）·分层黑（布局 #0a0a0a/容器 #141414/浮层 #1c1c1c）·灰阶 10 阶中性化·语义色按底调亮度·默认暗色+防闪烁三处同步·开发守则（禁止硬编码色值/新增颜色四步流程/白名单）·验收清单 |
 
 ## 模板（D01 §13）
 
