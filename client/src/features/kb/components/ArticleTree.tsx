@@ -3,12 +3,14 @@
  * → 专栏目录递归嵌套（fetchNodes 懒加载 loadData）→ 文章叶子（点击开 tab）。
  * 目录节点 hover「+」新建子目录（titleRender 内联输入，唯一写入动作——文章本体无写入 UI 拍板）。
  * 子树存 childrenMap（parentKey→children），treeData 由 spaces+map 派生——新建后追加即现。
+ * D26-O1 补充轮：kb-tree 残余自研类退役（容器/错误文案/内联表单/叶子图标改内联+token；
+ * 目录行「+」随 hover-CSS 退役改为常显 text 按钮）。
  */
 
 import { memo, useState } from 'react';
 import type { DataNode } from 'antd/es/tree';
 import { useQueryClient } from '@tanstack/react-query';
-import { Button as AntdButton, Input, Tree, Typography } from 'antd';
+import { Button as AntdButton, Input, Tree, Typography, theme } from 'antd';
 import { FileText, FolderPlus } from 'lucide-react';
 import { createDir, fetchNodes } from '../api/kb';
 import { useSpaces } from '../api/hooks';
@@ -31,6 +33,7 @@ interface Adding {
 }
 
 function ArticleTreeInner(props: { onOpenDoc: (docId: string, title: string) => void }) {
+  const { token } = theme.useToken();
   const spaces = useSpaces('all');
   const qc = useQueryClient();
   const [childrenMap, setChildrenMap] = useState<Record<string, KNode[]>>({});
@@ -41,7 +44,11 @@ function ArticleTreeInner(props: { onOpenDoc: (docId: string, title: string) => 
   const [addingErr, setAddingErr] = useState('');
 
   if (spaces.isError) {
-    return <div className="kb-tree__error">维度加载失败，请重试</div>;
+    return (
+      <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12, padding: '2px 12px' }}>
+        维度加载失败，请重试
+      </Typography.Text>
+    );
   }
   if (spaces.isPending) {
     return <SkeletonList count={5} />;
@@ -141,7 +148,7 @@ function ArticleTreeInner(props: { onOpenDoc: (docId: string, title: string) => 
     if (n.kind === 'dir') {
       const target: Adding = { parentKey: n.key, spaceId: n.spaceId, parentId: n.key.slice(3) };
       return adding?.parentKey === n.key ? (
-        <span className="kb-tree__add-form" onClick={(e) => e.stopPropagation()}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} onClick={(e) => e.stopPropagation()}>
           <Input
             size="small"
             placeholder="目录名"
@@ -167,7 +174,6 @@ function ArticleTreeInner(props: { onOpenDoc: (docId: string, title: string) => 
         <span data-testid="kb-tree-dir">
           {n.name}
           <AntdButton
-            className="kb-tree__add"
             type="text"
             size="small"
             icon={<FolderPlus size={12} />}
@@ -183,15 +189,15 @@ function ArticleTreeInner(props: { onOpenDoc: (docId: string, title: string) => 
       );
     }
     return (
-      <span data-testid="kb-tree-doc" className="kb-tree__doc-title">
-        <FileText size={13} className="kb-tree__doc-icon" />
+      <span data-testid="kb-tree-doc" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+        <FileText size={13} style={{ flex: 'none', color: token.colorTextTertiary }} />
         {n.name}
       </span>
     );
   };
 
   return (
-    <div className="kb-tree" data-testid="kb-tree">
+    <div style={{ padding: '4px 0 12px' }} data-testid="kb-tree">
       <Tree
         blockNode
         treeData={treeData}

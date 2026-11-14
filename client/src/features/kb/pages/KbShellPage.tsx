@@ -5,12 +5,13 @@
  * tab 列表为会话级（刷新重建，登记）。搜索页仍独立路由（全屏语义）。
  * D26-O1：页签条换 antd Tabs（card 式，仅作条用——内容仍由下方条件渲染，
  * 保持「仅活动 tab 挂载」的现有语义）；树头按钮换 antd Button。
+ * D26-O1 补充轮：kb-shell 骨架自研类退役——左栏/主区布局内联 style+theme token。
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Button as AntdButton, Tabs } from 'antd';
+import { Button as AntdButton, Flex, Space, Tabs, Typography, theme } from 'antd';
 import { FilePlus2, FolderPlus, Home } from 'lucide-react';
 import { fetchDoc } from '../api/kb';
 import { ArticleTree } from '../components/ArticleTree';
@@ -27,6 +28,7 @@ function docIdOf(pathname: string): string | undefined {
 }
 
 export function KbShellPage() {
+  const { token } = theme.useToken();
   const location = useLocation();
   const docId = docIdOf(location.pathname);
   const navigate = useNavigate();
@@ -89,20 +91,32 @@ export function KbShellPage() {
   );
 
   return (
-    <div className="kb-shell" data-testid="kb-shell">
-      <aside className="kb-shell__tree">
-        <div className="kb-shell__tree-head">
-          <span>文章树</span>
-          <span className="kb-shell__tree-actions">
+    <div data-testid="kb-shell" style={{ height: '100%', minHeight: 0, display: 'flex' }}>
+      <aside
+        style={{
+          flex: 'none',
+          width: 244,
+          borderRight: `1px solid ${token.colorBorderSecondary}`,
+          background: token.colorBgContainer,
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+        }}
+      >
+        <Flex align="center" justify="space-between" style={{ flex: 'none', padding: '10px 12px 6px' }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            文章树
+          </Typography.Text>
+          <Space size={0}>
             <AntdButton type="text" size="small" icon={<FilePlus2 size={13} />} data-testid="kb-btn-create-doc" onClick={() => setDlg('doc')}>
               文章
             </AntdButton>
             <AntdButton type="text" size="small" icon={<FolderPlus size={13} />} data-testid="kb-btn-create-dir" onClick={() => setDlg('dir')}>
               目录
             </AntdButton>
-          </span>
-        </div>
-        <div className="kb-shell__tree-body">
+          </Space>
+        </Flex>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 6px 12px' }}>
           <ArticleTree onOpenDoc={onOpenDoc} />
         </div>
       </aside>
@@ -118,8 +132,8 @@ export function KbShellPage() {
         />
       ) : null}
       {dlg === 'dir' ? <CreateDirDialog onClose={() => setDlg(null)} /> : null}
-      <div className="kb-shell__main">
-        <div className="kb-tabs" data-testid="kb-tabs">
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div data-testid="kb-tabs" style={{ flex: 'none' }}>
           <Tabs
             type="card"
             hideAdd
@@ -146,7 +160,7 @@ export function KbShellPage() {
             }))}
           />
         </div>
-        <div className="kb-shell__content">
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {/* 首页 tab=原 KbHomePage 整页复用（概览卡/大搜索/榜单三列/最近查看） */}
           {activeKey === 'home' ? <KbHomePage /> : <ArticlePanel docId={activeKey} />}
         </div>

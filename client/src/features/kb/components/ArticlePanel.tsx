@@ -2,10 +2,14 @@
  * 文章内容面板（D24 真机修正轮 2026-11-13）：KbShell tab 容器内渲染——
  * 标题/维度徽章/作者/创建·更新时间/浏览量 + 大纲锚条 + markdown 全文；
  * 打开即 view 上报（作者本人服务端短路；日去重幂等）。由 pages/ArticlePage 抽组件化。
+ * D26-O1 补充轮：外围排版 antd 化——标题 Typography.Title、元信息 Space+Tag+Text、
+ * 大纲锚条 antd Button（kb-article 族自研类退役改内联+token）。
+ * 正文 chunk 内 MarkdownText（agent-md 渲染层）保留不动。
  */
 
 import { useEffect } from 'react';
 import { Eye } from 'lucide-react';
+import { Button as AntdButton, Flex, Space, Tag, Typography, theme } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { fetchChunks, fetchDoc, fetchOutline } from '../api/kb';
 import { useViewDoc } from '../api/hooks';
@@ -17,6 +21,7 @@ import { formatListTime } from '../../../shared/utils/time';
 import { pushKbRecent } from '../pages/KbHomePage';
 
 export function ArticlePanel(props: { docId: string }) {
+  const { token } = theme.useToken();
   const { docId } = props;
   const doc = useQuery({ queryKey: qk.kb.doc(docId), queryFn: () => fetchDoc(docId), enabled: !!docId });
   const chunks = useQuery({ queryKey: qk.kb.chunks(docId), queryFn: () => fetchChunks(docId), enabled: !!docId });
@@ -41,11 +46,11 @@ export function ArticlePanel(props: { docId: string }) {
     doc.isPending || chunks.isPending ? 'loading' : doc.isError || chunks.isError ? 'error' : 'ok';
 
   return (
-    <div className="kb-article" data-testid="kb-article">
+    <div data-testid="kb-article" style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <StateView
         state={state}
         skeleton={
-          <div className="kb-article__skeleton">
+          <div style={{ padding: '20px 40px', display: 'flex', flexDirection: 'column', gap: 12 }}>
             <SkeletonBlock height={28} />
             <SkeletonList count={6} />
           </div>
@@ -57,45 +62,76 @@ export function ArticlePanel(props: { docId: string }) {
         }}
       >
         {doc.data ? (
-          <div className="kb-article__layout">
-            <aside className="kb-article__outline">
-              <div className="kb-article__outline-head">大纲</div>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+            <aside
+              style={{
+                flex: 'none',
+                width: 200,
+                overflowY: 'auto',
+                borderRight: `1px solid ${token.colorBorderSecondary}`,
+                padding: '16px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginBottom: 6 }}>
+                大纲
+              </Typography.Text>
               {(outline.data ?? []).length > 0 ? (
                 (outline.data ?? []).map((o) => (
-                  <button
+                  <AntdButton
                     key={`${o.heading_path}-${o.seq}`}
-                    type="button"
-                    className="kb-article__outline-item"
+                    type="text"
+                    size="small"
+                    block
+                    style={{ textAlign: 'left', padding: '4px 8px', height: 'auto' }}
                     onClick={() =>
                       document.querySelector(`[data-chunk-seq="${o.seq}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
                     }
                   >
-                    {o.heading_path}
-                  </button>
+                    <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.heading_path}</span>
+                  </AntdButton>
                 ))
               ) : (
-                <span className="kb-article__outline-empty">（无大纲）</span>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  （无大纲）
+                </Typography.Text>
               )}
             </aside>
-            <article className="kb-article__main">
-              <header className="kb-article__head">
-                <h1 className="kb-article__title">{doc.data.title}</h1>
-                <div className="kb-article__meta">
-                  <span className={`kb-space-badge kb-space-badge--${doc.data.space_type ?? 'company'}`}>
-                    {doc.data.space_type === 'personal' ? '我的文章' : '公司知识库'}
-                  </span>
-                  <span>作者 {doc.data.created_by}</span>
-                  <span>创建 {formatListTime(doc.data.created_at)}</span>
-                  <span>更新 {formatListTime(doc.data.updated_at)}</span>
-                  <span className="kb-article__views">
-                    <Eye size={13} /> {fmtViews(view.data?.view_count ?? doc.data.view_count ?? 0)}
-                  </span>
-                </div>
-              </header>
+            <article style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '20px 40px 48px', maxWidth: 860, margin: '0 auto' }}>
+              <Flex vertical gap={8} style={{ marginBottom: 16 }}>
+                <Typography.Title level={3} style={{ margin: 0, fontSize: 24 }}>
+                  {doc.data.title}
+                </Typography.Title>
+                <Space size={14} wrap align="center">
+                  {doc.data.space_type === 'personal' ? (
+                    <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+                      我的文章
+                    </Tag>
+                  ) : (
+                    <Tag style={{ marginInlineEnd: 0 }}>公司知识库</Tag>
+                  )}
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                    作者 {doc.data.created_by}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                    创建 {formatListTime(doc.data.created_at)}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                    更新 {formatListTime(doc.data.updated_at)}
+                  </Typography.Text>
+                  <Space size={4}>
+                    <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                      <Eye size={13} style={{ verticalAlign: -2 }} /> {fmtViews(view.data?.view_count ?? doc.data.view_count ?? 0)}
+                    </Typography.Text>
+                  </Space>
+                </Space>
+              </Flex>
               {chunks.data && chunks.data.length > 0 ? (
-                <div className="kb-article__body">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {chunks.data.map((c) => (
-                    <div key={c.seq} data-chunk-seq={c.seq} className="kb-article__chunk">
+                    <div key={c.seq} data-chunk-seq={c.seq}>
                       <MarkdownText text={c.content} />
                     </div>
                   ))}

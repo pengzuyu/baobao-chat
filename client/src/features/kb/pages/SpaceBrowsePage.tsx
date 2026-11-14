@@ -2,12 +2,15 @@
  * 维度浏览页（D24）：/kb/s/:spaceId——目录（专栏）面包屑逐层进入 + 文章列表。
  * 旧 KbPage 的空间浏览区重写：去上传/去授权/去摄入任务面板（页面无写入 UI 拍板），
  * 加浏览量列；目录树以路径栈手风琴实现（逐层 fetchNodes 懒加载——接通现状 UI 未接的 parent_id）。
+ * D26-O1 补充轮：面包屑→antd Breadcrumb、目录卡→Card、文章列表→List、
+ * 新建目录→Space.Compact+Input/Button（kb-browse-page 族自研样式退役，布局内联+token）。
  */
 
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Button as AntdButton, Input } from 'antd';
+import { Breadcrumb, Card, Flex, Input, List, Space, Typography, theme } from 'antd';
 import { ChevronRight, Eye, Folder, RotateCcw } from 'lucide-react';
+import { Button } from '../../../shared/ui/Button';
 import { useCreateDir, useNodes, useSpaces } from '../api/hooks';
 import { StateView } from '../../../shared/ui/StateView';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
@@ -19,6 +22,7 @@ interface DirCrumb {
 }
 
 export function SpaceBrowsePage() {
+  const { token } = theme.useToken();
   const { spaceId = '' } = useParams();
   const navigate = useNavigate();
   const spaces = useSpaces('all');
@@ -58,33 +62,29 @@ export function SpaceBrowsePage() {
       ? 'error'
       : 'ok';
 
+  // 面包屑：维度根 + 已进入目录栈（末位=当前层，非链接加粗）
+  const crumbItems = [
+    dirStack.length === 0
+      ? { title: <Typography.Text strong>{spaceName}</Typography.Text> }
+      : { title: <Typography.Link onClick={() => setDirStack([])}>{spaceName}</Typography.Link> },
+    ...dirStack.map((d, i) =>
+      i === dirStack.length - 1
+        ? { title: <Typography.Text strong>{d.name}</Typography.Text> }
+        : { title: <Typography.Link onClick={() => setDirStack((s) => s.slice(0, i + 1))}>{d.name}</Typography.Link> },
+    ),
+  ];
+
   return (
-    <div className="kb-browse-page" data-testid="kb-browse-page">
-      <div className="kb-browse-page__head">
-        <div className="kb-browse-page__crumbs">
-          <button type="button" className="kb-browse-page__crumb" onClick={() => setDirStack([])}>
-            {spaceName}
-          </button>
-          {dirStack.map((d, i) => (
-            <span key={d.id} className="kb-browse-page__crumb-wrap">
-              <ChevronRight size={13} className="kb-browse-page__sep" />
-              <button
-                type="button"
-                className="kb-browse-page__crumb"
-                onClick={() => setDirStack((s) => s.slice(0, i + 1))}
-              >
-                {d.name}
-              </button>
-            </span>
-          ))}
-        </div>
-        <div className="kb-browse-page__actions">
+    <div data-testid="kb-browse-page" style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', padding: '12px 20px 20px', gap: 10 }}>
+      <Flex justify="space-between" align="center" gap={12} wrap="wrap">
+        <Breadcrumb items={crumbItems} separator={<ChevronRight size={13} />} />
+        <Flex align="center" gap={10} wrap="wrap">
           {dirStack.length > 0 ? (
-            <button type="button" className="kb-link-btn" onClick={() => setDirStack((s) => s.slice(0, -1))}>
-              <RotateCcw size={13} /> 上一级
-            </button>
+            <Button variant="text" size="small" icon={<RotateCcw size={13} />} onClick={() => setDirStack((s) => s.slice(0, -1))}>
+              上一级
+            </Button>
           ) : null}
-          <span className="kb-browse-page__newdir">
+          <Space.Compact>
             <Input
               size="small"
               placeholder="新建专栏目录"
@@ -93,13 +93,17 @@ export function SpaceBrowsePage() {
               onChange={(e) => setNewDir(e.target.value)}
               onPressEnter={() => void submitDir()}
             />
-            <AntdButton size="small" type="primary" onClick={() => void submitDir()} loading={creating} disabled={!newDir.trim()}>
+            <Button size="small" loading={creating} disabled={!newDir.trim()} onClick={() => void submitDir()}>
               创建
-            </AntdButton>
-          </span>
-          {dirErr ? <span className="kb-browse-page__dir-err">{dirErr}</span> : null}
-        </div>
-      </div>
+            </Button>
+          </Space.Compact>
+          {dirErr ? (
+            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+              {dirErr}
+            </Typography.Text>
+          ) : null}
+        </Flex>
+      </Flex>
 
       <StateView
         state={state}
@@ -110,48 +114,57 @@ export function SpaceBrowsePage() {
           void nodes.refetch();
         }}
       >
-        <div className="kb-browse-page__body">
+        <Flex vertical gap={12} style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {dirs.length > 0 ? (
-            <div className="kb-browse-page__dirs">
+            <Flex wrap="wrap" gap={8}>
               {dirs.map((d) => (
-                <button
+                <Card
                   key={d.id}
-                  type="button"
-                  className="kb-browse-page__dir"
+                  size="small"
+                  hoverable
+                  style={{ cursor: 'pointer', borderRadius: 10 }}
                   onClick={() => setDirStack((s) => [...s, { id: d.id, name: d.name }])}
                 >
-                  <Folder size={16} className="kb-browse-page__dir-icon" />
-                  <span className="kb-browse-page__dir-name">{d.name}</span>
-                  <ChevronRight size={14} className="kb-browse-page__dir-arrow" />
-                </button>
+                  <Space size={8}>
+                    <Folder size={16} style={{ color: token.colorWarning, verticalAlign: -3 }} />
+                    <span style={{ fontSize: 13 }}>{d.name}</span>
+                    <ChevronRight size={14} style={{ color: token.colorTextQuaternary, verticalAlign: -2 }} />
+                  </Space>
+                </Card>
               ))}
-            </div>
+            </Flex>
           ) : null}
 
           {docs.length > 0 ? (
-            <div className="kb-browse-page__docs">
-              {docs.map((doc) => (
-                <button
-                  key={doc.id}
-                  type="button"
-                  className="kb-browse-page__doc"
+            <List
+              bordered
+              style={{ borderRadius: 10, overflow: 'hidden' }}
+              dataSource={docs}
+              rowKey="id"
+              renderItem={(doc) => (
+                <List.Item
                   data-testid="kb-browse-doc"
+                  style={{ padding: '10px 14px', cursor: 'pointer' }}
                   onClick={() => navigate(`/kb/d/${doc.id}`)}
                 >
-                  <span className="kb-browse-page__doc-title">{doc.title}</span>
-                  <span className="kb-browse-page__doc-meta">
-                    <Eye size={12} className="kb-board__eye" /> {doc.view_count ?? 0} · {formatListTime(doc.updated_at)}
-                  </span>
-                </button>
-              ))}
-            </div>
+                  <Flex justify="space-between" align="center" gap={12} style={{ width: '100%', minWidth: 0 }}>
+                    <Typography.Text ellipsis style={{ minWidth: 0 }}>
+                      {doc.title}
+                    </Typography.Text>
+                    <Typography.Text type="secondary" style={{ fontSize: 12, flex: 'none' }}>
+                      <Eye size={12} style={{ verticalAlign: -1 }} /> {doc.view_count ?? 0} · {formatListTime(doc.updated_at)}
+                    </Typography.Text>
+                  </Flex>
+                </List.Item>
+              )}
+            />
           ) : dirs.length === 0 ? (
             <StateView
               state="empty"
               emptyText={dirStack.length > 0 ? '目录为空' : '还没有文章——让 AI 把会话结论沉淀进知识库'}
             />
           ) : null}
-        </div>
+        </Flex>
       </StateView>
     </div>
   );

@@ -2,11 +2,13 @@
  * 检索结果页（D24）：/kb/search?q=——现 KbPage 内 SearchPanel 吸收为独立页面；
  * 命中卡文章化（标题+维度徽章+snippet 高亮+浏览量），点击跳阅读页锚点；
  * 展开上下文（seq 前后块）沿用；degraded 黄条（vector/reranker）与合规提示保留。
+ * D26-O1 补充轮：命中卡→antd Card+List、维度徽章→Tag、降级/合规条→Alert、
+ * 展开上下文块 Typography 化（kb-search-page/kb-hit-card 族自研样式退役）。
  */
 
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Input } from 'antd';
+import { Alert, Card, Flex, Input, List, Space, Tag, Typography, theme } from 'antd';
 import { useMutation } from '@tanstack/react-query';
 import { fetchChunksAround, queryKb } from '../api/kb';
 import type { KbChunk, KbQueryHit } from '../model/types';
@@ -15,6 +17,7 @@ import { StateView } from '../../../shared/ui/StateView';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
 
 export function SearchPage() {
+  const { token } = theme.useToken();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const keyword = params.get('q') ?? '';
@@ -70,8 +73,11 @@ export function SearchPage() {
           : 'ok';
 
   return (
-    <div className="kb-search-page" data-testid="kb-search-page">
-      <div className="kb-search-page__bar">
+    <div
+      data-testid="kb-search-page"
+      style={{ height: '100%', minHeight: 0, overflowY: 'auto', padding: '16px 28px 32px', display: 'flex', flexDirection: 'column', gap: 10 }}
+    >
+      <div style={{ maxWidth: 640, marginBottom: 12 }}>
         <Input.Search
           value={input}
           placeholder="搜索公司知识"
@@ -83,18 +89,18 @@ export function SearchPage() {
       </div>
 
       {state === 'ok' ? (
-        <div className="kb-search-page__meta">
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           命中 {items.length} · {search.data?.took_ms ?? 0}ms
-        </div>
+        </Typography.Text>
       ) : null}
       {degraded.includes('vector') ? (
-        <div className="kb-degraded-bar">语义检索暂不可用，已切换关键词模式</div>
+        <Alert type="warning" showIcon message="语义检索暂不可用，已切换关键词模式" />
       ) : null}
       {degraded.includes('reranker') ? (
-        <div className="kb-degraded-bar kb-degraded-bar--mild">重排服务暂不可用，已按融合序展示</div>
+        <Alert type="warning" showIcon message="重排服务暂不可用，已按融合序展示" />
       ) : null}
       {search.data?.filtered_hint ? (
-        <div className="kb-filtered-hint">⚠ {search.data.filtered_hint}（结果可能不完整）</div>
+        <Alert type="warning" showIcon message={`${search.data.filtered_hint}（结果可能不完整）`} />
       ) : null}
 
       <StateView
@@ -104,50 +110,57 @@ export function SearchPage() {
         onRetry={() => keyword && search.mutate(keyword)}
         emptyText={keyword ? '未找到相关内容：尝试更换关键词' : '输入关键词开始搜索'}
       >
-        <div className="kb-hit-list">
-          {items.map((hit) => {
+        <List
+          dataSource={items}
+          rowKey={(hit) => `${hit.doc_id}#${hit.chunk_seq}`}
+          split={false}
+          renderItem={(hit) => {
             const key = `${hit.doc_id}#${hit.chunk_seq}`;
             return (
-              <div key={key} className="kb-hit-card" data-testid="kb-hit-card">
-                <div className="kb-hit-card__head">
-                  <span className={`kb-space-badge kb-space-badge--${hit.space_type}`}>
-                    {hit.space_type === 'company' ? '公司' : '个人'}
-                  </span>
-                  <button type="button" className="kb-hit-card__title" onClick={() => navigate(`/kb/d/${hit.doc_id}`)}>
-                    {hit.title}
-                    {hit.heading_path ? ` · ${hit.heading_path}` : ''}
-                  </button>
-                  {hit.rerank_score ? (
-                    <span className="kb-hit-card__score">{hit.rerank_score.toFixed(2)}</span>
-                  ) : (
-                    <span className="kb-hit-card__score">{hit.score.toFixed(4)}</span>
-                  )}
-                </div>
-                <div className="kb-hit-card__snippet">
-                  <HighlightText text={hit.snippet} ranges={hit.highlight} />
-                </div>
-                <div className="kb-hit-card__actions">
-                  <button type="button" className="kb-link-btn" onClick={() => void toggleExpand(hit)}>
-                    展开上下文
-                  </button>
-                  <button type="button" className="kb-link-btn" onClick={() => navigate(`/kb/d/${hit.doc_id}`)}>
-                    阅读全文
-                  </button>
-                </div>
-                {expanded[key] ? (
-                  <div className="kb-hit-card__around">
-                    {(aroundMap[key] ?? []).map((c) => (
-                      <div key={c.seq} className="kb-hit-card__around-chunk">
-                        <span className="kb-chunk-seq">#{c.seq}</span>
-                        <span>{c.content}</span>
-                      </div>
-                    ))}
+              <List.Item style={{ padding: 0 }}>
+                <Card size="small" data-testid="kb-hit-card" style={{ width: '100%', marginBottom: 10, borderRadius: 8 }}>
+                  <Flex align="center" gap={8} style={{ minWidth: 0, marginBottom: 6 }}>
+                    <Tag style={{ marginInlineEnd: 0 }}>{hit.space_type === 'company' ? '公司' : '个人'}</Tag>
+                    <Typography.Text ellipsis style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600 }}>
+                      <Typography.Link onClick={() => navigate(`/kb/d/${hit.doc_id}`)}>
+                        {hit.title}
+                        {hit.heading_path ? ` · ${hit.heading_path}` : ''}
+                      </Typography.Link>
+                    </Typography.Text>
+                    <Typography.Text type="secondary" style={{ fontSize: 11, flex: 'none' }}>
+                      {hit.rerank_score ? hit.rerank_score.toFixed(2) : hit.score.toFixed(4)}
+                    </Typography.Text>
+                  </Flex>
+                  <div style={{ fontSize: 13, lineHeight: 1.7, wordBreak: 'break-all' }}>
+                    <HighlightText text={hit.snippet} ranges={hit.highlight} />
                   </div>
-                ) : null}
-              </div>
+                  <Space size={16} style={{ marginTop: 6 }}>
+                    <Typography.Link style={{ fontSize: 12 }} onClick={() => void toggleExpand(hit)}>
+                      展开上下文
+                    </Typography.Link>
+                    <Typography.Link style={{ fontSize: 12 }} onClick={() => navigate(`/kb/d/${hit.doc_id}`)}>
+                      阅读全文
+                    </Typography.Link>
+                  </Space>
+                  {expanded[key] ? (
+                    <Flex vertical gap={6} style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${token.colorBorder}` }}>
+                      {(aroundMap[key] ?? []).map((c) => (
+                        <Flex key={c.seq} gap={8} style={{ minWidth: 0 }}>
+                          <Typography.Text type="secondary" code style={{ fontSize: 11, flex: 'none' }}>
+                            #{c.seq}
+                          </Typography.Text>
+                          <Typography.Text type="secondary" style={{ fontSize: 12, minWidth: 0 }}>
+                            {c.content}
+                          </Typography.Text>
+                        </Flex>
+                      ))}
+                    </Flex>
+                  ) : null}
+                </Card>
+              </List.Item>
             );
-          })}
-        </div>
+          }}
+        />
       </StateView>
     </div>
   );
