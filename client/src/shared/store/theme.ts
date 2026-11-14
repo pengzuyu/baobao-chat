@@ -25,7 +25,8 @@ function applyTheme(resolved: ResolvedTheme): void {
 
 function readInitialMode(): ThemeMode {
   const saved = localStorage.getItem(STORAGE_KEY);
-  return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system';
+  // 2026-11-14 用户拍板：默认主题=暗色（黑）；用户显式选过则尊重其选择
+  return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'dark';
 }
 
 interface ThemeState {

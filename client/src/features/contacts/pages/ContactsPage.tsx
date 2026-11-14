@@ -235,20 +235,25 @@ export function ContactsPage() {
   // 闪烁节点滚动入视（展开重渲染后生效；闪烁=WAAPI 内联动画，无 CSS 类依赖）
   useEffect(() => {
     if (!flashId) return;
+    // 闪烁高亮色随主题主色（黑白反色系下单色闪现，无 CSS 类依赖）
+    const r = 0.18;
+    const b = 0.55;
+    const rgb = token.colorPrimary.slice(1).match(/.{2}/g)?.map((h) => parseInt(h, 16)) ?? [0, 0, 0];
+    const flash = (a: number) => `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${a})`;
     const raf = requestAnimationFrame(() => {
       const el = document.querySelector(`[data-node-id="${flashId}"]`);
       el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       el?.animate(
         [
-          { backgroundColor: 'rgba(46, 107, 230, 0.18)', boxShadow: 'inset 0 0 0 1px rgba(46, 107, 230, 0.55)' },
-          { backgroundColor: 'rgba(46, 107, 230, 0.18)', boxShadow: 'inset 0 0 0 1px rgba(46, 107, 230, 0.55)', offset: 0.6 },
+          { backgroundColor: flash(r), boxShadow: `inset 0 0 0 1px ${flash(b)}` },
+          { backgroundColor: flash(r), boxShadow: `inset 0 0 0 1px ${flash(b)}`, offset: 0.6 },
           { backgroundColor: 'transparent', boxShadow: 'none' },
         ],
         { duration: FLASH_MS, easing: 'ease-out' },
       );
     });
     return () => cancelAnimationFrame(raf);
-  }, [flashId, expanded, tree.data, users]);
+  }, [flashId, expanded, tree.data, users, token.colorPrimary]);
 
   /** 发消息：单聊幂等创建直达（双击用户/详情卡按钮共用） */
   const startDm = async (u: DirectoryUser) => {

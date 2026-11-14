@@ -7,10 +7,10 @@
 :root {
   color-scheme: light;
 
-  /* ---- 主色（占位，可按企业 VI 替换）---- */
-  --bbw-primary: #2e6be6;
-  --bbw-primary-hover: #2456b8;
-  --bbw-primary-light: #eaf1fd; /* 己方气泡底 / 选中态浅底 */
+  /* ---- 主色（2026-11-14 用户拍板：黑白反色系——亮色主色纯黑）---- */
+  --bbw-primary: #000000;
+  --bbw-primary-hover: #262626;
+  --bbw-primary-light: #ececec; /* 己方气泡底 / 选中态浅底（黑主色浅灰） */
 
   /* ---- 中性阶 10 阶（语义：1=最浅表面 … 10=最强文字；文字主用 gray-8，次用 gray-6）---- */
   --bbw-gray-1: #ffffff;
@@ -116,14 +116,14 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bbw-primary: #4c84f0; /* 暗底提亮一档保证对比度 */
-  --bbw-primary-hover: #6b9af5;
-  --bbw-primary-light: #1d2f52; /* 己方气泡底 / 选中态深蓝 */
+  --bbw-primary: #ffffff; /* 纯黑底上主色反色为白（黑白反色系） */
+  --bbw-primary-hover: #d4d4d4;
+  --bbw-primary-light: #1f1f1f; /* 己方气泡底 / 选中态（黑底上一档灰） */
 
-  --bbw-gray-1: #1f2329; /* 页面/卡片表面 */
-  --bbw-gray-2: #272e38; /* 次级表面 / 对方气泡 */
-  --bbw-gray-3: #343b46; /* 分隔线/边框 */
-  --bbw-gray-4: #4a5260;
+  --bbw-gray-1: #141414; /* 页面/卡片表面（纯黑底上一档） */
+  --bbw-gray-2: #1a1a1a; /* 次级表面 / 对方气泡（须与纯黑布局底拉开一档） */
+  --bbw-gray-3: #262626; /* 分隔线/边框 */
+  --bbw-gray-4: #333333;
   --bbw-gray-5: #5f6773;
   --bbw-gray-6: #8a919d; /* 次要文字 */
   --bbw-gray-7: #a5adb8;
