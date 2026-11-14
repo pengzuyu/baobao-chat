@@ -2,13 +2,12 @@
  * IM 内嵌 Agent 卡控制器（D18 §2/§4，非 UI 纯逻辑）：
  * - (user, conv) → sessionId 映射（IndexedDB meta 持久；D01 §12.2-5 禁 localStorage）
  * - 落流：WS msg.send type=agent_card（服务端透传）
+ * - 分阶段更新：REST PATCH /messages/{id}/agent-card（msg.updated 扇出）
  * - 卡片 body 组装：agent store StreamItems → stages 投影
- * - 待同步池（2026-11-14 隐私裁决：默认零落流——问题/过程/回答全程仅本机可见，
- *   回合收口入池，用户手动「同步」才把仅结论 agent_card 发进会话；旧「回合开始
- *   立即落 running 卡 + 阶段边界 PATCH」写路径整体退役）
  */
 
 import { localMetaGet, localMetaSet } from '../../../shared/api/localdb';
+import { http } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
 import { toolCallCommand, type AgentCardBody, type AgentStage } from '../../../shared/components/AgentProcessCard';
 import type { StreamItem } from '../../agent/store/agent';
@@ -17,17 +16,6 @@ import { useImStore } from '../store/im';
 const MAP_KEY = 'agent_embedded_map'; // { [convId]: sessionId }
 
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
-
-/** Agent 会话运行态集合（私密实时卡/重载对账/滚动跟随判定共用；
- *  与工作台 TURN_ACTIVE_STATUSES 同口径——原 MessageBubble 内私有定义迁此） */
-export const AGENT_LIVE_STATUSES = new Set<string>([
-  'running',
-  'waiting_permission',
-  'waiting_clarify',
-  'waiting_review',
-  'subagent_fanout',
-  'delegating',
-]);
 
 export async function getEmbeddedSessionId(convId: string): Promise<string | null> {
   const map = (await localMetaGet<Record<string, string>>(MAP_KEY)) ?? {};
@@ -40,8 +28,9 @@ export async function setEmbeddedSessionId(convId: string, sessionId: string): P
   await localMetaSet(MAP_KEY, map);
 }
 
-/** 落流 agent_card（2026-11-14 隐私裁决后唯一落流场景=手动同步仅结论卡；ack 回 msgId）。
- *  mock（浏览器演示）：WS 不在演示环境内，本地 im store 直接落卡 */
+/** 落流 agent_card（新回合立即调用——0 阶段 running 卡也落；ack 回 msgId 供后续 PATCH）。
+ *  mock（浏览器演示）：WS 不在演示环境内，本地 im store 直接落卡——活动卡已取消
+ *  （2026-11-11），落流卡是唯一界面，无 mock 通道则演示无反馈 */
 export async function landAgentCard(convId: string, clientMsgId: string, body: AgentCardBody): Promise<string | null> {
   if (USE_MOCK) {
     const im = useImStore.getState();
@@ -75,76 +64,19 @@ export async function landAgentCard(convId: string, clientMsgId: string, body: A
   return ack?.msgId ?? null;
 }
 
-/** 分阶段更新已落流卡片（D18 §4.2：body 原样透传）——2026-11-14 隐私裁决退役：
- *  默认零落流后无 running 卡可 PATCH，服务端路由保留兼容旧版落流卡 */
-
-// ── 待同步池（2026-11-14 隐私裁决）────────────────────────────────────────────
-// 回合收口（done 且有结论）→ 入池（IndexedDB 持久，重载不丢）；用户手动「同步」
-// → 仅结论 agent_card 落流 + 出池；「仅自己保留」→ 直接出池（工作台仍有全量历史）。
-// 失败/中断轮无结论可同步，不入池。
-
-/** 待同步回合（一问一答一轮；id 用确定性轮键 agc-{sid}-r{N} 幂等去重） */
-export interface PendingAgentRound {
-  id: string;
-  sessionId: string;
-  /** 流内 user 条目数（轮序；同步落流 token 的盐基） */
-  round: number;
-  /** 本轮问题（卡头标识；roundQuestionOf 产物） */
-  question?: string;
-  /** 最终回答 markdown（仅此一段随同步落流——思考/工具过程永不进会话） */
-  conclusionMd: string;
-  startedAt: number;
-  endedAt: number;
-}
-
-const PENDING_KEY = 'agent_embedded_pending'; // { [convId]: PendingAgentRound[] }
-const PENDING_CAP = 20; // 每会话封顶（防无限堆积；更早未处理轮静默淘汰）
-
-export async function readPendingPool(): Promise<Record<string, PendingAgentRound[]>> {
-  return (await localMetaGet<Record<string, PendingAgentRound[]>>(PENDING_KEY)) ?? {};
-}
-
-async function writePendingPool(pool: Record<string, PendingAgentRound[]>): Promise<void> {
-  await localMetaSet(PENDING_KEY, pool);
-}
-
-/** 入池（按 id 幂等；时间序追加，封顶截旧） */
-export async function addPendingRound(convId: string, item: PendingAgentRound): Promise<void> {
-  const pool = await readPendingPool();
-  const list = pool[convId] ?? [];
-  if (list.some((x) => x.id === item.id)) return; // 幂等：写入器可能随流事件重跑
-  pool[convId] = [...list, item].slice(-PENDING_CAP);
-  await writePendingPool(pool);
-}
-
-/** 出池（同步成功/仅自己保留共用） */
-export async function removePendingRound(convId: string, id: string): Promise<void> {
-  const pool = await readPendingPool();
-  const list = pool[convId];
-  if (!list || !list.some((x) => x.id === id)) return;
-  pool[convId] = list.filter((x) => x.id !== id);
-  await writePendingPool(pool);
-}
-
-/** 待同步回合 → 仅结论同步卡 body（无思考/工具过程；接收方按普通 done 卡渲染） */
-export function pendingSyncBody(item: PendingAgentRound): AgentCardBody {
-  return {
-    kind: 'embedded_agent',
-    session_id: item.sessionId,
-    status: 'done',
-    stages: [{ t: 'conclusion', md: item.conclusionMd, ts: item.endedAt }],
-    sources: [],
-    rounds: 1,
-    started_at: item.startedAt,
-    ended_at: item.endedAt,
-    question: item.question,
-  };
-}
-
-/** 手动同步：仅结论卡落流（落流 token 带盐防撞号）+ 出池。失败抛错由调用方提示重试 */
-export async function syncRoundToConv(convId: string, item: PendingAgentRound): Promise<void> {
-  await landAgentCard(convId, agentCardRoundToken(item.sessionId, item.round), pendingSyncBody(item));
-  await removePendingRound(convId, item.id);
+/** 分阶段更新已落流卡片（D18 §4.2：body 原样透传；mock 本地更新 body） */
+export async function patchAgentCard(msgId: string, body: AgentCardBody): Promise<void> {
+  if (USE_MOCK) {
+    useImStore.setState((s) => {
+      for (const [cid, list] of Object.entries(s.messagesByConv)) {
+        if (!list || !list.some((m) => m.msgId === msgId)) continue;
+        return { messagesByConv: { ...s.messagesByConv, [cid]: list.map((m) => (m.msgId === msgId ? { ...m, body } : m)) } };
+      }
+      return s;
+    });
+    return;
+  }
+  await http.patch(`/messages/${encodeURIComponent(msgId)}/agent-card`, body);
 }
 
 /**
@@ -223,9 +155,14 @@ export function stagesFromStream(items: StreamItem[]): { stages: AgentStage[]; s
 }
 
 /**
- * 粗粒度阶段签名（阶段边界节流）——2026-11-14 隐私裁决随阶段 PATCH 写路径退役删除
- * （防落流风暴口径的最后一次实践见 git 历史；默认零落流后无此需求）。
+ * 粗粒度阶段边界签名（活动卡落流/更新的 effect 依赖）：
+ * 只含阶段数/类型/工具名与状态——**不含结论文本长度**（流式 delta 每个 token
+ * 都变，细粒度签名会引发落流风暴，2026-11-10 真机实测事故）。结论 md 只随
+ * 终态 patch 全量带出；思考 digest 同理。
  */
+export function stagesSignature(stages: AgentStage[]): string {
+  return stages.map((s) => `${s.t}:${s.name ?? ''}:${s.status ?? ''}`).join('|');
+}
 
 /**
  * 上下文自读指令（D18 §3.5 2026-11-10 修订）：升级/继续不搬运卡片内容——

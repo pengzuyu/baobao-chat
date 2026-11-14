@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Flex, Image, Popover, Tag, Typography, theme } from 'antd';
 import { useAgentStore } from '../../agent/store/agent';
 import { getAgentBridge } from '../../agent/bridge';
-import { AGENT_LIVE_STATUSES, currentRoundItems, roundQuestionOf, stagesFromStream } from '../agent/embedded';
+import { currentRoundItems, roundQuestionOf, stagesFromStream } from '../agent/embedded';
 import {
   AlertCircle,
   ArrowDownToLine,
@@ -30,7 +30,6 @@ import {
   CheckCheck,
   ChevronDown,
   Clock3,
-  EyeOff,
   FileText,
   Image as ImageIcon,
   Lightbulb,
@@ -1267,8 +1266,15 @@ function FileCardFallback({ name }: { name: string }) {
   );
 }
 
-/** Agent 会话运行态集合已迁 ../agent/embedded 导出（2026-11-14 隐私裁决：
- *  EmbeddedAgentSync 重载对账与 EmbeddedPrivateCards/ChatPage 共用，避免组件间横向 import） */
+/** Agent 会话运行态集合（落流卡 live 判定；与工作台 TURN_ACTIVE_STATUSES 同口径） */
+const AGENT_LIVE_STATUSES = new Set<string>([
+  'running',
+  'waiting_permission',
+  'waiting_clarify',
+  'waiting_review',
+  'subagent_fanout',
+  'delegating',
+]);
 
 /** 落流卡完成后保持展开的宽限（2026-11-11 用户口径）：到点后台自动折叠成摘要卡
  * （无倒计时 UI）；期间用户再向 agent 发消息=新回合开始，旧卡立即折叠 */
@@ -1287,38 +1293,15 @@ function agentCardPlainText(md: string): string {
     .trim();
 }
 
-/** 私密卡同步动作（2026-11-14 隐私裁决）：EmbeddedPrivateCards 注入——仅本人可见的
- *  本地卡（非消息），收口后手动「同步」才把仅结论卡落流进会话 */
-export interface AgentCardPrivateSync {
-  onSync: () => void;
-  /** 仅自己保留：出池移除（工作台仍有全量历史） */
-  onDismiss: () => void;
-  /** 同步落流进行中（按钮 loading/防重入） */
-  busy?: boolean;
-}
-
-/** 落流卡（2026-11-11 改版；2026-11-14 隐私裁决复用为私密卡壳）：
+/** 落流卡（2026-11-11 改版）：
  * - 实时投影（活动卡取消后本卡即实时界面）：本会话运行中且本卡为当前轮
  *   （landed running）→ 直接以 agent store 流投影渲染（随 delta 平滑流式）
- * - 状态校正兜底：落流停在 running 而会话实际已收口（无人 PATCH 场景）→ 按 done
- *   渲染；**私密卡跳过**（存活由调用方判定——乐观上屏期 live 未翻转，误校正=闪没）
+ * - 状态校正兜底：落流停在 running 而会话实际已收口（无人 PATCH 场景）→ 按 done 渲染
  * - 摘要折叠（2026-11-11 用户拍板，仅 IM 聊天页、工作台不走本组件）：收口后折叠为
- *   迷你卡——完成起 2 分钟宽限到点自动折叠，宽限期内新回合开始立即折叠；**私密卡
- *   全部跳过**（同步决策未完成不后台抢折，折叠态带「未同步」小标，手动展开可同步）
- * - 私密卡（privateSync 入参）：卡顶「仅自己可见」条；收口后页脚「同步到会话/
- *   仅自己保留」——同步仅发最终回答（embedded.ts pendingSyncBody，无思考/工具）
+ *   迷你卡——完成起 2 分钟宽限到点自动折叠，宽限期内新回合开始立即折叠
  * - 应答条（仅回答 agent 的交互）：待审批黄条 + D20 提问蓝条——与聊天页弹框同感
  */
-export function AgentCardMsg({
-  body,
-  privateSync,
-  initialExpanded,
-}: {
-  body: AgentCardBody;
-  privateSync?: AgentCardPrivateSync;
-  /** 私密卡初始展开态（默认展开；EmbeddedPrivateCards 历史待同步轮传 false） */
-  initialExpanded?: boolean;
-}) {
+export function AgentCardMsg({ body }: { body: AgentCardBody }) {
   const { token } = theme.useToken();
   // 订阅只取引用（2026-11-11 卡顿修复）：此前 4 个 selector 内各做 O(流长) 扫描，
   // store 每次 set（流式期每 delta）都会执行——聊天里每轮一张历史卡，成本 ×卡数；
@@ -1377,13 +1360,12 @@ export function AgentCardMsg({
   }, [live, body, stream]);
   const display: AgentCardBody =
     liveProj ??
-    // 状态校正兜底（无人 PATCH 场景）：落流停在 running 而会话已收口 → 按 done 渲染；
-    // 私密卡跳过（存活由调用方判定——乐观上屏期 live 尚未翻转，误校正会让实时卡闪没）
-    (body.status === 'running' && !live && !privateSync ? { ...body, status: 'done', ended_at: body.ended_at ?? Date.now() } : body);
+    // 状态校正兜底（无人 PATCH 场景）：落流停在 running 而会话已收口 → 按 done 渲染
+    (body.status === 'running' && !live ? { ...body, status: 'done', ended_at: body.ended_at ?? Date.now() } : body);
 
   // ---- 一行折叠态（仅 IM；口径见组件头注）----
   const done = display.status !== 'running';
-  const [expanded, setExpanded] = useState(() => (privateSync ? initialExpanded !== false : !done));
+  const [expanded, setExpanded] = useState(!done);
   const graceTimerRef = useRef<number | null>(null);
   const clearGrace = useCallback(() => {
     if (graceTimerRef.current != null) {
@@ -1393,10 +1375,8 @@ export function AgentCardMsg({
   }, []);
   useEffect(() => clearGrace, [clearGrace]); // 卸载清定时器
   // running→done 转换（终态 PATCH/死会话校正）：起 2 分钟宽限，到点后台折叠
-  // （私密卡跳过——同步决策未完成不后台抢折）
   const prevDoneRef = useRef(done);
   useEffect(() => {
-    if (privateSync) return;
     if (!prevDoneRef.current && done) {
       clearGrace();
       graceTimerRef.current = window.setTimeout(() => {
@@ -1405,18 +1385,17 @@ export function AgentCardMsg({
       }, AGC_COLLAPSE_GRACE_MS);
     }
     prevDoneRef.current = done;
-  }, [done, clearGrace, privateSync]);
+  }, [done, clearGrace]);
   // 宽限期内新回合开始（同会话流 user 条目增加）且本卡已收口 → 立即折叠
   const userCount = useMemo(() => (stream ? stream.filter((it) => it.kind === 'user').length : 0), [stream]);
   const prevUserCountRef = useRef(userCount);
   useEffect(() => {
-    if (privateSync) return;
     if (userCount > prevUserCountRef.current && done) {
       clearGrace();
       setExpanded(false);
     }
     prevUserCountRef.current = userCount;
-  }, [userCount, done, clearGrace, privateSync]);
+  }, [userCount, done, clearGrace]);
   /** 手动展开/收起：清宽限定时器（手动优先，本轮不再后台抢折） */
   const toggleExpanded = useCallback(() => {
     clearGrace();
@@ -1491,22 +1470,6 @@ export function AgentCardMsg({
           <Bot size={13} />
           <span style={{ fontWeight: 600, flexShrink: 0 }}>Agent</span>
           <span style={{ flexShrink: 0, color: stateColor }}>{stateLabel}</span>
-          {privateSync ? (
-            <span
-              style={{
-                flexShrink: 0,
-                fontSize: 11,
-                lineHeight: '16px',
-                padding: '0 4px',
-                borderRadius: 4,
-                color: token.colorWarning,
-                background: token.colorWarningBg,
-                border: `1px solid ${token.colorWarningBorder}`,
-              }}
-            >
-              未同步
-            </span>
-          ) : null}
           <span style={{ flexShrink: 0, color: token.colorTextSecondary }}>：</span>
           <span
             style={{
@@ -1557,32 +1520,13 @@ export function AgentCardMsg({
   }
   return (
     <>
-      {privateSync ? (
-        <Flex align="center" gap={5} style={{ fontSize: 12, color: token.colorTextTertiary, padding: '0 2px' }}>
-          <EyeOff size={12} />
-          <span>仅自己可见{done ? '，同步后对方才能看到最终回答' : '，对方看不到本次问答'}</span>
-        </Flex>
-      ) : null}
       <AgentProcessCard
         body={display}
         startedAt={display.started_at}
-        testId={privateSync ? 'agent-card-private' : 'agent-card-msg'}
+        testId="agent-card-msg"
         onCollapse={toggleExpanded}
         actions={
           <Flex gap={6} onClick={(e) => e.stopPropagation()}>
-            {privateSync && done ? (
-              <Flex align="center" gap={8} style={{ marginTop: 6, width: '100%' }}>
-                <span style={{ flex: 1, fontSize: 12, color: token.colorTextSecondary }}>
-                  同步仅发送最终回答（不含思考与工具过程）
-                </span>
-                <Button size="small" variant="secondary" onClick={privateSync.onDismiss}>
-                  仅自己保留
-                </Button>
-                <Button size="small" loading={privateSync.busy} onClick={privateSync.onSync}>
-                  同步到会话
-                </Button>
-              </Flex>
-            ) : null}
             {pendingPerm && pendingPerm.kind === 'permission' && live ? (
             <Flex
               align="center"

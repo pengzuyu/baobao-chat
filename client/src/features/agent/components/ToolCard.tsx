@@ -1,8 +1,6 @@
 /**
- * 工具调用行（PAG-03 §3.3 / INT-AG-02；2026-11-14 全页过程流口径：一行一项）：
- * - 头部：图标 + 中文类型标签（title 提示原始工具名）+ 关键参数（终端=命令原文）+
- *   风险徽标 + 状态（运行中 Spin / ok+耗时 / failed / blocked 红条带错误码）
- * - 收起态追加结果摘要预览行（ZCode 式一行预览，展开后由完整区块替代）
+ * 工具调用折叠卡（PAG-03 §3.3 / INT-AG-02）：
+ * - 头部：图标 + 工具名 + 风险徽标 + 状态（运行中 Spin / ok+耗时 / failed / blocked 红条带错误码）
  * - 展开体：输入参数摘要（脱敏后的 args）+ 结果摘要（≤10 行）
  * - D26-O6：tool-card/agent-risk 类退役——内联 token 容器 + antd Tag/Spin/Typography；
  *   运行中自动展开/落定折叠行为原样保留。
@@ -23,17 +21,6 @@ function toolIcon(tool: string) {
   if (tool.startsWith('run') || tool.includes('command')) return Terminal;
   if (tool.startsWith('search') || tool.startsWith('glob') || tool.startsWith('grep')) return Search;
   return Wrench;
-}
-
-/** 工具名 → 中文类型标签（2026-11-14 全页过程流口径；头部 title 提示原名） */
-function toolLabel(tool: string): string {
-  if (tool === 'run_command') return '终端';
-  if (tool.startsWith('read')) return '读取文件';
-  if (tool.startsWith('edit') || tool.startsWith('write')) return '编辑文件';
-  if (tool.startsWith('glob') || tool.startsWith('grep') || tool.startsWith('search')) return '搜索';
-  if (tool.startsWith('fetch') || tool.startsWith('web')) return '网页';
-  if (tool === 'ask_user') return '提问';
-  return tool;
 }
 
 /** 8020-8026 拦截码文案（14 篇 §7 错误码映射） */
@@ -85,21 +72,19 @@ const headToggleStyle: CSSProperties = {
   height: 'auto',
 };
 
-/** 等宽内容块样式（参数/结果/日志；底色 token 取代原硬编码 rgba——对齐 agent-md 行内码观感） */
-function monoBlockStyle(token: ReturnType<typeof theme.useToken>['token']): CSSProperties {
-  return {
-    fontFamily: 'var(--bbw-font-mono)',
-    fontSize: 12,
-    background: token.colorFillSecondary,
-    borderRadius: 4,
-    padding: '8px 12px',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-all',
-    maxHeight: 220,
-    overflowY: 'auto',
-    margin: 0,
-  };
-}
+/** 等宽内容块样式（参数/结果/日志，原 tool-card__mono；底色对齐 agent-md 行内码口径） */
+const monoBlockStyle: CSSProperties = {
+  fontFamily: 'var(--bbw-font-mono)',
+  fontSize: 12,
+  background: 'rgba(127, 134, 145, 0.14)',
+  borderRadius: 4,
+  padding: '8px 12px',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-all',
+  maxHeight: 220,
+  overflowY: 'auto',
+  margin: 0,
+};
 
 export const ToolCard = memo(function ToolCard({ item }: { item: ToolItem }) {
   const { token } = theme.useToken();
@@ -156,8 +141,8 @@ export const ToolCard = memo(function ToolCard({ item }: { item: ToolItem }) {
           style={{ color: token.colorTextQuaternary, flexShrink: 0, transition: 'transform 0.15s ease', transform: open ? 'rotate(90deg)' : undefined }}
         />
         <Icon size={13} aria-hidden style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
-        <Typography.Text style={{ fontFamily: 'var(--bbw-font-mono)', fontSize: 12, flexShrink: 0 }} title={call.tool}>
-          {toolLabel(call.tool)}
+        <Typography.Text style={{ fontFamily: 'var(--bbw-font-mono)', fontSize: 12, flexShrink: 0 }}>
+          {isTerm ? '终端' : call.tool}
         </Typography.Text>
         {cmd ? (
           <Typography.Text code copyable={false} style={{ fontSize: 12, minWidth: 0, flexShrink: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: 'transparent', border: 'none', padding: 0 }}>
@@ -175,29 +160,19 @@ export const ToolCard = memo(function ToolCard({ item }: { item: ToolItem }) {
           {blocked.code} · {BLOCK_LABELS[blocked.code] ?? '已拦截'} · {blocked.rule}
         </div>
       ) : null}
-      {/* 收起态结果摘要预览行（ZCode 式一行预览；展开后由完整结果区块替代。
-          paddingLeft 53 对齐头部图标后文本起点：12(容器) + 12(箭头) + 8 + 13(图标) + 8 */}
-      {!open && result?.ok && result.summary ? (
-        <div
-          style={{ padding: '0 12px 8px 53px', fontSize: 12, lineHeight: 1.5, color: token.colorTextTertiary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-          title={result.summary}
-        >
-          {result.summary}
-        </div>
-      ) : null}
       {open ? (
         <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
             <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
               {isTerm ? '命令' : '输入参数（已脱敏）'}
             </Typography.Text>
-            <div style={monoBlockStyle(token)}>{isTerm && cmd ? `$ ${cmd}` : summarizeArgs(call.args) || '（无参数）'}</div>
+            <div style={monoBlockStyle}>{isTerm && cmd ? `$ ${cmd}` : summarizeArgs(call.args) || '（无参数）'}</div>
           </div>
           <div>
             <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
               执行结果{result?.truncated ? '（已截断）' : ''}
             </Typography.Text>
-            <div style={monoBlockStyle(token)}>{result?.summary ?? '（执行中…）'}</div>
+            <div style={monoBlockStyle}>{result?.summary ?? '（执行中…）'}</div>
           </div>
         </div>
       ) : null}

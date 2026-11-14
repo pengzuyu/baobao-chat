@@ -35,10 +35,9 @@ function voiceExtOf(mime: string): string {
   return 'webm';
 }
 
-/** 斜杠命令表（2026-11-11：/agent 进入/退出机器人对话模式；@Agent 触发已下线留作他用。
- *  2026-11-14 隐私裁决：Agent 模式=私密问答——全程仅自己可见，回答完成后可手动同步结论） */
+/** 斜杠命令表（2026-11-11：/agent 进入/退出机器人对话模式；@Agent 触发已下线留作他用） */
 const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
-  { cmd: '/agent', desc: '进入 Agent 私密问答（仅自己可见，再次执行取消）' },
+  { cmd: '/agent', desc: '进入与机器人对话模式（再次执行取消）' },
 ];
 
 /**
@@ -464,7 +463,7 @@ export function MessageInput({
 
       <Flex gap={4} align="center">
         {onToggleAgentMode ? (
-          <Tooltip title={agentMode ? 'Agent 私密问答已开启（仅自己可见，点击关闭）' : 'Agent 私密问答：本条消息交给 AI 处理，全程仅自己可见，完成后可同步结论到会话'}>
+          <Tooltip title={agentMode ? 'Agent 模式已开启（点击关闭）' : 'Agent 模式：本条消息交给 AI 处理'}>
             <Button
               variant="text"
               size="small"
@@ -540,12 +539,12 @@ export function MessageInput({
             <Mic size={17} />
           </Button>
         </Tooltip>
-        {/* Agent 私密问答徽标（行末右上角；margin-left:auto 只推自己，操作按钮保持原位） */}
+        {/* 机器人模式徽标（行末右上角；margin-left:auto 只推自己，操作按钮保持原位） */}
         {agentMode ? (
           <Button
             size="small"
             data-testid="agent-mode-badge"
-            title="Agent 私密问答中，仅自己可见，点击退出"
+            title="机器人对话模式中，点击退出"
             style={{
               marginInlineStart: 'auto',
               display: 'inline-flex',
@@ -562,7 +561,7 @@ export function MessageInput({
             onClick={() => onToggleAgentMode?.()}
           >
             <Bot size={12} />
-            Agent 私密问答
+            机器人对话模式
           </Button>
         ) : null}
       </Flex>
@@ -669,7 +668,7 @@ export function MessageInput({
                 {c.cmd}
               </span>
               <span style={{ color: token.colorTextQuaternary, fontSize: 12 }}>
-                {agentMode ? '当前已在 Agent 私密问答，执行=退出' : c.desc}
+                {agentMode ? '当前已在机器人模式，执行=退出' : c.desc}
               </span>
             </button>
           ))}

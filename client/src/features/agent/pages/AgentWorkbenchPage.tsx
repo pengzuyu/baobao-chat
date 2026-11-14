@@ -3,14 +3,13 @@
  * - 左：会话列表（窄栏 + 新建 + 二级导航入口）
  * - 中：会话视图（头部状态徽标/停止 + 会话流 + 输入区）
  * - 右：上下文栏（会话信息/检查点时间线/记忆侧写，可折叠）
- * - 会话流渲染（2026-11-14 ZCode 式全页过程流）：一轮=全宽用户消息块+过程流一行一项
- *   （思考/工具/审批/子任务/中间正文，每个工具一行）——运行中全展开实时走秒，收口后
- *   过程折为一行统计摘要可回看，结论 markdown 常开（WorkbenchTurn）
+ * - 会话流渲染（2026-11-11 回合气泡）：一轮=用户气泡+Agent 气泡——思考/工具/审批/
+ *   子任务/中间正文收进同一气泡的过程区（折叠为一行统计条），最终回答常开（TurnBubble）
  * - 六态：列表与中栏各自 StateView（forbidden 不适用于本域：页面准入权限点由设置域登记）
  * - offline：Agent 不依赖 WSS（D08 §1.3），mock 桥本地照常，仅提示
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Dropdown, Flex, Modal, Tag, Typography, theme, type MenuProps } from 'antd';
 import { MessageCircle, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, ShieldCheck, Square } from 'lucide-react';
@@ -29,9 +28,10 @@ import type { AIProvider } from '../../admin/model/types';
 import { AgentSubNav } from '../components/AgentSubNav';
 import { AgentSessionList } from '../components/AgentSessionList';
 import { AgentContextSidebar } from '../components/AgentContextSidebar';
+import { UserMessage } from '../components/StreamMessage';
 import type { PermissionDecision } from '../components/PermissionCard';
 import { TypingState } from '../components/TypingState';
-import { WorkbenchTurn, groupTurns, renderProcessItems } from '../components/WorkbenchTurn';
+import { TurnBubble, groupTurns, renderProcessItems } from '../components/TurnBubble';
 import { ModelThinkPicker } from '../components/ModelThinkPicker';
 import { convIdOfSession } from '../../im/agent/embedded';
 import { Composer } from '../components/Composer';
@@ -362,27 +362,29 @@ export function AgentWorkbenchPage() {
     />
   );
 
-  // ---- 会话流渲染（2026-11-14 ZCode 式全页过程流：一轮=用户块+一行一项过程流）----
+  // ---- 会话流渲染（2026-11-11 回合气泡：一轮=用户气泡+Agent 气泡，过程折叠进同泡）----
   const { head, turns } = useMemo(() => groupTurns(items), [items]);
   const turnActive = status !== undefined && TURN_ACTIVE_STATUSES.has(status);
   const streamNode = (
     <div
-      style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}
+      style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}
       ref={streamRef}
       onScroll={onStreamScroll}
     >
       {/* 首个 user 前的散条（历史残留事件流；正常为空） */}
       {head.length > 0 ? <>{renderProcessItems(head, handleRespond)}</> : null}
       {turns.map((t, i) => (
-        <WorkbenchTurn
-          key={t.user.key}
-          user={t.user}
-          items={t.items}
-          active={i === turns.length - 1 && turnActive}
-          onRespond={handleRespond}
-        />
+        <Fragment key={t.user.key}>
+          <UserMessage text={t.user.text} />
+          <TurnBubble
+            user={t.user}
+            items={t.items}
+            active={i === turns.length - 1 && turnActive}
+            onRespond={handleRespond}
+          />
+        </Fragment>
       ))}
-      {/* 运行中但尚无回合可挂载（回合启动阶段）→ 独立打点；有回合时由回合过程流承载 */}
+      {/* 运行中但尚无回合可挂载（回合启动阶段）→ 独立打点；有回合时由回合气泡承载 */}
       {turnActive && turns.length === 0 ? <TypingState text="Agent 正在处理" /> : null}
     </div>
   );
