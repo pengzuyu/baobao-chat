@@ -5,13 +5,15 @@
  * - PersonPickerModal：弹窗壳（发起单聊 ChatPage / 邀请成员 ConvInfoSidebar），
  *   single 点行即回调；multiple 底栏「确认（n）」
  * 数据源 GET /org/users（登录后含 uid 口径）；excludeUids 客户端过滤（如已有成员）。
- * D26-O5：仅外壳换 antd Modal（遮罩/Esc/底栏由 Modal 承载）；搜索框→antd Input；
- * 结果列表行属内容渲染，保守保留（列表行内联化随气泡域批次另行处理）。
+ * D26-O5：外壳/搜索框已 antd 化（Modal/Input）。
+ * D26-O6（本批）：列表内容行的 bbw-pp 与 bbw-contacts 自研类残留退役——内联 + shared
+ * Avatar + Typography，加载更多→shared Button。
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Input, Modal } from 'antd';
+import { Input, Modal, Typography, theme } from 'antd';
 import { Check, Search } from 'lucide-react';
+import { Avatar } from '../../../shared/ui/Avatar';
 import { Button } from '../../../shared/ui/Button';
 import { errText } from '../../../shared/api/http';
 import { fetchDirectoryUsers } from '../../contacts/api/contacts';
@@ -32,6 +34,7 @@ interface CoreProps {
 }
 
 export function PersonPickerCore({ multiple, selected, onToggle, onPick, excludeUids }: CoreProps) {
+  const { token } = theme.useToken();
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
   const [items, setItems] = useState<DirectoryUser[]>([]);
@@ -88,8 +91,15 @@ export function PersonPickerCore({ multiple, selected, onToggle, onPick, exclude
       });
   };
 
+  /** 提示行（搜索中/空态/错误；原 bbw-pp__hint） */
+  const hint = (text: string, warn = false): React.ReactNode => (
+    <Typography.Text type={warn ? 'warning' : 'secondary'} style={{ display: 'block', padding: '18px 8px', textAlign: 'center', fontSize: 12 }}>
+      {text}
+    </Typography.Text>
+  );
+
   return (
-    <div className="bbw-pp" data-testid="person-picker">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }} data-testid="person-picker">
       <Input
         autoFocus
         allowClear
@@ -100,34 +110,54 @@ export function PersonPickerCore({ multiple, selected, onToggle, onPick, exclude
         onChange={(e) => setQInput(e.target.value)}
         style={{ marginBottom: 8 }}
       />
-      <div className="bbw-pp__list">
+      <div style={{ overflow: 'auto', maxHeight: 320, display: 'flex', flexDirection: 'column', gap: 2 }}>
         {error ? (
-          <div className="bbw-pp__hint bbw-pp__hint--warn">{error}</div>
+          hint(error, true)
         ) : loading && rows.length === 0 ? (
-          <div className="bbw-pp__hint">搜索中…</div>
+          hint('搜索中…')
         ) : rows.length === 0 ? (
-          <div className="bbw-pp__hint">{q ? '无匹配人员' : '暂无人员'}</div>
+          hint(q ? '无匹配人员' : '暂无人员')
         ) : (
-          rows.map((u) => (
-            <button
-              key={u.uid}
-              type="button"
-              className={`bbw-pp__row${selectedUids.has(u.uid) ? ' bbw-pp__row--selected' : ''}`}
-              data-testid="person-picker-row"
-              onClick={() => (multiple ? onToggle?.(u) : onPick?.(u))}
-            >
-              <span className="bbw-contacts__avatar bbw-contacts__avatar--sm">{(u.display_name || '?').slice(0, 1)}</span>
-              <span className="bbw-pp__name">{u.display_name}</span>
-              <span className="bbw-pp__empno">{u.employee_no}</span>
-              <span className="bbw-pp__path">{u.org_path || '未分组'}</span>
-              {multiple && selectedUids.has(u.uid) ? <Check size={14} className="bbw-pp__check" /> : null}
-            </button>
-          ))
+          rows.map((u) => {
+            const picked = selectedUids.has(u.uid);
+            return (
+              <button
+                key={u.uid}
+                type="button"
+                data-testid="person-picker-row"
+                onClick={() => (multiple ? onToggle?.(u) : onPick?.(u))}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '7px 8px',
+                  borderRadius: token.borderRadius,
+                  border: 'none',
+                  background: picked ? token.colorPrimaryBg : 'transparent',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  color: token.colorText,
+                }}
+              >
+                <Avatar name={u.display_name || '?'} size={32} />
+                <Typography.Text style={{ fontSize: 13, fontWeight: 500, flexShrink: 0 }}>
+                  {u.display_name}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
+                  {u.employee_no}
+                </Typography.Text>
+                <Typography.Text type="secondary" ellipsis style={{ flex: 1, minWidth: 0, fontSize: 12 }}>
+                  {u.org_path || '未分组'}
+                </Typography.Text>
+                {multiple && picked ? <Check size={14} aria-hidden style={{ flexShrink: 0, color: token.colorPrimary }} /> : null}
+              </button>
+            );
+          })
         )}
         {nextCursor && rows.length > 0 ? (
-          <button type="button" className="bbw-contacts__more" onClick={loadMore} disabled={loading}>
+          <Button variant="secondary" size="small" onClick={loadMore} disabled={loading} loading={loading} style={{ margin: '8px auto', borderRadius: 14 }}>
             {loading ? '加载中…' : '加载更多'}
-          </button>
+          </Button>
         ) : null}
       </div>
     </div>

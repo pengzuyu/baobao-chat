@@ -1,12 +1,14 @@
 /**
  * 审批卡 · 命令确认形态（PAG-04 §3.4.1 / INT-AG-03/20；审批卡状态机 §4.2）：
  * - 工具名 + 风险 + 参数预览（命令文本框可编辑，允许时回传 editedArgs）
- * - 记忆粒度三选：本次 / 本会话 / 永久（高危不出现永久，options 由 Runtime 下发）
+ * - 记忆粒度三选（antd Segmented）：本次 / 本会话 / 永久（高危不出现永久，options 由 Runtime 下发）
  * - [允许] [拒绝]；120s 倒计时进度条，到点自动置灰 = 已超时拒绝
  * - 终态折叠：已允许（含粒度）/ 已拒绝 / 已超时 / 已作废（紧急停止）
+ * D26-O6：perm-card/perm-scope 类退役——内联 token + antd Tag/Segmented/Input/Typography。
  */
 
 import { memo, useEffect, useMemo, useState } from 'react';
+import { Input, Segmented, Tag, Typography, theme } from 'antd';
 import { ShieldAlert } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import type { StreamItem } from '../store/agent';
@@ -35,7 +37,15 @@ interface PermissionCardProps {
   onRespond: (d: PermissionDecision) => void;
 }
 
+/** 风险等级 → antd Tag 色（原 agent-risk--low/mid/high：绿/橙/红） */
+function riskTagColor(risk: string): 'success' | 'warning' | 'error' {
+  if (risk === 'low') return 'success';
+  if (risk === 'mid') return 'warning';
+  return 'error';
+}
+
 export const PermissionCard = memo(function PermissionCard({ item, onRespond }: PermissionCardProps) {
+  const { token } = theme.useToken();
   const { request, outcome } = item;
   const waiting = outcome === null;
   const commandPreview = request.preview.kind === 'command' ? request.preview : null;
@@ -56,6 +66,8 @@ export const PermissionCard = memo(function PermissionCard({ item, onRespond }: 
   const remainingSec = Math.ceil(remainingMs / 1000);
   const progress = Math.min(100, Math.max(0, (remainingMs / PERMISSION_WINDOW_MS) * 100));
   const expired = waiting && remainingMs <= 0;
+  const approved = !!outcome && outcome !== 'timeout' && outcome.decision === 'allow';
+  const timeoutLook = expired || outcome === 'timeout';
 
   const doAllow = () => {
     if (!waiting || expired) return;
@@ -83,87 +95,127 @@ export const PermissionCard = memo(function PermissionCard({ item, onRespond }: 
   };
   const settled = outcomeInfo();
 
+  // 头带底色口径：等待=警示黄、已允许=成功绿、终态=中性
+  const headBandBg = waiting && !expired ? token.colorWarningBg : approved ? token.colorSuccessBg : token.colorFillQuaternary;
+
   return (
     <div
-      className={`perm-card${waiting ? '' : ' perm-card--settled'}${expired || outcome === 'timeout' ? ' perm-card--timeout' : ''}${
-        outcome && outcome !== 'timeout' && outcome.decision === 'allow' ? ' perm-card--approved' : ''
-      }`}
       data-request-id={request.requestId}
+      style={{
+        alignSelf: 'stretch',
+        border: `1px solid ${waiting && !expired ? token.colorWarning : approved ? token.colorSuccess : token.colorBorderSecondary}`,
+        borderRadius: token.borderRadiusLG,
+        background: token.colorBgContainer,
+        boxShadow: waiting && !expired ? token.boxShadowTertiary : 'none',
+        overflow: 'hidden',
+        opacity: timeoutLook ? 0.72 : 1,
+      }}
     >
-      <div className="perm-card__head">
-        <ShieldAlert size={14} className="perm-card__icon" aria-hidden />
-        <span className="perm-card__title">命令执行请求</span>
-        <span className={`agent-risk agent-risk--${request.risk}`}>{RISK_LABELS[request.risk]}</span>
-        <span className="perm-card__tool">{request.tool}</span>
-        {waiting ? <span className="perm-card__countdown">剩余 {remainingSec}s</span> : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: headBandBg }}>
+        <ShieldAlert size={14} aria-hidden style={{ color: token.colorWarning, flexShrink: 0 }} />
+        <Typography.Text strong style={{ fontSize: 13, flexShrink: 0 }}>
+          命令执行请求
+        </Typography.Text>
+        <Tag color={riskTagColor(request.risk)} style={{ fontSize: 10, lineHeight: '16px', paddingInline: 5, marginInlineEnd: 0, flexShrink: 0 }}>
+          {RISK_LABELS[request.risk]}
+        </Tag>
+        <Typography.Text code copyable={false} style={{ fontSize: 12, background: 'transparent', border: 'none', padding: 0, flexShrink: 0 }}>
+          {request.tool}
+        </Typography.Text>
+        {waiting ? (
+          <Typography.Text type="warning" style={{ marginLeft: 'auto', fontSize: 12, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+            剩余 {remainingSec}s
+          </Typography.Text>
+        ) : null}
       </div>
 
       {/* 120s 倒计时进度条（到点自动置灰=拒绝，D08 §3.4） */}
-      {waiting ? <div className="perm-card__timer-track"><div className="perm-card__timer-bar" style={{ width: `${progress}%` }} /></div> : null}
+      {waiting ? (
+        <div style={{ height: 3, background: token.colorBorderSecondary }}>
+          <div style={{ height: '100%', width: `${progress}%`, background: token.colorWarning, transition: 'width 1s linear' }} />
+        </div>
+      ) : null}
 
-      <div className="perm-card__body">
+      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
         {commandPreview ? (
           <>
-            <div className="perm-card__row">
-              <span className="perm-card__label">工作目录</span>
-              <span className="perm-card__value perm-card__value--mono">{commandPreview.cwd}（白名单内 ✓）</span>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
+              <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
+                工作目录
+              </Typography.Text>
+              <Typography.Text style={{ fontFamily: 'var(--bbw-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
+                {commandPreview.cwd}（白名单内 ✓）
+              </Typography.Text>
             </div>
-            <div className="perm-card__row perm-card__row--col">
-              <span className="perm-card__label">
-                命令<span className="perm-card__label-hint">（可编辑，改后按新命令执行）</span>
-              </span>
-              <input
-                className="perm-card__command"
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
+              <Typography.Text type="secondary" style={{ flexShrink: 0 }}>
+                命令
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  （可编辑，改后按新命令执行）
+                </Typography.Text>
+              </Typography.Text>
+              <Input
                 value={editedCommand ?? commandPreview.command}
                 onChange={(e) => setEditedCommand(e.target.value)}
                 readOnly={!waiting || expired}
                 spellCheck={false}
                 aria-label="待执行命令（可编辑）"
+                style={{ fontFamily: 'var(--bbw-font-mono)', fontSize: 13 }}
               />
             </div>
           </>
         ) : (
-          <div className="perm-card__row">
-            <span className="perm-card__label">参数预览</span>
-            <span className="perm-card__value perm-card__value--mono">{request.preview.kind}（该形态的预览渲染后续版本接入）</span>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
+            <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
+              参数预览
+            </Typography.Text>
+            <Typography.Text style={{ fontFamily: 'var(--bbw-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
+              {request.preview.kind}（该形态的预览渲染后续版本接入）
+            </Typography.Text>
           </div>
         )}
-        <div className="perm-card__row">
-          <span className="perm-card__label">判定说明</span>
-          <span className="perm-card__value">{request.reason}</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
+          <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
+            判定说明
+          </Typography.Text>
+          <Typography.Text style={{ minWidth: 0 }}>{request.reason}</Typography.Text>
         </div>
 
-        {/* 记忆粒度三选（高危 options 不含 permanent；D08 §3.4/09 §4.2） */}
+        {/* 记忆粒度三选（antd Segmented radiogroup；高危 options 不含 permanent；D08 §3.4/09 §4.2） */}
         {waiting && !expired ? (
-          <div className="perm-card__scopes" role="radiogroup" aria-label="记忆粒度">
-            {SCOPE_OPTIONS.filter((o) => request.options.includes(o.value)).map((o) => (
-              <button
-                key={o.value}
-                type="button"
-                role="radio"
-                aria-checked={scope === o.value}
-                className={`perm-scope${scope === o.value ? ' perm-scope--active' : ''}`}
-                onClick={() => setScope(o.value)}
-                title={o.desc}
-              >
-                {o.label}
-              </button>
-            ))}
-            {!request.options.includes('permanent') ? <span className="perm-card__scope-note">高危工具不提供永久记忆</span> : null}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+            <Segmented<GrantScope>
+              size="small"
+              aria-label="记忆粒度"
+              value={scope}
+              onChange={(v) => setScope(v)}
+              options={SCOPE_OPTIONS.filter((o) => request.options.includes(o.value)).map((o) => ({
+                value: o.value,
+                label: <span title={o.desc}>{o.label}</span>,
+              }))}
+            />
+            {!request.options.includes('permanent') ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                高危工具不提供永久记忆
+              </Typography.Text>
+            ) : null}
           </div>
         ) : null}
 
         {waiting && !expired ? (
-          <div className="perm-card__actions">
-            <Button variant="primary" onClick={doAllow}>
-              允许
-            </Button>
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <Button onClick={doAllow}>允许</Button>
             <Button variant="secondary" onClick={doDeny}>
               拒绝
             </Button>
           </div>
         ) : (
-          <div className={`perm-card__outcome${settled.dim ? ' perm-card__outcome--dim' : ''}`}>{settled.text}</div>
+          <Typography.Text
+            type={settled.dim ? 'secondary' : 'success'}
+            style={{ fontSize: 13, alignSelf: 'flex-start', padding: '2px 8px', borderRadius: token.borderRadiusSM }}
+          >
+            {settled.text}
+          </Typography.Text>
         )}
       </div>
     </div>

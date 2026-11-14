@@ -6,9 +6,11 @@
  * - offline：渲染 children（本地缓存）+ 半透明遮罩提示
  * - forbidden：锁图标 + 无权限说明 + 申请权限入口
  * - degraded：顶部黄条 + children（只读操作可用）
+ * D26-O6：state-view 族类退役——容器/文案/按钮排版内联 + theme token（API 与六态语义不动）。
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
+import { Typography, theme } from 'antd';
 import { AlertTriangle, Lock } from 'lucide-react';
 import { ApiError, getErrorText } from '../api/http';
 import { Button } from './Button';
@@ -58,6 +60,15 @@ function useDelayed(show: boolean, delayMs: number): boolean {
   return visible;
 }
 
+/** 居中容器（原 state-view：loading/empty/error/forbidden 共用） */
+function CenterShell({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative' }}>
+      {children}
+    </div>
+  );
+}
+
 export function StateView({
   state,
   skeleton,
@@ -72,20 +83,21 @@ export function StateView({
   degradedText = '当前为降级模式，部分功能暂不可用',
   children,
 }: StateViewProps) {
+  const { token } = theme.useToken();
   const showSkeleton = useDelayed(state === 'loading', loadingDelayMs);
 
   // ok：正常内容态——直接透传 children（不套居中容器，表格/卡片网格按自身布局渲染）
   if (state === 'ok') return <>{children}</>;
 
   if (state === 'loading') {
-    return <div className="state-view">{showSkeleton ? skeleton : null}</div>;
+    return <CenterShell>{showSkeleton ? skeleton : null}</CenterShell>;
   }
 
   if (state === 'empty') {
     return (
-      <div className="state-view">
+      <CenterShell>
         <Empty text={emptyText} action={emptyAction} />
-      </div>
+      </CenterShell>
     );
   }
 
@@ -93,14 +105,16 @@ export function StateView({
     const apiError = error instanceof ApiError ? error : null;
     const text = apiError ? getErrorText(apiError.code) : error instanceof Error ? error.message : getErrorText(9004);
     return (
-      <div className="state-view">
-        <div className="state-view__inner">
-          <div className="state-view__icon state-view__icon--warn" aria-hidden>
+      <CenterShell>
+        <div style={{ textAlign: 'center', maxWidth: 360 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: token.colorWarning, marginBottom: 12 }} aria-hidden>
             <AlertTriangle size={40} strokeWidth={1.4} />
           </div>
-          <div className="state-view__text">{text}</div>
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSize }}>
+            {text}
+          </Typography.Text>
           {onRetry ? (
-            <div className="state-view__action">
+            <div style={{ marginTop: 12 }}>
               <Button variant="secondary" onClick={onRetry}>
                 重试
               </Button>
@@ -108,45 +122,83 @@ export function StateView({
           ) : null}
           {/* trace_id 折叠可复制（D01 §7 error 态） */}
           {apiError?.traceId ? (
-            <div
-              className="state-view__trace"
+            <Typography.Text
+              code
+              copyable={false}
               onClick={() => void navigator.clipboard?.writeText(apiError.traceId as string)}
               title="点击复制 trace_id，供问题排查"
+              style={{ display: 'block', marginTop: 8, cursor: 'pointer' }}
             >
               trace_id: {apiError.traceId}
-            </div>
+            </Typography.Text>
           ) : null}
         </div>
-      </div>
+      </CenterShell>
     );
   }
 
   if (state === 'forbidden') {
     return (
-      <div className="state-view">
-        <div className="state-view__inner">
-          <div className="state-view__icon" aria-hidden>
+      <CenterShell>
+        <div style={{ textAlign: 'center', maxWidth: 360 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextQuaternary, marginBottom: 12 }} aria-hidden>
             <Lock size={40} strokeWidth={1.4} />
           </div>
-          <div className="state-view__text">{forbiddenText}</div>
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSize }}>
+            {forbiddenText}
+          </Typography.Text>
           {onApplyPermission ? (
-            <div className="state-view__action">
+            <div style={{ marginTop: 12 }}>
               <Button variant="secondary" onClick={onApplyPermission}>
                 申请权限
               </Button>
             </div>
           ) : null}
         </div>
-      </div>
+      </CenterShell>
     );
   }
 
   // offline / degraded：保留 children（缓存浏览 / 只读），叠加提示层
   return (
-    <div className="state-view state-view--overlayed">
-      {state === 'degraded' ? <div className="state-view__degraded-bar">{degradedText}</div> : null}
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
+      {state === 'degraded' ? (
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            background: token.colorWarningBg,
+            color: token.colorWarning,
+            fontSize: token.fontSizeSM,
+            textAlign: 'center',
+            padding: '4px 0',
+            zIndex: 2,
+          }}
+        >
+          {degradedText}
+        </div>
+      ) : null}
       {children}
-      {state === 'offline' ? <div className="state-view__overlay">{offlineText}</div> : null}
+      {state === 'offline' ? (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'var(--bbw-veil)',
+            backdropFilter: 'blur(1px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1,
+            color: token.colorTextSecondary,
+            fontSize: token.fontSizeSM,
+          }}
+        >
+          {offlineText}
+        </div>
+      ) : null}
     </div>
   );
 }

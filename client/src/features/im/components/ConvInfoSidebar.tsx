@@ -2,19 +2,19 @@
  * 详情侧栏（D03 §3.5 PIM-05 + §3.6 群文件页签）：
  * - 单聊：对方名片（元信息只读）
  * - 群聊/广播群：五 tab（信息/成员/群文件/设置/公告）——设置 tab 仅 owner/admin 可见
- * - 操作全接真实 API：退群/转让/解散（危险确认）、添加成员（手输 uid）、
+ * - 操作全接真实 API：退群/转让/解散（危险确认）、添加成员（选人器）、
  *   设/取消管理员、单人禁言（预设时长）、移出、群名/策略/全员禁言、公告编辑、
  *   群文件列表+票据下载（GET /files/convs/{id}，D06 阶段二）
  * - conv.updated 推送经 conv 摘要变化触发详情重拉（memberCount/groupSetting 依赖）
- * D26-O5：仅换表单件与确认——7 个原生 input/select/textarea→antd
- * Input/Select/Input.TextArea、3 处原生 confirm 弹窗→Modal.confirm（danger）；
- * 布局结构类（detail-panel/gm-*）保留（本批唯一允许保留类名的文件）。
+ * D26-O5：表单件与确认已 antd 化（Input/Select/TextArea/Modal.confirm）。
+ * D26-O6（本批）：布局层退役 detail-panel/gm-* 类——骨架内联 token、四 tab→antd Tabs、
+ * 成员/文件行内联、操作钮→shared Button、徽标→Tag、错误条→Alert。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Input, Modal, Select } from 'antd';
-import { FileText, Hash, Megaphone, ScrollText, Settings2, Shield, Tag, Users, VolumeX, X } from 'lucide-react';
+import { Alert, Input, Modal, Select, Tabs, Tag, Typography, theme } from 'antd';
+import { FileText, Hash, Megaphone, ScrollText, Settings2, Shield, Tag as TagIcon, Users, VolumeX, X } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { Button } from '../../../shared/ui/Button';
 import { getErrorText } from '../../../shared/api/http';
@@ -49,6 +49,13 @@ type TabKey = 'info' | 'members' | 'files' | 'setting' | 'announcement';
 
 const ROLE_LABEL: Record<number, string> = { 1: '群主', 2: '管理员', 3: '成员', 4: '发布者' };
 
+/** 成员角色徽标色（原 gm-member__role--1/--2：群主主色/管理员橙） */
+function roleTagColor(role: number): string | undefined {
+  if (role === 1) return 'geekblue';
+  if (role === 2) return 'orange';
+  return undefined;
+}
+
 /** 单人禁言预设（≤30 天/次，04 篇 §4.5.3） */
 const MUTE_PRESETS = [
   { label: '10 分钟', ms: 10 * 60_000 },
@@ -57,6 +64,7 @@ const MUTE_PRESETS = [
 ];
 
 export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onLeft }: ConvInfoSidebarProps) {
+  const { token } = theme.useToken();
   const [tab, setTab] = useState<TabKey>(initialTab);
   const [detail, setDetail] = useState<ConversationMember[]>([]);
   const [myRole, setMyRole] = useState<MemberRole | undefined>(conv.myRole);
@@ -115,9 +123,79 @@ export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onL
       () => onLeft?.(conv.id),
     );
 
+  /** 元信息行（原 detail-panel__kv，内联；last=去底边线） */
+  const kv = (key: ReactNode, value: ReactNode, last = false): ReactNode => (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 13,
+        padding: '8px 0',
+        borderBottom: last ? 'none' : `1px solid ${token.colorBorderSecondary}`,
+      }}
+    >
+      <Typography.Text type="secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        {key}
+      </Typography.Text>
+      {value}
+    </div>
+  );
+
+  const statusTag = (
+    <Tag color={conv.status === 1 ? 'success' : 'default'}>{conv.status === 1 ? '活跃' : '已解散（只读）'}</Tag>
+  );
+
+  const tabPanes: Record<TabKey, ReactNode> = {
+    info: (
+      <InfoTab
+        conv={conv}
+        members={detail}
+        myUid={myUid}
+        myRole={myRole}
+        busy={busy}
+        onQuit={leave}
+        onDissolve={dissolve}
+        onTransfer={(uid) =>
+          void run(() => memberRole(conv.id, uid, 1))
+        }
+        kv={kv}
+        statusTag={statusTag}
+      />
+    ),
+    members: (
+      <MembersTab
+        conv={conv}
+        members={detail}
+        myUid={myUid}
+        myRole={myRole}
+        busy={busy}
+        onInvite={() => setInviteOpen(true)}
+        onRemove={(uid) => void run(() => memberRemove(conv.id, uid))}
+        onRole={(uid, role) => void run(() => memberRole(conv.id, uid, role))}
+        onTransferMember={(uid) => void run(() => memberRole(conv.id, uid, 1))}
+        onMute={(uid, until) =>
+          void run(() => convSetting(conv.id, { mute_member: { uid, until } }))
+        }
+      />
+    ),
+    files: <ConvFilesTab convId={conv.id} />,
+    setting: <SettingTab conv={conv} busy={busy} onPatch={(patch) => void run(() => convSetting(conv.id, patch))} />,
+    announcement: (
+      <AnnouncementTab
+        conv={conv}
+        announcement={groupAnnouncement}
+        busy={busy}
+        canEdit={isMgr || myRole === 4}
+        onSubmit={(text) => void run(() => convSetting(conv.id, { announcement: text }))}
+      />
+    ),
+  };
+
   const tabs = useMemo(() => {
-    const base: Array<{ key: TabKey; label: string; icon: typeof Tag }> = [
-      { key: 'info', label: '信息', icon: Tag },
+    const base: Array<{ key: TabKey; label: string; icon: typeof TagIcon }> = [
+      { key: 'info', label: '信息', icon: TagIcon },
       { key: 'members', label: '成员', icon: Users },
       { key: 'files', label: '群文件', icon: FileText }, // D03 §3.6（成员可见，服务端成员判定）
     ];
@@ -127,131 +205,86 @@ export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onL
   }, [isMgr]);
 
   return (
-    <aside className="detail-panel">
-      <div className="detail-panel__head">
-        <strong className="detail-panel__title">{conv.name}</strong>
+    <aside style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Typography.Text strong style={{ fontSize: 16 }}>
+          {conv.name}
+        </Typography.Text>
         {onClose ? (
-          <button className="icon-btn" onClick={onClose} title="收起">
-            <X size={16} />
-          </button>
+          <Button variant="text" size="small" icon={<X size={16} />} onClick={onClose} title="收起" />
         ) : null}
       </div>
 
-      <div className="detail-panel__profile">
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '8px 0' }}>
         <Avatar name={conv.name} size={64} group={conv.type === 3 ? 'broadcast' : conv.type === 2 ? 'group' : null} />
-        <span className="detail-panel__type-badge">{typeLabel}</span>
+        <Tag>{typeLabel}</Tag>
       </div>
 
-      {error ? <div className="gm-error">{error}</div> : null}
+      {error ? <Alert type="error" showIcon message={error} /> : null}
 
       {!isGroup ? (
         /* 单聊=名片（PIM-05：非群聊仅元信息） */
-        <div className="detail-panel__cards">
-          <div className="detail-panel__card">
-            <div className="detail-panel__kv">
-              <span className="detail-panel__key">
-                <Tag size={14} /> 类型
-              </span>
-              <span>{typeLabel}</span>
-            </div>
-            <div className="detail-panel__kv">
-              <span className="detail-panel__key">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadiusLG, padding: '4px 12px' }}>
+            {kv(
+              <>
+                <TagIcon size={14} /> 类型
+              </>,
+              <span>{typeLabel}</span>,
+            )}
+            {kv(
+              <>
                 <Users size={14} /> 成员数
-              </span>
-              <span>{conv.memberCount}</span>
-            </div>
-            <div className="detail-panel__kv">
-              <span className="detail-panel__key">
+              </>,
+              <span>{conv.memberCount}</span>,
+            )}
+            {kv(
+              <>
                 <ScrollText size={14} /> 状态
-              </span>
-              <span className={`status-badge ${conv.status === 1 ? 'status-badge--ok' : 'status-badge--off'}`}>
-                {conv.status === 1 ? '活跃' : '已解散（只读）'}
-              </span>
-            </div>
+              </>,
+              statusTag,
+              true,
+            )}
           </div>
         </div>
       ) : (
         <>
-          <div className="detail-panel__cards">
-            <div className="detail-panel__card">
-              <div className="detail-panel__kv">
-                <span className="detail-panel__key">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadiusLG, padding: '4px 12px' }}>
+              {kv(
+                <>
                   <Users size={14} /> 成员
-                </span>
+                </>,
                 <span>
                   {conv.memberCount}
                   {conv.type === 2 ? ' / 500' : ' / 5000'}
-                </span>
-              </div>
-              <div className="detail-panel__kv">
-                <span className="detail-panel__key">
+                </span>,
+              )}
+              {kv(
+                <>
                   <Shield size={14} /> 我的角色
-                </span>
-                <span>{ROLE_LABEL[myRole ?? 3]}</span>
-              </div>
+                </>,
+                <span>{ROLE_LABEL[myRole ?? 3]}</span>,
+                true,
+              )}
             </div>
           </div>
 
-          {/* 四 tab（PIM-05） */}
-          <div className="gm-tabs" role="tablist">
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.key}
-                className={`gm-tab${tab === t.key ? ' gm-tab--active' : ''}`}
-                onClick={() => setTab(t.key)}
-              >
-                <t.icon size={14} />
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="gm-tab-body">
-            {tab === 'info' ? (
-              <InfoTab
-                conv={conv}
-                members={detail}
-                myUid={myUid}
-                myRole={myRole}
-                busy={busy}
-                onQuit={leave}
-                onDissolve={dissolve}
-                onTransfer={(uid) =>
-                  void run(() => memberRole(conv.id, uid, 1))
-                }
-              />
-            ) : tab === 'members' ? (
-              <MembersTab
-                conv={conv}
-                members={detail}
-                myUid={myUid}
-                myRole={myRole}
-                busy={busy}
-                onInvite={() => setInviteOpen(true)}
-                onRemove={(uid) => void run(() => memberRemove(conv.id, uid))}
-                onRole={(uid, role) => void run(() => memberRole(conv.id, uid, role))}
-                onTransferMember={(uid) => void run(() => memberRole(conv.id, uid, 1))}
-                onMute={(uid, until) =>
-                  void run(() => convSetting(conv.id, { mute_member: { uid, until } }))
-                }
-              />
-            ) : tab === 'files' ? (
-              <ConvFilesTab convId={conv.id} />
-            ) : tab === 'setting' ? (
-              <SettingTab conv={conv} busy={busy} onPatch={(patch) => void run(() => convSetting(conv.id, patch))} />
-            ) : (
-              <AnnouncementTab
-                conv={conv}
-                announcement={groupAnnouncement}
-                busy={busy}
-                canEdit={isMgr || myRole === 4}
-                onSubmit={(text) => void run(() => convSetting(conv.id, { announcement: text }))}
-              />
-            )}
-          </div>
+          {/* 四 tab（PIM-05；原 gm-tabs → antd Tabs） */}
+          <Tabs
+            size="small"
+            activeKey={tab}
+            onChange={(k) => setTab(k as TabKey)}
+            items={tabs.map((t) => ({
+              key: t.key,
+              label: (
+                <span style={{ fontSize: 12 }}>
+                  <t.icon size={13} style={{ verticalAlign: '-2px' }} /> {t.label}
+                </span>
+              ),
+              children: <div style={{ padding: '12px 0' }}>{tabPanes[t.key]}</div>,
+            }))}
+          />
         </>
       )}
       {/* 邀请成员选人器（M3）：通讯录多选，排除已有成员；确认即 memberAdd */}
@@ -283,6 +316,8 @@ function InfoTab({
   onQuit,
   onDissolve,
   onTransfer,
+  kv,
+  statusTag,
 }: {
   conv: Conversation;
   members: ConversationMember[];
@@ -292,115 +327,141 @@ function InfoTab({
   onQuit: () => void;
   onDissolve: () => void;
   onTransfer: (uid: string) => void;
+  /** 元信息行渲染器（壳层注入，统一内联口径） */
+  kv: (key: ReactNode, value: ReactNode, last?: boolean) => ReactNode;
+  statusTag: ReactNode;
 }) {
+  const { token } = theme.useToken();
   const [confirm, setConfirm] = useState<'quit' | 'dissolve' | null>(null);
   const [transferUid, setTransferUid] = useState('');
   const owner = members.find((m) => m.role === 1);
   const iAmOwner = myRole === 1;
   const muteAll = conv.groupSetting?.muteAllUntil ?? 0;
 
-  return (
-    <div className="gm-section">
-      <div className="detail-panel__kv">
-        <span className="detail-panel__key">
-          <Tag size={14} /> 群名
-        </span>
-        <span>{conv.name}</span>
-      </div>
-      <div className="detail-panel__kv">
-        <span className="detail-panel__key">
-          <Hash size={14} /> 群主
-        </span>
-        <span>{owner ? `${owner.displayName}（${owner.uid === myUid ? '我' : owner.uid}）` : '—'}</span>
-      </div>
-      <div className="detail-panel__kv">
-        <span className="detail-panel__key">
-          <ScrollText size={14} /> 状态
-        </span>
-        <span className={`status-badge ${conv.status === 1 ? 'status-badge--ok' : 'status-badge--off'}`}>
-          {conv.status === 1 ? '活跃' : '已解散（只读）'}
-        </span>
-      </div>
-      {muteAll > Date.now() ? (
-        <div className="detail-panel__kv">
-          <span className="detail-panel__key">
-            <VolumeX size={14} /> 全员禁言
-          </span>
-          <span>至 {formatMuteUntil(muteAll)}</span>
-        </div>
+  /** 操作块（原 gm-op：边框浅底容器） */
+  const opBlock = (label: string | null, children: ReactNode): ReactNode => (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        padding: 10,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: token.borderRadius,
+        background: token.colorFillQuaternary,
+      }}
+    >
+      {label ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {label}
+        </Typography.Text>
       ) : null}
+      {children}
+    </div>
+  );
+
+  /** 危险二次确认行（原 gm-confirm） */
+  const confirmRow = (text: string, okText: string, onConfirmClick: () => void, busyFlag: boolean): ReactNode => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: token.colorError }}>
+      <span>{text}</span>
+      <Button variant="danger" size="small" disabled={busyFlag} onClick={onConfirmClick}>
+        {okText}
+      </Button>
+      <Button variant="text" size="small" onClick={() => setConfirm(null)}>
+        取消
+      </Button>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {kv(
+        <>
+          <TagIcon size={14} /> 群名
+        </>,
+        <span>{conv.name}</span>,
+      )}
+      {kv(
+        <>
+          <Hash size={14} /> 群主
+        </>,
+        <span>{owner ? `${owner.displayName}（${owner.uid === myUid ? '我' : owner.uid}）` : '—'}</span>,
+      )}
+      {kv(
+        <>
+          <ScrollText size={14} /> 状态
+        </>,
+        statusTag,
+      )}
+      {muteAll > Date.now()
+        ? kv(
+            <>
+              <VolumeX size={14} /> 全员禁言
+            </>,
+            <span>至 {formatMuteUntil(muteAll)}</span>,
+            true,
+          )
+        : null}
 
       {/* 转让（owner，危险确认，D01 §8） */}
       {iAmOwner && conv.status === 1 ? (
-        <div className="gm-op">
-          <div className="gm-op__label">转让群主</div>
-          <Input
-            placeholder="目标成员 uid"
-            value={transferUid}
-            onChange={(e) => setTransferUid(e.target.value)}
-            data-testid="transfer-uid"
-          />
-          <Button
-            variant="secondary"
-            disabled={busy || !transferUid.trim()}
-            onClick={() => {
-              const uid = transferUid.trim();
-              Modal.confirm({
-                title: `确认将群主转让给 ${uid}？`,
-                content: '转让后你变为普通成员',
-                okText: '转让',
-                okButtonProps: { danger: true },
-                cancelText: '取消',
-                onOk: () => {
-                  onTransfer(uid);
-                  setTransferUid('');
-                },
-              });
-            }}
-          >
-            转让
-          </Button>
-        </div>
+        opBlock(
+          '转让群主',
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Input
+              placeholder="目标成员 uid"
+              value={transferUid}
+              onChange={(e) => setTransferUid(e.target.value)}
+              data-testid="transfer-uid"
+            />
+            <Button
+              variant="secondary"
+              disabled={busy || !transferUid.trim()}
+              onClick={() => {
+                const uid = transferUid.trim();
+                Modal.confirm({
+                  title: `确认将群主转让给 ${uid}？`,
+                  content: '转让后你变为普通成员',
+                  okText: '转让',
+                  okButtonProps: { danger: true },
+                  cancelText: '取消',
+                  onOk: () => {
+                    onTransfer(uid);
+                    setTransferUid('');
+                  },
+                });
+              }}
+            >
+              转让
+            </Button>
+          </div>,
+        )
       ) : null}
 
       {conv.status === 1 && !iAmOwner ? (
-        <div className="gm-op">
-          {confirm === 'quit' ? (
-            <div className="gm-confirm">
-              <span>确认退出该群？</span>
-              <Button variant="danger" disabled={busy} onClick={onQuit}>
-                确认退群
-              </Button>
-              <Button variant="text" onClick={() => setConfirm(null)}>
-                取消
-              </Button>
-            </div>
+        opBlock(
+          null,
+          confirm === 'quit' ? (
+            confirmRow('确认退出该群？', '确认退群', onQuit, busy)
           ) : (
             <Button variant="secondary" onClick={() => setConfirm('quit')}>
               退出群聊
             </Button>
-          )}
-        </div>
+          ),
+        )
       ) : null}
 
       {iAmOwner && conv.status === 1 ? (
-        <div className="gm-op">
-          {confirm === 'dissolve' ? (
-            <div className="gm-confirm">
-              <span>解散后不可恢复，确认解散？</span>
-              <Button variant="danger" disabled={busy} onClick={onDissolve}>
-                确认解散
-              </Button>
-              <Button variant="text" onClick={() => setConfirm(null)}>
-                取消
-              </Button>
-            </div>
+        opBlock(
+          null,
+          confirm === 'dissolve' ? (
+            confirmRow('解散后不可恢复，确认解散？', '确认解散', onDissolve, busy)
           ) : (
             <Button variant="danger" onClick={() => setConfirm('dissolve')}>
               解散群聊
             </Button>
-          )}
-        </div>
+          ),
+        )
       ) : null}
     </div>
   );
@@ -433,44 +494,66 @@ function MembersTab({
   onTransferMember: (uid: string) => void;
   onMute: (uid: string, until: number) => void;
 }) {
+  const { token } = theme.useToken();
   const iAmOwner = myRole === 1;
   const iAmMgr = myRole === 1 || myRole === 2;
   const muted = (m: ConversationMember) => (m.muteUntil ?? 0) > Date.now();
 
   return (
-    <div className="gm-section">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {/* 邀请成员（M3）：通讯录多选弹窗（PersonPickerModal，群内已有成员自动排除） */}
       {iAmMgr && conv.status === 1 ? (
-        <div className="gm-op" data-testid="add-member">
-          <Button variant="primary" disabled={busy} onClick={onInvite}>
+        <div data-testid="add-member">
+          <Button disabled={busy} onClick={onInvite}>
             邀请成员
           </Button>
         </div>
       ) : null}
 
-      <div className="gm-members">
-        {members.map((m) => (
-          <div className="gm-member" key={m.uid} data-uid={m.uid}>
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {members.map((m, idx) => (
+          <div
+            key={m.uid}
+            data-uid={m.uid}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 4px',
+              borderBottom: idx === members.length - 1 ? 'none' : `1px solid ${token.colorBorderSecondary}`,
+            }}
+          >
             <Avatar name={m.displayName} size={32} />
-            <div className="gm-member__main">
-              <span className="gm-member__name">
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                 {m.uid === myUid ? `${m.displayName}（我）` : m.displayName}
-                {m.role !== 3 ? <span className={`gm-member__role gm-member__role--${m.role}`}>{ROLE_LABEL[m.role]}</span> : null}
-                {muted(m) ? <span className="gm-member__muted-tag">禁言中</span> : null}
+                {m.role !== 3 ? (
+                  <Tag color={roleTagColor(m.role)} style={{ fontSize: 10, lineHeight: '16px', paddingInline: 5, marginInlineEnd: 0 }}>
+                    {ROLE_LABEL[m.role]}
+                  </Tag>
+                ) : null}
+                {muted(m) ? (
+                  <Tag color="error" style={{ fontSize: 10, lineHeight: '16px', paddingInline: 5, marginInlineEnd: 0 }}>
+                    禁言中
+                  </Tag>
+                ) : null}
               </span>
-              <span className="gm-member__uid">{m.uid}</span>
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {m.uid}
+              </Typography.Text>
             </div>
             {iAmMgr && m.uid !== myUid && conv.status === 1 ? (
-              <div className="gm-member__ops">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end' }}>
                 {/* admin 不能动 owner/admin（服务端矩阵兜底 3015） */}
                 {iAmOwner ? (
                   <>
-                    <button type="button" className="gm-op-btn" disabled={busy} onClick={() => onRole(m.uid, m.role === 2 ? 3 : 2)}>
+                    <Button variant="secondary" size="small" disabled={busy} onClick={() => onRole(m.uid, m.role === 2 ? 3 : 2)}>
                       {m.role === 2 ? '取消管理员' : '设为管理员'}
-                    </button>
-                    <button
-                      type="button"
-                      className="gm-op-btn gm-op-btn--danger"
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="small"
+                      danger
                       disabled={busy}
                       onClick={() =>
                         Modal.confirm({
@@ -483,33 +566,34 @@ function MembersTab({
                       }
                     >
                       转让
-                    </button>
+                    </Button>
                   </>
                 ) : null}
                 {/* 禁言矩阵（04 篇 §4.5.1）：admin 仅 member 级；owner 可 member/admin（服务端兜底 3015） */}
                 {m.role === 3 || (iAmOwner && m.role === 2) ? (
                   muted(m) ? (
-                    <button type="button" className="gm-op-btn" disabled={busy} onClick={() => onMute(m.uid, 0)}>
+                    <Button variant="secondary" size="small" disabled={busy} onClick={() => onMute(m.uid, 0)}>
                       解除禁言
-                    </button>
+                    </Button>
                   ) : (
                     MUTE_PRESETS.map((p) => (
-                      <button
+                      <Button
                         key={p.label}
-                        type="button"
-                        className="gm-op-btn"
+                        variant="secondary"
+                        size="small"
                         disabled={busy}
                         onClick={() => onMute(m.uid, Date.now() + p.ms)}
                         title={`禁言 ${p.label}`}
                       >
                         禁言{p.label}
-                      </button>
+                      </Button>
                     ))
                   )
                 ) : null}
-                <button
-                  type="button"
-                  className="gm-op-btn gm-op-btn--danger"
+                <Button
+                  variant="secondary"
+                  size="small"
+                  danger
                   disabled={busy}
                   onClick={() =>
                     Modal.confirm({
@@ -522,7 +606,7 @@ function MembersTab({
                   }
                 >
                   移出
-                </button>
+                </Button>
               </div>
             ) : null}
           </div>
@@ -535,6 +619,7 @@ function MembersTab({
 /* ── 群文件 tab（D03 §3.6；GET /files/convs/{id} 成员可见 + 票据下载） ── */
 
 function ConvFilesTab({ convId }: { convId: string }) {
+  const { token } = theme.useToken();
   const [items, setItems] = useState<MyFileItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -577,42 +662,55 @@ function ConvFilesTab({ convId }: { convId: string }) {
   };
 
   return (
-    <div className="gm-section">
-      {error ? <div className="gm-error">{error}</div> : null}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {error ? <Alert type="error" showIcon message={error} /> : null}
       {items === null ? (
-        <div className="gm-empty">加载中…</div>
+        <Typography.Text type="secondary" style={{ padding: '16px 0', textAlign: 'center', fontSize: 12 }}>
+          加载中…
+        </Typography.Text>
       ) : items.length === 0 ? (
-        <div className="gm-empty">暂无群文件</div>
+        <Typography.Text type="secondary" style={{ padding: '16px 0', textAlign: 'center', fontSize: 12 }}>
+          暂无群文件
+        </Typography.Text>
       ) : (
-        <div className="gm-members" data-testid="conv-files-list">
-          {items.map((f) => (
-            <div className="gm-member" key={f.id}>
-              <div className="gm-member__main">
-                <span className="gm-member__name">
+        <div style={{ display: 'flex', flexDirection: 'column' }} data-testid="conv-files-list">
+          {items.map((f, idx) => (
+            <div
+              key={f.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 4px',
+                borderBottom: idx === items.length - 1 ? 'none' : `1px solid ${token.colorBorderSecondary}`,
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
                   <FileText size={13} /> {f.name}
                 </span>
-                <span className="gm-member__uid">
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                   {formatBytes(f.size)} · {formatMuteUntil(f.createdAt)}
-                </span>
+                </Typography.Text>
               </div>
-              <div className="gm-member__ops">
-                <button
-                  type="button"
-                  className="gm-op-btn"
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end' }}>
+                <Button
+                  variant="secondary"
+                  size="small"
                   disabled={!f.msgSeq || f.recalled}
                   title={f.recalled ? '消息已撤回，无法定位' : f.msgSeq ? '定位到消息' : '未关联消息'}
                   onClick={() => locate(f)}
                 >
                   定位
-                </button>
-                <button
-                  type="button"
-                  className="gm-op-btn"
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="small"
                   disabled={downloading === f.id}
                   onClick={() => void download(f)}
                 >
                   {downloading === f.id ? '取票据…' : '下载'}
-                </button>
+                </Button>
               </div>
             </div>
           ))}
@@ -646,20 +744,37 @@ function SettingTab({
   const [muteAllPreset, setMuteAllPreset] = useState(3600_000);
   const muteAllOn = (gs?.muteAllUntil ?? 0) > Date.now();
 
-  return (
-    <div className="gm-section">
-      <div className="gm-field">
-        <label className="gm-field__label">群名（≤50 字）</label>
-        <div className="gm-field__row">
-          <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="group-name-input" />
-          <Button variant="secondary" disabled={busy || !name.trim() || name === conv.name} onClick={() => onPatch({ name: name.trim() })}>
-            改名
-          </Button>
-        </div>
-      </div>
+  /** 表单字段块（原 gm-field） */
+  const field = (label: string, children: ReactNode): ReactNode => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {label}
+      </Typography.Text>
+      {children}
+    </div>
+  );
+  const row = (children: ReactNode): ReactNode => (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      {children}
+    </div>
+  );
 
-      <div className="gm-field">
-        <label className="gm-field__label">入群方式</label>
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {field(
+        '群名（≤50 字）',
+        row(
+          <>
+            <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="group-name-input" />
+            <Button variant="secondary" disabled={busy || !name.trim() || name === conv.name} onClick={() => onPatch({ name: name.trim() })}>
+              改名
+            </Button>
+          </>,
+        ),
+      )}
+
+      {field(
+        '入群方式',
         <Select
           style={{ width: '100%' }}
           value={gs?.joinMode ?? 1}
@@ -670,11 +785,11 @@ function SettingTab({
             { value: 2, label: '需要审批' },
             { value: 3, label: '仅邀请' },
           ]}
-        />
-      </div>
+        />,
+      )}
 
-      <div className="gm-field">
-        <label className="gm-field__label">邀请权限</label>
+      {field(
+        '邀请权限',
         <Select
           style={{ width: '100%' }}
           value={gs?.invitePolicy ?? 1}
@@ -684,11 +799,11 @@ function SettingTab({
             { value: 1, label: '全员可邀' },
             { value: 2, label: '仅管理员' },
           ]}
-        />
-      </div>
+        />,
+      )}
 
-      <div className="gm-field">
-        <label className="gm-field__label">@全体权限（3014）</label>
+      {field(
+        '@全体权限（3014）',
         <Select
           style={{ width: '100%' }}
           value={gs?.mentionAllPolicy ?? 2}
@@ -699,46 +814,47 @@ function SettingTab({
             { value: 2, label: '仅管理员' },
             { value: 3, label: '禁用' },
           ]}
-        />
-      </div>
+        />,
+      )}
 
-      <div className="gm-field">
-        <label className="gm-field__label">全员禁言（owner/admin 豁免）</label>
-        <div className="gm-field__row">
-          <Select
-            style={{ width: 140 }}
-            disabled={busy || muteAllOn}
-            value={muteAllPreset}
-            onChange={setMuteAllPreset}
-            data-testid="mute-all-select"
-            options={[
-              { value: 600_000, label: '10 分钟' },
-              { value: 3600_000, label: '1 小时' },
-              { value: 24 * 3600_000, label: '1 天' },
-            ]}
-          />
-          {muteAllOn ? (
-            <Button variant="secondary" disabled={busy} onClick={() => onPatch({ mute_all_until: 0 })}>
-              解除全员禁言
-            </Button>
-          ) : (
-            <Button
-              variant="primary"
-              disabled={busy}
-              onClick={() => onPatch({ mute_all_until: Date.now() + muteAllPreset })}
-            >
-              开启
-            </Button>
-          )}
-        </div>
-      </div>
+      {field(
+        '全员禁言（owner/admin 豁免）',
+        row(
+          <>
+            <Select
+              style={{ width: 140 }}
+              disabled={busy || muteAllOn}
+              value={muteAllPreset}
+              onChange={setMuteAllPreset}
+              data-testid="mute-all-select"
+              options={[
+                { value: 600_000, label: '10 分钟' },
+                { value: 3600_000, label: '1 小时' },
+                { value: 24 * 3600_000, label: '1 天' },
+              ]}
+            />
+            {muteAllOn ? (
+              <Button variant="secondary" disabled={busy} onClick={() => onPatch({ mute_all_until: 0 })}>
+                解除全员禁言
+              </Button>
+            ) : (
+              <Button
+                disabled={busy}
+                onClick={() => onPatch({ mute_all_until: Date.now() + muteAllPreset })}
+              >
+                开启
+              </Button>
+            )}
+          </>,
+        ),
+      )}
 
-      <div className="gm-field">
-        <label className="gm-field__label">新成员可见历史消息</label>
+      {field(
+        '新成员可见历史消息',
         <Button variant="secondary" disabled={busy} onClick={() => onPatch({ history_visible: !(gs?.historyVisible ?? true) })}>
           {gs?.historyVisible ?? true ? '当前：可见（点击关闭）' : '当前：不可见（点击开启）'}
-        </Button>
-      </div>
+        </Button>,
+      )}
     </div>
   );
 }
@@ -758,6 +874,7 @@ function AnnouncementTab({
   canEdit: boolean;
   onSubmit: (text: string) => void;
 }) {
+  const { token } = theme.useToken();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(announcement ?? '');
 
@@ -766,22 +883,38 @@ function AnnouncementTab({
   }, [announcement]);
 
   return (
-    <div className="gm-section">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {announcement ? (
-        <div className="gm-announcement" data-testid="announcement-text">
-          <div className="gm-announcement__body">{announcement}</div>
+        <div style={{ padding: 10, borderRadius: token.borderRadius, background: token.colorFillQuaternary }} data-testid="announcement-text">
+          <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{announcement}</div>
           {conv.groupSetting?.announcementTs ? (
-            <div className="gm-announcement__ts">发布于 {formatMuteUntil(conv.groupSetting.announcementTs)}</div>
+            <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
+              发布于 {formatMuteUntil(conv.groupSetting.announcementTs)}
+            </Typography.Text>
           ) : null}
         </div>
       ) : (
-        <div className="gm-empty">暂无公告{canEdit ? '，点击下方发布' : ''}</div>
+        <Typography.Text type="secondary" style={{ padding: '16px 0', textAlign: 'center', fontSize: 12 }}>
+          暂无公告{canEdit ? '，点击下方发布' : ''}
+        </Typography.Text>
       )}
 
       {canEdit && conv.status === 1 ? (
         editing ? (
-          <div className="gm-op">
-            <div className="gm-op__label">编辑公告（≤2000 字）</div>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              padding: 10,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: token.borderRadius,
+              background: token.colorFillQuaternary,
+            }}
+          >
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              编辑公告（≤2000 字）
+            </Typography.Text>
             <Input.TextArea
               rows={5}
               value={draft}
@@ -789,9 +922,8 @@ function AnnouncementTab({
               data-testid="announcement-input"
               placeholder="发布群公告…"
             />
-            <div className="gm-field__row">
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <Button
-                variant="primary"
                 disabled={busy || !draft.trim()}
                 onClick={() => {
                   onSubmit(draft.trim());

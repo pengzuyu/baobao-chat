@@ -1,10 +1,12 @@
 /**
- * 运行中打点动画（D08 §3.2 shimmer 行的会话流版：running 时三个跳动圆点 + 文案）。
+ * 运行中打点动画（D08 §3.2 shimmer 行的会话流版：running 时加载指示 + 文案）。
  * D19 增 300ms tick 已用时计时（对齐 change-my-life Elapsed；计时起点=本段运行指示
  * 出现时刻，暂停/等待审批等状态切换会重挂载自然重置）。
+ * D26-O6：自研 typing-state 类退役——内联 token 容器 + antd Spin（动画由 antd 承载）。
  */
 
 import { memo, useEffect, useState } from 'react';
+import { Spin, Typography } from 'antd';
 
 interface TypingStateProps {
   text?: string;
@@ -26,14 +28,26 @@ export const TypingState = memo(function TypingState({ text = 'Agent 正在处�
     return () => window.clearInterval(timer);
   }, []);
   return (
-    <div className="typing-state" role="status" aria-label={text}>
-      <span className="typing-state__dots" aria-hidden>
-        <i />
-        <i />
-        <i />
-      </span>
-      <span className="typing-state__text">{text}…</span>
-      <span className="typing-state__elapsed">{formatElapsed(now - startedAt)}</span>
+    <div
+      role="status"
+      aria-label={text}
+      style={{
+        alignSelf: 'flex-start',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '4px 12px',
+        borderRadius: 999,
+        background: 'var(--bbw-primary-light)',
+      }}
+    >
+      <Spin size="small" aria-hidden />
+      <Typography.Text style={{ fontSize: 12, flexShrink: 0 }}>
+        {text}…
+      </Typography.Text>
+      <Typography.Text code style={{ fontSize: 11, flexShrink: 0 }}>
+        {formatElapsed(now - startedAt)}
+      </Typography.Text>
     </div>
   );
 });

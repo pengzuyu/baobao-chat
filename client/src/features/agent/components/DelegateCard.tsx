@@ -4,18 +4,48 @@
  * - running：后台执行中（输出尾窗 ≤50 行 + [取消]；会话可继续对话）
  * - review：delegate.end（exit=0）驱动——摘要/改动文件/检查点/续接句柄 + [采纳并回填] [拒绝]
  * - resolved：终态（已采纳/已拒绝/失败/已取消）
+ * D26-O6：delegate-card 类退役——内联 token + antd Input/Spin/Typography。
  */
 
 import { memo, useState } from 'react';
+import { Input, Spin, Typography, theme } from 'antd';
 import { useImeGuard } from '../../../shared/hooks/useImeGuard';
-import { CheckCircle2, ChevronRight, Loader2, TerminalSquare, XCircle } from 'lucide-react';
+import { CheckCircle2, ChevronRight, TerminalSquare, XCircle } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useAgentStore } from '../store/agent';
 import type { StreamItem } from '../store/agent';
 
 type DelegateItem = Extract<StreamItem, { kind: 'delegate' }>;
 
+/** 过程卡头部折叠行（原 tool-card__head 口径，内联） */
+const headToggleStyle = {
+  width: '100%',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 12px',
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  fontSize: 13,
+  textAlign: 'left',
+  height: 'auto',
+} as const;
+
+/** 等宽内容块（原 tool-card__mono） */
+const monoBlockStyle = {
+  fontFamily: 'var(--bbw-font-mono)',
+  fontSize: 12,
+  background: 'rgba(127, 134, 145, 0.14)',
+  borderRadius: 4,
+  padding: '8px 12px',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-all',
+  overflowY: 'auto',
+} as const;
+
 export const DelegateCard = memo(function DelegateCard({ item }: { item: DelegateItem }) {
+  const { token } = theme.useToken();
   const confirmDelegate = useAgentStore((st) => st.confirmDelegate);
   const reviewDelegate = useAgentStore((st) => st.reviewDelegate);
   const cancelDelegate = useAgentStore((st) => st.cancelDelegate);
@@ -28,37 +58,75 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
 
   const headStatus =
     item.phase === 'brief' ? (
-      <span className="tool-card__status tool-card__status--running">待确认</span>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        待确认
+      </Typography.Text>
     ) : item.phase === 'running' ? (
-      <span className="tool-card__status tool-card__status--running">
-        <Loader2 size={12} className="bbw-spin" aria-hidden />
-        后台执行中
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <Spin size="small" aria-hidden />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          后台执行中
+        </Typography.Text>
       </span>
     ) : item.phase === 'review' ? (
-      <span className="tool-card__status tool-card__status--running">待审查</span>
+      <Typography.Text type="warning" style={{ fontSize: 12 }}>
+        待审查
+      </Typography.Text>
     ) : failed ? (
-      <span className="tool-card__status tool-card__status--failed">失败 · exit {item.end?.exitCode}</span>
+      <Typography.Text type="danger" style={{ fontSize: 12 }}>
+        失败 · exit {item.end?.exitCode}
+      </Typography.Text>
     ) : item.decision === 'accept' ? (
-      <span className="tool-card__status tool-card__status--ok">已采纳</span>
+      <Typography.Text type="success" style={{ fontSize: 12 }}>
+        已采纳
+      </Typography.Text>
     ) : (
-      <span className="tool-card__status tool-card__status--failed">{item.decision === 'reject' ? '已拒绝' : '已取消'}</span>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {item.decision === 'reject' ? '已拒绝' : '已取消'}
+      </Typography.Text>
     );
 
   return (
-    <div className={`delegate-card${failed ? ' delegate-card--failed' : ''}`}>
-      <button type="button" className="tool-card__head" onClick={() => setOpen((v) => !v)}>
-        <ChevronRight size={12} className={`tool-card__chev${open ? ' tool-card__chev--open' : ''}`} aria-hidden />
-        <TerminalSquare size={13} className="tool-card__icon" aria-hidden />
-        <span className="subagent-card__label">委派</span>
-        <span className="delegate-card__backend">{item.backend || '后端待定'}</span>
-        <span className="tool-card__status-wrap">{headStatus}</span>
+    <div
+      style={{
+        alignSelf: 'stretch',
+        border: `1px solid ${failed ? token.colorError : token.colorBorderSecondary}`,
+        borderRadius: token.borderRadiusLG,
+        background: token.colorBgContainer,
+        overflow: 'hidden',
+      }}
+    >
+      <button type="button" style={headToggleStyle} onClick={() => setOpen((v) => !v)}>
+        <ChevronRight
+          size={12}
+          aria-hidden
+          style={{ color: token.colorTextQuaternary, flexShrink: 0, transition: 'transform 0.15s ease', transform: open ? 'rotate(90deg)' : undefined }}
+        />
+        <TerminalSquare size={13} aria-hidden style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
+        <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
+          委派
+        </Typography.Text>
+        <Typography.Text code copyable={false} style={{ fontSize: 12, background: 'transparent', border: 'none', padding: 0, flexShrink: 0 }}>
+          {item.backend || '后端待定'}
+        </Typography.Text>
+        <span style={{ marginLeft: 'auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>{headStatus}</span>
       </button>
 
       {item.phase === 'brief' ? (
-        <div className="delegate-card__actions">
-          <span className="delegate-card__hint">Agent 请求委派本机编码智能体执行任务，确认后转后台运行（简报沿用模型产出）</span>
-          <div className="delegate-card__btns">
-            <Button variant="primary" onClick={() => confirmDelegate(item.runId, item.backend)}>
+        <div
+          style={{
+            borderTop: `1px solid ${token.colorBorderSecondary}`,
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+          }}
+        >
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Agent 请求委派本机编码智能体执行任务，确认后转后台运行（简报沿用模型产出）
+          </Typography.Text>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button onClick={() => confirmDelegate(item.runId, item.backend)}>
               确认启动（{item.backend || '默认后端'}）
             </Button>
             <Button variant="secondary" onClick={() => cancelDelegate(item.runId)}>
@@ -69,12 +137,13 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
       ) : null}
 
       {item.phase === 'running' ? (
-        <div className="delegate-card__actions">
-          <div className="delegate-card__input-row">
-            <input
-              className="delegate-card__input"
+        <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Input
+              size="small"
               value={draft}
               placeholder="运行中补充指令（转发子进程）…"
+              style={{ flex: 1, minWidth: 0, fontSize: 12 }}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !imeComposing()) {
@@ -86,6 +155,7 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
             />
             <Button
               variant="secondary"
+              size="small"
               disabled={!draft.trim()}
               onClick={() => {
                 sendRunInput(item.runId, draft);
@@ -94,7 +164,7 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
             >
               下发
             </Button>
-            <Button variant="secondary" onClick={() => cancelDelegate(item.runId)}>
+            <Button variant="secondary" size="small" onClick={() => cancelDelegate(item.runId)}>
               取消委派
             </Button>
           </div>
@@ -102,15 +172,19 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
       ) : null}
 
       {item.phase === 'review' && item.end ? (
-        <div className="delegate-card__review">
-          <div className="tool-card__section">
-            <div className="tool-card__section-label">执行摘要</div>
-            <div className="tool-card__mono">{item.end.summary || '（无摘要）'}</div>
+        <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+              执行摘要
+            </Typography.Text>
+            <div style={monoBlockStyle}>{item.end.summary || '（无摘要）'}</div>
           </div>
           {item.end.changedFiles.length > 0 ? (
-            <div className="tool-card__section">
-              <div className="tool-card__section-label">改动文件（{item.end.changedFiles.length}）</div>
-              <div className="tool-card__mono delegate-card__files">
+            <div>
+              <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+                改动文件（{item.end.changedFiles.length}）
+              </Typography.Text>
+              <div style={{ ...monoBlockStyle, maxHeight: 160, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {item.end.changedFiles.map((f) => (
                   <div key={f}>{f}</div>
                 ))}
@@ -118,15 +192,13 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
             </div>
           ) : null}
           {(item.end.checkpointId || item.end.childSessionRef) && (
-            <div className="delegate-card__meta">
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: token.colorTextSecondary, fontFamily: 'var(--bbw-font-mono)' }}>
               {item.end.checkpointId ? <span>回滚锚点 {item.end.checkpointId}</span> : null}
               {item.end.childSessionRef ? <span>可续接 {item.end.childSessionRef}</span> : null}
             </div>
           )}
-          <div className="delegate-card__btns">
-            <Button variant="primary" onClick={() => reviewDelegate(item.runId, true)}>
-              采纳并回填
-            </Button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button onClick={() => reviewDelegate(item.runId, true)}>采纳并回填</Button>
             <Button variant="secondary" onClick={() => reviewDelegate(item.runId, false)}>
               拒绝
             </Button>
@@ -135,31 +207,33 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
       ) : null}
 
       {item.phase === 'resolved' ? (
-        <div className="delegate-card__resolved">
+        <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {item.decision === 'accept' ? (
-            <span className="delegate-card__verdict delegate-card__verdict--ok">
+            <Typography.Text type="success" style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
               <CheckCircle2 size={12} aria-hidden />
               结果已回填主对话
-            </span>
+            </Typography.Text>
           ) : failed ? (
-            <span className="delegate-card__verdict delegate-card__verdict--fail">
+            <Typography.Text type="danger" style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
               <XCircle size={12} aria-hidden />
               {item.end?.summary || '委派异常退出'}
-            </span>
+            </Typography.Text>
           ) : (
-            <span className="delegate-card__verdict delegate-card__verdict--fail">
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
               <XCircle size={12} aria-hidden />
               {item.decision === 'reject' ? '结果已拒绝（可用检查点回滚）' : '已取消'}
-            </span>
+            </Typography.Text>
           )}
         </div>
       ) : null}
 
       {open && item.logs.length > 0 ? (
-        <div className="tool-card__body">
-          <div className="tool-card__section">
-            <div className="tool-card__section-label">后端输出（尾部 {item.logs.length} 行 · run {item.runId}）</div>
-            <div className="tool-card__mono delegate-card__logs">
+        <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+              后端输出（尾部 {item.logs.length} 行 · run {item.runId}）
+            </Typography.Text>
+            <div style={{ ...monoBlockStyle, maxHeight: 220, display: 'flex', flexDirection: 'column', gap: 2 }}>
               {item.logs.map((l, i) => (
                 <div key={i}>{l}</div>
               ))}

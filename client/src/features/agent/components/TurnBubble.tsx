@@ -6,10 +6,12 @@
  * 富交互过程明细（审批卡/子任务卡/可展开工具卡/中间正文）经 children 注入折叠区。
  * 摘要条=工作台统计口径（用时 · N 次LLM调用 · N 次工具执行 · N 个子agent）；
  * 运行中卡片自动展开+边框高亮+实时计时；回合收口自动折叠；未决审批强制展开。
+ * D26-O6：agent-row/agent-turn 类退役——内联 token（Bot 头像/系统行/中间正文弱化）。
  */
 
 import { memo, useMemo, type ReactNode } from 'react';
 import { Bot } from 'lucide-react';
+import { theme } from 'antd';
 import { AgentProcessCard, ThinkingCollapse } from '../../../shared/components/AgentProcessCard';
 import { MarkdownText } from '../../../shared/components/MarkdownText';
 import { stagesFromStream } from '../../im/agent/embedded';
@@ -25,6 +27,37 @@ import { TypingState } from './TypingState';
 
 type UserItem = Extract<StreamItem, { kind: 'user' }>;
 type ToolItem = Extract<StreamItem, { kind: 'tool' }>;
+
+/** 系统提示行（检查点/模式切换/记忆沉淀；原 agent-system-row，内联 token） */
+function SystemRow({ text }: { text: string }) {
+  const { token } = theme.useToken();
+  return (
+    <div
+      style={{
+        alignSelf: 'center',
+        fontSize: 12,
+        color: token.colorTextTertiary,
+        background: token.colorFillQuaternary,
+        borderRadius: 999,
+        padding: '2px 12px',
+        maxWidth: '92%',
+        textAlign: 'center',
+      }}
+    >
+      {text}
+    </div>
+  );
+}
+
+/** 中间轮正文（非最终回答，弱化展示；原 agent-turn__mid，内联 token） */
+function MidBody({ children }: { children: ReactNode }) {
+  const { token } = theme.useToken();
+  return (
+    <div style={{ fontSize: 13, color: token.colorTextSecondary, borderLeft: `2px solid ${token.colorBorderSecondary}`, paddingLeft: 8 }}>
+      {children}
+    </div>
+  );
+}
 
 /** 过程区条目渲染（思考折叠卡/工具组/审批/提问/子任务/委派/中间正文/系统行；连续工具归组）。
  *  作为 AgentProcessCard children 注入折叠区（2026-11-11 共用卡实现） */
@@ -60,9 +93,9 @@ export function renderProcessItems(
       case 'agentText':
         // 中间轮正文（非最终回答）进折叠区，弱化展示
         nodes.push(
-          <div key={item.key} className="agent-turn__mid">
+          <MidBody key={item.key}>
             <MarkdownText text={item.text} />
-          </div>,
+          </MidBody>,
         );
         break;
       case 'permission':
@@ -84,11 +117,7 @@ export function renderProcessItems(
         nodes.push(<DelegateCard key={item.key} item={item} />);
         break;
       case 'system':
-        nodes.push(
-          <div key={item.key} className="agent-system-row">
-            {item.text}
-          </div>,
-        );
+        nodes.push(<SystemRow key={item.key} text={item.text} />);
         break;
       default:
         break;
@@ -129,6 +158,7 @@ interface TurnBubbleProps {
  * （appendDelta 保旧条目引用稳定）而非数组引用，才能跳过重渲 */
 export const TurnBubble = memo(
   function TurnBubble({ user, items, active, onRespond }: TurnBubbleProps) {
+    const { token } = theme.useToken();
     // 最终回答 = 最后一段 agentText；其余（思考/工具/审批/子任务/中间正文/系统行）进折叠区
     let lastAnswerIdx = -1;
     for (let i = items.length - 1; i >= 0; i -= 1) {
@@ -150,11 +180,25 @@ export const TurnBubble = memo(
     const question = q.length > 30 ? `${q.slice(0, 30).join('')}…` : user.text.trim();
 
     return (
-      <div className="agent-row agent-row--bot agent-turn">
-        <div className="agent-row__avatar" aria-hidden>
+      <div style={{ display: 'flex', gap: 8, maxWidth: '88%' }}>
+        <div
+          aria-hidden
+          style={{
+            width: 26,
+            height: 26,
+            borderRadius: 8,
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: token.colorPrimaryBg,
+            color: token.colorPrimary,
+            marginTop: 2,
+          }}
+        >
           <Bot size={16} strokeWidth={1.8} />
         </div>
-        <div className="agent-turn__col">
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <AgentProcessCard
             body={{
               kind: 'embedded_agent',
