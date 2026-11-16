@@ -1,0 +1,7 @@
+# BaobaoChat K8s 环境命名空间（依赖组件自建形态，README §0）
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: baobao-chat
+  labels:
+    app.kubernetes.io/part-of: baobaochat

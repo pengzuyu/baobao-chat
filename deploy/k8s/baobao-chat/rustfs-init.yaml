@@ -1,0 +1,59 @@
+# =============================================================================
+# RustFS 桶初始化 Job（幂等，D29/D25 口径——对齐 compose rustfs-init 服务）
+# · bbw-data：开版本化 + CORS 通配（预签名直传 webview 预检；预签名 URL 即凭证，
+#   通配 origin 无泄露面）；bbw-backup：备份桶
+# · 凭据轮换后重跑：kubectl -n baobao-chat delete job bbw-rustfs-init && kubectl apply -f 本文件
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bbw-rustfs-init
+  namespace: baobao-chat
+  labels:
+    app.kubernetes.io/name: bbw-rustfs
+    app.kubernetes.io/part-of: baobaochat
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bbw-rustfs
+        app.kubernetes.io/part-of: baobaochat
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: aws-cli
+          # 转推 Harbor（README 步骤 1）；上游 amazon/aws-cli:2.31.4
+          image: 172.16.105.109:30003/pengzuyu/aws-cli:2.31.4
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: bbw-s3-cred
+                  key: accessKey
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: bbw-s3-cred
+                  key: secretKey
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+            - name: AWS_ENDPOINT_URL
+              value: http://bbw-rustfs.baobao-chat.svc.cluster.local:9000
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              aws s3api create-bucket --bucket bbw-data || true
+              aws s3api put-bucket-versioning --bucket bbw-data \
+                --versioning-configuration Status=Enabled || true
+              aws s3api create-bucket --bucket bbw-backup || true
+              aws s3api put-bucket-cors --bucket bbw-data --cors-configuration \
+                '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","POST","HEAD"],"AllowedHeaders":["content-type","x-amz-*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3600}]}' || true
+              echo "[rustfs-init] 桶初始化完成：bbw-data(版本化) / bbw-backup（CORS 已配）"
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}

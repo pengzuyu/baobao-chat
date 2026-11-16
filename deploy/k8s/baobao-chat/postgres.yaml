@@ -1,0 +1,100 @@
+# =============================================================================
+# PostgreSQL 16 + pgvector（baobao-chat 命名空间自建形态）
+# · 镜像必须带 pgvector：迁移基线 0001_init.sql:44 硬性 CREATE EXTENSION vector，
+#   官方 postgres 镜像缺扩展文件 → migrate Job 必失败（KB 向量列 embedding vector(1024)）
+# · 密码不入 git：部署时 kubectl create secret generic bbw-pg-cred（README 步骤 2）
+# · 对齐 compose 形态 pg 服务（deploy/compose/docker-compose.yml）；WAL 归档等
+#   运维强化按需后补（单副本起步，PVC 即数据面）
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: bbw-pg
+  namespace: baobao-chat
+  labels:
+    app.kubernetes.io/name: bbw-pg
+    app.kubernetes.io/part-of: baobaochat
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: bbw-pg
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: pg
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bbw-pg
+  namespace: baobao-chat
+  labels:
+    app.kubernetes.io/name: bbw-pg
+    app.kubernetes.io/part-of: baobaochat
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # 单副本+PVC：滚动会双写同卷，Recreate 语义正确
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bbw-pg
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bbw-pg
+        app.kubernetes.io/part-of: baobaochat
+    spec:
+      containers:
+        - name: postgres
+          # 转推 Harbor（README 步骤 1）；上游 pgvector/pgvector:pg16
+          image: 172.16.105.109:30003/pengzuyu/pgvector:pg16
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_USER
+              value: bbw
+            - name: POSTGRES_DB
+              value: bbw
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bbw-pg-cred
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata   # 子目录避开 lost+found
+          ports:
+            - name: pg
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "bbw", "-d", "bbw"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "bbw", "-d", "bbw"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: bbw-pg-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bbw-pg-data
+  namespace: baobao-chat
+  labels:
+    app.kubernetes.io/name: bbw-pg
+    app.kubernetes.io/part-of: baobaochat
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi          # storageClassName 缺省=集群默认；指定请在 README 步骤 3 覆盖
