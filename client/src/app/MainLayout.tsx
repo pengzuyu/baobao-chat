@@ -202,6 +202,7 @@ export function MainLayout() {
           >
             <Menu
               mode="inline"
+              inlineIndent={0} /* 根因修复：rc-menu 对 inline 根级项注入内联 paddingLeft=level×24px（盖过 itemPaddingInline 令牌），致内容右顶+左侧留白、56px 下挤压重叠 */
               selectedKeys={selectedKey ? [selectedKey] : []}
               onClick={({ key }) => navigate(key)}
               items={menuItems}
