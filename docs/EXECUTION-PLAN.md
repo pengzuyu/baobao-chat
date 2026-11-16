@@ -387,7 +387,7 @@
 
 | # | 事项 | 改动点 | 验收 | 状态 |
 |---|------|--------|------|------|
-| Q0 | 认证域 P0 欠账（与 OIDC 无依赖可先行） | refresh 落 OS 钥匙串+启动静默刷新直达主界面（03 §2.3）；RT 供给切 /auth/obo/token（act 归因+scope 子集，obo.renew 真换签）；auth_clear_token+did 真实化+改密吊销 refresh | tsc/build/test 绿；重启免重登；服务端日志 act 可见 | [ ] |
+| Q0 | 认证域 P0 欠账（与 OIDC 无依赖可先行） | refresh 落 OS 钥匙串+启动静默刷新直达主界面（03 §2.3）；RT 供给切 /auth/obo/token（act 归因+scope 子集，obo.renew 真换签）；auth_clear_token+did 真实化+改密吊销 refresh | tsc/build/test 绿；重启免重登；服务端日志 act 可见 | [x] 2026-11-16（C1 dbe89e9/C2 db62d6b/C3 cdecbb9/C4 3afc0c8：did 真实化（uuid 落 app 配置目录+登录/静默刷新补 did——此前缺字段对真实后端必 400 已断+WS 同源）；登出链路（apiLogout 吊销 refresh+auth_clear_token 清 Rust 缓存+改密即全端吊销）；refresh 落钥匙串（com.baobaochat.auth service）+restoreLogin 免密直达（App restoring 门防闪跳，显式登出弃凭据）；RT 切 OBO（宿主试签 act=desktop-{did}+scope=用户权限集，失败回落主 token 保底；renew 真换签走独立线程）；reqwest 0.12/uuid v1 新依赖 Cargo.lock 随提；全链 tsc/vite build/cargo check/go build+test 绿——真机走查归 Q5 ⑥⑦⑧） |
 | Q1 | OIDC 地基（服务端） | zitadel/oidc v3 依赖+Storage 适配层（oidc_client/auth_request/grant/refresh/**web_session** 五表，迁移 0038 起编——已存在两份 0037 撞号）；ES256 密钥装载（env BBW_OIDC_SIGNING_KEY；轮换窗口收缩候选见 D28 §10）；jwks/discovery/authorize/token（授权码+PKCE）；web-login 兜底（html/template 等待页 + **IdP 浏览器会话 7 天滑动**，D28 v0.2）；oidc_client admin CRUD | 纯 web 路径授权码全链通；7 天内第二应用免密（SSO）；curl 验 jwks | [ ] |
 | Q2 | desktop 确认链 | tauri deep-link 注册 bbw:// + capabilities 白名单；深链路由+确认卡 UI（antd 口径：应用名/logo/scope 人类可读/6 位码/点头像）；POST /oauth2/confirm（desktop access token 鉴权）；等待页深链尝试+轮询；grant 覆盖降级轻量卡。**可整体后置不阻塞 OIDC 上线**（D28 §10 收缩候选④） | 深链全链真机通；6 位码错 3 次作废 | [ ] |
 | Q3 | 授权管理与撤销面 | 用户面「已授权应用」页（oidc_grant 列表+撤销=吊销该应用 refresh）+设备列表补「浏览器会话」远端下线；introspection/revoke/userinfo 端点；admin OIDC 凭证管理（与 eco_app 发布联动）；审计 auth.oidc.* 事件 | 撤销后 introspection 立即 inactive；远端下线浏览器会话即失效 | [ ] |
