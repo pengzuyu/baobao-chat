@@ -3,6 +3,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,8 @@ type Config struct {
 	WSHeartbeat   time.Duration // 无心跳判定半开时长（14 篇 §2.1: 60s+裕量）
 	LoginMaxFails int           // 口令错误锁定阈值（03 篇 §2.3: 5 次）
 	LoginLockTTL  time.Duration // 锁定时长（10min）
+	OIDCIssuer    string        // OIDC OP issuer（D28；空=按 HTTPAddr 推导本地默认）
+	OIDCSigningKey string       // ES256 私钥 PEM（D28 拍板⑩①手工轮换；空=临时密钥仅联调）
 }
 
 // DevJWTSecret 开发默认 HS256 密钥（≥32 字节仅为通过长度校验；生产必经
@@ -49,5 +52,12 @@ func Load() *Config {
 	if v := os.Getenv("BBW_SEED_DEMO"); v == "0" || v == "false" {
 		c.SeedDemoData = false
 	}
+	// OIDC（D28 批次 Q1）：issuer 缺省按 HTTPAddr 推导本地联调地址（:8090 →
+	// http://127.0.0.1:8090/oauth2）；签名密钥未配走模块内临时密钥口径（仅联调）
+	c.OIDCIssuer = os.Getenv("BBW_OIDC_ISSUER")
+	if c.OIDCIssuer == "" {
+		c.OIDCIssuer = "http://127.0.0.1" + strings.TrimPrefix(c.HTTPAddr, "") + "/oauth2"
+	}
+	c.OIDCSigningKey = os.Getenv("BBW_OIDC_SIGNING_KEY")
 	return c
 }

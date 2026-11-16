@@ -35,3 +35,7 @@ func NewModule(users orgapi.UserReader, signer *authjwt.Signer, cfg *config.Conf
 
 // API 对外服务接口
 func (m *Module) API() authapi.AuthService { return m.svc }
+
+// Service 内部服务实例（D28 批次 Q1：oidc 模块复用防爆破/口令校验/权限聚合——
+// 经模块边界显式交付，避免 oidc 绕过装配自建依赖）
+func (m *Module) Service() *authservice.Service { return m.svc }

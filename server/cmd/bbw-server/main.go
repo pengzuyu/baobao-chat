@@ -46,6 +46,7 @@ import (
 	fileservice "github.com/baobaochat/server/internal/file/service"
 	filestore "github.com/baobaochat/server/internal/file/store"
 	"github.com/baobaochat/server/internal/gateway"
+	"github.com/baobaochat/server/internal/oidc"
 	"github.com/baobaochat/server/internal/kb"
 	kbapi "github.com/baobaochat/server/internal/kb/api"
 	kbrepo "github.com/baobaochat/server/internal/kb/repo"
@@ -339,6 +340,19 @@ func main() {
 		}
 		httpx.OK(w, r, map[string]string{"status": "ready"})
 	})
+
+	// OIDC Provider（D28 批次 Q1）：单体内模块挂 /oauth2/*（拍板 8）——
+	// authorize/token/jwks/discovery/userinfo/introspection/revoke 由 zitadel/oidc
+	// 路由，等待页/web-login 兜底由模块自注册；内存模式（无 PG）不挂载
+	var oidcMod *oidc.Module
+	if pgPool != nil {
+		var oidcErr error
+		oidcMod, oidcErr = oidc.New(pgPool, authMod.Service(), cfg.OIDCIssuer, cfg.OIDCSigningKey, bbwpg.DefaultTenantID)
+		if oidcErr != nil {
+			log.Fatalf("OIDC 模块装配失败: %v", oidcErr)
+		}
+		mux.Handle("/oauth2/", http.StripPrefix("/oauth2", oidcMod.Handler()))
+	}
 
 	// 认证 REST（03 篇 §7）
 	authAPI := authMod.API()
@@ -854,6 +868,12 @@ func main() {
 	}))
 	mux.Handle("GET /api/v1/admin/dashboard", requireAnyAdmin(handleAdminDashboard(adminSvc)))
 	mux.Handle("GET /api/v1/admin/users", requirePerm("admin:user:manage")(handleAdminUsers(adminSvc)))
+	// OIDC 客户端注册（D28 批次 Q1：生态应用 RP 凭证；一期只开 public client=PKCE-only）
+	if oidcMod != nil {
+		mux.Handle("POST /api/v1/admin/oidc/clients", requirePerm("admin:app:publish")(oidcMod.HandleClientsCreate()))
+		mux.Handle("GET /api/v1/admin/oidc/clients", requirePerm("admin:app:publish")(oidcMod.HandleClientsList()))
+		mux.Handle("PATCH /api/v1/admin/oidc/clients/status", requirePerm("admin:app:publish")(oidcMod.HandleClientsStatus()))
+	}
 	mux.Handle("PATCH /api/v1/admin/users/{id}", requirePerm("admin:user:manage")(handleAdminUserPatch(adminSvc)))
 	mux.Handle("POST /api/v1/admin/users/{id}/disable", requirePerm("admin:user:manage")(handleAdminUserStatus(adminSvc, orgapi.UserStatusDisabled)))
 	mux.Handle("POST /api/v1/admin/users/{id}/enable", requirePerm("admin:user:manage")(handleAdminUserStatus(adminSvc, orgapi.UserStatusActive)))

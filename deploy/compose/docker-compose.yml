@@ -31,6 +31,9 @@ x-bbw-env: &bbw-env
   BBW_DB_RO_DSN: ${BBW_DB_RO_DSN:-}
   # HS256 签名密钥（03 篇 §2.2；≥32 字节；空回退开发默认密钥并打警告日志，生产必改）
   BBW_JWT_SECRET: ${BBW_JWT_SECRET:-}
+  # OIDC Provider（D28 批次 Q1）：ES256 私钥 PEM + 对外 issuer；空=临时密钥仅联调
+  BBW_OIDC_SIGNING_KEY: ${BBW_OIDC_SIGNING_KEY:-}
+  BBW_OIDC_ISSUER: ${BBW_OIDC_ISSUER:-}
   # 文件域本地盘（容器内固定 /data，卷 bbw-data 持久化；对象存储阶段二替换，07 篇 §4）
   BBW_DATA_DIR: ${BBW_DATA_DIR:-/data}
   # 演示种子数据（alice/bob 口令 demo-pass-123）：部署环境默认关；联调置 1 可免引导

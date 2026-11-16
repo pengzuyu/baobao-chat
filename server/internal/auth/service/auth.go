@@ -334,6 +334,44 @@ func (s *Service) Verify(_ context.Context, token string) (*authjwt.Claims, erro
 	return s.signer.Parse(token)
 }
 
+// ── OIDC web 兜底登录用的三个导出面（D28 §5.3，批次 Q1）──────────────────────
+// oidc 模块经这三个方法复用 auth 域的防爆破/口令校验/用户与权限读取，
+// 不重复实现也不签发内部 token（web 会话归 oidc_web_session 自管）。
+
+// VerifyOIDCWebLogin 等待页账密校验：复用登录锁定计数与状态校验，不签发 token
+func (s *Service) VerifyOIDCWebLogin(ctx context.Context, tenantID int64, account, password string) (*orgapi.User, error) {
+	lockKey := strconv.FormatInt(tenantID, 10) + "|" + account
+	if locked, retry := s.attempts.IsLocked(ctx, lockKey); locked {
+		return nil, errx.NewWithDetails(errx.CodeAuthLoginLocked, "失败次数过多已锁定",
+			map[string]int{"retry_after_seconds": int(retry.Seconds()) + 1})
+	}
+	u, err := s.users.GetUserByLogin(ctx, tenantID, account)
+	// 不变量：不暴露"用户是否存在"（与 Login 同口径）
+	if err != nil || !VerifyPassword(u.PasswordHash, password) {
+		n := s.attempts.RecordFailure(ctx, lockKey, s.opts.MaxLoginFails, s.opts.LockTTL)
+		if n >= s.opts.MaxLoginFails {
+			return nil, errx.NewWithDetails(errx.CodeAuthLoginLocked, "失败次数过多已锁定",
+				map[string]int{"retry_after_seconds": int(s.opts.LockTTL.Seconds())})
+		}
+		return nil, errx.New(errx.CodeAuthPasswordWrong, "账号或口令错误")
+	}
+	if u.Status != orgapi.UserStatusActive {
+		return nil, errx.New(errx.CodeUserDisabled, "用户已禁用")
+	}
+	s.attempts.Reset(ctx, lockKey)
+	return u, nil
+}
+
+// UserByID oidc 侧按用户 ID 取用户（userinfo/introspection/private claims 用）
+func (s *Service) UserByID(ctx context.Context, id int64) (*orgapi.User, error) {
+	return s.users.GetUser(ctx, id)
+}
+
+// EffectiveScopesForUser 用户有效权限点（OIDC scope 子集校验/claims 注入用）
+func (s *Service) EffectiveScopesForUser(ctx context.Context, u *orgapi.User) []string {
+	return s.effectiveScopes(ctx, u)
+}
+
 // ChangePassword 改密（D11：旧密码校验 → 新密码规则 → 更新 hash + 清首登标志）
 func (s *Service) ChangePassword(ctx context.Context, tenantID, userID int64, oldPwd, newPwd string) error {
 	if oldPwd == "" || newPwd == "" {

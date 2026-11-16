@@ -62,6 +62,9 @@ BBW_DB_RO_DSN=                               # 空=读回落主库；主从档�
 # —— 认证与运行时（helm: secrets.jwtSecret → Secret bbw-auth；K8s 侧对应键）——
 BBW_JWT_SECRET=bbw_jwt_change_me_0123456789abcdef0123456789abcdef   # ★上线必改：≥32 字节随机串（03 篇 §2.2；空则回退开发默认密钥并打警告）
 BBW_SEED_DEMO=0                              # 演示种子数据（alice/bob 口令 demo-pass-123）：联调置 1 免 admin bootstrap；部署保持 0
+# —— OIDC Provider（D28 批次 Q1：生态应用统一登录；密钥生成 openssl ecparam -name prime256v1 -genkey -noout）——
+BBW_OIDC_SIGNING_KEY=                        # ★上线必改：ES256 私钥 PEM 单行（\n 转义注入）；空=临时密钥仅联调（重启已签 token 失效）
+BBW_OIDC_ISSUER=                             # 对外 issuer（生产形如 https://你的域名/oauth2；空=按监听地址推导本地默认）
 # BBW_DATA_DIR=/data                         # 文件域本地盘（容器内固定 /data 挂 bbw-data 卷，一般无需覆盖；对象存储阶段二替换）
 
 # -----------------------------------------------------------------------------
