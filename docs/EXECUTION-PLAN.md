@@ -407,3 +407,15 @@
 | R1 | compose/部署切换 | docker-compose（rustfs 服务+rustfs-init aws-cli 化+nginx upstream+卷改名+BBW_S3_ENDPOINT 默认值）+.env.tpl（RUSTFS_* 键）+migrate-files-to-s3.sh 改名 aws cli 化+Makefile/scripts/dev-up.sh+helm values endpoint+backup·restore 注释+main.go 日志文案 | docker compose config 绿；go build+全量 test 绿 | [x] 2026-11-16（本提交；rustfs 服务直接复用 BBW_S3_ACCESS_KEY/SECRET_KEY（凭据单源，MINIO_ROOT_* 键对废除）；healthcheck=/health/ready；init=amazon/aws-cli:2.31.4+AWS_ENDPOINT_URL；活文件 MinIO 措辞顺手清零（代码注释/helm/NOTES），frp 存档与 docs/ 设计篇按 D29 §7 保留；compose core+deps profile config 绿+go build/vet/全量 test 绿） |
 | R2 | 集成测试+冒烟 | `BBW_TEST_S3_ADDR` 门控 S3 集成测试（store 层全操作+presign 真链 PUT/GET+UNSIGNED-PAYLOAD 验签+DeleteObjects Content-MD5 断言）；本地 :9100 RustFS 冒烟全绿 | 集成测试对 RustFS 全绿；离线单测不回归 | [x] 2026-11-16（本提交；s3_integration_test.go 五用例对 RustFS 1.0.5 **全绿**：Save/Promote/Open/Head 往返+幂等、CopyTo 幂等、relay staging 位图/清理、**multipart 预签名真链**（预签名 PUT 6MB+1MB 分片=UNSIGNED-PAYLOAD 验签过/ListParts 位图/Complete 合并体逐字节核对/complete 后会话消失/Abort 作废）、预签名 GET+变体 image/jpeg Content-Type+DeleteKey/缺失语义；**UNSIGNED-PAYLOAD 验签与 DeleteObjects（RemoveStaging 路径）实测通过**——D25 §10「门控单测未落」遗留就此清偿；全量离线 test 无回归（未配 env 自动 skip）；冒烟容器即起即清） |
 | R3 | 真机验收 | compose 栈全链（并入 D25 §9 六项：>8MB 分片直传/120s 票据/缩略变体//oss/ 前缀签名链/CORS 预检/断点续传） | 用户真机走查 | [ ] |
+
+## 批次 W：品牌白标与构建期注入（D31，2026-11-16 W0-W3 编码完成待真机验收）
+
+> 动机=开源适配：内网自部署方只改 `brand/` 一处（brand.json+logo.svg/icon.png）换名换标出自己的包。改动面=客户端+壳+服务端文案源+部署层。设计：[D31](detail/D31-品牌白标与构建期注入设计.md)。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|------|--------|------|------|
+| W0 | 设计落稿 | D31 新增+detail/README 索引（D30 已被并行占用顺延 D31） | 口径可追溯 | [x] 2026-11-16（400e28e） |
+| W1 | 品牌地基 | brand/ 目录（brand.json 五品牌字段+identity 身份区/assets 迁入）+scripts/brand/gen.mjs 五类生成物（shared/brand.ts·壳 brand.rs·tauri.conf patch·logo 复制·index.html title）+Makefile brand/brand-conf 双 target+--check 门禁 | 默认值幂等零 diff；二次运行仍零 diff | [x] 2026-11-16（10ef544；tauri.conf patch 保 schemes 单行风格避免纯格式 diff；icon.png 从 client/app-icon.png git mv） |
+| W2 | 前端触点收敛 | 12 文件 14 处改引 shared/brand（Logo alt/登录页/初始化页/关于页/侧栏 tooltip/两处系统通知署名/OIDC 确认卡/device_name/下载目录默认值）+i18n login.title 死键删除+顺收 D30 并行新增 ExtAgentCard 两处 | 全前端 BaobaoChat 硬编码清零；tsc+vite build 绿 | [x] 2026-11-16（2fcc78a） |
+| W3 | 壳+服务端+部署参数化 | lib.rs register 改 brand::SCHEME（客户端 scheme 四处定义收敛）；config 三 env（BBW_BRAND_NAME/BBW_DEEP_LINK_SCHEME/BBW_BOOTSTRAP_MAIL_DOMAIN）；oidc 等待页模板 BrandName/Scheme 参数化；/setup+CLI bootstrap 邮箱后缀参数化（demo seed 不动）；compose nginx 占位插值；.env.tpl 三键；publish-website 门禁改读 brand.json；build-desktop.sh/ps1 前置 --check | cargo check/go build/vet/compose config 绿；试换牌 build 绿+回退零残留 | [x] 2026-11-16（c43c4d7；Acme 试换牌全链验证：生成→tsc/vite build 绿→git 回退零残留→--check 复绿；deep-link 日志 bbw:// 字样顺带动态化） |
+| W4 | 真机验收 | D31 §6 四项：测试品牌 make brand 出包全变（安装包名/图标/登录页/通知署名）；老包覆盖安装不登出（identifier 不变）；OIDC 深链正常（scheme 未动）；改 brand/ 回退可逆 | 用户真机走查 | [ ] |
