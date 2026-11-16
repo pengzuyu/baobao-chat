@@ -5,10 +5,11 @@
  *    残余自研 CSS（气泡/markdown 等）与 antd 组件**同一份令牌源**，切主题即时联动。
  * tokens.css 仅作 React 挂载前的首屏兜底基线（值与本文件一致）。
  *
- * 色彩方向（2026-11-14 用户拍板「主题色黑」+「毛坯感」修正）：
- * - 黑白反色系（Vercel 风）：亮色主色纯黑 / 暗色主色纯白；
- * - 暗色做**分层黑**（布局 #0a0a0a → 容器 #141414 → 浮层推导 ~#1c1c1c），非一平纯黑；
- * - 灰阶全中性化（去蓝调）；语义色按底色调亮度（黑底提亮、白底压深）。
+ * 色彩方向（2026-11-14 拍板黑白反色 → 2026-11-16 修订：用户嫌暗色难看）：
+ * - 亮色保持黑白反色（Vercel 风）：主色纯黑、白底；
+ * - 暗色改**蓝调分层黑 + 彩色主色**（Slack/Linear 风）：布局 #0b0e14 → 容器 #11151d，
+ *   主色柔蓝 #5b8cff，文字米白 #e8eaf0（非纯白）——聊天应用不再冷硬无焦点；
+ * - 语义色按底色调亮度（暗底提亮、白底压深）。
  */
 
 import { theme as antdTheme } from 'antd';
@@ -25,15 +26,15 @@ const LIGHT = {
   gray: ['#ffffff', '#f5f5f5', '#e5e5e5', '#d4d4d4', '#a3a3a3', '#737373', '#525252', '#3f3f3f', '#262626', '#171717'],
 } as const;
 
-/** 暗色（= tokens.css [data-theme='dark']；分层黑 + 白主色反色） */
+/** 暗色（= tokens.css [data-theme='dark']；蓝调分层黑 + 彩色主色） */
 const DARK = {
-  primary: '#ffffff',
+  primary: '#5b8cff',
   success: '#4ade80',
   warning: '#fbbf24',
   danger: '#f87171',
-  bgLayout: '#0a0a0a',
-  bgContainer: '#141414',
-  gray: ['#141414', '#1a1a1a', '#262626', '#333333', '#4d4d4d', '#6f6f6f', '#8f8f8f', '#b8b8b8', '#dcdcdc', '#f0f0f0'],
+  bgLayout: '#0b0e14',
+  bgContainer: '#11151d',
+  gray: ['#11151d', '#161b26', '#232a36', '#2c3442', '#3d4757', '#8a93a5', '#9aa3b2', '#c6ccd8', '#dde2ec', '#e8eaf0'],
 } as const;
 
 type Mode = 'light' | 'dark';
@@ -49,9 +50,9 @@ export const THEME = {
   fontFamily: `-apple-system, 'PingFang SC', 'Microsoft YaHei', 'Inter', sans-serif`,
 } as const;
 
-/** 主色 hover/light 派生（气泡底/选中浅底；亮=灰阶 2 档、暗=黑底上一档） */
-const primaryHoverOf = (mode: Mode) => (mode === 'dark' ? '#d4d4d4' : '#262626');
-const primaryLightOf = (mode: Mode) => (mode === 'dark' ? '#1f1f1f' : '#f0f0f0');
+/** 主色 hover/light 派生（气泡底/选中浅底；亮=灰阶 2 档、暗=蓝调深底一档） */
+const primaryHoverOf = (mode: Mode) => (mode === 'dark' ? '#7ba3ff' : '#262626');
+const primaryLightOf = (mode: Mode) => (mode === 'dark' ? '#1d2739' : '#f0f0f0');
 
 /** antd ThemeConfig 单源工厂（D26 §2 起沿用；D27 分层黑修订） */
 export function antdThemeFrom(mode: Mode): ThemeConfig {
@@ -67,10 +68,10 @@ export function antdThemeFrom(mode: Mode): ThemeConfig {
       colorText: c.gray[9],
       colorTextSecondary: c.gray[6],
       colorBorder: c.gray[2],
-      colorBorderSecondary: mode === 'dark' ? '#1f1f1f' : '#f0f0f0',
+      colorBorderSecondary: mode === 'dark' ? '#1a2030' : '#f0f0f0',
       colorBgContainer: c.bgContainer,
       colorBgLayout: c.bgLayout,
-      colorBgBase: mode === 'dark' ? '#0a0a0a' : '#ffffff',
+      colorBgBase: mode === 'dark' ? '#0b0e14' : '#ffffff',
       borderRadius: 6, // = --bbw-radius-control
       fontSize: 14, // = --bbw-font-14
       controlHeight: 32,
@@ -79,7 +80,7 @@ export function antdThemeFrom(mode: Mode): ThemeConfig {
     components: {
       Button: { borderRadius: 6 },
       Modal: { titleFontSize: 16 }, // = --bbw-font-16
-      Table: { headerBg: mode === 'dark' ? '#1a1a1a' : '#f5f5f5' },
+      Table: { headerBg: mode === 'dark' ? '#151a24' : '#f5f5f5' },
     },
   };
 }

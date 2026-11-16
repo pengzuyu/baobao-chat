@@ -7,15 +7,15 @@
     <title>BaobaoChat · 企业协作工作台</title>
     <script>
       // 主题防闪烁：React 挂载前按本地偏好设定 data-theme（键 bbw-theme 与 shared/store/theme.ts 对齐；UI 偏好非业务数据）
-      // 2026-11-14 用户拍板：默认主题=暗色（黑）——未显式选择时恒 dark（与 theme.ts readInitialMode 同步）
+      // 2026-11-16 用户拍板：默认主题=亮色——未显式选择时恒 light（与 theme.ts readInitialMode 同步）
       (function () {
         try {
           var m = localStorage.getItem('bbw-theme');
-          var dark = m === 'light' ? false : m === 'system' ? window.matchMedia('(prefers-color-scheme: dark)').matches : true;
+          var dark = m === 'dark' ? true : m === 'system' ? window.matchMedia('(prefers-color-scheme: dark)').matches : false;
           document.documentElement.dataset.theme = dark ? 'dark' : 'light';
         } catch (e) {
-          /* localStorage 不可用时回落默认暗色（黑） */
-          document.documentElement.dataset.theme = 'dark';
+          /* localStorage 不可用时回落默认亮色 */
+          document.documentElement.dataset.theme = 'light';
         }
       })();
     </script>

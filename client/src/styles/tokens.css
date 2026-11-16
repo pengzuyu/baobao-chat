@@ -109,32 +109,32 @@
 }
 
 /*
- * 暗色主题全量映射（D01 §14 开放问题 2，2026-11 冻结）：
- * 中性阶语义反转（1=最深表面 … 10=最亮文字），主色浅底转深蓝，
+ * 暗色主题全量映射（D01 §14 开放问题 2，2026-11 冻结；2026-11-16 D27 修订=蓝调分层黑+彩色主色）：
+ * 中性阶语义反转（1=最深表面 … 10=最亮文字）且整体带蓝调，主色柔蓝 #5b8cff，
  * 浅底语义色/遮罩/阴影/shimmer 高光同步压暗。
  */
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bbw-primary: #ffffff; /* 纯黑底上主色反色为白（黑白反色系） */
-  --bbw-primary-hover: #d4d4d4;
-  --bbw-primary-light: #1f1f1f; /* 己方气泡底 / 选中态（黑底上一档灰） */
+  --bbw-primary: #5b8cff; /* 蓝调分层黑底上的彩色主色（Slack/Linear 风） */
+  --bbw-primary-hover: #7ba3ff;
+  --bbw-primary-light: #1d2739; /* 己方气泡底 / 选中态（蓝调深底一档） */
 
-  --bbw-gray-1: #141414; /* 页面/卡片表面（分层黑：布局 #0a0a0a 上一档） */
-  --bbw-gray-2: #1a1a1a; /* 次级表面 / 对方气泡（须与布局底拉开一档） */
-  --bbw-gray-3: #262626; /* 分隔线/边框 */
-  --bbw-gray-4: #333333;
-  --bbw-gray-5: #4d4d4d;
-  --bbw-gray-6: #6f6f6f; /* 次要文字 */
-  --bbw-gray-7: #8f8f8f;
-  --bbw-gray-8: #b8b8b8; /* 正文主色 */
-  --bbw-gray-9: #dcdcdc;
-  --bbw-gray-10: #f0f0f0;
+  --bbw-gray-1: #11151d; /* 页面/卡片表面（分层蓝黑：布局 #0b0e14 上一档） */
+  --bbw-gray-2: #161b26; /* 次级表面 / 对方气泡（须与布局底拉开一档） */
+  --bbw-gray-3: #232a36; /* 分隔线/边框 */
+  --bbw-gray-4: #2c3442;
+  --bbw-gray-5: #3d4757;
+  --bbw-gray-6: #8a93a5; /* 次要文字 */
+  --bbw-gray-7: #9aa3b2;
+  --bbw-gray-8: #c6ccd8; /* 正文主色 */
+  --bbw-gray-9: #dde2ec;
+  --bbw-gray-10: #e8eaf0; /* 最亮文字=米白非纯白（降对比刺眼） */
 
-  --bbw-success: #4ade80; /* 黑底提亮一档 */
+  --bbw-success: #4ade80; /* 暗底提亮一档 */
   --bbw-warning: #fbbf24;
   --bbw-danger: #f87171;
-  --bbw-info: #ffffff; /* 黑白反色系 info 跟随主色 */
+  --bbw-info: #5b8cff; /* info 跟随主色 */
 
   --bbw-danger-light: #3d2729;
   --bbw-warning-light: #3b3106;
@@ -143,7 +143,7 @@
   --bbw-text-on-fill: #ffffff;
 
   --bbw-mask: rgba(0, 0, 0, 0.45);
-  --bbw-veil: rgba(31, 35, 41, 0.65);
+  --bbw-veil: rgba(11, 14, 20, 0.65);
   --bbw-shadow-card: 0 8px 32px rgba(0, 0, 0, 0.45);
   --bbw-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.5);
   --bbw-shimmer: rgba(255, 255, 255, 0.07);
