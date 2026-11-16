@@ -305,9 +305,10 @@ pub fn agent_runs_list(host: Host, session_id: Option<String>) -> Result<Value, 
     Ok(json!({ "items": result["items"].clone() }))
 }
 
-/// 登录/刷新成功后下发 token（obo.token → RT 的 OboCache；obo.renew 由桥应答）。
-/// user_id/user_name（D22/L4）：装配器静态替换 ${BBW_USER_ID}/${BBW_USER_NAME}
-/// 用——换账号触发装配重推（stdio env 是 spawn 快照）
+/// 登录/刷新成功后下发 token（D28 批0/Q0-2：宿主持 access 试签 OBO → obo.token
+/// 下发 RT 的 OboCache；obo.renew 由桥真换签）。user_id/user_name（D22/L4）：
+/// 装配器静态替换 ${BBW_USER_ID}/${BBW_USER_NAME} 用——换账号触发装配重推（stdio
+/// env 是 spawn 快照）；did/perms：OBO agent_session_id 归因前缀与 scope（先于 token）
 #[tauri::command]
 pub fn auth_set_token(
     host: Host,
@@ -315,8 +316,13 @@ pub fn auth_set_token(
     expires_at: i64,
     user_id: Option<String>,
     user_name: Option<String>,
+    did: Option<String>,
+    perms: Option<Vec<String>>,
 ) -> Result<(), String> {
-    let r = host.set_token(token, expires_at);
+    if let Some(d) = did {
+        host.set_device(&d, perms.as_deref().unwrap_or(&[]));
+    }
+    let r = host.set_access_token(token, expires_at);
     if let (Some(id), Some(name)) = (user_id, user_name) {
         let _ = host.set_user(&id, &name); // 失败仅告警（重登自愈）
     }

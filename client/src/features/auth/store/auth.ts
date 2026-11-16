@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { setTokenProvider, setUnauthorizedHandler, ApiError } from '../../../shared/api/http';
-import { ensureDeviceId } from '../../../shared/deviceId';
+import { ensureDeviceId, getDeviceId } from '../../../shared/deviceId';
 import { apiChangePassword, apiLogin, apiLogout, apiMyPermissions, apiRefresh, USE_MOCK, type AuthUser, type LoginResult } from '../api/auth';
 
 type LoginStatus = 'idle' | 'submitting' | 'locked';
@@ -57,13 +57,15 @@ function scheduleSilentRefresh(getState: () => AuthState): void {
 }
 
 function applyLogin(result: LoginResult) {
-  // Tauri 宿主同步 token（→ obo.token 下发 Runtime；浏览器环境为 no-op）
+  // Tauri 宿主同步 token（→ 宿主试签 OBO → obo.token 下发 Runtime；浏览器环境为 no-op）
   if (result.accessToken && isTauriHost()) {
     void invoke('auth_set_token', {
       token: result.accessToken,
       expiresAt: result.expiresAt,
       userId: result.user?.uid,
       userName: result.user?.name,
+      did: getDeviceId() ?? undefined, // OBO agent_session_id 归因前缀（D28 批0）
+      perms: result.user?.perms, // OBO scope=用户权限集（服务端子集校验）
     }).catch(() => undefined);
   }
   // refresh 落 OS 钥匙串（D28 批0/Q0-1）：唯一落盘点，启动恢复依据；

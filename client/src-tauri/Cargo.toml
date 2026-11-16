@@ -32,6 +32,9 @@ base64 = "0.23"
 keyring = "3"
 # 稳定设备号（D28 批0）：uuid v4 落 app 配置目录；复用依赖树既有版本
 uuid = { version = "1", features = ["v4"] }
+# OBO 签发（D28 批0）：宿主持 access 调 /auth/obo/token——blocking+json 足矣；
+# rustls 供 https 网关（生产域名）；与 updater 共享依赖树
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 
 [profile.release]
 codegen-units = 1

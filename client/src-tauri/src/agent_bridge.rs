@@ -56,6 +56,16 @@ impl SessionCache {
     }
 }
 
+/// OBO 下发 exp 余量（D28 批0）：服务端 OBOTTL=15min，按 now+14min 交付（RT 提前调度续签）
+const OBO_EXP_MARGIN: u64 = 840;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 struct ProcState {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
@@ -70,6 +80,11 @@ struct Shared {
     sessions: Mutex<Vec<SessionCache>>,
     /// (token, exp unix 秒)——auth_set_token 缓存，obo.renew 应答源
     token: Mutex<Option<(String, u64)>>,
+    /// OBO 签发上下文（D28 批0/Q0-2）：did=agent_session_id 归因前缀；
+    /// obo_scopes=用户权限集（/auth/obo/token 子集校验用）；gateway=auth 端点基址
+    did: Mutex<String>,
+    obo_scopes: Mutex<Vec<String>>,
+    gateway: String,
     /// 当前登录用户（工号/姓名）——插件装配器静态替换 ${BBW_USER_ID}/${BBW_USER_NAME}
     /// 用（D22 §6.1/L4；换账号=set_user 后重推装配，stdio env 是 spawn 快照）
     user: Mutex<(String, String)>,
@@ -104,23 +119,63 @@ impl Shared {
         }
     }
 
-    /// RT 侧 obo.renew 应答：用缓存 token 重发 obo.token（带 reply_to 关联）
-    fn answer_renew(&self, reply_to: String) {
+    /// RT 侧 obo.renew 应答（D28 批0/Q0-2 真换签）：用缓存 access 重走 /auth/obo/token
+    /// 换新 OBO；失败回落重发缓存 access（≤15min 内仍可用）。HTTP 走独立线程——
+    /// 事件泵绝不被 5s 超时卡住
+    fn answer_renew(self: &Arc<Self>, reply_to: String) {
         let token = self.token.lock().unwrap().clone();
-        let mut env = match token {
-            Some((t, exp)) => json!({
-                "v": 1, "id": "h-renew", "type": "obo.token",
-                "payload": { "token": t, "exp": exp, "scopes": [] }
-            }),
-            None => return, // 无 token 可续（未登录）：RT 侧 needs_renew 空缓存不请求，理论不达
+        let Some((access, _)) = token else {
+            return; // 无 token 可续（未登录/已登出）：RT 侧 needs_renew 空缓存不请求，理论不达
         };
-        env["reply_to"] = Value::String(reply_to);
-        let mut p = self.proc.lock().unwrap();
-        if let Some(stdin) = p.stdin.as_mut() {
-            let mut line = env.to_string();
-            line.push('\n');
-            let _ = stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush());
+        let shared = Arc::clone(self);
+        std::thread::spawn(move || {
+            let (payload_token, exp) = match shared.issue_obo(&access) {
+                Ok(obo) => (obo, now_secs() + OBO_EXP_MARGIN),
+                Err(e) => {
+                    eprintln!("[bbw-bridge] OBO 续签失败，回落重发缓存 access: {e}");
+                    (access, now_secs() + OBO_EXP_MARGIN)
+                }
+            };
+            let scopes = shared.obo_scopes.lock().unwrap().clone();
+            let mut env = json!({
+                "v": 1, "id": "h-renew", "type": "obo.token",
+                "payload": { "token": payload_token, "exp": exp, "scopes": scopes }
+            });
+            env["reply_to"] = Value::String(reply_to);
+            let mut p = shared.proc.lock().unwrap();
+            if let Some(stdin) = p.stdin.as_mut() {
+                let mut line = env.to_string();
+                line.push('\n');
+                let _ = stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush());
+            }
+        });
+    }
+
+    /// 签发 OBO（D28 批0/Q0-2）：POST /api/v1/auth/obo/token（agent_session_id=
+    /// desktop-{did} 归因前缀；scope=用户权限集）→ {code:0,data:{obo_token}}
+    fn issue_obo(&self, access: &str) -> Result<String, String> {
+        let did = self.did.lock().unwrap().clone();
+        let scopes = self.obo_scopes.lock().unwrap().clone();
+        let url = format!("{}/api/v1/auth/obo/token", self.gateway.trim_end_matches('/'));
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp: Value = client
+            .post(&url)
+            .bearer_auth(access)
+            .json(&json!({ "agent_session_id": format!("desktop-{did}"), "scope": scopes }))
+            .send()
+            .map_err(|e| format!("OBO 端点不可达: {e}"))?
+            .json()
+            .map_err(|e| format!("OBO 响应解析失败: {e}"))?;
+        if resp["code"].as_i64() != Some(0) {
+            return Err(format!("OBO 签发被拒 (code={} message={})", resp["code"], resp["message"]));
         }
+        resp["data"]["obo_token"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "OBO 响应缺 obo_token".to_string())
     }
 
     /// UNT 事件喂会话缓存（camel 原始 payload 取字段；pre=转换前，post=转换后）
@@ -194,6 +249,9 @@ impl AgentHost {
                 }),
                 sessions: Mutex::new(Vec::new()),
                 token: Mutex::new(None),
+                did: Mutex::new(String::new()),
+                obo_scopes: Mutex::new(Vec::new()),
+                gateway: gateway.clone(),
                 user: Mutex::new((String::new(), String::new())),
                 halted: AtomicBool::new(false),
             }),
@@ -268,13 +326,31 @@ impl AgentHost {
         Ok(rep["ok"].as_bool().unwrap_or(false))
     }
 
-    /// 登录/刷新成功后下发 token（exp 毫秒 → 协议秒）
-    pub fn set_token(&self, token: String, exp_ms: i64) -> Result<(), String> {
+    /// 登录/刷新成功后下发 token（D28 批0/Q0-2 OBO 优先）：缓存主 access（续签源）→
+    /// 试签 OBO（act 归因+权限集）下发；失败回落主 token（可用性优先，归因降级告警）
+    pub fn set_access_token(&self, token: String, exp_ms: i64) -> Result<(), String> {
         *self.shared.token.lock().unwrap() = Some((token.clone(), (exp_ms / 1000).max(0) as u64));
+        let obo = match self.shared.issue_obo(&token) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[bbw-bridge] OBO 签发失败，回落主 token 下发: {e}");
+                return self.fire(
+                    "obo.token",
+                    json!({ "token": token, "exp": exp_ms / 1000, "scopes": [] }),
+                );
+            }
+        };
+        let scopes = self.shared.obo_scopes.lock().unwrap().clone();
         self.fire(
             "obo.token",
-            json!({ "token": token, "exp": exp_ms / 1000, "scopes": [] }),
+            json!({ "token": obo, "exp": now_secs() + OBO_EXP_MARGIN, "scopes": scopes }),
         )
+    }
+
+    /// OBO 签发上下文注入（did=归因前缀，perms=权限集）——须先于 set_access_token
+    pub fn set_device(&self, did: &str, perms: &[String]) {
+        *self.shared.did.lock().unwrap() = did.to_string();
+        *self.shared.obo_scopes.lock().unwrap() = perms.to_vec();
     }
 
     /// 登出清缓存（D28 批0/Q0-3）：token 与用户归零。RT 侧已持有的 token 靠
