@@ -62,6 +62,10 @@ BBW_DB_DSN=postgres://bbw:bbw_change_me@pg:5432/bbw?sslmode=disable
 BBW_DB_RO_DSN=                               # 空=读回落主库；主从档位填写副本 DSN（16 篇 §3.3）
 # —— 认证与运行时（helm: secrets.jwtSecret → Secret bbw-auth；K8s 侧对应键）——
 BBW_JWT_SECRET=bbw_jwt_change_me_0123456789abcdef0123456789abcdef   # ★上线必改：≥32 字节随机串（03 篇 §2.2；空则回退开发默认密钥并打警告）
+# KMS 主密钥（aigw 供应商密钥信封加密；helm: secrets.kmsMasterKey → Secret bbw-secrets）：
+# base64(32B)，openssl rand -base64 32 生成；空=带密钥的供应商无法创建/装配（仅警告不阻断）。
+# ★密钥丢失/更换则存量 kms:v1 密文作废需重存
+BBW_KMS_MASTER_KEY=
 BBW_SEED_DEMO=0                              # 演示种子数据（alice/bob 口令 demo-pass-123）：联调置 1 免 admin bootstrap；部署保持 0
 # —— OIDC Provider（D28 批次 Q1：生态应用统一登录；密钥生成 openssl ecparam -name prime256v1 -genkey -noout）——
 BBW_OIDC_SIGNING_KEY=                        # ★上线必改：ES256 私钥 PEM 单行（\n 转义注入）；空=临时密钥仅联调（重启已签 token 失效）
