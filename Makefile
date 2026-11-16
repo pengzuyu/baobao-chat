@@ -88,6 +88,17 @@ client-typecheck: ## 前端类型检查（npm run typecheck，若定义）
 	  else echo "[make] client/ 尚未创建（设计阶段），跳过"; fi
 
 # ---------------------------------------------------------------------------
+# 品牌白标（D31）：brand/ 唯一改动面 → 生成产物（改 brand/ 后必跑）
+# ---------------------------------------------------------------------------
+.PHONY: brand-conf
+brand-conf: ## 按 brand/brand.json 重新生成品牌产物（tauri.conf 域/brand.ts/brand.rs/logo/title；不动图标）
+	node scripts/brand/gen.mjs
+
+.PHONY: brand
+brand: brand-conf ## 全量换牌：brand-conf + tauri icon 重生成全套 OS 图标（仅换 icon.png 后需要）
+	cd client && npx tauri icon ../brand/assets/icon.png
+
+# ---------------------------------------------------------------------------
 # agent（Rust Agent Runtime sidecar，D11）
 # ---------------------------------------------------------------------------
 .PHONY: agent-build
