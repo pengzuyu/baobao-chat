@@ -33,6 +33,7 @@ import { isLocallyReported, notifyAgentDone } from '../features/agent/bridge/not
 import { AdminLayout } from '../features/admin/pages/AdminLayout';
 import { DashboardPage } from '../features/admin/pages/DashboardPage';
 import { EcoAppsPage } from '../features/admin/pages/EcoAppsPage';
+import { OidcClientsPage } from '../features/admin/pages/OidcClientsPage';
 import { SkillsPage } from '../features/admin/pages/SkillsPage';
 import { OrgDirectoryPage } from '../features/admin/pages/OrgDirectoryPage';
 import { RolesPage } from '../features/admin/pages/RolesPage';
@@ -56,6 +57,7 @@ import { NotificationSettingsPage } from '../features/settings/pages/Notificatio
 import { TransferSettingsPage } from '../features/settings/pages/TransferSettingsPage';
 import { AgentSettingsPage } from '../features/settings/pages/AgentSettingsPage';
 import { McpSettingsPage } from '../features/settings/pages/McpSettingsPage';
+import { AuthorizedAppsPage } from '../features/settings/pages/AuthorizedAppsPage';
 import { AboutPage } from '../features/settings/pages/AboutPage';
 import { sendSystemNotification } from '../features/agent/bridge/notify';
 import { startUpdaterAutoCheck } from '../features/settings/updater';
@@ -311,6 +313,7 @@ export function App() {
           <Route path="ai-providers" element={<AiProvidersPage />} />
           <Route path="stickers" element={<StickersPage />} />
           <Route path="eco-apps" element={<EcoAppsPage />} />
+          <Route path="oidc-clients" element={<OidcClientsPage />} />
           <Route path="skills" element={<SkillsPage />} />
           <Route path="usage" element={<UsagePage />} />
           <Route path="audit" element={<AuditPage />} />
@@ -324,6 +327,7 @@ export function App() {
           <Route path="shortcuts" element={<ShortcutSettingsPage />} />
           <Route path="agent" element={<AgentSettingsPage />} />
           <Route path="mcp" element={<McpSettingsPage />} />
+          <Route path="authorized" element={<AuthorizedAppsPage />} />
           <Route path="about" element={<AboutPage />} />
         </Route>
       </Route>

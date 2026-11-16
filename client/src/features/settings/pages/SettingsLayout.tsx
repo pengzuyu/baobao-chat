@@ -8,7 +8,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Menu } from 'antd';
 import type { MenuProps } from 'antd';
 import { t, useI18nStore } from '../../../shared/i18n';
-import { ArrowDownUp, Bell, Bot, Info, Keyboard, Plug, Settings } from 'lucide-react';
+import { ArrowDownUp, Bell, Bot, Info, Keyboard, Plug, Settings, ShieldCheck } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
@@ -22,6 +22,7 @@ function useTabs() {
     { to: '/settings/shortcuts', icon: Keyboard, label: t('settings.tab.shortcuts') },
     { to: '/settings/agent', icon: Bot, label: t('settings.tab.agent') },
     { to: '/settings/mcp', icon: Plug, label: t('settings.tab.mcp') },
+    { to: '/settings/authorized', icon: ShieldCheck, label: t('settings.tab.authorized') },
     { to: '/settings/about', icon: Info, label: t('settings.tab.about') },
   ] as const;
 }

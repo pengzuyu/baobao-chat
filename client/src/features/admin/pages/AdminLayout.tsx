@@ -9,7 +9,7 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Menu } from 'antd';
 import type { MenuProps } from 'antd';
-import { BookOpen, Bot, FileUp, Gauge, Megaphone, Network, Puzzle, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
+import { BookOpen, Bot, FileUp, Gauge, KeyRound, Megaphone, Network, Puzzle, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
@@ -27,6 +27,7 @@ const TABS = [
   { to: '/admin/policies', icon: ShieldCheck, label: '策略' },
   { to: '/admin/stickers', icon: SmilePlus, label: '表情集' },
   { to: '/admin/eco-apps', icon: Package, label: '应用' },
+  { to: '/admin/oidc-clients', icon: KeyRound, label: '登录接入' },
   { to: '/admin/skills', icon: Sparkles, label: '技能包' },
   { to: '/admin/plugins', icon: Puzzle, label: '插件' },
   { to: '/admin/usage', icon: Zap, label: '用量' },
