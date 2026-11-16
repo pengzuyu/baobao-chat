@@ -43,6 +43,7 @@
 | D28 | [OIDC 统一认证与生态接入面设计](D28-OIDC统一认证与生态接入面设计.md) | 03/14/D22 | **bbw auth 对外做标准 OP**：嵌 zitadel/oidc v3·一期只生态面·ES256+jwks·授权码+PKCE·web 兜底=IdP 浏览器会话 7 天滑动·6 位确认码深链点头像（bbw://）·per-app access=JWT refresh=opaque 轮换重放拒·授权管理/撤销面·MCP 三类信任域 |
 | D29 | [对象存储后端切换 RustFS 设计](D29-对象存储后端切换RustFS设计.md) | D25/01/16 | **MinIO 移除换 RustFS**（AGPL 禁入风险+开源版 2026-02 归档无补丁双触发）：Apache-2.0·Ceph s3tests 兼容矩阵背书·SeaweedFS 因桶版本化不完整落选·Go/前端零协议改动（D25 aws-sdk-go-v2 红利）·mc→aws-cli init 全标准 S3 API·BBW_TEST_S3_ADDR 门控集成测试落地（清偿 D25 §10 遗留） |
 | D30 | [外部智能体接入面设计](D30-外部智能体接入面设计.md) | D14/17/09/18(G12) | **打开中的桌面壳长出本机回环 A2A server 面**（兑现 G12 二期预留）：127.0.0.1:8791 单监听器两张脸——A2A 正身（agent card+message/send+tasks/get，task.id=sessionId 续聊天然）+MCP 方言脸 /mcp（bbw_agent_chat）；bbw ask CLI 第三客户端；宿主=打开中的 App（D14 不破·身份/知识库按同事本人）·本机 token 鉴权（授权卡发放/撤销）·防环=外部会话禁 delegate（命令层拦）·审批卡照弹 App 内人工点 |
+| D31 | [品牌白标与构建期注入设计](D31-品牌白标与构建期注入设计.md) | 00/16/D21/D28 | **换名换标单源化**（开源适配：内网自部署方改 `brand/` 一处即出自己的包）：brand.json+logo.svg/icon.png 固定目录·gen.mjs 生成 tauri.conf 域/前端 brand.ts/壳 brand.rs/图标全套·深链 scheme 四处定义收敛单源·服务端三 env（BBW_BRAND_NAME/BBW_DEEP_LINK_SCHEME/BBW_BOOTSTRAP_MAIL_DOMAIN）·前端 11 触点收敛·拍板=品牌可变身份不变（identifier/scheme/keyring/存储前缀锁定）·运行时下发不做·LICENSE 挂账另拍 |
 
 ## 模板（D01 §13）
 
