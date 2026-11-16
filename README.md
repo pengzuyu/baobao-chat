@@ -80,6 +80,7 @@ AI       ai-gateway（模型无关）→ GLM / Qwen / DeepSeek / vLLM 私有化
 5. **知识库权限过滤前置**：检索 SQL 注入用户可见集，绝不后过滤（11 篇）。
 6. **多租户硬隔离**：tenant_id + PG RLS + 存储前缀（02/03 篇）。
 7. **编码执行可插拔**：自研 Agent 是编排者，编码优先委派本地 Claude Code / zcode（headless 适配器），自研循环兜底；子智能体不持有任何公司凭证（17 篇）。
+8. **统一登录走标准 OIDC**（D28，2026-11-16 落地）：bbw auth 内嵌 zitadel/oidc 做对外 OP（单进程 `/oauth2/*`，ES256+jwks）；生态应用填 issuer 即可接入；desktop 深链点头像+6 位码确认，web 兜底 7 天 IdP 会话免密；主 token 永不出设备，per-app token=aud 绑定短时效。示例见 [examples/oidc-rp](examples/oidc-rp)。
 
 ## 状态
 
