@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"time"
 
@@ -113,15 +114,27 @@ func (s *Storage) CreateAuthRequest(ctx context.Context, req *oidc.AuthRequest, 
 		CodeChallengeMethod: string(req.CodeChallengeMethod),
 		UserID:              userID,
 	}
+	// 6 位确认码（D28 §5.1）：明文存——等待页与 desktop 确认卡都要重新展示（双端
+	// 核对的锚点就是展示值本身）；机密性不靠它（300s 短命 + 确认动作用 desktop
+	// access token 鉴权）
 	_, err = s.db.Exec(ctx, `
-		INSERT INTO oidc_auth_request (id, tenant_id, client_id, scopes, nonce, state, code_challenge, code_challenge_m, snapshot, status)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')`,
+		INSERT INTO oidc_auth_request (id, tenant_id, client_id, scopes, nonce, state, code_challenge, code_challenge_m, confirm_code, snapshot, status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')`,
 		ar.ID, s.defaultTenant, ar.ClientID, mustJSON(ar.Scopes), ar.Nonce, ar.State,
-		ar.CodeChallenge, ar.CodeChallengeMethod, mustJSON(ar))
+		ar.CodeChallenge, ar.CodeChallengeMethod, genConfirmCode(), mustJSON(ar))
 	if err != nil {
 		return nil, fmt.Errorf("oidc: 存授权请求: %w", err)
 	}
 	return ar, nil
+}
+
+// genConfirmCode 密码学随机 6 位数字（000000-999999，%06d 补零）
+func genConfirmCode() string {
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		panic("oidc: rand: " + err.Error())
+	}
+	return fmt.Sprintf("%06d", n.Int64())
 }
 
 func (s *Storage) loadAuthRequest(ctx context.Context, id string) (*authRequest, error) {
@@ -165,8 +178,9 @@ func (s *Storage) DeleteAuthRequest(ctx context.Context, id string) error {
 	return err
 }
 
-// completeAuthRequest 等待页/web 登录认领（§5.2/§5.3）：回填用户并置 done。
-func (s *Storage) completeAuthRequest(ctx context.Context, id, userID string) error {
+// completeAuthRequest 等待页/web 登录/desktop 确认三种认领共用（§5.1-§5.3）：
+// 回填用户并置 done。amr 区分认领通道（pwd=账密 / desktop-confirm=桌面确认卡）。
+func (s *Storage) completeAuthRequest(ctx context.Context, id, userID string, amr []string) error {
 	ar, err := s.loadAuthRequest(ctx, id)
 	if err != nil {
 		return err
@@ -179,11 +193,17 @@ func (s *Storage) completeAuthRequest(ctx context.Context, id, userID string) er
 	}
 	ar.UserID = userID
 	ar.Completed = true
-	ar.AMR = []string{"pwd"}
+	ar.AMR = amr
 	ar.AuthTime = s.now()
 	_, err = s.db.Exec(ctx, `UPDATE oidc_auth_request SET user_id=$2, snapshot=$3, status='approved', auth_time=$4, approved_at=now() WHERE id=$1`,
 		id, uid, mustJSON(ar), ar.AuthTime)
-	return err
+	if err != nil {
+		return err
+	}
+	// 授权记录在认领时即写（Q2 修：此前只在 offline_access refresh 流才 upsert——
+	// 码路径授权不落 grant，覆盖判定永远 false；三种认领通道统一记录）
+	s.upsertGrant(ctx, ar.ClientID, userID, ar.Scopes)
+	return nil
 }
 
 func (s *Storage) intersectScopes(ctx context.Context, scopes []string, u *orgapi.User) []string {
@@ -556,6 +576,115 @@ func (s *Storage) ValidateJWTProfileScopes(ctx context.Context, userID string, s
 }
 
 func (s *Storage) Health(ctx context.Context) error { return s.db.Ping(ctx) }
+
+// ── desktop 确认链（§5.1，批次 Q2）──────────────────────────────────────────
+
+const confirmTTL = 300 * time.Second // 未决授权请求存活期（03 §2.1.1）
+
+type confirmInfo struct {
+	ClientID string
+	AppName  string
+	Scopes   []string
+	Code6    string
+	Status   string
+	Age      time.Duration
+}
+
+// confirmInfo 确认卡数据：应用名/scope/6 位码/状态（desktop GET 展示）。
+func (s *Storage) confirmInfo(ctx context.Context, reqID string) (*confirmInfo, error) {
+	var clientID, code, status string
+	var scopes []byte
+	var created time.Time
+	err := s.db.QueryRow(ctx, `SELECT client_id, scopes, confirm_code, status, created_at FROM oidc_auth_request WHERE id=$1`, reqID).
+		Scan(&clientID, &scopes, &code, &status, &created)
+	if err != nil {
+		return nil, errNotFound
+	}
+	info := &confirmInfo{ClientID: clientID, Code6: code, Status: status, Age: s.now().Sub(created)}
+	_ = json.Unmarshal(scopes, &info.Scopes)
+	if c, err := s.clientRow(ctx, s.defaultTenant, clientID); err == nil {
+		info.AppName = c.Name
+	}
+	return info, nil
+}
+
+// grantCovered 用户对该应用的既有授权是否覆盖所申请 scope（标准保留 scope 恒覆盖）；
+// 命中则 desktop 确认卡降级轻量形态（免 6 位码，D28 §5.1）。
+func (s *Storage) grantCovered(ctx context.Context, userID int64, clientID string, scopes []string) bool {
+	var granted []byte
+	var revoked *time.Time
+	err := s.db.QueryRow(ctx, `SELECT scopes, revoked_at FROM oidc_grant WHERE user_id=$1 AND client_id=$2`, userID, clientID).
+		Scan(&granted, &revoked)
+	if err != nil || revoked != nil {
+		return false
+	}
+	owned := map[string]bool{}
+	var gs []string
+	_ = json.Unmarshal(granted, &gs)
+	for _, g := range gs {
+		owned[g] = true
+	}
+	for _, sc := range scopes {
+		if reservedScopes[sc] || owned[sc] {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// waitStatus 等待页轮询：只回状态不回身份（public 端点）。
+func (s *Storage) waitStatus(ctx context.Context, reqID string) string {
+	var status string
+	var created time.Time
+	if err := s.db.QueryRow(ctx, `SELECT status, created_at FROM oidc_auth_request WHERE id=$1`, reqID).
+		Scan(&status, &created); err != nil {
+		return "missing"
+	}
+	if status == "pending" && s.now().Sub(created) > confirmTTL {
+		s.db.Exec(ctx, `UPDATE oidc_auth_request SET status='expired' WHERE id=$1 AND status='pending'`, reqID)
+		return "expired"
+	}
+	return status
+}
+
+// tryConfirm desktop 确认卡提交：6 位码核对（错 3 次作废）→ 认领（amr=desktop-confirm）。
+// 错误口径：1010 请求过期/不存在 · 1012 码不匹配（含作废）。
+func (s *Storage) tryConfirm(ctx context.Context, reqID, code6 string, userID int64) (attemptsLeft int, err error) {
+	info, err := s.confirmInfo(ctx, reqID)
+	if err != nil {
+		return 0, errExpiredReq
+	}
+	if info.Status != "pending" {
+		return 0, errExpiredReq
+	}
+	if info.Age > confirmTTL {
+		s.db.Exec(ctx, `UPDATE oidc_auth_request SET status='expired' WHERE id=$1`, reqID)
+		return 0, errExpiredReq
+	}
+	// grant 覆盖 → 轻量形态：点头像即走，免 6 位码（D28 §5.1；首次授权/新增 scope 才核对）
+	if s.grantCovered(ctx, userID, info.ClientID, info.Scopes) {
+		return 0, s.completeAuthRequest(ctx, reqID, strconv.FormatInt(userID, 10), []string{"desktop-confirm"})
+	}
+	if info.Code6 != code6 {
+		var attempts int
+		_ = s.db.QueryRow(ctx, `SELECT confirm_attempts FROM oidc_auth_request WHERE id=$1`, reqID).Scan(&attempts)
+		attempts++
+		if attempts >= 3 {
+			s.db.Exec(ctx, `UPDATE oidc_auth_request SET confirm_attempts=$2, status='denied' WHERE id=$1`, reqID, attempts)
+			return 0, errCodeInvalidated
+		}
+		s.db.Exec(ctx, `UPDATE oidc_auth_request SET confirm_attempts=$2 WHERE id=$1`, reqID, attempts)
+		return 3 - attempts, errCodeMismatch
+	}
+	return 0, s.completeAuthRequest(ctx, reqID, strconv.FormatInt(userID, 10), []string{"desktop-confirm"})
+}
+
+var (
+	errExpiredReq      = errors.New("请求已过期或不存在")
+	errCodeMismatch    = errors.New("确认码不匹配")
+	errCodeInvalidated = errors.New("确认码错误次数过多，请求已作废")
+)
 
 // ── web 会话（§5.3，SSO 免密载体）───────────────────────────────────────────
 
