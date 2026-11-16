@@ -53,6 +53,9 @@ OUT_BASE="$ROOT/out/release/v$VERSION"
 
 [ -d "$ROOT/client/node_modules" ] || { echo "[build-desktop] 先装依赖：npm --prefix client install" >&2; exit 1; }
 
+# 品牌产物一致性门禁（D31）：brand/brand.json 改动未跑生成器则拒绝出包
+node "$ROOT/scripts/brand/gen.mjs" --check
+
 # ---- 1. 编译期注入的临时文件（trap 保证清理，域名不进 git）----
 ENV_PROD="$ROOT/client/.env.production"
 REL_CONF="$ROOT/client/src-tauri/tauri.release.conf.json"

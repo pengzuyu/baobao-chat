@@ -693,6 +693,6 @@ configs:
         }
         location @placeholder {
           default_type text/plain;
-          return 200 "BaobaoChat 官网尚未发布：先在构建机执行 scripts/release/publish-website.sh\n";
+          return 200 "${BBW_BRAND_NAME:-BaobaoChat} 官网尚未发布：先在构建机执行 scripts/release/publish-website.sh\n";
         }
       }

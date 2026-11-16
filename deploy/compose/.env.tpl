@@ -66,6 +66,10 @@ BBW_SEED_DEMO=0                              # 演示种子数据（alice/bob �
 # —— OIDC Provider（D28 批次 Q1：生态应用统一登录；密钥生成 openssl ecparam -name prime256v1 -genkey -noout）——
 BBW_OIDC_SIGNING_KEY=                        # ★上线必改：ES256 私钥 PEM 单行（\n 转义注入）；空=临时密钥仅联调（重启已签 token 失效）
 BBW_OIDC_ISSUER=                             # 对外 issuer（生产形如 https://你的域名/oauth2；空=按监听地址推导本地默认）
+# —— 品牌白标（D31：与构建侧 brand/brand.json 对齐；改 scheme 必须与客户端同步重出包）——
+BBW_BRAND_NAME=                              # 产品显示名（OIDC 等待页/nginx 官网占位等文案源；空=BaobaoChat）
+BBW_DEEP_LINK_SCHEME=                        # 桌面端深链 scheme（空=bbw；须与客户端 brand.json identity 一致，否则深链确认登录静默失效）
+BBW_BOOTSTRAP_MAIL_DOMAIN=                   # 初始管理员邮箱后缀（/setup 与 CLI bootstrap 建户；空=bbw.io）
 # BBW_DATA_DIR=/data                         # 文件域本地盘（容器内固定 /data 挂 bbw-data 卷，一般无需覆盖；对象存储阶段二替换）
 
 # -----------------------------------------------------------------------------

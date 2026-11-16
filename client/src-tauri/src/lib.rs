@@ -8,6 +8,7 @@
 pub mod agent_bridge;
 pub mod agent_commands;
 pub mod auth_commands;
+pub mod brand;
 pub mod ext_agent;
 pub mod plugin_commands;
 pub mod mcp_commands;
@@ -82,8 +83,9 @@ pub fn run() {
             use tauri_plugin_deep_link::DeepLinkExt;
             {
                 // dev（tauri debug 构建）运行时注册 scheme；发布形态 Info.plist 由构建注入
+                // （scheme 单源自 brand/brand.json 生成——D31，与 tauri.conf/服务端 env 同源）
                 #[cfg(debug_assertions)]
-                let _ = app.deep_link().register("bbw"); // 失败仅告警（已注册/无权限不阻断）
+                let _ = app.deep_link().register(brand::SCHEME); // 失败仅告警（已注册/无权限不阻断）
                 let emit_handle = app.handle().clone();
                 let forward = move |urls: Vec<url::Url>| {
                     for u in urls {
@@ -97,7 +99,7 @@ pub fn run() {
                                 let _ = emit_handle.emit("oidc://confirm-req", serde_json::json!({ "req": req }));
                             }
                         } else {
-                            eprintln!("[bbw-deeplink] 未识别的 bbw:// 路径: {u}");
+                            eprintln!("[bbw-deeplink] 未识别的 {}:// 路径: {u}", brand::SCHEME);
                         }
                     }
                 };

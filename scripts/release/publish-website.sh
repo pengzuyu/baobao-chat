@@ -34,9 +34,11 @@ echo "[publish-website] rsync → $HOST:$WEBSITE_DIR"
 ssh "$HOST" "mkdir -p '$WEBSITE_DIR'"
 rsync -a --delete --info=stats1 "$ROOT/website/dist/" "$HOST:$WEBSITE_DIR/"
 
-if curl -fsSL --max-time 15 "$VERIFY_URL" | grep -q "BaobaoChat"; then
+# 回读验证品牌名取 brand/brand.json（D31：换牌部署后门禁不再认死上游名）
+BRAND_NAME="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$ROOT/brand/brand.json','utf8')).name)")"
+if curl -fsSL --max-time 15 "$VERIFY_URL" | grep -q "$BRAND_NAME"; then
   echo "[publish-website] ✔ 回读验证通过：$VERIFY_URL"
 else
-  echo "[publish-website] ✗ 回读验证失败（$VERIFY_URL 未含 BaobaoChat 字样）——检查 nginx-lb / website 服务" >&2
+  echo "[publish-website] ✗ 回读验证失败（$VERIFY_URL 未含 $BRAND_NAME 字样）——检查 nginx-lb / website 服务" >&2
   exit 1
 fi

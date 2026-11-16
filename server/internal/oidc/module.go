@@ -28,17 +28,26 @@ import (
 )
 
 type Module struct {
-	storage       *Storage
-	auth          *authservice.Service
-	provider      *op.Provider
-	callbackURL   func(context.Context, string) string
-	defaultTenant int64
-	insecure      bool // issuer 为 http（本地联调）时 cookie 不加 Secure
+	storage        *Storage
+	auth           *authservice.Service
+	provider       *op.Provider
+	callbackURL    func(context.Context, string) string
+	defaultTenant  int64
+	insecure       bool   // issuer 为 http（本地联调）时 cookie 不加 Secure
+	brandName      string // 品牌显示名（D31；等待页文案）
+	deepLinkScheme string // 深链 scheme（D31；与客户端 brand.json 对齐，默认 bbw）
 }
 
 // New 装配 OIDC 模块。signingKeyPEM 为空时生成临时密钥并打警告（重启即换，
 // 已签 token 失效——仅限本地联调；生产必须配 BBW_OIDC_SIGNING_KEY）。
-func New(db *pgxpool.Pool, auth *authservice.Service, issuer, signingKeyPEM string, defaultTenant int64) (*Module, error) {
+// brandName/deepLinkScheme 为 D31 白标参数（空回落 BaobaoChat/bbw）。
+func New(db *pgxpool.Pool, auth *authservice.Service, issuer, signingKeyPEM, brandName, deepLinkScheme string, defaultTenant int64) (*Module, error) {
+	if brandName == "" {
+		brandName = "BaobaoChat"
+	}
+	if deepLinkScheme == "" {
+		deepLinkScheme = "bbw"
+	}
 	key, err := loadSigningKey(signingKeyPEM)
 	if err != nil {
 		return nil, err
@@ -80,12 +89,14 @@ func New(db *pgxpool.Pool, auth *authservice.Service, issuer, signingKeyPEM stri
 	// 浏览器跟跳会落到挂载点外 404；单 issuer 静态直拼最稳）
 	callbackBase := strings.TrimSuffix(issuer, "/") + "/authorize/callback?id="
 	return &Module{
-		storage:       stor,
-		auth:          auth,
-		provider:      provider,
-		callbackURL:   func(_ context.Context, id string) string { return callbackBase + url.QueryEscape(id) },
-		defaultTenant: defaultTenant,
-		insecure:      insecure,
+		storage:        stor,
+		auth:           auth,
+		provider:       provider,
+		callbackURL:    func(_ context.Context, id string) string { return callbackBase + url.QueryEscape(id) },
+		defaultTenant:  defaultTenant,
+		insecure:       insecure,
+		brandName:      brandName,
+		deepLinkScheme: deepLinkScheme,
 	}, nil
 }
 

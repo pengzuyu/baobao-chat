@@ -37,6 +37,12 @@ if (-not (Test-Path "$Root\client\node_modules")) {
   Write-Error "[build-desktop] 先装依赖：npm --prefix client install"
 }
 
+# 品牌产物一致性门禁（D31）：brand/brand.json 改动未跑生成器则拒绝出包
+node "$Root\scripts\brand\gen.mjs" --check
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "[build-desktop] 品牌产物 --check 未过——改 brand/ 后先 make brand-conf 再出包"
+}
+
 # ---- 编译期注入临时文件（finally 清理，域名不进 git）----
 $EnvProd = "$Root\client\.env.production"
 $RelConf = "$Root\client\src-tauri\tauri.release.conf.json"

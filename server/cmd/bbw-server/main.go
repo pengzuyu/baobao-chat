@@ -46,7 +46,6 @@ import (
 	fileservice "github.com/baobaochat/server/internal/file/service"
 	filestore "github.com/baobaochat/server/internal/file/store"
 	"github.com/baobaochat/server/internal/gateway"
-	"github.com/baobaochat/server/internal/oidc"
 	"github.com/baobaochat/server/internal/kb"
 	kbapi "github.com/baobaochat/server/internal/kb/api"
 	kbrepo "github.com/baobaochat/server/internal/kb/repo"
@@ -60,6 +59,7 @@ import (
 	"github.com/baobaochat/server/internal/message/api"
 	"github.com/baobaochat/server/internal/message/repo"
 	"github.com/baobaochat/server/internal/message/service"
+	"github.com/baobaochat/server/internal/oidc"
 	"github.com/baobaochat/server/internal/org"
 	orgacl "github.com/baobaochat/server/internal/org/acl"
 	"github.com/baobaochat/server/internal/org/api"
@@ -357,7 +357,7 @@ func main() {
 	var oidcMod *oidc.Module
 	if pgPool != nil {
 		var oidcErr error
-		oidcMod, oidcErr = oidc.New(pgPool, authMod.Service(), cfg.OIDCIssuer, cfg.OIDCSigningKey, bbwpg.DefaultTenantID)
+		oidcMod, oidcErr = oidc.New(pgPool, authMod.Service(), cfg.OIDCIssuer, cfg.OIDCSigningKey, cfg.BrandName, cfg.DeepLinkScheme, bbwpg.DefaultTenantID)
 		if oidcErr != nil {
 			log.Fatalf("OIDC 模块装配失败: %v", oidcErr)
 		}
@@ -378,7 +378,7 @@ func main() {
 	// 建户即关（租户内有任何用户 → bootstrap 永久 1014）。CLI bootstrap 降级为兜底
 	setupGate := newSetupGate(pgPool)
 	mux.HandleFunc("GET /api/v1/setup/status", handleSetupStatus(orgRepo))
-	mux.HandleFunc("POST /api/v1/setup/bootstrap", handleSetupBootstrap(orgRepo, roleStore, setupGate))
+	mux.HandleFunc("POST /api/v1/setup/bootstrap", handleSetupBootstrap(orgRepo, roleStore, setupGate, cfg.BootstrapMailDomain))
 
 	// 受保护路由：auth → tenant（D02 §6 链尾两环）
 	authed := func(h http.HandlerFunc) http.Handler {
@@ -530,8 +530,8 @@ func main() {
 		log.Println("kb 嵌入链路：直调网关 Router 供应商（未配 BBW_AIGW_DEV_TOKEN；表驱动路由生效后为真实上游，否则 mock 确定性向量）")
 	}
 	kbMod := kb.NewModule(kbservice.Options{
-		Embedder: kbEmbed,
-		Reranker: kbRerank,
+		Embedder:         kbEmbed,
+		Reranker:         kbRerank,
 		EnforceEmbedDims: kbEnforceDims,
 		// 作者信息批量查询（D24 榜单/概览展示名；org 域闭包——跨域不引包，
 		// 循环 GetUser：每榜 ≤10 人，量级可忽略；部门名 P1 随目录通道补）
@@ -628,7 +628,9 @@ func main() {
 			for _, m := range msgs { // ListMessagesLatest 为倒序——翻成升序贴近阅读
 				switch m.Type {
 				case "text":
-					var b struct{ Text string `json:"text"` }
+					var b struct {
+						Text string `json:"text"`
+					}
 					_ = json.Unmarshal(m.Body, &b)
 					lines = append(lines, m.SenderName+": "+truncateRunesForMCP(b.Text, 300))
 				case "agent_card":
@@ -1345,7 +1347,7 @@ func (g *setupGate) Lock(ctx context.Context) (func(), error) {
 // 建户 → 挂内置「管理员」角色；前端成功后自动走 /auth/login 进系统。
 // 并发互斥：setupGate（进程内 + advisory lock）包住"空检查→建户"全程；
 // 同工号另有 UK(tenant,empno) 兜底
-func handleSetupBootstrap(orgs orgrepo.Repo, roles adminrepo.RoleRepo, gate *setupGate) http.HandlerFunc {
+func handleSetupBootstrap(orgs orgrepo.Repo, roles adminrepo.RoleRepo, gate *setupGate, mailDomain string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req setupBootstrapReq
 		if err := decodeJSON(r, &req); err != nil {
@@ -1390,7 +1392,7 @@ func handleSetupBootstrap(orgs orgrepo.Repo, roles adminrepo.RoleRepo, gate *set
 		created, err := orgs.CreateUser(ctx, orgapi.User{
 			TenantID: bbwpg.DefaultTenantID, Type: orgapi.UserTypeHuman,
 			EmployeeNo: req.EmployeeNo, DisplayName: req.DisplayName,
-			Email: req.EmployeeNo + "@bbw.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
+			Email: req.EmployeeNo + "@" + mailDomain, PasswordHash: hash, Status: orgapi.UserStatusActive,
 		})
 		if err != nil {
 			httpx.Fail(w, r, err)
@@ -2743,7 +2745,7 @@ func runAdminBootstrap(args []string) {
 	}
 	created, err := repo.CreateUser(ctx, orgapi.User{
 		TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: *empno,
-		DisplayName: "平台管理员", Email: *empno + "@bbw.io",
+		DisplayName: "平台管理员", Email: *empno + "@" + cfg.BootstrapMailDomain,
 		PasswordHash: hash, Status: orgapi.UserStatusActive,
 	})
 	if err != nil {
@@ -3116,7 +3118,6 @@ func handleFileUploadComplete(svc fileapi.FileService) http.HandlerFunc {
 		httpx.OK(w, r, res)
 	}
 }
-
 
 // handleFileConvFiles 会话文件聚合（群文件页签；成员判定在 service）
 func handleFileConvFiles(svc fileapi.FileService) http.HandlerFunc {

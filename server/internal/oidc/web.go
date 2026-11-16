@@ -23,7 +23,7 @@ var pageTpl = template.Must(template.New("wait").Parse(`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BaobaoChat · 统一登录</title>
+<title>{{.BrandName}} · 统一登录</title>
 <style>
   :root { color-scheme: dark; }
   body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
@@ -48,13 +48,13 @@ var pageTpl = template.Must(template.New("wait").Parse(`<!DOCTYPE html>
 </head>
 <body>
 <div class="card">
-  <h1>使用 BaobaoChat 账号登录</h1>
+  <h1>使用 {{.BrandName}} 账号登录</h1>
   <p class="sub">{{.AppName}}</p>
   <div class="code-box">
     <div class="label">桌面端确认码（双端核对一致再确认）</div>
     <div class="code">{{.Code6}}</div>
   </div>
-  <div id="hint">正在等待桌面端确认…若未弹出，<a href="bbw://auth?req={{.ID}}">点此唤起 BaobaoChat</a>；核对上方确认码与桌面端卡片一致后再点头像。</div>
+  <div id="hint">正在等待桌面端确认…若未弹出，<a href="{{.Scheme}}://auth?req={{.ID}}">点此唤起 {{.BrandName}}</a>；核对上方确认码与桌面端卡片一致后再点头像。</div>
   <details>
     <summary>桌面端不在身边？使用工号密码登录</summary>
     <form method="POST" action="/oauth2/web-login">
@@ -70,7 +70,7 @@ var pageTpl = template.Must(template.New("wait").Parse(`<!DOCTYPE html>
 </div>
 <script>
   // 深链唤起（无 desktop 的浏览器静默无动作，300ms 后回落密码表单可见）
-  setTimeout(function(){ try { window.location.href = 'bbw://auth?req={{.ID}}'; } catch (e) {} }, 400);
+  setTimeout(function(){ try { window.location.href = '{{.Scheme}}://auth?req={{.ID}}'; } catch (e) {} }, 400);
   // 状态轮询（desktop 确认卡完成认领 → 回跳 authorize callback 签 code）
   var timer = setInterval(function () {
     fetch('/oauth2/wait/status?id={{.ID}}').then(function (r) { return r.json(); }).then(function (d) {
@@ -90,10 +90,12 @@ var pageTpl = template.Must(template.New("wait").Parse(`<!DOCTYPE html>
 </html>`))
 
 type waitPageData struct {
-	ID      string
-	AppName string
-	Code6   string
-	Error   string
+	ID        string
+	AppName   string // 接入应用名（per-app，非产品品牌）
+	Code6     string
+	Error     string
+	BrandName string // 产品品牌（D31，BBW_BRAND_NAME）
+	Scheme    string // 深链 scheme（D31，BBW_DEEP_LINK_SCHEME）
 }
 
 // registerWebRoutes 等待页/兜底登录/desktop 确认端点（挂 /oauth2 子树）。
@@ -115,7 +117,7 @@ func (m *Module) handleWait(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "缺少 id", http.StatusBadRequest)
 		return
 	}
-	data := waitPageData{ID: id, AppName: "应用", Code6: "—— ——"}
+	data := waitPageData{ID: id, AppName: "应用", Code6: "—— ——", BrandName: m.brandName, Scheme: m.deepLinkScheme}
 	if info, err := m.storage.confirmInfo(r.Context(), id); err == nil {
 		data.AppName = info.AppName
 		if info.Status == "pending" && info.Age <= confirmTTL {
@@ -202,7 +204,7 @@ func (m *Module) handleWebLogin(w http.ResponseWriter, r *http.Request) {
 	password := r.PostFormValue("password")
 
 	renderErr := func(msg string) {
-		data := waitPageData{ID: id, AppName: "应用", Error: msg}
+		data := waitPageData{ID: id, AppName: "应用", Error: msg, BrandName: m.brandName, Scheme: m.deepLinkScheme}
 		if info, err := m.storage.confirmInfo(r.Context(), id); err == nil {
 			data.AppName = info.AppName
 			data.Code6 = info.Code6
