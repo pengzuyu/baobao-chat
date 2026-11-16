@@ -49,6 +49,8 @@ struct ExtTask {
 pub struct ExtHub {
     tasks: Mutex<HashMap<String, ExtTask>>,
     token: Mutex<String>,
+    /// 实际绑定端口（agent card url 用；冲突回落时≠DEFAULT_PORT）
+    port: std::sync::atomic::AtomicU16,
 }
 
 impl ExtHub {
@@ -56,6 +58,7 @@ impl ExtHub {
         Self {
             tasks: Mutex::new(HashMap::new()),
             token: Mutex::new(String::new()), // start() 装载/生成后非空
+            port: std::sync::atomic::AtomicU16::new(DEFAULT_PORT),
         }
     }
 
@@ -250,6 +253,8 @@ pub fn start(app: AppHandle, hub: Arc<ExtHub>, data_dir: PathBuf) {
     if bound != base {
         eprintln!("[bbw-ext] 端口 {base} 被占用，回落 {bound}");
     }
+    hub.port
+        .store(bound, std::sync::atomic::Ordering::SeqCst);
     write_status_file(&data_dir, bound);
     eprintln!("[bbw-ext] 外部智能体接入面在线: http://127.0.0.1:{bound}/");
     std::thread::spawn(move || {
@@ -273,7 +278,7 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
             json!({
                 "name": "BaobaoChat Agent",
                 "description": "BaobaoChat agent 会话（知识检索/记忆/专家/工具）——外部智能体经 A2A 当子智能体调用",
-                "url": "http://127.0.0.1:8791/",
+                "url": format!("http://127.0.0.1:{}/", hub.port.load(std::sync::atomic::Ordering::SeqCst)),
                 "version": "0.1.0",
                 "capabilities": { "streaming": false },
                 "defaultInputModes": ["text"],
@@ -286,7 +291,12 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
         );
         return;
     }
-    if method != Method::Post || (path != "/" && path != "/mcp") {
+    if path == "/mcp" && method != Method::Post {
+        // streamable HTTP：server 主动 SSE 不做（stateless），GET/DELETE 一律 405
+        respond_json(request, 405, json!({ "error": "method not allowed" }));
+        return;
+    }
+    if method != Method::Post || path != "/" {
         respond_json(request, 404, json!({ "error": "not found" }));
         return;
     }
@@ -296,11 +306,6 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
             401,
             json!({ "error": "unauthorized", "hint": "设置 → 外部 Agent 接入 查看本机 token" }),
         );
-        return;
-    }
-    // 批3 挂 MCP 方言脸；一期占位
-    if path == "/mcp" {
-        respond_json(request, 404, json!({ "error": "mcp face not yet implemented (D30 批3)" }));
         return;
     }
     let mut body = String::new();
@@ -315,6 +320,14 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
             return;
         }
     };
+    // MCP 方言脸（批3）：翻译到同一 A2A 任务内核
+    if path == "/mcp" {
+        match mcp_dispatch(&app, &hub, &rpc) {
+            McpReply::Json(v) => respond_json(request, 200, v),
+            McpReply::Accepted => respond_json(request, 202, json!(null)),
+        }
+        return;
+    }
     let id = rpc["id"].clone();
     let reply = match rpc["method"].as_str().unwrap_or("") {
         "message/send" => handle_send(&app, &hub, rpc["params"].clone())
@@ -326,6 +339,120 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
         other => rpc_error(id.clone(), -32601, &format!("method not found: {other}")),
     };
     respond_json(request, 200, reply);
+}
+
+// ---------------------------------------------------------------------------
+// MCP 方言脸（D30 §4）：stateless streamable HTTP——initialize / ping /
+// tools/list / tools/call + notifications 202；单工具 bbw_agent_chat 内联
+// 等待终态（对 A2A 任务内核的纯翻译，无第二套实现）
+// ---------------------------------------------------------------------------
+
+enum McpReply {
+    Json(Value),
+    Accepted,
+}
+
+fn mcp_dispatch(app: &AppHandle, hub: &ExtHub, rpc: &Value) -> McpReply {
+    let id = rpc["id"].clone();
+    let method = rpc["method"].as_str().unwrap_or("");
+    // 通知（无 id）：202 空应答（notifications/initialized 等）
+    if id.is_null() {
+        return McpReply::Accepted;
+    }
+    let result = match method {
+        "initialize" => Ok(json!({
+            // 回显客户端协议版本（不识别回落 2025-03-26 基线）
+            "protocolVersion": rpc["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "bbw-agent", "version": "0.1.0" }
+        })),
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({ "tools": [tool_def()] })),
+        "tools/call" => mcp_tool_call(app, hub, &rpc["params"]),
+        other => Err((-32601, format!("method not found: {other}"))),
+    };
+    match result {
+        Ok(v) => McpReply::Json(json!({ "jsonrpc": "2.0", "id": id, "result": v })),
+        Err((code, msg)) => McpReply::Json(rpc_error(id, code, &msg)),
+    }
+}
+
+fn tool_def() -> Value {
+    json!({
+        "name": "bbw_agent_chat",
+        "description": "把打开中的 BaobaoChat agent 当子智能体调用：发起/续聊一轮完整 agent 会话\
+（知识检索/记忆/专家/公司工具，按当前登录用户权限）。返回本轮最终回答；\
+审批/澄清卡会弹在 BaobaoChat 窗口内等待人工确认，调用侧自动等待。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": { "type": "string", "description": "用户消息/任务指令" },
+                "session_id": { "type": "string", "description": "续聊会话 id（首轮省略；来自上次返回）" },
+                "timeout_secs": { "type": "integer", "description": "等待终态超时（缺省 600）" }
+            },
+            "required": ["prompt"]
+        }
+    })
+}
+
+/// bbw_agent_chat：message/send → 内联轮询 ExtHub 至终态 → content 文本
+fn mcp_tool_call(app: &AppHandle, hub: &ExtHub, params: &Value) -> Result<Value, (i64, String)> {
+    if params["name"].as_str() != Some("bbw_agent_chat") {
+        return Err((-32602, format!("unknown tool: {}", params["name"].as_str().unwrap_or("?"))));
+    }
+    let args = &params["arguments"];
+    let prompt = args["prompt"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| (-32602, "arguments.prompt 缺失".to_string()))?;
+    let timeout = args["timeout_secs"].as_u64().unwrap_or(600);
+    let mut message = json!({
+        "role": "user",
+        "parts": [{ "kind": "text", "text": prompt }],
+        "metadata": {},
+    });
+    if let Some(sid) = args["session_id"].as_str().filter(|s| !s.is_empty()) {
+        message["taskId"] = json!(sid);
+    }
+    let task = handle_send(app, hub, json!({ "message": message }))?;
+    let sid = task["id"].as_str().unwrap_or_default().to_string();
+    let started = std::time::Instant::now();
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let task = handle_get(app, hub, json!({ "id": sid }))?;
+        match task["status"]["state"].as_str().unwrap_or("") {
+            "completed" => {
+                let answer = task["artifacts"][0]["parts"][0]["text"].as_str().unwrap_or("");
+                let text = if answer.is_empty() {
+                    format!(
+                        "（本轮无文本回复——{}）\n[session {sid}]",
+                        task["status"]["message"]["parts"][0]["text"].as_str().unwrap_or("可能仅工具调用")
+                    )
+                } else {
+                    format!("{answer}\n[session {sid} · 传 session_id 可续聊]")
+                };
+                return Ok(json!({ "content": [{ "type": "text", "text": text }] }));
+            }
+            "failed" | "canceled" => {
+                let msg = task["status"]["message"]["parts"][0]["text"].as_str().unwrap_or("");
+                return Ok(json!({
+                    "content": [{ "type": "text", "text": format!("{msg} [session {sid}]") }],
+                    "isError": true
+                }));
+            }
+            // working / input-required：审批卡已弹 App 内，继续等
+            _ => {
+                if started.elapsed().as_secs() >= timeout {
+                    return Ok(json!({
+                        "content": [{ "type": "text", "text": format!(
+                            "等待超时（{timeout}s）——会话仍在 BaobaoChat 内运行；续查：bbw ask --session {sid}"
+                        ) }],
+                        "isError": true
+                    }));
+                }
+            }
+        }
+    }
 }
 
 /// message/send：text parts 提取 →（metadata.sessionId/taskId 复用 | 新建）
