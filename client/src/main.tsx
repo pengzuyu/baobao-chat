@@ -8,12 +8,13 @@ import { message } from 'antd';
 import { AppProviders } from './app/providers';
 import { App } from './app/App';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
-import { installHttpAuthBridge } from './features/auth/store/auth';
+import { installHttpAuthBridge, restoreLogin } from './features/auth/store/auth';
 import { getErrorText, setApiErrorNotifier } from './shared/api/http';
 import './styles/tokens.css';
 import './styles/global.css';
 
 installHttpAuthBridge(); // http.ts ← auth store 的 token 提供者/401 处理
+void restoreLogin(); // 启动静默恢复（D28 批0）：钥匙串 refresh → 免密直达主界面
 
 // 未认领错误全局兜底（2026-11-12）：http 层抛出的 ApiError 一宏任务内无人认领
 // （自展示 errText / 有意静默 claim）→ 全局 toast——静默吞错不再等于用户看不见

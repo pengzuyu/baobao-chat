@@ -23,6 +23,8 @@ interface AuthState {
   error: ApiError | null;
   /** 1007 锁定截止时间戳（ms），倒计时展示用 */
   lockUntil: number;
+  /** 启动静默恢复中（D28 批0）：App 壳显示占位防登录页闪跳 */
+  restoring: boolean;
 
   login: (account: string, password: string) => Promise<void>;
   /** 首登/自助改密（D11）：成功后清 user.must_change_pwd */
@@ -64,6 +66,11 @@ function applyLogin(result: LoginResult) {
       userName: result.user?.name,
     }).catch(() => undefined);
   }
+  // refresh 落 OS 钥匙串（D28 批0/Q0-1）：唯一落盘点，启动恢复依据；
+  // 失败降级=下次启动重输口令（会话内静默刷新不受影响）
+  if (result.refreshToken && isTauriHost()) {
+    void invoke('auth_save_login', { refreshToken: result.refreshToken }).catch(() => undefined);
+  }
   return {
     token: result.accessToken,
     refreshToken: result.refreshToken ?? null,
@@ -88,6 +95,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   loginStatus: 'idle',
   error: null,
   lockUntil: 0,
+  restoring: false,
 
   login: async (account, password) => {
     set({ loginStatus: 'submitting', error: null });
@@ -123,8 +131,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     if (token && !USE_MOCK) {
       void ensureDeviceId().then((did) => apiLogout(did).catch(() => undefined));
     }
-    // Rust 宿主 token 缓存清理（此前登出残留至下次登录）
-    if (isTauriHost()) void invoke('auth_clear_token').catch(() => undefined);
+    // Rust 宿主 token 缓存清理（此前登出残留至下次登录）+ 钥匙串弃凭据（显式登出=下次启动不再免密）
+    if (isTauriHost()) {
+      void invoke('auth_clear_token').catch(() => undefined);
+      void invoke('auth_clear_login').catch(() => undefined);
+    }
     // 本地缓存清理（IM 消息/outbox/游标随账号退出抹除，D03 §6.2 隐私面）
     void import('../../im/api/local').then((m) => m.localLogoutCleanup());
   },
@@ -150,4 +161,30 @@ export const useAuthStore = create<AuthState>((set) => ({
 export function installHttpAuthBridge(): void {
   setTokenProvider(() => useAuthStore.getState().token);
   setUnauthorizedHandler(() => useAuthStore.getState().logout());
+}
+
+let restoreStarted = false;
+
+/**
+ * 启动静默恢复（D28 批0/Q0-1，03 §2.3 落地）：钥匙串 refresh → /auth/refresh
+ * → 直达主界面；失败（过期/吊销/重放）清钥匙串回登录页。main.tsx 装配期调用一次。
+ */
+export async function restoreLogin(): Promise<void> {
+  if (restoreStarted) return;
+  restoreStarted = true;
+  if (USE_MOCK || !isTauriHost()) return;
+  useAuthStore.setState({ restoring: true });
+  try {
+    const saved = await invoke<string | null>('auth_load_login');
+    if (saved) {
+      const did = await ensureDeviceId();
+      const result = await apiRefresh(saved, did);
+      useAuthStore.setState(applyLogin(result));
+      scheduleSilentRefresh(() => useAuthStore.getState());
+    }
+  } catch {
+    void invoke('auth_clear_login').catch(() => undefined); // 恢复失败即弃凭据
+  } finally {
+    useAuthStore.setState({ restoring: false });
+  }
 }

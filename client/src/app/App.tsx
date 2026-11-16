@@ -223,6 +223,17 @@ export function App() {
     });
   }, []);
 
+  // 启动静默恢复门（D28 批0）：钥匙串 refresh 换新 access 期间显示占位——
+  // 防 RequireAuth 先跳登录页再跳主界的闪跳；非 Tauri/mock 恒 false 不触发
+  const restoring = useAuthStore((s) => s.restoring);
+  if (restoring) {
+    return (
+      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center' }}>
+        正在恢复登录…
+      </div>
+    );
+  }
+
   return (
     <BrowserRouter>
       {(window as unknown as { __bbwToastHolder?: React.ReactNode }).__bbwToastHolder}
