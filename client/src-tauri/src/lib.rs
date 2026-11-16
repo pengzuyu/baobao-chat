@@ -173,7 +173,9 @@ pub fn run() {
             mcp_commands::mcp_personal_upsert,
             mcp_commands::mcp_personal_remove,
             mcp_commands::mcp_personal_set_enabled,
-            mcp_commands::mcp_test_connection
+            mcp_commands::mcp_test_connection,
+            ext_agent::ext_agent_status,
+            ext_agent::ext_agent_token_regen
         ])
         .run(context)
         .expect("Tauri 应用启动失败");

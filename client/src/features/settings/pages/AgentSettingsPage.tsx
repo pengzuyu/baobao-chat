@@ -28,6 +28,7 @@ import {
 import { PROVIDER_PRESETS, presetKeyOfBaseUrl, type AIProvider } from '../../admin/model/types';
 import { ProviderModelsEditor } from '../../admin/components/ProviderModelsEditor';
 import { CloudBackupCard } from '../components/CloudBackupCard';
+import { ExtAgentCard } from '../components/ExtAgentCard';
 
 /** 设置行统一渲染：名称（可带图标）+ 描述 + 右侧控件 */
 function SettingRow({ name, desc, control }: { name: ReactNode; desc: ReactNode; control: ReactNode }) {
@@ -53,6 +54,7 @@ export function AgentSettingsPage() {
 
       <DefaultModelCard />
       <MyProvidersCard />
+      <ExtAgentCard />
       <CloudBackupCard />
 
       <Card size="small">

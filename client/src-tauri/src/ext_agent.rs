@@ -51,6 +51,8 @@ pub struct ExtHub {
     token: Mutex<String>,
     /// 实际绑定端口（agent card url 用；冲突回落时≠DEFAULT_PORT）
     port: std::sync::atomic::AtomicU16,
+    /// 监听线程是否已起（授权卡在线状态）
+    online: std::sync::atomic::AtomicBool,
 }
 
 impl ExtHub {
@@ -59,6 +61,7 @@ impl ExtHub {
             tasks: Mutex::new(HashMap::new()),
             token: Mutex::new(String::new()), // start() 装载/生成后非空
             port: std::sync::atomic::AtomicU16::new(DEFAULT_PORT),
+            online: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -257,6 +260,7 @@ pub fn start(app: AppHandle, hub: Arc<ExtHub>, data_dir: PathBuf) {
         .store(bound, std::sync::atomic::Ordering::SeqCst);
     write_status_file(&data_dir, bound);
     eprintln!("[bbw-ext] 外部智能体接入面在线: http://127.0.0.1:{bound}/");
+    hub.online.store(true, std::sync::atomic::Ordering::SeqCst);
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
             let app = app.clone();
@@ -264,6 +268,42 @@ pub fn start(app: AppHandle, hub: Arc<ExtHub>, data_dir: PathBuf) {
             std::thread::spawn(move || handle(request, app, hub));
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// 授权卡命令层（D30 批4）：状态查询 / token 重发（撤销=重新生成即旧失效）
+// ---------------------------------------------------------------------------
+
+/// 接入面状态（设置页「外部 Agent 接入」卡数据源）
+#[tauri::command]
+pub fn ext_agent_status(hub: tauri::State<'_, Arc<ExtHub>>) -> Result<Value, String> {
+    Ok(json!({
+        "online": hub.online.load(std::sync::atomic::Ordering::SeqCst),
+        "port": hub.port.load(std::sync::atomic::Ordering::SeqCst),
+        "token": hub.token.lock().unwrap().clone(),
+    }))
+}
+
+/// 重新生成本机 token（=撤销既有授权：旧 token 立即 401；0600 重落盘）
+#[tauri::command]
+pub fn ext_agent_token_regen(
+    hub: tauri::State<'_, Arc<ExtHub>>,
+    host: tauri::State<'_, AgentHost>,
+) -> Result<Value, String> {
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let path = host.data_dir().join("external-agent-token");
+    std::fs::write(&path, &token).map_err(|e| format!("token 写入失败: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    hub.set_token(token.clone());
+    Ok(json!({ "token": token }))
 }
 
 fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
