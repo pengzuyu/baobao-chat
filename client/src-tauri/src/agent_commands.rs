@@ -54,10 +54,16 @@ pub fn agent_input(
     text: String,
     thinking: Option<String>,
 ) -> Result<Value, String> {
-    host.request(
+    let rep = host.request(
         "user.message",
         json!({ "sessionId": session_id, "text": text, "attachments": [], "thinking": thinking }),
     )?;
+    // RT 错误回执必须外抛（2026-11-16 幽灵会话事故：回执 type=error 被静默吞成
+    // Ok——上层 agentFlow 全链无感知）。注意幽灵会话的「会话不存在」是异步
+    // error 事件（ack 仍 queued），前端另有映射自愈兜底
+    if rep["type"] == "error" {
+        return Err(format!("消息被拒：{}", rep["message"].as_str().unwrap_or("runtime error")));
+    }
     Ok(json!({ "ok": true }))
 }
 

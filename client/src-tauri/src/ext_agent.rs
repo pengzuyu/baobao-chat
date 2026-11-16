@@ -369,13 +369,22 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
         return;
     }
     let id = rpc["id"].clone();
+    // A2A 即 JSON-RPC：成功响应必须 {"jsonrpc","id","result"} 信封包裹——裸 task
+    // 对象会被调用方按 result 解包拿到 Null（2026-11-16 bbw ask 轮询
+    // 「params.id 缺失」事故：send 响应 task.id 解析为空）
     let reply = match rpc["method"].as_str().unwrap_or("") {
-        "message/send" => handle_send(&app, &hub, rpc["params"].clone())
-            .unwrap_or_else(|(code, msg)| rpc_error(id.clone(), code, &msg)),
-        "tasks/get" => handle_get(&app, &hub, rpc["params"].clone())
-            .unwrap_or_else(|(code, msg)| rpc_error(id.clone(), code, &msg)),
-        "tasks/cancel" => handle_cancel(&app, &hub, rpc["params"].clone())
-            .unwrap_or_else(|(code, msg)| rpc_error(id.clone(), code, &msg)),
+        "message/send" => match handle_send(&app, &hub, rpc["params"].clone()) {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err((code, msg)) => rpc_error(id.clone(), code, &msg),
+        },
+        "tasks/get" => match handle_get(&app, &hub, rpc["params"].clone()) {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err((code, msg)) => rpc_error(id.clone(), code, &msg),
+        },
+        "tasks/cancel" => match handle_cancel(&app, &hub, rpc["params"].clone()) {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err((code, msg)) => rpc_error(id.clone(), code, &msg),
+        },
         other => rpc_error(id.clone(), -32601, &format!("method not found: {other}")),
     };
     respond_json(request, 200, reply);
