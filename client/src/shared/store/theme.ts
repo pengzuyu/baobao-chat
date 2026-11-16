@@ -2,17 +2,23 @@
  * 主题全局态（D01 §12.2-5：主题属全局态，归 shared/store）：
  * - mode 三态：light / dark / system（system 跟随 OS prefers-color-scheme）
  * - resolved 为实际生效值，驱动 <html data-theme> 与 antd ConfigProvider algorithm
- * - 持久化：localStorage('bbw-theme')。主题是 UI 偏好而非业务数据，
+ * - accent 主题色（D27 修订2）：六套预置主色，与 mode 正交组合；只影响主色系
+ *   （primary/hover/light 三档，见 themeConstants ACCENTS 注册表），不动灰阶/语义色；
+ *   无需 html 属性/防闪烁——providers 在首帧内容前经 ConfigProvider + CSS 变量注入生效
+ * - 持久化：localStorage('bbw-theme' / 'bbw-accent')。主题是 UI 偏好而非业务数据，
  *   不受"业务数据禁止 localStorage（D01 §12.2-5）"红线约束；后续统一设置存储迁 Rust 层。
  * - 防闪烁：index.html 内联脚本在 React 挂载前已先行设置 data-theme。
  */
 
 import { create } from 'zustand';
+import { ACCENTS, DEFAULT_ACCENT, type ThemeAccent } from '../ui/themeConstants';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type ResolvedTheme = 'light' | 'dark';
+export type { ThemeAccent };
 
 const STORAGE_KEY = 'bbw-theme';
+const ACCENT_STORAGE_KEY = 'bbw-accent';
 
 function resolveMode(mode: ThemeMode): ResolvedTheme {
   if (mode !== 'system') return mode;
@@ -30,20 +36,33 @@ function readInitialMode(): ThemeMode {
   return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'light';
 }
 
+function readInitialAccent(): ThemeAccent {
+  const saved = localStorage.getItem(ACCENT_STORAGE_KEY);
+  // D27 修订2：默认晨蓝；注册表外的存量值（含旧键污染）一律回落默认
+  return saved && saved in ACCENTS ? (saved as ThemeAccent) : DEFAULT_ACCENT;
+}
+
 interface ThemeState {
   mode: ThemeMode;
   resolved: ResolvedTheme;
+  accent: ThemeAccent;
   setMode: (mode: ThemeMode) => void;
+  setAccent: (accent: ThemeAccent) => void;
 }
 
 export const useThemeStore = create<ThemeState>((set) => ({
   mode: readInitialMode(),
   resolved: resolveMode(readInitialMode()),
+  accent: readInitialAccent(),
   setMode: (mode) => {
     const resolved = resolveMode(mode);
     localStorage.setItem(STORAGE_KEY, mode);
     applyTheme(resolved);
     set({ mode, resolved });
+  },
+  setAccent: (accent) => {
+    localStorage.setItem(ACCENT_STORAGE_KEY, accent);
+    set({ accent });
   },
 }));
 

@@ -7,10 +7,10 @@
 :root {
   color-scheme: light;
 
-  /* ---- 主色（D27 黑白反色系——亮色主色纯黑；运行时由 providers 按 antd 主题单源注入覆盖）---- */
-  --bbw-primary: #000000;
-  --bbw-primary-hover: #262626;
-  --bbw-primary-light: #f0f0f0; /* 己方气泡底 / 选中态浅底 */
+  /* ---- 主色（D27 修订2 accent 化——此处为默认晨蓝兜底；运行时由 providers 按 bbw-accent 注入覆盖）---- */
+  --bbw-primary: #1677ff;
+  --bbw-primary-hover: #4096ff;
+  --bbw-primary-light: #e6f4ff; /* 己方气泡底 / 选中态浅底 */
 
   /* ---- 中性阶 10 阶（D27 全中性化去蓝调；语义：1=最浅表面 … 10=最强文字）---- */
   --bbw-gray-1: #ffffff;
@@ -28,7 +28,7 @@
   --bbw-success: #16a34a;
   --bbw-warning: #d97706;
   --bbw-danger: #dc2626;
-  --bbw-info: #000000; /* 黑白反色系 info 跟随主色 */
+  --bbw-info: #1677ff; /* info 跟随主色 */
 
   /* ---- 语义浅底（横幅/提示条底色，随主题映射）---- */
   --bbw-danger-light: #fdecec;
@@ -109,16 +109,17 @@
 }
 
 /*
- * 暗色主题全量映射（D01 §14 开放问题 2，2026-11 冻结；2026-11-16 D27 修订=蓝调分层黑+彩色主色）：
- * 中性阶语义反转（1=最深表面 … 10=最亮文字）且整体带蓝调，主色柔蓝 #5b8cff，
+ * 暗色主题全量映射（D01 §14 开放问题 2，2026-11 冻结；2026-11-16 D27 修订=蓝调分层黑+彩色主色，
+ * 修订2=主色系 accent 化——本段主色三值为默认晨蓝暗档兜底，运行时随 bbw-accent 覆盖）：
+ * 中性阶语义反转（1=最深表面 … 10=最亮文字）且整体带蓝调，
  * 浅底语义色/遮罩/阴影/shimmer 高光同步压暗。
  */
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bbw-primary: #5b8cff; /* 蓝调分层黑底上的彩色主色（Slack/Linear 风） */
+  --bbw-primary: #5b8cff; /* 默认 accent 晨蓝暗档（蓝调分层黑底上的彩色主色，Slack/Linear 风） */
   --bbw-primary-hover: #7ba3ff;
-  --bbw-primary-light: #1d2739; /* 己方气泡底 / 选中态（蓝调深底一档） */
+  --bbw-primary-light: #1d2739; /* 己方气泡底 / 选中态（accent 调深底一档） */
 
   --bbw-gray-1: #11151d; /* 页面/卡片表面（分层蓝黑：布局 #0b0e14 上一档） */
   --bbw-gray-2: #161b26; /* 次级表面 / 对方气泡（须与布局底拉开一档） */

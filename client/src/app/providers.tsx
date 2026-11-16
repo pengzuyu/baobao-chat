@@ -1,9 +1,9 @@
 /**
  * 全局 Provider 组合层（app/）：React Query + AntD 主题融合 + i18n locale（E12）。
  * antd 内置文案随 bbw-locale 切换；应用文案经 shared/i18n t()。
- * AntD token 融合（D27 主题机制与色彩规范）：
- * - antd 组件：ConfigProvider theme=antdThemeFrom(mode) 单源；
- * - 残余自研 CSS：cssVarsFrom(mode) 注入 document root --bbw-*，与 antd 同源联动。
+ * AntD token 融合（D27 主题机制与色彩规范；修订2 增 accent 维度）：
+ * - antd 组件：ConfigProvider theme=antdThemeFrom(mode, accent) 单源；
+ * - 残余自研 CSS：cssVarsFrom(mode, accent) 注入 document root --bbw-*，与 antd 同源联动。
  */
 
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
@@ -55,19 +55,20 @@ function AuthCacheBoundary({ children }: { children: ReactNode }) {
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const resolved = useThemeStore((s) => s.resolved);
+  const accent = useThemeStore((s) => s.accent);
   const locale = useI18nStore((s) => s.locale);
   const mode = resolved === 'dark' ? 'dark' : 'light';
 
   // D27 机制核心：--bbw-* CSS 变量随 antd 主题单源注入（残余自研 CSS 与 antd 组件同源联动）
   useEffect(() => {
     const root = document.documentElement;
-    for (const [k, v] of Object.entries(cssVarsFrom(mode))) root.style.setProperty(k, v);
-  }, [mode]);
+    for (const [k, v] of Object.entries(cssVarsFrom(mode, accent))) root.style.setProperty(k, v);
+  }, [mode, accent]);
 
   return (
     <QueryClientProvider client={queryClient}>
       <AuthCacheBoundary>
-        <ConfigProvider locale={locale === 'en' ? enUS : zhCN} theme={antdThemeFrom(mode)}>
+        <ConfigProvider locale={locale === 'en' ? enUS : zhCN} theme={antdThemeFrom(mode, accent)}>
           {children}
         </ConfigProvider>
       </AuthCacheBoundary>
