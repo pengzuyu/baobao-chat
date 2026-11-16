@@ -75,3 +75,4 @@ server/data/
 client/tsconfig.tsbuildinfo
 examples/plugins/*.zip
 examples/oidc-rp/oidc-rp
+cli/target/
