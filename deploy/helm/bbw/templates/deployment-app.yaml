@@ -41,7 +41,7 @@ spec:
         - name: bbw-server
           # 模块化单体：--enable 控制启用域（D02 §2；由 values.modules.* 推导，
           # 与 compose 侧 BBW_APP_MODULES 等价）
-          args: ["--enable", "{{ include "bbw.app.enabledModules . }}"]
+          args: ["--enable", "{{ include "bbw.app.enabledModules" . }}"]
           image: {{ include "bbw.image" (dict "root" $ "repo" "bbw-app") }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
@@ -78,6 +78,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "bbw.secretName.app" . }}
                   key: jwtSecret
+            # KMS 主密钥（aigw 供应商密钥加密，19 篇 §1.2-2；空=KMS 不初始化）
+            - name: BBW_KMS_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbw.secretName.app" . }}
+                  key: kmsMasterKey
           envFrom:
             - configMapRef:
                 name: {{ include "bbw.fullname" . }}-config

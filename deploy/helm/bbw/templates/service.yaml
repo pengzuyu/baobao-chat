@@ -1,6 +1,8 @@
 {{/*
 服务暴露：app / gateway（media 见 deployment-media.yaml 内 hostNetwork 说明：
 hostNetwork 模式下信令经 Ingress 直连宿主端口，Service 仅作发现占位）
+app 可切 NodePort（app.service.*）：裸 HTTP 直连形态（/api /ws 同口直达，
+桌面端 bbrt 不支持 TLS 的内网环境）；gateway 关闭时不渲染（bbw-gateway 镜像未交付）
 */}}
 apiVersion: v1
 kind: Service
@@ -10,7 +12,7 @@ metadata:
     {{- include "bbw.labels" . | nindent 4 }}
     app.kubernetes.io/component: app
 spec:
-  type: ClusterIP
+  type: {{ .Values.app.service.type }}
   selector:
     {{- include "bbw.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: app
@@ -18,7 +20,11 @@ spec:
     - name: http
       port: 80
       targetPort: http
+      {{- if and (eq .Values.app.service.type "NodePort") .Values.app.service.nodePort }}
+      nodePort: {{ .Values.app.service.nodePort }}
+      {{- end }}
 ---
+{{- if .Values.gateway.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -36,6 +42,7 @@ spec:
       port: 80
       targetPort: http-ws
 ---
+{{- end }}
 {{- if .Values.modules.media }}
 apiVersion: v1
 kind: Service

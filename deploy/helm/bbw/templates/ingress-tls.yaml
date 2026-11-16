@@ -8,6 +8,9 @@ Ingress + TLS（16 篇 §3.4：BBW_TLS_* 的 K8s 形态 = TLS Secret + ingress�
   /update/ 与 /，如需集群内分发请补对应 Deployment。
 */}}
 {{- if .Values.ingress.enabled }}
+{{- /* 后端选择：gateway 交付前（gateway.enabled=false）全量回落单体 app Service */}}
+{{- $backendSvc := ternary (printf "%s-gateway" (include "bbw.fullname" .)) (printf "%s-app" (include "bbw.fullname" .)) .Values.gateway.enabled }}
+{{- $backendPort := ternary "http-ws" "http" .Values.gateway.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -34,35 +37,35 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "bbw.fullname" . }}-gateway
+                name: {{ $backendSvc }}
                 port:
-                  name: http-ws
+                  name: {{ $backendPort }}
           - path: /api/
             pathType: Prefix
             backend:
               service:
-                name: {{ include "bbw.fullname" . }}-gateway
+                name: {{ $backendSvc }}
                 port:
-                  name: http-ws
+                  name: {{ $backendPort }}
           - path: /v1/
             pathType: Prefix
             backend:
               service:
-                name: {{ include "bbw.fullname" . }}-gateway
+                name: {{ $backendSvc }}
                 port:
-                  name: http-ws
+                  name: {{ $backendPort }}
           - path: /mcp/
             pathType: Prefix
             backend:
               service:
-                name: {{ include "bbw.fullname" . }}-gateway
+                name: {{ $backendSvc }}
                 port:
-                  name: http-ws
+                  name: {{ $backendPort }}
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "bbw.fullname" . }}-gateway
+                name: {{ $backendSvc }}
                 port:
-                  name: http-ws
+                  name: {{ $backendPort }}
 {{- end }}

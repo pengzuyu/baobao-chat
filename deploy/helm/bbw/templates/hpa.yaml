@@ -4,7 +4,7 @@ HPA（16 篇 §3.2 指标表）
   需 prometheus-adapter 将 bbw_ws_connections 暴露为 custom.metrics.k8s.io
 · app：CPU 70% + 各域队列深度（file/kb worker，external 指标）
 */}}
-{{- if .Values.gateway.autoscaling.enabled }}
+{{- if and .Values.gateway.enabled .Values.gateway.autoscaling.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

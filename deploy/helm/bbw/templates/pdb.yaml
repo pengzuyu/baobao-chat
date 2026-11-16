@@ -5,7 +5,7 @@ PDB（16 篇 §3.2）
 · media：默认关闭——任何驱逐前必须确认通话避让窗口（§4.4/§4.5：
   标记 draining → 现有通话结束不迁 → 下线；drain 前检查在线房间）
 */}}
-{{- if .Values.gateway.pdb.enabled }}
+{{- if and .Values.gateway.enabled .Values.gateway.pdb.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
