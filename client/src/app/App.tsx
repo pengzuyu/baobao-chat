@@ -90,7 +90,7 @@ function useEmergencyStopHotkey(): void {
         emergencyStop();
         // 多屏提示（OQ-C30）：主窗 toast + 系统通知（免打扰不拦——紧急语义优先于偏好闸门）
         window.dispatchEvent(new CustomEvent('bbw:toast', { detail: '已触发紧急停止：Agent 进程终止、未决审批作废' }));
-        void sendSystemNotification('BaobaoWork · 紧急停止', 'Agent 进程已终止，未决审批已作废');
+        void sendSystemNotification('BaobaoChat · 紧急停止', 'Agent 进程已终止，未决审批已作废');
       }
     };
     window.addEventListener('keydown', onKey);
@@ -216,7 +216,7 @@ export function App() {
   useEffect(() => {
     startUpdaterAutoCheck((info) => {
       void sendSystemNotification(
-        'BaobaoWork · 发现新版本',
+        'BaobaoChat · 发现新版本',
         `v${info.version} 已发布，可到「设置 · 关于」下载更新`,
       );
     });

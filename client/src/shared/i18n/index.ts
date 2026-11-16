@@ -87,7 +87,7 @@ const zh: Record<string, string> = {
   'nav.mail': '邮件',
   'nav.agent': 'Agent',
   // 登录
-  'login.title': 'BaobaoWork',
+  'login.title': 'BaobaoChat',
   'login.account': '账号',
   'login.password': '口令',
   'login.submit': '登 录',
@@ -121,7 +121,7 @@ const en: Record<string, string> = {
   'nav.kb': 'Knowledge',
   'nav.mail': 'Mail',
   'nav.agent': 'Agent',
-  'login.title': 'BaobaoWork',
+  'login.title': 'BaobaoChat',
   'login.account': 'Account',
   'login.password': 'Password',
   'login.submit': 'Sign in',

@@ -52,7 +52,7 @@
 }
 ```
 
-- **secret 分流**（镜像 `plugin_commands.rs` 的 config 制）：`secretKeys` 所列 env/header 键，真值入钥匙串 **service `com.baobaowork.mcp`、account `{server名}/{键名}`**；personal.json 只存 `""` 占位——secret 真值不落盘。读取时合并（同 `read_plugin_config` 的空串回查）。
+- **secret 分流**（镜像 `plugin_commands.rs` 的 config 制）：`secretKeys` 所列 env/header 键，真值入钥匙串 **service `com.baobaochat.mcp`、account `{server名}/{键名}`**；personal.json 只存 `""` 占位——secret 真值不落盘。读取时合并（同 `read_plugin_config` 的空串回查）。
 - **校验**（upsert 时）：
   - name 同 Go `reMcpServerID`（`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`，plugin_validate.go:95——server 名即 `mcp.{name}.*` 命名空间段），保留名 `corp` 拒绝；
   - stdio 须非空 `command`；http 须 `http://` 或 `https://` 开头的 url；

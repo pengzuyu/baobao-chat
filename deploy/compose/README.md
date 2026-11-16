@@ -1,4 +1,4 @@
-# BaobaoWork docker-compose 部署（小规模单 VM 形态）
+# BaobaoChat docker-compose 部署（小规模单 VM 形态）
 
 对应设计：`docs/16-部署运维与非功能设计.md` §3.1 拓扑 / §3.3 容量 / §3.4 双形态等价。
 Docker 与 K8s 均为一等公民：同一组镜像、同一套配置键、两份编排（K8s 见 `../helm/bbw/`）。

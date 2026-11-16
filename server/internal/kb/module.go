@@ -2,9 +2,9 @@
 package kb
 
 import (
-	kbapi "github.com/baobaowork/server/internal/kb/api"
-	kbrepo "github.com/baobaowork/server/internal/kb/repo"
-	kbservice "github.com/baobaowork/server/internal/kb/service"
+	kbapi "github.com/baobaochat/server/internal/kb/api"
+	kbrepo "github.com/baobaochat/server/internal/kb/repo"
+	kbservice "github.com/baobaochat/server/internal/kb/service"
 )
 
 // Module kb 模块外壳：对外只暴露 api

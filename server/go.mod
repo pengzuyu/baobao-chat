@@ -1,4 +1,4 @@
-module github.com/baobaowork/server
+module github.com/baobaochat/server
 
 go 1.26.0
 

@@ -23,7 +23,7 @@ import (
 	"regexp"
 	"strings"
 
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // PluginMaxPackageBytes 包体上限（D22 §3.1）

@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	kbrepo "github.com/baobaowork/server/internal/kb/repo"
-	kbservice "github.com/baobaowork/server/internal/kb/service"
-	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	kbrepo "github.com/baobaochat/server/internal/kb/repo"
+	kbservice "github.com/baobaochat/server/internal/kb/service"
+	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 func TestPGKBSmoke(t *testing.T) {

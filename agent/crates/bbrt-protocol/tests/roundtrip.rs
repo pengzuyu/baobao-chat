@@ -1150,8 +1150,8 @@ fn golden_d19_workspace_and_session_list_messages() {
 
     let item = WorkspaceItem {
         id: "ws-1790000000-0".into(),
-        path: "/Users/me/code/baobao-work".into(),
-        name: "baobao-work".into(),
+        path: "/Users/me/code/baobao-chat".into(),
+        name: "baobao-chat".into(),
         is_repo: true,
         trusted: true,
         last_opened_at: 1_790_000_000_000,
@@ -1159,10 +1159,10 @@ fn golden_d19_workspace_and_session_list_messages() {
     };
     golden(
         &HostToRuntime::WorkspaceRegister {
-            path: "/Users/me/code/baobao-work".into(),
+            path: "/Users/me/code/baobao-chat".into(),
             name: None,
         },
-        json!({"type":"workspace.register","path":"/Users/me/code/baobao-work"}),
+        json!({"type":"workspace.register","path":"/Users/me/code/baobao-chat"}),
     );
     golden(
         &HostToRuntime::WorkspaceList,
@@ -1180,7 +1180,7 @@ fn golden_d19_workspace_and_session_list_messages() {
         &RuntimeToHost::WorkspaceRegistered { item: item.clone() },
         json!({
             "type":"workspace.registered",
-            "item":{"id":"ws-1790000000-0","path":"/Users/me/code/baobao-work","name":"baobao-work",
+            "item":{"id":"ws-1790000000-0","path":"/Users/me/code/baobao-chat","name":"baobao-chat",
                     "isRepo":true,"trusted":true,"lastOpenedAt":1790000000000i64,"createdAt":1780000000000i64}
         }),
     );
@@ -1188,7 +1188,7 @@ fn golden_d19_workspace_and_session_list_messages() {
         &RuntimeToHost::WorkspaceListed { items: vec![item] },
         json!({
             "type":"workspace.listed",
-            "items":[{"id":"ws-1790000000-0","path":"/Users/me/code/baobao-work","name":"baobao-work",
+            "items":[{"id":"ws-1790000000-0","path":"/Users/me/code/baobao-chat","name":"baobao-chat",
                       "isRepo":true,"trusted":true,"lastOpenedAt":1790000000000i64,"createdAt":1780000000000i64}]
         }),
     );
@@ -1201,7 +1201,7 @@ fn golden_d19_workspace_and_session_list_messages() {
             items: vec![SessionListItem {
                 id: "sess-1".into(),
                 title: "会话 1".into(),
-                workspace: "/Users/me/code/baobao-work".into(),
+                workspace: "/Users/me/code/baobao-chat".into(),
                 mode: "ask".into(),
                 model_policy: "auto".into(),
                 model_override: None,
@@ -1214,7 +1214,7 @@ fn golden_d19_workspace_and_session_list_messages() {
         },
         json!({
             "type":"session.listed",
-            "items":[{"id":"sess-1","title":"会话 1","workspace":"/Users/me/code/baobao-work",
+            "items":[{"id":"sess-1","title":"会话 1","workspace":"/Users/me/code/baobao-chat",
                       "mode":"ask","modelPolicy":"auto","status":"ended",
                       "createdAt":1780000000000i64,"updatedAt":1790000000000i64,
                       "endedAt":1790000000500i64,"summary":"收口"}]
@@ -1364,17 +1364,17 @@ fn golden_d19_memory_scope_fields() {
         &HostToRuntime::MemoryList {
             limit: None,
             scope: Some(MemoryScope::Project),
-            workspace_path: Some("/Users/me/code/baobao-work".into()),
+            workspace_path: Some("/Users/me/code/baobao-chat".into()),
         },
-        json!({"type":"memory.list","scope":"project","workspacePath":"/Users/me/code/baobao-work"}),
+        json!({"type":"memory.list","scope":"project","workspacePath":"/Users/me/code/baobao-chat"}),
     );
     golden(
         &HostToRuntime::MemoryDelete {
             scope: Some(MemoryScope::Project),
-            workspace_path: Some("/Users/me/code/baobao-work".into()),
+            workspace_path: Some("/Users/me/code/baobao-chat".into()),
             name: "端口-8090".into(),
         },
-        json!({"type":"memory.delete","scope":"project","workspacePath":"/Users/me/code/baobao-work","name":"端口-8090"}),
+        json!({"type":"memory.delete","scope":"project","workspacePath":"/Users/me/code/baobao-chat","name":"端口-8090"}),
     );
     // memory.saved 项目作用域
     golden(
@@ -1385,12 +1385,12 @@ fn golden_d19_memory_scope_fields() {
             memory_type: "project".into(),
             updated: false,
             scope: Some(MemoryScope::Project),
-            workspace_name: Some("baobao-work-72ab07a9e501bc35".into()),
+            workspace_name: Some("baobao-chat-72ab07a9e501bc35".into()),
         },
         json!({
             "type":"memory.saved","sessionId":"sess-1","name":"端口-8090",
             "title":"端口 8090 约定","memoryType":"project","updated":false,
-            "scope":"project","workspaceName":"baobao-work-72ab07a9e501bc35"
+            "scope":"project","workspaceName":"baobao-chat-72ab07a9e501bc35"
         }),
     );
 }

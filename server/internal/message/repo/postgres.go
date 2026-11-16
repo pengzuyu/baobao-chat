@@ -20,8 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	messageapi "github.com/baobaowork/server/internal/message/api"
-	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	messageapi "github.com/baobaochat/server/internal/message/api"
+	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // advisory lock 键（表级 ID 分配互斥，见 AllocID）

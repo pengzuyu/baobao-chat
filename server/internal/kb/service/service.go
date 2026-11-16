@@ -19,9 +19,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	kbapi "github.com/baobaowork/server/internal/kb/api"
-	kbrepo "github.com/baobaowork/server/internal/kb/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	kbapi "github.com/baobaochat/server/internal/kb/api"
+	kbrepo "github.com/baobaochat/server/internal/kb/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // EmbedFn 嵌入函数注入（生产=HTTP 自调 AI 网关 bbw-embed 1024 维；测试=假嵌入不走网络）

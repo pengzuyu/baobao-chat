@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/baobaowork/server/internal/message/api"
-	"github.com/baobaowork/server/internal/message/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	"github.com/baobaochat/server/internal/message/api"
+	"github.com/baobaochat/server/internal/message/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 // seedFixture 单聊(conv1: alice=10001/bob=10002) + 广播群(conv2: alice=member, root=10003=publisher)

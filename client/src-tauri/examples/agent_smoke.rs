@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use baobaowork_client_lib::agent_bridge::AgentHost;
+use baobaochat_client_lib::agent_bridge::AgentHost;
 
 fn main() {
     let done = Arc::new(AtomicBool::new(false));

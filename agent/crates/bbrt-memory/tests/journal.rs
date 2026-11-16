@@ -9,7 +9,7 @@ use bbrt_memory::{ActivityEvent, FileChangeKind, Journal, MemoryType};
 fn started(session: &str) -> ActivityEvent {
     ActivityEvent::SessionStarted {
         session: session.to_string(),
-        workspace: "baobao-work".to_string(),
+        workspace: "baobao-chat".to_string(),
         mode: "interactive".to_string(),
     }
 }

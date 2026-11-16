@@ -24,7 +24,7 @@ fn setup(now: &str, today: &str) -> (MemoryEngine, Arc<FixedClock>, tempfile::Te
 fn started(session: &str) -> ActivityEvent {
     ActivityEvent::SessionStarted {
         session: session.to_string(),
-        workspace: "baobao-work".to_string(),
+        workspace: "baobao-chat".to_string(),
         mode: "interactive".to_string(),
     }
 }
@@ -288,12 +288,12 @@ fn memory_saved_payload_roundtrip_camel_case() {
     // D19 项目作用域：workspaceName 携带分区名；scope 缺省反序列化回落 user
     let proj = MemorySavedEvent {
         scope: "project".into(),
-        workspace_name: Some("baobao-work-72ab07a9e501bc35".into()),
+        workspace_name: Some("baobao-chat-72ab07a9e501bc35".into()),
         ..ev.clone()
     };
     let proj_json = serde_json::to_string(&proj).unwrap();
     assert!(proj_json.contains(r#""scope":"project""#));
-    assert!(proj_json.contains(r#""workspaceName":"baobao-work-72ab07a9e501bc35""#));
+    assert!(proj_json.contains(r#""workspaceName":"baobao-chat-72ab07a9e501bc35""#));
     assert_eq!(
         serde_json::from_str::<MemorySavedEvent>(&proj_json).unwrap(),
         proj

@@ -1,4 +1,4 @@
-// BaobaoWork 客户端 Rust 壳（Tauri 2）
+// BaobaoChat 客户端 Rust 壳（Tauri 2）
 //
 // 职责规划（02 篇 §2）：
 // - 持有 WSS/REST 连接（UI 重载不断线）、本地 SQLite 缓存与 outbox（阶段二）

@@ -2,9 +2,9 @@
 package org
 
 import (
-	"github.com/baobaowork/server/internal/org/api"
-	"github.com/baobaowork/server/internal/org/repo"
-	"github.com/baobaowork/server/internal/org/service"
+	"github.com/baobaochat/server/internal/org/api"
+	"github.com/baobaochat/server/internal/org/repo"
+	"github.com/baobaochat/server/internal/org/service"
 )
 
 // Module org 模块外壳：只暴露 api 层能力给其他模块（依赖规则 D02 §4）

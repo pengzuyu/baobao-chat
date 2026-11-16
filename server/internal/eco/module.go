@@ -2,8 +2,8 @@
 package eco
 
 import (
-	ecorepo "github.com/baobaowork/server/internal/eco/repo"
-	ecoservice "github.com/baobaowork/server/internal/eco/service"
+	ecorepo "github.com/baobaochat/server/internal/eco/repo"
+	ecoservice "github.com/baobaochat/server/internal/eco/service"
 )
 
 // Module 生态域模块

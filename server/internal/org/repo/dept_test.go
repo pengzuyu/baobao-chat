@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	orgapi "github.com/baobaowork/server/internal/org/api"
+	orgapi "github.com/baobaochat/server/internal/org/api"
 )
 
 func TestDeptTreeLifecycle(t *testing.T) {

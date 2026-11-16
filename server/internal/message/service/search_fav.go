@@ -12,9 +12,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	messageapi "github.com/baobaowork/server/internal/message/api"
-	messagerepo "github.com/baobaowork/server/internal/message/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	messageapi "github.com/baobaochat/server/internal/message/api"
+	messagerepo "github.com/baobaochat/server/internal/message/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // Favorite 收藏（D03 API-IM-10/INT-IM-06）：

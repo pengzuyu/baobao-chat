@@ -170,7 +170,7 @@ export function MainLayout() {
         style={{ background: token.colorBgContainer, borderRight: `1px solid ${token.colorBorderSecondary}` }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '8px 0' }}>
-          <div style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }} title="BaobaoWork">
+          <div style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }} title="BaobaoChat">
             <Logo size={26} />
           </div>
           {/* 竖排图标栏：Menu 行高/内边距覆写（itemPaddingInline=0 让竖排内容居中） */}

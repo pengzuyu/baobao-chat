@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# BaobaoWork docker-compose 回滚脚本（16 篇 §4.4 回滚路径 / §3.4 双形态升级表）
+# BaobaoChat docker-compose 回滚脚本（16 篇 §4.4 回滚路径 / §3.4 双形态升级表）
 # 用法：./rollback.sh [TAG]   （缺省使用 .env 中的 BBW_PREVIOUS_TAG）
 # 原则：
 #  · 保留上一 tag 一键切回（N-1 镜像由 upgrade.sh 通过 BBW_PREVIOUS_TAG 记录）

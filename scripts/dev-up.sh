@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# BaobaoWork 一键开发环境拉起脚本
+# BaobaoChat 一键开发环境拉起脚本
 #  · 初始化 deploy/compose/.env（首次从 .env.tpl 复制）
 #  · 生成开发用自签 TLS 证书（volumes/certs/；生产换内部 CA 签发，15 篇 §3.1）
 #  · 启动 compose core 依赖（pg16 / redis7 / minio / update-src / app-init）

@@ -132,7 +132,7 @@ pub struct MemorySavedEvent {
     /// D19 作用域："user" | "project"（默认 user=旧口径；D23 起 user=公共层）
     #[serde(default = "default_scope_user")]
     pub scope: String,
-    /// D19 项目分区名（scope=project 时携带；scope_key 形如 baobao-work-72ab07a9…）
+    /// D19 项目分区名（scope=project 时携带；scope_key 形如 baobao-chat-72ab07a9…）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_name: Option<String>,
     /// D23 公共层十类标签（画像/偏好/…；None=项目分区知识记忆）
@@ -729,9 +729,9 @@ mod scoped_tests {
     /// 分区 key：目录名净化 + 路径哈希；同名不同路径区分、别名归一。
     #[test]
     fn scope_key_sanitizes_and_hashes() {
-        let a = scope_key(Path::new("/Users/me/code/baobao-work"));
-        let b = scope_key(Path::new("/Users/other/code/baobao-work"));
-        assert!(a.starts_with("baobao-work-"), "{a}");
+        let a = scope_key(Path::new("/Users/me/code/baobao-chat"));
+        let b = scope_key(Path::new("/Users/other/code/baobao-chat"));
+        assert!(a.starts_with("baobao-chat-"), "{a}");
         assert_ne!(a, b, "同名不同路径必须不同 key");
         // CJK 目录名净化为空 → project 兜底
         let cjk = scope_key(Path::new("/Users/me/code/宝贝项目"));

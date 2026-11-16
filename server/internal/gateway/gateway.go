@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/baobaowork/server/internal/gateway/presence"
-	"github.com/baobaowork/server/internal/message/api"
-	"github.com/baobaowork/server/internal/platform/authjwt"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
-	"github.com/baobaowork/server/internal/platform/httpx"
-	"github.com/baobaowork/server/internal/platform/ws"
+	"github.com/baobaochat/server/internal/gateway/presence"
+	"github.com/baobaochat/server/internal/message/api"
+	"github.com/baobaochat/server/internal/platform/authjwt"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
+	"github.com/baobaochat/server/internal/platform/httpx"
+	"github.com/baobaochat/server/internal/platform/ws"
 )
 
 // Gateway /ws/connect 接入：鉴权 → 升级 → 注册 hub → 信封路由 → 心跳 → 清理（D02 §6）

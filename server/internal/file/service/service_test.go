@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	fileapi "github.com/baobaowork/server/internal/file/api"
-	filerepo "github.com/baobaowork/server/internal/file/repo"
-	filestore "github.com/baobaowork/server/internal/file/store"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	fileapi "github.com/baobaochat/server/internal/file/api"
+	filerepo "github.com/baobaochat/server/internal/file/repo"
+	filestore "github.com/baobaochat/server/internal/file/store"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // pngBytes 生成 w×h 的 PNG 测试图

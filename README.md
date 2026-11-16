@@ -1,4 +1,4 @@
-# BaobaoWork 设计文档库
+# BaobaoChat 设计文档库
 
 公司内部多 Agent 协作工具（**聊天 · 文件 · 邮件 · 知识库 · 专家 Agent · Agent 插件 · 本地 claude code/zcode 委派**）的**设计阶段文档库**。当前为 v0.1。
 

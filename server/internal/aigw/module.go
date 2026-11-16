@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/baobaowork/server/internal/platform/authjwt"
-	"github.com/baobaowork/server/internal/platform/kms"
+	"github.com/baobaochat/server/internal/platform/authjwt"
+	"github.com/baobaochat/server/internal/platform/kms"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/baobaowork/server/internal/platform/authjwt"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/authjwt"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // 中间件链顺序：按 D02 §6 固定（trace→recovery→rate-limit→auth→tenant）

@@ -3,7 +3,7 @@
 //! 存储（纯客户端本地，真值不经服务端——与插件 config 同制 D22 §6.1/L4）：
 //!   {dataDir}/eco/mcp/personal.json   server 清单（stdio/HTTP 双形态+enabled/
 //!                                     secretKeys；secret 值文件存空串占位）
-//!   钥匙串 service com.baobaowork.mcp  account {server名}/{键名}（secret 真值）
+//!   钥匙串 service com.baobaochat.mcp  account {server名}/{键名}（secret 真值）
 //!
 //! 写操作后统一走 push_mcp_assembly 全量重推（corp>插件>个人三源合并
 //! mcp.config，D26 §4）；同名冲突由装配层跳过（防劫持口径顺延）。
@@ -22,7 +22,7 @@ type Host<'a> = State<'a, AgentHost>;
 /// 钥匙串条目（account={server}/{key}——与插件 config 的 service 分离，
 /// 卸载清理互不影响）
 fn keyring_entry(server: &str, key: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new("com.baobaowork.mcp", &format!("{server}/{key}"))
+    keyring::Entry::new("com.baobaochat.mcp", &format!("{server}/{key}"))
         .map_err(|e| format!("钥匙串不可用: {e}"))
 }
 

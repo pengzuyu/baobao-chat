@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/baobaowork/server/internal/admin/api"
-	"github.com/baobaowork/server/internal/admin/repo"
-	"github.com/baobaowork/server/internal/org/api"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/pinyinutil"
+	"github.com/baobaochat/server/internal/admin/api"
+	"github.com/baobaochat/server/internal/admin/repo"
+	"github.com/baobaochat/server/internal/org/api"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/pinyinutil"
 )
 
 // Options 装配项（main 注入；跨域闭包 + 管理员白名单）

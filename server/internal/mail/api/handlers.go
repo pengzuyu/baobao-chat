@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"strconv"
 
-	mailrepo "github.com/baobaowork/server/internal/mail/repo"
-	mailservice "github.com/baobaowork/server/internal/mail/service"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/httpx"
+	mailrepo "github.com/baobaochat/server/internal/mail/repo"
+	mailservice "github.com/baobaochat/server/internal/mail/service"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/httpx"
 )
 
 // RegisterRoutes 用户面路由（22 §6.1；reply/forward-im/cancel-send 随 mail_card

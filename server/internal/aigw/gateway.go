@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // 档位别名（§3.2：调用方只允许别名或 p: 引用；具体模型名 9001、未知别名 8052）

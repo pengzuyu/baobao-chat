@@ -2,10 +2,10 @@
 package admin
 
 import (
-	"github.com/baobaowork/server/internal/admin/api"
-	"github.com/baobaowork/server/internal/admin/repo"
-	"github.com/baobaowork/server/internal/admin/service"
-	"github.com/baobaowork/server/internal/org/api"
+	"github.com/baobaochat/server/internal/admin/api"
+	"github.com/baobaochat/server/internal/admin/repo"
+	"github.com/baobaochat/server/internal/admin/service"
+	"github.com/baobaochat/server/internal/org/api"
 )
 
 // Module admin 模块外壳

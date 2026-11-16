@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
-	mailrepo "github.com/baobaowork/server/internal/mail/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	mailrepo "github.com/baobaochat/server/internal/mail/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // 发送检查链参数（22 §4.3；admin_policy domain=mail 热更随 D10 PAD-09 阶段二）

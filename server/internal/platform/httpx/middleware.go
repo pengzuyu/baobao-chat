@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/baobaowork/server/internal/platform/authjwt"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/authjwt"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // Middleware 标准 HTTP 中间件

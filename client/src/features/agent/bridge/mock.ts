@@ -217,7 +217,7 @@ function seedReports(): AgentReport[] {
       stats: { sessions: 3, tools: 47, blocked: 2, files: 12, memorySaved: 3 },
       markdown: [
         `# ${dayStr(1)} Agent 日报`,
-        '- 会话 3 个（累计 2h14m）；工作区 baobao-work、docs-site',
+        '- 会话 3 个（累计 2h14m）；工作区 baobao-chat、docs-site',
         '- 工具调用 47 次：read_file×21 edit_file×9 run_command×8 search_files×9',
         '- 被拦截 2 次（8021 危险命令 / 8024 链接逃逸）',
         '- 文件变更 12：edit×9 create×3；检查点 4（pre-edit×3 manual×1）',
@@ -229,7 +229,7 @@ function seedReports(): AgentReport[] {
         '| --- | --- | --- | --- | --- |',
         '| s-102 | bbw-server | 48m | 19 | 已完成 |',
         '| s-101 | docs-site | 26m | 15 | 已完成 |',
-        '| s-099 | baobao-work | 60m | 13 | 已暂停 |',
+        '| s-099 | baobao-chat | 60m | 13 | 已暂停 |',
       ].join('\n'),
     },
     {
@@ -843,7 +843,7 @@ export class MockAgentBridge implements AgentBridge {
         },
         ...this.reports.filter((r) => r.date !== today),
       ];
-      this.emit({ type: 'reportDaily', date: today, path: `~/Library/Application Support/baobao-work/agent/reports/${today}.md`, stats });
+      this.emit({ type: 'reportDaily', date: today, path: `~/Library/Application Support/baobao-chat/agent/reports/${today}.md`, stats });
       await ctx.wait(400);
       await this.finishSession(sid, '修复登录超时：定位时钟偏移根因并验证（12/12 测试通过）');
     } catch (e) {

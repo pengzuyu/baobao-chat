@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/baobaowork/server/internal/admin/api"
-	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	"github.com/baobaochat/server/internal/admin/api"
+	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // advisory lock 键（表级 ID 分配互斥；org 9101 / message 9102-9108 / file 9109 /

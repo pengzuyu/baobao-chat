@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/baobaowork/server/internal/message/api"
+	"github.com/baobaochat/server/internal/message/api"
 )
 
 // Memory 内存实现：阶段一跑通全链路；并发安全（单锁足够，量级见 04 篇 §1.1 基线）

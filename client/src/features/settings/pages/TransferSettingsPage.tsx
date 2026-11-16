@@ -46,7 +46,7 @@ export function TransferSettingsPage() {
     }
   };
 
-  const shownDir = pref.downloadDir || '~/Downloads/BaobaoWork';
+  const shownDir = pref.downloadDir || '~/Downloads/BaobaoChat';
 
   const dirControl: ReactNode = isTauri() ? (
     <Button
@@ -63,7 +63,7 @@ export function TransferSettingsPage() {
     <Input
       size="small"
       style={{ width: 220 }}
-      placeholder="~/Downloads/BaobaoWork"
+      placeholder="~/Downloads/BaobaoChat"
       value={dirInput || pref.downloadDir}
       onChange={(e) => setDirInput(e.target.value)}
       onBlur={() => dirInput && setDownloadDir(dirInput.trim())}

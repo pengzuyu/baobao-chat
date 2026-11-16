@@ -107,7 +107,7 @@ memory.saved    {session, title, type}
 
 ```markdown
 # 2026-11-06 Agent 日报
-- 会话 3 个（累计 2h14m）；工作区 baobao-work、docs-site
+- 会话 3 个（累计 2h14m）；工作区 baobao-chat、docs-site
 - 工具调用 47 次：read_file×21 edit_file×9 run_command×8 …；被拦截 2 次（8021 危险命令 / 8024 链接逃逸）
 - 文件变更 12：edit×9 create×3；检查点 4（pre-edit×3 manual×1）
 - 委派 1 次（claude，exit 0）；失败教训 1 条

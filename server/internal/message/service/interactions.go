@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	messageapi "github.com/baobaowork/server/internal/message/api"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	messageapi "github.com/baobaochat/server/internal/message/api"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 // validateText text 内容策略（长度 3004 / 敏感词 3005；Send 与 Edit 共用）

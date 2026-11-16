@@ -259,7 +259,7 @@ export function LoginPage() {
   return (
     <div style={AUTH_PAGE_STYLE}>
       <Card style={{ width: 360 }}>
-        <AuthBrand title="BaobaoWork" sub="让协作更简单 · 企业协作工作台" />
+        <AuthBrand title="BaobaoChat" sub="让协作更简单 · 企业协作工作台" />
 
         <Form
           layout="vertical"
@@ -302,7 +302,7 @@ export function LoginPage() {
 
         <AuthFooter>
           SSO / MFA 登录入口在后续阶段接入（03 篇）
-          <br />© 2026 BaobaoWork
+          <br />© 2026 BaobaoChat
         </AuthFooter>
       </Card>
     </div>

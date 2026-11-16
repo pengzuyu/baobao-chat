@@ -1,6 +1,6 @@
 # bbw-server（阶段一：模块化单体骨架）
 
-BaobaoWork 服务端阶段一代码骨架：**Go 1.22 · 标准库自研 WS/JWT · pgx（唯一第三方依赖）**。
+BaobaoChat 服务端阶段一代码骨架：**Go 1.22 · 标准库自研 WS/JWT · pgx（唯一第三方依赖）**。
 范围：auth / org / message 三模块 + gateway + platform 基础设施。
 存储双模：`BBW_DB_DSN` 非空 → PostgreSQL（pgx + 启动迁移 + RLS 兜底）；空 → 内存仓储（测试路径不变）。
 

@@ -2,7 +2,7 @@
   "name": "hello-baobao",
   "version": "1.0.0",
   "description": "官方示例插件：四类组件全携带（技能/工具/命令/专家）——开发参考见 examples/plugins/README.md",
-  "author": { "name": "BaobaoWork" },
+  "author": { "name": "BaobaoChat" },
   "skills": "./skills",
   "commands": "./commands",
   "agents": "./agents",

@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // ── memory ──

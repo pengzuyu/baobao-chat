@@ -2,9 +2,9 @@
 package agentbackup
 
 import (
-	agentbackupapi "github.com/baobaowork/server/internal/agentbackup/api"
-	agentbackuprepo "github.com/baobaowork/server/internal/agentbackup/repo"
-	agentbackupservice "github.com/baobaowork/server/internal/agentbackup/service"
+	agentbackupapi "github.com/baobaochat/server/internal/agentbackup/api"
+	agentbackuprepo "github.com/baobaochat/server/internal/agentbackup/repo"
+	agentbackupservice "github.com/baobaochat/server/internal/agentbackup/service"
 )
 
 // Module agent 备份模块外壳：对外只暴露 api

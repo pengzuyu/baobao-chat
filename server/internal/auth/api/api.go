@@ -5,7 +5,7 @@ package authapi
 import (
 	"context"
 
-	"github.com/baobaowork/server/internal/platform/authjwt"
+	"github.com/baobaochat/server/internal/platform/authjwt"
 )
 
 // LoginReq 口令登录请求（14 篇 §5.1：写操作幂等键阶段二接 Idempotency-Key）

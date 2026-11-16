@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    baobaowork_client_lib::run()
+    baobaochat_client_lib::run()
 }

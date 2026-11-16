@@ -12,7 +12,7 @@
 //     [--version 0.2.0] [--notes "本次更新说明"] [--notes-file out/release/v0.2.0/RELEASE-NOTES.md]
 //
 // 布局约定（build-desktop 收集产物 → publish.sh 原样 rsync）：
-//   out/release/v<ver>/darwin-x86_64/BaobaoWork.app.tar.gz(+.sig) + *.dmg
+//   out/release/v<ver>/darwin-x86_64/BaobaoChat.app.tar.gz(+.sig) + *.dmg
 //   out/release/v<ver>/darwin-aarch64/…（同名 app.tar.gz——按平台子目录隔离防撞名）
 //   out/release/v<ver>/linux-x86_64/*.AppImage(+.sig) + *.deb
 //   out/release/v<ver>/windows-x86_64/*-setup.exe(+.sig)

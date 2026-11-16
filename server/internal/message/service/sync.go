@@ -5,8 +5,8 @@ import (
 	"context"
 	"strconv"
 
-	messageapi "github.com/baobaowork/server/internal/message/api"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	messageapi "github.com/baobaochat/server/internal/message/api"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // Sync 增量拉取：逐会话校验成员 → after=cursor 取增量（超出 limit 标 gap 由端侧翻页补洞）

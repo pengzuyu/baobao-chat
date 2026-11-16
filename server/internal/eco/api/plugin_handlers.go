@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strconv"
 
-	ecoservice "github.com/baobaowork/server/internal/eco/service"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/httpx"
+	ecoservice "github.com/baobaochat/server/internal/eco/service"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/httpx"
 )
 
 // ── 用户面 ──

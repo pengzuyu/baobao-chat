@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"testing"
 
-	messageapi "github.com/baobaowork/server/internal/message/api"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	messageapi "github.com/baobaochat/server/internal/message/api"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 func agentCardPayload(cmid, status string) messageapi.SendPayload {

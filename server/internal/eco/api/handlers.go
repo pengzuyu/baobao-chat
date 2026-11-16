@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"strconv"
 
-	ecoservice "github.com/baobaowork/server/internal/eco/service"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/httpx"
+	ecoservice "github.com/baobaochat/server/internal/eco/service"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/httpx"
 )
 
 // RegisterUserRoutes 用户面（个人库：发布/我的清单/下架/删除；authed）

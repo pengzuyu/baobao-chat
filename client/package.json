@@ -1,9 +1,9 @@
 {
-  "name": "baobaowork-client",
+  "name": "baobaochat-client",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "BaobaoWork 客户端（Tauri 2 + React，阶段一：应用壳/认证/IM 三栏）",
+  "description": "BaobaoChat 客户端（Tauri 2 + React，阶段一：应用壳/认证/IM 三栏）",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

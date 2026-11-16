@@ -28,10 +28,10 @@ import (
 	"log"
 	"strconv"
 
-	messageapi "github.com/baobaowork/server/internal/message/api"
-	messagerepo "github.com/baobaowork/server/internal/message/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	messageapi "github.com/baobaochat/server/internal/message/api"
+	messagerepo "github.com/baobaochat/server/internal/message/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 // notifyDedupCap 幂等去重容量（与 gateway 同量级）

@@ -1,5 +1,5 @@
 # =============================================================================
-# BaobaoWork .gitignore（三栈通用：client(Tauri/React) + server(Go) + agent(Rust) + 交付物运行时数据）
+# BaobaoChat .gitignore（三栈通用：client(Tauri/React) + server(Go) + agent(Rust) + 交付物运行时数据）
 # =============================================================================
 
 # ---- 通用 ----

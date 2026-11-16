@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	ecorepo "github.com/baobaowork/server/internal/eco/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	ecorepo "github.com/baobaochat/server/internal/eco/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // PluginPolicy 三档（同 skill；10 篇 §4.5）

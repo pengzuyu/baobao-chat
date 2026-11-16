@@ -1,2 +1,2 @@
-# BaobaoWork Agent Runtime 统一使用 rustfmt 默认风格（零配置，CI `cargo fmt --check` 直接可用）。
+# BaobaoChat Agent Runtime 统一使用 rustfmt 默认风格（零配置，CI `cargo fmt --check` 直接可用）。
 # 本文件仅作说明占位：如后续需要覆盖默认项，须经团队评审后统一修改，不允许个人局部覆盖。

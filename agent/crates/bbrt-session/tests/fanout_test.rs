@@ -256,7 +256,7 @@ fn fanout_two_probes_join_into_history() {
     assert!(seen.len() >= 4, "2 子任务 × ≥2 轮");
     assert!(seen
         .iter()
-        .all(|(s, _)| s.contains("BaobaoWork 的本机 Agent")));
+        .all(|(s, _)| s.contains("BaobaoChat 的本机 Agent")));
     assert!(seen
         .iter()
         .all(|(s, _)| s.contains("[项目]") && s.contains("/ws")));

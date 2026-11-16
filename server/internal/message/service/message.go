@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	messageapi "github.com/baobaowork/server/internal/message/api"
-	messagerepo "github.com/baobaowork/server/internal/message/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	messageapi "github.com/baobaochat/server/internal/message/api"
+	messagerepo "github.com/baobaochat/server/internal/message/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 // Options 策略参数（租户策略热更接入点：admin_policy → policy.updated，D02 §8）

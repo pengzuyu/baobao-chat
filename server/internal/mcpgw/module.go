@@ -29,7 +29,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/baobaowork/server/internal/platform/authjwt"
+	"github.com/baobaochat/server/internal/platform/authjwt"
 )
 
 // AuditEntry MCP 工具调用审计行（D14 §6.2 审计看 ③：subject/actor 双写口径；

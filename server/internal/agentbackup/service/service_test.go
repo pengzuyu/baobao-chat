@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"testing"
 
-	agentbackupapi "github.com/baobaowork/server/internal/agentbackup/api"
-	agentbackuprepo "github.com/baobaowork/server/internal/agentbackup/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	agentbackupapi "github.com/baobaochat/server/internal/agentbackup/api"
+	agentbackuprepo "github.com/baobaochat/server/internal/agentbackup/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // codeOf 错误码断言助手（file 域同款）

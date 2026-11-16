@@ -1,5 +1,5 @@
 # =============================================================================
-# BaobaoWork 单 VM 全量拓扑（docker-compose，16 篇 §3.1 / §3.3 / §3.4）
+# BaobaoChat 单 VM 全量拓扑（docker-compose，16 篇 §3.1 / §3.3 / §3.4）
 # -----------------------------------------------------------------------------
 # · compose spec 语法（无 version 字段），Docker Compose v2.20+。
 # · profiles 分组（16 篇 §3.4 模块启停 = compose profiles ↔ Helm values.modules.*）：
@@ -88,7 +88,7 @@ services:
   # 扩缩容：docker compose --profile core up -d --scale app=N
   # ===========================================================================
   app:
-    image: ${BBW_IMAGE_REGISTRY:-registry.example.com/baobaowork}/bbw-app:${BBW_IMAGE_TAG:-0.1.0}
+    image: ${BBW_IMAGE_REGISTRY:-registry.example.com/baobaochat}/bbw-app:${BBW_IMAGE_TAG:-0.1.0}
     profiles: [core]
     restart: unless-stopped
     logging: *default-logging
@@ -417,7 +417,7 @@ volumes:
 configs:
   nginx-conf:
     content: |
-      # BaobaoWork 接入层 nginx（16 篇 §3.1）
+      # BaobaoChat 接入层 nginx（16 篇 §3.1）
       # —— WSS 会话保持：小规模单 nginx 用 ip_hash 固定客户端→app 实例；
       #    双接入层时必须改按 did 一致性哈希（16 篇 §3.1 要点）——
       worker_processes auto;
@@ -688,6 +688,6 @@ configs:
         }
         location @placeholder {
           default_type text/plain;
-          return 200 "BaobaoWork 官网尚未发布：先在构建机执行 scripts/release/publish-website.sh\n";
+          return 200 "BaobaoChat 官网尚未发布：先在构建机执行 scripts/release/publish-website.sh\n";
         }
       }

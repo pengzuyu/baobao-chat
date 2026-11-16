@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // Limiter 内存令牌桶限流（阶段一单机；多实例后换 Redis，键分 租户/用户/Agent 三档——D02 §6）

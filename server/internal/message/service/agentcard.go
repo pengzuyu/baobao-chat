@@ -9,9 +9,9 @@ import (
 	"context"
 	"encoding/json"
 
-	messageapi "github.com/baobaowork/server/internal/message/api"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	messageapi "github.com/baobaochat/server/internal/message/api"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 // UpdateAgentCard 内嵌 Agent 卡阶段更新（仅发起者本人 + type=agent_card 可写；

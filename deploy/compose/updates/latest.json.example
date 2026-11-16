@@ -1,20 +1,20 @@
 {
   "//": "Tauri updater 标准 manifest 样例（16 篇 §5.1 / EXECUTION-PLAN A5）——CI 发布流水线对安装包 tauri signer 签名后生成同名文件投放 updates-data 卷（nginx /update/ 直出）。与 update-manifest.json（compose 内联占位的自研渠道/灰度决策清单）职责不同：本文件=事实安装源，自研清单=阶段二壳侧渠道决策。signature=minisign 格式 ed25519 签名（key[:nonce]:sig base64），version 必须 > 当前安装版本才会触发更新。",
   "version": "0.1.1",
-  "notes": "BaobaoWork 0.1.1 更新说明（示例）",
+  "notes": "BaobaoChat 0.1.1 更新说明（示例）",
   "pub_date": "2026-11-09T12:00:00Z",
   "platforms": {
     "darwin-aarch64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNpZ25lciBleGFtcGxlCg==:MEUCIQDK.example",
-      "url": "https://bbw.example.internal/update/BaobaoWork_0.1.1_aarch64.app.tar.gz"
+      "url": "https://bbw.example.internal/update/BaobaoChat_0.1.1_aarch64.app.tar.gz"
     },
     "linux-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNpZ25lciBleGFtcGxlCg==:MEUCIQDK.example",
-      "url": "https://bbw.example.internal/update/baobaowork-client_0.1.1_amd64.AppImage.tar.gz"
+      "url": "https://bbw.example.internal/update/baobaochat-client_0.1.1_amd64.AppImage.tar.gz"
     },
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNpZ25lciBleGFtcGxlCg==:MEUCIQDK.example",
-      "url": "https://bbw.example.internal/update/BaobaoWork_0.1.1_x64-setup.exe.zip"
+      "url": "https://bbw.example.internal/update/BaobaoChat_0.1.1_x64-setup.exe.zip"
     }
   }
 }

@@ -8,7 +8,7 @@
 # 用法（在本机或任一汇集了产物的机器执行；rsync + ssh）：
 #   BBW_PUBLIC_URL=http://bbw.example.internal \
 #   BBW_DEPLOY_HOST=deploy@10.x.x.x \
-#   BBW_DEPLOY_ROOT=/opt/baobaowork/deploy/compose \
+#   BBW_DEPLOY_ROOT=/opt/baobaochat/deploy/compose \
 #     bash scripts/release/publish.sh
 #
 # 环境变量：

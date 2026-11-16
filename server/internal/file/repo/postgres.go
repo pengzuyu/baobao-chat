@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // advisory lock 键（表级 ID 分配互斥；message 域已占 9102-9108，本表 9109）

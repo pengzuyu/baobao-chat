@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/baobaowork/server/internal/platform/authjwt"
+	"github.com/baobaochat/server/internal/platform/authjwt"
 )
 
 // ServerName serverInfo.name（bbrt-mcp 诊断/健康面板展示；命名空间段 corp 由

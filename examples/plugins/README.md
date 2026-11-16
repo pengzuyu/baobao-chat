@@ -1,4 +1,4 @@
-# BaobaoWork 插件开发指南
+# BaobaoChat 插件开发指南
 
 > 一个插件包 = 一组 Agent 能力的分发单元：**技能 / 工具 / 命令 / 专家** 四类组件按需携带，
 > 用户安装后即时生效（工具进 `mcp.<插件名>.*` 命名空间、技能按触发词注入、命令 `/` 渲染、专家可被会诊选中）。
@@ -50,7 +50,7 @@ zip 打包时**顶层允许套一层目录**（`my-plugin/...` 或直接根内�
   "commands": "./commands",
   "agents": "./agents",
   "mcpServers": "./.mcp.json",  // 或直接内联对象：{"mcpServers": {...}}
-  "bbw": {                      // BaobaoWork 扩展块（Claude/ZCode 兼容包可无此块）
+  "bbw": {                      // BaobaoChat 扩展块（Claude/ZCode 兼容包可无此块）
     "risk": "low",              // low|medium|high：插件级默认风险（工具级 x-bbw-risk 优先）
     "category": "devops",       // 市场分类
     "netAllow": ["*.corp.internal"], // 网络访问声明（v0.1 安装确认页展示，强制执行阶段二）
@@ -157,7 +157,7 @@ model: fast                                     # fast|strong（缺省 strong）
 | 卸载 | 删目录；**用户配置与钥匙串默认保留**（重装即复用） |
 
 调试入口：
-- 安装目录：`~/Library/Application Support/com.baobaowork.client/agent-runtime/eco/plugins/<id>/`（`plugin-state.json` = 启用态+激活版本）
+- 安装目录：`~/Library/Application Support/com.baobaochat.client/agent-runtime/eco/plugins/<id>/`（`plugin-state.json` = 启用态+激活版本）
 - MCP 连接日志：同目录上级的 `bbrt.log`（`grep '懒补连\|连接降级'`——stdio server 启动失败/坏协议会在这里现形）
 - stdio server 单测：`node server.mjs` 手工粘贴 JSON 行（stdout 是协议通道，**日志必须走 stderr**）
 - 装完没生效？确认插件页「已安装」开关开着，新开会话再试（`mcp.config` 在宿主重启后也会重推，重启桌面端可兜底）

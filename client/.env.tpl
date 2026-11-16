@@ -1,5 +1,5 @@
 # =============================================================================
-# BaobaoWork 客户端联调环境模板（cp .env.tpl .env.local && vim .env.local）
+# BaobaoChat 客户端联调环境模板（cp .env.tpl .env.local && vim .env.local）
 # -----------------------------------------------------------------------------
 # · VITE_* 为 Vite 编译期注入：修改后需重启 dev server（tauri dev 会带起 vite）。
 # · 客户端形态仅桌面端（2026-11-08 裁决）：本文件服务于 `npm run tauri dev`

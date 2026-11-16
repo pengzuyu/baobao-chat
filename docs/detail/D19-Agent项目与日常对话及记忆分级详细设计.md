@@ -5,7 +5,7 @@
 - 关联：08（Agent 总体）/ D08（工作台）/ D09（工具与安全）/ D11（Runtime 内部）/ D13（沙箱）/ D15（记忆双轨）/ D18（IM 内嵌卡）
 - 范围：bbrt 协议+store+memory+session+tools、Tauri 壳、客户端 agent 工作台；**服务端零改动**（D15 口径：记忆本地文件唯一权威）
 
-> **落地注记（2026-11-12 · 日常=默认用户工作区，ZCode 式口径修订）**：原「日常对话=无目录，workspace 类工具整体 8020 拒绝」废除——真机实测 IM embedded 会话全部落日常、agent 什么工具都用不了（用户在私聊/群聊让 agent 干活是主场景）。新口径：**不绑项目的会话（日常/任务/embedded）共用同一用户级默认工作空间 `~/.baobaowork/workspace`**（env `BBW_RT_DEFAULT_WORKSPACE` 可覆盖；bbrt-sec `sandbox::default_user_workspace()`），pipeline `session_env` 日常分支走项目会话同款沙箱覆写（沙箱根=该目录，越界仍 8020 词法+内核双拦）、`coding.delegate` 日常放开（cwd=默认工作区）。**数据模型与记忆分级不动**：`workspace_id` 空=日常判定、工作台双区 UI、记忆路由（日常仍用户级，`ws_path()` 语义保留）原样。前端 ChatPage embedded 建会话废除「跟随最近项目」恒日常。子代理（SessionWorkspaces 未登记）沙箱仍兜底全局根，按主会话路由登记阶段二。
+> **落地注记（2026-11-12 · 日常=默认用户工作区，ZCode 式口径修订）**：原「日常对话=无目录，workspace 类工具整体 8020 拒绝」废除——真机实测 IM embedded 会话全部落日常、agent 什么工具都用不了（用户在私聊/群聊让 agent 干活是主场景）。新口径：**不绑项目的会话（日常/任务/embedded）共用同一用户级默认工作空间 `~/.baobaochat/workspace`**（env `BBW_RT_DEFAULT_WORKSPACE` 可覆盖；bbrt-sec `sandbox::default_user_workspace()`），pipeline `session_env` 日常分支走项目会话同款沙箱覆写（沙箱根=该目录，越界仍 8020 词法+内核双拦）、`coding.delegate` 日常放开（cwd=默认工作区）。**数据模型与记忆分级不动**：`workspace_id` 空=日常判定、工作台双区 UI、记忆路由（日常仍用户级，`ws_path()` 语义保留）原样。前端 ChatPage embedded 建会话废除「跟随最近项目」恒日常。子代理（SessionWorkspaces 未登记）沙箱仍兜底全局根，按主会话路由登记阶段二。
 
 > **落地注记（2026-11-11 · 会话历史加载）**：工作台打开会话此前只显本进程直播流（重启/切列表即空白）。新增协议 `session.history` REQ→`session.history.result`（HistoryItem：user/assistant 原文+tool 名与结果摘要；golden 契约已锁），RT 直读 `agent_event` WAL（会话不须在运行态，历史/结束会话同样可查，与 rename 直落库同口径）；WAL 写入点随之增补——`assistant.done` 加 `text` 回复原文、`tool.result` 加 `ok`/`summary`（旧 WAL 行缺字段渐进降级：assistant 旧轮跳过、tool name-only；recovery 仍只读旧字段不受影响，recovery 借 text 重建上下文留阶段二）。前端 store `selectSession` 即拉 `loadHistoryIfEmpty`（本进程无流时回填，直播中/乐观上屏不覆盖）。IM embedded 会话（D18 与私聊/群聊同一会话身份）在工作台打开即见全程聊天记录——跨端同会话历史互通。mock 桥剧本为内存态不落 WAL，历史返回空（真实链路专用）。
 
@@ -52,7 +52,7 @@
 
 ## 4. 记忆分级（bbrt-memory）
 
-- **物理布局**：用户级维持 `{dataDir}/agent/memory/`；项目级 `{dataDir}/agent/memory/projects/<scope_key>/`，`scope_key=<目录名净化>-<路径 FNV-1a 64 哈希 16hex>`（ZCode 风格，如 `baobao-work-72ab07a9e501bc35`；realpath 归一防路径别名）。分区天然继承 4KB/200 条 LRU/脱敏拒写（KnowledgeStore 复用）。
+- **物理布局**：用户级维持 `{dataDir}/agent/memory/`；项目级 `{dataDir}/agent/memory/projects/<scope_key>/`，`scope_key=<目录名净化>-<路径 FNV-1a 64 哈希 16hex>`（ZCode 风格，如 `baobao-chat-72ab07a9e501bc35`；realpath 归一防路径别名）。分区天然继承 4KB/200 条 LRU/脱敏拒写（KnowledgeStore 复用）。
 - **路由规则（类型驱动）**：`user` 类恒用户级；`project/feedback/reference` 类在项目会话→项目分区，日常会话→回落用户级。四个写入路径全走该规则：W1 `memory_save` 工具（pipeline 按会话解析 ws）、W2① 启发式（恒 user 类→用户级）、W2② 工具教训 feedback（随会话目录）、W3 会话结束提炼（逐条按类型路由；已有索引喂两域合并头 60 行）。
 - **召回**：`recall_scoped(ws, query)`——项目会话注 `[用户记忆]`+`[项目记忆·<分区>]` 两段（单段空则只注另一段），日常仅用户段；子代理 ProbeCtx 同口径。
 - **提示词**：SYSTEM_PROMPT 记忆规范补作用域说明（自动路由无需指定）；[项目] 行日常会话显示「日常对话（无工作目录）」。

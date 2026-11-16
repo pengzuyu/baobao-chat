@@ -15,7 +15,7 @@ export type SpeedLimit = 'none' | '1' | '4' | '10'; // MB/s
 const STORAGE_KEY = 'bbw-transfer';
 
 export interface TransferPref {
-  downloadDir: string; // 空=默认（~/Downloads/BaobaoWork，随引擎落盘时使用）
+  downloadDir: string; // 空=默认（~/Downloads/BaobaoChat，随引擎落盘时使用）
   upLimit: SpeedLimit;
   downLimit: SpeedLimit;
 }

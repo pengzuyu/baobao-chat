@@ -11,9 +11,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/baobaowork/server/internal/aigw"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/httpx"
+	"github.com/baobaochat/server/internal/aigw"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/httpx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

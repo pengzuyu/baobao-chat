@@ -54,7 +54,7 @@ D15 v0.2 + D19 已实现资产（标注 D23 去向）：
 ## 2. 目标存储布局
 
 ```
-{dataDir}/agent/memory/                  ← 根沿用（dataDir 即 ~/.baobaowork，天然在 workspace 沙箱外）
+{dataDir}/agent/memory/                  ← 根沿用（dataDir 即 ~/.baobaochat，天然在 workspace 沙箱外）
 ├── global/                              ← 公共层（原用户级平铺文件族迁入改制）
 │   ├── journal.jsonl                    ← 记忆写入日志（真相；永不注入上下文）
 │   └── USER.md                          ← 压实视图（缓存；每次重投影整体重渲染）

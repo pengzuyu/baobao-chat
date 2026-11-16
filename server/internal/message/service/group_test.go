@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	messageapi "github.com/baobaowork/server/internal/message/api"
-	messagerepo "github.com/baobaowork/server/internal/message/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	messageapi "github.com/baobaochat/server/internal/message/api"
+	messagerepo "github.com/baobaochat/server/internal/message/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 // captureConvUpdated 订阅采集 conv.updated 事件载荷（kind 断言用）

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/baobaowork/server/internal/message/api"
+	"github.com/baobaochat/server/internal/message/api"
 )
 
 // ErrDuplicateClientMsgID UK(conv_id, client_msg_id) 冲突（幂等兜底）

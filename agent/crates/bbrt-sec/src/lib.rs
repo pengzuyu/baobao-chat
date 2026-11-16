@@ -1,4 +1,4 @@
-//! bbrt-sec：BaobaoWork Agent Runtime 的安全与沙箱 crate
+//! bbrt-sec：BaobaoChat Agent Runtime 的安全与沙箱 crate
 //!（D11 §2.5 文件级结构；门控/审计语义权威=09 篇，OS 沙箱权威=D13 Part B）。
 //!
 //! 模块地图（本期落地范围；policy.rs / audit.rs / injection.rs 按 D11 排期后续补齐）：

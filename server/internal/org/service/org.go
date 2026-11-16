@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/baobaowork/server/internal/org/api"
-	"github.com/baobaowork/server/internal/org/repo"
-	"github.com/baobaowork/server/internal/platform/pinyinutil"
+	"github.com/baobaochat/server/internal/org/api"
+	"github.com/baobaochat/server/internal/org/repo"
+	"github.com/baobaochat/server/internal/platform/pinyinutil"
 )
 
 // Service 实现 orgapi.UserReader

@@ -139,7 +139,7 @@ export function AboutPage() {
           <Flex vertical align="center" gap={4} style={{ padding: '8px 0', textAlign: 'center' }}>
             <Logo size={52} />
             <Typography.Title level={4} style={{ margin: '8px 0 0' }}>
-              BaobaoWork
+              BaobaoChat
             </Typography.Title>
             <Typography.Text type="secondary">让协作更简单 · 企业协作工作台</Typography.Text>
             <Tag style={{ marginTop: 6 }}>v{pkg.version}</Tag>

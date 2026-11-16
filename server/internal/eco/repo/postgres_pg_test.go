@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 func TestPGEcoSmoke(t *testing.T) {

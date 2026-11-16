@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	ecorepo "github.com/baobaowork/server/internal/eco/repo"
+	ecorepo "github.com/baobaochat/server/internal/eco/repo"
 )
 
 const manifestTpl = `id: %s

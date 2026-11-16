@@ -2,8 +2,8 @@
 package mail
 
 import (
-	mailrepo "github.com/baobaowork/server/internal/mail/repo"
-	mailservice "github.com/baobaowork/server/internal/mail/service"
+	mailrepo "github.com/baobaochat/server/internal/mail/repo"
+	mailservice "github.com/baobaochat/server/internal/mail/service"
 )
 
 // Module 邮件域模块

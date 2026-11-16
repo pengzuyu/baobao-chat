@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/baobaowork/server/internal/message/api"
-	messagerepo "github.com/baobaowork/server/internal/message/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	"github.com/baobaochat/server/internal/message/api"
+	messagerepo "github.com/baobaochat/server/internal/message/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 // sendText 便捷构造：alice → conv1 发 text

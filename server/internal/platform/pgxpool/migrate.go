@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/baobaowork/server/migrations"
+	"github.com/baobaochat/server/migrations"
 )
 
 // Migrate 幂等执行内嵌迁移（启动时调用）。

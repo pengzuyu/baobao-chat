@@ -14,7 +14,7 @@ fn seed_day(journal: &Journal, date: &str) {
     let ev = |e: ActivityEvent| journal.append(date, &e).unwrap();
     ev(ActivityEvent::SessionStarted {
         session: "s1".into(),
-        workspace: "baobao-work".into(),
+        workspace: "baobao-chat".into(),
         mode: "interactive".into(),
     });
     for tool in ["read_file", "read_file", "read_file", "edit_file"] {
@@ -170,7 +170,7 @@ fn stats_match_journal_events() {
             s1.ended,
             s1.duration_ms
         ),
-        ("baobao-work", 4, 1, true, 8_040_000)
+        ("baobao-chat", 4, 1, true, 8_040_000)
     );
     let s2 = &report.stats.sessions_detail["s2"];
     assert!((s2.workspace == "docs-site") && !s2.ended && s2.duration_ms == 0);
@@ -188,7 +188,7 @@ fn markdown_template_matches_d15_shape() {
     let md = fs::read_to_string(dir.path().join("reports/2026-11-06.md")).unwrap();
 
     assert!(md.starts_with("# 2026-11-06 Agent 日报\n"));
-    assert!(md.contains("- 会话 2 个（累计 2h14m）；工作区 baobao-work、docs-site"));
+    assert!(md.contains("- 会话 2 个（累计 2h14m）；工作区 baobao-chat、docs-site"));
     // Top 工具排行（次数降序）+ 拦截码
     assert!(md.contains(
         "工具调用 5 次：read_file×3 edit_file×1 run_command×1；被拦截 2 次（8021×1 / 8024×1）"
@@ -198,7 +198,7 @@ fn markdown_template_matches_d15_shape() {
     assert!(md.contains("- 今日记忆 +2：「端口 8090 约定」「run_command 失败教训」"));
     // 会话明细表
     assert!(md.contains("## 会话明细"));
-    assert!(md.contains("| s1 | baobao-work | 2h14m | 4 | 正常结束 |"));
+    assert!(md.contains("| s1 | baobao-chat | 2h14m | 4 | 正常结束 |"));
     assert!(md.contains("| s2 | docs-site | 0s | 1 | 未结束 |"));
 }
 

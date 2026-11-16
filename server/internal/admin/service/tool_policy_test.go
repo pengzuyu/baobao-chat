@@ -5,10 +5,10 @@ import (
 	"context"
 	"testing"
 
-	adminapi "github.com/baobaowork/server/internal/admin/api"
-	adminrepo "github.com/baobaowork/server/internal/admin/repo"
-	orgrepo "github.com/baobaowork/server/internal/org/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	adminapi "github.com/baobaochat/server/internal/admin/api"
+	adminrepo "github.com/baobaochat/server/internal/admin/repo"
+	orgrepo "github.com/baobaochat/server/internal/org/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 func TestAgentToolPolicy(t *testing.T) {

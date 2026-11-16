@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/baobaowork/server/internal/org/api"
+	"github.com/baobaochat/server/internal/org/api"
 )
 
 // PG 实现占位（阶段二接入 pgx + sqlc）：

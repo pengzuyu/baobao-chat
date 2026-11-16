@@ -2,10 +2,10 @@
 package message
 
 import (
-	"github.com/baobaowork/server/internal/message/api"
-	"github.com/baobaowork/server/internal/message/repo"
-	"github.com/baobaowork/server/internal/message/service"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	"github.com/baobaochat/server/internal/message/api"
+	"github.com/baobaochat/server/internal/message/repo"
+	"github.com/baobaochat/server/internal/message/service"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 // Module message 模块外壳：对外只暴露 api

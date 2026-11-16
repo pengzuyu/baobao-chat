@@ -8,9 +8,9 @@ import (
 	"context"
 	"strconv"
 
-	fileapi "github.com/baobaowork/server/internal/file/api"
-	filerepo "github.com/baobaowork/server/internal/file/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	fileapi "github.com/baobaochat/server/internal/file/api"
+	filerepo "github.com/baobaochat/server/internal/file/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // ListTransfers 本人传输记录（direction 0=全部；created_at 倒序）

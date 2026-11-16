@@ -9,7 +9,7 @@
  *   3. tools/list            → 工具清单（name/description/inputSchema）
  *   4. tools/call            → 执行：回 { content: [{type:'text',text}], isError }
  *
- * 宿主（BaobaoWork Runtime）装配后工具全名 = mcp.hello-baobao.<tool>；
+ * 宿主（BaobaoChat Runtime）装配后工具全名 = mcp.hello-baobao.<tool>；
  * 审批/风险门控由宿主统一处理，server 无需关心。
  *
  * 环境变量（.mcp.json env 段注入，变量族见 examples/plugins/README.md）：

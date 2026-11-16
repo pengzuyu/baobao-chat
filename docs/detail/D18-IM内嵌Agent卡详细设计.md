@@ -87,7 +87,7 @@ bob   在「行政群」 → bob   的 embedded 会话 C（跑在 bob 本机）
 
 **② 工具组（ToolCallGroup 模式）**
 - 灰底汇总条：「正在执行 (N 个工具)」（进行中图标 pulse）/「活动： N 个工具调用」（完成）；**进行中默认展开、完成后折叠**
-- 每工具一行 code 样式：`name — 参数摘要`（优先 path/command/query 等代表性字段，截断 ~60 字；BaobaoWork 加结果摘要列——落流 stages 已有 summary）
+- 每工具一行 code 样式：`name — 参数摘要`（优先 path/command/query 等代表性字段，截断 ~60 字；BaobaoChat 加结果摘要列——落流 stages 已有 summary）
 - 子任务卡（SubagentCard/DelegateCard）**插在其发生时的父 phase 之后**，按执行顺序而非全部堆尾
 
 **③ 运行中 vs 完成态（核心视觉规则）**

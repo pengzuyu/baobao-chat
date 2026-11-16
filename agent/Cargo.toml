@@ -1,4 +1,4 @@
-# BaobaoWork Agent Runtime workspace（D11 §1.2 crate 总览）
+# BaobaoChat Agent Runtime workspace（D11 §1.2 crate 总览）
 # 依赖方向由 CI cargo-deny 强制（禁止环）：protocol ← 所有。
 [workspace]
 resolver = "2"

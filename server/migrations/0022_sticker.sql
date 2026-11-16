@@ -1,5 +1,5 @@
 -- ============================================================================
--- BaobaoWork 0022_sticker：自定义表情包（用户拍板"完整自定义表情包"）
+-- BaobaoChat 0022_sticker：自定义表情包（用户拍板"完整自定义表情包"）
 -- 模型：sticker_set（个人集 owner_id 非空 / 租户公共集 owner_id NULL，admin 上架）
 --      + sticker（集内条目，图片经 file 域 /files/upload 得 file_id 引用）
 -- 发送：msg type=sticker（body {file_id,width,height,sticker_id}，服务端校验可见性）

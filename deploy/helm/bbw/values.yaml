@@ -1,5 +1,5 @@
 # =============================================================================
-# BaobaoWork Helm values —— 默认【小规模 K8s 档】（16 篇 §3.3 容量表：3 worker 起步）
+# BaobaoChat Helm values —— 默认【小规模 K8s 档】（16 篇 §3.3 容量表：3 worker 起步）
 # 中规模叠加：helm install ... -f values-mid.yaml；大规模：-f values-large.yaml
 # 键与 deploy/compose/.env.tpl 一一对应（行内 “compose:” 注释标注来源键）
 # =============================================================================
@@ -9,7 +9,7 @@
 # ---------------------------------------------------------------------------
 global:
   domain: bbw.example.internal          # compose: BBW_PUBLIC_DOMAIN
-  imageRegistry: registry.example.com/baobaowork   # compose: BBW_IMAGE_REGISTRY
+  imageRegistry: registry.example.com/baobaochat   # compose: BBW_IMAGE_REGISTRY
   imageTag: 0.1.0                       # compose: BBW_IMAGE_TAG（同一 tag 锁定，§3.4）
   timezone: Asia/Shanghai
   imagePullSecrets: []                  # 内部 Registry 凭据：[{ name: regcred }]

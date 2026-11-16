@@ -4,7 +4,7 @@ package aigw
 import (
 	"testing"
 
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 func newPoolRouter() *Router {

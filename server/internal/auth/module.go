@@ -2,12 +2,12 @@
 package auth
 
 import (
-	"github.com/baobaowork/server/internal/auth/api"
-	"github.com/baobaowork/server/internal/auth/repo"
-	"github.com/baobaowork/server/internal/auth/service"
-	"github.com/baobaowork/server/internal/org/api"
-	"github.com/baobaowork/server/internal/platform/authjwt"
-	"github.com/baobaowork/server/internal/platform/config"
+	"github.com/baobaochat/server/internal/auth/api"
+	"github.com/baobaochat/server/internal/auth/repo"
+	"github.com/baobaochat/server/internal/auth/service"
+	"github.com/baobaochat/server/internal/org/api"
+	"github.com/baobaochat/server/internal/platform/authjwt"
+	"github.com/baobaochat/server/internal/platform/config"
 )
 
 // Module auth 模块外壳：对外只暴露 api（D02 §4 依赖规则）

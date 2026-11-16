@@ -18,12 +18,12 @@ import (
 	"testing"
 	"time"
 
-	orgapi "github.com/baobaowork/server/internal/org/api"
-	orgrepo "github.com/baobaowork/server/internal/org/repo"
-	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	orgapi "github.com/baobaochat/server/internal/org/api"
+	orgrepo "github.com/baobaochat/server/internal/org/repo"
+	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
 
-	authrepo "github.com/baobaowork/server/internal/auth/repo"
-	messageapi "github.com/baobaowork/server/internal/message/api"
+	authrepo "github.com/baobaochat/server/internal/auth/repo"
+	messageapi "github.com/baobaochat/server/internal/message/api"
 )
 
 func TestPGSmoke(t *testing.T) {

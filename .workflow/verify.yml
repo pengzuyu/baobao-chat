@@ -1,4 +1,4 @@
-# BaobaoWork Gitee Go 流水线（与根 Makefile verify 门同源；16 篇 §8 CI）
+# BaobaoChat Gitee Go 流水线（与根 Makefile verify 门同源；16 篇 §8 CI）
 # 触发：main 分支 push / PR；四栈串行门禁（Go → 前端 → Rust → 部署交付物）
 version: '1.0'
 stages:

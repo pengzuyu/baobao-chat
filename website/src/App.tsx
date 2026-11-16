@@ -1,5 +1,5 @@
 /**
- * BaobaoWork 官网单页（D21）：产品介绍 / 功能特性 / 路线图 / 下载区。
+ * BaobaoChat 官网单页（D21）：产品介绍 / 功能特性 / 路线图 / 下载区。
  * 下载区数据运行时拉取 /update/release-info.json（发布脚本产物）——
  * 发新版自动跟进；文案初稿源=README/docs 00/EXECUTION-PLAN，业务方终审后可改。
  */
@@ -99,7 +99,7 @@ function Header() {
       <div className="container header-inner">
         <div className="brand">
           <span className="brand-mark">B</span>
-          <span className="brand-name">BaobaoWork</span>
+          <span className="brand-name">BaobaoChat</span>
         </div>
         <nav className="site-nav">
           <a href="#features">功能特性</a>
@@ -267,7 +267,7 @@ function Footer() {
     <footer className="site-footer">
       <div className="container">
         <div className="footer-inner">
-          <span>© {new Date().getFullYear()} BaobaoWork · 企业协作工作台</span>
+          <span>© {new Date().getFullYear()} BaobaoChat · 企业协作工作台</span>
           <span>私有化部署 · 数据留在内网 · 内部使用</span>
         </div>
       </div>

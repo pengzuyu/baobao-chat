@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/baobaowork/server/internal/admin/api"
-	adminrepo "github.com/baobaowork/server/internal/admin/repo"
-	"github.com/baobaowork/server/internal/org/api"
-	orgrepo "github.com/baobaowork/server/internal/org/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/admin/api"
+	adminrepo "github.com/baobaochat/server/internal/admin/repo"
+	"github.com/baobaochat/server/internal/org/api"
+	orgrepo "github.com/baobaochat/server/internal/org/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // effectCounter 写副作用记录（断言禁用即踢线/吊销语义）

@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/baobaowork/server/internal/platform/authjwt"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/authjwt"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // Claims 入口身份（JWT 或开发令牌降级形态）

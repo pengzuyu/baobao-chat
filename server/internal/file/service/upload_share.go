@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	fileapi "github.com/baobaowork/server/internal/file/api"
-	filerepo "github.com/baobaowork/server/internal/file/repo"
-	filestore "github.com/baobaowork/server/internal/file/store"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	fileapi "github.com/baobaochat/server/internal/file/api"
+	filerepo "github.com/baobaochat/server/internal/file/repo"
+	filestore "github.com/baobaochat/server/internal/file/store"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // 默认分片参数（07 §1.2：4MB/片；本地盘直传无预签名批次概念，登记）

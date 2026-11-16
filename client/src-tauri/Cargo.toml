@@ -1,14 +1,14 @@
 [package]
-name = "baobaowork-client"
+name = "baobaochat-client"
 version = "0.1.0"
-description = "BaobaoWork 客户端（Tauri 2 壳）"
-authors = ["BaobaoWork"]
+description = "BaobaoChat 客户端（Tauri 2 壳）"
+authors = ["BaobaoChat"]
 edition = "2021"
 rust-version = "1.77.2"
 
 # lib 与 bin 分离（Tauri 2 推荐，便于移动端复用）
 [lib]
-name = "baobaowork_client_lib"
+name = "baobaochat_client_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

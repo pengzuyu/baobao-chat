@@ -2,10 +2,10 @@
 package file
 
 import (
-	fileapi "github.com/baobaowork/server/internal/file/api"
-	filerepo "github.com/baobaowork/server/internal/file/repo"
-	fileservice "github.com/baobaowork/server/internal/file/service"
-	filestore "github.com/baobaowork/server/internal/file/store"
+	fileapi "github.com/baobaochat/server/internal/file/api"
+	filerepo "github.com/baobaochat/server/internal/file/repo"
+	fileservice "github.com/baobaochat/server/internal/file/service"
+	filestore "github.com/baobaochat/server/internal/file/store"
 )
 
 // Module file 模块外壳：对外只暴露 api

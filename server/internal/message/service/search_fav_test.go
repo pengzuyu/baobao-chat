@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/baobaowork/server/internal/message/api"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/message/api"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // favOrFail 便捷收藏（失败即 Fatal）

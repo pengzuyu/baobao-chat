@@ -1,4 +1,4 @@
-# BaobaoWork Agent Runtime（bbrt-* Rust workspace）
+# BaobaoChat Agent Runtime（bbrt-* Rust workspace）
 
 Agent Runtime 独立进程的实现仓库（Rust sidecar，08 §3.1）。内部设计权威出处：
 `docs/detail/D11-AgentRuntime内部详细设计.md`（crate 划分 §2 / 会话状态机 §3 / stdio 全消息表 §4）；

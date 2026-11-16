@@ -1,4 +1,4 @@
-# BaobaoWork 客户端（阶段一骨架）
+# BaobaoChat 客户端（阶段一骨架）
 
 Tauri 2 + React 18 + TypeScript（strict）+ Vite + Zustand + TanStack Query + AntD 5。
 阶段一范围：应用壳（56px 导航 + 路由）/ 认证 / IM 三栏，六态与断点体系按 D01 落地。

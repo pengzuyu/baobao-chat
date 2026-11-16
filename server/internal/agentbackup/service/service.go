@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	agentbackupapi "github.com/baobaowork/server/internal/agentbackup/api"
-	agentbackuprepo "github.com/baobaowork/server/internal/agentbackup/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	agentbackupapi "github.com/baobaochat/server/internal/agentbackup/api"
+	agentbackuprepo "github.com/baobaochat/server/internal/agentbackup/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // maxBackupBytes 单备份密文上限（事件 JSONL 会话级 MB 级；32MB 防滥用）

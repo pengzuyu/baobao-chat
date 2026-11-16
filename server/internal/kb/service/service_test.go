@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	kbrepo "github.com/baobaowork/server/internal/kb/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	kbrepo "github.com/baobaochat/server/internal/kb/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // fakeTopical 主题词袋假嵌入：文本含哪些主题词 → 对应单位轴累加（4 维够区分）

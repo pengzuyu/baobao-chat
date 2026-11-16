@@ -4,7 +4,7 @@
 #
 # 用法（rsync + ssh）：
 #   BBW_DEPLOY_HOST=deploy@10.x.x.x \
-#   BBW_DEPLOY_ROOT=/opt/baobaowork/deploy/compose \
+#   BBW_DEPLOY_ROOT=/opt/baobaochat/deploy/compose \
 #     bash scripts/release/publish-website.sh
 #
 # 环境变量：
@@ -34,9 +34,9 @@ echo "[publish-website] rsync → $HOST:$WEBSITE_DIR"
 ssh "$HOST" "mkdir -p '$WEBSITE_DIR'"
 rsync -a --delete --info=stats1 "$ROOT/website/dist/" "$HOST:$WEBSITE_DIR/"
 
-if curl -fsSL --max-time 15 "$VERIFY_URL" | grep -q "BaobaoWork"; then
+if curl -fsSL --max-time 15 "$VERIFY_URL" | grep -q "BaobaoChat"; then
   echo "[publish-website] ✔ 回读验证通过：$VERIFY_URL"
 else
-  echo "[publish-website] ✗ 回读验证失败（$VERIFY_URL 未含 BaobaoWork 字样）——检查 nginx-lb / website 服务" >&2
+  echo "[publish-website] ✗ 回读验证失败（$VERIFY_URL 未含 BaobaoChat 字样）——检查 nginx-lb / website 服务" >&2
   exit 1
 fi

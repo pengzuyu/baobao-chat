@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/baobaowork/server/internal/org/api"
-	orgrepo "github.com/baobaowork/server/internal/org/repo"
+	"github.com/baobaochat/server/internal/org/api"
+	orgrepo "github.com/baobaochat/server/internal/org/repo"
 )
 
 // TestUserDeptChainOf 祖先链解析：直接 ∪ 各部门祖先链（深度无关）、

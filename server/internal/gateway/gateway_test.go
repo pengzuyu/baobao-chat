@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/baobaowork/server/internal/message/api"
-	"github.com/baobaowork/server/internal/message/repo"
-	"github.com/baobaowork/server/internal/message/service"
-	"github.com/baobaowork/server/internal/platform/authjwt"
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	"github.com/baobaowork/server/internal/platform/eventbus"
+	"github.com/baobaochat/server/internal/message/api"
+	"github.com/baobaochat/server/internal/message/repo"
+	"github.com/baobaochat/server/internal/message/service"
+	"github.com/baobaochat/server/internal/platform/authjwt"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/platform/eventbus"
 )
 
 // 路由集成：内存 message 模块 + 事件总线 + hub，验证

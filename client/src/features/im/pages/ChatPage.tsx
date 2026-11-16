@@ -263,7 +263,7 @@ export function ChatPage() {
     if (sid) return sid; // 映射在=库里有行，RT 复活兜底
     // 2026-11-12 日常口径（ZCode 式）：IM embedded 会话恒日常——不跟随项目
     // （旧「沿用最近项目会话目录」废除：sessions 未加载完时必落空，且口径
-    // 已改为不跟项目走）。日常=bbrt 侧默认用户工作空间 ~/.baobaowork/workspace；
+    // 已改为不跟项目走）。日常=bbrt 侧默认用户工作空间 ~/.baobaochat/workspace；
     // 要操作具体项目目录=ChatHeader 🤖 进工作台开项目会话。
     // 创建即带来源标题（与xxx的对话/xxx · 群聊）——工作台左栏可辨识
     const created = await useAgentStore.getState().createSession({

@@ -1,9 +1,9 @@
 {
-  "name": "baobaowork-website",
+  "name": "baobaochat-website",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "BaobaoWork 官网（产品介绍/路线图/各平台安装包下载；静态站 rsync 发布至部署机 volumes/website）",
+  "description": "BaobaoChat 官网（产品介绍/路线图/各平台安装包下载；静态站 rsync 发布至部署机 volumes/website）",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

@@ -1,5 +1,5 @@
 # =============================================================================
-# BaobaoWork 根级 Makefile（三栈：server / client / agent + 双形态部署）
+# BaobaoChat 根级 Makefile（三栈：server / client / agent + 双形态部署）
 # 依赖文档：docs/detail/D02（服务端工程结构）· docs/16 §3.4（双形态部署）
 # 惯例：make help 查看全部目标；设计阶段（代码栈未落地）目标会友好跳过
 # =============================================================================
@@ -18,7 +18,7 @@ HELM_DIR       := deploy/helm/bbw
 # ---------------------------------------------------------------------------
 .PHONY: help
 help: ## 显示本帮助（中文目标说明）
-	@echo "BaobaoWork Make 目标："
+	@echo "BaobaoChat Make 目标："
 	@echo
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) \
 	  | sort -f

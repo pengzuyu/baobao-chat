@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	ecorepo "github.com/baobaowork/server/internal/eco/repo"
+	ecorepo "github.com/baobaochat/server/internal/eco/repo"
 )
 
 // zipOf 现场构建 zip（map 名→内容）

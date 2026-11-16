@@ -7,10 +7,10 @@ import (
 	"context"
 	"strconv"
 
-	errx "github.com/baobaowork/server/internal/platform/errors"
-	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
-	stickerapi "github.com/baobaowork/server/internal/sticker/api"
-	stickerrepo "github.com/baobaowork/server/internal/sticker/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
+	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	stickerapi "github.com/baobaochat/server/internal/sticker/api"
+	stickerrepo "github.com/baobaochat/server/internal/sticker/repo"
 )
 
 // Options 装配期注入

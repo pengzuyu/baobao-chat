@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	authservice "github.com/baobaowork/server/internal/auth/service"
-	mailrepo "github.com/baobaowork/server/internal/mail/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	authservice "github.com/baobaochat/server/internal/auth/service"
+	mailrepo "github.com/baobaochat/server/internal/mail/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 const (

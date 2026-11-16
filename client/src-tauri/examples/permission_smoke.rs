@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use baobaowork_client_lib::agent_bridge::AgentHost;
+use baobaochat_client_lib::agent_bridge::AgentHost;
 
 fn main() {
     let saw_request = Arc::new(AtomicBool::new(false));

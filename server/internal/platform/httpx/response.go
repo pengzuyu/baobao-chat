@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // TraceIDHeader 响应头回传 trace_id（14 篇 §7：9004/9005 靠 trace_id 排查）

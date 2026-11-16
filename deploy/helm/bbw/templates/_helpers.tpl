@@ -1,4 +1,4 @@
-{{/* BaobaoWork Helm 公共模板（16 篇 §3.4 K8s 形态） */}}
+{{/* BaobaoChat Helm 公共模板（16 篇 §3.4 K8s 形态） */}}
 
 {{- define "bbw.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}

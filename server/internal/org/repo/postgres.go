@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/baobaowork/server/internal/org/api"
-	bbwpg "github.com/baobaowork/server/internal/platform/pgxpool"
+	"github.com/baobaochat/server/internal/org/api"
+	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // lockKeyUsers users 表 ID 分配的 advisory lock 键（全局唯一，见 AllocID）

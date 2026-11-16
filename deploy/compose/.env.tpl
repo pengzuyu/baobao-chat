@@ -1,5 +1,5 @@
 # =============================================================================
-# BaobaoWork docker-compose 环境配置模板（16 篇 §3.4 双形态等价配置键）
+# BaobaoChat docker-compose 环境配置模板（16 篇 §3.4 双形态等价配置键）
 # -----------------------------------------------------------------------------
 # 用法：cp .env.tpl .env && vim .env    （.env 已被 .gitignore 排除，不入 git）
 #
@@ -16,7 +16,7 @@
 # 应用镜像统一走内部 Registry；BBW_IMAGE_TAG 与 Helm 侧 global.imageTag 必须同 tag
 # 锁定（16 篇 §3.4“版本由同一 tag 锁定”）。生产建议在 docker-compose.yml 中追加
 # @sha256 digest 双重钉死。
-BBW_IMAGE_REGISTRY=registry.example.com/baobaowork
+BBW_IMAGE_REGISTRY=registry.example.com/baobaochat
 BBW_IMAGE_TAG=0.1.0
 # make server-image 构建用基础镜像源（内网覆盖；空=官方默认 golang:1.22-alpine /
 # alpine:3.20。例：BBW_GO_BUILDER=docker.m.daocloud.io/library/golang:1.22-alpine，

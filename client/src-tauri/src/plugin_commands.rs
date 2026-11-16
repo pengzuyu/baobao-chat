@@ -227,7 +227,7 @@ pub fn plugin_local_state(host: Host, plugin_id: String) -> Result<Value, String
 /// 钥匙串条目（service 固定；account={plugin_id}/{key}——卸载保留=钥匙串
 /// 不删，重装即复用；D22 §5.2 keepConfig 语义）
 fn keyring_entry(plugin_id: &str, key: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new("com.baobaowork.plugins", &format!("{plugin_id}/{key}"))
+    keyring::Entry::new("com.baobaochat.plugins", &format!("{plugin_id}/{key}"))
         .map_err(|e| format!("钥匙串不可用: {e}"))
 }
 

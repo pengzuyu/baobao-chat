@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/baobaowork/server/internal/platform/authjwt"
+	"github.com/baobaochat/server/internal/platform/authjwt"
 )
 
 const testSecret = "test-secret-0123456789abcdef0123456789abcdef"

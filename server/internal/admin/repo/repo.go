@@ -9,7 +9,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/baobaowork/server/internal/admin/api"
+	"github.com/baobaochat/server/internal/admin/api"
 )
 
 // sentinel 错误（service 层映射错误码）

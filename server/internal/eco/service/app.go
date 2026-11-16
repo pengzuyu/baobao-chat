@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	ecorepo "github.com/baobaowork/server/internal/eco/repo"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	ecorepo "github.com/baobaochat/server/internal/eco/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // AppSvcReq 登记入参

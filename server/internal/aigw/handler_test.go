@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	authjwt "github.com/baobaowork/server/internal/platform/authjwt"
+	authjwt "github.com/baobaochat/server/internal/platform/authjwt"
 )
 
 func newTestGateway(quotaLimit int64, devToken string) (*Gateway, *Meter, *Quota) {

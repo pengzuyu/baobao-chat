@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/baobaowork/server/internal/auth/api"
-	"github.com/baobaowork/server/internal/auth/repo"
-	"github.com/baobaowork/server/internal/org/api"
-	"github.com/baobaowork/server/internal/org/repo"
-	"github.com/baobaowork/server/internal/platform/authjwt"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	"github.com/baobaochat/server/internal/auth/api"
+	"github.com/baobaochat/server/internal/auth/repo"
+	"github.com/baobaochat/server/internal/org/api"
+	"github.com/baobaochat/server/internal/org/repo"
+	"github.com/baobaochat/server/internal/platform/authjwt"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // sha256Hex 与实现同算法的测试辅助

@@ -17,10 +17,10 @@ import (
 
 	xdraw "golang.org/x/image/draw"
 
-	fileapi "github.com/baobaowork/server/internal/file/api"
-	filerepo "github.com/baobaowork/server/internal/file/repo"
-	filestore "github.com/baobaowork/server/internal/file/store"
-	errx "github.com/baobaowork/server/internal/platform/errors"
+	fileapi "github.com/baobaochat/server/internal/file/api"
+	filerepo "github.com/baobaochat/server/internal/file/repo"
+	filestore "github.com/baobaochat/server/internal/file/store"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
 // D25 拍板⑤：presign part_size 强制 8MB（S3 multipart 非末片 ≥5MiB 硬限，忽略端侧声明）
