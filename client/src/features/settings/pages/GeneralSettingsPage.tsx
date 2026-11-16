@@ -1,16 +1,17 @@
 /**
  * 设置 · 通用（D01 §4.2）：
- * - 主题三态（浅色/深色/跟随系统）——全设置页族中本阶段唯一真实生效的设置，
- *   经 shared/store/theme 持久化（UI 偏好，localStorage bbw-theme）
+ * - 主题三态（浅色/深色/跟随系统）+ 主题色六套（D27 修订2 accent 化）
+ *   ——经 shared/store/theme 持久化（UI 偏好，localStorage bbw-theme / bbw-accent）
  * - 语言三态真实生效（E12：zh-CN/en/system——切换即时生效，antd 内置文案联动）
  * D26-O3：主题三选卡→Segmented、语言下拉→Select、卡片壳→Card（theme-card/settings-* 退役）。
  */
 
 import type { ReactNode } from 'react';
 import { Card, Flex, Segmented, Select, Space, Typography } from 'antd';
-import { Languages, Monitor, Moon, Sun } from 'lucide-react';
+import { Languages, Monitor, Moon, Palette, Sun } from 'lucide-react';
 import { useThemeStore, type ThemeMode } from '../../../shared/store/theme';
 import { useI18nStore } from '../../../shared/i18n';
+import { AccentSwatches } from '../../../shared/ui/AccentSwatches';
 
 const THEME_OPTIONS: Array<{ value: ThemeMode; label: string; icon: ReactNode }> = [
   { value: 'light', label: '浅色', icon: <Sun size={14} /> },
@@ -41,6 +42,15 @@ export function GeneralSettingsPage() {
           />
           <Typography.Text type="secondary">
             {mode === 'system' ? `跟随系统（当前：${resolved === 'dark' ? '深色' : '浅色'}）` : mode === 'dark' ? '深色' : '浅色'}
+          </Typography.Text>
+        </Flex>
+      </Card>
+
+      <Card size="small" title={<Space size={6}><Palette size={14} /> 外观 · 主题色</Space>}>
+        <Flex align="center" gap={12} wrap="wrap">
+          <AccentSwatches />
+          <Typography.Text type="secondary">
+            主按钮/链接/聊天气泡/选中态等主色系即时切换，亮/暗两模式各自适配；灰阶与红绿黄语义色不变
           </Typography.Text>
         </Flex>
       </Card>

@@ -26,6 +26,7 @@ import { useThemeStore, type ThemeMode } from '../shared/store/theme';
 import { t, useI18nStore } from '../shared/i18n';
 import { Logo } from '../shared/ui/Logo';
 import { Avatar } from '../shared/ui/Avatar';
+import { AccentSwatches } from '../shared/ui/AccentSwatches';
 import { ErrorBoundary } from '../shared/ui/ErrorBoundary';
 
 interface NavItem {
@@ -112,6 +113,16 @@ export function MainLayout() {
           { key: 'theme-dark', label: THEME_LABEL.dark },
           { key: 'theme-system', label: THEME_LABEL.system },
         ],
+      },
+      // D27 修订2：主题色快切（色块行内嵌 label；点击色块即生效并收起下拉，key 'accent' 本体无动作）
+      {
+        key: 'accent',
+        label: (
+          <Flex align="center" gap={8}>
+            <span>主题色</span>
+            <AccentSwatches size={16} />
+          </Flex>
+        ),
       },
       { key: 'settings', label: '设置' },
       { key: 'about', label: '关于' },
