@@ -4,7 +4,7 @@
  *   （2026-11-14 用户拍板保留原 56px 图标栏观感——Menu items 不用 icon 槽，
  *   label 内自定义 Flex vertical；itemHeight 放宽、itemPaddingInline 归零经
  *   ConfigProvider components.Menu 覆写；未读 Badge 叠图标右上；选中态由 antdThemeFrom
- *   的 components.Menu 显式覆写（D27 修订2），菜单项沿侧栏纵向均匀分布）
+ *   的 components.Menu 显式覆写（D27 修订2））
  * - 品牌 Logo + 消息/通知/知识库/邮件/Agent/管理 + 头像菜单；管理项按权限动态显隐；
  *   专家/应用入口 2026-11-12 起暂时隐藏
  * - 顶部连接状态横幅（antd Alert banner；六态 offline/degraded 全局落点，D01 §7）
@@ -179,7 +179,7 @@ export function MainLayout() {
   return (
     <Layout style={{ height: '100%', background: 'transparent' }}>
       <Layout.Sider
-        width={76}
+        width={56} /* = --bbw-nav-width（D01 §5.1 一级导航栏基线；竖排化时曾放宽到 76 致两侧留白，2026-11-16 用户拍板收窄回归） */
         style={{ background: token.colorBgContainer, borderRight: `1px solid ${token.colorBorderSecondary}` }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '8px 0' }}>
@@ -205,17 +205,7 @@ export function MainLayout() {
               selectedKeys={selectedKey ? [selectedKey] : []}
               onClick={({ key }) => navigate(key)}
               items={menuItems}
-              // 菜单项沿整条侧栏均匀分布（顶部聚拢会在长窗口下留大段空白；窗口过矮时
-              // 无剩余空间，justifyContent 不生效、退化为正常堆叠，天然安全）
-              style={{
-                flex: 1,
-                minWidth: 0,
-                borderInlineEnd: 'none',
-                background: 'transparent',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-evenly',
-              }}
+              style={{ flex: 1, minWidth: 0, borderInlineEnd: 'none', background: 'transparent' }}
             />
           </ConfigProvider>
           <Dropdown menu={avatarMenu} placement="topRight" trigger={['click']}>
