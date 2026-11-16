@@ -186,9 +186,12 @@ func (s *Storage) completeAuthRequest(ctx context.Context, id, userID string, am
 		return err
 	}
 	uid, _ := strconv.ParseInt(userID, 10, 64)
-	// scope 收敛：应用白名单 ∩ 用户有效权限（超集申请在库侧已被 IsScopeAllowed 拦；
-	// 这里保证 per-app token 永不超过用户本人权限——OBO 同口径）
+	// scope 收敛 + 禁用拦截（Q3 补：SSO 会话直达路径此前不查用户状态——被禁用户
+	// 持存活浏览器会话仍可授权新应用）
 	if u, err := s.auth.UserByID(ctx, uid); err == nil {
+		if u.Status != orgapi.UserStatusActive {
+			return errors.New("用户已禁用")
+		}
 		ar.Scopes = s.intersectScopes(ctx, ar.Scopes, u)
 	}
 	ar.UserID = userID
@@ -400,21 +403,16 @@ func (s *Storage) TerminateSession(ctx context.Context, userID string, clientID 
 }
 
 func (s *Storage) RevokeToken(ctx context.Context, tokenOrTokenID string, userID string, clientID string) *oidc.Error {
-	if userID != "" {
-		// 撤销 access（tokenID 形态）
-		if _, err := s.db.Exec(ctx, `UPDATE oidc_access_token SET revoked=true WHERE id=$1`, tokenOrTokenID); err != nil {
-			return oidc.ErrServerError().WithDescription("%s", err.Error())
+	// 库的 Revoke 流程（op/token_revocation.go）：refresh 场景经 GetRefreshTokenInfo 转成
+	// 「tokenID=refresh 行 id + userID 非空」，与 access 场景（tokenID=access 行 id）入参
+	// 不可区分——两路都执行，哪个命中灭哪个；未命中静默（RFC 7009 不泄露存在性）
+	if _, err := s.db.Exec(ctx, `UPDATE oidc_access_token SET revoked=true WHERE id=$1`, tokenOrTokenID); err != nil {
+		return oidc.ErrServerError().WithDescription("%s", err.Error())
+	}
+	if rid, err := strconv.ParseInt(tokenOrTokenID, 10, 64); err == nil {
+		if _, err := s.db.Exec(ctx, `UPDATE oidc_refresh_token SET status='revoked' WHERE id=$1`, rid); err == nil {
+			s.db.Exec(ctx, `UPDATE oidc_access_token SET revoked=true WHERE refresh_id=$1`, rid)
 		}
-		return nil
-	}
-	// 撤销 refresh（token 值形态）：连带其后签发的 access
-	var id int64
-	err := s.db.QueryRow(ctx, `SELECT id FROM oidc_refresh_token WHERE token_hash=$1`, sha256hex(tokenOrTokenID)).Scan(&id)
-	if err != nil {
-		return nil // RFC 7009：未知 token 也返回成功（不泄露存在性）
-	}
-	if _, err := s.db.Exec(ctx, `UPDATE oidc_refresh_token SET status='revoked' WHERE id=$1`, id); err == nil {
-		s.db.Exec(ctx, `UPDATE oidc_access_token SET revoked=true WHERE refresh_id=$1`, id)
 	}
 	return nil
 }
@@ -729,4 +727,112 @@ func (s *Storage) webSessionUser(ctx context.Context, token string) int64 {
 
 func (s *Storage) revokeWebSessions(ctx context.Context, userID int64) {
 	s.db.Exec(ctx, `UPDATE oidc_web_session SET status='revoked', revoked_at=now() WHERE user_id=$1 AND status='active'`, userID)
+}
+
+// ── 用户面授权管理（D28 批次 Q3：「已授权应用」+ 浏览器会话远端下线）──────────
+
+type grantDTO struct {
+	ClientID    string   `json:"client_id"`
+	AppName     string   `json:"app_name"`
+	Scopes      []string `json:"scopes"`
+	GrantedAt   string   `json:"granted_at"`
+	LastUsedAt  string   `json:"last_used_at"`
+	Revoked     bool     `json:"revoked"`
+}
+
+func (s *Storage) listGrants(ctx context.Context, userID int64) []grantDTO {
+	rows, err := s.db.Query(ctx, `
+		SELECT g.client_id, COALESCE(c.name,''), g.scopes, g.granted_at, g.last_used_at, g.revoked_at
+		FROM oidc_grant g LEFT JOIN oidc_client c ON c.tenant_id=g.tenant_id AND c.client_id=g.client_id
+		WHERE g.user_id=$1 ORDER BY g.granted_at DESC`, userID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []grantDTO
+	for rows.Next() {
+		var dto grantDTO
+		var scopes []byte
+		var granted, lastUsed time.Time
+		var revoked *time.Time
+		if err := rows.Scan(&dto.ClientID, &dto.AppName, &scopes, &granted, &lastUsed, &revoked); err != nil {
+			continue
+		}
+		_ = json.Unmarshal(scopes, &dto.Scopes)
+		dto.GrantedAt = granted.Format(time.RFC3339)
+		dto.LastUsedAt = lastUsed.Format(time.RFC3339)
+		dto.Revoked = revoked != nil
+		out = append(out, dto)
+	}
+	return out
+}
+
+// revokeGrant 撤销用户对应用的授权：grant 置 revoked + 该应用 refresh/access 全灭
+// （已签 access ≤15min 自然过期兜底；introspection 立即 inactive）。
+func (s *Storage) revokeGrant(ctx context.Context, userID int64, clientID string) error {
+	tag, err := s.db.Exec(ctx, `UPDATE oidc_grant SET revoked_at=now() WHERE user_id=$1 AND client_id=$2 AND revoked_at IS NULL`,
+		userID, clientID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errNotFound
+	}
+	s.db.Exec(ctx, `UPDATE oidc_refresh_token SET status='revoked' WHERE user_id=$1 AND client_id=$2 AND status='active'`, userID, clientID)
+	s.db.Exec(ctx, `UPDATE oidc_access_token SET revoked=true WHERE user_id=$1 AND client_id=$2`, userID, clientID)
+	return nil
+}
+
+type sessionDTO struct {
+	ID          int64  `json:"id"`
+	Did         string `json:"did"`
+	UserAgent   string `json:"user_agent"`
+	IP          string `json:"ip"`
+	LastUsedAt  string `json:"last_used_at"`
+	CreatedAt   string `json:"created_at"`
+	ExpiresAt   string `json:"expires_at"`
+}
+
+func (s *Storage) listSessions(ctx context.Context, userID int64) []sessionDTO {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, did, user_agent, ip, last_used_at, created_at, sliding_expires_at
+		FROM oidc_web_session WHERE user_id=$1 AND status='active' ORDER BY last_used_at DESC`, userID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []sessionDTO
+	for rows.Next() {
+		var dto sessionDTO
+		var lastUsed, created, expires time.Time
+		if err := rows.Scan(&dto.ID, &dto.Did, &dto.UserAgent, &dto.IP, &lastUsed, &created, &expires); err != nil {
+			continue
+		}
+		dto.LastUsedAt = lastUsed.Format(time.RFC3339)
+		dto.CreatedAt = created.Format(time.RFC3339)
+		dto.ExpiresAt = expires.Format(time.RFC3339)
+		out = append(out, dto)
+	}
+	return out
+}
+
+func (s *Storage) revokeSession(ctx context.Context, userID, sessionID int64) error {
+	tag, err := s.db.Exec(ctx, `UPDATE oidc_web_session SET status='revoked', revoked_at=now() WHERE id=$1 AND user_id=$2 AND status='active'`,
+		sessionID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errNotFound
+	}
+	return nil
+}
+
+// RevokeAllForUser 改密/禁用全吊销（v0.2 拍板 7：改密即全端 OIDC 凭证失效）：
+// 浏览器会话 + 全部应用 refresh/access。
+func (m *Module) RevokeAllForUser(ctx context.Context, userID int64) {
+	m.storage.revokeWebSessions(ctx, userID)
+	m.storage.db.Exec(ctx, `UPDATE oidc_refresh_token SET status='revoked' WHERE user_id=$1 AND status='active'`, userID)
+	m.storage.db.Exec(ctx, `UPDATE oidc_access_token SET revoked=true WHERE user_id=$1`, userID)
+	m.storage.db.Exec(ctx, `UPDATE oidc_grant SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, userID)
 }

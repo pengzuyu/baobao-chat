@@ -161,6 +161,9 @@ func main() {
 	// agentKillOn 平台总闸（D9）：adminSvc 装配于后段——var 前置声明，auth/aigw
 	// 两处闭包捕获引用，adminSvc 就绪后回填即双点生效（OBO 签发 + 网关每请求）
 	var agentKillOn func() bool
+	// oidcRevokeOnPwd 改密→OIDC 全吊销回调（D28 批3/Q3）：oidc 模块装配于后段，
+	// 与 agentKillOn 同款 var 前置+闭包回填
+	var oidcRevokeOnPwd func(ctx context.Context, userID int64)
 	authMod := auth.NewModule(orgMod.API(), signer, cfg, tokenRepo, deviceRepo, attemptRepo,
 		func(o *authservice.Options) {
 			o.ScopesOf = scopesOf
@@ -169,6 +172,12 @@ func main() {
 			// 改密落库（D11：orgRepo 直调——users 只读通道外的写路径经闭包）
 			o.UserSetPassword = func(ctx context.Context, tenantID, userID int64, hash string) error {
 				return orgRepo.SetPassword(ctx, tenantID, userID, hash)
+			}
+			// 改密→OIDC 面全吊销（Q3：浏览器会话+应用凭证；oidcMod 就绪后回填）
+			o.OnPasswordChanged = func(ctx context.Context, userID int64) {
+				if oidcRevokeOnPwd != nil {
+					oidcRevokeOnPwd(ctx, userID)
+				}
 			}
 		})
 
@@ -352,6 +361,8 @@ func main() {
 			log.Fatalf("OIDC 模块装配失败: %v", oidcErr)
 		}
 		mux.Handle("/oauth2/", http.StripPrefix("/oauth2", oidcMod.Handler()))
+		// 改密→OIDC 全吊销回调回填（auth 侧闭包在装配方才捕获本 var）
+		oidcRevokeOnPwd = oidcMod.RevokeAllForUser
 	}
 
 	// 认证 REST（03 篇 §7）
@@ -377,6 +388,13 @@ func main() {
 	// 改密（D11：旧密码校验+清首登强制标志）
 	mux.Handle("POST /api/v1/me/password", authed(handleChangePassword(authAPI)))
 	mux.Handle("GET /api/v1/me", authed(handleMe))
+	// OIDC 用户面授权管理（D28 批3/Q3）：已授权应用 + 浏览器会话远端下线
+	if oidcMod != nil {
+		mux.Handle("GET /api/v1/me/oidc/grants", authed(oidcMod.HandleMeGrants()))
+		mux.Handle("POST /api/v1/me/oidc/grants/revoke", authed(oidcMod.HandleMeGrantRevoke()))
+		mux.Handle("GET /api/v1/me/oidc/sessions", authed(oidcMod.HandleMeSessions()))
+		mux.Handle("DELETE /api/v1/me/oidc/sessions/{id}", authed(oidcMod.HandleMeSessionRevoke()))
+	}
 
 	// 用户面通讯录只读（2026-11-12 用户裁决：通讯录全员可见——找人/看谁在用）：
 	// 组织树复用管理端 handler（只读无写径）；检索含 uid（发起单聊/选人器数据源），

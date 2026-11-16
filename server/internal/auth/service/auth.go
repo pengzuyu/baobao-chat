@@ -39,6 +39,9 @@ type Options struct {
 	// UserSetPassword 改密落库（D11；main 注 orgRepo.SetPassword——users 为只读
 	// UserReader 接口，写通道经闭包避免拓宽 New 签名）
 	UserSetPassword func(ctx context.Context, tenantID, userID int64, passwordHash string) error
+	// OnPasswordChanged 改密成功后回调（D28 批3/Q3：oidc 模块挂全吊销——浏览器会话
+	// +全部应用 refresh/access/grant；main 经闭包注入，auth 不反向依赖 oidc）
+	OnPasswordChanged func(ctx context.Context, userID int64)
 }
 
 func (o *Options) fillDefaults() {
@@ -413,6 +416,10 @@ func (s *Service) ChangePassword(ctx context.Context, tenantID, userID int64, ol
 	// 改密即吊销全部 refresh（D28 批0：旧凭证不得在改密后续期；本会话 access 靠 15min 自然过期）
 	if err := s.tokens.RevokeForUser(ctx, userID, 0, true); err != nil {
 		return errx.From(err)
+	}
+	// OIDC 面全吊销（D28 v0.2 拍板 7：浏览器会话+应用 refresh/access/grant；失败不阻断改密）
+	if s.opts.OnPasswordChanged != nil {
+		s.opts.OnPasswordChanged(ctx, userID)
 	}
 	return nil
 }
