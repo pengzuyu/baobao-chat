@@ -18,6 +18,7 @@ import { NotificationCenterPage } from '../features/im/pages/NotificationCenterP
 import { ContactsPage } from '../features/contacts/pages/ContactsPage';
 import { KbShellPage } from '../features/kb/pages/KbShellPage';
 import { MyArticlesPage } from '../features/kb/pages/MyArticlesPage';
+import { APP_NAME } from '../shared/brand';
 import { SearchPage } from '../features/kb/pages/SearchPage';
 import { SpaceBrowsePage } from '../features/kb/pages/SpaceBrowsePage';
 import { MailPage } from '../features/mail/pages/MailPage';
@@ -94,7 +95,7 @@ function useEmergencyStopHotkey(): void {
         emergencyStop();
         // 多屏提示（OQ-C30）：主窗 toast + 系统通知（免打扰不拦——紧急语义优先于偏好闸门）
         window.dispatchEvent(new CustomEvent('bbw:toast', { detail: '已触发紧急停止：Agent 进程终止、未决审批作废' }));
-        void sendSystemNotification('BaobaoChat · 紧急停止', 'Agent 进程已终止，未决审批已作废');
+        void sendSystemNotification(`${APP_NAME} · 紧急停止`, 'Agent 进程已终止，未决审批已作废');
       }
     };
     window.addEventListener('keydown', onKey);
@@ -234,7 +235,7 @@ export function App() {
   useEffect(() => {
     startUpdaterAutoCheck((info) => {
       void sendSystemNotification(
-        'BaobaoChat · 发现新版本',
+        `${APP_NAME} · 发现新版本`,
         `v${info.version} 已发布，可到「设置 · 关于」下载更新`,
       );
     });

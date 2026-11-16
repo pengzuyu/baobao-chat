@@ -9,6 +9,7 @@ import { Alert, Avatar, Modal, Space, Tag, Typography, message } from 'antd';
 import { useAuthStore } from '../store/auth';
 import { apiOidcConfirm, apiOidcConfirmInfo, type OidcConfirmInfo } from '../api/oidc';
 import { ApiError } from '../../../shared/api/http';
+import { APP_NAME } from '../../../shared/brand';
 
 /** scope 人类可读（标准保留 scope + 常见权限点；未映射的回退原码——权限点字典后续接） */
 const SCOPE_LABEL: Record<string, string> = {
@@ -110,7 +111,7 @@ export function OidcConfirmCard({ reqId, onClose }: { reqId: string; onClose: ()
         <Alert
           type="warning"
           showIcon
-          message="请先登录 BaobaoChat"
+          message={`请先登录 ${APP_NAME}`}
           description="在应用内登录后回到本卡片，会自动继续确认流程。"
         />
       )}

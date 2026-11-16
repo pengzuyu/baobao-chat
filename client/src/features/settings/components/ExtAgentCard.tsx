@@ -9,6 +9,7 @@ import { Alert, Card, List, Popconfirm, Space, Typography } from 'antd';
 import { Check, Copy, Eye, EyeOff, RefreshCw } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { fetchExtAgentStatus, isExtAgentUiAvailable, regenExtAgentToken, type ExtAgentStatus } from '../api/extAgent';
+import { APP_NAME } from '../../../shared/brand';
 
 export function ExtAgentCard() {
   const [status, setStatus] = useState<ExtAgentStatus | null>(null);
@@ -65,7 +66,7 @@ export function ExtAgentCard() {
           {
             key: 'state',
             name: '接入面状态',
-            desc: '127.0.0.1 本机回环，随 BaobaoChat 打开而在线；关闭 App 即下线',
+            desc: `127.0.0.1 本机回环，随 ${APP_NAME} 打开而在线；关闭 App 即下线`,
             control: status?.online ? (
               <Typography.Text type="success" style={{ fontSize: 12 }}>
                 在线 · 127.0.0.1:{port}
@@ -116,7 +117,7 @@ export function ExtAgentCard() {
         )}
       />
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 4 }}>
-        把 BaobaoChat agent 当子智能体调用——知识检索/记忆/专家/公司工具按你的权限执行；审批卡会在本窗口弹出，请留意确认。
+        把 {APP_NAME} agent 当子智能体调用——知识检索/记忆/专家/公司工具按你的权限执行；审批卡会在本窗口弹出，请留意确认。
       </Typography.Paragraph>
       <Typography.Paragraph style={{ fontSize: 12, marginBottom: 2 }}>
         Claude Code 挂载：

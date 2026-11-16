@@ -15,6 +15,7 @@ import { FolderOpen } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useTransferStore, type SpeedLimit } from '../../../shared/store/transfer';
+import { APP_NAME } from '../../../shared/brand';
 
 const LIMIT_OPTIONS = [
   { value: 'none', label: '不限速' },
@@ -46,7 +47,7 @@ export function TransferSettingsPage() {
     }
   };
 
-  const shownDir = pref.downloadDir || '~/Downloads/BaobaoChat';
+  const shownDir = pref.downloadDir || `~/Downloads/${APP_NAME}`;
 
   const dirControl: ReactNode = isTauri() ? (
     <Button
@@ -63,7 +64,7 @@ export function TransferSettingsPage() {
     <Input
       size="small"
       style={{ width: 220 }}
-      placeholder="~/Downloads/BaobaoChat"
+      placeholder={`~/Downloads/${APP_NAME}`}
       value={dirInput || pref.downloadDir}
       onChange={(e) => setDirInput(e.target.value)}
       onBlur={() => dirInput && setDownloadDir(dirInput.trim())}

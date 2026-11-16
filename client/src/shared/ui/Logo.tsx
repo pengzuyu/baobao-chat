@@ -1,5 +1,6 @@
 /** 设计基元：品牌 Logo（public/logo.svg，导航顶/登录页/关于页复用） */
+import { APP_NAME } from '../brand';
 
 export function Logo({ size = 28 }: { size?: number }) {
-  return <img src="/logo.svg" width={size} height={size} alt="BaobaoChat" />;
+  return <img src="/logo.svg" width={size} height={size} alt={APP_NAME} />;
 }

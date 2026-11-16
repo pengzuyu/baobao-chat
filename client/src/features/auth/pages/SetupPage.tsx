@@ -11,6 +11,7 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { apiSetupBootstrap, apiSetupStatus } from '../api/auth';
 import { getErrorText } from '../../../shared/api/http';
 import { Logo } from '../../../shared/ui/Logo';
+import { APP_NAME, COPYRIGHT } from '../../../shared/brand';
 import { useAuthStore } from '../store/auth';
 
 type SetupPhase = 'checking' | 'uninitialized' | 'initialized';
@@ -61,7 +62,7 @@ export function SetupPage() {
         <Flex vertical align="center" gap={4} style={{ textAlign: 'center', marginBottom: 20 }}>
           <Logo size={44} />
           <Typography.Title level={4} style={{ margin: '8px 0 0' }}>
-            欢迎使用 BaobaoChat
+            欢迎使用 {APP_NAME}
           </Typography.Title>
           <Typography.Text type="secondary">首次部署 · 创建平台管理员即完成初始化</Typography.Text>
         </Flex>
@@ -107,7 +108,7 @@ export function SetupPage() {
 
         <Typography.Text type="secondary" style={{ display: 'block', textAlign: 'center', fontSize: 12, marginTop: 16 }}>
           创建后可登录管理台创建普通用户与部门
-          <br />© 2026 BaobaoChat
+          <br />{COPYRIGHT}
         </Typography.Text>
       </Card>
     </div>

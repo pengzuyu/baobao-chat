@@ -18,6 +18,7 @@ import { Bell, Bot, BookUser, BrainCircuit, Gauge, Mail, MessageCircle } from 'l
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
+import { APP_NAME } from '../shared/brand';
 import { useImWsEvents } from '../features/im/store/wsEvents';
 import { useUnreadNotificationCount } from '../features/im/api/hooks';
 import { useConnectionStore } from '../shared/store/connection';
@@ -170,7 +171,7 @@ export function MainLayout() {
         style={{ background: token.colorBgContainer, borderRight: `1px solid ${token.colorBorderSecondary}` }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '8px 0' }}>
-          <div style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }} title="BaobaoChat">
+          <div style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }} title={APP_NAME}>
             <Logo size={26} />
           </div>
           {/* 竖排图标栏：Menu 行高/内边距覆写（itemPaddingInline=0 让竖排内容居中） */}

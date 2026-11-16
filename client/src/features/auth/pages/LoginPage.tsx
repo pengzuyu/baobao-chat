@@ -17,6 +17,7 @@ import { Alert, Button, Card, Flex, Form, Input, Typography } from 'antd';
 import { Navigate } from 'react-router-dom';
 import { errText, getErrorText } from '../../../shared/api/http';
 import { Logo } from '../../../shared/ui/Logo';
+import { APP_NAME, COPYRIGHT, TAGLINE } from '../../../shared/brand';
 import { useAuthStore } from '../store/auth';
 import { apiRegister, apiSetupStatus, type UserCard } from '../api/auth';
 import { UserPicker } from '../components/UserPicker';
@@ -259,7 +260,7 @@ export function LoginPage() {
   return (
     <div style={AUTH_PAGE_STYLE}>
       <Card style={{ width: 360 }}>
-        <AuthBrand title="BaobaoChat" sub="让协作更简单 · 企业协作工作台" />
+        <AuthBrand title={APP_NAME} sub={TAGLINE} />
 
         <Form
           layout="vertical"
@@ -302,7 +303,7 @@ export function LoginPage() {
 
         <AuthFooter>
           SSO / MFA 登录入口在后续阶段接入（03 篇）
-          <br />© 2026 BaobaoChat
+          <br />{COPYRIGHT}
         </AuthFooter>
       </Card>
     </div>

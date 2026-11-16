@@ -4,6 +4,7 @@
  */
 
 import { ApiError, getErrorText, http } from '../../../shared/api/http';
+import { DEVICE_NAME } from '../../../shared/brand';
 
 /** 是否使用内置桩数据（默认连真实后端；显式 VITE_USE_MOCK=1 才走桩——D18 翻转） */
 export const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
@@ -42,7 +43,7 @@ export async function apiLogin(account: string, password: string, did: string): 
   }
   const data = await http.post<{ access_token: string; refresh_token?: string; expires_at: number; user: AuthUser }>(
     '/auth/login',
-    { account, password, did, device_name: 'BaobaoChat Desktop' },
+    { account, password, did, device_name: DEVICE_NAME },
   );
   // snake→camel 映射（同源 schema 生成后可移除，14 篇 §8）
   return {
