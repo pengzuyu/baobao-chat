@@ -166,12 +166,14 @@ impl ExtHub {
     }
 
     /// 答案惰性提取：completed 且未取过 → session.history 最后一条 assistant
-    /// 原文（REQ 回执为协议 camelCase，不经 normalize）
+    /// 原文（REQ 回执为协议 camelCase，不经 normalize）。结果须同时回写调用方
+    /// 的 task 快照与 map 行——handle_get 返回的是快照，只写 map 会让首轮
+    /// completed 永远拿到占位空串（2026-11-16 bbw ask 实测空答案事故）
     fn ensure_answer(&self, host: &AgentHost, sid: &str, task: &mut ExtTask) {
         if task.state != "completed" || task.answer.is_some() {
             return;
         }
-        task.answer = Some(String::new()); // 先占位防重入
+        task.answer = Some(String::new()); // 先占位防重入（clone 与 map 收尾双写）
         let extracted = host
             .request("session.history", json!({ "sessionId": sid }))
             .ok()
@@ -185,13 +187,21 @@ impl ExtHub {
                     .find(|it| it["kind"] == "assistant")
                     .and_then(|it| it["text"].as_str().map(str::to_string))
             });
+        let answer = extracted.filter(|s| !s.is_empty());
+        let note = if answer.is_none() {
+            Some("本轮无文本回复（可能仅工具调用）".to_string())
+        } else {
+            None
+        };
         let mut tasks = self.tasks.lock().unwrap();
         if let Some(t) = tasks.get_mut(sid) {
-            t.answer = extracted.filter(|s| !s.is_empty());
-            if t.answer.is_none() {
-                t.note = Some("本轮无文本回复（可能仅工具调用）".into());
+            t.answer = answer.clone();
+            if answer.is_none() {
+                t.note = note.clone();
             }
         }
+        task.answer = answer; // 回写快照（调用方返回值）
+        task.note = note;
     }
 }
 
@@ -336,7 +346,9 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
         respond_json(request, 405, json!({ "error": "method not allowed" }));
         return;
     }
-    if method != Method::Post || path != "/" {
+    // 两张脸同端口：A2A 正身 / + MCP 方言 /mcp——此前 path != "/" 把 POST /mcp
+    // 拦进 404，MCP 脸从未可达（2026-11-16 curl 实测 not found）
+    if method != Method::Post || (path != "/" && path != "/mcp") {
         respond_json(request, 404, json!({ "error": "not found" }));
         return;
     }
