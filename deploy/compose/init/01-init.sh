@@ -4,10 +4,8 @@
 # 对应设计：16 篇 §2.2 初始化工具 / §3.4 交付物结构；D02 §7 迁移规范
 # 运行容器：postgres:16-alpine（app-init 服务，entrypoint 调用本脚本）
 #  1. 等待 pg 就绪（pg_isready 轮询）
-#  2. 幂等创建只读角色占位 + 按序执行 /migrations/**/*.up.sql（生产通道为
-#     `bbw-app migrate`，同镜像 golang-migrate；本脚本为免依赖的兜底实现，
-#     手工维护 schema_migrations 表）
-#  3. 尝试创建 pgvector/zhparser 扩展（官方镜像未预装则跳过并告警，13 篇）
+#  2. 尝试创建 pgvector/zhparser 扩展（官方镜像未预装则跳过并告警，13 篇）
+#  3. schema 迁移：bbw-server 启动时内嵌应用（单基线 0001_init.sql，权威通道）
 #  4. 引导内置平台管理员（只打印引导命令/提示，不在脚本中落密码，§5.3）
 # =============================================================================
 set -euo pipefail
@@ -48,47 +46,13 @@ SQL
 log "扩展检查完成（若上方报错：官方 postgres 镜像未预装，请按 13 篇自建镜像后重跑）。"
 
 # ---------------------------------------------------------------------------
-# 3. 依序执行 /migrations/**/*.up.sql（golang-migrate 命名：<域>/NNN_desc.up.sql）
-#    已应用的版本记入 schema_migrations，重复执行自动跳过（幂等）
+# 3. 数据库 schema（2026-11-16 squash 收口：单一终态基线 0001_init.sql）
+#    执行通道 = bbw-server 内嵌 Migrate（单通道权威，启动时自动应用并记
+#    schema_migrations 版本；此前本脚本的 *.up.sql 字典序执行段已移除——
+#    其 find 模式与实际文件命名不匹配，从未真正执行过）。本容器只负责
+#    pg 就绪等待与扩展预装。
 # ---------------------------------------------------------------------------
-MIGRATIONS_DIR="${MIGRATIONS_DIR:-/migrations}"
-if [ -d "$MIGRATIONS_DIR" ] && [ -n "$(find "$MIGRATIONS_DIR" -name '*.up.sql' -print -quit 2>/dev/null)" ]; then
-  log "发现迁移目录：${MIGRATIONS_DIR}，开始应用（顺序 = 路径字典序）..."
-  psql -q -v ON_ERROR_STOP=1 <<'SQL'
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  version BIGINT PRIMARY KEY,
-  name    TEXT NOT NULL DEFAULT '',
-  dirty   BOOLEAN NOT NULL DEFAULT FALSE
-);
-SQL
-  find "$MIGRATIONS_DIR" -name '*.up.sql' -type f | LC_ALL=C sort | while IFS= read -r file; do
-    base=$(basename "$file" .up.sql)
-    # 版本号 = 文件名前缀 NNN（golang-migrate 约定）
-    version=$(echo "$base" | cut -d_ -f1 | sed 's/^0*//')
-    case "$version" in
-      ''|*[!0-9]*) log "跳过无法解析版本号的文件：$file"; continue ;;
-    esac
-    applied=$(psql -tA -q -c "SELECT count(*) FROM schema_migrations WHERE version = ${version}")
-    if [ "$applied" != "0" ]; then
-      log "已应用，跳过：${base} (v${version})"
-      continue
-    fi
-    log "应用迁移：${file##*/} (v${version}) ..."
-    psql -q -v ON_ERROR_STOP=1 -c "INSERT INTO schema_migrations(version, name, dirty) VALUES (${version}, '${base}', TRUE)" >/dev/null
-    if psql -q -v ON_ERROR_STOP=1 -f "$file"; then
-      psql -q -v ON_ERROR_STOP=1 -c "UPDATE schema_migrations SET dirty = FALSE WHERE version = ${version}" >/dev/null
-      log "完成：${base}"
-    else
-      log "错误：迁移失败（v${version}），schema_migrations 标记为 dirty。"
-      log "修复后删除该行再重跑，或改用 bbw-app migrate（§3.4 正式通道）。"
-      exit 1
-    fi
-  done
-  log "迁移应用完毕。"
-else
-  log "未发现迁移文件（${MIGRATIONS_DIR} 为空或不存在，server/ 尚未落地时属预期）。"
-  psql -q -c "CREATE TABLE IF NOT EXISTS schema_migrations (version BIGINT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', dirty BOOLEAN NOT NULL DEFAULT FALSE)"
-fi
+log "schema 迁移由 bbw-server 启动时内嵌应用（0001 终态基线），本容器不执行 SQL。"
 
 # ---------------------------------------------------------------------------
 # 4. 内置平台管理员引导（16 篇 §2.2）

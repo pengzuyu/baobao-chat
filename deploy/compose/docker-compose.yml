@@ -137,7 +137,7 @@ services:
     volumes:
       - ./init:/init:ro
       # golang-migrate 迁移目录（D02 §7 按域分目录）；server/ 未落地前目录可为空
-      - ${BBW_MIGRATIONS_DIR:-../../server/migrations}:/migrations:ro
+      - ${BBW_MIGRATIONS_DIR:-../../server/migrations}:/migrations:ro   # 2026-11-16 后已不使用：迁移走 bbw-server 内嵌通道（基线见 server/migrations/0001_init.sql）；挂载保留供人工排查
     depends_on:
       pg:
         condition: service_healthy

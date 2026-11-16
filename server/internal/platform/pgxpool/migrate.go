@@ -16,7 +16,7 @@ import (
 // 标记 dirty → 执行 → 清 dirty；已应用版本跳过，可重复执行。
 // 兼容：外部通道直灌过 DDL 但无版本记录时，按 Migration.Probe 探测补登记（见 embed.go）。
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS public.schema_migrations (
 		version BIGINT PRIMARY KEY,
 		name    TEXT NOT NULL DEFAULT '',
 		dirty   BOOLEAN NOT NULL DEFAULT FALSE)`); err != nil {
@@ -24,7 +24,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	for _, m := range migrations.List {
 		var dirty bool
-		err := pool.QueryRow(ctx, `SELECT dirty FROM schema_migrations WHERE version=$1`, m.Version).Scan(&dirty)
+		err := pool.QueryRow(ctx, `SELECT dirty FROM public.schema_migrations WHERE version=$1`, m.Version).Scan(&dirty)
 		switch {
 		case err == nil:
 			if dirty {
@@ -42,14 +42,14 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			}
 			if exists {
 				if _, err := pool.Exec(ctx,
-					`INSERT INTO schema_migrations(version,name,dirty) VALUES($1,$2,FALSE)`, m.Version, m.Name); err != nil {
+					`INSERT INTO public.schema_migrations(version,name,dirty) VALUES($1,$2,FALSE)`, m.Version, m.Name); err != nil {
 					return fmt.Errorf("migrate: 补登记 v%d: %w", m.Version, err)
 				}
 				continue
 			}
 		}
 		if _, err := pool.Exec(ctx,
-			`INSERT INTO schema_migrations(version,name,dirty) VALUES($1,$2,TRUE)`, m.Version, m.Name); err != nil {
+			`INSERT INTO public.schema_migrations(version,name,dirty) VALUES($1,$2,TRUE)`, m.Version, m.Name); err != nil {
 			return fmt.Errorf("migrate: 标记 v%d: %w", m.Version, err)
 		}
 		// 0001 自带 BEGIN/COMMIT；无参数 Exec 走简单协议，支持多语句脚本（pgx conn.go：
@@ -58,7 +58,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return fmt.Errorf("migrate: 执行 v%d(%s): %w", m.Version, m.Name, err)
 		}
 		if _, err := pool.Exec(ctx,
-			`UPDATE schema_migrations SET dirty=FALSE WHERE version=$1`, m.Version); err != nil {
+			`UPDATE public.schema_migrations SET dirty=FALSE WHERE version=$1`, m.Version); err != nil {
 			return fmt.Errorf("migrate: 清 dirty v%d: %w", m.Version, err)
 		}
 	}

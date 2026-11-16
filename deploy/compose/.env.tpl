@@ -30,7 +30,8 @@ BBW_APP_REPLICAS=2
 #   core(必选，全栈：app/nginx-lb/依赖) media ops mail——按站点形态叠加；
 #   deps=开发依赖子组（dev-up.sh 用，不起 app 容器）；测试全栈保持 core 即可
 COMPOSE_PROFILES=core
-# 迁移目录（golang-migrate，按域分目录；D02 §7）。首次初始化时挂载进 app-init。
+# 迁移目录（已退役保留：2026-11-16 迁移收口为 bbw-server 内嵌单基线 0001_init.sql，
+# app-init 不再执行 SQL；此挂载仅作人工排查用）
 BBW_MIGRATIONS_DIR=../../server/migrations
 
 # -----------------------------------------------------------------------------
