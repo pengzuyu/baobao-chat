@@ -8,7 +8,7 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { setTokenProvider, setUnauthorizedHandler, ApiError } from '../../../shared/api/http';
 import { ensureDeviceId } from '../../../shared/deviceId';
-import { apiChangePassword, apiLogin, apiMyPermissions, apiRefresh, type AuthUser, type LoginResult } from '../api/auth';
+import { apiChangePassword, apiLogin, apiLogout, apiMyPermissions, apiRefresh, USE_MOCK, type AuthUser, type LoginResult } from '../api/auth';
 
 type LoginStatus = 'idle' | 'submitting' | 'locked';
 
@@ -115,9 +115,16 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    const { token } = useAuthStore.getState();
     if (refreshTimer) clearTimeout(refreshTimer);
     refreshTimer = null;
     set({ token: null, refreshToken: null, expiresAt: null, user: null, loginStatus: 'idle', error: null, lockUntil: 0 });
+    // 服务端吊销 refresh（D28 批0：fire-and-forget——本地态已清，失败由 30 天自然过期兜底）
+    if (token && !USE_MOCK) {
+      void ensureDeviceId().then((did) => apiLogout(did).catch(() => undefined));
+    }
+    // Rust 宿主 token 缓存清理（此前登出残留至下次登录）
+    if (isTauriHost()) void invoke('auth_clear_token').catch(() => undefined);
     // 本地缓存清理（IM 消息/outbox/游标随账号退出抹除，D03 §6.2 隐私面）
     void import('../../im/api/local').then((m) => m.localLogoutCleanup());
   },

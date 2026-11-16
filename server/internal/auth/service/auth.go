@@ -372,5 +372,9 @@ func (s *Service) ChangePassword(ctx context.Context, tenantID, userID int64, ol
 	if err := s.opts.UserSetPassword(ctx, tenantID, userID, hash); err != nil {
 		return errx.From(err)
 	}
+	// 改密即吊销全部 refresh（D28 批0：旧凭证不得在改密后续期；本会话 access 靠 15min 自然过期）
+	if err := s.tokens.RevokeForUser(ctx, userID, 0, true); err != nil {
+		return errx.From(err)
+	}
 	return nil
 }

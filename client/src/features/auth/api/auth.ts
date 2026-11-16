@@ -53,6 +53,15 @@ export async function apiLogin(account: string, password: string, did: string): 
   };
 }
 
+/** 登出吊销 refresh（did 定位本设备；all=全端。03 §2.2——本地态先行清理，服务端吊销 fire-and-forget） */
+export async function apiLogout(did: string, all = false): Promise<void> {
+  if (USE_MOCK) {
+    await delay(120);
+    return;
+  }
+  await http.post('/auth/logout', { did, all });
+}
+
 /** 静默刷新（D28 批0：补 did 设备绑定——此前缺字段对真实后端必 400） */
 export async function apiRefresh(refreshToken: string, did: string): Promise<LoginResult> {
   if (USE_MOCK) {

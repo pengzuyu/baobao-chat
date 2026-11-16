@@ -322,3 +322,11 @@ pub fn auth_set_token(
     }
     r
 }
+
+/// 登出清 token 缓存（D28 批0/Q0-3）：Rust 侧 Shared.token/user 归零——
+/// 此前登出无清理命令，缓存残留至下次登录
+#[tauri::command]
+pub fn auth_clear_token(host: Host) -> Result<(), String> {
+    host.clear_token();
+    Ok(())
+}

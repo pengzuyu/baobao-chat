@@ -113,6 +113,7 @@ pub fn run() {
             agent_commands::report_list,
             agent_commands::report_get,
             agent_commands::auth_set_token,
+            agent_commands::auth_clear_token,
             auth_commands::device_id,
             agent_commands::workspace_register,
             agent_commands::workspace_list,

@@ -277,6 +277,14 @@ impl AgentHost {
         )
     }
 
+    /// 登出清缓存（D28 批0/Q0-3）：token 与用户归零。RT 侧已持有的 token 靠
+    /// ≤15min 自然过期（协议无 obo.token 空值语义，不新增）；此后 obo.renew
+    /// 因无缓存不答——RT needs_renew 空缓存不请求，理论不达
+    pub fn clear_token(&self) {
+        *self.shared.token.lock().unwrap() = None;
+        *self.shared.user.lock().unwrap() = (String::new(), String::new());
+    }
+
     /// 登录用户信息（D22/L4）：装配器替换 ${BBW_USER_ID}/${BBW_USER_NAME} 用；
     /// 更新后重推装配（换账号 → stdio env 随新 spawn 生效；HTTP 的 TOKEN 是
     /// RT 动态替换不受影响）。失败仅告警（装配重推自愈）
