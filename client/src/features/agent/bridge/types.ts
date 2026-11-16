@@ -155,6 +155,8 @@ export interface ClarifyOptionDTO {
 export type AgentEvent =
   | { type: 'streamDelta'; sessionId: string; seq: number; delta: string; channel: 'text' | 'reasoning' }
   | { type: 'streamDone'; sessionId: string; finishReason: string; usage: { in: number; out: number } }
+  /** 协议级错误（error NTF：8011 模型不可用/流中断、8010 超限等；sessionId 可空=全局错误） */
+  | { type: 'error'; sessionId: string; code: number; message: string; fatal: boolean }
   | { type: 'stateChanged'; sessionId: string; state: SessionStatus; reason?: string }
   | {
       type: 'toolCall';

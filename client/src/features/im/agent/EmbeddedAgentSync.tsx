@@ -72,7 +72,10 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
   }, [stream]);
 
   const terminal = !!session && (TERMINAL_STATES.has(session.status) || session.endedAt != null);
-  const failed = session?.status === 'error';
+  // failed 判定：会话 error 态（历史口径）或本轮流内含错误条目（8011/8010——RT
+  // 错误收口 idle，session.status 不翻 error，须看流内错误卡）
+  const failed =
+    session?.status === 'error' || currentRoundItems(stream).some((it) => it.kind === 'error');
   // 回合收口判定（权威，2026-11-11）：最后一条 user 的 turnDoneAt——store 仅在终态
   // stateChanged 打点（回合结束必有终态收口，含 interrupt；中途 streamDone/瞬态
   // idle 不打点）。比盯会话 status 稳：status 瞬态（revive 镜像/ready 迟到）不会误收口

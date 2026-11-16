@@ -147,6 +147,17 @@ export function stagesFromStream(items: StreamItem[]): { stages: AgentStage[]; s
           summary: it.end?.summary?.slice(0, 120),
         });
         break;
+      case 'error':
+        // 错误行（8011 模型不可用/流中断、8010 超限）进卡：fail 态工具行样式，
+        // 完整消息可展开——随落流卡持久化，IM 历史可见
+        stages.push({
+          t: 'tool',
+          name: `错误 ${it.code}`,
+          status: 'fail',
+          summary: it.message.slice(0, 120),
+          result: `${it.fatal ? '[fatal] ' : ''}${it.message}`,
+        });
+        break;
       default:
         break; // user/permission/system 不进卡
     }

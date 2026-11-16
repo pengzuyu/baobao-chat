@@ -78,7 +78,10 @@ export type StreamItem =
       end?: Extract<AgentEvent, { type: 'delegateEnd' }>;
       decision?: 'accept' | 'reject';
     }
-  | { kind: 'system'; key: string; text: string };
+  | { kind: 'system'; key: string; text: string }
+  /** 错误卡（error NTF 投影：8011 模型不可用/流中断、8010 超限等；不进 WAL——
+   *  刷新/重开后消失，仅当轮提示重发/换模型可重试） */
+  | { kind: 'error'; key: string; code: number; message: string; fatal: boolean };
 
 /** 检查点（checkpoint.created 投影，右栏时间线） */
 export interface CheckpointItem {
@@ -699,6 +702,22 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             streams: { ...s.streams, [event.sessionId]: list },
             usageBySession: { ...s.usageBySession, [event.sessionId]: merged },
           };
+        }
+        case 'error': {
+          // 全局错误（无会话归属，如 fatal 协议错）不落卡——控制台可观测即可
+          if (!event.sessionId) {
+            console.warn(`[agent] 全局错误 ${event.code}: ${event.message}`);
+            return {};
+          }
+          const list = s.streams[event.sessionId] ?? [];
+          const item: StreamItem = {
+            kind: 'error',
+            key: `e-${list.length}-${event.code}`,
+            code: event.code,
+            message: event.message,
+            fatal: event.fatal,
+          };
+          return { streams: { ...s.streams, [event.sessionId]: [...list, item] } };
         }
         case 'stateChanged': {
           // 状态机投影：会话列表状态点/头部徽标/输入区禁用规则共用

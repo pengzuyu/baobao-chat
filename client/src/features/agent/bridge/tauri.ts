@@ -379,6 +379,9 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
       return { type: 'stateChanged', sessionId: sid, state: 'idle' };
     case 'session.ended':
       return { type: 'sessionEnded', sessionId: sid, summary: str(raw.summary) };
+    // 协议级错误（8011 模型不可用/流中断、8010 超限等；session_id 可空=全局错误）
+    case 'error':
+      return { type: 'error', sessionId: sid, code: num(raw.code), message: str(raw.message), fatal: raw.fatal === true };
     case 'tool.call':
       return {
         type: 'toolCall',

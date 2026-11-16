@@ -49,6 +49,27 @@ function SystemRow({ text }: { text: string }) {
   );
 }
 
+/** 错误行（error NTF：8011 模型不可用/流中断、8010 超限——不可静默，红字行内卡） */
+function ErrorRow({ code, message, fatal }: { code: number; message: string; fatal: boolean }) {
+  const { token } = theme.useToken();
+  return (
+    <div
+      style={{
+        alignSelf: 'stretch',
+        fontSize: 12,
+        lineHeight: 1.6,
+        color: token.colorError,
+        background: token.colorErrorBg,
+        border: `1px solid ${token.colorErrorBorder}`,
+        borderRadius: token.borderRadius,
+        padding: '6px 10px',
+      }}
+    >
+      {fatal ? '严重错误' : '出错了'}（{code}）：{message}
+    </div>
+  );
+}
+
 /** 中间轮正文（非最终回答，弱化展示；原 agent-turn__mid，内联 token） */
 function MidBody({ children }: { children: ReactNode }) {
   const { token } = theme.useToken();
@@ -119,6 +140,9 @@ export function renderProcessItems(
       case 'system':
         nodes.push(<SystemRow key={item.key} text={item.text} />);
         break;
+      case 'error':
+        nodes.push(<ErrorRow key={item.key} code={item.code} message={item.message} fatal={item.fatal} />);
+        break;
       default:
         break;
     }
@@ -171,10 +195,12 @@ export const TurnBubble = memo(
     // stages 投影（共用卡数据源）：结论=stages 最后一段（含最终回答），卡下常开
     const { stages, sources, rounds } = useMemo(() => stagesFromStream(items), [items]);
 
-    // 未决审批/提问强制展开（交互卡不能被折叠藏起）
+    // 未决审批/提问强制展开（交互卡不能被折叠藏起）；错误行同样不可折叠藏起
+    //（回合收口自动折叠——否则 8011/8010 等错误卡被收进折叠区=静默）
     const hasPendingPerm = processItems.some(
       (it) => (it.kind === 'permission' && it.outcome === null) || (it.kind === 'clarify' && it.answer === null),
     );
+    const hasError = processItems.some((it) => it.kind === 'error');
     // 卡头问题标识（≤30 字截断，对齐 IM 卡口径）
     const q = [...user.text.trim()];
     const question = q.length > 30 ? `${q.slice(0, 30).join('')}…` : user.text.trim();
@@ -212,7 +238,7 @@ export const TurnBubble = memo(
             }}
             live={active}
             startedAt={user.ts}
-            forceExpand={hasPendingPerm}
+            forceExpand={hasPendingPerm || hasError}
           >
             {processItems.length > 0 ? renderProcessItems(processItems, onRespond) : undefined}
           </AgentProcessCard>
