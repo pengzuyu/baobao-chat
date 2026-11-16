@@ -143,7 +143,7 @@ export function OidcConfirmCard({ reqId, onClose }: { reqId: string; onClose: ()
           {info.covered_by_grant ? (
             <Alert type="info" showIcon message="你此前已授权过该应用，点头像即可完成本次登录。" />
           ) : (
-            <div style={{ textAlign: 'center', border: '1px dashed #d9d9d9', borderRadius: 8, padding: '10px 0' }}>
+            <div style={{ textAlign: 'center', border: '1px dashed var(--bbw-gray-3)', borderRadius: 8, padding: '10px 0' }}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 确认码（与浏览器页面核对一致后再确认）
               </Typography.Text>
@@ -156,7 +156,7 @@ export function OidcConfirmCard({ reqId, onClose }: { reqId: string; onClose: ()
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
             <Avatar
               size={44}
-              style={{ backgroundColor: '#1677ff', cursor: submitting ? 'wait' : 'pointer', flexShrink: 0 }}
+              style={{ backgroundColor: 'var(--bbw-primary)', cursor: submitting ? 'wait' : 'pointer', flexShrink: 0 }}
               onClick={() => void approve()}
             >
               {(user?.name ?? '?').slice(0, 1)}
