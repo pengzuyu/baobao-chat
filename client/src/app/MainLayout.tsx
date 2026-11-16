@@ -3,7 +3,8 @@
  * - 左侧一级导航（antd Layout.Sider + Menu）：**图标在上、文字在下**竖排形态
  *   （2026-11-14 用户拍板保留原 56px 图标栏观感——Menu items 不用 icon 槽，
  *   label 内自定义 Flex vertical；itemHeight 放宽、itemPaddingInline 归零经
- *   ConfigProvider components.Menu 覆写；未读 Badge 叠图标右上；选中态走 antd 原生）
+ *   ConfigProvider components.Menu 覆写；未读 Badge 叠图标右上；选中态由 antdThemeFrom
+ *   的 components.Menu 显式覆写（D27 修订2），菜单项沿侧栏纵向均匀分布）
  * - 品牌 Logo + 消息/通知/知识库/邮件/Agent/管理 + 头像菜单；管理项按权限动态显隐；
  *   专家/应用入口 2026-11-12 起暂时隐藏
  * - 顶部连接状态横幅（antd Alert banner；六态 offline/degraded 全局落点，D01 §7）
@@ -204,7 +205,17 @@ export function MainLayout() {
               selectedKeys={selectedKey ? [selectedKey] : []}
               onClick={({ key }) => navigate(key)}
               items={menuItems}
-              style={{ flex: 1, minWidth: 0, borderInlineEnd: 'none', background: 'transparent' }}
+              // 菜单项沿整条侧栏均匀分布（顶部聚拢会在长窗口下留大段空白；窗口过矮时
+              // 无剩余空间，justifyContent 不生效、退化为正常堆叠，天然安全）
+              style={{
+                flex: 1,
+                minWidth: 0,
+                borderInlineEnd: 'none',
+                background: 'transparent',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-evenly',
+              }}
             />
           </ConfigProvider>
           <Dropdown menu={avatarMenu} placement="topRight" trigger={['click']}>
