@@ -7,6 +7,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { setTokenProvider, setUnauthorizedHandler, ApiError } from '../../../shared/api/http';
+import { ensureDeviceId } from '../../../shared/deviceId';
 import { apiChangePassword, apiLogin, apiMyPermissions, apiRefresh, type AuthUser, type LoginResult } from '../api/auth';
 
 type LoginStatus = 'idle' | 'submitting' | 'locked';
@@ -43,7 +44,8 @@ function scheduleSilentRefresh(getState: () => AuthState): void {
   if (wait <= 0) return;
   refreshTimer = setTimeout(async () => {
     try {
-      const result = await apiRefresh(refreshToken);
+      const did = await ensureDeviceId();
+      const result = await apiRefresh(refreshToken, did);
       useAuthStore.setState(applyLogin(result));
       scheduleSilentRefresh(() => useAuthStore.getState()); // 续期后重排
     } catch {
@@ -90,7 +92,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   login: async (account, password) => {
     set({ loginStatus: 'submitting', error: null });
     try {
-      const result = await apiLogin(account, password);
+      const did = await ensureDeviceId(); // 稳定设备号：登录请求携带（03 §2.2 设备绑定）
+      const result = await apiLogin(account, password, did);
       set(applyLogin(result));
       scheduleSilentRefresh(() => useAuthStore.getState()); // 静默刷新骨架
     } catch (err) {

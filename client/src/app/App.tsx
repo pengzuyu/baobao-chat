@@ -8,6 +8,7 @@ import { useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../features/auth/store/auth';
+import { ensureDeviceId } from '../shared/deviceId';
 import { LoginPage } from '../features/auth/pages/LoginPage';
 import { SetupPage } from '../features/auth/pages/SetupPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
@@ -185,8 +186,8 @@ function useWsLifecycle(): void {
 
   useEffect(() => {
     if (token && !USE_MOCK) {
-      // TODO(deviceId)：正式版由 Rust 层生成并持久化设备标识（禁止 localStorage 存业务数据，D01 §12.2-5）
-      wsClient.connect(WS_BASE, token, 'dev-device');
+      // 稳定设备号（D28 批0）：Rust 持久化 uuid 单源——替换 dev-device 硬编码
+      void ensureDeviceId().then((did) => wsClient.connect(WS_BASE, token, did));
     } else {
       wsClient.disconnect();
     }

@@ -7,6 +7,7 @@
 
 pub mod agent_bridge;
 pub mod agent_commands;
+pub mod auth_commands;
 pub mod plugin_commands;
 pub mod mcp_commands;
 
@@ -112,6 +113,7 @@ pub fn run() {
             agent_commands::report_list,
             agent_commands::report_get,
             agent_commands::auth_set_token,
+            auth_commands::device_id,
             agent_commands::workspace_register,
             agent_commands::workspace_list,
             agent_commands::workspace_forget,

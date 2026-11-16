@@ -26,7 +26,7 @@ export interface LoginResult {
   user: AuthUser;
 }
 
-export async function apiLogin(account: string, password: string): Promise<LoginResult> {
+export async function apiLogin(account: string, password: string, did: string): Promise<LoginResult> {
   if (USE_MOCK) {
     // 桩：账号 locked 演示 1007 错误锁定倒计时；其余任意账号口令可登录
     await delay(500);
@@ -42,7 +42,7 @@ export async function apiLogin(account: string, password: string): Promise<Login
   }
   const data = await http.post<{ access_token: string; refresh_token?: string; expires_at: number; user: AuthUser }>(
     '/auth/login',
-    { account, password },
+    { account, password, did, device_name: 'BaobaoChat Desktop' },
   );
   // snake→camel 映射（同源 schema 生成后可移除，14 篇 §8）
   return {
@@ -53,8 +53,8 @@ export async function apiLogin(account: string, password: string): Promise<Login
   };
 }
 
-/** 静默刷新骨架：真实端点待 03 篇定稿后补全 */
-export async function apiRefresh(refreshToken: string): Promise<LoginResult> {
+/** 静默刷新（D28 批0：补 did 设备绑定——此前缺字段对真实后端必 400） */
+export async function apiRefresh(refreshToken: string, did: string): Promise<LoginResult> {
   if (USE_MOCK) {
     await delay(200);
     return {
@@ -66,6 +66,7 @@ export async function apiRefresh(refreshToken: string): Promise<LoginResult> {
   }
   const data = await http.post<{ access_token: string; refresh_token?: string; expires_at: number; user: AuthUser }>('/auth/refresh', {
     refresh_token: refreshToken,
+    did,
   });
   return {
     accessToken: data.access_token,
