@@ -55,7 +55,10 @@ pub fn run() {
         // 目录/文件选择（D13）
         .plugin(tauri_plugin_dialog::init())
         // relaunch（D21：更新装完一键重启；无条件注册——updater 禁用时前端不调即无感）
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        // 深链 bbw://（D28 批2/Q2b：等待页唤起 desktop 确认卡；scheme 声明在
+        // tauri.conf.json plugins.deep-link，dev 形态运行时注册）
+        .plugin(tauri_plugin_deep_link::init());
     if updater_pubkey.is_empty() {
         eprintln!(
             "[bbw] updater 未配置签名公钥（tauri.conf.json plugins.updater.pubkey），自动更新禁用；\
@@ -71,6 +74,37 @@ pub fn run() {
             std::panic::set_hook(Box::new(|info| {
                 eprintln!("[bbw-panic] {info}");
             }));
+            // 深链路由（D28 批2/Q2b）：bbw://auth?req={id} → WebView 事件
+            // oidc://confirm-req（确认卡组件监听）。冷启动（链接拉起 App）经
+            // get_current 补投；运行中经 deep-link://new-url。dev 形态 macOS 需
+            // 运行时 register（发布形态 Info.plist 由构建注入）
+            use tauri_plugin_deep_link::DeepLinkExt;
+            {
+                // dev（tauri debug 构建）运行时注册 scheme；发布形态 Info.plist 由构建注入
+                #[cfg(debug_assertions)]
+                let _ = app.deep_link().register("bbw"); // 失败仅告警（已注册/无权限不阻断）
+                let emit_handle = app.handle().clone();
+                let forward = move |urls: Vec<url::Url>| {
+                    for u in urls {
+                        if u.host_str() == Some("auth") {
+                            let req = u
+                                .query_pairs()
+                                .find(|(k, _)| k == "req")
+                                .map(|(_, v)| v.to_string())
+                                .unwrap_or_default();
+                            if !req.is_empty() {
+                                let _ = emit_handle.emit("oidc://confirm-req", serde_json::json!({ "req": req }));
+                            }
+                        } else {
+                            eprintln!("[bbw-deeplink] 未识别的 bbw:// 路径: {u}");
+                        }
+                    }
+                };
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    forward(urls);
+                }
+                app.deep_link().on_open_url(move |event| forward(event.urls()));
+            }
             // Agent 宿主桥：数据目录={appData}/agent-runtime；事件泵→WebView（agent://event）
             let handle = app.handle().clone();
             let data_dir = handle

@@ -4,11 +4,12 @@
  * - WS 生命周期：登录后连接、登出断开；重连成功触发增量同步（14 篇 §4.2）
  */
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../features/auth/store/auth';
 import { ensureDeviceId } from '../shared/deviceId';
+import { OidcConfirmCard } from '../features/auth/components/OidcConfirmCard';
 import { LoginPage } from '../features/auth/pages/LoginPage';
 import { SetupPage } from '../features/auth/pages/SetupPage';
 import { ChatPage } from '../features/im/pages/ChatPage';
@@ -203,6 +204,20 @@ function useWsLifecycle(): void {
 
 export function App() {
   useWsLifecycle();
+  // OIDC 深链确认请求（D28 批2/Q2b）：bbw://auth?req= 唤起 → Rust emit → 确认卡
+  const [oidcConfirmReq, setOidcConfirmReq] = useState<string | null>(null);
+  useEffect(() => {
+    if (USE_MOCK || typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    let unlisten: (() => void) | undefined;
+    void import('@tauri-apps/api/event').then(({ listen }) => {
+      void listen<{ req?: string }>('oidc://confirm-req', (e) => {
+        if (e.payload?.req) setOidcConfirmReq(e.payload.req);
+      }).then((fn) => {
+        unlisten = fn;
+      });
+    });
+    return () => unlisten?.();
+  }, []);
   useEmergencyStopHotkey();
   useDevReloadHotkey();
   useGlobalToast();
@@ -314,6 +329,9 @@ export function App() {
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      {oidcConfirmReq && (
+        <OidcConfirmCard reqId={oidcConfirmReq} onClose={() => setOidcConfirmReq(null)} />
+      )}
     </BrowserRouter>
   );
 }

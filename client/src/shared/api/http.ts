@@ -163,6 +163,11 @@ export function setUnauthorizedHandler(handler: (err: ApiError) => void): void {
 
 const API_BASE: string = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080/api/v1';
 
+/** 完整请求 URL：相对路径拼 API_BASE；绝对 http(s) 直通（/oauth2 等非 /api/v1 端点，D28 批2） */
+function resolveUrl(path: string): string {
+  return /^https?:/.test(path) ? path : `${API_BASE}${path}`;
+}
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   body?: unknown;
@@ -181,7 +186,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
+    res = await fetch(resolveUrl(path), {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -242,7 +247,7 @@ export async function downloadBlob(path: string): Promise<Blob> {
   if (token) headers.set('Authorization', `Bearer ${token}`);
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { headers });
+    res = await fetch(resolveUrl(path), { headers });
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') throw e;
     throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
@@ -275,7 +280,7 @@ export async function postMultipart<T>(path: string, formData: FormData): Promis
   if (token) headers.set('Authorization', `Bearer ${token}`);
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers, body: formData });
+    res = await fetch(resolveUrl(path), { method: 'POST', headers, body: formData });
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') throw e;
     throw scheduleFallback(new ApiError(9004, getErrorText(9004)));

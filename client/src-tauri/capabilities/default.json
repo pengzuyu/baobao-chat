@@ -11,6 +11,7 @@
     "notification:default",
     "updater:default",
     "process:allow-restart",
-    "dialog:default"
+    "dialog:default",
+    "deep-link:default"
   ]
 }
