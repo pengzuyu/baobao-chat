@@ -1,6 +1,6 @@
 // 预签名直传编排（D25 O2；07 §4.1 对象存储形态）。
 // presign 模式判定=store 具体类型（*filestore.S3）——Local 回落无此形态；
-// 分片字节客户端直连 MinIO（大流量不经 app），服务端只管建会话/发批/位图/complete 收口。
+// 分片字节客户端直连对象存储（大流量不经 app；后端 RustFS，D29），服务端只管建会话/发批/位图/complete 收口。
 package fileservice
 
 import (

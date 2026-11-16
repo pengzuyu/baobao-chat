@@ -14,18 +14,18 @@ func TestNewS3Validation(t *testing.T) {
 	if _, err := NewS3(S3Options{}); err == nil {
 		t.Fatal("空 endpoint 应拒绝")
 	}
-	if _, err := NewS3(S3Options{Endpoint: "http://minio:9000", PublicEndpoint: "://bad"}); err == nil {
+	if _, err := NewS3(S3Options{Endpoint: "http://rustfs:9000", PublicEndpoint: "://bad"}); err == nil {
 		t.Fatal("非法对外端点应拒绝")
 	}
 	// 多级前缀拒绝（仅支持一级 /oss）
-	if _, err := NewS3(S3Options{Endpoint: "http://minio:9000", PublicEndpoint: "https://d.com/a/b"}); err == nil {
+	if _, err := NewS3(S3Options{Endpoint: "http://rustfs:9000", PublicEndpoint: "https://d.com/a/b"}); err == nil {
 		t.Fatal("多级前缀应拒绝")
 	}
-	s, err := NewS3(S3Options{Endpoint: "http://minio:9000"})
+	s, err := NewS3(S3Options{Endpoint: "http://rustfs:9000"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.bucket != "bbw-data" || s.publicBase != "http://minio:9000" || s.urlPrefix != "" {
+	if s.bucket != "bbw-data" || s.publicBase != "http://rustfs:9000" || s.urlPrefix != "" {
 		t.Fatalf("默认值错误: %+v", s)
 	}
 }
@@ -47,7 +47,7 @@ func TestS3KeyLayout(t *testing.T) {
 // ③query 携带 partNumber/uploadId/X-Amz-Expires 与签名四件套。
 func TestS3PresignOffline(t *testing.T) {
 	s, err := NewS3(S3Options{
-		Endpoint: "http://minio:9000",
+		Endpoint: "http://rustfs:9000",
 		PublicEndpoint: "https://chat.example.com/oss",
 		AccessKey: "ak", SecretKey: "sk",
 	})

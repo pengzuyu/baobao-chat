@@ -24,7 +24,7 @@ var ErrTooLarge = errors.New("storage: exceed max upload size")
 // ErrNotFound 内容对象不存在（物理文件缺失；service 映射 4005）
 var ErrNotFound = errors.New("storage: blob not found")
 
-// Storage 内容存储接口（MinIO/S3 阶段二实现同接口替换）
+// Storage 内容存储接口（Local/S3 双实现，D25；S3 后端=RustFS，D29）
 type Storage interface {
 	// Save 流式写入临时文件并计算 sha256，返回 (字节数, sha256, 临时路径)。
 	// 超过 maxBytes 立刻中止并清理临时文件返回 ErrTooLarge。

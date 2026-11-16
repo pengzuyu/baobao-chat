@@ -29,7 +29,7 @@ dev: dev-up ## 一键开发：拉起 compose 依赖(core) + 启动前端 dev ser
 	  else echo "[make] client/ 尚未创建（设计阶段），仅依赖已就绪，见 scripts/dev-up.sh 输出"; fi
 
 .PHONY: dev-up
-dev-up: ## 拉起本地依赖（compose core：pg/redis/minio；含自签证书与 .env 初始化）
+dev-up: ## 拉起本地依赖（compose core：pg/redis/rustfs；含自签证书与 .env 初始化）
 	./scripts/dev-up.sh
 
 .PHONY: dev-down
@@ -52,7 +52,7 @@ server-run: dev-up ## 本地运行 bbw-server（依赖 compose core，DSN 指向
 	@if [ -d server ]; then \
 	  cd server && BBW_DB_DSN='postgres://bbw:bbw_change_me@127.0.0.1:5432/bbw?sslmode=disable' \
 	    BBW_REDIS_ADDR=127.0.0.1:6379 BBW_S3_ENDPOINT=http://127.0.0.1:9000 \
-	    BBW_S3_ACCESS_KEY=bbw_minio_change_me BBW_S3_SECRET_KEY=bbw_minio_secret_change_me \
+	    BBW_S3_ACCESS_KEY=bbw_rustfs_change_me BBW_S3_SECRET_KEY=bbw_rustfs_secret_change_me \
 	    go run ./cmd/bbw-server --enable auth,org,message,file,kb,eco,admin,audit,notify,aigw; \
 	  else echo "[make] server/ 尚未创建（设计阶段），跳过"; fi
 

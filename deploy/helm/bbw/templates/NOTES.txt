@@ -27,7 +27,7 @@
    · 已引用既有 Secret：{{ .Values.secrets.existingSecretDb }} / {{ .Values.secrets.existingSecretS3 }}
 {{- end }}
    · PostgreSQL（CNPG/StatefulSet 主从+读副本，WAL 归档至对象存储，§4.6）
-   · Redis（哨兵 StatefulSet）· MinIO（分布式 StatefulSet，EC）
+   · Redis（哨兵 StatefulSet）· 对象存储（RustFS，D29；分布式 StatefulSet，EC）
    · prometheus-adapter：暴露 bbw_ws_connections / bbw_queue_depth /
      bbw_rooms_active / bbw_wopi_sessions 自定义指标（HPA 依赖，§3.2）
 

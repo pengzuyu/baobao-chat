@@ -404,6 +404,6 @@
 | # | 事项 | 改动点 | 验收 | 状态 |
 |---|------|--------|------|------|
 | R0 | 设计落稿 | D29 新增+EXECUTION-PLAN 登记+01 篇 A.1/A.2 MinIO 行改判+D25 顶部注记+detail/README 索引（顺补 D28 行） | 口径可追溯 | [x] 2026-11-16（本提交；本地预检已实证 RustFS 1.0.5：/health/ready+minio 兼容探针通、aws-cli 建桶/put-bucket-versioning/put-bucket-cors 写读全过） |
-| R1 | compose/部署切换 | docker-compose（rustfs 服务+rustfs-init aws-cli 化+nginx upstream+卷改名+BBW_S3_ENDPOINT 默认值）+.env.tpl（RUSTFS_* 键）+migrate-files-to-s3.sh 改名 aws cli 化+Makefile/scripts/dev-up.sh+helm values endpoint+backup·restore 注释+main.go 日志文案 | docker compose config 绿；go build+全量 test 绿 | [ ] |
+| R1 | compose/部署切换 | docker-compose（rustfs 服务+rustfs-init aws-cli 化+nginx upstream+卷改名+BBW_S3_ENDPOINT 默认值）+.env.tpl（RUSTFS_* 键）+migrate-files-to-s3.sh 改名 aws cli 化+Makefile/scripts/dev-up.sh+helm values endpoint+backup·restore 注释+main.go 日志文案 | docker compose config 绿；go build+全量 test 绿 | [x] 2026-11-16（本提交；rustfs 服务直接复用 BBW_S3_ACCESS_KEY/SECRET_KEY（凭据单源，MINIO_ROOT_* 键对废除）；healthcheck=/health/ready；init=amazon/aws-cli:2.31.4+AWS_ENDPOINT_URL；活文件 MinIO 措辞顺手清零（代码注释/helm/NOTES），frp 存档与 docs/ 设计篇按 D29 §7 保留；compose core+deps profile config 绿+go build/vet/全量 test 绿） |
 | R2 | 集成测试+冒烟 | `BBW_TEST_S3_ADDR` 门控 S3 集成测试（store 层全操作+presign 真链 PUT/GET+UNSIGNED-PAYLOAD 验签+DeleteObjects Content-MD5 断言）；本地 :9100 RustFS 冒烟全绿 | 集成测试对 RustFS 全绿；离线单测不回归 | [ ] |
 | R3 | 真机验收 | compose 栈全链（并入 D25 §9 六项：>8MB 分片直传/120s 票据/缩略变体//oss/ 前缀签名链/CORS 预检/断点续传） | 用户真机走查 | [ ] |

@@ -54,13 +54,13 @@ config:
 
 # ---------------------------------------------------------------------------
 # 外部组件（§3.2：PG=CNPG Operator/StatefulSet，Redis=哨兵 StatefulSet，
-# MinIO=分布式 StatefulSet——由 Operator/独立 release 管理，本 chart 只引用）
+# 对象存储（D29：RustFS，原 MinIO 移除）=分布式 StatefulSet——由 Operator/独立 release 管理，本 chart 只引用）
 # ---------------------------------------------------------------------------
 externalServices:
   redis:
     address: bbw-redis.bbw-data.svc.cluster.local:6379      # compose: BBW_REDIS_ADDR
   s3:
-    endpoint: http://minio.bbw-data.svc.cluster.local:9000  # compose: BBW_S3_ENDPOINT
+    endpoint: http://rustfs.bbw-data.svc.cluster.local:9000  # compose: BBW_S3_ENDPOINT（D29）
     publicEndpoint: ""                                      # compose: BBW_S3_PUBLIC_ENDPOINT（D25 预签名对外基址；
                                                             # 空=本地盘回落；启用须同时给 ingress 加 /oss/ 路由）
     bucket: bbw-data                                        # compose: BBW_S3_BUCKET

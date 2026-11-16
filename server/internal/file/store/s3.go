@@ -1,9 +1,9 @@
-// Package store S3/MinIO 实现（D25）。对象布局：t/{tenant}/{sha前2}/{sha}（13 篇 §6）。
+// Package store S3 实现（D25；部署后端 RustFS，D29——任意 S3 兼容实现均可）。对象布局：t/{tenant}/{sha前2}/{sha}（13 篇 §6）。
 // Local 语义映射：Save 返回的 tmpPath=S3 临时对象键（不透明字符串，Promote 原样收回）；
 // staging 兼容路径（relay PATCH）=s2/{uploadID}/{no:05d} 普通对象——presign 模式不经过，
 // 分片走 S3 原生 multipart（key=s/{uploadID}，uploadId 会话由 service 层持有，见 O2）。
 // 预签名对外口径（D25 拍板②）：签名按去前缀路径+对外 host 计算（v4.PresignHTTP 手签），
-// 返回 URL 拼回 publicEndpoint 路径前缀——nginx /oss/ strip 前缀 + Host 透传后 MinIO 可验签。
+// 返回 URL 拼回 publicEndpoint 路径前缀——nginx /oss/ strip 前缀 + Host 透传后对象存储可验签。
 // ResetStaging=启动清扫：s2/ 孤儿分片 + 在途 multipart（内存会话失配回收，Local 同语义）。
 package store
 
@@ -35,7 +35,7 @@ import (
 
 // S3Options 构造参数（main 从 BBW_S3_* 环境变量装配）
 type S3Options struct {
-	Endpoint      string // 服务端→MinIO 内部端点（http://minio:9000）
+	Endpoint      string // 服务端→对象存储内部端点（http://rustfs:9000）
 	PublicEndpoint string // 客户端可达基址（https://dom/oss 或 http://ip:9000）；空=同 Endpoint；可含一级路径前缀
 	AccessKey     string
 	SecretKey     string
@@ -75,13 +75,13 @@ func NewS3(o S3Options) (*S3, error) {
 	if o.Bucket == "" {
 		o.Bucket = "bbw-data"
 	}
-	region := "us-east-1" // MinIO 忽略 region；S3 兼容端点通用占位
+	region := "us-east-1" // RustFS 忽略 region；S3 兼容端点通用占位
 	creds := aws.NewCredentialsCache(awscred.NewStaticCredentialsProvider(o.AccessKey, o.SecretKey, ""))
 	client := s3.New(s3.Options{
 		Credentials: creds,
 		Region:      region,
 		BaseEndpoint: aws.String(o.Endpoint),
-		UsePathStyle: true, // MinIO 必须 path-style（bucket 在路径首段）
+		UsePathStyle: true, // S3 兼容端点须 path-style（bucket 在路径首段）
 	})
 	up := manager.NewUploader(client, func(u *manager.Uploader) {
 		u.PartSize = 8 << 20 // 未知长度流式：8MB 分片缓冲（relay 中转 ≤20MB → 内存上限可控）
@@ -429,7 +429,7 @@ func (s *S3) presign(ctx context.Context, method, key string, q url.Values, ttl 
 	if s.urlPrefix == "" {
 		return signedURI, nil
 	}
-	// 拼回对外前缀（签名按去前缀路径计算，nginx strip 后 MinIO 可验——D25 拍板②）
+	// 拼回对外前缀（签名按去前缀路径计算，nginx strip 后对象存储可验——D25 拍板②）
 	final, err := url.Parse(signedURI)
 	if err != nil {
 		return "", fmt.Errorf("s3: presign parse: %w", err)

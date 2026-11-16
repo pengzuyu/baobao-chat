@@ -181,7 +181,8 @@ func main() {
 			}
 		})
 
-	// 文件域（D06 + D25）：存储层双实现——BBW_S3_ENDPOINT 配了走 MinIO 对象存储
+	// 文件域（D06 + D25）：存储层双实现——BBW_S3_ENDPOINT 配了走 S3 对象存储
+	// （部署后端=RustFS，D29；任意 S3 兼容实现均可）
 	// （t/{tenant}/{sha2}/{sha} 布局 + 预签名直传，D25）；空=本地盘回落
 	// （开发机/CI/单机裸跑零负担，D25 拍板③）。会话成员判定经闭包查 message 仓（D02 §4）
 	var fileStore filestore.Storage
@@ -197,7 +198,7 @@ func main() {
 			log.Fatalf("S3 存储构造失败: %v", err)
 		}
 		fileStore = s3Store
-		log.Printf("文件存储：MinIO 对象存储（%s，对外 %s）", ep, envOr("BBW_S3_PUBLIC_ENDPOINT", ep))
+		log.Printf("文件存储：S3 对象存储（%s，对外 %s；后端 RustFS，D29）", ep, envOr("BBW_S3_PUBLIC_ENDPOINT", ep))
 	} else {
 		fileStore = filestore.NewLocal(envOr("BBW_DATA_DIR", "./data"))
 		log.Printf("文件存储：本地磁盘（%s；未配置 BBW_S3_ENDPOINT，D25 回落）", envOr("BBW_DATA_DIR", "./data"))

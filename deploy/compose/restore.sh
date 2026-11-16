@@ -39,7 +39,7 @@ read -r -p "确认继续？输入 YES: " CONFIRM
 # ---------------------------------------------------------------------------
 # 1. 停应用流量（nginx-lb + app；media 视站点配置一并停止）
 # ---------------------------------------------------------------------------
-echo "[restore] 1/5 停止应用（保留 pg/redis/minio）..."
+echo "[restore] 1/5 停止应用（保留 pg/redis/rustfs）..."
 docker compose stop nginx-lb app >/dev/null 2>&1 || true
 docker compose stop media >/dev/null 2>&1 || true
 

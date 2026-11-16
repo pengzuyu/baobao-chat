@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Config 服务端配置（默认值 < 环境变量；Redis/MinIO 接入点见各 TODO）
+// Config 服务端配置（默认值 < 环境变量；Redis/S3 接入点见各 TODO）
 type Config struct {
 	HTTPAddr      string        // HTTP+WS 监听地址
 	DBDSN         string        // PostgreSQL DSN（空 → 内存仓储回退，测试路径不变；阶段二存储接入）

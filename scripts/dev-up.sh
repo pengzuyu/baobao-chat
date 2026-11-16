@@ -3,7 +3,7 @@
 # BaobaoChat 一键开发环境拉起脚本
 #  · 初始化 deploy/compose/.env（首次从 .env.tpl 复制）
 #  · 生成开发用自签 TLS 证书（volumes/certs/；生产换内部 CA 签发，15 篇 §3.1）
-#  · 启动 compose core 依赖（pg16 / redis7 / minio / update-src / app-init）
+#  · 启动 compose core 依赖（pg16 / redis7 / rustfs / update-src / app-init）
 #  · 打印前端 / 后端本地 dev 命令
 # 幂等：可重复执行。用法：./scripts/dev-up.sh（或 make dev-up）
 # =============================================================================
@@ -43,15 +43,15 @@ if [ ! -f "${CERT_DIR}/tls.crt" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. 拉起开发依赖（deps 子组：pg / redis / minio / update-src / app-init；
+# 3. 拉起开发依赖（deps 子组：pg / redis / rustfs / update-src / app-init；
 #    不起 app 容器与 nginx-lb——开发流为宿主直跑 server。全栈容器化测试：
 #    make server-image 先构建镜像，再 COMPOSE_PROFILES=core docker compose up -d）
 # ---------------------------------------------------------------------------
-log "启动 compose 开发依赖（deps：pg / redis / minio / update-src / app-init）..."
+log "启动 compose 开发依赖（deps：pg / redis / rustfs / update-src / app-init）..."
 COMPOSE_PROFILES=deps docker compose up -d
 
 log "等待核心依赖健康 ..."
-for svc in pg redis minio; do
+for svc in pg redis rustfs; do
   waited=0
   until [ "$(docker compose ps -aq "$svc" | head -n1 | xargs -I{} docker inspect --format '{{.State.Health.Status}}' {})" = "healthy" ]; do
     sleep 3
@@ -76,7 +76,7 @@ cat <<'EOF'
     或：
       cd server && BBW_DB_DSN='postgres://bbw:bbw_change_me@127.0.0.1:5432/bbw?sslmode=disable' \
         BBW_REDIS_ADDR=127.0.0.1:6379 BBW_S3_ENDPOINT=http://127.0.0.1:9000 \
-        BBW_S3_ACCESS_KEY=bbw_minio_change_me BBW_S3_SECRET_KEY=bbw_minio_secret_change_me \
+        BBW_S3_ACCESS_KEY=bbw_rustfs_change_me BBW_S3_SECRET_KEY=bbw_rustfs_secret_change_me \
         go run ./cmd/bbw-server --enable auth,org,message,file,kb,eco,admin,audit,notify,aigw
 
   · 前端（client/）：        make client-dev     （首次先 make client-install）
