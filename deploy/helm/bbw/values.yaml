@@ -95,10 +95,10 @@ app:
   service:
     type: ClusterIP            # ClusterIP | NodePort
     nodePort: ""               # type=NodePort 时生效，如 30808
-  resources:                           # 1k 档 ≈1C/实例（§3.3）
+  resources:                           # requests 极小值=不预留调度面，实际用量由 limit 封顶（内网小集群口径）
     requests:
-      cpu: 250m
-      memory: 512Mi
+      cpu: 1m
+      memory: 16Mi
     limits:
       cpu: "1"
       memory: 1Gi
@@ -131,8 +131,8 @@ gateway:
   terminationGracePeriodSeconds: 60    # WS 优雅迁移宽限（D02 §6：60s in-flight ack）
   resources:                           # WSS 单节点 5 万连接 <8GB 为上限（§6.7），小档 2Gi
     requests:
-      cpu: 250m
-      memory: 512Mi
+      cpu: 1m
+      memory: 16Mi
     limits:
       cpu: "1"
       memory: 2Gi
@@ -181,5 +181,5 @@ ingress:
 migrateJob:
   enabled: true
   resources:
-    requests: {cpu: 100m, memory: 128Mi}
+    requests: {cpu: 1m, memory: 16Mi}
     limits: {cpu: "1", memory: 512Mi}

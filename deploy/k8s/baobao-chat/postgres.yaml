@@ -74,8 +74,8 @@ spec:
               command: ["pg_isready", "-U", "bbw", "-d", "bbw"]
             initialDelaySeconds: 30
             periodSeconds: 15
-          resources:
-            requests: {cpu: 250m, memory: 512Mi}
+          resources:                   # requests 极小值=不预留调度面（内网小集群口径）
+            requests: {cpu: 1m, memory: 16Mi}
             limits: {cpu: "1", memory: 1Gi}
           volumeMounts:
             - name: data

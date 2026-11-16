@@ -73,8 +73,8 @@ spec:
             httpGet: {path: /health/ready, port: s3}
             initialDelaySeconds: 20
             periodSeconds: 15
-          resources:
-            requests: {cpu: 250m, memory: 512Mi}
+          resources:                   # requests 极小值=不预留调度面（内网小集群口径）
+            requests: {cpu: 1m, memory: 16Mi}
             limits: {cpu: "1", memory: 2Gi}
           volumeMounts:
             - name: data
