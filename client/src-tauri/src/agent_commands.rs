@@ -234,14 +234,20 @@ pub fn report_get(host: Host, date: String) -> Result<Value, String> {
 /// RT 按 sessionId 定向投递 runner 通道）。task_brief=None=沿用模型原稿
 /// （确认不改稿是主路径；编辑稿随 P1 简报编辑器）。mode/workspace 为协议
 /// 必填字段，从会话缓存回填（RT dispatch 侧忽略）。
+/// D30 拍板4 防环：外部会话禁委派（bbw→delegate→claude→bbw 递归熔断，
+/// delegate 必经本命令层，壳层一行拦截、RT 零改动）。
 #[tauri::command]
 pub fn agent_delegate_launch(
     host: Host,
+    ext_hub: tauri::State<'_, std::sync::Arc<crate::ext_agent::ExtHub>>,
     session_id: String,
     delegate_task_id: String,
     backend: String,
     task_brief: Option<Value>,
 ) -> Result<(), String> {
+    if ext_hub.is_external(&host, &session_id) {
+        return Err("外部智能体接入的会话不允许委派（防递归）".into());
+    }
     let (mode, workspace) = host
         .list_sessions()
         .iter()

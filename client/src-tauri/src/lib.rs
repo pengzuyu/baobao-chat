@@ -8,6 +8,7 @@
 pub mod agent_bridge;
 pub mod agent_commands;
 pub mod auth_commands;
+pub mod ext_agent;
 pub mod plugin_commands;
 pub mod mcp_commands;
 
@@ -112,11 +113,18 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|e| format!("app_data_dir 不可用: {e}"))?
                 .join("agent-runtime");
+            // 外部智能体接入面（D30 批1）：ExtHub 先建——emit 闭包 fan-out
+            // （WebView + ExtHub.dispatch 任务状态机）+ 命令层防环查询共用
+            let hub = Arc::new(ext_agent::ExtHub::new());
+            let hub_emit = hub.clone();
             let emit = Arc::new(move |payload: serde_json::Value| {
+                hub_emit.dispatch(&payload);
                 // 派发失败（无窗口监听）不影响桥运行
                 let _ = handle.emit("agent://event", payload);
             });
-            app.manage(AgentHost::new(data_dir, emit));
+            app.manage(AgentHost::new(data_dir.clone(), emit));
+            app.manage(hub.clone());
+            ext_agent::start(app.handle().clone(), hub, data_dir);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
