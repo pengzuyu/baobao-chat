@@ -393,3 +393,17 @@
 | Q3 | 授权管理与撤销面 | 用户面「已授权应用」页（oidc_grant 列表+撤销=吊销该应用 refresh）+设备列表补「浏览器会话」远端下线；introspection/revoke/userinfo 端点；admin OIDC 凭证管理（与 eco_app 发布联动）；审计 auth.oidc.* 事件 | 撤销后 introspection 立即 inactive；远端下线浏览器会话即失效 | [x] 2026-11-16（Q3a 6485918+Q3b 46f23a2；服务端 /me grants/sessions 四端点+改密→OIDC 全吊销回调（v0.2 拍板7 清偿）+completeAuthRequest 补禁用拦截（SSO 直达路径漏洞）+**RevokeToken 双路修复**（lib refresh 场景传行id+userID 非空与 access 不可区分——原按 userID 分支致 refresh 吊销静默失效）；introspection 端点行为确认：RFC7662 拒 public client 属规范口径（机密客户端开通即活）；audit 后置（admin 审计表为管理员操作口径）；前端设置「登录与授权」页+admin「登录接入」页；冒烟：revoke 200→refresh 立拒/me 撤销→covered 回 false/会话下线→等待页不再直达；真机走查归 Q5） |
 | Q4 | 文档回填与示例 | 03 篇修订（登录方式表+接口表补 /oauth2/*）+14 篇协议登记；examples/ 最小 RP 示例（jwks 本地验签演示）；README/deploy 补 BBW_OIDC_SIGNING_KEY | 通用软件（Grafana 类）OIDC 登录实测通 | [x] 2026-11-16（03 篇 D28 落地注记（OP 端点/§2.1.1 双向/§2.2 令牌补充/OBO 接线/me 授权面/未实现清单）；14 篇 1010-1013 启用状态登记（1011 拒绝按钮/1013 未启用记后置）；README 决策速览第 8 条；compose env 已在 Q1 落；examples/oidc-rp=zitadel rp 标准客户端（discovery+PKCE+jwks 验签+userinfo），**curl 全链实测通**（登录成功页+claims aud=client/amr+userinfo Alice）——「通用 OIDC 库实测」以此完成，Grafana 类通用软件留真机；坑：oidc.IDClaims 是接口须用 *oidc.IDTokenClaims 实例化） |
 | Q5 | 真机验收 | D28 §8 八项（标准 RP 兼容/深链点头像/未登录 desktop/无 desktop 兜底/防钓鱼/撤销链/密钥轮换/Q0 三项） | 用户真机走查 | [ ] |
+
+## 批次 R：对象存储后端切换 RustFS（D29，2026-11-16 设计落稿）
+
+> 拍板（2026-11-16）：MinIO 双风险（AGPL 禁入+开源版 2025-09 EOL、2026-02 仓库归档永无补丁）
+> → 整体移除换 **RustFS**（Apache-2.0，Ceph s3tests 兼容矩阵背书，桶版本化/预签名/CORS 全支持）；
+> SeaweedFS 因桶版本化不完整落选（留 fallback）。Go/前端零协议改动（D25 aws-sdk-go-v2 红利），
+> 改动面=deploy 层+集成测试。设计：[D29](detail/D29-对象存储后端切换RustFS设计.md)。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|------|--------|------|------|
+| R0 | 设计落稿 | D29 新增+EXECUTION-PLAN 登记+01 篇 A.1/A.2 MinIO 行改判+D25 顶部注记+detail/README 索引（顺补 D28 行） | 口径可追溯 | [x] 2026-11-16（本提交；本地预检已实证 RustFS 1.0.5：/health/ready+minio 兼容探针通、aws-cli 建桶/put-bucket-versioning/put-bucket-cors 写读全过） |
+| R1 | compose/部署切换 | docker-compose（rustfs 服务+rustfs-init aws-cli 化+nginx upstream+卷改名+BBW_S3_ENDPOINT 默认值）+.env.tpl（RUSTFS_* 键）+migrate-files-to-s3.sh 改名 aws cli 化+Makefile/scripts/dev-up.sh+helm values endpoint+backup·restore 注释+main.go 日志文案 | docker compose config 绿；go build+全量 test 绿 | [ ] |
+| R2 | 集成测试+冒烟 | `BBW_TEST_S3_ADDR` 门控 S3 集成测试（store 层全操作+presign 真链 PUT/GET+UNSIGNED-PAYLOAD 验签+DeleteObjects Content-MD5 断言）；本地 :9100 RustFS 冒烟全绿 | 集成测试对 RustFS 全绿；离线单测不回归 | [ ] |
+| R3 | 真机验收 | compose 栈全链（并入 D25 §9 六项：>8MB 分片直传/120s 票据/缩略变体//oss/ 前缀签名链/CORS 预检/断点续传） | 用户真机走查 | [ ] |
