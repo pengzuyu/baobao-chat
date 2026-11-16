@@ -376,3 +376,20 @@
 > 过程记录：本批曾于 D26-O7 并行期间完整落地一次，被同工作区并行批次对 im/agent/ 目录
 > discard 连环清掉（含两个新文件）；用户裁决等对方提交后以 D26 批8-10 提交版为基底重做，
 > 以上 [x] 为重做版状态。
+
+## 批次 Q：OIDC 统一认证与生态接入面（D28，2026-11-16 设计落稿待评审）
+
+> 拍板（2026-11-16）：bbw auth 对外做标准 OIDC Provider（目标=兼容通用第三方应用）；
+> 嵌 zitadel/oidc v3（协议正确性由库保证+单二进制保留，自研全套否决）；一期只做生态
+> 接入面（桌面自身登录/RT OBO/内生态 HS256 不动）；OIDC 面强制 ES256+jwks；6 位确认码
+> 深链点头像授权（03 §2.1.1 骨架反用，错误码 1010-1013 正式启用）。设计：
+> [D28](detail/D28-OIDC统一认证与生态接入面设计.md)。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|------|--------|------|------|
+| Q0 | 认证域 P0 欠账（与 OIDC 无依赖可先行） | refresh 落 OS 钥匙串+启动静默刷新直达主界面（03 §2.3）；RT 供给切 /auth/obo/token（act 归因+scope 子集，obo.renew 真换签）；auth_clear_token+did 真实化+改密吊销 refresh | tsc/build/test 绿；重启免重登；服务端日志 act 可见 | [ ] |
+| Q1 | OIDC 地基（服务端） | zitadel/oidc v3 依赖+Storage 适配层（oidc_client/auth_request/grant/refresh/**web_session** 五表，迁移 0038 起编——已存在两份 0037 撞号）；ES256 密钥装载（env BBW_OIDC_SIGNING_KEY；轮换窗口收缩候选见 D28 §10）；jwks/discovery/authorize/token（授权码+PKCE）；web-login 兜底（html/template 等待页 + **IdP 浏览器会话 7 天滑动**，D28 v0.2）；oidc_client admin CRUD | 纯 web 路径授权码全链通；7 天内第二应用免密（SSO）；curl 验 jwks | [ ] |
+| Q2 | desktop 确认链 | tauri deep-link 注册 bbw:// + capabilities 白名单；深链路由+确认卡 UI（antd 口径：应用名/logo/scope 人类可读/6 位码/点头像）；POST /oauth2/confirm（desktop access token 鉴权）；等待页深链尝试+轮询；grant 覆盖降级轻量卡。**可整体后置不阻塞 OIDC 上线**（D28 §10 收缩候选④） | 深链全链真机通；6 位码错 3 次作废 | [ ] |
+| Q3 | 授权管理与撤销面 | 用户面「已授权应用」页（oidc_grant 列表+撤销=吊销该应用 refresh）+设备列表补「浏览器会话」远端下线；introspection/revoke/userinfo 端点；admin OIDC 凭证管理（与 eco_app 发布联动）；审计 auth.oidc.* 事件 | 撤销后 introspection 立即 inactive；远端下线浏览器会话即失效 | [ ] |
+| Q4 | 文档回填与示例 | 03 篇修订（登录方式表+接口表补 /oauth2/*）+14 篇协议登记；examples/ 最小 RP 示例（jwks 本地验签演示）；README/deploy 补 BBW_OIDC_SIGNING_KEY | 通用软件（Grafana 类）OIDC 登录实测通 | [ ] |
+| Q5 | 真机验收 | D28 §8 八项（标准 RP 兼容/深链点头像/未登录 desktop/无 desktop 兜底/防钓鱼/撤销链/密钥轮换/Q0 三项） | 用户真机走查 | [ ] |
