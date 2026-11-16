@@ -50,7 +50,7 @@ import { ingestFromIm } from '../../kb/api/kb';
 import { MessageInput } from '../components/MessageInput';
 import { EmbeddedAgentSync } from '../agent/EmbeddedAgentSync';
 import type { AgentCardBody } from '../../../shared/components/AgentProcessCard';
-import { embeddedTitle, getEmbeddedSessionId, setEmbeddedSessionId } from '../agent/embedded';
+import { embeddedTitle, getEmbeddedSessionId, setEmbeddedSessionId, validEmbeddedSessionId } from '../agent/embedded';
 import { useAgentStore } from '../../agent/store/agent';
 import { ForwardModal } from '../components/ForwardModal';
 import { ReadReceiptModal } from '../components/ReadReceiptModal';
@@ -259,7 +259,9 @@ export function ChatPage() {
    * ensureAgentEventSubscribed（2026-11-11 根因修复），此处只读映射直发 */
   const ensureEmbeddedSession = async (): Promise<string> => {
     void useAgentStore.getState().init(); // 数据预取并行（左栏/记忆页用）；不 await
-    const sid = await getEmbeddedSessionId(convId!);
+    // 幽灵映射自愈（2026-11-16）：映射在但 RT 已无此会话（换轨/丢失遗留）——
+    // validEmbeddedSessionId 校验并清映射，此处走重建
+    const sid = await validEmbeddedSessionId(convId!);
     if (sid) return sid; // 映射在=库里有行，RT 复活兜底
     // 2026-11-12 日常口径（ZCode 式）：IM embedded 会话恒日常——不跟随项目
     // （旧「沿用最近项目会话目录」废除：sessions 未加载完时必落空，且口径
@@ -275,13 +277,19 @@ export function ChatPage() {
     return created.id;
   };
 
-  /** Agent 流程（D18 §2/§3.1）：问题交本会话 embedded Agent 处理，回复经落流卡回流 */
+  /** Agent 流程（D18 §2/§3.1）：问题交本会话 embedded Agent 处理，回复经落流卡回流。
+   *  失败必须可见（2026-11-16 幽灵映射事故：裸 void 全链静默=发消息无任何反馈） */
   const agentFlow = async (rawText: string) => {
     if (!convId) return;
     const question = rawText.replace(/^\/agent\s*/, '').trim() || rawText;
-    const sid = await ensureEmbeddedSession();
-    setEmbeddedActive(sid);
-    await useAgentStore.getState().sendTextTo(sid, question);
+    try {
+      const sid = await ensureEmbeddedSession();
+      setEmbeddedActive(sid);
+      await useAgentStore.getState().sendTextTo(sid, question);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      message.error(`Agent 处理失败：${detail}`, 4);
+    }
   };
 
   /** 聊天头部 🤖 入口（2026-11-11）：跳工作台对应 embedded 会话；无则新建后跳转 */

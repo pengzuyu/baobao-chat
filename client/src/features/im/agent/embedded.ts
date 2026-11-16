@@ -9,6 +9,7 @@
 import { localMetaGet, localMetaSet } from '../../../shared/api/localdb';
 import { http } from '../../../shared/api/http';
 import { wsClient } from '../../../shared/api/ws';
+import { getAgentBridge } from '../../agent/bridge';
 import { toolCallCommand, type AgentCardBody, type AgentStage } from '../../../shared/components/AgentProcessCard';
 import type { StreamItem } from '../../agent/store/agent';
 import { useImStore } from '../store/im';
@@ -20,6 +21,31 @@ const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 export async function getEmbeddedSessionId(convId: string): Promise<string | null> {
   const map = (await localMetaGet<Record<string, string>>(MAP_KEY)) ?? {};
   return map[convId] ?? null;
+}
+
+/** 映射有效性校验+自愈（2026-11-16 幽灵映射事故）：映射可能指向 RT 已不存在的
+ *  会话（旧壳/运行库换轨遗留——agent_input 打幽灵 id 被 RT 拒且全部静默）。
+ *  权威判据 = session_list；幽灵则清映射返回 null（走重建：丢上下文好过永久静默死）。
+ *  校验链路自身异常时保守放行（不阻断发送，失败由错误卡兜底）。 */
+export async function validEmbeddedSessionId(convId: string): Promise<string | null> {
+  const sid = await getEmbeddedSessionId(convId);
+  if (!sid) return null;
+  try {
+    const known = (await getAgentBridge().listSessions()).some((s) => s.id === sid);
+    if (known) return sid;
+  } catch {
+    return sid;
+  }
+  await clearEmbeddedSessionId(convId);
+  return null;
+}
+
+/** 清除会话映射（幽灵自愈用；只删本 conv 行不动其他） */
+export async function clearEmbeddedSessionId(convId: string): Promise<void> {
+  const map = (await localMetaGet<Record<string, string>>(MAP_KEY)) ?? {};
+  if (!map[convId]) return;
+  delete map[convId];
+  await localMetaSet(MAP_KEY, map);
 }
 
 export async function setEmbeddedSessionId(convId: string, sessionId: string): Promise<void> {
