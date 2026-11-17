@@ -8,7 +8,7 @@
 
 | # | 决策 | 内容 |
 |---|------|------|
-| 1 | **工作台中栏弃卡片改平铺流** | 回合不再包 AgentProcessCard 大卡；过程条目平铺（无头像、全宽、类型化块）；**用户消息也改平铺块**（弃右侧主色气泡）；收口后过程折叠为一行统计+正文常开 |
+| 1 | **工作台中栏弃卡片改平铺流** | 回合不再包 AgentProcessCard 大卡；过程条目平铺（无头像、全宽、类型化块）；收口后过程折叠为一行统计+正文常开。**用户消息：2026-11-17 二改修订——回归右对齐主色气泡**（黑白反色：主色底+基色字，token 随 D27 主题/accent 切换联动；初版「也改平铺块」作废），agent 侧保持平铺流 |
 | 2 | **skill 感知 = 显式 `skill` 内置工具**（Claude Code 同款） | 不是 shell 读文件、不做 skill_manage（装卸已有 tools.reload 通道）；工具名 `skill`、args `{name}`、**结果=SKILL.md 正文**（天然注入上下文）；走现有 toolCall/toolResult 通道——时间线天然工具卡、WAL 自动记录、risk 取 frontmatter（high 可挂审批）、协议零扩展；**移除隐式触发词注入**（match_for 自动注入路径退役）——技能加载统一显式调用，机制单一可见 |
 | 3 | **子 agent 侧栏 = 复用右栏 aside，tab 管理** | AgentContextSidebar 改 antd Tabs（会话信息/运行记录/检查点/记忆+新「运行详情」）；运行详情视图内用与中栏同一 `AgentStreamView` 渲染该 run 完整过程（「与主 agent 一样，但不在一个窗口」的落点）；该 tab 激活时 aside 加宽至 ~480px |
 | 4 | **IM 内嵌卡不动，工作台新写**（修订 2026-11-11「两处同一实现」拍板） | AgentProcessCard 归 IM 落流卡/发起者卡专用（服务端 stages 协议不动）；工作台新写 `features/agent/components/stream/` 组件族；MarkdownText 等原子件继续共用；stagesFromStream 投影归 IM 卡专用 |
@@ -66,8 +66,8 @@
 
 | 条目 | 组件 | 形态 |
 |---|---|---|
-| user | `UserBlock` | 左侧全宽轻边框/浅底平铺块（弃右气泡） |
-| reasoning | `ReasoningBlock` | 灰底小字块「思考中…/思考过程」，流式强制展开、段末自动折叠（ThinkingCollapse 语义迁移） |
+| user | `UserBlock` | **右对齐主色气泡**（2026-11-17 二改：黑白反色主色底+基色字，token 随 D27 主题/accent 切换联动；maxWidth 88%） |
+| reasoning | `ReasoningBlock` | 灰底块「思考中…/思考过程」：流式默认展开、段末自动折叠、手动可翻转；**未展开=单行「当前行」预览**（最后一个非空行、不折行、超宽横向滚动、流式自动跟尾、换行即切新行——2026-11-17 二改，与共享 ThinkingCollapse 分叉，IM 不受影响） |
 | agentText（中间轮） | `MidText` | 弱化正文段（左边框+次要色，zcode 中间说明段形态） |
 | agentText（最终） | 正文 | 全宽 MarkdownText + 流式光标 |
 | tool | `ToolBlock`（家族分流） | 见下表 |
