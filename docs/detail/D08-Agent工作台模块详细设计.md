@@ -1,5 +1,7 @@
 # D08 - Agent 工作台模块详细设计（UI 层）
 
+> **⚠ 2026-11-17 口径修订（D33）**：§3.3 PAG-03 中栏渲染规范已由 [D33-工作台 Agent 消息流渲染设计](D33-工作台Agent消息流渲染设计.md) 接管——中栏弃「回合卡片」（AgentProcessCard）改 zcode 式平铺消息流（类型化块/工具族细分/收口折叠一行统计/用户消息平铺块）；§8 stream/ 组件目录按 D33 §3.5 落位；AgentProcessCard 归 IM 内嵌卡专用（修订 D18 §3.4/D19 §7「两处同一实现」拍板）。本篇 §3.3/§8 留作历史。
+
 > **D19 落地注记（2026-11-10）**：§B 工作区组已随 D19 实施——workspace 登记/列表走协议 workspace.register/list/forget（agent_workspace 表接线，realpath upsert）；「打开目录」=系统选择器（plugin-dialog）即显式信任（§4.4 精细确认登记阶段二）；会话列表持久恢复=session.list REQ；新会话默认=日常对话（无工作目录），项目会话绑定目录且沙箱根=该目录。过程显示（§3.3 思考/工具卡）已对齐 change-my-life 效果（流式展开/自动折叠/工具组汇总条）。详见 D19。
 
 
