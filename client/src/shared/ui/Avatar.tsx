@@ -3,6 +3,7 @@
  * 名字 djb2 hash → 10 色企业系色板稳定取色；群聊/广播群显示图标底。
  */
 
+import type { CSSProperties } from 'react';
 import { Avatar as AntdAvatar } from 'antd';
 import { Megaphone, Users } from 'lucide-react';
 
@@ -27,7 +28,8 @@ function hashName(name: string): number {
   return h;
 }
 
-export type AvatarSize = 24 | 32 | 40 | 64;
+/** 任意像素值皆可（通讯录 22/72 等非标准档；fontSize/iconSize 均按 size 派生） */
+export type AvatarSize = number;
 export type AvatarGroup = 'group' | 'broadcast';
 
 interface AvatarProps {
@@ -36,9 +38,11 @@ interface AvatarProps {
   /** group=群聊图标底；broadcast=广播群（橙底喇叭，飞书式警示感） */
   group?: AvatarGroup | null;
   className?: string;
+  /** 行内布局透传（如 flex:'none'；后写覆盖默认取色样式） */
+  style?: CSSProperties;
 }
 
-export function Avatar({ name, size = 40, group = null, className }: AvatarProps) {
+export function Avatar({ name, size = 40, group = null, className, style }: AvatarProps) {
   const color = group === 'broadcast' ? '#f0872c' : PALETTE[hashName(name) % PALETTE.length];
   const iconSize = Math.round(size * 0.5);
 
@@ -47,7 +51,7 @@ export function Avatar({ name, size = 40, group = null, className }: AvatarProps
       className={className}
       shape="square"
       size={size}
-      style={{ backgroundColor: color, color: '#fff', fontSize: Math.round(size * 0.38), fontWeight: 500 }}
+      style={{ backgroundColor: color, color: '#fff', fontSize: Math.round(size * 0.38), fontWeight: 500, ...style }}
     >
       {group === 'group' ? (
         <Users size={iconSize} strokeWidth={2} />

@@ -3,10 +3,10 @@
  * - 单棵树：全公司 → 部门树 → 用户叶子（按主部门挂靠；未挂部门用户归虚拟「未分组」）
  * - 搜索与聊天页同款：输入先出下拉结果（联系人段=服务端四路检索；组织段=树内名称过滤），
  *   点击结果定位回树——展开祖先 + 滚动入视 + 闪烁高亮（不直接跳走）
- * - 交互：双击用户 → 发起单聊直达（conv.create type=1 幂等）；hover 用户 → 详情卡
- *   （姓名/工号/组织链路 + 发消息）；管理动作仍在 /admin/org
+ * - 交互：双击用户 → 发起单聊直达（conv.create type=1 幂等）；点部门节点标题即展开/收缩
+ *   （expandAction=click，2026-11-17）；hover 详情卡已按用户口径退役；管理动作仍在 /admin/org
  * 数据源：GET /org/tree + GET /org/users（全量翻页拉齐后端内组树）。
- * D26-O3 antd 换装：树→antd Tree（titleRender 图标/人数 Tag/hover Popover 详情卡/徽标）；
+ * D26-O3 antd 换装：树→antd Tree（titleRender 图标/人数 Tag/徽标）；
  * 搜索下拉→Popover+Menu（分组段+禁用占位行）；右侧档案→Card+Descriptions+Breadcrumb；
  * 头像→Avatar、等宽字→Text code、提示→Text secondary、alert→Modal.error；
  * 布局内联 style + antd token（bbc-contacts / org-node / icon-btn 等自研样式全退役，
@@ -42,6 +42,7 @@ import { convCreate } from '../../im/api/im';
 import { qk } from '../../../shared/api/keys';
 import { errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
+import { Avatar as UserAvatar } from '../../../shared/ui/Avatar';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useAuthStore } from '../../auth/store/auth';
 
@@ -290,59 +291,21 @@ export function ContactsPage() {
     return [{ key: deptDomId('root'), title: '全公司', isLeaf: false, children }];
   }, [tree.data, grouped]);
 
-  /** 用户叶子行（Tree title 内：hover 详情卡 + 双击进聊；点击选中由 Tree onSelect 接管） */
+  /** 用户叶子行（Tree title 内：双击进聊；点击选中由 Tree onSelect 接管；2026-11-17 hover 详情卡按用户口径退役） */
   const renderUserRow = (u: DirectoryUser) => (
-    <Popover
-      trigger="hover"
-      mouseEnterDelay={0.35}
-      mouseLeaveDelay={0.15}
-      placement="right"
-      content={
-        <Flex gap={12} data-testid="contacts-user-card" style={{ minWidth: 220 }}>
-          <Avatar size={44} style={{ flex: 'none' }}>
-            {(u.display_name || '?').slice(0, 1)}
-          </Avatar>
-          <Flex vertical gap={4} style={{ minWidth: 0 }}>
-            <Space size={8}>
-              <span style={{ fontWeight: 500 }}>{u.display_name}</span>
-              <Typography.Text code>{u.employee_no}</Typography.Text>
-            </Space>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {u.org_path || '未分组'}
-            </Typography.Text>
-            {u.uid === myUid ? (
-              <Tag style={{ marginInlineEnd: 0 }}>我自己</Tag>
-            ) : (
-              <Button
-                size="small"
-                icon={<MessageCircle size={13} />}
-                disabled={dmBusy}
-                onClick={() => void startDm(u)}
-                data-testid="contacts-card-msg"
-              >
-                发消息
-              </Button>
-            )}
-          </Flex>
-        </Flex>
-      }
+    <span
+      data-node-id={userDomId(u.uid)}
+      data-testid="contacts-user-row"
+      title="双击发消息"
+      onDoubleClick={() => void startDm(u)}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, width: '100%' }}
     >
-      <span
-        data-node-id={userDomId(u.uid)}
-        data-testid="contacts-user-row"
-        title="双击发消息"
-        onDoubleClick={() => void startDm(u)}
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, width: '100%' }}
-      >
-        <Avatar size={22} style={{ flex: 'none', fontSize: 12 }}>
-          {(u.display_name || '?').slice(0, 1)}
-        </Avatar>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.display_name}</span>
-        <Typography.Text code type="secondary" style={{ fontSize: 12, flex: 'none' }}>
-          {u.employee_no}
-        </Typography.Text>
-      </span>
-    </Popover>
+      <UserAvatar name={u.display_name || '?'} size={22} style={{ flex: 'none' }} />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.display_name}</span>
+      <Typography.Text code type="secondary" style={{ fontSize: 12, flex: 'none' }}>
+        {u.employee_no}
+      </Typography.Text>
+    </span>
   );
 
   /** titleRender：根=全公司（人数）/未分组（人数）/部门（子树人数 + 路径 tooltip）/用户叶子（hover 卡） */
@@ -385,9 +348,7 @@ export function ContactsPage() {
   // ── 搜索下拉行（Popover+Menu；分组段=Menu group，加载/空态=禁用占位行） ──
   const ddUserLabel = (u: DirectoryUser) => (
     <Flex align="center" gap={8} style={{ minWidth: 0 }}>
-      <Avatar size={22} style={{ flex: 'none', fontSize: 12 }}>
-        {(u.display_name || '?').slice(0, 1)}
-      </Avatar>
+      <UserAvatar name={u.display_name || '?'} size={22} style={{ flex: 'none' }} />
       <span style={{ flex: 'none' }}>{u.display_name}</span>
       <Typography.Text code type="secondary" style={{ fontSize: 12, flex: 'none' }}>
         {u.employee_no}
@@ -474,9 +435,7 @@ export function ContactsPage() {
             wrap="wrap"
             style={{ padding: '28px 32px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
           >
-            <Avatar size={72} style={{ flex: 'none', fontSize: 26 }}>
-              {(u.display_name || '?').slice(0, 1)}
-            </Avatar>
+            <UserAvatar name={u.display_name || '?'} size={72} style={{ flex: 'none' }} />
             <Flex vertical gap={8} style={{ minWidth: 0 }}>
               <Flex align="center" gap={10} wrap="wrap">
                 <Typography.Title level={4} style={{ margin: 0 }}>
@@ -606,9 +565,7 @@ export function ContactsPage() {
                     onDoubleClick={() => void startDm(u)}
                   >
                     <Flex align="center" gap={10} style={{ minWidth: 0 }}>
-                      <Avatar size={32} style={{ flex: 'none' }}>
-                        {(u.display_name || '?').slice(0, 1)}
-                      </Avatar>
+                      <UserAvatar name={u.display_name || '?'} size={32} style={{ flex: 'none' }} />
                       <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {u.display_name}
@@ -721,6 +678,7 @@ export function ContactsPage() {
               blockNode
               treeData={treeData}
               titleRender={titleRender}
+              expandAction="click" /* 点节点标题即展开/收缩（2026-11-17 用户口径；叶子不受影响仍走选中） */
               expandedKeys={[...expanded]}
               selectedKeys={selectedId ? [selectedId] : []}
               onExpand={(keys) => setExpanded(new Set(keys.map(String)))}
