@@ -50,6 +50,7 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
   const reviewDelegate = useAgentStore((st) => st.reviewDelegate);
   const cancelDelegate = useAgentStore((st) => st.cancelDelegate);
   const sendRunInput = useAgentStore((st) => st.sendRunInput);
+  const openRunView = useAgentStore((st) => st.openRunView);
   const { imeEnterDecision, imeCompositionProps } = useImeGuard();
   const [draft, setDraft] = useState('');
   const [open, setOpen] = useState(false);
@@ -96,21 +97,33 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
         overflow: 'hidden',
       }}
     >
-      <button type="button" style={headToggleStyle} onClick={() => setOpen((v) => !v)}>
-        <ChevronRight
-          size={12}
-          aria-hidden
-          style={{ color: token.colorTextQuaternary, flexShrink: 0, transition: 'transform 0.15s ease', transform: open ? 'rotate(90deg)' : undefined }}
-        />
-        <TerminalSquare size={13} aria-hidden style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
-        <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
-          委派
-        </Typography.Text>
-        <Typography.Text code copyable={false} style={{ fontSize: 12, background: 'transparent', border: 'none', padding: 0, flexShrink: 0 }}>
-          {item.backend || '后端待定'}
-        </Typography.Text>
-        <span style={{ marginLeft: 'auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>{headStatus}</span>
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <button type="button" style={{ ...headToggleStyle, flex: 1, minWidth: 0 }} onClick={() => setOpen((v) => !v)}>
+          <ChevronRight
+            size={12}
+            aria-hidden
+            style={{ color: token.colorTextQuaternary, flexShrink: 0, transition: 'transform 0.15s ease', transform: open ? 'rotate(90deg)' : undefined }}
+          />
+          <TerminalSquare size={13} aria-hidden style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
+            委派
+          </Typography.Text>
+          <Typography.Text code copyable={false} style={{ fontSize: 12, background: 'transparent', border: 'none', padding: 0, flexShrink: 0 }}>
+            {item.backend || '后端待定'}
+          </Typography.Text>
+          <span style={{ marginLeft: 'auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>{headStatus}</span>
+        </button>
+        {/* D33：查看过程 → 右栏运行详情（childSessionRef 会话历史优先） */}
+        <Typography.Link
+          style={{ fontSize: 12, padding: '0 12px', flexShrink: 0 }}
+          onClick={(e) => {
+            e.stopPropagation();
+            openRunView(item.runId);
+          }}
+        >
+          查看过程
+        </Typography.Link>
+      </div>
 
       {item.phase === 'brief' ? (
         <div

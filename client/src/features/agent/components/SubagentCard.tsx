@@ -35,6 +35,7 @@ export const SubagentCard = memo(function SubagentCard({ item }: { item: Subagen
   const [open, setOpen] = useState(false);
   const sendRunInput = useAgentStore((st) => st.sendRunInput);
   const cancelRun = useAgentStore((st) => st.cancelRun);
+  const openRunView = useAgentStore((st) => st.openRunView);
   const { imeEnterDecision, imeCompositionProps } = useImeGuard();
   const [draft, setDraft] = useState('');
 
@@ -66,21 +67,33 @@ export const SubagentCard = memo(function SubagentCard({ item }: { item: Subagen
         overflow: 'hidden',
       }}
     >
-      <button type="button" style={headToggleStyle} onClick={() => setOpen((v) => !v)}>
-        <ChevronRight
-          size={12}
-          aria-hidden
-          style={{ color: token.colorTextQuaternary, flexShrink: 0, transition: 'transform 0.15s ease', transform: open ? 'rotate(90deg)' : undefined }}
-        />
-        <Radar size={13} aria-hidden style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
-        <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
-          子任务
-        </Typography.Text>
-        <Typography.Text ellipsis style={{ minWidth: 0, fontSize: 12 }}>
-          {item.taskDigest}
-        </Typography.Text>
-        <span style={{ marginLeft: 'auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>{statusNode}</span>
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <button type="button" style={{ ...headToggleStyle, flex: 1, minWidth: 0 }} onClick={() => setOpen((v) => !v)}>
+          <ChevronRight
+            size={12}
+            aria-hidden
+            style={{ color: token.colorTextQuaternary, flexShrink: 0, transition: 'transform 0.15s ease', transform: open ? 'rotate(90deg)' : undefined }}
+          />
+          <Radar size={13} aria-hidden style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
+            子任务
+          </Typography.Text>
+          <Typography.Text ellipsis style={{ minWidth: 0, fontSize: 12 }}>
+            {item.taskDigest}
+          </Typography.Text>
+          <span style={{ marginLeft: 'auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>{statusNode}</span>
+        </button>
+        {/* D33：查看过程 → 右栏运行详情（与主渲染器同款过程流） */}
+        <Typography.Link
+          style={{ fontSize: 12, padding: '0 12px', flexShrink: 0 }}
+          onClick={(e) => {
+            e.stopPropagation();
+            openRunView(item.runId);
+          }}
+        >
+          查看过程
+        </Typography.Link>
+      </div>
       {item.status === 'running' ? (
         <div
           style={{

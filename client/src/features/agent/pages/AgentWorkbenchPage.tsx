@@ -152,6 +152,8 @@ export function AgentWorkbenchPage() {
   // 任何会话（含后台 embedded）每个 delta 都整页重渲；selector 现仅取本会话数组
   // 引用（O(1)），其它会话的更新不再波及本页
   const items = useAgentStore((s) => (s.activeSessionId ? s.streams[s.activeSessionId] : undefined)) ?? EMPTY_ITEMS;
+  // D33：运行详情（右栏 aside 宽度随其激活加宽；侧栏自身订阅过程流数据）
+  const activeRunView = useAgentStore((s) => s.activeRunView);
   const runs = activeSessionId ? (runsBySession[activeSessionId] ?? []) : [];
 
   // run 面板数据（D16 §3.1）：会话切换时拉取；生命周期事件触发的刷新在 store 内
@@ -529,11 +531,11 @@ export function AgentWorkbenchPage() {
           )}
         </section>
 
-        {/* 右：上下文栏（可折叠） */}
+        {/* 右：上下文栏（可折叠；D33 运行详情激活时加宽至 480 承载过程流） */}
         {activeSession && sideOpen ? (
           <aside
             style={{
-              width: 304,
+              width: activeRunView ? 480 : 304,
               flexShrink: 0,
               borderLeft: `1px solid ${token.colorBorderSecondary}`,
               background: token.colorBgContainer,
