@@ -109,7 +109,7 @@ Agent 是 BaobaoChat 的一等公民（00 篇 §2.2）：一个运行在员工�
 
 ```
 ┌───────────────────────────── Agent 工作台 ──────────────────────────────────┐
-│ 权限模式: [auto-edit v]  模型: [强 v]  工作区: ~/code/bbw-server  ●运行中  ⏸ ■ │
+│ 权限模式: [auto-edit v]  模型: [强 v]  工作区: ~/code/bbc-server  ●运行中  ⏸ ■ │
 ├──────────┬────────────────────────────────────────────────┬─────────────────┤
 │ 会话列表  │  ── 流式对话 / 终端输出 / 文件改动时间线 ──        │ 待审批队列 (2)   │
 │ ● 修复登录│                                                 │ ┌命令执行──────┐ │
@@ -120,10 +120,10 @@ Agent 是 BaobaoChat 的一等公民（00 篇 §2.2）：一个运行在员工�
 │          │  > 终端: cargo test --lib                        │ │ auth.rs ±12  │ │
 │ 📁 工作区 │    running 12 passed ...                        │ │ [查看diff]    │ │
 │ ~/code/  │  ── 文件改动时间线 ──                             │ │ [批准] [拒绝] │ │
-│  bbw-svr │  14:02  auth.rs     +8/-4   [检查点 cp3]          │ └──────────────┘ │
+│  bbc-svr │  14:02  auth.rs     +8/-4   [检查点 cp3]          │ └──────────────┘ │
 │ 最近打开: │  14:05  session.rs +2/-2                          │ 检查点:          │
 │ ~/code/  │                                                 │ cp3 14:02 [恢复]│
-│  bbw-web │ [输入: 继续任务…                        发送  ^升档│ cp2 13:58 [恢复]│
+│  bbc-web │ [输入: 继续任务…                        发送  ^升档│ cp2 13:58 [恢复]│
 │          │  到强模型]                                      │ (拖拽审批顺序)   │
 └──────────┴────────────────────────────────────────────────┴─────────────────┘
 ```
@@ -250,7 +250,7 @@ compacting: 快模型将"最旧一半轮次"摘要为归档段(bullet)
 |---|---|
 | 检测 | 打开工作区时自动探测 git 仓库；非 git 目录提示"建议 git init 以启用检查点保护"，仍可工作但无检查点 |
 | 时机 | 每个修改类工具（write_file/edit_file/run_command 修改型/git 提交类）**首次执行前**自动创建；同批连续修改共用一个检查点（间隔 > 5 min 或跨任务再建） |
-| 实现 | stash 式快照：已跟踪文件的修改以 `git stash create` 等价物落到隐藏 ref `refs/bbw-agent/{session_id}/cp-{n}`；未跟踪新增文件记录清单（不搬移文件） |
+| 实现 | stash 式快照：已跟踪文件的修改以 `git stash create` 等价物落到隐藏 ref `refs/bbc-agent/{session_id}/cp-{n}`；未跟踪新增文件记录清单（不搬移文件） |
 | 内容 | checkpoint 记录：ref、未跟踪清单、改动文件列表、触发原因（pre-edit/pre-command/manual） |
 | 恢复 | 工作台右栏检查点列表 → "恢复"= 逆向应用该检查点之后的工作区修改（不触碰用户更早的提交），恢复前二次确认并自动先做一次当前状态快照 |
 | 上报 | `checkpoint.event` 经 stdio 上报，UI 时间线打检查点标记（§3.3） |
@@ -384,7 +384,7 @@ new → starting → active ⇄ thinking ⇄ tool_running            │
 
 ### 6.2 ai-gateway 调用约定（复用既有接口，非新增）
 
-- `POST /v1/chat/completions`（OpenAI 兼容，SSE），`Authorization: Bearer <OBO token>`；请求头带 `X-BBW-Agent-Session` 供网关按会话计量（01 篇 §5.5、12 篇用量）。
+- `POST /v1/chat/completions`（OpenAI 兼容，SSE），`Authorization: Bearer <OBO token>`；请求头带 `X-BBC-Agent-Session` 供网关按会话计量（01 篇 §5.5、12 篇用量）。
 - 工具定义以 OpenAI tools 格式下发，schema 由 10 篇工具注册表生成（对齐 MCP tool jsonschema）。
 
 ### 6.3 REST（云端备份，可选开启）

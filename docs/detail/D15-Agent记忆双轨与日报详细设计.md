@@ -57,7 +57,7 @@ links: [<其他slug>]           # 关联记忆（可悬空，标记待补）
 |---|---|---|---|
 | W1 | 模型工具 `memory.save{title, type, body, links?}` | 系统提示携带正式记忆使用规范（何时记/四类怎么选/先查重再写/不记清单），引导模型在学到持久事实时调用（工具注册表登记，风险级=低，全档放行——只写本机记忆目录） | knowledge::save()；引导语在 loop_runner SYSTEM_PROMPT（v0.2 已落实） |
 | W2 | 规则触发（免模型兜底） | ① 用户消息匹配"记住/以后/下次…"模式 → 即时提取候选（标题=首 40 字）② 同一工具同一错误连续 ≥2 次 → 自动记 feedback 教训（loop_runner 工具轮喂 ErrorTracker，v0.2 已接线） | heuristic 模块，可关（`memory.heuristic=off`；开关随配置系统接线，v0.1 恒开） |
-| W3 | 会话结束提炼 | session.ended 时把会话转录（User/Assistant 文本轮，总量 ≤8K 字符）交 bbw-fast 提炼为 ≤3 条候选 JSON，逐条过 save（同题去重兜底）；失败/不可解析静默跳过，不阻塞收口 | loop_runner::distill_memories（v0.2 已落地；原"依赖压缩摘要"改为独立提炼调用） |
+| W3 | 会话结束提炼 | session.ended 时把会话转录（User/Assistant 文本轮，总量 ≤8K 字符）交 bbc-fast 提炼为 ≤3 条候选 JSON，逐条过 save（同题去重兜底）；失败/不可解析静默跳过，不阻塞收口 | loop_runner::distill_memories（v0.2 已落地；原"依赖压缩摘要"改为独立提炼调用） |
 
 写入规则：**同题更新不重复**——新条目 title 与既有条目相似（slug 相等或 title 完全相等）→ 原地更新正文与 updated_at（保留 created_at），否则新增。删除仅经 UI（memory.delete），无 TTL 自动删。
 

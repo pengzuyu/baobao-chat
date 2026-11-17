@@ -12,7 +12,7 @@
 | 2 | TLS | **本次一并补**：bbrt-mcp 引 rustls（ring 后端）+ webpki-roots，手写 HTTP/1.1 加 TLS 层；SSE/streamable 仍不做（→OQ-2） |
 | 3 | 存储 | **纯客户端本地**：personal.json + 钥匙串真值，真值不经服务端——与插件 config 同制（D22 §6.1/L4） |
 | 4 | 优先级 | corp > 插件 > 个人，同名跳过+告警（D22 防劫持口径顺延）；`corp` 为保留名 |
-| 5 | 变量族 | 复用 D22 §6.1 子集：`${BBW_USER_ID}`/`${BBW_USER_NAME}` 装配静态替换；`${BBW_USER_TOKEN}` HTTP headers 留 RT 调用层动态替换、stdio env 置空（HTTP-only 约定不变）；个人面**无** `${PLUGIN_ROOT}`/`${CONFIG:*}` |
+| 5 | 变量族 | 复用 D22 §6.1 子集：`${BBC_USER_ID}`/`${BBC_USER_NAME}` 装配静态替换；`${BBC_USER_TOKEN}` HTTP headers 留 RT 调用层动态替换、stdio env 置空（HTTP-only 约定不变）；个人面**无** `${PLUGIN_ROOT}`/`${CONFIG:*}` |
 | 6 | 测试连接 | **走 RT 真实链路**：协议 `McpTest`/`McpTestResult`，一次性 McpClient 即弃——TLS、TOKEN 动态注入、懒连接全走生产代码，测的就是真实路径 |
 
 ## 1. 范围与不做
@@ -56,7 +56,7 @@
 - **校验**（upsert 时）：
   - name 同 Go `reMcpServerID`（`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`，plugin_validate.go:95——server 名即 `mcp.{name}.*` 命名空间段），保留名 `corp` 拒绝；
   - stdio 须非空 `command`；http 须 `http://` 或 `https://` 开头的 url；
-  - **usesIdentity 探测**：任一 env/header 值含 `${BBW_USER_TOKEN}` → 列表回显该标记（UI 警示「将以你的身份调用」，同插件口径）。
+  - **usesIdentity 探测**：任一 env/header 值含 `${BBC_USER_TOKEN}` → 列表回显该标记（UI 警示「将以你的身份调用」，同插件口径）。
 - 删除 = 文件条目删除 + 该 server 全部钥匙串条目删除。
 
 ## 3. 壳命令层（`client/src-tauri/src/mcp_commands.rs` 新文件）
@@ -78,7 +78,7 @@
 
 1. **corp**（不变）：HTTP 网关，进程 env 兜底 + 装配覆盖；
 2. **插件**（不变）：各启用插件 activeVersion 的 `.mcp.json`/内联 mcpServers；
-3. **personal（新）**：读 `eco/mcp/personal.json`，跳过 `enabled=false`，env/header 合并钥匙串真值，逐条复用 `mcp_server_wire(name, def, /*plugin_root*/ "", &user, /*config*/ 空表)`——`${BBW_USER_ID/NAME}` 照常静态替换、headers 中 `${BBW_USER_TOKEN}` 照常保留给 RT、stdio env 置空，无 PLUGIN_ROOT/CONFIG 语义（个人面不使用）。
+3. **personal（新）**：读 `eco/mcp/personal.json`，跳过 `enabled=false`，env/header 合并钥匙串真值，逐条复用 `mcp_server_wire(name, def, /*plugin_root*/ "", &user, /*config*/ 空表)`——`${BBC_USER_ID/NAME}` 照常静态替换、headers 中 `${BBC_USER_TOKEN}` 照常保留给 RT、stdio env 置空，无 PLUGIN_ROOT/CONFIG 语义（个人面不使用）。
 
 **同名冲突**：`taken` 表顺延——corp 先占、插件次之、**个人同名跳过**（eprintln 告警；UI 不预检，装配层防劫持兜底）。
 
@@ -110,7 +110,7 @@
   - `usesIdentity` 警示条「将以你的身份调用」（同 PluginPage L265 口径）；
   - 编辑器：kind 二选一；stdio=command + args（每行一条）+ env 键值行；http=url + headers 键值行；**逐值「密文」checkbox** → 该键入 `secretKeys`（已存 secret 留空=不改，空串不覆盖钥匙串真值——同 plugin_write_config 语义）；
   - 顶部提示条：「新增/修改 server 后需重启会话，工具才会进入模型工具列表」（插件同口径）；
-  - 变量族帮助文案：`${BBW_USER_TOKEN}`/`${BBW_USER_ID}`/`${BBW_USER_NAME}` 三行小表（含 TOKEN 仅 HTTP headers 可用、stdio env 置空约定）。
+  - 变量族帮助文案：`${BBC_USER_TOKEN}`/`${BBC_USER_ID}`/`${BBC_USER_NAME}` 三行小表（含 TOKEN 仅 HTTP headers 可用、stdio env 置空约定）。
 - **i18n**：`shared/i18n/index.ts` 中英词条（tab 名/页面/表单/错误）。
 
 ## 8. 分批提交（每批一提交一推送）
@@ -130,7 +130,7 @@
 3. **https 公网**：连任一公网 https MCP server 连通（TLS 握手+工具列表正常）；
 4. **secret 不落盘**：personal.json 中 secret 值恒为 `""`，钥匙串 app 密码项可见真值；列表回读不泄漏；
 5. **同名冲突**：登记与插件同名 server → 装配跳过且 bbrt.log 有告警，插件工具不受影响；
-6. **TOKEN 动态**：headers 用 `${BBW_USER_TOKEN}` 的 server，登录态变化后无需重配即可用；
+6. **TOKEN 动态**：headers 用 `${BBC_USER_TOKEN}` 的 server，登录态变化后无需重配即可用；
 7. **启停/删除**：禁用即从 mcp.config 移除（已建会话内工具标灰），删除连钥匙串条目一起清；
 8. **重启口径**：新增 server 后旧会话不出现其工具、新会话出现（注册表快照限制的正面确认）。
 

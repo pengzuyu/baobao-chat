@@ -78,7 +78,7 @@ ALTER TABLE agent_event ADD COLUMN run_id TEXT NOT NULL DEFAULT '';
 
 - 本地链：`root_session_id → session → run(run_id) → 事件`；委派链补齐 `child.tool_use`（17 篇 §5.3）。
 - **三处断链修复**（P0-2）：① `delegate_bridge` 的 `LaunchOpts.parent_session_id` 传空串；② `respond_delegate` 广播改按 delegate_task_id/run_id 定向路由；③ `bridge.rs` DelegateEnd 上行丢 changed_files/checkpoint_id/child_session_ref。
-- 服务端侧：aigw 归因头 `X-BBW-Agent-Session`＋`X-BBW-Scene(delegate/expert)` 已有，后续把 run_id 带入归因头即可在 `ai_usage_hourly` 上串起成本链（阶段二，随 run 上收）。
+- 服务端侧：aigw 归因头 `X-BBC-Agent-Session`＋`X-BBC-Scene(delegate/expert)` 已有，后续把 run_id 带入归因头即可在 `ai_usage_hourly` 上串起成本链（阶段二，随 run 上收）。
 
 ## 5. 同步/异步与 ETA（对应总体要求 6）
 

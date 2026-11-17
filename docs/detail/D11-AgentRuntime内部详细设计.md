@@ -182,7 +182,7 @@ bbrt-delegate/src/
 ├─ generic.rs        # 通用 CLI（行文本→stream.delta；仅 auto-edit+ 可用）
 ├─ builtin.rs        # 内置后端桥（进程内 08 篇循环，天然归一化）
 ├─ normalize.rs      # 子智能体事件→本协议事件（§8.3 映射表）
-├─ procmgr.rs        # 进程组：新 pgid + BBW_SANDBOX=1 标记；取消协议（§8.4）；遗留进程扫描清理
+├─ procmgr.rs        # 进程组：新 pgid + BBC_SANDBOX=1 标记；取消协议（§8.4）；遗留进程扫描清理
 ├─ health.rs         # detect(--version) + 最小 headless 冒烟（§8.5）；版本能力矩阵
 ├─ workspace_lock.rs # 同工作区互斥文件锁（8035）
 └─ brief.rs          # TaskBrief 结构化构造与校验（forbidden 转子进程约束）
@@ -192,7 +192,7 @@ bbrt-delegate/src/
 
 ### 2.7 bbrt-aigw
 
-职责：ai-gateway 调用（HTTPS+SSE、用户 OBO token、X-BBW-Agent-Session 头）、失败重试与降档（08 §4.6）、用量计量。
+职责：ai-gateway 调用（HTTPS+SSE、用户 OBO token、X-BBC-Agent-Session 头）、失败重试与降档（08 §4.6）、用量计量。
 
 ```
 bbrt-aigw/src/
@@ -522,7 +522,7 @@ function fanout(session, subtasks):        # 触发：快模型判定 complex（
 ```
 cancel(graceful=true):  SIGINT(pgid) → 等 3s → 未退出则 SIGKILL 整进程树（递归 pgid/任务对象）
 cancel(graceful=false): 直接 SIGKILL 树
-启动即：setsid/posix_spawn setpgid/Job Object + env BBW_SANDBOX=1
+启动即：setsid/posix_spawn setpgid/Job Object + env BBC_SANDBOX=1
 Runtime 启动时扫描"带标记且父进程已死"的遗留进程并清理（09 §4.6）
 ```
 
@@ -615,7 +615,7 @@ CREATE INDEX idx_event_session ON agent_event(session_id, seq);
 CREATE TABLE agent_checkpoint (
   id             TEXT PRIMARY KEY,             -- cp-<ulid>
   session_id     TEXT NOT NULL REFERENCES agent_session(id),
-  git_ref        TEXT,                         -- refs/bbw-agent/{session}/cp-{n}
+  git_ref        TEXT,                         -- refs/bbc-agent/{session}/cp-{n}
   untracked      TEXT,                         -- JSON: 未跟踪文件清单
   files_changed  TEXT NOT NULL,                -- JSON: [{path,add,del}]
   reason         TEXT NOT NULL CHECK(reason IN('pre-edit','pre-command','manual','delegate','pre-restore')),

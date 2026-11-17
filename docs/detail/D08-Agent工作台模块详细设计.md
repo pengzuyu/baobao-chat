@@ -166,7 +166,7 @@ Agent 工作台是 Agent 能力的唯一 UI 载体，覆盖两种会话形态（
 
 ```
 ┌─ ⚠ 命令执行请求 ── risk:高 ────────────── 剩余 118s ──────┐
-│ 工作目录: ~/code/bbw-server（白名单内 ✓）                  │
+│ 工作目录: ~/code/bbc-server（白名单内 ✓）                  │
 │ 命令(可编辑): [ cargo test --lib                 ] ✎改后执行│
 │ 危险标识: 🚫 sudo 提权 → 已按规则拒绝（8021）   ← 命中拒绝类 │
 │          ⚠ 规则未命中 · 快模型分类: 中危(构建类) ← 需确认    │
@@ -458,7 +458,7 @@ reviewing ──[全部拒绝/逐hunk拒绝]─────────► rejec
 
 // invoke('agent_approve', {...})  // 命令卡：改命令 + 会话记忆
 { "request_id": "pr-1042", "scope": "session",
-  "edited_args": { "command": "cargo test --lib -- --nocapture", "cwd": "/Users/dev/code/bbw-server" } }
+  "edited_args": { "command": "cargo test --lib -- --nocapture", "cwd": "/Users/dev/code/bbc-server" } }
 // →
 { "ok": true }
 
@@ -674,7 +674,7 @@ src/features/agent/
 |---|---|
 | 审批积压（用户离开） | 单卡 120s 超时=拒绝；≥3 次超时自动 paused（09 §7.4）→ 状态点灰 + 横幅 |
 | Runtime 不可用且重启耗尽 | 工作台只读态：历史会话可浏览（本地库），新输入禁用；PAG-08 提供重试 |
-| 委派中 Runtime 崩溃 | 委派子进程由宿主接管清理（BBW_SANDBOX 标记扫描）；恢复后 delegate_task 标 failed(8033) 待续接 |
+| 委派中 Runtime 崩溃 | 委派子进程由宿主接管清理（BBC_SANDBOX 标记扫描）；恢复后 delegate_task 标 failed(8033) 待续接 |
 | 会话被吊销（agent.revoked） | 会话卡片锁定 + "已被管理员吊销"；未决审批全部 cancelled |
 | 策略热变更（agent.policy.updated） | 黄条 "安全策略已更新，进行中的相关工具调用将重新确认"（09 §6.3） |
 | 同工作区并发会话 | 新会话提示 "另一会话正在使用此工作区" 冲突风险（08 §7）+ 委派互斥 8035 |

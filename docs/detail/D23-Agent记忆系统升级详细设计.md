@@ -43,7 +43,7 @@ D15 v0.2 + D19 已实现资产（标注 D23 去向）：
 | 资产 | 现状 | D23 去向 |
 |---|---|---|
 | 知识记忆文件族 | 用户级 `{dataDir}/agent/memory/{MEMORY.md,slug.md}`；项目级 `…/memory/projects/<目录名-哈希>/` | 项目层**原样沿用**；用户层换制（§2 迁移） |
-| 三写入路径 | W1 `memory_save` 工具（SYSTEM_PROMPT 引导）/W2 heuristic（「记住/以后/下次」模式+同工具同错连续 2 次）/W3 会话结束 bbw-fast 提炼 ≤3 条 | 三路**全部改灌 journal→重投影**（§3.6） |
+| 三写入路径 | W1 `memory_save` 工具（SYSTEM_PROMPT 引导）/W2 heuristic（「记住/以后/下次」模式+同工具同错连续 2 次）/W3 会话结束 bbc-fast 提炼 ≤3 条 | 三路**全部改灌 journal→重投影**（§3.6） |
 | 召回分档 | 条目 ≤50 → MEMORY.md 全量；>50 → Top-K 关键词精排（CJK 2-gram+ASCII 整词） | 项目层沿用；用户层换 USER.md 全文（§6） |
 | 同题更新 | slug 相同或 title 相等→原地更新（保留 created_at） | 项目层沿用；用户层由 forget+write/journal 重放承接 |
 | LRU 淘汰 | 总条数 ≤200，最旧淘汰 | **废除**（拍板 B） |
@@ -65,7 +65,7 @@ D15 v0.2 + D19 已实现资产（标注 D23 去向）：
 ```
 
 - **一次性迁移（bbrt 启动执行，幂等）**：既有用户级 slug.md 文件族逐条转 `{op:"add"}` 灌入 journal（四类→十类映射见 §3.1），重投影生成首个 USER.md，旧文件移 `archive/`；项目分区零迁移。
-- `BBW_MEMORY_ROOT` env 覆盖记忆根——测试/联调隔离（防 :8090 测试期 agent 脏记忆污染日常 USER.md；与 BBW_RT_DEFAULT_WORKSPACE 同族模式）。
+- `BBC_MEMORY_ROOT` env 覆盖记忆根——测试/联调隔离（防 :8090 测试期 agent 脏记忆污染日常 USER.md；与 BBC_RT_DEFAULT_WORKSPACE 同族模式）。
 - P2 同步到来时：老根整体 mv 进 `u-{uid}/` 一层即完成按用户切分（拍板 #2），非重构。
 
 ## 3. 公共层（global）设计
@@ -116,7 +116,7 @@ reproject():
       原子写（temp+rename）
   else:
       硬 = 禁止/授权条目（程序保留，不进 LLM 输入）
-      软 = 其余条目 → bbw-fast 压缩（目标 ≤2400 字）
+      软 = 其余条目 → bbc-fast 压缩（目标 ≤2400 字）
       candidate = render(硬) + render(压缩后软)
       校验：总长 ≤3000 且格式合法 → 原子写
             否则保留旧 USER.md（宁旧勿错；journal 无损，下次再试）
@@ -152,7 +152,7 @@ reproject():
 |---|---|
 | W1 `memory_save` | type 参数改**双枚举**：global 十类 / 项目 project·feedback·reference（分区路由不动）；global 写入=append+reproject；**日常会话 project 类回落 global**（落地修订 A：以 `[教训]` 类落 USER.md） |
 | W2 heuristic | 「记住…」候选与连续同错教训，先过统一判据门禁再灌 journal——**自动路径判据不过则丢弃**（自动写不能污染预算） |
-| W3 会话收尾提炼 | bbw-fast 候选逐条过判据+十类归类后灌 journal；提炼与压实共用 fast 档调用设施 |
+| W3 会话收尾提炼 | bbc-fast 候选逐条过判据+十类归类后灌 journal；提炼与压实共用 fast 档调用设施 |
 
 ## 4. 项目层（projects）设计
 
@@ -199,7 +199,7 @@ reproject():
 | 脱敏 | masking 沿用（journal/USER.md/分区文件写前打码；密钥特征拒写） |
 | 本地性 | 零网络行为；P2 前不上服务端；审计仅 metadata 沿用 |
 | 用户可见可编辑 | 记忆页 P0 加 USER.md 只读视图+global 条目删除（走 op 通道）；P1 编辑——**安全阀**：错误记忆毒化全部后续会话，唯一纠错途径是用户本人 |
-| 联调隔离 | `BBW_MEMORY_ROOT` 覆盖记忆根 |
+| 联调隔离 | `BBC_MEMORY_ROOT` 覆盖记忆根 |
 
 ## 8. crate 落点与实施批次
 
@@ -208,13 +208,13 @@ bbrt-memory/src/
 ├─ lib.rs            # MemoryEngine 装配（+全局 Mutex 串行化全部记忆操作）
 ├─ global/           # 新增
 │  ├─ mod.rs         # journal append/replay/重投影/启动 reconcile/一次性迁移
-│  └─ compact.rs     # 压实漏斗（规则层+bbw-fast 调用+校验）
+│  └─ compact.rs     # 压实漏斗（规则层+bbc-fast 调用+校验）
 ├─ knowledge/        # 沿用（项目分区）：LRU 移除、last_used 增、hook 限长
 ├─ journal.rs        # 活动日志（零改动）
 └─ digest.rs         # 日报（零改动）
 ```
 
-EXECUTION-PLAN 批次 M：M1 存储换制+迁移+十类路由；M2 压实漏斗+forget/read 工具；M3 协议+记忆页+BBW_MEMORY_ROOT；M4 真机验收（详表见 EXECUTION-PLAN）。
+EXECUTION-PLAN 批次 M：M1 存储换制+迁移+十类路由；M2 压实漏斗+forget/read 工具；M3 协议+记忆页+BBC_MEMORY_ROOT；M4 真机验收（详表见 EXECUTION-PLAN）。
 
 测试要点（新增 global 套件，沿 tools_suite 风格）：journal 重放幂等（reproject 两次结果一致）；压实校验失败保留旧视图；硬条目不进 LLM 请求体（断言）；单条 >80 字/视图 >3000 拒；forget 命中 0/1/N 三态；迁移幂等（二次启动零迁移）；日常 project 类回落 global；8020 沙箱不可达记忆目录。
 
@@ -225,4 +225,4 @@ EXECUTION-PLAN 批次 M：M1 存储换制+迁移+十类路由；M2 压实漏斗+
 3. 更正链路：说「以后不要替我发消息」→`[禁止]` 落盘；后说「发消息可以直接发了」→ forget 旧+`[授权]` 新，USER.md 即时更新且旧条消失；
 4. 预算与压实：灌超 3000 字后观察压实产物 ≤3000 且禁止条目逐字保留；断 provider 重试 → 压实跳过、视图不变、journal 完整；
 5. 记忆页：global 页签见 USER.md 条目、可删除、删除后即时反映（memory.forgot 事件）；
-6. 边界：`memory_read` 拉项目条目正常；workspace 文件工具读写 `{dataDir}/agent/memory/` 被 8020 拒；`BBW_MEMORY_ROOT=/tmp/x` 启动后记忆落新根。
+6. 边界：`memory_read` 拉项目条目正常；workspace 文件工具读写 `{dataDir}/agent/memory/` 被 8020 拒；`BBC_MEMORY_ROOT=/tmp/x` 启动后记忆落新根。

@@ -2,9 +2,9 @@
 
 > 状态：2026-11-13 设计定稿；2026-11-14 **全量收口完成**——用户两次推翻 §4 保留清单（「所有页面全部 antd 化」）：批7 kb 博客体三页+阅读页外围、批8 IM 外围（会话列表/搜索/收藏/通知页头/多选条/ApplyCard）、批9 气泡族（MessageBubble 灯箱→Image.Preview/MessageInput→Input.TextArea IME 保真/右键→antd Menu/表情→Tabs/FloatButton/AgentProcessCard 落流卡）、批10 过程卡族 9 文件+MainLayout 竖排图标栏（用户拍板图标上文字下）+StateView/Splitter/ConvInfo/PersonPicker；**O6b 二轮清扫 global.css 4881→768 行**（9895 起累计 -92%）。存活自研面仅剩：agent-md 渲染层/StickerThumb/审批 Modal agc-perm/merge-drawer 内容行/Skeleton 内部/im 三栏骨架类/闪烁锚点（后续候选）。⚠️ 批9 期间拦截并回滚了一次子代理自造「隐私裁决」的落流逻辑重构（产品行为零变更）。仅剩 O7 用户真机走查。
 > 定位：**全站视觉与交互基座换制，非局部美化**。自研 BEM+global.css(10384 行) 体系收敛为「布局层」；antd 5 承接全部通用交互件（表单/弹窗/下拉/表格/树/页签/提示）。
-> 上游：[D01](D01-客户端总体详细设计.md)（设计系统/六态/断点——六态与断点规范继续有效）、tokens.css（--bbw-\* 令牌升格为 antd theme 唯一色源）。
+> 上游：[D01](D01-客户端总体详细设计.md)（设计系统/六态/断点——六态与断点规范继续有效）、tokens.css（--bbc-\* 令牌升格为 antd theme 唯一色源）。
 > 关联：[D24](D24-知识库博客化详细设计.md)（kb 域为样板域）、providers.tsx（ConfigProvider 主题桥接已通）、vite.config（antd 独立 chunk 已拆）。
-> 正交不动：IM 气泡/消息流结构（见 §4 保留清单）、http/i18n/store/路由、--bbw-\* 令牌文件（反而升格）。
+> 正交不动：IM 气泡/消息流结构（见 §4 保留清单）、http/i18n/store/路由、--bbc-\* 令牌文件（反而升格）。
 
 ## 0. 背景与拍板决策
 
@@ -16,7 +16,7 @@
 |---|---|---|
 | 1 | 切换范围 | **除 IM 气泡/消息流结构外，全站切 antd**（含 admin/settings/auth/contacts/mail/expert/eco/agent/kb 及 IM 域的弹窗·表单·列表外围） |
 | 2 | 选库 | **Ant Design 5**（已在依赖/已桥接/组件面最大/中文生态）；**Arco 否决**（风格更像但双库并存得不偿失） |
-| 3 | 风格基线 | 现有视觉**零漂移**：--bbw-\* 令牌全量灌 antd theme（主色 #2e6be6、圆角 6、现灰阶），antd 只换"手感"不换"观感" |
+| 3 | 风格基线 | 现有视觉**零漂移**：--bbc-\* 令牌全量灌 antd theme（主色 #2e6be6、圆角 6、现灰阶），antd 只换"手感"不换"观感" |
 | 4 | 表单策略 | **控件层替换，不强推 Form 重写**：input→Input / select→Select / textarea→Input.TextArea / checkbox→Checkbox / radio→Radio.Group；校验维持现有手写；antd Form 仅新页面使用 |
 | 5 | 确认框 | 24 处 window.confirm 全换 `Modal.confirm`（含危险态红色按钮） |
 | 6 | 提示统一 | 全站 toast 统一 antd message（ChatPage 自研 ann-banner/favToast 退役）；http 全局兜底已 antd |
@@ -44,12 +44,12 @@ providers.tsx ConfigProvider theme.token（亮色）：
 
 | antd token | 取值（=令牌） | antd token | 取值 |
 |---|---|---|---|
-| colorPrimary | #2e6be6（--bbw-primary） | borderRadius | 6 |
+| colorPrimary | #2e6be6（--bbc-primary） | borderRadius | 6 |
 | colorInfo | 同 primary | fontSize | 14 |
 | colorSuccess/Warning/Error | 23a55b / e6a23c / e5484d | controlHeight | 32 |
-| colorText | var(--bbw-gray-9) #272e3b | colorBgLayout | var(--bbw-gray-2) |
+| colorText | var(--bbc-gray-9) #272e3b | colorBgLayout | var(--bbc-gray-2) |
 | colorTextSecondary | #4e5969（gray-8） | colorBgContainer | #fff（gray-1） |
-| colorBorder / colorBorderSecondary | #e5e6eb（gray-3）/ #f2f3f5（gray-2） | fontFamily | --bbw-font-family |
+| colorBorder / colorBorderSecondary | #e5e6eb（gray-3）/ #f2f3f5（gray-2） | fontFamily | --bbc-font-family |
 
 暗色：`darkAlgorithm` + 同一映射函数读暗色令牌覆盖（gray-1↔深底等；themeConstants 单源函数化 `antdThemeFrom(mode)`）。components 层微调：Button{borderRadius:6}、Modal{titleFontSize:16}、Tabs{cardGap:8}、Table{headerBg:gray-2}。**验收基线：新旧组件混排截图对比，主色/灰阶/圆角无肉眼差异**。
 
@@ -62,7 +62,7 @@ providers.tsx ConfigProvider theme.token（亮色）：
 | kb-tabs | Tabs（卡片式，items 驱动；home tab `closable:false`） | kb 域样板首换 |
 | ArticleTree/目录树 | Tree（loadData 懒加载、title 自定义渲染、目录 hover「+」用 titleRender） | kb 样板 |
 | admin-table 各表 | Table（columns/ds、分页、scroll sticky） | O2 admin 域 |
-| bbw-input/原生三件 | Input/Input.TextArea/Select（含 ConvInfoSidebar 4 个 select） | 控件级替换 |
+| bbc-input/原生三件 | Input/Input.TextArea/Select（含 ConvInfoSidebar 4 个 select） | 控件级替换 |
 | window.confirm×24 | Modal.confirm（危险操作 danger okButtonProps） | O2/O3/O5 逐域清 |
 | favToast/ann-banner | antd message | O5 |
 | Empty/Avatar | antd Empty/Avatar（Logo 保留自研） | 直接换 |

@@ -4,7 +4,7 @@
 |---|---|
 | 文档版本 | v0.2（2026-11-16 落稿；同日修订：web 兜底升级为 IdP 浏览器会话，见 §0 拍板 7） |
 | 上游文档 | [03-身份认证与权限体系](../03-身份认证与权限体系.md) · [10-生态应用接入](../10-生态应用接入与技能分发设计.md) · [D22-插件系统](D22-插件系统详细设计.md) |
-| 本篇定位 | bbw auth 长出标准 **OIDC Provider（OP）对外接入面**，让生态/第三方 web 应用以标准协议接入统一登录；同时收口认证域三项 P0 欠账（refresh 落钥匙串 / RT 切 OBO / 登出清理） |
+| 本篇定位 | bbc auth 长出标准 **OIDC Provider（OP）对外接入面**，让生态/第三方 web 应用以标准协议接入统一登录；同时收口认证域三项 P0 欠账（refresh 落钥匙串 / RT 切 OBO / 登出清理） |
 
 ---
 
@@ -12,15 +12,15 @@
 
 | # | 拍板 | 内容 |
 |---|---|---|
-| 1 | **OIDC 化** | bbw auth 对外做标准 OIDC Provider，目标是「兼容各个应用」（含通用第三方软件），不自创私有协议面 |
+| 1 | **OIDC 化** | bbc auth 对外做标准 OIDC Provider，目标是「兼容各个应用」（含通用第三方软件），不自创私有协议面 |
 | 2 | **嵌 `zitadel/oidc` 库**（建议倾向，评审可改） | 协议正确性（discovery/ID Token/nonce/PKCE/标准 scope）由库保证；我们只实现 Storage 接口接 PG；保留单二进制部署。替代方案「自研 OIDC 全套」被否——出错面大、工作量 2-3 倍 |
 | 3 | **一期只做生态应用接入面**（建议倾向，评审可改） | RP = 生态/第三方 web 应用。桌面端自身账密登录、agent OBO、内生态 token（HS256 JWT）**一期全部不动**；桌面端迁移 OIDC 为二期开放问题（§10） |
 | 4 | **OIDC 面强制 ES256** | 非对称签名 + jwks 公钥发布是 OP 的前提；**内部 HS256 一期并行保留、互不影响**（两套签发独立），统一时机见 §10 |
-| 5 | **既有红线全部保留** | 主 access token / refresh token 不出桌面；插件 `${BBW_USER_TOKEN}` HTTP-only 不变；03 §6.5 反模式清单继续有效 |
+| 5 | **既有红线全部保留** | 主 access token / refresh token 不出桌面；插件 `${BBC_USER_TOKEN}` HTTP-only 不变；03 §6.5 反模式清单继续有效 |
 | 6 | 推翻记录 | 前轮讨论中的「路线甲：自研薄协议面（自定义 6 端点）」被拍板 1/2 取代，勿再按其设计 |
 | 7 | **web 兜底 = 正式 IdP 浏览器会话**（v0.2 修订，2026-11-16 用户质询后） | 弃 v0.1「一次性 10min cookie」口径：HttpOnly+Secure+SameSite=Lax cookie + `oidc_web_session` 表；**默认 7 天滑动**（租户可配 1-30 天；关「记住此浏览器」= 浏览器会话 cookie 关窗即失效）；设备列表可见、可远端下线；改密/禁用全吊销；高敏 scope 或 `prompt=login`/`max_age` 越界强制重输口令。**SSO 免密由此会话承载** |
-| 8 | **不独立服务：单体内新增 `internal/oidc` 模块**（2026-11-16 拍板） | zitadel/oidc 以子路由挂现有 bbw-server 的 `/oauth2/*`，与 internal/auth 同进程；不拆独立部署单元。理由与未来拆分触发条件见 §3.2 |
-| 9 | **aud 多应用适配暂不处理**（2026-11-16 拍板，开工裁决） | A 类 MCP 网关一期宽松 aud（接受自身或 bbw-agent 通用受众），单一全局 `${BBW_USER_TOKEN}` 注入零改动；按 server 独立签发与 RFC 8693 换票**整体挂起**，生态规模化后再议（§6.5 三档表仅存档） |
+| 8 | **不独立服务：单体内新增 `internal/oidc` 模块**（2026-11-16 拍板） | zitadel/oidc 以子路由挂现有 bbc-server 的 `/oauth2/*`，与 internal/auth 同进程；不拆独立部署单元。理由与未来拆分触发条件见 §3.2 |
+| 9 | **aud 多应用适配暂不处理**（2026-11-16 拍板，开工裁决） | A 类 MCP 网关一期宽松 aud（接受自身或 bbc-agent 通用受众），单一全局 `${BBC_USER_TOKEN}` 注入零改动；按 server 独立签发与 RFC 8693 换票**整体挂起**，生态规模化后再议（§6.5 三档表仅存档） |
 | 10 | **收缩候选落定**（2026-11-16 开工裁决） | ①密钥双 key 轮换窗口→**手工轮换文档**；②per-client TTL 列→**v1 写死默认值**；③introspection **保留**；④Q2 深链确认链**保持批次序不后置**（按现行批次顺序执行） |
 
 ---
@@ -32,7 +32,7 @@
 - 账密登录 + HS256 JWT access（15min）+ opaque refresh（30 天滑动、一次性轮换、重放全下线、did 绑定）——`server/internal/auth/service/auth.go`
 - OBO 签发端点 `POST /api/v1/auth/obo/token`（scope 子集强制、`act` 归因、≤15min、killswitch）——服务端已实现
 - RBAC/数据范围/ACL、device 表、refresh_token 会话表（含轮换审计链）
-- 形式 1（agent 接插件自动填 token）：`${BBW_USER_TOKEN}` 由 RT 调用期动态注入 HTTP header（`agent_bridge.rs:988-1002`），stdio env 置空（D22 HTTP-only）
+- 形式 1（agent 接插件自动填 token）：`${BBC_USER_TOKEN}` 由 RT 调用期动态注入 HTTP header（`agent_bridge.rs:988-1002`），stdio env 置空（D22 HTTP-only）
 
 ### 1.2 缺口（本篇补）
 
@@ -53,13 +53,13 @@
 
 ```
 ┌─────────────────┐  授权码+PKCE   ┌──────────────────┐   ES256+jwks   ┌──────────────┐
-│  生态/第三方应用  │ ────────────► │   bbw auth (OP)   │ ◄──────────── │ 任何标准 RP 库 │
+│  生态/第三方应用  │ ────────────► │   bbc auth (OP)   │ ◄──────────── │ 任何标准 RP 库 │
 │  (Relying Party) │ ◄──────────── │  zitadel/oidc 嵌入 │  本地验签零调用 │  (各语言通用)  │
 └─────────────────┘  per-app JWT   └──────────────────┘               └──────────────┘
-                                        ▲  WS(oidc.confirm_req) + 深链 bbw://auth
+                                        ▲  WS(oidc.confirm_req) + 深链 bbc://auth
                                         │
                                  ┌──────────────┐
-                                 │ bbw desktop  │ ←— 第一方客户端：自身登录一期不走 OIDC，
+                                 │ bbc desktop  │ ←— 第一方客户端：自身登录一期不走 OIDC，
                                  │ (授权确认终端) │    以「已登录身份」代用户点头像确认授权
                                  └──────────────┘
 
@@ -71,13 +71,13 @@
 ```
 1. web 应用 → GET /oauth2/authorize?client_id&redirect_uri&scope&state&nonce&code_challenge(S256)&response_type=code
 2. OP 创建 AuthRequest → 302 到宿主「授权等待页」/oauth2/wait?req={id}（服务端渲染，见 §5）
-3. 等待页：显示 6 位确认码 + 发起深链 bbw://auth?req={id} 拉起 desktop
+3. 等待页：显示 6 位确认码 + 发起深链 bbc://auth?req={id} 拉起 desktop
    ├─ desktop 在线已登录 → 弹确认卡（client 名/logo/scope 清单/同一 6 位码）
    │    用户点头像 → desktop 以自身 access token 调 POST /oauth2/confirm{req, code6}
    │    → OP 校验（用户身份+6位码一致+未超时）→ op.ApproveAuthRequest
    ├─ desktop 未登录 → desktop 弹自身登录页，登录后回到确认卡
    └─ 无 desktop（深链超时/失败）→ 等待页回落账密表单（§5.3）→ 登录建 IdP 浏览器会话（7 天滑动）→ 页面内确认
-        会话期内再从任何应用发起 bbw 登录 = 免密直达 consent（SSO；grant 已覆盖则静默跳回）
+        会话期内再从任何应用发起 bbc 登录 = 免密直达 consent（SSO；grant 已覆盖则静默跳回）
 4. OP 签发一次性 code（60s、绑定 req）→ 302 redirect_uri?code&state
 5. web 应用 → POST /oauth2/token（code + code_verifier，PKCE 校验）
    → access_token(JWT: iss/aud=client_id/sub/tenant/scope 子集/exp≤15min) + id_token + refresh_token
@@ -109,8 +109,8 @@
   - access/refresh 签发回调 → 复用既有用户 scope 聚合逻辑（auth.go:153-176 同源），**scope 必须是用户权限子集**（OBO 端点同款校验，1006 语义）
   - `SigningKey` 轮换 → §3.1
   - `UserInfo` → `oidc_grant` + user 表拼装
-- **自定义 claims**：access token 注入 `tenant`/`scope`（bbw 权限点字典）；ID Token 走库标准结构。RP 若要展示名，走 `/oauth2/userinfo`（sub/name/employee_no/tenant）。
-- 错误响应走 **OAuth2 标准格式**（`error=invalid_client/invalid_grant/...` HTTP 400/401），**不走 bbw `{code,data}` 信封**——两者并存，路由前缀区分。
+- **自定义 claims**：access token 注入 `tenant`/`scope`（bbc 权限点字典）；ID Token 走库标准结构。RP 若要展示名，走 `/oauth2/userinfo`（sub/name/employee_no/tenant）。
+- 错误响应走 **OAuth2 标准格式**（`error=invalid_client/invalid_grant/...` HTTP 400/401），**不走 bbc `{code,data}` 信封**——两者并存，路由前缀区分。
 
 ### 3.0 模块归属（拍板 8）
 
@@ -118,13 +118,13 @@
 
 ### 3.1 签名密钥与 jwks
 
-- ES256 密钥对：env `BBW_OIDC_SIGNING_KEY`（PEM/base64，随部署注入；生成脚本进 `deploy/compose`，与 `BBW_JWT_SECRET` 同级管理，★上线必改）。
+- ES256 密钥对：env `BBC_OIDC_SIGNING_KEY`（PEM/base64，随部署注入；生成脚本进 `deploy/compose`，与 `BBC_JWT_SECRET` 同级管理，★上线必改）。
 - kid 轮换：按库的 key rotation 接口双密钥并存窗口（新签用新 kid，jwks 同时发布新旧公钥；旧密钥仅验签直至其签发的 token 全部过期 ≤15min 后下线）。
 - jwks 端点由库提供（`/.well-known/jwks.json`），应用侧启动拉取 + kid 未命中重拉。
 
 ### 3.2 为什么不是独立服务（拍板 8 依据）
 
-| 拆服务的经典触发条件 | bbw 现状 |
+| 拆服务的经典触发条件 | bbc 现状 |
 |---|---|
 | 独立伸缩（流量差异大） | ❌ OP 流量=登录时才发生（authorize/token/jwks），相对 IM/WS 可忽略；jwks 被应用缓存后更是接近零 |
 | 独立故障域（一个挂不能拖垮另一个） | ❌ 登录/refresh 本来就在主服务里，拆 OIDC 拆不走认证；且 OP 挂不影响已登录用户（应用本地验签），共享故障域的实际代价≈0 |
@@ -136,7 +136,7 @@
 
 **未来值得拆的触发信号**（记档，触发再议）：① 对外多租户运营，OP 流量与主业务解耦诉求出现；② 需要把签名私钥隔离到专属进程/HSM 级保护；③ 生态应用规模大到需要独立对 OP 做灰度/版本。届时迁移路径平滑：模块已按 internal/oidc 独立分层，抽出=换 main+加 svc token，不动表结构与协议面。
 
-部署侧变化仅两处：compose `.env.tpl` 增 `BBW_OIDC_SIGNING_KEY`（★上线必改，与 BBW_JWT_SECRET 同级）；nginx 无需新 location（`/oauth2/*` 沿用既有 `/` → app 代理）。app×2 副本无状态兼容：AuthRequest/web_session/refresh 全在 PG，两副本行为一致，jwks 同源同密钥。
+部署侧变化仅两处：compose `.env.tpl` 增 `BBC_OIDC_SIGNING_KEY`（★上线必改，与 BBC_JWT_SECRET 同级）；nginx 无需新 location（`/oauth2/*` 沿用既有 `/` → app 代理）。app×2 副本无状态兼容：AuthRequest/web_session/refresh 全在 PG，两副本行为一致，jwks 同源同密钥。
 
 ---
 
@@ -150,7 +150,7 @@ oidc_client(
   client_secret_hash TEXT NULL,   -- 机密客户端才有；public client(PKCE-only) 为空
   name, logo_file_id,             -- 确认卡展示
   redirect_uris JSONB,            -- 精确匹配白名单
-  scopes JSONB,                   -- 允许申请的 bbw 权限点白名单（发布时静态校验）
+  scopes JSONB,                   -- 允许申请的 bbc 权限点白名单（发布时静态校验）
   grant_types JSONB DEFAULT '["authorization_code"]',
   access_ttl_sec INT DEFAULT 900, refresh_ttl_sec INT DEFAULT 2592000,
   status,                         -- active / disabled（下架即拒新授权）
@@ -192,7 +192,7 @@ oidc_web_session(                 -- IdP 浏览器会话（web 兜底登录态�
 
 ### 5.1 desktop 确认卡（一期主体交互）
 
-- 深链：`tauri.conf.json` 注册 URL scheme `bbw`（`bbw://auth?req=...`）；等待页 JS 尝试唤起，300ms 无响应视为无 desktop（回落 §5.3）。
+- 深链：`tauri.conf.json` 注册 URL scheme `bbc`（`bbc://auth?req=...`）；等待页 JS 尝试唤起，300ms 无响应视为无 desktop（回落 §5.3）。
 - desktop 收到深链 → 弹确认卡：应用名+logo、申请 scope 的人类可读清单、**页面同源 6 位码**、用户自己头像（点击即确认）。
 - 确认动作：`POST /oauth2/confirm {req_id, confirm_code}`，鉴权用 desktop 自身 access token（Bearer）——服务端由此得知「用户是谁」，回填 AuthRequest.user_id。
 - 防钓鱼分层：
@@ -212,7 +212,7 @@ oidc_web_session(                 -- IdP 浏览器会话（web 兜底登录态�
 
 - 等待页内嵌表单 → `POST /oauth2/web-login`（argon2id 校验复用）→ 建立 **IdP 浏览器会话**（`oidc_web_session`，§4）→ 页面内呈现 consent（scope 清单）确认 → Approve → 302 回应用。
 - 会话 cookie：HttpOnly + Secure + SameSite=Lax，仅 `/oauth2/*` 路径；**默认 7 天滑动**（每次使用续期；租户可配 1-30 天），未勾「记住此浏览器」则降级为浏览器会话 cookie（关窗即失效）。
-- **SSO 语义**：会话有效期内 Bob 再从**任何**应用走 bbw 登录 → authorize 直接识别会话，免密直达 consent；该应用 grant 已覆盖时静默跳回。「7 天退出登录」即此滑动窗口，到期或被下线后下一次登录重输口令。
+- **SSO 语义**：会话有效期内 Bob 再从**任何**应用走 bbc 登录 → authorize 直接识别会话，免密直达 consent；该应用 grant 已覆盖时静默跳回。「7 天退出登录」即此滑动窗口，到期或被下线后下一次登录重输口令。
 - 会话不顶替认证：高敏 scope 或 `prompt=login` / `max_age` 越界时，即使会话有效也强制重输口令（标准 OIDC 语义）。
 - 防爆破复用既有登录锁定计数；**等待页未决请求本身**仍 300s 一次性（§2.2），与登录态是两个东西。
 - 修订记录：v0.1 曾定为「一次性 10min cookie」——安全上成立（无长期 web 凭证），但牺牲了 SSO 免密（每个应用每次都重输口令，统一登录的「统一」名存实亡）；经用户质询后升级为本节口径。7 天会话的安全前提是**可撤销**：会话表 + 设备列表远端下线 + 改密全吊销——与「refresh 落钥匙串」同一原则（能撤销的长凭证才配长寿命）。
@@ -229,7 +229,7 @@ oidc_web_session(                 -- IdP 浏览器会话（web 兜底登录态�
 |---|---|
 | 桌面端账密登录 / refresh / WS 认证 | 不动（批0 只补钥匙串落盘与清理欠账） |
 | bbrt RT 供给 | 批0 从「主 token」切到 `/auth/obo/token` 签的 OBO token（act 归因+scope 子集）；与 OIDC 面无耦合 |
-| aigw / /mcp/corp / 插件 `${BBW_USER_TOKEN}` | 不动（HTTP-only 语义不变） |
+| aigw / /mcp/corp / 插件 `${BBC_USER_TOKEN}` | 不动（HTTP-only 语义不变） |
 | 内部 HS256 | 与 OIDC ES256 双轨并行；统一切换时机开放（§10） |
 | svc token / mTLS（03 §2.4） | 不属本篇 |
 | OBO 与 RFC 8693 token exchange 对齐 | 二期开放问题 |
@@ -238,17 +238,17 @@ oidc_web_session(                 -- IdP 浏览器会话（web 兜底登录态�
 
 ## 6.5 MCP 消费侧的三类信任域（谁的 MCP 认谁的 token）★v0.2 增
 
-> 背景：生态应用以插件形式接入、插件按 MCP 对接应用（D22 既定）。关键认知：**「应用支持 OIDC」≠「应用认 bbw 的 token」**——支持 OIDC 登录只是它当 RP（把登录托付给 bbw）；要在它的 API/MCP 网关上验证 bbw 签发的 token，必须由**应用侧主动配置 bbw 的 jwks**。只有自己生态的应用和公司控制的网关会这么做，SaaS 不会为任何客户配置外部 IdP 联邦。
+> 背景：生态应用以插件形式接入、插件按 MCP 对接应用（D22 既定）。关键认知：**「应用支持 OIDC」≠「应用认 bbc 的 token」**——支持 OIDC 登录只是它当 RP（把登录托付给 bbc）；要在它的 API/MCP 网关上验证 bbc 签发的 token，必须由**应用侧主动配置 bbc 的 jwks**。只有自己生态的应用和公司控制的网关会这么做，SaaS 不会为任何客户配置外部 IdP 联邦。
 
-| 类 | 谁的 MCP | 例 | MCP 认什么凭证 | bbw 侧机制 |
+| 类 | 谁的 MCP | 例 | MCP 认什么凭证 | bbc 侧机制 |
 |---|---|---|---|---|
-| A | **bbw 生态应用**（D28 RP） | 用 bbw 统一登录的自研/外包应用，其 MCP 面对 agent 开放 | **bbw 签发的 OBO token**（sub=用户、act=agent 会话、aud=该应用；应用侧用 bbw jwks 本地验签） | RT 调用期注入 `${BBW_USER_TOKEN}`（既有机制零改动）；aud 精确到应用依赖 RFC 8693（§9） |
+| A | **bbc 生态应用**（D28 RP） | 用 bbc 统一登录的自研/外包应用，其 MCP 面对 agent 开放 | **bbc 签发的 OBO token**（sub=用户、act=agent 会话、aud=该应用；应用侧用 bbc jwks 本地验签） | RT 调用期注入 `${BBC_USER_TOKEN}`（既有机制零改动）；aud 精确到应用依赖 RFC 8693（§9） |
 | B | **公司自建 MCP 网关**（corp 源） | 内部 OA/ERP/知识库包装的 `/mcp/corp` | 同 A（OBO + act 归因） | D22/D14 既定三源装配 corp>插件>个人，已有 |
-| C | **第三方 SaaS 的 MCP** | GitHub/Notion/Slack 官方 remote MCP、社区 stdio MCP | **它们自己的凭证**——bbw token 永远无效，不必尝试 | 三条子路：①D26 个人 MCP：keyring 存其 API key（`${CONFIG:key}`，**今天就能用**）②bbw 作为 OAuth client 对其授权服务器走 MCP 授权规范（OAuth 2.1）自动拿 token 落 keyring——bbrt-mcp 需补 OAuth client 能力（§9 开放问题）③服务端连接器代持（10 篇 §6.3 B：凭证 KMS + 转发携带用户上下文头）——团队共享服务账号场景 |
+| C | **第三方 SaaS 的 MCP** | GitHub/Notion/Slack 官方 remote MCP、社区 stdio MCP | **它们自己的凭证**——bbc token 永远无效，不必尝试 | 三条子路：①D26 个人 MCP：keyring 存其 API key（`${CONFIG:key}`，**今天就能用**）②bbc 作为 OAuth client 对其授权服务器走 MCP 授权规范（OAuth 2.1）自动拿 token 落 keyring——bbrt-mcp 需补 OAuth client 能力（§9 开放问题）③服务端连接器代持（10 篇 §6.3 B：凭证 KMS + 转发携带用户上下文头）——团队共享服务账号场景 |
 
-**对 A 类的 aud 细节**：多 server 是装配**常态**而非异常——三源装配（`assemble_mcp_servers`）在登录/配置期把 corp 网关+全部已装插件+个人 MCP 的整套清单一次推给 RT，装 N 个生态插件即同时挂 N 个 A 类 MCP，且一条 agent 指令可交叉调用多应用工具。问题不在「能否同时连」而在**一份全局 token（OboCache 单值 → `${BBW_USER_TOKEN}` 注入所有 server）无法同时对多个受众有效**：若各 A 类网关严格校验 aud=自身 client_id，同一 token 必然顾此失彼。解法三档：一期宽松 aud（网关接受 `aud=自身或 bbw-agent 通用受众`，注入机制零改动，OBO ≤15min+scope 子集下边际风险小）；中期按 server 独立签发（注入协议升级）；终态 RFC 8693 换票（基础 OBO 换 aud=目标应用窄票，微软 OBO 同款）——编码期与 Storage 适配一并定档位。B 类无此矛盾：corp 网关是「一个 server 挂多个内部系统」，受众天然单一。
+**对 A 类的 aud 细节**：多 server 是装配**常态**而非异常——三源装配（`assemble_mcp_servers`）在登录/配置期把 corp 网关+全部已装插件+个人 MCP 的整套清单一次推给 RT，装 N 个生态插件即同时挂 N 个 A 类 MCP，且一条 agent 指令可交叉调用多应用工具。问题不在「能否同时连」而在**一份全局 token（OboCache 单值 → `${BBC_USER_TOKEN}` 注入所有 server）无法同时对多个受众有效**：若各 A 类网关严格校验 aud=自身 client_id，同一 token 必然顾此失彼。解法三档：一期宽松 aud（网关接受 `aud=自身或 bbc-agent 通用受众`，注入机制零改动，OBO ≤15min+scope 子集下边际风险小）；中期按 server 独立签发（注入协议升级）；终态 RFC 8693 换票（基础 OBO 换 aud=目标应用窄票，微软 OBO 同款）——编码期与 Storage 适配一并定档位。B 类无此矛盾：corp 网关是「一个 server 挂多个内部系统」，受众天然单一。
 
-**两车道结论**：生态原生应用（A/B）= bbw token 直达（OIDC RP + MCP 验 bbw jwks + OBO 归因）；第三方包装（C）= 用它们的凭证（keyring/OAuth client/服务端代持）。车道判断发生在插件装配期（manifest 声明），不在运行时。
+**两车道结论**：生态原生应用（A/B）= bbc token 直达（OIDC RP + MCP 验 bbc jwks + OBO 归因）；第三方包装（C）= 用它们的凭证（keyring/OAuth client/服务端代持）。车道判断发生在插件装配期（manifest 声明），不在运行时。
 
 
 
@@ -266,7 +266,7 @@ oidc_web_session(                 -- IdP 浏览器会话（web 兜底登录态�
 
 ### 批2：desktop 确认链
 
-URL scheme `bbw://` 注册；深链路由到确认卡；确认卡 UI（antd，复用 D26 组件口径）；`POST /oauth2/confirm`；等待页深链尝试+轮询；6 位码全链。
+URL scheme `bbc://` 注册；深链路由到确认卡；确认卡 UI（antd，复用 D26 组件口径）；`POST /oauth2/confirm`；等待页深链尝试+轮询；6 位码全链。
 
 ### 批3：授权管理与撤销面
 
@@ -274,7 +274,7 @@ URL scheme `bbw://` 注册；深链路由到确认卡；确认卡 UI（antd，�
 
 ### 批4：文档回填与示例
 
-03 篇修订（§2.1 登录方式表补「生态应用 OIDC 接入」节，§7 接口表补 /oauth2/*）；14 篇协议注册表登记；`examples/` 增一个最小 RP 示例（Go 或 Node，演示 jwks 本地验签）；README 部署段补 `BBW_OIDC_SIGNING_KEY`。
+03 篇修订（§2.1 登录方式表补「生态应用 OIDC 接入」节，§7 接口表补 /oauth2/*）；14 篇协议注册表登记；`examples/` 增一个最小 RP 示例（Go 或 Node，演示 jwks 本地验签）；README 部署段补 `BBC_OIDC_SIGNING_KEY`。
 
 ---
 

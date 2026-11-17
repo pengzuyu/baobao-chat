@@ -37,7 +37,7 @@ bob   在「行政群」 → bob   的 embedded 会话 C（跑在 bob 本机）
 | 常驻复用 | 后续 @Agent 直接 `agent_input` 续在同一会话，上下文自动延续 |
 | 跨群隔离 | conv 维度分会话，行政群内容永不进入项目群上下文 |
 | 跨人隔离 | Agent 跑在各自桌面本机，物理隔离，天然不可能共用 |
-| 映射存储 | `convId → sessionId` 映射存 IndexedDB bbw-local meta（D01 §12.2-5 禁 localStorage 存业务数据）；bbrt 侧即普通会话（SQLite 持久） |
+| 映射存储 | `convId → sessionId` 映射存 IndexedDB bbc-local meta（D01 §12.2-5 禁 localStorage 存业务数据）；bbrt 侧即普通会话（SQLite 持久） |
 | 复用既有能力 | workspace 必填 → 沿用工作台最近会话的工作区（无历史则弹目录选择）；mode 固定 `ask`（弹框审批）；模型路由同工作台 |
 | 与工作台并存 | embedded 会话出现在工作台会话列表（同 store 同 runtime），可随时去工作台打开 |
 
