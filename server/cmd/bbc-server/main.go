@@ -404,6 +404,10 @@ func main() {
 	mux.Handle("GET /api/v1/org/tree", authed(handleDeptTree(orgRepo)))
 	mux.Handle("GET /api/v1/org/users", authed(handleOrgDirectoryUsers(orgMod.DirectoryAPI())))
 
+	// 在线状态全量快照（04 篇 §5.3 配套）：登录/重连后首拉种子（此后靠 presence.changed
+	// 增量维持）；handler 在 gateway 包（e2e harness 复用同款装配）
+	mux.Handle("GET /api/v1/presences", authed(gw.HandlePresences()))
+
 	// 表情包（0022 个人集；公共集治理走 /admin/stickers/*）
 	mux.Handle("GET /api/v1/stickers", authed(handleStickerLibrary(stickerSvc)))
 	mux.Handle("POST /api/v1/stickers/sets", authed(handleStickerCreateSet(stickerSvc)))

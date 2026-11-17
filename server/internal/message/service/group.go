@@ -177,24 +177,26 @@ func (s *Service) publishConvUpdated(ctx context.Context, conv *messagerepo.Conv
 	})
 }
 
-// displayConvName 会话显示名：单聊=对端显示名（微信同款；种子/历史行存的
-// "alice-bob" 双拼名不面向用户），群/广播群=会话名。对端解析失败回落原 Name。
-func (s *Service) displayConvName(ctx context.Context, conv *messagerepo.Conversation, viewerID int64) string {
+// singlePeer 会话显示名 + 单聊对端 uid：单聊=对端显示名（微信同款；种子/历史行存的
+// "alice-bob" 双拼名不面向用户），群/广播群=会话名（peerUid 空）。对端解析失败回落原 Name。
+func (s *Service) singlePeer(ctx context.Context, conv *messagerepo.Conversation, viewerID int64) (string, string) {
 	if conv.Type != messageapi.ConvSingle {
-		return conv.Name
+		return conv.Name, ""
 	}
 	ids, err := s.repo.MembersOf(ctx, conv.ID)
 	if err != nil {
-		return conv.Name
+		return conv.Name, ""
 	}
 	for _, id := range ids {
 		if id != viewerID {
+			name := conv.Name
 			if n := s.nameOf(id); n != "" {
-				return n
+				name = n
 			}
+			return name, strconv.FormatInt(id, 10)
 		}
 	}
-	return conv.Name
+	return conv.Name, ""
 }
 
 // buildDetail 会话详情组装（API-IM-03：成员概要全量简版 + group_setting + my）
@@ -205,9 +207,10 @@ func (s *Service) buildDetail(ctx context.Context, conv *messagerepo.Conversatio
 	if unread < 0 {
 		unread = 0
 	}
+	convName, peerUID := s.singlePeer(ctx, conv, viewerID)
 	dto := &messageapi.ConvDetailDTO{
 		ConversationDTO: messageapi.ConversationDTO{
-			ID: strconv.FormatInt(conv.ID, 10), Type: conv.Type, Name: s.displayConvName(ctx, conv, viewerID),
+			ID: strconv.FormatInt(conv.ID, 10), Type: conv.Type, Name: convName, PeerUID: peerUID,
 			OwnerID:   strconv.FormatInt(conv.OwnerID, 10),
 			LatestSeq: conv.LatestSeq, LastMsgTS: conv.LastMsgTS, MemberCount: conv.MemberCount,
 			Status: conv.Status,

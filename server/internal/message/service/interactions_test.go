@@ -420,3 +420,32 @@ func TestSyncIncremental(t *testing.T) {
 		t.Fatalf("gap 语义=%+v", res4.Convs[0])
 	}
 }
+
+// 单聊对端 uid 透出（ConversationDTO.peerUid，2026-11-17：客户端在线状态点依据）
+func TestSingleConvPeerUID(t *testing.T) {
+	svc, _, _ := seedFixture(t, Options{})
+	ctx := context.Background()
+	byID := func(uid int64) map[string]messageapi.ConversationDTO {
+		t.Helper()
+		convs, err := svc.ListUserConversations(ctx, uid)
+		if err != nil {
+			t.Fatalf("list(%d): %v", uid, err)
+		}
+		out := map[string]messageapi.ConversationDTO{}
+		for _, c := range convs {
+			out[c.ID] = c
+		}
+		return out
+	}
+	// 双向互逆：alice 视角对端=bob，bob 视角对端=alice
+	if got := byID(10001)["1"].PeerUID; got != "10002" {
+		t.Fatalf("alice 视角 peerUid=%q want 10002", got)
+	}
+	if got := byID(10002)["1"].PeerUID; got != "10001" {
+		t.Fatalf("bob 视角 peerUid=%q want 10001", got)
+	}
+	// 非单聊（广播群）不填
+	if got := byID(10001)["2"].PeerUID; got != "" {
+		t.Fatalf("广播群 peerUid=%q want 空", got)
+	}
+}

@@ -518,8 +518,9 @@ func (s *Service) ListUserConversations(ctx context.Context, userID int64) ([]me
 		if unread < 0 {
 			unread = 0
 		}
+		name, peerUID := s.singlePeer(ctx, &c, userID)
 		dto := messageapi.ConversationDTO{
-			ID: strconv.FormatInt(c.ID, 10), Type: c.Type, Name: s.displayConvName(ctx, &c, userID),
+			ID: strconv.FormatInt(c.ID, 10), Type: c.Type, Name: name, PeerUID: peerUID,
 			OwnerID:   strconv.FormatInt(c.OwnerID, 10),
 			LatestSeq: c.LatestSeq, LastMsgTS: c.LastMsgTS, MemberCount: c.MemberCount,
 			Status: c.Status,

@@ -113,6 +113,8 @@ func newServer(t *testing.T) *testServer {
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", http.HandlerFunc(gw.ServeWS))
+	// presence 快照 REST（鉴权中间件在 cmd 层，harness 免鉴权直挂同款 handler）
+	mux.Handle("GET /api/v1/presences", gw.HandlePresences())
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return &testServer{srv: srv, msgRepo: msgRepo, msgSvc: msgSvc, auth: authSvc, aliceID: alice.ID, bobID: bob.ID}
@@ -558,12 +560,54 @@ func TestE2EPresence(t *testing.T) {
 		return bytes.Contains(p, []byte(fmt.Sprintf(`"uid":"%d"`, s.bobID))) &&
 			bytes.Contains(p, []byte(`"status":"dnd"`))
 	}, 3*time.Second)
+	// 快照端点：dnd 期间含 alice online + bob dnd
+	snap := func() map[string]string {
+		resp, err := http.Get(s.srv.URL + "/api/v1/presences")
+		if err != nil {
+			t.Fatalf("GET presences: %v", err)
+		}
+		defer resp.Body.Close()
+		var body struct {
+			Code int `json:"code"`
+			Data struct {
+				Items []struct {
+					UID    string `json:"uid"`
+					Status string `json:"status"`
+				} `json:"items"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Code != 0 {
+			t.Fatalf("presences 解码: %v code=%d", err, body.Code)
+		}
+		out := map[string]string{}
+		for _, it := range body.Data.Items {
+			out[it.UID] = it.Status
+		}
+		return out
+	}
+	if got := snap()[fmt.Sprintf("%d", s.bobID)]; got != "dnd" {
+		t.Fatalf("快照 bob=%q want dnd", got)
+	}
+	if got := snap()[fmt.Sprintf("%d", s.aliceID)]; got != "online" {
+		t.Fatalf("快照 alice=%q want online", got)
+	}
 	// bob 断开 → offline
 	_ = bob.nc.Close()
 	alice.until("presence.changed", func(p json.RawMessage) bool {
 		return bytes.Contains(p, []byte(fmt.Sprintf(`"uid":"%d"`, s.bobID))) &&
 			bytes.Contains(p, []byte(`"status":"offline"`))
 	}, 5*time.Second)
+	// 断线后快照出清 bob（alice.until 已保证服务端处理完 ConnDown，轮询兜底）
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := snap()[fmt.Sprintf("%d", s.bobID)]; !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("断线后快照仍含 bob")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // ---------------------------------------------------------------------------

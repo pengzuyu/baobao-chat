@@ -192,9 +192,11 @@ type UserConvStateDTO struct {
 
 // ConversationDTO 会话列表项（camel，对齐客户端 Conversation）
 type ConversationDTO struct {
-	ID            string           `json:"id"`
-	Type          int              `json:"type"`
-	Name          string           `json:"name"`
+	ID   string `json:"id"`
+	Type int    `json:"type"`
+	Name string `json:"name"`
+	// PeerUID 单聊对端 uid（仅 type=1 填；客户端在线状态点/资料跳转依据，2026-11-17）
+	PeerUID       string           `json:"peerUid,omitempty"`
 	OwnerID       string           `json:"ownerId,omitempty"`
 	LatestSeq     int64            `json:"latestSeq"`
 	LastMsgDigest string           `json:"lastMsgDigest,omitempty"`
