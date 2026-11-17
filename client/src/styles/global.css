@@ -321,6 +321,15 @@ body {
 /* D26-O6b：原「免打扰图标（会话列表项）」段已随 antd 全量收口退役（2026-11-14） */
 /* ─────────────── Agent 工作台域（D08/D11/D15，agent- 前缀区隔） ─────────────── */
 /* D26-O6b：原「Agent 工作台域（D08/D11/D15，agent- 前缀区隔）」段已随 antd 全量收口退役（2026-11-14） */
+/* D33 思考 ticker（工作台平铺流 ReasoningBlock）：隐藏横向滚动条——内联样式
+   无法表达伪元素；滚动跟随由组件内自动跟尾承担（固定高不撑高，四改加固） */
+.rb-ticker {
+  scrollbar-width: none;
+}
+.rb-ticker::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
 /* markdown 降级排版（StreamMessage/日报共用） */
 .agent-md {
   display: flex;

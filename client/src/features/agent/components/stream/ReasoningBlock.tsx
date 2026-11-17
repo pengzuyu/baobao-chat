@@ -88,20 +88,26 @@ export function ReasoningBlock({ text, streaming }: { text: string; streaming: b
           {streaming ? '思考中...' : '思考过程'}
         </button>
         {/* 流式输出中（未手动展开）：单行 ticker=当前行，超宽横向滚动自动跟尾；
-            输出完毕不再展示内容（点标题展开查看） */}
+            输出完毕不再展示内容（点标题展开查看）。
+            加固（2026-11-17 四改）：固定 height+显式禁断行+隐藏横向滚动条——
+            滚动条占位/引擎换行怪癖都不可撑高（rb-ticker 类见 global.css） */}
         {streaming && !expanded ? (
           <div
             ref={lineRef}
+            className="rb-ticker"
             style={{
               flex: 1,
               minWidth: 0,
+              height: 26,
               overflowX: 'auto',
               overflowY: 'hidden',
               whiteSpace: 'nowrap',
+              wordBreak: 'keep-all',
+              overflowWrap: 'normal',
+              textWrap: 'nowrap',
               fontSize: 12,
               lineHeight: '26px',
               color: token.colorTextTertiary,
-              scrollbarWidth: 'thin',
             }}
           >
             {lastLine || '…'}
