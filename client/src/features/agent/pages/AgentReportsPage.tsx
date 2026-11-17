@@ -15,7 +15,7 @@ import { SkeletonList } from '../../../shared/ui/Skeleton';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { useAgentStore } from '../store/agent';
 import { AgentSubNav } from '../components/AgentSubNav';
-import { MarkdownText } from '../components/StreamMessage';
+import { MarkdownText } from '../../../shared/components/MarkdownText';
 
 export function AgentReportsPage() {
   const { token } = theme.useToken();
