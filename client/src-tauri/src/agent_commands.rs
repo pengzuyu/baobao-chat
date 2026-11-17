@@ -23,6 +23,13 @@ pub fn session_history(host: Host, session_id: String) -> Result<Value, String> 
     host.request("session.history", json!({ "sessionId": session_id }))
 }
 
+/// run 历史（D33：RT run.history 直读 WAL 透传——子 agent 侧栏过程回放，
+/// agent_event 按 run_id 过滤投影：spawn→User / trace→Assistant·Tool）
+#[tauri::command]
+pub fn run_history(host: Host, run_id: String) -> Result<Value, String> {
+    host.request("run.history", json!({ "runId": run_id }))
+}
+
 /// 新建会话：宿主生成 sessionId → session.start（等 session.ready 回执）。
 /// title 可选初始标题（IM embedded 会话来源名；缺省=「会话 n」占位，
 /// 前端首条用户消息后经 agent_rename 派生）

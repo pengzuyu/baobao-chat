@@ -27,11 +27,32 @@ export type SessionStatus =
 export type RiskLevel = 'low' | 'mid' | 'high';
 
 /** 会话历史条目（session.history 回执；WAL 摘要级投影——工作台打开会话加载
- *  聊天记录，IM embedded 与工作台同一会话跨端共用。ok/summary 旧 WAL 行可缺） */
+ *  聊天记录，IM embedded 与工作台同一会话跨端共用。ok/summary 旧 WAL 行可缺；
+ *  args=脱敏 JSON 字符串（D33 §3.4 工具卡回放保真），旧行可缺 */
 export type HistoryItem =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
-  | { kind: 'tool'; callId: string; tool: string; ok?: boolean; summary?: string };
+  | { kind: 'tool'; callId: string; tool: string; ok?: boolean; summary?: string; args?: string };
+
+/**
+ * 工具 args 归一（D33 §2 存量坑修复）：self 工具的 wire args 是 JSON **字符串**
+ * （bridge.rs 包 Value::String 上行）、委派后端归一化事件是对象——统一 parse 成
+ * 对象；解析失败/非对象回落 {}。normalizeEvent 与 historyToStreamItem 共用。
+ */
+export function parseToolArgs(raw: unknown): Record<string, unknown> {
+  if (typeof raw === 'string') {
+    try {
+      const v: unknown = JSON.parse(raw);
+      return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  return {};
+}
 
 /** 审批记忆粒度（09 §4.2 三级记忆） */
 export type GrantScope = 'once' | 'session' | 'permanent';
@@ -229,6 +250,20 @@ export type AgentEvent =
   | { type: 'subagentEvent'; sessionId: string; runId: string; phase: 'spawn' | 'delta' | 'done' | 'fail'; summary?: string }
   | { type: 'subagentJoin'; sessionId: string; results: Array<{ runId: string; ok: boolean; summary: string }> }
   /**
+   * 子 Agent 过程明细（D33 §3.2：probe 每步文本/工具外发，按 runId 路由
+   * sideStreams 侧栏 run 流，不进主时间线。text=每模型轮整段；argsMasked=
+   * 脱敏 JSON 字符串）
+   */
+  | {
+      type: 'subagentTrace';
+      sessionId: string;
+      runId: string;
+      item:
+        | { kind: 'text'; text: string }
+        | { kind: 'tool_call'; callId: string; tool: string; argsMasked: string; risk: RiskLevel }
+        | { kind: 'tool_result'; callId: string; ok: boolean; summary: string; durationMs: number };
+    }
+  /**
    * 委派（D16 类型 3：本机 CLI 后台运行——launch 后 turn 立即返回，
    * delegate.end 异步到达驱动审查卡）。brief 阶段待确认（delegate.launch），
    * 事件 kind：meta|output|tool_use|tool_result|warning
@@ -277,6 +312,8 @@ export interface AgentBridge {
   endSession(sessionId: string): Promise<void>;
   /** 会话历史（session.history 直读 WAL：打开会话加载聊天记录；空=无历史） */
   loadHistory(sessionId: string): Promise<HistoryItem[]>;
+  /** run 历史（D33 run.history：子 agent 侧栏过程回放——spawn→User/trace→Assistant·Tool；空=无过程行） */
+  loadRunHistory(runId: string): Promise<HistoryItem[]>;
   /** 全局紧急停止（agent_emergency_stop：杀进程组 + 未决审批作废，INT-AG-12） */
   emergencyStop(): Promise<void>;
   /** 审批回应（agent_approve / agent_reject；editedArgs=命令卡改后回传，09 §6.1） */

@@ -135,6 +135,7 @@ pub fn run() {
             win_minimize,
             agent_commands::session_list,
             agent_commands::session_history,
+            agent_commands::run_history,
             agent_commands::agent_start_session,
             agent_commands::agent_input,
             agent_commands::agent_switch_model,

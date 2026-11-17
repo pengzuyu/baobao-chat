@@ -384,6 +384,7 @@ export class MockAgentBridge implements AgentBridge {
     if (round === 1) void this.scriptReadFile(s, ctx);
     else if (round === 2) void this.scriptRunCommand(s, ctx);
     else if (round === 3) void this.scriptAskUser(s, ctx);
+    else if (round === 4) void this.scriptSkillAndSubagent(s, ctx);
     else void this.scriptRunCommand(s, ctx);
   }
 
@@ -435,6 +436,11 @@ export class MockAgentBridge implements AgentBridge {
 
   async loadHistory(_sessionId: string): Promise<HistoryItem[]> {
     // mock 剧本是内存态不落 WAL——历史加载返回空（真实链路 session.history 读库）
+    return [];
+  }
+
+  async loadRunHistory(_runId: string): Promise<HistoryItem[]> {
+    // D33：mock 剧本 trace 不落 WAL——回放返回空（侧栏直播期可见）
     return [];
   }
 
@@ -886,6 +892,100 @@ export class MockAgentBridge implements AgentBridge {
         'text',
       );
       this.emit({ type: 'streamDone', sessionId: sid, finishReason: 'stop', usage: { in: 1980, out: 240 } });
+      this.setStatus(sid, 'idle', 'finish');
+    } catch (e) {
+      if (!(e instanceof ScriptCancelled)) throw e;
+    } finally {
+      if (this.contexts.get(sid) === ctx) this.contexts.delete(sid);
+    }
+  }
+
+  /** 第 4 轮（D33）：skill 显式加载 → 并行探查子 agent（spawn/trace/done/join，
+   *  trace 按状态机走 sideStreams 侧栏——主流只见子任务卡）→ 结论收尾 */
+  private async scriptSkillAndSubagent(s: AgentSessionMeta, ctx: ScriptContext): Promise<void> {
+    const sid = s.id;
+    try {
+      this.setStatus(sid, 'running', 'user.message');
+      await this.streamOut(ctx, sid, '这个任务匹配技能目录里的「报销助手」，先加载技能规范：', 'text');
+      // ① skill 工具调用（D33：结果=技能正文注入上下文）
+      this.emit({
+        type: 'toolCall',
+        sessionId: sid,
+        callId: `call-${sid}-r4a`,
+        tool: 'skill',
+        args: { name: '报销助手' },
+        risk: 'low',
+        parallel: false,
+        source: 'self',
+      });
+      ctx.inFlightCalls.add(`call-${sid}-r4a`);
+      await ctx.wait(600);
+      ctx.inFlightCalls.delete(`call-${sid}-r4a`);
+      this.emit({
+        type: 'toolResult',
+        sessionId: sid,
+        callId: `call-${sid}-r4a`,
+        ok: true,
+        summary: '# 技能: 报销助手（risk: low）\n报销三步：填单、贴票、提交审批。',
+        truncated: false,
+        durationMs: 580,
+      });
+      await this.streamOut(ctx, sid, '按技能规范拆成两项并行探查，派子 agent 调查：', 'text');
+      // ② 子 agent fan-out：spawn ×2 → trace（侧栏流）→ done → join
+      this.setStatus(sid, 'subagent_fanout', 'fanout');
+      const subs: Array<{ runId: string; task: string }> = [
+        { runId: 'r-41', task: '查近 30 天差旅票据与金额汇总' },
+        { runId: 'r-42', task: '核对报销制度里的票据要求与审批链' },
+      ];
+      for (const sub of subs) {
+        this.emit({ type: 'subagentSpawn', sessionId: sid, runId: sub.runId, taskDigest: sub.task, toolSubset: ['read_file', 'search_files'] });
+      }
+      for (const sub of subs) {
+        this.emit({
+          type: 'subagentTrace',
+          sessionId: sid,
+          runId: sub.runId,
+          item: {
+            kind: 'tool_call',
+            callId: `${sub.runId}-c1`,
+            tool: 'search_files',
+            argsMasked: '{"query":"差旅 票据"}',
+            risk: 'low',
+          },
+        });
+        await ctx.wait(900);
+        this.emit({
+          type: 'subagentTrace',
+          sessionId: sid,
+          runId: sub.runId,
+          item: { kind: 'tool_result', callId: `${sub.runId}-c1`, ok: true, summary: '命中 6 处（发票/行程单/审批单）', durationMs: 860 },
+        });
+        this.emit({
+          type: 'subagentTrace',
+          sessionId: sid,
+          runId: sub.runId,
+          item: { kind: 'text', text: `已完成调查：${sub.task}——材料齐全，含 2 张待补行程单。` },
+        });
+        this.emit({
+          type: 'subagentEvent',
+          sessionId: sid,
+          runId: sub.runId,
+          phase: 'done',
+          summary: `已完成调查：${sub.task}——材料齐全，含 2 张待补行程单。`,
+        });
+      }
+      this.emit({
+        type: 'subagentJoin',
+        sessionId: sid,
+        results: subs.map((sub) => ({ runId: sub.runId, ok: true, summary: `${sub.task}——材料齐全` })),
+      });
+      await this.streamOut(
+        ctx,
+        sid,
+        ['## 汇总', '', '- 两项探查完成：票据与制度核对无冲突', '- 待补 2 张行程单后即可按技能三步流程提交', '', '点击上方子任务卡「查看过程」可看探查明细。'].join('\n'),
+        'text',
+      );
+      this.emit({ type: 'streamDone', sessionId: sid, finishReason: 'stop', usage: { in: 2210, out: 310 } });
       this.setStatus(sid, 'idle', 'finish');
     } catch (e) {
       if (!(e instanceof ScriptCancelled)) throw e;

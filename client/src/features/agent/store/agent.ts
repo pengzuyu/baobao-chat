@@ -21,6 +21,7 @@ import type {
   PermissionMode,
   SessionStatus,
 } from '../bridge/types';
+import { parseToolArgs } from '../bridge/types';
 
 /** 会话流条目（UI 投影模型；stream.delta 增量拼进 agentText/reasoning 尾项） */
 export type StreamItem =
@@ -116,6 +117,12 @@ interface AgentState {
   runsBySession: Record<string, RunInfo[]>;
   /** 全量 run 清单（2026-11-11 左栏任务分区：runs.list 无 sessionId=跨会话全量） */
   taskRuns: RunInfo[];
+  /** D33 §3.2/§3.3：runId → 子 agent 过程流（subagentSpawn 播种 user 条目 +
+   *  subagentTrace 直播投影 + run.history 回放回填；右栏运行详情数据源。
+   *  不进主时间线——probe 过程只在侧栏可见） */
+  sideStreams: Record<string, StreamItem[]>;
+  /** D33：右栏运行详情当前展示的 runId（null=未打开/回落默认 tab） */
+  activeRunView: string | null;
 
   /** 思考强度档位（2026-11-11 zcode 同款三档；全局用户选择，随每条消息下发） */
   thinkLevel: 'low' | 'medium' | 'high';
@@ -187,6 +194,12 @@ interface AgentState {
   loadRuns: (sessionId: string) => void;
   /** 拉全量 run（左栏任务分区；sessionId 缺省=跨会话全量） */
   loadTaskRuns: () => void;
+  /** D33：打开运行详情（右栏切该 run 的过程流；本进程无流时拉 run.history 回放） */
+  openRunView: (runId: string) => void;
+  /** D33：关闭运行详情（回落默认 tab；sideStreams 保留——重开不重拉） */
+  closeRunView: () => void;
+  /** D33：run 历史回放（subagentTrace 未直播到的场景：重启/切回后打开） */
+  loadRunHistory: (runId: string) => Promise<void>;
   /** 事件唯一入口（reducer 式分发；包一层便于桥接入） */
   handleEvent: (event: AgentEvent) => void;
 }
@@ -278,7 +291,8 @@ function nextKey(prefix: string): string {
 }
 
 /** 历史条目 → 流条目（回合气泡同构渲染；key 前缀 h- 区分直播条目。
- *  工具行合成 call/result 事件（args 空——WAL 只记名与结果摘要） */
+ *  工具行合成 call/result 事件（args=脱敏 JSON 串 parse——D33 §3.4 WAL 补记后
+ *  重启回放工具卡保真；旧行无 args → {} 降级） */
 function historyToStreamItem(sid: string, it: HistoryItem, i: number): StreamItem {
   switch (it.kind) {
     case 'user':
@@ -294,7 +308,7 @@ function historyToStreamItem(sid: string, it: HistoryItem, i: number): StreamIte
           sessionId: sid,
           callId: it.callId,
           tool: it.tool,
-          args: {},
+          args: parseToolArgs(it.args),
           risk: 'low',
           parallel: false,
           source: 'self',
@@ -389,6 +403,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   runsBySession: {},
   thinkLevel: 'medium',
   taskRuns: [],
+  sideStreams: {},
+  activeRunView: null,
 
   memories: [],
   memoriesLoading: false,
@@ -680,6 +696,31 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       .catch(() => undefined);
   },
 
+  // ---- D33：运行详情（右栏子 agent 过程流）----
+
+  openRunView: (runId) => {
+    set({ activeRunView: runId });
+    void get().loadRunHistory(runId);
+  },
+
+  closeRunView: () => set({ activeRunView: null }),
+
+  loadRunHistory: async (runId) => {
+    // 本进程已有直播流（或已回放过）不重拉；拉取期间来了直播也不覆盖
+    if (!runId || (get().sideStreams[runId] ?? []).length > 0) return;
+    let items: HistoryItem[];
+    try {
+      items = await bridge.loadRunHistory(runId);
+    } catch {
+      return; // 回放失败不阻断（直播照常；空态=子任务卡摘要兜底）
+    }
+    set((s) =>
+      (s.sideStreams[runId] ?? []).length > 0
+        ? s
+        : { sideStreams: { ...s.sideStreams, [runId]: items.map((it, i) => historyToStreamItem(runId, it, i)) } },
+    );
+  },
+
   // ---- 事件分发（reducer 式；全部经此入口改 streams/sessions/…）----
   handleEvent: (event) => {
     // stream.delta 走合帧缓冲（50ms 窗口一次 set；见 flushDeltaBuffer 注释）；
@@ -886,7 +927,98 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             taskDigest: event.taskDigest,
             status: 'running',
           };
-          return { streams: { ...s.streams, [event.sessionId]: [...list, item] } };
+          // D33：侧栏过程流播种（user 条目=任务摘要；trace 在其上追加）
+          const side = s.sideStreams[event.runId] ?? [
+            { kind: 'user' as const, key: `su-${event.runId}`, text: event.taskDigest, ts: Date.now() },
+          ];
+          return {
+            streams: { ...s.streams, [event.sessionId]: [...list, item] },
+            sideStreams: { ...s.sideStreams, [event.runId]: side },
+          };
+        }
+        // D33 §3.2：probe 过程明细 → 侧栏 run 流（不进主时间线）。
+        // text=每模型轮整段 agentText；tool_call/tool_result 按 callId 配对成
+        // 标准 tool 条目（与主流 handleEvent 同构，渲染器零特判）
+        case 'subagentTrace': {
+          const runId = event.runId;
+          let list = s.sideStreams[runId] ?? [
+            { kind: 'user' as const, key: `su-${runId}`, text: '（子任务过程）', ts: Date.now() },
+          ];
+          if (event.item.kind === 'text') {
+            if (event.item.text) {
+              list = [...list, { kind: 'agentText' as const, key: nextKey('sat'), text: event.item.text, streaming: false }];
+            }
+          } else if (event.item.kind === 'tool_call') {
+            list = [
+              ...list,
+              {
+                kind: 'tool' as const,
+                key: `t-${event.item.callId}`,
+                call: {
+                  type: 'toolCall' as const,
+                  sessionId: event.sessionId,
+                  callId: event.item.callId,
+                  tool: event.item.tool,
+                  args: parseToolArgs(event.item.argsMasked),
+                  risk: event.item.risk,
+                  parallel: false,
+                  source: 'self' as const,
+                },
+              },
+            ];
+          } else {
+            // tool_result：按 callId 回填；孤儿（错过 call，如中途订阅）合成带结果的完整条目
+            // （先解构——闭包内联合窄化失效）
+            const { callId, ok, summary, durationMs } = event.item;
+            let patched = false;
+            list = list.map((it) => {
+              if (it.kind === 'tool' && it.call.callId === callId && !it.result) {
+                patched = true;
+                return {
+                  ...it,
+                  result: {
+                    type: 'toolResult' as const,
+                    sessionId: event.sessionId,
+                    callId,
+                    ok,
+                    summary,
+                    truncated: false,
+                    durationMs,
+                  },
+                };
+              }
+              return it;
+            });
+            if (!patched) {
+              list = [
+                ...list,
+                {
+                  kind: 'tool' as const,
+                  key: `t-${callId}`,
+                  call: {
+                    type: 'toolCall' as const,
+                    sessionId: event.sessionId,
+                    callId,
+                    tool: '(unknown)',
+                    args: {},
+                    risk: 'low' as const,
+                    parallel: false,
+                    source: 'self' as const,
+                  },
+                  result: {
+                    type: 'toolResult' as const,
+                    sessionId: event.sessionId,
+                    callId,
+                    ok,
+                    summary,
+                    truncated: false,
+                    durationMs,
+                  },
+                },
+              ];
+            }
+          }
+          return { sideStreams: { ...s.sideStreams, [runId]: list } };
         }
         case 'subagentEvent': {
           // delta=运行中反馈（补充指令注入等，D16 决策⑧）→ 刷新卡摘要；

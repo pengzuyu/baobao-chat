@@ -36,6 +36,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { parseToolArgs } from './types';
 import type {
   AgentBridge,
   AgentEvent,
@@ -237,6 +238,12 @@ export class TauriAgentBridge implements AgentBridge {
     return rep.items ?? [];
   }
 
+  async loadRunHistory(runId: string): Promise<HistoryItem[]> {
+    // D33：RT run.history.result 原样透传（子 agent 侧栏过程回放）
+    const rep = await invoke<{ items?: HistoryItem[] }>('run_history', { runId });
+    return rep.items ?? [];
+  }
+
   async emergencyStop(): Promise<void> {
     await invoke('agent_emergency_stop');
   }
@@ -388,7 +395,9 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         sessionId: sid,
         callId: str(raw.call_id),
         tool: str(raw.tool),
-        args: (raw.args as Record<string, unknown> | undefined) ?? {},
+        // D33：args 归一（self=JSON 字符串 / backend=对象 → 统一对象；修真机
+        // 终端卡头部命令显示不出的存量坑）
+        args: parseToolArgs(raw.args),
         risk: (str(raw.risk) as RiskLevel) || 'low',
         parallel: raw.parallel === true,
         source: raw.source === 'backend' ? 'backend' : 'self',
@@ -514,6 +523,45 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
           summary: str(r.summary),
         })),
       };
+    // D33 §3.2：probe 过程明细（item tag=kind；risk medium→mid 与 tool.call 同口径）
+    case 'subagent.trace': {
+      const item = (raw.item as Record<string, unknown> | undefined) ?? {};
+      const kind = str(item.kind);
+      const runId = str(raw.sub_id);
+      if (kind === 'text') {
+        return { type: 'subagentTrace', sessionId: sid, runId, item: { kind: 'text', text: str(item.text) } };
+      }
+      if (kind === 'tool_call') {
+        const r = str(item.risk);
+        return {
+          type: 'subagentTrace',
+          sessionId: sid,
+          runId,
+          item: {
+            kind: 'tool_call',
+            callId: str(item.callId),
+            tool: str(item.tool),
+            argsMasked: str(item.argsMasked),
+            risk: (r === 'low' || r === 'high' ? r : r === 'medium' ? 'mid' : 'low') as RiskLevel,
+          },
+        };
+      }
+      if (kind === 'tool_result') {
+        return {
+          type: 'subagentTrace',
+          sessionId: sid,
+          runId,
+          item: {
+            kind: 'tool_result',
+            callId: str(item.callId),
+            ok: item.ok === true,
+            summary: str(item.summary),
+            durationMs: num(item.durationMs),
+          },
+        };
+      }
+      return null; // 未知 item kind 前向兼容忽略
+    }
     case 'delegate.event': {
       const runId = str(raw.delegate_task_id);
       const kind = str(raw.kind);
