@@ -162,6 +162,8 @@ fn run() -> Result<(), String> {
         // 下发后无需重启即注入工具面
         mcp: Some(mcp_client.clone()),
         session_workspaces: Some(session_workspaces.clone()),
+        // D33 §3.1：skill 工具与组装/tools.reload 热重扫共用同一索引实例
+        skills: Some(skills_index.clone()),
         ..Default::default()
     }));
     let obo_for_model = Arc::clone(&obo);
@@ -591,6 +593,19 @@ fn dispatch(
             Some(RuntimeToHost::SessionHistoryResult {
                 items: bbrt_session::recovery::wal_history(&events),
                 session_id,
+            })
+        }
+        // run 历史（D33 §3.3 子 agent 侧栏回放）：agent_event 按 run_id 过滤
+        // 投影——spawn→User / trace→Assistant·Tool；与 session.history 同口径
+        // 直读 WAL（run 不须在运行态）
+        HostToRuntime::RunHistory { run_id } => {
+            let events = match store.lock() {
+                Ok(g) => g.events_by_run(&run_id, 10_000).unwrap_or_default(),
+                Err(_) => vec![],
+            };
+            Some(RuntimeToHost::RunHistoryResult {
+                items: bbrt_session::recovery::wal_run_history(&events),
+                run_id,
             })
         }
         HostToRuntime::MemoryList {

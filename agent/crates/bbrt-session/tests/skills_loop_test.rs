@@ -1,5 +1,9 @@
-//! 技能注入 loop 集成：triggers 命中的技能正文进 system 消息 [技能] 段
-//! （10 篇 §4.5 / 08 篇 §4.3 预算），未命中不注入。
+//! 技能目录区 loop 集成（D33 §3.1：技能加载改显式 `skill` 工具调用——
+//! 组装只放全量目录引导，隐式触发词注入退役；工具面收紧随显式调用
+//! 阶段二重接线，本轮恒不限制）。
+//!
+//! 历史：2026-11-17 前本文件验证「triggers 命中正文自动注入 + allowedTools
+//! 收紧」——随机制退役改写（口径见 D33 拍板 #2）。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -106,9 +110,10 @@ fn eco_with_skill() -> std::path::PathBuf {
     eco
 }
 
-/// 命中轮：[技能] 段含技能名与正文；未命中轮：[技能] 段为空。
+/// D33：[技能] 段=全量目录引导（引导句 + name：description）——正文不因
+/// trigger 关键词注入（显式 skill 工具加载才取正文）；两轮目录一致
 #[test]
-fn skill_body_injected_on_trigger_only() {
+fn skill_catalog_listed_in_system_only() {
     let eco = eco_with_skill();
     let captured = Arc::new(Mutex::new(vec![]));
     let deps = LoopDeps {
@@ -132,27 +137,29 @@ fn skill_body_injected_on_trigger_only() {
         None,
     );
 
-    // 命中轮
+    // 「命中」关键词轮（旧机制会注入正文——新口径同样只有目录）
     runner.run_turn("帮我报销上次的差旅费", &deps, None);
-    // 未命中轮
+    // 无关轮
     runner.run_turn("今天天气怎么样", &deps, None);
 
     let systems = captured.lock().unwrap().clone();
     assert_eq!(systems.len(), 2, "两轮各一次模型调用");
-    assert!(
-        systems[0].contains("[技能]")
-            && systems[0].contains("报销助手")
-            && systems[0].contains("报销三步"),
-        "命中轮应注入技能正文: {}",
-        systems[0]
-    );
-    assert!(!systems[1].contains("报销三步"), "未命中轮不应注入技能正文");
+    for sys in &systems {
+        assert!(
+            sys.contains("[技能]") && sys.contains("skill 工具") && sys.contains("报销助手"),
+            "目录区应含引导句与技能名: {sys}"
+        );
+        assert!(
+            !sys.contains("报销三步"),
+            "正文不因 trigger 注入（显式调用才加载）: {sys}"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&eco);
 }
 
 // ---------------------------------------------------------------------------
-// pick_tools 工具面收紧（10 篇 §4.6 条件①）
+// 工具面（10 篇 §4.6 pick_tools——D33：随隐式注入退役恒不收紧）
 // ---------------------------------------------------------------------------
 
 /// 记录 req.tools 名集的模型（首轮文本收尾）
@@ -232,9 +239,10 @@ impl ToolExecutor for ThreeTools {
     }
 }
 
-/// 命中技能全体声明 allowedTools → tools 收紧到并集
+/// D33：技能声明 allowedTools 也不收紧（旧「命中并集收紧」随隐式注入退役；
+/// 收紧随显式 skill 调用阶段二重接线）
 #[test]
-fn pick_tools_narrows_to_declared_union() {
+fn pick_tools_not_narrowed_by_skill_declarations() {
     let skills = SkillIndex {
         entries: vec![
             SkillEntry {
@@ -249,7 +257,7 @@ fn pick_tools_narrows_to_declared_union() {
             SkillEntry {
                 name: "audit".into(),
                 description: String::new(),
-                triggers: vec!["部署".into()], // 同 trigger 双技能并集
+                triggers: vec!["部署".into()],
                 allowed_tools: vec!["search_files".into()],
                 risk: "low".into(),
                 body: "审计流程".into(),
@@ -284,17 +292,13 @@ fn pick_tools_narrows_to_declared_union() {
     runner.run_turn("帮我部署服务", &deps, None);
     let seen = model.0.lock().unwrap().clone();
     assert!(!seen.is_empty());
-    // 收紧：并集 {read_file, search_files}，不含 list_dir
     assert!(
-        seen.iter()
-            .all(|names| names.contains(&"read_file".to_string())
-                && names.contains(&"search_files".to_string())
-                && !names.contains(&"list_dir".to_string())),
-        "工具面应收紧到并集: {seen:?}"
+        seen.iter().all(|names| names.len() == 3),
+        "D33：不因技能声明收紧（全量三工具）: {seen:?}"
     );
 }
 
-/// 命中技能未声明 allowedTools → 不收紧（全量）
+/// 未声明 allowedTools → 全量（口径不变，回归护栏）
 #[test]
 fn pick_tools_keeps_full_when_undeclared() {
     let skills = SkillIndex {
@@ -302,7 +306,7 @@ fn pick_tools_keeps_full_when_undeclared() {
             name: "free".into(),
             description: String::new(),
             triggers: vec!["自由".into()],
-            allowed_tools: vec![], // 未声明=全量语义
+            allowed_tools: vec![],
             risk: "low".into(),
             body: "不限工具".into(),
             dir: "/tmp/skills/free".into(),

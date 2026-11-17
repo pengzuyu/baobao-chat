@@ -19,6 +19,7 @@ pub mod git;
 pub mod http;
 pub mod memory;
 pub mod search;
+pub mod skill;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -166,4 +167,6 @@ pub(crate) fn register_all(registry: &mut ToolRegistry) {
     registry.register(memory::subagent_cancel_def());
     // D20：提问卡（loop_runner 拦截，仅注册可发现性）
     registry.register(ask_user::ask_user_def());
+    // D33：技能显式加载（执行体在 pipeline dispatch——SkillIndex 经 ToolsConfig 注入）
+    registry.register(skill::skill_def());
 }

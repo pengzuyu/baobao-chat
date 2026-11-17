@@ -719,39 +719,15 @@ impl SessionRunner {
 
             // ② 组装 + 请求模型
             report.steps += 1;
-            // 技能命中注入（10 篇 §4.5：用户消息含 trigger 的技能正文进 skills
-            // 区块，context 预算 5% 截断兜底；索引空/未命中=空段零成本）+
-            // 技能索引区（D22 §2.1/L3：未命中技能一行一条 name：description——
-            // 模型知晓存在，提及名字即可触发；Claude 格式技能无 triggers 时
-            // 解析层已兜底 name 作触发词）+
-            // 工具面收紧（10 篇 §4.6 pick_tools 条件①：命中技能**全体**声明
-            // 非空 allowedTools → tools 收紧到并集；任一未声明=不限制——
-            // 无声明技能语义即全量；快模型预筛/近期调用/目录化 system 随下轮）
-            let (skills_text, allowed_tools) = {
+            // 技能目录区（D33 §3.1：技能加载改显式 `skill` 工具调用——组装只放
+            // 全量目录引导（name：description，正文不漏），隐式触发词注入退役；
+            // 空索引=空段零成本。工具面收紧（allowedTools 并集）随显式调用阶段二
+            // 重接线——本轮恒不限制）
+            let skills_text = {
                 let idx = deps.skills.lock().unwrap_or_else(|p| p.into_inner());
-                let matched = idx.match_for(user_text);
-                let index_text = idx.render_index(&matched);
-                let text = if index_text.is_empty() {
-                    idx.render(&matched)
-                } else {
-                    format!("{}\n\n{}", index_text, idx.render(&matched))
-                };
-                let allow =
-                    if matched.is_empty() || matched.iter().any(|e| e.allowed_tools.is_empty()) {
-                        None
-                    } else {
-                        let mut union: Vec<String> = vec![];
-                        for e in &matched {
-                            for t in &e.allowed_tools {
-                                if !union.contains(t) {
-                                    union.push(t.clone());
-                                }
-                            }
-                        }
-                        Some(union)
-                    };
-                (text, allow)
+                idx.render_catalog()
             };
+            let allowed_tools: Option<Vec<String>> = None;
             let assembled = assemble(
                 &deps.budget,
                 AssembleParts {
@@ -946,10 +922,17 @@ impl SessionRunner {
                     args_masked: masked.clone(),
                     risk: risk.into(),
                 });
+                // D33 §3.4：WAL 补记脱敏参数——session.history 回放工具卡保真
+                // （命令/路径/diff 重启可见；旧读法按缺 args 降级）
                 deps.wal.append(
                     &self.session_id,
                     "tool.call",
-                    &format!("{{\"call_id\":\"{}\",\"tool\":\"{}\"}}", tc.id, tc.name),
+                    &serde_json::json!({
+                        "call_id": tc.id,
+                        "tool": tc.name,
+                        "args": masked,
+                    })
+                    .to_string(),
                 );
 
                 // 修改类工具前置快照（08 §4.4：stash 式 pre-edit；5min 窗口去重在服务内）
@@ -1821,8 +1804,9 @@ fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {
     msgs
 }
 
-/// 简化风险映射（bbrt-tools 注册表携带精确级；此处兜底展示）
-fn risk_of(tool: &str) -> &'static str {
+/// 简化风险映射（bbrt-tools 注册表携带精确级；此处兜底展示）。
+/// pub(crate)：subagent.rs 的 trace 发射复用同口径（D33 §3.2）
+pub(crate) fn risk_of(tool: &str) -> &'static str {
     match tool {
         "read_file" | "list_dir" | "search_files" | "glob" => "low",
         "write_file" | "edit_file" | "git_status" | "git_diff" => "medium",

@@ -59,6 +59,10 @@ pub struct ToolsConfig {
     /// 用户级工作空间，不跟随项目）。None=运行时解析（env BBC_RT_DEFAULT_WORKSPACE
     /// > ~/.baobaochat/workspace）；测试注入 tmp 免写真实 HOME
     pub default_workspace: Option<PathBuf>,
+    /// 技能索引（D33 §3.1：skill 工具执行体按名取正文；与 loop_runner 组装/
+    /// tools.reload 热重扫共用同一实例）。None=未装配（单测/嵌入式）→ skill
+    /// 工具降级返回不可用提示
+    pub skills: Option<Arc<Mutex<bbrt_session::skills::SkillIndex>>>,
 }
 
 impl ToolsConfig {
@@ -83,6 +87,7 @@ impl ToolsConfig {
             mcp_policy: bbrt_mcp::PolicyFilter::default(),
             session_workspaces: None,
             default_workspace: None,
+            skills: None,
         }
     }
 
@@ -129,6 +134,7 @@ impl Default for ToolsConfig {
             mcp_policy: bbrt_mcp::PolicyFilter::default(),
             session_workspaces: None,
             default_workspace: None,
+            skills: None,
         }
     }
 }

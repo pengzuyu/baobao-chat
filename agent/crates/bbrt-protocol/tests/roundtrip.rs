@@ -142,6 +142,8 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             model: Some("p:2:deepseek-chat".into()),
             reason: Some("user".into()),
         },
+        // D33 §3.3：run 历史回放
+        HostToRuntime::RunHistory { run_id: "r-9".into() },
     ]
 }
 
@@ -276,6 +278,30 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
                 sub_id: "sub-1".into(),
                 ok: true,
                 summary: "超时源于 30s 数据库等待".into(),
+            }],
+        },
+        // D33 §3.2：probe 过程明细
+        RuntimeToHost::SubagentTrace {
+            session_id: "sess-1".into(),
+            sub_id: "r-9".into(),
+            item: bbrt_protocol::SubagentTraceItem::ToolCall {
+                call_id: "c1".into(),
+                tool: "read_file".into(),
+                args_masked: "{\"path\":\"a.rs\"}".into(),
+                risk: bbrt_protocol::RiskLevel::Low,
+            },
+        },
+        RuntimeToHost::SubagentTrace {
+            session_id: "sess-1".into(),
+            sub_id: "r-9".into(),
+            item: bbrt_protocol::SubagentTraceItem::Text {
+                text: "已定位问题".into(),
+            },
+        },
+        RuntimeToHost::RunHistoryResult {
+            run_id: "r-9".into(),
+            items: vec![bbrt_protocol::HistoryItem::User {
+                text: "定位超时来源".into(),
             }],
         },
         RuntimeToHost::DelegateBrief {
@@ -416,7 +442,7 @@ fn roundtrip_all_host_to_runtime() {
     let all = all_host_to_runtime();
     assert_eq!(
         all.len(),
-        22,
+        23,
         "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong + D20 clarify.response"
     );
     for msg in &all {
@@ -429,7 +455,7 @@ fn roundtrip_all_runtime_to_host() {
     let all = all_runtime_to_host();
     assert_eq!(
         all.len(),
-        35,
+        38,
         "D11 §4 RT→宿主 21 类型 + D15 追加 6 类型 + checkpoint.restored + 双向 ping/pong + 2026-11-11 interrupted/renamed + D20 clarify.request/状态样本 + D23 memory.forget.result"
     );
     for msg in &all {
@@ -686,6 +712,79 @@ fn golden_subagent_join() {
                 {"subId":"sub-1","ok":true,"summary":"命中 3 处"},
                 {"subId":"sub-2","ok":false,"summary":"超步自杀，部分结果"}
             ]
+        }),
+    );
+}
+
+/// D33 §3.2：probe 过程明细——item tag=kind 三态；WAL 行 payload 同构
+#[test]
+fn golden_d33_subagent_trace_and_run_history() {
+    golden(
+        &RuntimeToHost::SubagentTrace {
+            session_id: "s".into(),
+            sub_id: "r-9".into(),
+            item: bbrt_protocol::SubagentTraceItem::ToolCall {
+                call_id: "c1".into(),
+                tool: "run_command".into(),
+                args_masked: "{\"command\":\"cargo test\"}".into(),
+                risk: bbrt_protocol::RiskLevel::High,
+            },
+        },
+        json!({
+            "type":"subagent.trace","sessionId":"s","subId":"r-9",
+            "item":{
+                "kind":"tool_call","callId":"c1","tool":"run_command",
+                "argsMasked":"{\"command\":\"cargo test\"}","risk":"high"
+            }
+        }),
+    );
+    golden(
+        &RuntimeToHost::SubagentTrace {
+            session_id: "s".into(),
+            sub_id: "r-9".into(),
+            item: bbrt_protocol::SubagentTraceItem::ToolResult {
+                call_id: "c1".into(),
+                ok: true,
+                summary: "12 passed".into(),
+                duration_ms: 4200,
+            },
+        },
+        json!({
+            "type":"subagent.trace","sessionId":"s","subId":"r-9",
+            "item":{"kind":"tool_result","callId":"c1","ok":true,"summary":"12 passed","durationMs":4200}
+        }),
+    );
+    golden(
+        &RuntimeToHost::SubagentTrace {
+            session_id: "s".into(),
+            sub_id: "r-9".into(),
+            item: bbrt_protocol::SubagentTraceItem::Text {
+                text: "已定位问题".into(),
+            },
+        },
+        json!({
+            "type":"subagent.trace","sessionId":"s","subId":"r-9",
+            "item":{"kind":"text","text":"已定位问题"}
+        }),
+    );
+    golden(
+        &HostToRuntime::RunHistory { run_id: "r-9".into() },
+        json!({"type":"run.history","runId":"r-9"}),
+    );
+    golden(
+        &RuntimeToHost::RunHistoryResult {
+            run_id: "r-9".into(),
+            items: vec![bbrt_protocol::HistoryItem::Tool {
+                call_id: "c1".into(),
+                tool: "read_file".into(),
+                ok: Some(true),
+                summary: Some("42 行".into()),
+                args: Some("{\"path\":\"a.rs\"}".into()),
+            }],
+        },
+        json!({
+            "type":"run.history.result","runId":"r-9",
+            "items":[{"kind":"tool","callId":"c1","tool":"read_file","ok":true,"summary":"42 行","args":"{\"path\":\"a.rs\"}"}]
         }),
     );
 }
@@ -1245,6 +1344,7 @@ fn golden_session_history_messages() {
                     tool: "read_file".into(),
                     ok: Some(true),
                     summary: Some("42 行".into()),
+                    args: None,
                 },
                 HistoryItem::Assistant {
                     text: "已修复".into(),
@@ -1268,6 +1368,7 @@ fn golden_session_history_messages() {
             tool: "bash".into(),
             ok: None,
             summary: None,
+            args: None,
         },
         json!({"kind":"tool","callId":"c9","tool":"bash"}),
     );

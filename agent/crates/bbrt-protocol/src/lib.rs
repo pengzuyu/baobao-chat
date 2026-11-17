@@ -13,7 +13,8 @@ pub use envelope::{
     HostToRuntime, McpServerWire, McpTransportWire, MemoryListItem, MemoryScope, ModelPolicy,
     ModelSwitchReason, PermissionMode, Preview, ProtocolError, RenewReason, ReportListItem,
     ReviewDecision, RiskLevel, RuntimeToHost, SessionListItem, SessionState, StreamChannel,
-    SubagentPhase, SubagentResult, TaskBrief, ThinkingLevel, ToolSource, ToolsReloadReason, Usage,
+    SubagentPhase, SubagentResult, SubagentTraceItem, TaskBrief, ThinkingLevel, ToolSource,
+    ToolsReloadReason, Usage,
     WorkspaceItem, PROTOCOL_VERSION,
 };
 // CodecError 定义于 codec 模块（envelope 内不再重复导出）

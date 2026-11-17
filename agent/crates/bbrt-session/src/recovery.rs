@@ -262,6 +262,8 @@ pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
                 tool: str_field("tool").unwrap_or_default(),
                 ok: None,
                 summary: None,
+                // D33 §3.4：脱敏参数透传（旧 WAL 行无此字段 → None 降级）
+                args: str_field("args"),
             }),
             "tool.result" => {
                 let call_id = str_field("call_id").unwrap_or_default();
@@ -271,6 +273,67 @@ pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
                 {
                     *ok = payload.get("ok").and_then(|x| x.as_bool());
                     *summary = str_field("summary");
+                }
+            }
+            _ => {}
+        }
+    }
+    items
+}
+
+/// WAL → run 历史条目（D33 §3.3 run.history 回执投影，侧栏子 agent 过程回放）。
+/// 数据源=events_by_run 过滤行：subagent.spawn→User（payload.task 摘要）、
+/// subagent.trace 的 text→Assistant / tool_call+tool_result 按 call_id 配对→Tool
+/// （args=脱敏原文）。其余 run 行（input/cancel/join 等）忽略——侧栏只要过程流。
+pub fn wal_run_history(events: &[EventRow]) -> Vec<HistoryItem> {
+    let mut items: Vec<HistoryItem> = Vec::new();
+    for ev in events {
+        let payload: serde_json::Value = match serde_json::from_str(&ev.payload) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let str_field = |key: &str| {
+            payload
+                .get(key)
+                .and_then(|x| x.as_str())
+                .map(str::to_string)
+        };
+        match ev.type_.as_str() {
+            "subagent.spawn" => {
+                if let Some(task) = str_field("task") {
+                    if !items.iter().any(|it| matches!(it, HistoryItem::User { .. })) {
+                        items.push(HistoryItem::User { text: task });
+                    }
+                }
+            }
+            "subagent.trace" => {
+                // payload=SubagentTraceItem 序列化（tag=kind、字段 camelCase——与 wire 同构）
+                match payload.get("kind").and_then(|x| x.as_str()) {
+                    Some("text") => {
+                        let text = str_field("text").unwrap_or_default();
+                        if !text.is_empty() {
+                            items.push(HistoryItem::Assistant { text });
+                        }
+                    }
+                    Some("tool_call") => items.push(HistoryItem::Tool {
+                        call_id: str_field("callId").unwrap_or_default(),
+                        tool: str_field("tool").unwrap_or_default(),
+                        ok: None,
+                        summary: None,
+                        args: str_field("argsMasked"),
+                    }),
+                    Some("tool_result") => {
+                        let call_id = str_field("callId").unwrap_or_default();
+                        if let Some(HistoryItem::Tool { ok, summary, .. }) = items
+                            .iter_mut()
+                            .rev()
+                            .find(|it| matches!(it, HistoryItem::Tool { call_id: c, ok: None, .. } if *c == call_id))
+                        {
+                            *ok = payload.get("ok").and_then(|x| x.as_bool());
+                            *summary = str_field("summary");
+                        }
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -329,6 +392,7 @@ mod history_tests {
                     tool: "read_file".into(),
                     ok: Some(true),
                     summary: Some("42 行".into()),
+                    args: None,
                 },
                 HistoryItem::Assistant {
                     text: "已修复".into()
@@ -367,7 +431,87 @@ mod history_tests {
                     tool: "bash".into(),
                     ok: None,
                     summary: None,
+                    args: None,
                 },
+            ]
+        );
+    }
+
+    /// D33 §3.4：tool.call 行带 args（脱敏原文）→ HistoryItem.Tool.args 透传
+    #[test]
+    fn wal_history_passes_tool_args() {
+        let events = vec![
+            ev(1, "user.text", r#"{"text":"跑测试"}"#),
+            ev(
+                2,
+                "tool.call",
+                r#"{"call_id":"c2","tool":"run_command","args":"{\"command\":\"cargo test\"}"}"#,
+            ),
+            ev(
+                3,
+                "tool.result",
+                r#"{"call_id":"c2","ok":true,"summary":"12 passed"}"#,
+            ),
+        ];
+        assert_eq!(
+            wal_history(&events),
+            vec![
+                HistoryItem::User { text: "跑测试".into() },
+                HistoryItem::Tool {
+                    call_id: "c2".into(),
+                    tool: "run_command".into(),
+                    ok: Some(true),
+                    summary: Some("12 passed".into()),
+                    args: Some("{\"command\":\"cargo test\"}".into()),
+                },
+            ]
+        );
+    }
+
+    /// D33 §3.3：run 级行投影——spawn→User（task）、trace text→Assistant、
+    /// tool_call+tool_result 按 call_id 配对→Tool（args=args_masked）；
+    /// input/cancel 等其余 run 行忽略；重复 spawn 不重复 User
+    #[test]
+    fn wal_run_history_projects_trace_rows() {
+        let events = vec![
+            EventRow {
+                id: 1,
+                run_id: "r-9".into(),
+                ..ev(11, "subagent.spawn", r#"{"run_id":"r-9","eta_hint_ms":0,"task":"定位超时来源"}"#)
+            },
+            EventRow {
+                id: 2,
+                run_id: "r-9".into(),
+                ..ev(12, "subagent.trace", r#"{"kind":"tool_call","callId":"c1","tool":"read_file","argsMasked":"{\"path\":\"a.rs\"}","risk":"low"}"#)
+            },
+            EventRow {
+                id: 3,
+                run_id: "r-9".into(),
+                ..ev(13, "subagent.trace", r#"{"kind":"tool_result","callId":"c1","ok":true,"summary":"42 行","durationMs":18}"#)
+            },
+            EventRow {
+                id: 4,
+                run_id: "r-9".into(),
+                ..ev(14, "subagent.trace", r#"{"kind":"text","text":"已定位问题"}"#)
+            },
+            EventRow {
+                id: 5,
+                run_id: "r-9".into(),
+                ..ev(15, "subagent.input", r#"{"run_id":"r-9","text":"补充"}"#)
+            },
+        ];
+        assert_eq!(
+            wal_run_history(&events),
+            vec![
+                HistoryItem::User { text: "定位超时来源".into() },
+                HistoryItem::Tool {
+                    call_id: "c1".into(),
+                    tool: "read_file".into(),
+                    ok: Some(true),
+                    summary: Some("42 行".into()),
+                    args: Some("{\"path\":\"a.rs\"}".into()),
+                },
+                HistoryItem::Assistant { text: "已定位问题".into() },
             ]
         );
     }

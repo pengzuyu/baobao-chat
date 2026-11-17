@@ -120,12 +120,12 @@ pub struct ProbeCtx {
 }
 
 /// 与主 to_chat_messages 同构的 system 组装（[技能]/[项目]/[记忆] 三段；
-/// D19：记忆召回随主会话工作区分级——项目会话注用户+项目两段）
+/// D19：记忆召回随主会话工作区分级——项目会话注用户+项目两段。
+/// D33：技能目录区与主同口径（显式 skill 工具加载，隐式注入退役））
 fn probe_system(ctx: &ProbeCtx, task: &str) -> String {
     let skills_text = {
         let idx = ctx.skills.lock().unwrap_or_else(|p| p.into_inner());
-        let matched = idx.match_for(task);
-        idx.render(&matched)
+        idx.render_catalog()
     };
     let ws = if ctx.workspace.is_empty() {
         None
@@ -275,6 +275,19 @@ pub fn run_probe(
             };
         };
         let (text, tool_calls, finish) = drain(stream);
+        // 过程明细外发（D33 §3.2）：每模型轮整段文本一条 trace（正文进侧栏
+        // run 流；reasoning 现状丢弃不外发，登记阶段二）
+        if !text.is_empty() {
+            trace_out(
+                sink.as_ref(),
+                wal.as_ref(),
+                session_id,
+                run_id,
+                bbrt_protocol::SubagentTraceItem::Text {
+                    text: clamp_summary(&text),
+                },
+            );
+        }
         history.push(Round::Assistant {
             content: text.clone(),
             tool_calls: tool_calls
@@ -294,16 +307,49 @@ pub fn run_probe(
             };
         }
         for tc in tool_calls {
+            // 过程明细外发：工具发起（脱敏参数 + 兜底风险级）
+            let (masked, _) = bbrt_sec::masking::mask_and_digest(&tc.arguments);
+            let risk = match crate::loop_runner::risk_of(&tc.name) {
+                "low" => bbrt_protocol::RiskLevel::Low,
+                "medium" => bbrt_protocol::RiskLevel::Medium,
+                _ => bbrt_protocol::RiskLevel::High,
+            };
+            trace_out(
+                sink.as_ref(),
+                wal.as_ref(),
+                session_id,
+                run_id,
+                bbrt_protocol::SubagentTraceItem::ToolCall {
+                    call_id: tc.id.clone(),
+                    tool: tc.name.clone(),
+                    args_masked: masked,
+                    risk,
+                },
+            );
+            let exec_started = std::time::Instant::now();
             let call = ToolInvocation {
                 call_id: tc.id.clone(),
                 name: tc.name.clone(),
                 args_json: tc.arguments.clone(),
                 session_id: session_id.to_string(),
             };
-            let summary = match ctx.tools.execute(ctx.mode, &call) {
-                ToolOutcome::Ok { summary, .. } => summary,
-                ToolOutcome::Blocked { summary, .. } => format!("[被拦] {summary}"),
+            let (ok, summary) = match ctx.tools.execute(ctx.mode, &call) {
+                ToolOutcome::Ok { summary, .. } => (true, summary),
+                ToolOutcome::Blocked { summary, .. } => (false, format!("[被拦] {summary}")),
             };
+            // 过程明细外发：工具落定（含耗时）
+            trace_out(
+                sink.as_ref(),
+                wal.as_ref(),
+                session_id,
+                run_id,
+                bbrt_protocol::SubagentTraceItem::ToolResult {
+                    call_id: tc.id.clone(),
+                    ok,
+                    summary: clamp_summary(&summary),
+                    duration_ms: exec_started.elapsed().as_millis() as u64,
+                },
+            );
             history.push(Round::Tool {
                 call_id: tc.id.clone(),
                 name: tc.name.clone(),
@@ -521,6 +567,25 @@ pub fn transition_join(state: SessionState) -> SessionState {
 // ---------------------------------------------------------------------------
 // 内部工具
 // ---------------------------------------------------------------------------
+
+/// 过程明细外发 + WAL 同步落行（D33 §3.2）：事件按 sub_id 路由侧栏 run 流；
+/// WAL 行 type=subagent.trace、payload=item 序列化（run.history 回放同构投影）
+fn trace_out(
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
+    session_id: &str,
+    run_id: &str,
+    item: bbrt_protocol::SubagentTraceItem,
+) {
+    sink.emit(SessionEvent::SubagentTrace {
+        session_id: session_id.to_string(),
+        sub_id: run_id.to_string(),
+        item: item.clone(),
+    });
+    if let Ok(payload) = serde_json::to_string(&item) {
+        wal.append_run(session_id, run_id, "subagent.trace", &payload);
+    }
+}
 
 /// 摘要 token 上限截断（按 CJK≈4:1 保守起步，char boundary 对齐）
 pub(crate) fn clamp_summary(text: &str) -> String {

@@ -327,6 +327,9 @@ impl ToolExecutor for PipelineExecutor {
                 let ws = self.session_ws_path(&call.session_id);
                 builtin::memory::read(&env, &args, &call.session_id, ws.as_deref())
             }
+            // D33 §3.1：技能显式加载（结果=SKILL.md 正文，天然注入下轮上下文；
+            // 未装配索引/未命中走 Ok 降级引导，见 builtin/skill.rs）
+            "skill" => builtin::skill::load(self.config.skills.as_ref(), &args),
             // mcp.{server}.{tool}（D11 §2.10 dispatch_by_source：网关/外部 MCP 工具；
             // OBO 由 McpClient 令牌闭包逐请求注入；断连/未注册 → 8002 标灰语义）
             _ if call.name.starts_with("mcp.") => match &self.mcp {

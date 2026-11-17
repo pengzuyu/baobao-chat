@@ -129,6 +129,16 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             session_id: session_id.clone(),
             results: results.clone(),
         },
+        // D33：probe 过程明细直通（item 含 risk 枚举，无需字符串转换）
+        SessionEvent::SubagentTrace {
+            session_id,
+            sub_id,
+            item,
+        } => RuntimeToHost::SubagentTrace {
+            session_id: session_id.clone(),
+            sub_id: sub_id.clone(),
+            item: item.clone(),
+        },
         SessionEvent::SessionReady {
             session_id,
             restored,

@@ -154,6 +154,13 @@ pub enum SessionEvent {
         phase: String,
         summary: Option<String>,
     },
+    /// subagent.trace（D33 §3.2：probe 每步过程明细——每模型轮整段文本/工具
+    /// 发起与落定；宿主按 sub_id 路由侧栏 run 流，不进主时间线）
+    SubagentTrace {
+        session_id: String,
+        sub_id: String,
+        item: bbrt_protocol::SubagentTraceItem,
+    },
     /// subagent.join（join 汇总；失败子任务带 fail 标注）
     SubagentJoined {
         session_id: String,

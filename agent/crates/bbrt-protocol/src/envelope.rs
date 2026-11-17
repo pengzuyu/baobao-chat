@@ -171,6 +171,29 @@ pub enum SubagentPhase {
     Fail,
 }
 
+/// 子 Agent 过程条目（D33 §3.2 subagent.trace 的 item 三态：每模型轮整段文本 /
+/// 工具发起（脱敏后）/ 工具落定）。WAL `subagent.trace` 行 payload 同构复用
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SubagentTraceItem {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "tool_call", rename_all = "camelCase")]
+    ToolCall {
+        call_id: String,
+        tool: String,
+        args_masked: String,
+        risk: RiskLevel,
+    },
+    #[serde(rename = "tool_result", rename_all = "camelCase")]
+    ToolResult {
+        call_id: String,
+        ok: bool,
+        summary: String,
+        duration_ms: u64,
+    },
+}
+
 /// 委派归一化事件类别（delegate.event，D11 §8.3 映射表）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -403,6 +426,10 @@ pub enum HistoryItem {
         ok: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
+        /// 脱敏后参数原文（D33 §3.4：工具卡历史回放保真——命令/路径/diff 重启
+        /// 可见；旧 WAL 行无此字段 → None 降级 name-only）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        args: Option<String>,
     },
 }
 
@@ -763,6 +790,11 @@ pub enum HostToRuntime {
     #[serde(rename = "session.history", rename_all = "camelCase")]
     SessionHistory { session_id: String },
 
+    /// run 历史查询（REQ→run.history.result；D33 §3.3 子 agent 侧栏回放——
+    /// agent_event 按 run_id 过滤投影：spawn→User / trace→Assistant·Tool）
+    #[serde(rename = "run.history", rename_all = "camelCase")]
+    RunHistory { run_id: String },
+
     /// 会话持久列表（D19；REQ→session.listed。agent_session JOIN agent_workspace，
     /// 宿主重启后恢复会话列表的数据源；活跃状态以宿主缓存叠加为准）
     #[serde(rename = "session.list", rename_all = "camelCase")]
@@ -971,6 +1003,16 @@ pub enum RuntimeToHost {
         results: Vec<SubagentResult>,
     },
 
+    /// 子 Agent 过程明细（UNT；D33 §3.2：probe 每步文本/工具外发——宿主按
+    /// sub_id 路由到侧栏 run 流，不进主时间线）
+    #[serde(rename = "subagent.trace", rename_all = "camelCase")]
+    SubagentTrace {
+        #[serde(default)]
+        session_id: String,
+        sub_id: String,
+        item: SubagentTraceItem,
+    },
+
     /// 简报待确认（UNT；等待 delegate.launch）
     #[serde(rename = "delegate.brief", rename_all = "camelCase")]
     DelegateBrief {
@@ -1156,6 +1198,14 @@ pub enum RuntimeToHost {
     #[serde(rename = "session.history.result", rename_all = "camelCase")]
     SessionHistoryResult {
         session_id: String,
+        #[serde(default)]
+        items: Vec<HistoryItem>,
+    },
+
+    /// run.history 回执（D33；空=run 不存在或无过程行）
+    #[serde(rename = "run.history.result", rename_all = "camelCase")]
+    RunHistoryResult {
+        run_id: String,
         #[serde(default)]
         items: Vec<HistoryItem>,
     },

@@ -88,6 +88,35 @@ impl SkillIndex {
         merged
     }
 
+    /// 技能目录区文本（D33 §3.1：全量技能一行一条 `name：description`，引导
+    /// 模型显式调用 `skill` 工具加载——隐式触发词注入退役；空索引=空串。
+    /// **无 description 只列名**——不取 body 开头当描述（未加载不漏正文）
+    pub fn render_catalog(&self) -> String {
+        let lines: Vec<String> = self
+            .entries
+            .iter()
+            .take(MAX_INDEX_LINES)
+            .map(|e| {
+                if e.description.is_empty() {
+                    format!("- {}", e.name)
+                } else {
+                    let desc: String = e.description.chars().take(INDEX_DESC_MAX).collect();
+                    format!("- {}：{}", e.name, desc)
+                }
+            })
+            .collect();
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "（可用技能目录，调用 skill 工具加载对应技能的完整规范）\n{}",
+                lines.join("\n")
+            )
+        }
+    }
+
+    /// 【退役 2026-11-17 D33】技能加载改显式 `skill` 工具调用——本组隐式注入
+    /// 三件（match_for/render/render_index）不再进组装路径，保留供既有测试。
     /// 技能索引区文本（未命中技能一行一条：`name：description`——让模型知道
     /// 存在、提及名字即可触发；空索引/全命中=空串。matched 中的技能已注入
     /// 正文不出现在索引，避免重复。**无 description 只列名**——不取 body
@@ -156,6 +185,24 @@ impl SkillIndex {
     /// 是否为空
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// 按名渲染单条技能正文（D33 §3.1：skill 工具执行体——格式与退役的
+    /// 隐式注入 render() 单条同构；未命中 None）
+    pub fn render_entry(&self, name: &str) -> Option<String> {
+        self.entries.iter().find(|e| e.name == name).map(|e| {
+            let tools = if e.allowed_tools.is_empty() {
+                String::new()
+            } else {
+                format!("\n（本技能允许工具: {}）", e.allowed_tools.join(", "))
+            };
+            format!("# 技能: {}（risk: {}）{tools}\n{}", e.name, e.risk, e.body)
+        })
+    }
+
+    /// 全部技能名（skill 工具未命中时引导清单用，D33）
+    pub fn names(&self) -> Vec<&str> {
+        self.entries.iter().map(|e| e.name.as_str()).collect()
     }
 }
 

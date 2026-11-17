@@ -94,6 +94,17 @@ impl Store {
         let rows = stmt.query_map(params![session_id, after_seq, limit as i64], from_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+
+    /// 按 run 归属拉取（D33 §3.3 run.history 回放：idx_event_run 索引，
+    /// id 升序=写入序；主循环事件 run_id 空串不命中）
+    pub fn events_by_run(&self, run_id: &str, limit: u32) -> Result<Vec<EventRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, seq, type, payload, created_at, run_id FROM agent_event
+             WHERE run_id = ?1 ORDER BY id ASC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![run_id, limit as i64], from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
 }
 
 #[cfg(test)]
