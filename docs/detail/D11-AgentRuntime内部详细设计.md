@@ -146,7 +146,7 @@ bbrt-tools/src/
 
 ### 2.5 bbrt-sec
 
-职责：09 篇全部安全机制的内化：门控判定顺序、三级记忆、危险命令规则库、沙箱（路径/网络/资源/进程组）、审计哈希链、脱敏、注入检测。沙箱的 **OS 原生实现**（Linux bubblewrap/cgroups、macOS Seatbelt/rlimit、Windows Job Object/Restricted Token）、降级矩阵与逃逸测试套件以 [D13 Part B](D13-变更控制模式与沙箱执行详细设计.md) 为权威。
+职责：09 篇全部安全机制的内化：门控判定顺序、三级记忆、危险命令规则库、沙箱（路径/网络/资源/进程组）、审计哈希链、脱敏、注入检测。~~沙箱的 **OS 原生实现**（Linux bubblewrap/cgroups、macOS Seatbelt/rlimit、Windows Job Object/Restricted Token）、降级矩阵与逃逸测试套件以 D13 Part B 为权威~~（**2026-11-17 D32 追记：Seatbelt OS 层退场**，sandbox/launcher 收缩为纯进程执行器——超时杀组/输出截断/RSS 看门狗；词法层 path/network 不变；详见 [D32](D32-Agent安全模式重构设计.md)）。
 
 ```
 bbrt-sec/src/

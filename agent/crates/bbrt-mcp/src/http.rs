@@ -93,9 +93,8 @@ fn connect_stream(url: &ParsedUrl, timeout: Duration) -> Result<BoxStream, McpEr
     let config = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
-    let server_name = rustls::pki_types::ServerName::try_from(url.host.clone()).map_err(|e| {
-        McpError::Connect(format!("TLS ServerName 无效（{}）: {e}", url.host))
-    })?;
+    let server_name = rustls::pki_types::ServerName::try_from(url.host.clone())
+        .map_err(|e| McpError::Connect(format!("TLS ServerName 无效（{}）: {e}", url.host)))?;
     let conn = rustls::ClientConnection::new(Arc::new(config), server_name)
         .map_err(|e| McpError::Connect(format!("TLS 初始化失败: {e}")))?;
     Ok(Box::new(rustls::StreamOwned::new(conn, tcp)))
@@ -177,8 +176,8 @@ pub fn get_text(url: &str) -> Result<String, String> {
     use std::io::{Read, Write as _};
 
     let parsed = parse_url(url).map_err(|e| format!("url 非法: {e}"))?;
-    let mut stream = connect_stream(&parsed, Duration::from_secs(30))
-        .map_err(|e| format!("连接失败: {e}"))?;
+    let mut stream =
+        connect_stream(&parsed, Duration::from_secs(30)).map_err(|e| format!("连接失败: {e}"))?;
     let req = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: text/yaml, application/json\r\nConnection: close\r\n\r\n",
         parsed.path, parsed.host

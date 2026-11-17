@@ -183,7 +183,11 @@ pub fn classify_action(call: &ToolCall, ctx: &GateCtx) -> ActionCategory {
         if ctx.rules.scan(cmd).is_some() {
             return ActionCategory::DangerousCommand;
         }
-        if ctx.whitelist_prefixes.iter().any(|p| prefix_match(p, cmd)) {
+        // D32 拍板 #4：白名单=「系统构建工具直调」专属——复合运算符/执行文件形态
+        // 即使前缀命中也落 ArbitraryCommand（文件内容绕过词法，边界在模式信任）
+        if ctx.whitelist_prefixes.iter().any(|p| prefix_match(p, cmd))
+            && is_plain_direct_invocation(cmd)
+        {
             return ActionCategory::WhitelistCommand;
         }
         return ActionCategory::ArbitraryCommand;
@@ -212,7 +216,51 @@ fn prefix_match(prefix: &str, cmd: &str) -> bool {
         || cmd.as_bytes()[prefix.len()] == b'\t'
 }
 
-/// ③矩阵行（D13-A2）：(类别, 模式) → Allow / Confirm
+/// 白名单语义守卫（D32 拍板 #4）：白名单=「系统构建工具直调」专属。
+/// 以下形态即使前缀命中也不算白名单，落 ArbitraryCommand：
+/// - 含控制运算符/替换（`;` `&&` `|` `>` `<` 反引号 `$(` 换行）——堵
+///   「`cargo test && …`」复合绕过（prefix_match 词边界只挡紧贴分号形态）；
+/// - 「执行一个文件」形态：首程序 ∈ 解释器/脚本运行器（sh/bash/zsh/python/
+///   node…）或任务运行器（npm/pnpm/yarn/bun/make/just——执行 package.json/
+///   Makefile 等 agent 可写文件）——文件内容绕过词法，边界在模式信任不在内容审查。
+/// 保守取向：运算符在引号内出现也判非直调（向严偏移可接受；cargo test 等经典
+/// 构建直调不受影响）。
+fn is_plain_direct_invocation(cmd: &str) -> bool {
+    for ch in [';', '&', '|', '>', '<', '`', '\n', '\r'] {
+        if cmd.contains(ch) {
+            return false;
+        }
+    }
+    if cmd.contains("$(") {
+        return false;
+    }
+    let first = cmd.split_whitespace().next().unwrap_or("");
+    let prog = first
+        .rsplit('/')
+        .next()
+        .unwrap_or(first)
+        .to_ascii_lowercase();
+    const INTERPRETERS: &[&str] = &[
+        "sh",
+        "bash",
+        "zsh",
+        "dash",
+        "ksh",
+        "python",
+        "python3",
+        "node",
+        "ruby",
+        "perl",
+        "php",
+        "osascript",
+    ];
+    const TASK_RUNNERS: &[&str] = &["npm", "pnpm", "yarn", "bun", "make", "just"];
+    !(INTERPRETERS.contains(&prog.as_str()) || TASK_RUNNERS.contains(&prog.as_str()))
+}
+
+/// ③矩阵行（D13-A2，**D32 修订**：任意命令 full-auto 放行；网络出站/git push/委派
+/// 跟档 auto-edit+；CorpWrite 唯一保留三档确认——详见 docs/detail/D32 §3）：
+/// (类别, 模式) → Allow / Confirm
 fn matrix(category: ActionCategory, mode: PermissionMode) -> bool {
     // 返回 true=Allow（✅ 自动执行），false=Confirm（🔶）
     match category {
@@ -222,42 +270,41 @@ fn matrix(category: ActionCategory, mode: PermissionMode) -> bool {
         ActionCategory::FileEdit => mode != PermissionMode::Ask,
         // 白名单命令：ask/auto-edit 🔶（可记忆），full-auto ✅
         ActionCategory::WhitelistCommand => mode == PermissionMode::FullAuto,
-        // 任意命令：三档都 🔶（auto-edit 每次确认；full-auto 首次确认可记忆）
-        ActionCategory::ArbitraryCommand
+        // 任意命令（含「执行文件」形态）：full-auto ✅（D32：原三档 🔶；
+        // 本机执行+词法围栏+checkpoint 兜底，对齐 ZCode guarded 档语义）
+        ActionCategory::ArbitraryCommand => mode == PermissionMode::FullAuto,
+        // 网络出站：auto-edit+ ✅（D32：原三档 🔶；NetPolicy 白名单兜底目的地）
+        ActionCategory::NetworkEgress => mode != PermissionMode::Ask,
+        // git push（普通）：auto-edit+ ✅（D32：原三档 🔶；force push 归危险规则库双确认）
+        ActionCategory::GitPush => mode != PermissionMode::Ask,
+        // 委派编码：auto-edit+ ✅（D32：原三档 🔶；子 agent 独立 checkpoint 可恢复）
+        ActionCategory::Delegate => mode != PermissionMode::Ask,
         // 高危命令：三档 🔶 双重提示（不可永久记忆）
-        | ActionCategory::DangerousCommand
-        // 永不全自动清单：网络出站/公司域写/git push/委派，三档 🔶
-        | ActionCategory::NetworkEgress
-        | ActionCategory::CorpWrite
-        | ActionCategory::GitPush
-        | ActionCategory::Delegate => false,
+        // CorpWrite（公司域写）：三档 🔶 **唯一保留硬闸**——效果落他人/共享面不可撤回
+        ActionCategory::DangerousCommand | ActionCategory::CorpWrite => false,
     }
 }
 
-/// 确认卡可选 scope 集（A2 备注 + §4.2 限制：高危只 once；永不全自动类只 once；
-/// http_fetch 内网 GET 可记忆；full-auto 任意命令首次确认可记忆）
+/// 确认卡可选 scope 集（A2 备注 + §4.2 限制，**D32 修订**：高危只 once；
+/// 网络出站可永久记忆（NetPolicy 白名单兜底下按域记忆合理）；
+/// 触人/出域类（CorpWrite/GitPush/Delegate）最多 Session——永久级另由
+/// GrantStore::NEVER_PERMANENT_TOOLS 双保险硬拒）
 fn confirm_scopes(category: ActionCategory, mode: PermissionMode) -> Vec<GrantScope> {
+    let _ = mode; // D32 起无按模式分支的特例（原 full-auto 任意命令首确认记忆已随矩阵放行消亡）
     match category {
         ActionCategory::DangerousCommand => vec![GrantScope::Once],
         ActionCategory::NetworkEgress => {
-            vec![GrantScope::Once, GrantScope::Session, GrantScope::Permanent]
-        }
-        ActionCategory::ArbitraryCommand if mode == PermissionMode::FullAuto => {
             vec![GrantScope::Once, GrantScope::Session, GrantScope::Permanent]
         }
         _ => vec![GrantScope::Once, GrantScope::Session],
     }
 }
 
-/// 类别是否允许记忆豁免（④步适用范围：永不全自动类无记忆）
+/// 类别是否允许记忆豁免（④步适用范围，**D32 修订**：仅高危命令无记忆；
+/// 触人/出域类放开 **Session 级**记忆让弹窗指数衰减，「永久级」由
+/// GrantStore::NEVER_PERMANENT_TOOLS 硬拒双保险——口径=触人动作最多记一会话）
 fn memory_allowed(category: ActionCategory) -> bool {
-    !matches!(
-        category,
-        ActionCategory::DangerousCommand
-            | ActionCategory::CorpWrite
-            | ActionCategory::GitPush
-            | ActionCategory::Delegate
-    )
+    !matches!(category, ActionCategory::DangerousCommand)
 }
 
 /// 权限门控主入口（判定顺序见模块注释 ①–⑥）
@@ -414,7 +461,11 @@ mod tests {
                 rules: DangerRuleSet::builtin(),
                 memory: GrantStore::new(),
                 policy: ToolPolicy::default(),
-                whitelist: vec!["cargo test".to_string(), "cargo build".to_string()],
+                whitelist: vec![
+                    "cargo test".to_string(),
+                    "cargo build".to_string(),
+                    "go build".to_string(),
+                ],
             }
         }
 
@@ -512,11 +563,12 @@ mod tests {
     }
 
     #[test]
-    fn row4_arbitrary_command_confirm_in_all_modes() {
+    fn row4_arbitrary_command_confirm_until_full_auto() {
         let f = Fixture::new();
         let args = json!({"command": "python3 gen.py"});
         let c = call("run_command", &args);
-        for mode in MODES {
+        // D32：任意命令 full-auto 放行（原三档 🔶；对齐 ZCode guarded 档语义）
+        for mode in [PermissionMode::Ask, PermissionMode::AutoEdit] {
             assert!(
                 matches!(
                     permission_gate(mode, &c, &f.ctx()),
@@ -525,6 +577,10 @@ mod tests {
                 "{mode:?} 应确认"
             );
         }
+        assert!(matches!(
+            permission_gate(PermissionMode::FullAuto, &c, &f.ctx()),
+            Decision::Allow { .. }
+        ));
     }
 
     #[test]
@@ -602,54 +658,97 @@ mod tests {
         }
     }
 
-    // ---- A2 行 6/7/8：永不全自动清单 ----
+    // ---- A2 行 6/7/8（D32 修订）：网络出站/git push 跟档；CorpWrite 唯一保留三档确认 ----
 
     #[test]
-    fn rows678_never_full_auto_confirm_in_all_modes() {
+    fn rows67_network_and_git_push_follow_mode() {
         let f = Fixture::new();
-        let cases = [
-            (
-                "http_fetch",
-                json!({"url":"https://internal.x/api"}),
-                ActionCategory::NetworkEgress,
-            ),
-            (
-                "doc_write",
-                json!({"doc_id":"d1"}),
-                ActionCategory::CorpWrite,
-            ),
-            (
-                "im_send",
-                json!({"conv_id":"c1"}),
-                ActionCategory::CorpWrite,
-            ),
-            (
-                "git_push",
-                json!({"remote":"origin"}),
-                ActionCategory::GitPush,
-            ),
-        ];
-        for (tool, args, cat) in cases {
-            assert_eq!(classify_action(&call(tool, &args), &f.ctx()), cat);
-            for mode in MODES {
-                match permission_gate(mode, &call(tool, &args), &f.ctx()) {
-                    Decision::Confirm { double_prompt, .. } => assert!(!double_prompt),
-                    other => panic!("{tool} @ {mode:?} 应确认，实际 {other:?}"),
-                }
-            }
+        // 网络出站：ask 🔶，auto-edit+ ✅（D32：NetPolicy 白名单兜底）
+        let net = json!({"url":"https://internal.x/api"});
+        assert!(matches!(
+            classify_action(&call("http_fetch", &net), &f.ctx()),
+            ActionCategory::NetworkEgress
+        ));
+        assert!(matches!(
+            permission_gate(PermissionMode::Ask, &call("http_fetch", &net), &f.ctx()),
+            Decision::Confirm { .. }
+        ));
+        for mode in [PermissionMode::AutoEdit, PermissionMode::FullAuto] {
+            assert!(
+                matches!(
+                    permission_gate(mode, &call("http_fetch", &net), &f.ctx()),
+                    Decision::Allow { .. }
+                ),
+                "{mode:?} 网络出站应放行"
+            );
         }
-        // http_fetch 可记忆（§4.1.1）
-        let d = permission_gate(
-            PermissionMode::AutoEdit,
-            &call("http_fetch", &json!({"url":"https://internal.x/api"})),
-            &f.ctx(),
-        );
-        match d {
+        // ask 档确认卡可永久记忆（按域，§4.1.1）
+        match permission_gate(PermissionMode::Ask, &call("http_fetch", &net), &f.ctx()) {
             Decision::Confirm { scopes, .. } => {
                 assert!(scopes.contains(&GrantScope::Permanent))
             }
             other => panic!("{other:?}"),
         }
+        // git push（普通）：ask 🔶，auto-edit+ ✅（force push 归危险规则库）
+        let push = json!({"remote":"origin"});
+        assert!(matches!(
+            classify_action(&call("git_push", &push), &f.ctx()),
+            ActionCategory::GitPush
+        ));
+        assert!(matches!(
+            permission_gate(PermissionMode::Ask, &call("git_push", &push), &f.ctx()),
+            Decision::Confirm { .. }
+        ));
+        for mode in [PermissionMode::AutoEdit, PermissionMode::FullAuto] {
+            assert!(
+                matches!(
+                    permission_gate(mode, &call("git_push", &push), &f.ctx()),
+                    Decision::Allow { .. }
+                ),
+                "{mode:?} git push 应放行"
+            );
+        }
+    }
+
+    #[test]
+    fn row7_corp_write_confirm_in_all_modes_with_session_memory() {
+        let f = Fixture::new();
+        // CorpWrite：三档 🔶 唯一保留硬闸——效果落他人/共享面不可撤回（D32 拍板 #1）
+        for tool in ["doc_write", "im_send"] {
+            let args = json!({"conv_id":"c1"});
+            for mode in MODES {
+                match permission_gate(mode, &call(tool, &args), &f.ctx()) {
+                    Decision::Confirm {
+                        double_prompt,
+                        scopes,
+                        ..
+                    } => {
+                        assert!(!double_prompt);
+                        // 最多 Session 级记忆（永久由 NEVER_PERMANENT_TOOLS 双保险硬拒）
+                        assert!(scopes.contains(&GrantScope::Session));
+                        assert!(!scopes.contains(&GrantScope::Permanent));
+                    }
+                    other => panic!("{tool} @ {mode:?} 应确认，实际 {other:?}"),
+                }
+            }
+        }
+        // Session 记忆命中 → 会话内放行（弹窗指数衰减）
+        f.memory
+            .insert(crate::memory::Grant {
+                tool: "im_send".into(),
+                pattern: "*".into(),
+                scope: GrantScope::Session,
+                granted_at_ms: 1,
+            })
+            .unwrap();
+        assert!(matches!(
+            permission_gate(
+                PermissionMode::FullAuto,
+                &call("im_send", &json!({"conv_id":"c2"})),
+                &f.ctx()
+            ),
+            Decision::Allow { .. }
+        ));
     }
 
     // ---- A2 行 9/10：委派与子 Agent ----
@@ -671,17 +770,77 @@ mod tests {
     }
 
     #[test]
-    fn row9_delegate_confirm_row10_subagent_allow() {
+    fn row9_delegate_follow_mode_row10_subagent_allow() {
         let f = Fixture::new();
+        // 委派：ask 🔶，auto-edit+ ✅（D32：子 agent 独立 checkpoint 可恢复）
+        assert!(matches!(
+            permission_gate(
+                PermissionMode::Ask,
+                &call("coding.delegate", &json!({})),
+                &f.ctx()
+            ),
+            Decision::Confirm { .. }
+        ));
+        for mode in [PermissionMode::AutoEdit, PermissionMode::FullAuto] {
+            assert!(
+                matches!(
+                    permission_gate(mode, &call("coding.delegate", &json!({})), &f.ctx()),
+                    Decision::Allow { .. }
+                ),
+                "{mode:?} 委派应放行"
+            );
+        }
+        // 子 Agent 只读探查：全档放行
         for mode in MODES {
-            assert!(matches!(
-                permission_gate(mode, &call("coding.delegate", &json!({})), &f.ctx()),
-                Decision::Confirm { .. }
-            ));
             assert!(matches!(
                 permission_gate(mode, &call("subagent", &json!({})), &f.ctx()),
                 Decision::Allow { .. }
             ));
+        }
+    }
+
+    // ---- D32 拍板 #4：白名单语义收紧（构建工具直调专属） ----
+
+    #[test]
+    fn whitelist_guard_blocks_compound_and_file_execution() {
+        let f = Fixture::new();
+        // 复合控制运算符：前缀命中也不算白名单
+        for cmd in [
+            "cargo test && ls /",
+            "cargo test; echo done",
+            "cargo test | tee out.txt",
+            "cargo test > /etc/hosts",
+            "cargo test `pwd`",
+            "cargo test $(whoami)",
+        ] {
+            assert_eq!(
+                classify_action(&call("run_command", &json!({"command": cmd})), &f.ctx()),
+                ActionCategory::ArbitraryCommand,
+                "{cmd} 应落任意命令"
+            );
+        }
+        // 「执行一个文件」形态：解释器带文件参数 / 任务运行器
+        for cmd in [
+            "python3 gen.py",
+            "/usr/bin/python find.py",
+            "node build.js",
+            "bash run.sh",
+            "npm run build",
+            "make deploy",
+        ] {
+            assert_eq!(
+                classify_action(&call("run_command", &json!({"command": cmd})), &f.ctx()),
+                ActionCategory::ArbitraryCommand,
+                "{cmd} 执行文件形态不应匹配白名单"
+            );
+        }
+        // 经典构建直调不受影响
+        for cmd in ["cargo test --lib", "go build ./...", "cargo test"] {
+            assert_eq!(
+                classify_action(&call("run_command", &json!({"command": cmd})), &f.ctx()),
+                ActionCategory::WhitelistCommand,
+                "{cmd} 应保持白名单"
+            );
         }
     }
 

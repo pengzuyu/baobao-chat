@@ -543,10 +543,11 @@ fn gate_ask档run_command需确认_预览含命令原文() {
 }
 
 #[test]
-fn gate_fullauto任意命令首次确认可记忆() {
+fn gate_fullauto任意命令直接放行() {
     let f = Fixture::new();
     let ex = f.executor();
-    // D13-A2 行 4：full-auto 任意命令 🔶 首次确认可记忆 → options 含 permanent
+    // D32 矩阵修订：full-auto 任意命令 ✅（原「首确认可记忆」随矩阵放行消亡；
+    // 词法围栏=precheck_write_targets/PathPolicy，恢复兜底=checkpoint）
     match ex.check(
         PermissionMode::FullAuto,
         &call(
@@ -554,10 +555,8 @@ fn gate_fullauto任意命令首次确认可记忆() {
             serde_json::json!({"command": "python3 gen.py"}),
         ),
     ) {
-        CheckOutcome::NeedConfirm { options, .. } => {
-            assert!(options.contains(&"permanent".to_string()), "{options:?}");
-        }
-        other => panic!("full-auto 任意命令仍需首确认: {other:?}"),
+        CheckOutcome::Allow { .. } => {}
+        other => panic!("full-auto 任意命令应直接放行: {other:?}"),
     }
 }
 

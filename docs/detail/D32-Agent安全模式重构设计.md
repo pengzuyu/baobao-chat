@@ -86,9 +86,9 @@
 
 | # | 事项 | 改动点 | 验收 | 状态 |
 |---|------|--------|------|------|
-| X0 | 设计落稿 | 本篇+EXECUTION-PLAN 批次 X+detail/README 索引 | 口径可追溯 | [x] 2026-11-17 |
-| X1 | 删 Seatbelt | §4 清单（launcher 收缩+接线三处+测试） | §4 验收三条 | [ ] |
-| X2 | 矩阵+词法收紧 | §3.2 四函数+§5 守卫+测试新语义断言+D13/09 篇追记（拍板 7） | cargo test 全绿；文档追记可 grep | [ ] |
+| X0 | 设计落稿 | 本篇+EXECUTION-PLAN 批次 X+detail/README 索引 | 口径可追溯 | [x] 2026-11-17（95773a5） |
+| X1 | 删 Seatbelt | §4 清单（launcher 收缩+接线三处+测试） | §4 验收三条 | [x] 2026-11-17（187dd4a；净 -391 行；581 passed/0 failed+fmt 绿；残留仅 D32 追记注释两条） |
+| X2 | 矩阵+词法收紧 | §3.2 四函数+§5 守卫+测试新语义断言+D13/09 篇追记（拍板 7） | cargo test 全绿；文档追记可 grep | [x] 2026-11-17（本提交；583 passed/0 failed；NEVER_PERMANENT_TOOLS 扩 file_upload/app_write；D13 篇头追记+09 篇落地注记+D11 §2.5 划线） |
 | X3 | 真机验收 | 三档走查：auto-edit 修 bug 全程仅跑测试 1 弹；full-auto 0 弹+高危红卡仍拦；im_send Session 记忆二问变一问 | 用户真机走查 | [ ] |
 
 ## 9. 暗墙方案存档（否决缓议，复活时直接取用）

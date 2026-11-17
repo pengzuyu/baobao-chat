@@ -441,6 +441,6 @@
 | # | 事项 | 改动点 | 验收 | 状态 |
 |---|------|--------|------|------|
 | X0 | 设计落稿 | D32 新增+EXECUTION-PLAN 批次 X+detail/README 索引 | 口径可追溯 | [x] 2026-11-17 |
-| X1 | 删 Seatbelt | launcher.rs 收缩纯进程管理器（删 SANDBOX_EXEC 常量/profile/detect/SandboxLevel/DegradedInfo/sandbox-exec 分支）+接线三处（config.rs/main.rs/cmd.rs）+测试同步 | agent cargo test --workspace 全绿；rg sandbox-exec/Seatbelt/SandboxLevel/DegradedInfo 代码零命中；词法层测试无回归 | [ ] |
-| X2 | 矩阵+词法收紧 | gate.rs 四函数（matrix/classify_action 白名单守卫/memory_allowed CorpWrite=仅 Session）+测试新语义断言+D13/09/D11 文档追记（推翻 D13-A2 部分须注记） | cargo test 全绿（矩阵新断言）；文档追记可 grep | [ ] |
+| X1 | 删 Seatbelt | launcher.rs 收缩纯进程管理器（删 SANDBOX_EXEC 常量/profile/detect/SandboxLevel/DegradedInfo/sandbox-exec 分支）+接线三处（config.rs/main.rs/cmd.rs）+测试同步 | agent cargo test --workspace 全绿；rg sandbox-exec/Seatbelt/SandboxLevel/DegradedInfo 代码零命中；词法层测试无回归 | [x] 2026-11-17（187dd4a；净 -391 行；B 层生命周期+BBC_SANDBOX=1 孤儿标记+violation 记录原样保留；escape_suite B12 行1/3/6 留 L2 断言、行4/5/7/8/9 生命周期用例全绿；顺修 bbrt-mcp fmt 漂移+roundtrip.rs 既有 unused import；581 passed/0 failed+fmt 绿） |
+| X2 | 矩阵+词法收紧 | gate.rs 四函数（matrix/classify_action 白名单守卫/memory_allowed CorpWrite=仅 Session）+测试新语义断言+D13/09/D11 文档追记（推翻 D13-A2 部分须注记） | cargo test 全绿（矩阵新断言）；文档追记可 grep | [x] 2026-11-17（矩阵：任意命令 full-auto✅/网络·push·委派 auto-edit+✅/CorpWrite 唯一三档🔶+Session 记忆（NEVER_PERMANENT_TOOLS 扩 file_upload/app_write 六件双保险）；白名单守卫 is_plain_direct_invocation（复合运算符/执行文件形态落任意命令）；confirm_scopes 删 full-auto 任意命令特例臂；测试重写 row4/rows67 拆分/row7 CorpWrite Session/row9 跟档+新增守卫用例；583 passed/0 failed） |
 | X3 | 真机验收 | 三档走查：auto-edit 修 bug 全程仅跑测试 1 弹；full-auto 0 弹+高危红卡仍拦；im_send Session 记忆二问变一问 | 用户真机走查 | [ ] |

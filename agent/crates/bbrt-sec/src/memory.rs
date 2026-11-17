@@ -27,9 +27,16 @@ pub enum GrantScope {
     Permanent,
 }
 
-/// 永不全自动清单（A2：网络出站中的 http_fetch 可记忆，故不在此列；
-/// 此处为"高危工具默认不可永久记忆"的硬名单，§4.2 限制条款）
-const NEVER_PERMANENT_TOOLS: [&str; 4] = ["git_push", "doc_write", "im_send", "coding.delegate"];
+/// 永久记忆硬名单（§4.2 限制条款；**D32 修订**：触人/出域动作最多 Session 级记忆，
+/// file_upload/app_write 补齐 CorpWrite 全集；网络出站 http_fetch 可记忆故不在此列）
+const NEVER_PERMANENT_TOOLS: [&str; 6] = [
+    "git_push",
+    "doc_write",
+    "im_send",
+    "file_upload",
+    "app_write",
+    "coding.delegate",
+];
 
 /// 一条授权记忆（§5.1 agent_tool_grant 表的内存形态）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
