@@ -429,3 +429,18 @@
 | W2 | 前端触点收敛 | 12 文件 14 处改引 shared/brand（Logo alt/登录页/初始化页/关于页/侧栏 tooltip/两处系统通知署名/OIDC 确认卡/device_name/下载目录默认值）+i18n login.title 死键删除+顺收 D30 并行新增 ExtAgentCard 两处 | 全前端 BaobaoChat 硬编码清零；tsc+vite build 绿 | [x] 2026-11-16（2fcc78a） |
 | W3 | 壳+服务端+部署参数化 | lib.rs register 改 brand::SCHEME（客户端 scheme 四处定义收敛）；config 三 env（BBC_BRAND_NAME/BBC_DEEP_LINK_SCHEME/BBC_BOOTSTRAP_MAIL_DOMAIN）；oidc 等待页模板 BrandName/Scheme 参数化；/setup+CLI bootstrap 邮箱后缀参数化（demo seed 不动）；compose nginx 占位插值；.env.tpl 三键；publish-website 门禁改读 brand.json；build-desktop.sh/ps1 前置 --check | cargo check/go build/vet/compose config 绿；试换牌 build 绿+回退零残留 | [x] 2026-11-16（c43c4d7；Acme 试换牌全链验证：生成→tsc/vite build 绿→git 回退零残留→--check 复绿；deep-link 日志 bbc:// 字样顺带动态化） |
 | W4 | 真机验收 | D31 §6 四项：测试品牌 make brand 出包全变（安装包名/图标/登录页/通知署名）；老包覆盖安装不登出（identifier 不变）；OIDC 深链正常（scheme 未动）；改 brand/ 回退可逆 | 用户真机走查 | [ ] |
+
+## 批次 X：Agent 安全模式重构（D32，2026-11-17 设计定稿待编码）
+
+> 拍板（2026-11-17）：矩阵放宽对齐 ZCode 实战形态（本机实测其 shell 无 OS 沙箱纯权限层）——
+> 任意命令 full-auto 自动/网络出站·git push·委派 auto-edit+ 自动/CorpWrite 唯一保留三档确认+Session 记忆；
+> 删 Seatbelt（sandbox A 层）留进程生命周期（B）+词法（C），`BBC_SANDBOX=1` 标记保留给 procmgr 孤儿扫描；
+> 白名单语义收紧（执行文件/控制运算符形态不匹配）；暗墙三件否决缓议（agent 需拿 token 办事）。
+> 设计：[D32](detail/D32-Agent安全模式重构设计.md)。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|------|--------|------|------|
+| X0 | 设计落稿 | D32 新增+EXECUTION-PLAN 批次 X+detail/README 索引 | 口径可追溯 | [x] 2026-11-17 |
+| X1 | 删 Seatbelt | launcher.rs 收缩纯进程管理器（删 SANDBOX_EXEC 常量/profile/detect/SandboxLevel/DegradedInfo/sandbox-exec 分支）+接线三处（config.rs/main.rs/cmd.rs）+测试同步 | agent cargo test --workspace 全绿；rg sandbox-exec/Seatbelt/SandboxLevel/DegradedInfo 代码零命中；词法层测试无回归 | [ ] |
+| X2 | 矩阵+词法收紧 | gate.rs 四函数（matrix/classify_action 白名单守卫/memory_allowed CorpWrite=仅 Session）+测试新语义断言+D13/09/D11 文档追记（推翻 D13-A2 部分须注记） | cargo test 全绿（矩阵新断言）；文档追记可 grep | [ ] |
+| X3 | 真机验收 | 三档走查：auto-edit 修 bug 全程仅跑测试 1 弹；full-auto 0 弹+高危红卡仍拦；im_send Session 记忆二问变一问 | 用户真机走查 | [ ] |
