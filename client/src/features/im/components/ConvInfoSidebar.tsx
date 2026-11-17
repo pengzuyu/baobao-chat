@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Alert, Input, Modal, Select, Tabs, Tag, Typography, theme } from 'antd';
 import { FileText, Hash, Megaphone, ScrollText, Settings2, Shield, Tag as TagIcon, Users, VolumeX, X } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
@@ -20,6 +21,7 @@ import { PresenceBadge, toPresenceStatus } from '../../../shared/ui/PresenceDot'
 import { Button } from '../../../shared/ui/Button';
 import { getErrorText } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
+import { fetchAllDirectoryUsers } from '../../contacts/api/contacts';
 import {
   convDissolve,
   convQuit,
@@ -78,6 +80,19 @@ export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onL
   const isGroup = conv.type !== 1;
   const isMgr = myRole === 1 || myRole === 2;
   const typeLabel = conv.type === 1 ? '单聊' : conv.type === 2 ? '群聊' : '广播群';
+
+  // 单聊对端签名（2026-11-17 个人签名模块）：通讯录全量缓存按 peerUid 查；
+  // 被动刷新口径（用户拍板）——staleTime 30s 后侧栏重开自动重拉，无 WS 推送
+  const presence = useImStore((s) => s.presence);
+  const peerUid = !isGroup ? conv.peerUid : undefined;
+  const dirUsersQuery = useQuery({
+    queryKey: ['org', 'users', 'all'],
+    queryFn: fetchAllDirectoryUsers,
+    enabled: !!peerUid,
+  });
+  const peerSignature = peerUid
+    ? dirUsersQuery.data?.find((u) => u.uid === peerUid)?.signature
+    : undefined;
 
   // 详情/成员拉取：conv 摘要变化（conv.updated 推送合并）即重拉
   const reload = useCallback(async () => {
@@ -207,19 +222,44 @@ export function ConvInfoSidebar({ conv, myUid, initialTab = 'info', onClose, onL
 
   return (
     <aside style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Typography.Text strong style={{ fontSize: 16 }}>
-          {conv.name}
-        </Typography.Text>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 24 }}>
+        {/* 单聊：名字由下方对端名片承载（头像与「名字+签名」同高），避免双显 */}
+        {isGroup ? (
+          <Typography.Text strong style={{ fontSize: 16 }}>
+            {conv.name}
+          </Typography.Text>
+        ) : (
+          <span />
+        )}
         {onClose ? (
           <Button variant="text" size="small" icon={<X size={16} />} onClick={onClose} title="收起" />
         ) : null}
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '8px 0' }}>
-        <Avatar name={conv.name} size={64} group={conv.type === 3 ? 'broadcast' : conv.type === 2 ? 'group' : null} />
-        <Tag>{typeLabel}</Tag>
-      </div>
+      {isGroup ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '8px 0' }}>
+          <Avatar name={conv.name} size={64} group={conv.type === 3 ? 'broadcast' : 'group'} />
+          <Tag>{typeLabel}</Tag>
+        </div>
+      ) : (
+        /* 单聊对端名片（2026-11-17 个人签名模块）：头像左、名字+签名右同高横排；
+           签名空=未设置不渲染（他人展示位仅此一处，通讯录不带——用户拍板） */
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '4px 0 8px' }} data-testid="conv-peer-card">
+          <PresenceBadge status={toPresenceStatus(peerUid ? presence[peerUid] : undefined)} dotSize={14}>
+            <Avatar name={conv.name} size={56} />
+          </PresenceBadge>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
+            <Typography.Text strong ellipsis style={{ fontSize: 15 }}>
+              {conv.name}
+            </Typography.Text>
+            {peerSignature ? (
+              <Typography.Text type="secondary" ellipsis style={{ fontSize: 12 }} data-testid="conv-peer-signature">
+                {peerSignature}
+              </Typography.Text>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {error ? <Alert type="error" showIcon message={error} /> : null}
 

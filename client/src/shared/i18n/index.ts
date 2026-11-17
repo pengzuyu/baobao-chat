@@ -59,6 +59,7 @@ export function localeOf(): Locale {
 const zh: Record<string, string> = {
   // 设置页族
   'settings.title': '设置',
+  'settings.tab.profile': '个人资料',
   'settings.tab.general': '通用',
   'settings.tab.notification': '通知',
   'settings.tab.transfer': '传输',
@@ -95,6 +96,7 @@ const zh: Record<string, string> = {
 
 const en: Record<string, string> = {
   'settings.title': 'Settings',
+  'settings.tab.profile': 'Profile',
   'settings.tab.general': 'General',
   'settings.tab.notification': 'Notifications',
   'settings.tab.transfer': 'Transfer',

@@ -30,12 +30,13 @@ func NewPostgres(pool *pgxpool.Pool) Repo { return &Postgres{pool: pool} }
 
 // userCols 列清单（可空列 COALESCE 兜底，避免扫描 NULL 报错）
 const userCols = `id, tenant_id, type, employee_no, display_name,
-	COALESCE(email,''), COALESCE(phone,''), COALESCE(password_hash,''), status, must_change_password`
+	COALESCE(email,''), COALESCE(phone,''), COALESCE(password_hash,''), status, must_change_password,
+	COALESCE(signature,'')`
 
 func scanUser(row pgx.Row) (*orgapi.User, error) {
 	var u orgapi.User
 	if err := row.Scan(&u.ID, &u.TenantID, &u.Type, &u.EmployeeNo, &u.DisplayName,
-		&u.Email, &u.Phone, &u.PasswordHash, &u.Status, &u.MustChangePassword); err != nil {
+		&u.Email, &u.Phone, &u.PasswordHash, &u.Status, &u.MustChangePassword, &u.Signature); err != nil {
 		return nil, err
 	}
 	// Scopes 不落库：权限点归属 role/user_role 表（03 篇 §4），阶段二接 RBAC 查询拼装（TODO）
@@ -56,9 +57,9 @@ func (p *Postgres) CreateUser(ctx context.Context, u orgapi.User) (orgapi.User, 
 		}
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO users (id, tenant_id, type, employee_no, display_name, email, phone, password_hash, status, must_change_password)
-		VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8,$9,$10)`,
-		u.ID, u.TenantID, u.Type, u.EmployeeNo, u.DisplayName, u.Email, u.Phone, u.PasswordHash, u.Status, u.MustChangePassword); err != nil {
+		INSERT INTO users (id, tenant_id, type, employee_no, display_name, signature, email, phone, password_hash, status, must_change_password)
+		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,''),$9,$10,$11)`,
+		u.ID, u.TenantID, u.Type, u.EmployeeNo, u.DisplayName, u.Signature, u.Email, u.Phone, u.PasswordHash, u.Status, u.MustChangePassword); err != nil {
 		return orgapi.User{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -141,6 +142,19 @@ func (p *Postgres) CountUsers(ctx context.Context, tenantID int64) (int64, error
 func (p *Postgres) SetUserStatus(ctx context.Context, id int64, status int) error {
 	tag, err := p.pool.Exec(ctx,
 		`UPDATE users SET status=$2, updated_at=now() WHERE id=$1`, id, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return orgapi.ErrUserNotFound
+	}
+	return nil
+}
+
+// SetUserSignature 个人签名更新（长度校验在 service；updated_at 一并刷新）
+func (p *Postgres) SetUserSignature(ctx context.Context, id int64, signature string) error {
+	tag, err := p.pool.Exec(ctx,
+		`UPDATE users SET signature=$2, updated_at=now() WHERE id=$1`, id, signature)
 	if err != nil {
 		return err
 	}

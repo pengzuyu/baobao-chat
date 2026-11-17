@@ -29,6 +29,8 @@ interface AuthState {
   login: (account: string, password: string) => Promise<void>;
   /** 首登/自助改密（D11）：成功后清 user.must_change_pwd */
   changePassword: (oldPwd: string, newPwd: string) => Promise<void>;
+  /** 个人签名更新（2026-11-17 个人签名模块）：成功后同步 user.signature */
+  setSignature: (signature: string) => void;
   logout: () => void;
   clearError: () => void;
   /** 重拉权限摘要（perm.changed 推送后；导航显隐实时收窄，03 篇 §4） */
@@ -122,6 +124,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     await apiChangePassword(oldPwd, newPwd);
     const u = useAuthStore.getState().user;
     if (u) set({ user: { ...u, must_change_pwd: false } });
+  },
+
+  setSignature: (signature) => {
+    const u = useAuthStore.getState().user;
+    if (u) set({ user: { ...u, signature } });
   },
 
   logout: () => {

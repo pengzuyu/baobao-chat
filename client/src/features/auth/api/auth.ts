@@ -17,6 +17,8 @@ export interface AuthUser {
   perms: string[];
   /** 首登强制改密（D11：导入用户置位——登录页二步改密表单） */
   must_change_pwd?: boolean;
+  /** 个人签名（2026-11-17 个人签名模块）：设置页编辑初值；服务端 omitempty */
+  signature?: string;
 }
 
 export interface LoginResult {
@@ -187,4 +189,15 @@ export async function apiChangePassword(oldPassword: string, newPassword: string
     return;
   }
   await http.post('/me/password', { old_password: oldPassword, new_password: newPassword });
+}
+
+/** 更新个人资料（2026-11-17 个人签名模块）：目前仅 signature——trim 后 ≤100 字、空串=清空；
+ * 返回服务端归一化后的签名值 */
+export async function apiUpdateMyProfile(signature: string): Promise<string> {
+  if (USE_MOCK) {
+    await delay(300);
+    return signature.trim();
+  }
+  const data = await http.patch<{ signature: string }>('/me/profile', { signature });
+  return data.signature ?? signature;
 }

@@ -28,6 +28,9 @@ type User struct {
 	Type         int    `json:"type"`
 	EmployeeNo   string `json:"employee_no"`
 	DisplayName  string `json:"display_name"`
+	// 个人签名（2026-11-17 个人签名模块）：≤100 字，空串=未设置；
+	// 自助改（PATCH /me/profile），展示位仅单聊会话侧栏名片
+	Signature    string `json:"signature,omitempty"`
 	Email        string `json:"email,omitempty"`
 	Phone        string `json:"phone,omitempty"`
 	PasswordHash string `json:"-"` // 不序列化外泄

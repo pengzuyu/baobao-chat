@@ -52,6 +52,7 @@ import { resolveWsBase, wsClient } from '../shared/api/ws';
 import { bindWsToConnectionStore, useConnectionStore } from '../shared/store/connection';
 import { MainLayout } from './MainLayout';
 import { SettingsLayout } from '../features/settings/pages/SettingsLayout';
+import { ProfileSettingsPage } from '../features/settings/pages/ProfileSettingsPage';
 import { ShortcutSettingsPage } from '../features/settings/pages/ShortcutSettingsPage';
 import { GeneralSettingsPage } from '../features/settings/pages/GeneralSettingsPage';
 import { NotificationSettingsPage } from '../features/settings/pages/NotificationSettingsPage';
@@ -321,7 +322,8 @@ export function App() {
         </Route>
         {/* 设置页族（D01 §4.2）：通用/通知/传输/Agent/关于；通用页主题切换真实生效 */}
         <Route path="/settings" element={<SettingsLayout />}>
-          <Route index element={<Navigate to="/settings/general" replace />} />
+          <Route index element={<Navigate to="/settings/profile" replace />} />
+          <Route path="profile" element={<ProfileSettingsPage />} />
           <Route path="general" element={<GeneralSettingsPage />} />
           <Route path="notification" element={<NotificationSettingsPage />} />
           <Route path="transfer" element={<TransferSettingsPage />} />

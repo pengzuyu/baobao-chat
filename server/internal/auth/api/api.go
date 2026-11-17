@@ -34,6 +34,8 @@ type LoginUser struct {
 	Perms []string `json:"perms"`
 	// 首登强制改密（0029/D11）：导入用户置位——前端登录二步改密表单
 	MustChangePwd bool `json:"must_change_pwd,omitempty"`
+	// 个人签名（2026-11-17 个人签名模块）：设置页编辑初值；空串省略
+	Signature string `json:"signature,omitempty"`
 }
 
 // RefreshReq 刷新请求（一次性轮换）

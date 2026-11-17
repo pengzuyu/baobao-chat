@@ -214,7 +214,7 @@ func (s *Service) issuePair(ctx context.Context, u *orgapi.User, deviceID int64,
 
 // toLoginUser org 用户 → 登录返回体（uid 字符串化；perms=有效权限点口径）
 func toLoginUser(u *orgapi.User, scopes []string) *authapi.LoginUser {
-	return &authapi.LoginUser{UID: strconv.FormatInt(u.ID, 10), Name: u.DisplayName, Perms: scopes, MustChangePwd: u.MustChangePassword}
+	return &authapi.LoginUser{UID: strconv.FormatInt(u.ID, 10), Name: u.DisplayName, Perms: scopes, MustChangePwd: u.MustChangePassword, Signature: u.Signature}
 }
 
 // Refresh 一次性轮换：旧值换新值；旧值再现=疑似被盗 → 全设备下线（03 篇 §2.2）

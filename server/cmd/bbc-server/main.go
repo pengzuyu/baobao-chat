@@ -388,6 +388,8 @@ func main() {
 	mux.Handle("POST /api/v1/auth/logout", authed(handleLogout(authAPI)))
 	// 改密（D11：旧密码校验+清首登强制标志）
 	mux.Handle("POST /api/v1/me/password", authed(handleChangePassword(authAPI)))
+	// 个人资料自助更新（2026-11-17 个人签名模块）：目前仅 signature 一项
+	mux.Handle("PATCH /api/v1/me/profile", authed(handleMeProfile(orgMod.DirectoryAPI())))
 	mux.Handle("GET /api/v1/me", authed(handleMe))
 	// OIDC 用户面授权管理（D28 批3/Q3）：已授权应用 + 浏览器会话远端下线
 	if oidcMod != nil {
@@ -2801,12 +2803,14 @@ func seedDemo(orgRepo orgrepo.Repo, msgRepo messagerepo.Repo) {
 	users := []orgapi.User{
 		{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "alice", DisplayName: "Alice",
 			Email: "alice@bbc.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
+			Signature: "保持好奇，保持热爱。",
 			// admin 权限点 v0.1：seed 即授权（阶段二换 role/user_role 表装配；PG 模式
 			// scopes 不落库，管理判定走 BBC_ADMIN_ACCOUNTS=alice 白名单，登记）
 			Scopes: []string{"im:message:send", "agent:session:use", "admin", "admin:user:manage", "admin:policy:manage", "admin:audit:read", "admin:usage:read"}},
 		{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "bob", DisplayName: "Bob",
 			Email: "bob@bbc.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
-			Scopes: []string{"im:message:send"}},
+			Signature: "少说多做。",
+			Scopes:    []string{"im:message:send"}},
 	}
 	ids := make([]int64, 0, len(users))
 	for _, u := range users {
@@ -4035,6 +4039,36 @@ func handleDeptDetach(m orgapi.DeptMembershipReaderWriter) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, map[string]any{"ok": true})
+	}
+}
+
+// handleMeProfile PATCH /me/profile（2026-11-17 个人签名模块）：
+// 目前仅 signature 一项（display_name/头像仍管理面口径，为扩展留位）；
+// signature 指针判空=字段缺省拒绝，空串=清空；被动刷新拍板——不广播事件
+func handleMeProfile(svc *orgservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req struct {
+			Signature *string `json:"signature"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if req.Signature == nil {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "signature 必填"))
+			return
+		}
+		sig, err := svc.SetSignature(r.Context(), uid, *req.Signature)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"signature": sig})
 	}
 }
 

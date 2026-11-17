@@ -9,6 +9,7 @@ import (
 
 	"github.com/baobaochat/server/internal/org/api"
 	"github.com/baobaochat/server/internal/org/repo"
+	errx "github.com/baobaochat/server/internal/platform/errors"
 	"github.com/baobaochat/server/internal/platform/pinyinutil"
 )
 
@@ -50,6 +51,19 @@ func (s *Service) CountUsers(ctx context.Context, tenantID int64) (int64, error)
 // SetUserStatus 启用/禁用
 func (s *Service) SetUserStatus(ctx context.Context, id int64, status int) error {
 	return s.repo.SetUserStatus(ctx, id, status)
+}
+
+// SetSignature 个人签名自助更新（2026-11-17 个人签名模块）：
+// trim 后 ≤100 字（rune 口径），空串=清空；返回归一化后的签名值
+func (s *Service) SetSignature(ctx context.Context, uid int64, signature string) (string, error) {
+	signature = strings.TrimSpace(signature)
+	if len([]rune(signature)) > 100 {
+		return "", errx.New(errx.CodeBadRequest, "签名最长 100 字")
+	}
+	if err := s.repo.SetUserSignature(ctx, uid, signature); err != nil {
+		return "", errx.From(err)
+	}
+	return signature, nil
 }
 
 // SetPassword 改密+清首登标志（D11；hash 由 auth 域闭包生成，透传仓储）
@@ -138,6 +152,8 @@ type DirectoryUser struct {
 	Name       string `json:"display_name"`
 	OrgPath    string `json:"org_path"`
 	DeptID     string `json:"dept_id"`
+	// 个人签名（2026-11-17 个人签名模块）：单聊会话侧栏名片消费；空串省略
+	Signature string `json:"signature,omitempty"`
 }
 
 // DirectoryFilter 用户面通讯录检索过滤：Q 同搜人（工号/姓名/拼音全拼/首字母）；
@@ -296,6 +312,7 @@ func (s *Service) directory(ctx context.Context, tenantID int64, f DirectoryFilt
 			Name:       u.DisplayName,
 			OrgPath:    orgPath(primaryOf[u.ID]),
 			DeptID:     deptID,
+			Signature:  u.Signature,
 		})
 	}
 	return page, next, nil

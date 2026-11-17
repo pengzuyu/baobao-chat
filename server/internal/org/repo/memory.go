@@ -31,6 +31,8 @@ type Repo interface {
 	CountUsers(ctx context.Context, tenantID int64) (int64, error)
 	// SetUserStatus 启用/禁用（orgapi.UserStatus*）；行不存在返回 ErrUserNotFound
 	SetUserStatus(ctx context.Context, id int64, status int) error
+	// SetUserSignature 个人签名自助更新（长度校验在 service；行不存在返回 ErrUserNotFound）
+	SetUserSignature(ctx context.Context, id int64, signature string) error
 	// SetPassword 改密+清首登标志（D11；hash 由 auth 域闭包生成）
 	SetPassword(ctx context.Context, tenantID, userID int64, passwordHash string) error
 
@@ -182,6 +184,18 @@ func (m *Memory) SetUserStatus(_ context.Context, id int64, status int) error {
 		return orgapi.ErrUserNotFound
 	}
 	u.Status = status
+	return nil
+}
+
+// SetUserSignature 个人签名更新
+func (m *Memory) SetUserSignature(_ context.Context, id int64, signature string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.byID[id]
+	if !ok {
+		return orgapi.ErrUserNotFound
+	}
+	u.Signature = signature
 	return nil
 }
 

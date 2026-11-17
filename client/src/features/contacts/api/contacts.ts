@@ -16,6 +16,8 @@ export interface DirectoryUser {
   display_name: string;
   org_path: string;
   dept_id?: string;
+  /** 个人签名（2026-11-17 个人签名模块）：单聊会话侧栏名片/设置页资料消费 */
+  signature?: string;
 }
 
 export interface DirectoryQuery {
@@ -45,4 +47,18 @@ export async function fetchDirectoryUsers(
   const suffix = params.toString() ? `?${params.toString()}` : '';
   const data = await http.get<{ items: DirectoryUser[]; next_cursor: string }>(`/org/users${suffix}`);
   return { items: data.items ?? [], nextCursor: data.next_cursor ?? '' };
+}
+
+/** 全量拉齐通讯录（cursor 翻页拼齐；查询键统一 ['org','users','all']——
+ * 通讯录页/单聊侧栏名片/设置页资料共用缓存，签名被动刷新拍板靠挂载重拉） */
+export async function fetchAllDirectoryUsers(): Promise<DirectoryUser[]> {
+  const out: DirectoryUser[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < 100; i += 1) {
+    const page = await fetchDirectoryUsers({ cursor, limit: 50 });
+    out.push(...page.items);
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return out;
 }

@@ -8,7 +8,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Menu } from 'antd';
 import type { MenuProps } from 'antd';
 import { t, useI18nStore } from '../../../shared/i18n';
-import { ArrowDownUp, Bell, Bot, Info, Keyboard, Plug, Settings, ShieldCheck } from 'lucide-react';
+import { ArrowDownUp, Bell, Bot, Info, Keyboard, Plug, Settings, ShieldCheck, UserRound } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
@@ -16,6 +16,7 @@ import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 function useTabs() {
   useI18nStore((s) => s.locale); // 响应语言切换（E12）
   return [
+    { to: '/settings/profile', icon: UserRound, label: t('settings.tab.profile') },
     { to: '/settings/general', icon: Settings, label: t('settings.tab.general') },
     { to: '/settings/notification', icon: Bell, label: t('settings.tab.notification') },
     { to: '/settings/transfer', icon: ArrowDownUp, label: t('settings.tab.transfer') },

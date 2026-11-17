@@ -35,7 +35,7 @@ import {
 import type { DataNode } from 'antd/es/tree';
 import type { MenuProps } from 'antd';
 import { Building2, FolderTree, MessageCircle, Search, Users } from 'lucide-react';
-import { fetchDirectoryUsers, fetchOrgTree } from '../api/contacts';
+import { fetchAllDirectoryUsers, fetchDirectoryUsers, fetchOrgTree } from '../api/contacts';
 import type { DirectoryUser } from '../api/contacts';
 import type { DeptNode } from '../../admin/api/admin';
 import { convCreate } from '../../im/api/im';
@@ -58,19 +58,6 @@ const FLASH_MS = 1200;
 const deptDomId = (id: string) => `dept-${id}`;
 const userDomId = (uid: string) => `user-${uid}`;
 
-/** 全量拉齐用户（cursor 翻页聚合；v0.1 用户量级安全上限 100 页=5000 人同服务端口径） */
-async function fetchAllUsers(): Promise<DirectoryUser[]> {
-  const out: DirectoryUser[] = [];
-  let cursor: string | undefined;
-  for (let i = 0; i < 100; i += 1) {
-    const page = await fetchDirectoryUsers({ cursor, limit: 50 });
-    out.push(...page.items);
-    if (!page.nextCursor) break;
-    cursor = page.nextCursor;
-  }
-  return out;
-}
-
 export function ContactsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -87,7 +74,7 @@ export function ContactsPage() {
 
   // ── 数据：树 + 全量用户 ──
   const tree = useQuery({ queryKey: ['org', 'tree'], queryFn: fetchOrgTree });
-  const usersQuery = useQuery({ queryKey: ['org', 'users', 'all'], queryFn: fetchAllUsers });
+  const usersQuery = useQuery({ queryKey: ['org', 'users', 'all'], queryFn: fetchAllDirectoryUsers });
   const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data]);
   const usersByUid = useMemo(() => new Map(users.map((u) => [u.uid, u])), [users]);
 
