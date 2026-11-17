@@ -330,12 +330,17 @@ body {
   display: none;
   height: 0;
 }
-/* markdown 降级排版（StreamMessage/日报共用） */
+/* markdown 渲染排版（富渲染增强：GFM 补齐 + token 化配色；颜色全走 --bbc-*，
+   D27 六色 accent 与亮暗模式自动联动；MarkdownText/日报/KB 阅读页共用） */
 .agent-md {
   display: flex;
   flex-direction: column;
   gap: var(--bbc-space-2);
   font-size: var(--bbc-font-14);
+}
+
+.agent-md--inner {
+  gap: 4px;
 }
 
 .agent-md__p {
@@ -350,14 +355,33 @@ body {
 
 .agent-md__h--1 {
   font-size: var(--bbc-font-16);
+  color: var(--bbc-primary);
 }
 
 .agent-md__h--2 {
   font-size: var(--bbc-font-14);
+  border-left: 3px solid var(--bbc-primary);
+  padding-left: 8px;
 }
 
 .agent-md__h--3 {
   font-size: var(--bbc-font-13);
+}
+
+/* 引用块：主色竖条 + accent 淡底 */
+.agent-md__quote {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--bbc-primary);
+  background: var(--bbc-primary-light);
+  border-radius: 0 6px 6px 0;
+  color: var(--bbc-gray-8);
+}
+
+.agent-md__hr {
+  border: none;
+  border-top: 1px solid var(--bbc-gray-3);
+  margin: 4px 0;
 }
 
 .agent-md__list {
@@ -365,6 +389,53 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.agent-md__list--nested {
+  padding-left: 16px;
+  margin-top: 2px;
+}
+
+/* 任务列表项：去标记 + checkbox + 文本独立 span（flex 内行内流保护） */
+.agent-md__task {
+  list-style: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.agent-md__task--done .agent-md__task-text {
+  color: var(--bbc-gray-6);
+  text-decoration: line-through;
+}
+
+.agent-md__task-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-md__checkbox {
+  flex: none;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border: 1px solid var(--bbc-gray-5);
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 12px;
+  text-align: center;
+  color: #fff;
+  user-select: none;
+}
+
+.agent-md__checkbox--on {
+  background: var(--bbc-primary);
+  border-color: var(--bbc-primary);
+}
+
+.agent-md del {
+  color: var(--bbc-gray-6);
 }
 
 .agent-md__code {
@@ -378,12 +449,21 @@ body {
   line-height: 1.6;
 }
 
+/* 行内码：accent 淡彩底 + 主色字（围栏代码块内重置为透明） */
 .agent-md code {
   font-family: var(--bbc-font-mono);
   font-size: 0.92em;
-  background: rgba(127, 134, 145, 0.14);
+  background: var(--bbc-primary-light);
+  color: var(--bbc-primary);
   border-radius: 4px;
   padding: 0 4px;
+}
+
+.agent-md__code code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
 }
 
 .agent-md__table {
@@ -392,16 +472,26 @@ body {
   font-size: var(--bbc-font-13);
 }
 
-.agent-md__table td {
+.agent-md__table td,
+.agent-md__th {
   border: 1px solid var(--bbc-gray-3);
   padding: 4px var(--bbc-space-2);
   text-align: left;
 }
 
-.agent-md__tr--head td {
-  background: var(--bbc-gray-2);
-  font-weight: 500;
+/* 表头：accent 淡底强调 */
+.agent-md__th {
+  background: var(--bbc-primary-light);
+  font-weight: 600;
   color: var(--bbc-gray-9);
+}
+
+.agent-md__table tbody tr:nth-child(even) td {
+  background: var(--bbc-gray-1);
+}
+
+.agent-md__table tbody tr:hover td {
+  background: var(--bbc-primary-light);
 }
 
 /* 思考摘要折叠（channel=reasoning）——旧 ReasoningCollapse 已删（2026-11-11 过程区
