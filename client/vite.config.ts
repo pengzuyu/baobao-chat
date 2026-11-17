@@ -20,6 +20,7 @@ export default defineConfig({
           react: ['react', 'react-dom', 'react-router-dom'],
           antd: ['antd'],
           query: ['@tanstack/react-query'],
+          hljs: ['highlight.js'],
         },
       },
     },

@@ -438,10 +438,54 @@ body {
   color: var(--bbc-gray-6);
 }
 
-.agent-md__code {
-  background: var(--bbc-gray-1);
+/* 围栏代码块（MdCode）：头行（语言标签+复制按钮）+ 代码体 */
+.agent-md__code-wrap {
   border: 1px solid var(--bbc-gray-3);
   border-radius: var(--bbc-radius-control);
+  background: var(--bbc-gray-1);
+  overflow: hidden;
+}
+
+.agent-md__code-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 10px;
+  background: var(--bbc-gray-2);
+  border-bottom: 1px solid var(--bbc-gray-3);
+}
+
+.agent-md__code-lang {
+  font-family: var(--bbc-font-mono);
+  font-size: var(--bbc-font-12);
+  color: var(--bbc-gray-6);
+  user-select: none;
+}
+
+.agent-md__copy {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: var(--bbc-font-12);
+  color: var(--bbc-gray-6);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.agent-md__copy:hover {
+  color: var(--bbc-primary);
+  background: var(--bbc-primary-light);
+}
+
+.agent-md__copy--done {
+  color: var(--bbc-success);
+}
+
+.agent-md__code {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   padding: var(--bbc-space-2) var(--bbc-space-3);
   overflow-x: auto;
   font-family: var(--bbc-font-mono);
@@ -466,6 +510,17 @@ body {
   border-radius: 0;
 }
 
+/* 表格（MdTable）：横向滚动包一层（IM 680px 卡内宽表不撑破）；
+   表头按钮三态排序 + ≥4 行筛选框 */
+.agent-md__table-wrap {
+  overflow-x: auto;
+}
+
+.agent-md__table-filter {
+  margin-bottom: 6px;
+  max-width: 240px;
+}
+
 .agent-md__table {
   width: 100%;
   border-collapse: collapse;
@@ -484,6 +539,42 @@ body {
   background: var(--bbc-primary-light);
   font-weight: 600;
   color: var(--bbc-gray-9);
+  padding: 0;
+}
+
+.agent-md__th-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  padding: 4px var(--bbc-space-2);
+  text-align: inherit;
+}
+
+.agent-md__th-btn:hover {
+  color: var(--bbc-primary);
+}
+
+.agent-md__th-ind {
+  font-size: 0.8em;
+  color: var(--bbc-gray-6);
+  user-select: none;
+}
+
+th[aria-sort='ascending'] .agent-md__th-ind,
+th[aria-sort='descending'] .agent-md__th-ind {
+  color: var(--bbc-primary);
+}
+
+.agent-md__table-empty {
+  color: var(--bbc-gray-6);
+  text-align: center;
 }
 
 .agent-md__table tbody tr:nth-child(even) td {
@@ -492,6 +583,115 @@ body {
 
 .agent-md__table tbody tr:hover td {
   background: var(--bbc-primary-light);
+}
+
+/* ── hljs token 主题（自写：官方 github.css 亮暗两套全局 .hljs 选择器冲突无法
+   并存，改固定色相双版，[data-theme='dark'] 切暗色；仅 MdCode 内使用） ── */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-doctag {
+  color: #a626a4;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-meta-string,
+.hljs-quote {
+  color: #50a14f;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-symbol {
+  color: #986801;
+}
+
+.hljs-comment {
+  color: var(--bbc-gray-6);
+  font-style: italic;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+  color: #4078f2;
+}
+
+.hljs-title.class_,
+.hljs-type,
+.hljs-attr,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: #c18401;
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-meta,
+.hljs-link {
+  color: #e45649;
+}
+
+/* diff 块：整行红绿（success/danger token 亮暗自适应） */
+.hljs-addition {
+  color: var(--bbc-success);
+  background: var(--bbc-success-light);
+  display: inline-block;
+  width: 100%;
+}
+
+.hljs-deletion {
+  color: var(--bbc-danger);
+  background: var(--bbc-danger-light);
+  display: inline-block;
+  width: 100%;
+}
+
+[data-theme='dark'] .hljs-keyword,
+[data-theme='dark'] .hljs-selector-tag,
+[data-theme='dark'] .hljs-built_in,
+[data-theme='dark'] .hljs-doctag {
+  color: #c678dd;
+}
+
+[data-theme='dark'] .hljs-string,
+[data-theme='dark'] .hljs-regexp,
+[data-theme='dark'] .hljs-meta-string {
+  color: #98c379;
+}
+
+[data-theme='dark'] .hljs-quote {
+  color: var(--bbc-gray-6);
+}
+
+[data-theme='dark'] .hljs-number,
+[data-theme='dark'] .hljs-literal,
+[data-theme='dark'] .hljs-symbol {
+  color: #d19a66;
+}
+
+[data-theme='dark'] .hljs-title,
+[data-theme='dark'] .hljs-title.function_,
+[data-theme='dark'] .hljs-section {
+  color: #61afef;
+}
+
+[data-theme='dark'] .hljs-title.class_,
+[data-theme='dark'] .hljs-type,
+[data-theme='dark'] .hljs-attr,
+[data-theme='dark'] .hljs-selector-attr,
+[data-theme='dark'] .hljs-selector-class,
+[data-theme='dark'] .hljs-selector-id {
+  color: #e5c07b;
+}
+
+[data-theme='dark'] .hljs-variable,
+[data-theme='dark'] .hljs-template-variable,
+[data-theme='dark'] .hljs-meta,
+[data-theme='dark'] .hljs-link {
+  color: #e06c75;
 }
 
 /* 思考摘要折叠（channel=reasoning）——旧 ReasoningCollapse 已删（2026-11-11 过程区

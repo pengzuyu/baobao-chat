@@ -1,6 +1,7 @@
 /**
  * markdown 手写渲染器（GFM 子集；React 元素直出无 v-html，零 XSS 面）：
- * 围栏代码/表格（对齐）/标题/引用块/水平线/无序+有序列表（两级嵌套/任务项）/
+ * 围栏代码（MdCode：语言标签/复制/highlight.js 子集高亮）/表格（MdTable：表头
+ * 三态排序+筛选、对齐）/标题/引用块/水平线/无序+有序列表（两级嵌套/任务项）/
  * 粗体/斜体/删除线/行内码/链接/图片（D24 补链接图片有序列表；富渲染增强补齐
  * 引用/hr/嵌套/任务/删除线/斜体/表格对齐，配色 token 化见 global.css .agent-md 段）。
  * 原实现于 features/agent/StreamMessage（PAG-03 §3.3 降级规范），
@@ -10,63 +11,9 @@
  */
 
 import { memo, type ReactNode } from 'react';
-
-/** 链接出站协议白名单（javascript:/data: 等拒绝——降级渲染的最小 XSS 防线） */
-function safeHref(url: string): string | null {
-  const u = url.trim();
-  if (/^(https?:\/\/|\/)/i.test(u)) return u;
-  return null;
-}
-
-/** 行内标记渲染：`code` → <code>，**bold** → <strong>，*em* → <em>，
- * ~~del~~ → <del>，[text](url) → <a target=_blank>，![alt](url) → <img>（D24）。
- * em 的环视断言（lookbehind）拒绝 `2*3*4` 类运算式误判：开/闭星号紧邻单词字符不匹配。 */
-function renderInline(text: string, keyPrefix: string): ReactNode[] {
-  const out: ReactNode[] = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*|~~[^~]+~~|(?<![\w*])\*(?!\s)([^*]+?)(?<!\s)\*(?![\w*])|!?\[[^\]]*\]\([^)\s]+\))/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let i = 0;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    const token = m[0];
-    if (token.startsWith('`')) {
-      out.push(<code key={`${keyPrefix}-c${i}`}>{token.slice(1, -1)}</code>);
-    } else if (token.startsWith('**')) {
-      out.push(<strong key={`${keyPrefix}-b${i}`}>{token.slice(2, -2)}</strong>);
-    } else if (token.startsWith('~~')) {
-      out.push(<del key={`${keyPrefix}-d${i}`}>{token.slice(2, -2)}</del>);
-    } else if (token.startsWith('*')) {
-      out.push(<em key={`${keyPrefix}-i${i}`}>{token.slice(1, -1)}</em>);
-    } else if (token.startsWith('![')) {
-      // 图片 ![alt](url)
-      const im = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
-      if (im) {
-        const href = safeHref(im[2]);
-        out.push(href
-          ? <img key={`${keyPrefix}-img${i}`} className="agent-md__img" src={href} alt={im[1]} loading="lazy" />
-          : token);
-      } else {
-        out.push(token);
-      }
-    } else {
-      // 链接 [text](url)
-      const lm = /^\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
-      if (lm) {
-        const href = safeHref(lm[2]);
-        out.push(href
-          ? <a key={`${keyPrefix}-a${i}`} className="agent-md__a" href={href} target="_blank" rel="noreferrer noopener">{lm[1] || href}</a>
-          : token);
-      } else {
-        out.push(token);
-      }
-    }
-    last = m.index + token.length;
-    i += 1;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
+import { MdCode } from './MdCode';
+import { MdTable } from './MdTable';
+import { renderInline } from './mdInline';
 
 /* ─────────────── 块级解析（GFM 子集） ─────────────── */
 
@@ -123,8 +70,9 @@ function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
   while (i < lines.length) {
     const line = lines[i];
 
-    // 围栏代码块
+    // 围栏代码块（```lang 头；MdCode 带语言标签/复制按钮/高亮）
     if (FENCE_RE.test(line)) {
+      const lang = line.slice(3).trim();
       const buf: string[] = [];
       i += 1;
       while (i < lines.length && !FENCE_RE.test(lines[i])) {
@@ -132,15 +80,12 @@ function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
         i += 1;
       }
       i += 1; // 跳过闭合围栏（流式中未闭合则吃到行尾）
-      blocks.push(
-        <pre key={key++} className="agent-md__code">
-          <code>{buf.join('\n')}</code>
-        </pre>,
-      );
+      blocks.push(<MdCode key={key++} code={buf.join('\n')} lang={lang} />);
       continue;
     }
 
-    // 表格（连续 | 行；首行=表头，第二行为分隔行时取对齐，GFM 之外的分隔行按数据行）
+    // 表格（连续 | 行；首行=表头，第二行为分隔行时取对齐，GFM 之外的分隔行按数据行；
+    // MdTable 提供表头排序/筛选交互）
     if (TABLE_RE.test(line)) {
       const raw: string[][] = [];
       let aligns: ('left' | 'center' | 'right')[] | null = null;
@@ -153,31 +98,8 @@ function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
         }
         i += 1;
       }
-      const [head, ...body] = raw;
-      blocks.push(
-        <table key={key++} className="agent-md__table">
-          <thead>
-            <tr>
-              {(head ?? []).map((c, ci) => (
-                <th key={ci} className="agent-md__th" style={{ textAlign: aligns?.[ci] }}>
-                  {renderInline(c, `${keyPrefix}-th${key}-${ci}`)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {body.map((cells, r) => (
-              <tr key={r}>
-                {cells.map((c, ci) => (
-                  <td key={ci} style={{ textAlign: aligns?.[ci] }}>
-                    {renderInline(c, `${keyPrefix}-td${key}-${r}-${ci}`)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>,
-      );
+      const [head = [], ...body] = raw;
+      blocks.push(<MdTable key={key++} head={head} rows={body} aligns={aligns} />);
       continue;
     }
 
