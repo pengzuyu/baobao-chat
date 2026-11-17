@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // ── memory ──
@@ -295,7 +295,7 @@ func (p *PluginPostgres) InsertPlugin(ctx context.Context, v Plugin) (Plugin, er
 	}
 	defer tx.Rollback(ctx)
 	if v.ID == 0 {
-		if v.ID, err = bbwpg.AllocID(ctx, tx, lockKeyEcoPlugin, "eco_plugin"); err != nil {
+		if v.ID, err = bbcpg.AllocID(ctx, tx, lockKeyEcoPlugin, "eco_plugin"); err != nil {
 			return Plugin{}, err
 		}
 	}
@@ -420,7 +420,7 @@ func (p *PluginPostgres) InsertVersion(ctx context.Context, v PluginVersion) (Pl
 	}
 	defer tx.Rollback(ctx)
 	if v.ID == 0 {
-		if v.ID, err = bbwpg.AllocID(ctx, tx, lockKeyEcoPluginVersion, "eco_plugin_version"); err != nil {
+		if v.ID, err = bbcpg.AllocID(ctx, tx, lockKeyEcoPluginVersion, "eco_plugin_version"); err != nil {
 			return PluginVersion{}, err
 		}
 	}

@@ -657,7 +657,7 @@ func validAddress(addr string) bool {
 func newMessageID(now time.Time) string {
 	buf := make([]byte, 8)
 	_, _ = rand.Read(buf)
-	return fmt.Sprintf("<%d.%s@bbw.mail>", now.UnixNano(), hex.EncodeToString(buf))
+	return fmt.Sprintf("<%d.%s@bbc.mail>", now.UnixNano(), hex.EncodeToString(buf))
 }
 
 func randomSecret(n int) (string, error) {
@@ -813,7 +813,7 @@ func (s *Service) SendAsShared(ctx context.Context, tenantID, userID, mailboxID 
 }
 
 // autoFwdMarker 自动转发链路标记（InReplyTo 携带=已转发一层，封顶防环；D16）
-const autoFwdMarker = "bbw-auto-fwd"
+const autoFwdMarker = "bbc-auto-fwd"
 
 // ── 草稿（D16/22 §3.5：drafts folder 存续写；发送时清理）──
 

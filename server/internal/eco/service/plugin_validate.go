@@ -2,7 +2,7 @@
 //
 // 职责：zip → manifest 快照（组件统计/权限声明）。全部规则：
 //   - 包 ≤10MB；
-//   - 清单三目录名识别（.bbw-plugin 优先 → .claude-plugin → .zcode-plugin），
+//   - 清单三目录名识别（.bbc-plugin 优先 → .claude-plugin → .zcode-plugin），
 //     兼容「顶层单目录 / 根即内容」两种打包形态；
 //   - name/version/description 规则（同 skill 口径）；
 //   - 全条目 zip slip 检查（.. / 绝对路径拒绝）；
@@ -10,7 +10,7 @@
 //   - .mcp.json（或内联 mcpServers 对象）可解析、server 名合法、stdio 有
 //     command / HTTP 有 url；
 //   - hooks.json 可解析（不执行）；
-//   - 身份使用探测（${BBW_USER_TOKEN}）与 config 声明收集（安装确认页语料）。
+//   - 身份使用探测（${BBC_USER_TOKEN}）与 config 声明收集（安装确认页语料）。
 package ecoservice
 
 import (
@@ -44,11 +44,11 @@ type PluginManifest struct {
 	Version     string `json:"version"`
 	Description string `json:"description"`
 	Components  PluginComponents `json:"components"`
-	Risk        string   `json:"risk,omitempty"`      // low|medium|high（bbw.risk）
-	Category    string   `json:"category,omitempty"`   // bbw.category（pkg 元数据同步）
+	Risk        string   `json:"risk,omitempty"`      // low|medium|high（bbc.risk）
+	Category    string   `json:"category,omitempty"`   // bbc.category（pkg 元数据同步）
 	NetAllow    []string `json:"netAllow,omitempty"`   // v0.1 仅展示
-	UsesIdentity bool   `json:"usesIdentity"`          // .mcp.json 出现 ${BBW_USER_TOKEN}
-	ConfigKeys  []string `json:"configKeys,omitempty"` // bbw.config 声明（详情页配置表单）
+	UsesIdentity bool   `json:"usesIdentity"`          // .mcp.json 出现 ${BBC_USER_TOKEN}
+	ConfigKeys  []string `json:"configKeys,omitempty"` // bbc.config 声明（详情页配置表单）
 	// ConfigSecrets secret 型配置键（L4：客户端分流钥匙串存储的判定依据）
 	ConfigSecrets []string `json:"configSecrets,omitempty"`
 }
@@ -64,7 +64,7 @@ type pluginJSONRaw struct {
 	Agents      json.RawMessage `json:"agents"`
 	McpServers  json.RawMessage `json:"mcpServers"` // string=路径 | object=内联
 	Hooks       json.RawMessage `json:"hooks"`
-	BBW         *struct {
+	BBC         *struct {
 		Risk     string   `json:"risk"`
 		Category string   `json:"category"`
 		NetAllow []string `json:"netAllow"`
@@ -74,7 +74,7 @@ type pluginJSONRaw struct {
 			Type     string `json:"type"`
 			Required bool   `json:"required"`
 		} `json:"config"`
-	} `json:"bbw"`
+	} `json:"bbc"`
 }
 
 // mcpJSONRaw .mcp.json 形态：{"mcpServers": {name: {command|url,...}}}
@@ -93,11 +93,11 @@ type mcpServerRaw struct {
 var (
 	rePluginID    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	reMcpServerID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
-	reIdentityVar = regexp.MustCompile(`\$\{BBW_USER_(?:TOKEN|ID|NAME)\}`)
+	reIdentityVar = regexp.MustCompile(`\$\{BBC_USER_(?:TOKEN|ID|NAME)\}`)
 )
 
-// manifestDirs 清单识别顺序（D22 §0 决策 1：三名都认，bbw 优先）
-var manifestDirs = []string{".bbw-plugin", ".claude-plugin", ".zcode-plugin"}
+// manifestDirs 清单识别顺序（D22 §0 决策 1：三名都认，bbc 优先）
+var manifestDirs = []string{".bbc-plugin", ".claude-plugin", ".zcode-plugin"}
 
 // validatePluginPackage 校验 zip 包并产出 manifest 快照与组件路径集合。
 // 返回（快照、组件文件清单——供客户端复跑对照，err）。
@@ -134,7 +134,7 @@ func validatePluginPackage(pkg []byte) (*PluginManifest, []string, error) {
 		files[name] = data
 	}
 
-	// 清单识别（兼容顶层单目录：dir/.bbw-plugin/plugin.json 或根 .bbw-plugin/plugin.json）
+	// 清单识别（兼容顶层单目录：dir/.bbc-plugin/plugin.json 或根 .bbc-plugin/plugin.json）
 	base := ""
 	var raw pluginJSONRaw
 	found := false
@@ -175,7 +175,7 @@ func validatePluginPackage(pkg []byte) (*PluginManifest, []string, error) {
 	}
 	if !found {
 		return nil, nil, errx.New(errx.CodeBadRequest,
-			"未找到插件清单（.bbw-plugin/.claude-plugin/.zcode-plugin/plugin.json 任一）")
+			"未找到插件清单（.bbc-plugin/.claude-plugin/.zcode-plugin/plugin.json 任一）")
 	}
 
 	m := &PluginManifest{Name: raw.Name, Version: raw.Version, Description: raw.Description}
@@ -313,22 +313,22 @@ func validatePluginPackage(pkg []byte) (*PluginManifest, []string, error) {
 		m.Components.Hooks = true
 	}
 
-	// bbw 扩展块
-	if raw.BBW != nil {
-		m.Risk = raw.BBW.Risk
+	// bbc 扩展块
+	if raw.BBC != nil {
+		m.Risk = raw.BBC.Risk
 		switch m.Risk {
 		case "", "low", "medium", "high":
 		default:
-			return nil, nil, errx.New(errx.CodeBadRequest, "bbw.risk ∈ low|medium|high")
+			return nil, nil, errx.New(errx.CodeBadRequest, "bbc.risk ∈ low|medium|high")
 		}
-		m.Category = raw.BBW.Category
-		m.NetAllow = raw.BBW.NetAllow
-		for _, c := range raw.BBW.Config {
+		m.Category = raw.BBC.Category
+		m.NetAllow = raw.BBC.NetAllow
+		for _, c := range raw.BBC.Config {
 			if !reMcpServerID.MatchString(c.Key) {
-				return nil, nil, errx.New(errx.CodeBadRequest, "bbw.config key 非法: "+c.Key)
+				return nil, nil, errx.New(errx.CodeBadRequest, "bbc.config key 非法: "+c.Key)
 			}
 			if c.Type != "" && c.Type != "secret" && c.Type != "string" {
-				return nil, nil, errx.New(errx.CodeBadRequest, "bbw.config type ∈ secret|string: "+c.Key)
+				return nil, nil, errx.New(errx.CodeBadRequest, "bbc.config type ∈ secret|string: "+c.Key)
 			}
 			m.ConfigKeys = append(m.ConfigKeys, c.Key)
 			if c.Type == "secret" {

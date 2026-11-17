@@ -20,7 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // advisory lock 键（表级 ID 分配互斥；9101-9109 已被 org/auth/message/file 占用）
@@ -75,7 +75,7 @@ func (p *Postgres) EnsurePersonalSpace(ctx context.Context, tenantID, userID, qu
 	} else if hit != nil {
 		return *hit, tx.Commit(ctx)
 	}
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyKBSpace, "kb_space")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyKBSpace, "kb_space")
 	if err != nil {
 		return Space{}, err
 	}
@@ -109,7 +109,7 @@ func (p *Postgres) CreateSpace(ctx context.Context, s Space) (Space, error) {
 		return Space{}, err
 	}
 	defer tx.Rollback(ctx)
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyKBSpace, "kb_space")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyKBSpace, "kb_space")
 	if err != nil {
 		return Space{}, err
 	}
@@ -142,7 +142,7 @@ func (p *Postgres) EnsureCompanySpace(ctx context.Context, tenantID, quotaBytes 
 	} else if hit != nil {
 		return *hit, tx.Commit(ctx)
 	}
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyKBSpace, "kb_space")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyKBSpace, "kb_space")
 	if err != nil {
 		return Space{}, err
 	}
@@ -248,7 +248,7 @@ func (p *Postgres) CreateNode(ctx context.Context, n Node) (Node, error) {
 		return Node{}, err
 	}
 	defer tx.Rollback(ctx)
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyKBNode, "kb_node")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyKBNode, "kb_node")
 	if err != nil {
 		return Node{}, err
 	}
@@ -310,7 +310,7 @@ func (p *Postgres) CreateDoc(ctx context.Context, d Doc) (Doc, error) {
 		return Doc{}, err
 	}
 	defer tx.Rollback(ctx)
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyKBDoc, "kb_doc")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyKBDoc, "kb_doc")
 	if err != nil {
 		return Doc{}, err
 	}

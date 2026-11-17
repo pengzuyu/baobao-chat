@@ -17,10 +17,10 @@ import (
 
 // 档位别名（§3.2：调用方只允许别名或 p: 引用；具体模型名 9001、未知别名 8052）
 const (
-	AliasFast   = "bbw-fast"
-	AliasStrong = "bbw-strong"
-	AliasEmbed  = "bbw-embed"
-	AliasRerank = "bbw-rerank" // D24：kb 重排档（/v1/rerank；mock 词面重叠兜底）
+	AliasFast   = "bbc-fast"
+	AliasStrong = "bbc-strong"
+	AliasEmbed  = "bbc-embed"
+	AliasRerank = "bbc-rerank" // D24：kb 重排档（/v1/rerank；mock 词面重叠兜底）
 	// RefPrefix 直达引用前缀：p:<provider_id>:<model>（0023 表驱动多供应商）
 	RefPrefix = "p:"
 )
@@ -98,9 +98,9 @@ func (r *Router) EntryOf(id int64) *providerEntry {
 
 // ResolveFor model 解析统一入口（§3.2 引用扩展，0023）：
 //
-//	bbw-fast/bbw-strong → 档位路由（表驱动 active 路由，无则 env/mock 兜底装配）
+//	bbc-fast/bbc-strong → 档位路由（表驱动 active 路由，无则 env/mock 兜底装配）
 //	p:<id>:<model>      → 直达引用：存在且启用（8053）→ 公司级或本人（8054）→ 清单内（8055）
-//	其余                → 8052（bbw- 未知别名）/ 9001（具体模型名绕过路由）
+//	其余                → 8052（bbc- 未知别名）/ 9001（具体模型名绕过路由）
 func (r *Router) ResolveFor(tenant, uid int64, model string) ([]Candidate, error) {
 	if model == "" {
 		return nil, errx.New(errx.CodeBadRequest, "model 必填")
@@ -115,10 +115,10 @@ func (r *Router) ResolveFor(tenant, uid int64, model string) ([]Candidate, error
 		return c, nil
 	}
 	if !strings.HasPrefix(model, RefPrefix) {
-		if strings.HasPrefix(model, "bbw-") {
+		if strings.HasPrefix(model, "bbc-") {
 			return nil, errx.New(errx.CodeAIGWRouteNotDefined, "路由档位未配置: "+model)
 		}
-		return nil, errx.New(errx.CodeBadRequest, "model 仅允许档位别名（bbw-fast/bbw-strong）或直达引用（p:<供应商ID>:<模型>）")
+		return nil, errx.New(errx.CodeBadRequest, "model 仅允许档位别名（bbc-fast/bbc-strong）或直达引用（p:<供应商ID>:<模型>）")
 	}
 	parts := strings.SplitN(model, ":", 3)
 	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
@@ -243,7 +243,7 @@ type MeterDim struct {
 	Tenant   int64
 	User     int64
 	Svc      string // svc:kb；用户调用空
-	Session  string // X-BBW-Agent-Session
+	Session  string // X-BBC-Agent-Session
 	Scene    string // chat/embed/rerank/delegate/expert
 	Tier     string
 	Provider int64

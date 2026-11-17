@@ -2,11 +2,11 @@
 
 // PG 集成冒烟（build tag `pg`，默认 go test 不编译）。
 //
-//	本地：BBW_PG_TEST_DSN='postgres://bbw:...@127.0.0.1:5432/bbw?sslmode=disable' \
+//	本地：BBC_PG_TEST_DSN='postgres://bbc:...@127.0.0.1:5432/bbc?sslmode=disable' \
 //	      go test -tags pg ./internal/admin/repo/ -run TestPGAdmin -v
 //
 // 覆盖：迁移 0010 admin_audit_action 落库/分页、敏感词 CRUD（0006 表 + UK 冲突 +
-// 热更源缓存失效）、UsageRows 聚合（ai_usage_hourly）。未设置 BBW_PG_TEST_DSN 即 skip。
+// 热更源缓存失效）、UsageRows 聚合（ai_usage_hourly）。未设置 BBC_PG_TEST_DSN 即 skip。
 package adminrepo
 
 import (
@@ -15,21 +15,21 @@ import (
 	"testing"
 	"time"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 func TestPGAdminSmoke(t *testing.T) {
-	dsn := os.Getenv("BBW_PG_TEST_DSN")
+	dsn := os.Getenv("BBC_PG_TEST_DSN")
 	if dsn == "" {
-		t.Skip("BBW_PG_TEST_DSN 未设置，跳过 PG 集成测试")
+		t.Skip("BBC_PG_TEST_DSN 未设置，跳过 PG 集成测试")
 	}
 	ctx := context.Background()
-	pool, err := bbwpg.New(ctx, dsn)
+	pool, err := bbcpg.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("建池: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	if err := bbwpg.Migrate(ctx, pool); err != nil {
+	if err := bbcpg.Migrate(ctx, pool); err != nil {
 		t.Fatalf("迁移（应含 0010 admin_audit_action）: %v", err)
 	}
 	r := NewPostgres(pool)
@@ -122,7 +122,7 @@ func TestPGAdminSmoke(t *testing.T) {
 	}
 	t.Logf("ai_usage_hourly 近 7 日聚合行数=%d", len(rows))
 
-	// ── ④ RLS：app.tenant 会话变量兜底下（bbwpg.AfterConnect SET app.tenant=1）
+	// ── ④ RLS：app.tenant 会话变量兜底下（bbcpg.AfterConnect SET app.tenant=1）
 	// 跨租户行（tenant=2 手工插入）不可见 ──
 	_, _ = pool.Exec(ctx, `INSERT INTO admin_audit_action (id, tenant_id, operator_id, action)
 		VALUES ($1, 2, $2, 'cross.tenant.probe')`, time.Now().UnixNano(), op)
@@ -142,17 +142,17 @@ func TestPGAdminSmoke(t *testing.T) {
 
 // TestPGRolePermPoints RBAC 阶段二 PG 路径：role/user_role 落库 + 权限点聚合并集
 func TestPGRolePermPoints(t *testing.T) {
-	dsn := os.Getenv("BBW_PG_TEST_DSN")
+	dsn := os.Getenv("BBC_PG_TEST_DSN")
 	if dsn == "" {
-		t.Skip("BBW_PG_TEST_DSN 未设置，跳过 PG 集成测试")
+		t.Skip("BBC_PG_TEST_DSN 未设置，跳过 PG 集成测试")
 	}
 	ctx := context.Background()
-	pool, err := bbwpg.New(ctx, dsn)
+	pool, err := bbcpg.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("建池: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	if err := bbwpg.Migrate(ctx, pool); err != nil {
+	if err := bbcpg.Migrate(ctx, pool); err != nil {
 		t.Fatalf("迁移: %v", err)
 	}
 	roles := NewPostgresRoles(pool)

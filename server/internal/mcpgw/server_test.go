@@ -1,4 +1,4 @@
-// mcpgw 契约测试：JSON-RPC 分发、三层身份（Bearer/_meta.bbwObo 双通道、
+// mcpgw 契约测试：JSON-RPC 分发、三层身份（Bearer/_meta.bbcObo 双通道、
 // OBO scope 防线二、act 归因审计）、kb_query 参数校验与业务失败语义。
 // 用例与 bbrt-mcp（client 侧）行为镜像——两侧契约以此共同冻结。
 package mcpgw
@@ -173,7 +173,7 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 	got := map[string]string{}
 	for _, tl := range tools {
 		m := tl.(map[string]any)
-		got[m["name"].(string)] = m["annotations"].(map[string]any)["x-bbw-risk"].(string)
+		got[m["name"].(string)] = m["annotations"].(map[string]any)["x-bbc-risk"].(string)
 	}
 	for name, risk := range want {
 		if got[name] != risk {
@@ -185,7 +185,7 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 func TestCallKbQueryHappyPathBearer(t *testing.T) {
 	f := newFixture(t)
 	tok := f.mint(t, "7", false)
-	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"kb_query","arguments":{"keyword":"架构","top_k":5},"_meta":{"bbwAct":"agent:sess-1"}}}`, tok)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"kb_query","arguments":{"keyword":"架构","top_k":5},"_meta":{"bbcAct":"agent:sess-1"}}}`, tok)
 	res := decode(t, rec)["result"].(map[string]any)
 	if res["isError"] == true {
 		t.Fatalf("应成功: %v", res)
@@ -208,10 +208,10 @@ func TestCallKbQueryHappyPathBearer(t *testing.T) {
 }
 
 func TestCallKbQueryMetaOboFallback(t *testing.T) {
-	// stdio 语义身份随行：无 Authorization 头，OBO 在 params._meta.bbwObo
+	// stdio 语义身份随行：无 Authorization 头，OBO 在 params._meta.bbcObo
 	f := newFixture(t)
 	obo := f.mint(t, "9", true, "kb:query:use")
-	body := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"kb_query","arguments":{"keyword":"x"},"_meta":{"bbwObo":"` + obo + `","bbwAct":"expert:ppt:a1"}}}`
+	body := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"kb_query","arguments":{"keyword":"x"},"_meta":{"bbcObo":"` + obo + `","bbcAct":"expert:ppt:a1"}}}`
 	rec := post(t, f.gw, body, "")
 	res := decode(t, rec)["result"].(map[string]any)
 	if res["isError"] == true {
@@ -228,7 +228,7 @@ func TestCallKbQueryMetaOboFallback(t *testing.T) {
 func TestCallOboMissingScopeDenied(t *testing.T) {
 	f := newFixture(t)
 	obo := f.mint(t, "9", true, "im:message:send") // 无 kb:query:use
-	body := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"kb_query","arguments":{"keyword":"x"},"_meta":{"bbwObo":"` + obo + `"}}}`
+	body := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"kb_query","arguments":{"keyword":"x"},"_meta":{"bbcObo":"` + obo + `"}}}`
 	rec := post(t, f.gw, body, "")
 	if code := errCode(t, decode(t, rec)); code != codeScopeDenied {
 		t.Fatalf("OBO 缺 scope 应 -32002，得到 %v", code)
@@ -262,7 +262,7 @@ func TestCallImSendTextAndCard(t *testing.T) {
 	f := newFixture(t)
 	tok := f.mint(t, "7", false)
 	// text 形态
-	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"text","text":"部署完成"},"_meta":{"bbwAct":"agent:s1"}}}`, tok)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"text","text":"部署完成"},"_meta":{"bbcAct":"agent:s1"}}}`, tok)
 	res := decode(t, rec)["result"].(map[string]any)
 	if res["isError"] == true {
 		t.Fatalf("应成功: %v", res)
@@ -292,7 +292,7 @@ func TestCallImSendTextAndCard(t *testing.T) {
 	}
 	// OBO 缺 im:message:send → 防线二拒绝（高风险工具 scope 强制）
 	obo := f.mint(t, "9", true, "kb:query:use")
-	body := `{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"text","text":"x"},"_meta":{"bbwObo":"` + obo + `"}}}`
+	body := `{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"text","text":"x"},"_meta":{"bbcObo":"` + obo + `"}}}`
 	if code := errCode(t, decode(t, post(t, f.gw, body, ""))); code != codeScopeDenied {
 		t.Fatal("OBO 缺 im:message:send 应 -32002")
 	}
@@ -324,7 +324,7 @@ func TestCallFileUploadHappyAndValidation(t *testing.T) {
 	}
 	// OBO 缺 file:upload → 拒绝
 	obo := f.mint(t, "9", true, "im:message:send")
-	b := `{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"file_upload","arguments":{"filename":"a.txt","content_b64":"` + b64 + `"},"_meta":{"bbwObo":"` + obo + `"}}}`
+	b := `{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"file_upload","arguments":{"filename":"a.txt","content_b64":"` + b64 + `"},"_meta":{"bbcObo":"` + obo + `"}}}`
 	if code := errCode(t, decode(t, post(t, f.gw, b, ""))); code != codeScopeDenied {
 		t.Fatal("OBO 缺 file:upload 应 -32002")
 	}
@@ -437,7 +437,7 @@ func TestMailSendSupply(t *testing.T) {
 	f := newFixture(t)
 	tok := f.mint(t, "7", false)
 	// 发送成功：主体传播+检查链入域
-	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"mail_send","arguments":{"to":["E100002@corp.company.internal"],"subject":"评审邀请","body":"请审阅","cc":["E100003@corp.company.internal"]},"_meta":{"bbwAct":"agent:sess-m"}}}`, tok)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"mail_send","arguments":{"to":["E100002@corp.company.internal"],"subject":"评审邀请","body":"请审阅","cc":["E100003@corp.company.internal"]},"_meta":{"bbcAct":"agent:sess-m"}}}`, tok)
 	res := decode(t, rec)["result"].(map[string]any)
 	if res["isError"] == true || !strings.Contains(rec.Body.String(), "delivered") {
 		t.Fatalf("发送应成功: %v", res)
@@ -456,7 +456,7 @@ func TestMailSendSupply(t *testing.T) {
 	// OBO 缺 mail scope → 防线二（-32002）
 	f2 := newFixture(t)
 	obo := f2.mint(t, "9", true, "im:message:send") // 无 mail:agent_tool
-	body := `{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"mail_send","arguments":{"to":["x@corp.company.internal"],"subject":"s","body":"b"},"_meta":{"bbwObo":"` + obo + `"}}}`
+	body := `{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"mail_send","arguments":{"to":["x@corp.company.internal"],"subject":"s","body":"b"},"_meta":{"bbcObo":"` + obo + `"}}}`
 	rec = post(t, f2.gw, body, "")
 	if c := errCode(t, decode(t, rec)); c != -32002 {
 		t.Fatalf("OBO 缺 scope 应 -32002: %v", c)
@@ -467,7 +467,7 @@ func TestMailSendSupply(t *testing.T) {
 func TestCallImHistory(t *testing.T) {
 	f := newFixture(t)
 	tok := f.mint(t, "9", false)
-	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"im_history","arguments":{"conv_id":7},"_meta":{"bbwAct":"agent:sess-2"}}}`, tok)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"im_history","arguments":{"conv_id":7},"_meta":{"bbcAct":"agent:sess-2"}}}`, tok)
 	res := decode(t, rec)["result"].(map[string]any)
 	if res["isError"] == true {
 		t.Fatalf("应成功: %v", res)

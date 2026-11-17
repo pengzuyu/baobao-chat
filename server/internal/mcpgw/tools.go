@@ -27,7 +27,7 @@ type ToolDef struct {
 	Description string
 	// InputSchema jsonschema（MCP tool 风格；与 09 篇 §3.2 参数表对齐）
 	InputSchema map[string]any
-	// Risk 风险级（09 篇权威；经 annotations["x-bbw-risk"] 下发，客户端缺失默认"中"）
+	// Risk 风险级（09 篇权威；经 annotations["x-bbc-risk"] 下发，客户端缺失默认"中"）
 	Risk string
 	// Scope OBO scope（空=无要求；仅 OBO 令牌校验——用户本人 JWT 走域服务自身权限）
 	Scope string
@@ -156,7 +156,7 @@ func findTool(name string) *ToolDef {
 	return nil
 }
 
-// listToolsMessage tools/list 结果（annotations 携带 x-bbw-risk——bbrt-mcp discovery 消费）
+// listToolsMessage tools/list 结果（annotations 携带 x-bbc-risk——bbrt-mcp discovery 消费）
 func listToolsMessage() map[string]any {
 	tools := make([]map[string]any, 0, 4)
 	for _, t := range corpTools() {
@@ -164,7 +164,7 @@ func listToolsMessage() map[string]any {
 			"name":        t.Name,
 			"description": t.Description,
 			"inputSchema": t.InputSchema,
-			"annotations": map[string]any{"x-bbw-risk": t.Risk},
+			"annotations": map[string]any{"x-bbc-risk": t.Risk},
 		})
 	}
 	return map[string]any{"tools": tools}

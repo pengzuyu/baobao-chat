@@ -2,7 +2,7 @@
 // 2026-11-16 squash（D28 会话拍板：无升级场景）：原 0001-0038 增量链收口为
 // 单一终态基线——由 dev 库全链终态 pg_dump 导出。此后新增 schema 变更仍按
 // NNNN 追加文件并在 List 登记（保持"单基线+增量"并存形态）。
-// 执行通道：bbw-server 内嵌 Migrate（单通道权威；compose init 只做 pg 等待+扩展）。
+// 执行通道：bbc-server 内嵌 Migrate（单通道权威；compose init 只做 pg 等待+扩展）。
 package migrations
 
 import _ "embed"

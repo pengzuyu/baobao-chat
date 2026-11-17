@@ -2,7 +2,7 @@
 
 // eco 域 PG 冒烟（build tag `pg`）。
 //
-//	BBW_PG_TEST_DSN='postgres://bbw:...' go test -tags pg ./internal/eco/repo/ -run TestPGEcoSmoke -v
+//	BBC_PG_TEST_DSN='postgres://bbc:...' go test -tags pg ./internal/eco/repo/ -run TestPGEcoSmoke -v
 package ecorepo
 
 import (
@@ -12,21 +12,21 @@ import (
 	"testing"
 	"time"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 func TestPGEcoSmoke(t *testing.T) {
-	dsn := os.Getenv("BBW_PG_TEST_DSN")
+	dsn := os.Getenv("BBC_PG_TEST_DSN")
 	if dsn == "" {
-		t.Skip("BBW_PG_TEST_DSN 未设置")
+		t.Skip("BBC_PG_TEST_DSN 未设置")
 	}
 	ctx := context.Background()
-	pool, err := bbwpg.New(ctx, dsn)
+	pool, err := bbcpg.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("建池: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	if err := bbwpg.Migrate(ctx, pool); err != nil {
+	if err := bbcpg.Migrate(ctx, pool); err != nil {
 		t.Fatalf("迁移（应含 0020 eco_expert）: %v", err)
 	}
 	sfx := strconv.FormatInt(time.Now().UnixNano()%10000000, 10)

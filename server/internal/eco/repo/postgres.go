@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 const lockKeyEco int64 = 9131
@@ -43,7 +43,7 @@ func (p *Postgres) Create(ctx context.Context, e Expert) (Expert, error) {
 	}
 	defer tx.Rollback(ctx)
 	if e.ID == 0 {
-		if e.ID, err = bbwpg.AllocID(ctx, tx, lockKeyEco, "eco_expert"); err != nil {
+		if e.ID, err = bbcpg.AllocID(ctx, tx, lockKeyEco, "eco_expert"); err != nil {
 			return Expert{}, err
 		}
 	}

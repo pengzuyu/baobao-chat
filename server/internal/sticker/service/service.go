@@ -8,14 +8,14 @@ import (
 	"strconv"
 
 	errx "github.com/baobaochat/server/internal/platform/errors"
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 	stickerapi "github.com/baobaochat/server/internal/sticker/api"
 	stickerrepo "github.com/baobaochat/server/internal/sticker/repo"
 )
 
 // Options 装配期注入
 type Options struct {
-	// TenantID 阶段一默认租户（与 auth DefaultTenant 同源 bbwpg.DefaultTenantID）
+	// TenantID 阶段一默认租户（与 auth DefaultTenant 同源 bbcpg.DefaultTenantID）
 	TenantID int64
 	// FileCheck 上传文件归属校验（file 域；nil=跳过——内存/测试装配）
 	FileCheck func(ctx context.Context, ownerID, fileID int64) error
@@ -25,7 +25,7 @@ type Options struct {
 
 func (o *Options) fillDefaults() {
 	if o.TenantID == 0 {
-		o.TenantID = bbwpg.DefaultTenantID
+		o.TenantID = bbcpg.DefaultTenantID
 	}
 	if o.MaxPersonalSets == 0 {
 		o.MaxPersonalSets = 10

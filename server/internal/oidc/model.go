@@ -1,5 +1,5 @@
 // model.go：内部模型——op.AuthRequest / op.Client / op.RefreshTokenRequest 三接口的
-// bbw 实现（列字段持久化 + JSONB 快照，迁移 0038）。
+// bbc 实现（列字段持久化 + JSONB 快照，迁移 0038）。
 package oidc
 
 import (
@@ -52,7 +52,7 @@ func (a *authRequest) GetSubject() string           { return a.UserID }
 func (a *authRequest) Done() bool                   { return a.Completed }
 
 // client 客户端（oidc_client 行 → op.Client）。一期只开 public client（PKCE-only，
-// D28 §9 开放问题 4），LoginURL 定向到 bbw 等待页（§5.2）。
+// D28 §9 开放问题 4），LoginURL 定向到 bbc 等待页（§5.2）。
 type client struct {
 	id            string
 	secretHash    string

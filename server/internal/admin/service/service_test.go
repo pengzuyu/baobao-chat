@@ -657,8 +657,8 @@ func TestCreateUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !full.MustChangePassword || full.PasswordHash != "pbkdf2$test$wangwu!BBW" {
-		t.Fatalf("初始口令应 工号+!BBW 且首登强制改密: %+v", full)
+	if !full.MustChangePassword || full.PasswordHash != "pbkdf2$test$wangwu!BBC" {
+		t.Fatalf("初始口令应 工号+!BBC 且首登强制改密: %+v", full)
 	}
 	depts, err := orgRepo.ListUserDepts(ctx, 1, uid)
 	if err != nil || len(depts) != 1 || depts[0].DeptID != dept.ID || !depts[0].IsPrimary {

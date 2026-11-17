@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 const lockKeyAgentBackup int64 = 9132
@@ -47,7 +47,7 @@ func (p *Postgres) Insert(ctx context.Context, r Row) (Row, error) {
 	}
 	defer tx.Rollback(ctx)
 	if r.ID == 0 {
-		if r.ID, err = bbwpg.AllocID(ctx, tx, lockKeyAgentBackup, "agent_session_backup"); err != nil {
+		if r.ID, err = bbcpg.AllocID(ctx, tx, lockKeyAgentBackup, "agent_session_backup"); err != nil {
 			return Row{}, err
 		}
 	}

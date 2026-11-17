@@ -1,5 +1,5 @@
 // Package aigw AI 网关模块装配（docs/19）：
-// 装配优先级（0023）：ai_provider/ai_route_rule 表驱动 → 环境注入（BBW_AIGW_*）→ mock 兜底；
+// 装配优先级（0023）：ai_provider/ai_route_rule 表驱动 → 环境注入（BBC_AIGW_*）→ mock 兜底；
 // 限流/配额/计量 → Gateway HTTP 接入层。
 package aigw
 
@@ -17,8 +17,8 @@ import (
 
 // Options 环境装配项（默认 < 环境变量）
 type Options struct {
-	DevToken      string // BBW_AIGW_DEV_TOKEN：开发/联调令牌（空=禁用）
-	MonthlyTokens int64  // BBW_AIGW_MONTHLY_TOKENS：月度 token 配额（0=不限）
+	DevToken      string // BBC_AIGW_DEV_TOKEN：开发/联调令牌（空=禁用）
+	MonthlyTokens int64  // BBC_AIGW_MONTHLY_TOKENS：月度 token 配额（0=不限）
 	RatePerMin    float64
 	Burst         float64
 	// AgentKillOn 平台总闸（D9；main 注入 admin 域——on 时 OBO 请求 503）
@@ -26,14 +26,14 @@ type Options struct {
 }
 
 func loadOptions() Options {
-	o := Options{DevToken: os.Getenv("BBW_AIGW_DEV_TOKEN"), RatePerMin: 30, Burst: 10}
-	if v, err := strconv.ParseInt(os.Getenv("BBW_AIGW_MONTHLY_TOKENS"), 10, 64); err == nil && v > 0 {
+	o := Options{DevToken: os.Getenv("BBC_AIGW_DEV_TOKEN"), RatePerMin: 30, Burst: 10}
+	if v, err := strconv.ParseInt(os.Getenv("BBC_AIGW_MONTHLY_TOKENS"), 10, 64); err == nil && v > 0 {
 		o.MonthlyTokens = v
 	}
-	if v, err := strconv.ParseFloat(os.Getenv("BBW_AIGW_RATE_PER_MIN"), 64); err == nil && v > 0 {
+	if v, err := strconv.ParseFloat(os.Getenv("BBC_AIGW_RATE_PER_MIN"), 64); err == nil && v > 0 {
 		o.RatePerMin = v
 	}
-	if v, err := strconv.ParseFloat(os.Getenv("BBW_AIGW_BURST"), 64); err == nil && v > 0 {
+	if v, err := strconv.ParseFloat(os.Getenv("BBC_AIGW_BURST"), 64); err == nil && v > 0 {
 		o.Burst = v
 	}
 	return o
@@ -82,12 +82,12 @@ func NewModule(pool *pgxpool.Pool, verify func(token string) (*authjwt.Claims, e
 	var reg *Registry
 	if pool != nil {
 		meter = NewMeter(pgxHourSink{pool: pool})
-		k, err := kms.New(os.Getenv("BBW_KMS_MASTER_KEY"))
+		k, err := kms.New(os.Getenv("BBC_KMS_MASTER_KEY"))
 		if err != nil {
-			log.Fatalf("[aigw] BBW_KMS_MASTER_KEY 非法（需 base64(32B)，openssl rand -base64 32）: %v", err)
+			log.Fatalf("[aigw] BBC_KMS_MASTER_KEY 非法（需 base64(32B)，openssl rand -base64 32）: %v", err)
 		}
 		if k == nil {
-			log.Println("[aigw] 未配置 BBW_KMS_MASTER_KEY：带密钥的供应商无法创建/装配（无密钥上游不受影响）")
+			log.Println("[aigw] 未配置 BBC_KMS_MASTER_KEY：带密钥的供应商无法创建/装配（无密钥上游不受影响）")
 		}
 		reg = NewRegistry(pool, router, k, 1) // v0.1 单租户=1；多租户分桶阶段二
 		if err := reg.Reload(context.Background()); err != nil {

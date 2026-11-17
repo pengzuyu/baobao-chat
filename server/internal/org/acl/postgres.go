@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 const lockKeyACL int64 = 9127
@@ -32,7 +32,7 @@ func (p *Postgres) Grant(ctx context.Context, e Entry) (Entry, error) {
 	}
 	defer tx.Rollback(ctx)
 	if e.ID == 0 {
-		if e.ID, err = bbwpg.AllocID(ctx, tx, lockKeyACL, "resource_acl"); err != nil {
+		if e.ID, err = bbcpg.AllocID(ctx, tx, lockKeyACL, "resource_acl"); err != nil {
 			return Entry{}, err
 		}
 	}

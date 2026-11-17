@@ -16,7 +16,7 @@ import (
 
 // ServerName serverInfo.name（bbrt-mcp 诊断/健康面板展示；命名空间段 corp 由
 // Runtime 侧配置决定，工具全名约定 mcp.corp.kb_query）
-const ServerName = "bbw-corp"
+const ServerName = "bbc-corp"
 
 // Gateway MCP HTTP 接入层
 type Gateway struct {
@@ -95,7 +95,7 @@ func (g *Gateway) HandleMCP(w http.ResponseWriter, r *http.Request) {
 				bizFail = true
 			}
 		}
-		g.audit(r.Context(), claims, frame.Params, actOf(frame.Params, r.Header.Get("X-BBW-Act")), err, bizFail, time.Since(start))
+		g.audit(r.Context(), claims, frame.Params, actOf(frame.Params, r.Header.Get("X-BBC-Act")), err, bizFail, time.Since(start))
 	}
 
 	if err != nil {
@@ -156,17 +156,17 @@ func (g *Gateway) handleCall(r *http.Request, claims *authjwt.Claims, params jso
 }
 
 // claims 主体身份提取（②）：Authorization: Bearer 优先（HTTP 通道），
-// params._meta.bbwObo 兜底（stdio 语义身份随行——call.rs 注记的传输层差异在此吸收）
+// params._meta.bbcObo 兜底（stdio 语义身份随行——call.rs 注记的传输层差异在此吸收）
 func (g *Gateway) claims(r *http.Request, params json.RawMessage) (*authjwt.Claims, *rpcError) {
 	if g.opts.Verify == nil {
 		return nil, rpcErr(codeUnauthorized, "网关未配置鉴权")
 	}
 	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
 	if token == "" {
-		token = metaString(params, "bbwObo")
+		token = metaString(params, "bbcObo")
 	}
 	if token == "" {
-		return nil, rpcErr(codeUnauthorized, "缺少主体令牌（Authorization: Bearer 或 _meta.bbwObo）")
+		return nil, rpcErr(codeUnauthorized, "缺少主体令牌（Authorization: Bearer 或 _meta.bbcObo）")
 	}
 	c, err := g.opts.Verify(r.Context(), token)
 	if err != nil {
@@ -220,9 +220,9 @@ func (g *Gateway) writeRPCError(w http.ResponseWriter, id json.RawMessage, e *rp
 	})
 }
 
-// actOf 归因身份（③）：_meta.bbwAct 优先，X-BBW-Act 头兜底（10 篇 §5）
+// actOf 归因身份（③）：_meta.bbcAct 优先，X-BBC-Act 头兜底（10 篇 §5）
 func actOf(params json.RawMessage, headerAct string) string {
-	if v := metaString(params, "bbwAct"); v != "" {
+	if v := metaString(params, "bbcAct"); v != "" {
 		return v
 	}
 	return headerAct

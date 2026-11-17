@@ -13,8 +13,8 @@
  * 审批/风险门控由宿主统一处理，server 无需关心。
  *
  * 环境变量（.mcp.json env 段注入，变量族见 examples/plugins/README.md）：
- *   BBW_CONFIG_GREET_NAME — 插件配置项 greet_name（string 型，装配时替换）
- *   BBW_DEMO_USER_ID      — 当前登录用户工号（${BBW_USER_ID}）
+ *   BBC_CONFIG_GREET_NAME — 插件配置项 greet_name（string 型，装配时替换）
+ *   BBC_DEMO_USER_ID      — 当前登录用户工号（${BBC_USER_ID}）
  *
  * 调试：直接跑 `node server.mjs`，逐行粘贴下方 JSON 观察应答（Ctrl-C 退出）。
  */
@@ -65,8 +65,8 @@ function callTool(name, args) {
       return `掷出 ${Math.floor(Math.random() * sides) + 1} 点（${sides} 面骰）`;
     }
     case 'who_am_i': {
-      const uid = env.BBW_DEMO_USER_ID || '（未注入——未登录或宿主未装配身份）';
-      const name = env.BBW_CONFIG_GREET_NAME || '（未配置）';
+      const uid = env.BBC_DEMO_USER_ID || '（未注入——未登录或宿主未装配身份）';
+      const name = env.BBC_CONFIG_GREET_NAME || '（未配置）';
       return `用户工号：${uid}；配置 greet_name：${name}`;
     }
     default:

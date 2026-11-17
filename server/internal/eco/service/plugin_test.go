@@ -32,11 +32,11 @@ func zipOf(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
-// fullPlugin 四组件合法包（.mcp.json 引 BBW_USER_TOKEN + bbw.config）
+// fullPlugin 四组件合法包（.mcp.json 引 BBC_USER_TOKEN + bbc.config）
 func fullPlugin(manifestDir string) map[string]string {
 	manifest := `{"name":"deploy-helper","version":"1.2.0","description":"发布助手",
 		"skills":"./skills","commands":"./commands","agents":"./agents","mcpServers":"./.mcp.json",
-		"bbw":{"risk":"medium","category":"devops","netAllow":["*.company.internal"],
+		"bbc":{"risk":"medium","category":"devops","netAllow":["*.company.internal"],
 			"config":[{"key":"gitlab_token","label":"GitLab Token","type":"secret","required":true}]}}`
 	return map[string]string{
 		manifestDir + "/plugin.json":  manifest,
@@ -44,14 +44,14 @@ func fullPlugin(manifestDir string) map[string]string {
 		"commands/release.md":         "---\nname: release\n---\n发布清单：$ARGUMENTS",
 		"agents/release-verify.md":    "---\nname: release-verify\ndescription: 验收\n---",
 		".mcp.json": `{"mcpServers":{
-			"deploy":{"command":"node","args":["${PLUGIN_ROOT}/server.js"],"env":{"BBW_USER_ID":"${BBW_USER_ID}"}},
-			"bbw-kb":{"url":"https://bbw.company.internal/mcp/kb","headers":{"Authorization":"Bearer ${BBW_USER_TOKEN}"}}}}`,
+			"deploy":{"command":"node","args":["${PLUGIN_ROOT}/server.js"],"env":{"BBC_USER_ID":"${BBC_USER_ID}"}},
+			"bbc-kb":{"url":"https://bbc.company.internal/mcp/kb","headers":{"Authorization":"Bearer ${BBC_USER_TOKEN}"}}}}`,
 		"server.js": "// stdio mcp server",
 	}
 }
 
 func TestValidatePluginPackage_Full(t *testing.T) {
-	m, files, err := validatePluginPackage(zipOf(t, fullPlugin(".bbw-plugin")))
+	m, files, err := validatePluginPackage(zipOf(t, fullPlugin(".bbc-plugin")))
 	if err != nil {
 		t.Fatalf("合法包被拒: %v", err)
 	}
@@ -62,13 +62,13 @@ func TestValidatePluginPackage_Full(t *testing.T) {
 		t.Fatalf("组件统计错: %+v", m.Components)
 	}
 	if !m.UsesIdentity {
-		t.Fatal("usesIdentity 应为 true（${BBW_USER_TOKEN} 在 .mcp.json）")
+		t.Fatal("usesIdentity 应为 true（${BBC_USER_TOKEN} 在 .mcp.json）")
 	}
 	if len(m.ConfigKeys) != 1 || m.ConfigKeys[0] != "gitlab_token" {
 		t.Fatalf("configKeys 错: %v", m.ConfigKeys)
 	}
 	if m.Category != "devops" || m.Risk != "medium" || len(m.NetAllow) != 1 {
-		t.Fatalf("bbw 扩展块错: %+v", m)
+		t.Fatalf("bbc 扩展块错: %+v", m)
 	}
 	if len(files) != 5 { // SKILL.md + release.md + agent.md + .mcp.json + plugin.json? 组件文件应含清单外四件
 		t.Logf("组件文件清单: %v", files)
@@ -84,7 +84,7 @@ func TestValidatePluginPackage_ManifestDirFallback(t *testing.T) {
 }
 
 func TestValidatePluginPackage_TopLevelDir(t *testing.T) {
-	src := fullPlugin(".bbw-plugin")
+	src := fullPlugin(".bbc-plugin")
 	wrapped := map[string]string{}
 	for k, v := range src {
 		wrapped["deploy-helper/"+k] = v
@@ -104,45 +104,45 @@ func TestValidatePluginPackage_Rejects(t *testing.T) {
 	}{
 		{"缺清单", map[string]string{"skills/deploy/SKILL.md": "x"}, "未找到插件清单"},
 		{"坏JSON", func() map[string]string {
-			m := fullPlugin(".bbw-plugin")
-			m[".bbw-plugin/plugin.json"] = "{bad"
+			m := fullPlugin(".bbc-plugin")
+			m[".bbc-plugin/plugin.json"] = "{bad"
 			return m
 		}(), "plugin.json 解析失败"},
 		{"name非法", func() map[string]string {
-			m := fullPlugin(".bbw-plugin")
-			m[".bbw-plugin/plugin.json"] = strings.Replace(m[".bbw-plugin/plugin.json"], "deploy-helper", "Deploy Helper", 1)
+			m := fullPlugin(".bbc-plugin")
+			m[".bbc-plugin/plugin.json"] = strings.Replace(m[".bbc-plugin/plugin.json"], "deploy-helper", "Deploy Helper", 1)
 			return m
 		}(), "name 非法"},
 		{"semver非法", func() map[string]string {
-			m := fullPlugin(".bbw-plugin")
-			m[".bbw-plugin/plugin.json"] = strings.Replace(m[".bbw-plugin/plugin.json"], "1.2.0", "1.2", 1)
+			m := fullPlugin(".bbc-plugin")
+			m[".bbc-plugin/plugin.json"] = strings.Replace(m[".bbc-plugin/plugin.json"], "1.2.0", "1.2", 1)
 			return m
 		}(), "语义化"},
 		{"坏mcpJSON", func() map[string]string {
-			m := fullPlugin(".bbw-plugin")
+			m := fullPlugin(".bbc-plugin")
 			m[".mcp.json"] = "{bad"
 			return m
 		}(), "MCP 定义解析失败"},
 		{"server缺command与url", func() map[string]string {
-			m := fullPlugin(".bbw-plugin")
+			m := fullPlugin(".bbc-plugin")
 			m[".mcp.json"] = `{"mcpServers":{"x":{"args":["a"]}}}`
 			return m
 		}(), "command（stdio）或 url（HTTP）"},
 		{"server名非法", func() map[string]string {
-			m := fullPlugin(".bbw-plugin")
+			m := fullPlugin(".bbc-plugin")
 			m[".mcp.json"] = `{"mcpServers":{"bad name":{"command":"x"}}}`
 			return m
 		}(), "server 名非法"},
 		{"空插件", map[string]string{
-			".bbw-plugin/plugin.json": `{"name":"empty-x","version":"0.0.1","description":"空"}`,
+			".bbc-plugin/plugin.json": `{"name":"empty-x","version":"0.0.1","description":"空"}`,
 		}, "未携带任何组件"},
 		{"声明目录缺失", func() map[string]string {
-			m := fullPlugin(".bbw-plugin")
+			m := fullPlugin(".bbc-plugin")
 			delete(m, "skills/deploy/SKILL.md")
 			return m
 		}(), "skills 目录缺失"},
 		{"hooks坏JSON", func() map[string]string {
-			m := fullPlugin(".bbw-plugin")
+			m := fullPlugin(".bbc-plugin")
 			m["hooks/hooks.json"] = "{bad"
 			return m
 		}(), "hooks"},
@@ -166,7 +166,7 @@ func TestValidatePluginPackage_ZipSlip(t *testing.T) {
 	zw := zip.NewWriter(&buf)
 	w, _ := zw.Create("../evil.sh")
 	_, _ = w.Write([]byte("x"))
-	w2, _ := zw.Create("deploy/.bbw-plugin/plugin.json")
+	w2, _ := zw.Create("deploy/.bbc-plugin/plugin.json")
 	_, _ = w2.Write([]byte(`{"name":"x-y","version":"1.0.0","description":"d"}`))
 	w3, _ := zw.Create("skills/SKILL.md")
 	_, _ = w3.Write([]byte("s"))
@@ -201,7 +201,7 @@ func newPluginSvc(t *testing.T) *Service {
 func TestPluginLifecycle(t *testing.T) {
 	svc := newPluginSvc(t)
 	ctx := context.Background()
-	pkg := zipOf(t, fullPlugin(".bbw-plugin"))
+	pkg := zipOf(t, fullPlugin(".bbc-plugin"))
 
 	// 上传（draft）→ 发布
 	dto, err := svc.UploadPlugin(ctx, 1, 9, pkg, "首版", PluginPolicyRecommend)
@@ -271,10 +271,10 @@ func TestPluginLifecycle(t *testing.T) {
 	}
 
 	// 新版本 → hasUpdate
-	pkg2 := zipOf(t, fullPlugin(".bbw-plugin")) // 同构造器，改版本号
-	files := fullPlugin(".bbw-plugin")
-	files[".bbw-plugin/plugin.json"] = strings.Replace(
-		files[".bbw-plugin/plugin.json"], "1.2.0", "1.3.0", 1)
+	pkg2 := zipOf(t, fullPlugin(".bbc-plugin")) // 同构造器，改版本号
+	files := fullPlugin(".bbc-plugin")
+	files[".bbc-plugin/plugin.json"] = strings.Replace(
+		files[".bbc-plugin/plugin.json"], "1.2.0", "1.3.0", 1)
 	pkg2 = zipOf(t, files)
 	if _, err := svc.UploadPlugin(ctx, 1, 9, pkg2, "新版", 0); err != nil {
 		t.Fatalf("二版上传失败: %v", err)
@@ -299,7 +299,7 @@ func TestPluginLifecycle(t *testing.T) {
 func TestPluginForceCannotUninstall(t *testing.T) {
 	svc := newPluginSvc(t)
 	ctx := context.Background()
-	if _, err := svc.UploadPlugin(ctx, 1, 9, zipOf(t, fullPlugin(".bbw-plugin")), "", PluginPolicyForce); err != nil {
+	if _, err := svc.UploadPlugin(ctx, 1, 9, zipOf(t, fullPlugin(".bbc-plugin")), "", PluginPolicyForce); err != nil {
 		t.Fatal(err)
 	}
 	_ = svc.PublishPluginVersion(ctx, 1, "deploy-helper", "1.2.0")
@@ -313,7 +313,7 @@ func TestPluginForceCannotUninstall(t *testing.T) {
 	// force 置顶
 	svc.UploadPlugin(ctx, 1, 9, func() []byte {
 		m := map[string]string{
-			".bbw-plugin/plugin.json": `{"name":"aaa-optional","version":"1.0.0","description":"x","bbw":{"category":"devops"}}`,
+			".bbc-plugin/plugin.json": `{"name":"aaa-optional","version":"1.0.0","description":"x","bbc":{"category":"devops"}}`,
 			"skills/x/SKILL.md":       "s",
 		}
 		return zipOf(t, m)
@@ -328,7 +328,7 @@ func TestPluginForceCannotUninstall(t *testing.T) {
 func TestPluginDelistAndDupVersion(t *testing.T) {
 	svc := newPluginSvc(t)
 	ctx := context.Background()
-	pkg := zipOf(t, fullPlugin(".bbw-plugin"))
+	pkg := zipOf(t, fullPlugin(".bbc-plugin"))
 	svc.UploadPlugin(ctx, 1, 9, pkg, "", 0)
 	_ = svc.PublishPluginVersion(ctx, 1, "deploy-helper", "1.2.0")
 	// 同版本重传拒
@@ -342,8 +342,8 @@ func TestPluginDelistAndDupVersion(t *testing.T) {
 	if l, _ := svc.PluginCatalog(ctx, 1, 7, "", "", ""); len(l) != 0 {
 		t.Fatal("下架后 catalog 应空")
 	}
-	files := fullPlugin(".bbw-plugin")
-	files[".bbw-plugin/plugin.json"] = strings.Replace(files[".bbw-plugin/plugin.json"], "1.2.0", "1.4.0", 1)
+	files := fullPlugin(".bbc-plugin")
+	files[".bbc-plugin/plugin.json"] = strings.Replace(files[".bbc-plugin/plugin.json"], "1.2.0", "1.4.0", 1)
 	if _, err := svc.UploadPlugin(ctx, 1, 9, zipOf(t, files), "", 0); err == nil || !strings.Contains(err.Error(), "已下架") {
 		t.Fatalf("下架后追加版本应拒: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestPluginDelistAndDupVersion(t *testing.T) {
 
 // manifest 快照 JSON 可序列化（存表列；DTO 展开还原）
 func TestPluginManifestJSONRoundtrip(t *testing.T) {
-	m, _, err := validatePluginPackage(zipOf(t, fullPlugin(".bbw-plugin")))
+	m, _, err := validatePluginPackage(zipOf(t, fullPlugin(".bbc-plugin")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestPluginPersonalSandbox(t *testing.T) {
 	svc := newPluginSvc(t)
 	ctx := context.Background()
 	// alice(7) 个人上传（draft）
-	if _, err := svc.UploadPluginPrivate(ctx, 1, 7, zipOf(t, fullPlugin(".bbw-plugin")), "我的自用"); err != nil {
+	if _, err := svc.UploadPluginPrivate(ctx, 1, 7, zipOf(t, fullPlugin(".bbc-plugin")), "我的自用"); err != nil {
 		t.Fatalf("个人上传失败: %v", err)
 	}
 	// owner(7) 可见可装（draft 即自用沙盒）；他人(8) 不可见不可装
@@ -395,12 +395,12 @@ func TestPluginPersonalSandbox(t *testing.T) {
 		t.Fatal("他人详情应 404")
 	}
 	// 他人(8) 同名上传 → 拒（plugin_id 占用）
-	if _, err := svc.UploadPluginPrivate(ctx, 1, 8, zipOf(t, fullPlugin(".bbw-plugin")), ""); err == nil {
+	if _, err := svc.UploadPluginPrivate(ctx, 1, 8, zipOf(t, fullPlugin(".bbc-plugin")), ""); err == nil {
 		t.Fatal("他人覆盖个人插件应拒")
 	}
 	// owner 追加版本 ✓；管理员 publish → 进公共（8 也可见）
-	files := fullPlugin(".bbw-plugin")
-	files[".bbw-plugin/plugin.json"] = strings.Replace(files[".bbw-plugin/plugin.json"], "1.2.0", "1.3.0", 1)
+	files := fullPlugin(".bbc-plugin")
+	files[".bbc-plugin/plugin.json"] = strings.Replace(files[".bbc-plugin/plugin.json"], "1.2.0", "1.3.0", 1)
 	if _, err := svc.UploadPluginPrivate(ctx, 1, 7, zipOf(t, files), "v2"); err != nil {
 		t.Fatalf("owner 追加版本应过: %v", err)
 	}

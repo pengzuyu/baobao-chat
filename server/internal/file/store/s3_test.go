@@ -1,5 +1,5 @@
 // S3 存储层单测（D25 O1）：构造校验/键布局/预签名 URL 结构离线验证
-//（PresignHTTP 纯计算，静态凭证零网络）；真机集成链由 BBW_TEST_S3_ADDR 门控（O2 验收）。
+//（PresignHTTP 纯计算，静态凭证零网络）；真机集成链由 BBC_TEST_S3_ADDR 门控（O2 验收）。
 package store
 
 import (
@@ -25,7 +25,7 @@ func TestNewS3Validation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.bucket != "bbw-data" || s.publicBase != "http://rustfs:9000" || s.urlPrefix != "" {
+	if s.bucket != "bbc-data" || s.publicBase != "http://rustfs:9000" || s.urlPrefix != "" {
 		t.Fatalf("默认值错误: %+v", s)
 	}
 }
@@ -58,7 +58,7 @@ func TestS3PresignOffline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(u, "https://chat.example.com/oss/bbw-data/s/up-9?") {
+	if !strings.HasPrefix(u, "https://chat.example.com/oss/bbc-data/s/up-9?") {
 		t.Fatalf("URL 前缀拼回错误: %s", u)
 	}
 	for _, kv := range []string{"partNumber=12", "uploadId=S3UPID", "X-Amz-Expires=3600", "X-Amz-Algorithm=AWS4-HMAC-SHA256", "X-Amz-Signature=", "X-Amz-Credential=ak%2F"} {
@@ -70,7 +70,7 @@ func TestS3PresignOffline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(g, "https://chat.example.com/oss/bbw-data/t/1/ab/abcd?") {
+	if !strings.HasPrefix(g, "https://chat.example.com/oss/bbc-data/t/1/ab/abcd?") {
 		t.Fatalf("GET 预签名前缀错误: %s", g)
 	}
 	if !strings.Contains(g, "X-Amz-Expires=120") {
@@ -83,7 +83,7 @@ func TestS3PresignOffline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(u2, "http://192.168.1.8:9000/bbw-data/t/1/ab/abcd?") {
+	if !strings.HasPrefix(u2, "http://192.168.1.8:9000/bbc-data/t/1/ab/abcd?") {
 		t.Fatalf("直连形态错误: %s", u2)
 	}
 }

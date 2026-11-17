@@ -1,5 +1,5 @@
 // Package kms 嵌入式密钥加密件（19 篇 §1.2-2「密钥不出网关」的 v0.1 落地形态）：
-// AES-256-GCM + 主密钥环境注入（BBW_KMS_MASTER_KEY，base64(32B)），
+// AES-256-GCM + 主密钥环境注入（BBC_KMS_MASTER_KEY，base64(32B)），
 // 密文自描述（kms:v1: 前缀）落业务表引用列；外部 KMS/SDK 阶段二替换，密文格式兼容演进。
 // 生成主密钥：openssl rand -base64 32（不入 git/日志）。
 package kms
@@ -19,7 +19,7 @@ import (
 const RefPrefix = "kms:v1:"
 
 // ErrMasterKeyMissing 主密钥未配置（无法加密新密钥；解密已有引用同因）
-var ErrMasterKeyMissing = errors.New("kms: 未配置 BBW_KMS_MASTER_KEY")
+var ErrMasterKeyMissing = errors.New("kms: 未配置 BBC_KMS_MASTER_KEY")
 
 // ErrBadRef 引用格式非法或解密失败（密文损坏/主密钥不匹配）
 var ErrBadRef = errors.New("kms: 引用非法或解密失败")

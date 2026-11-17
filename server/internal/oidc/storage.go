@@ -24,7 +24,7 @@ import (
 
 	authservice "github.com/baobaochat/server/internal/auth/service"
 	"github.com/baobaochat/server/internal/org/api"
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 	"github.com/zitadel/oidc/v3/pkg/oidc"
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
@@ -325,7 +325,7 @@ func (s *Storage) insertRefreshToken(ctx context.Context, clientID, subject stri
 		return "", 0, err
 	}
 	defer tx.Rollback(ctx)
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyOIDCRefresh, "oidc_refresh_token")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyOIDCRefresh, "oidc_refresh_token")
 	if err != nil {
 		return "", 0, err
 	}
@@ -354,7 +354,7 @@ func (s *Storage) upsertGrant(ctx context.Context, clientID, subject string, sco
 		return
 	}
 	defer tx.Rollback(ctx)
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyOIDCGrant, "oidc_grant")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyOIDCGrant, "oidc_grant")
 	if err != nil {
 		return
 	}
@@ -693,7 +693,7 @@ func (s *Storage) createWebSession(ctx context.Context, userID int64, ua, ip str
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyOIDCSession, "oidc_web_session")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyOIDCSession, "oidc_web_session")
 	if err != nil {
 		return "", err
 	}

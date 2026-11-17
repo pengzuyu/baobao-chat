@@ -1,5 +1,5 @@
 // 网关嵌入通道：EmbedFn 的 HTTP 实现（生产装配）。
-// 生产链路：kb 服务 → POST {origin}/v1/embeddings（model=bbw-embed，BBW_AIGW_DEV_TOKEN
+// 生产链路：kb 服务 → POST {origin}/v1/embeddings（model=bbc-embed，BBC_AIGW_DEV_TOKEN
 // 开发令牌鉴权）→ aigw 网关路由 → mock/真实供应商 → 1024 维确定性向量。
 // 内存模式单测不走本通道（直接注入假 EmbedFn，任务约束）。
 package kbservice
@@ -17,7 +17,7 @@ import (
 
 // GatewayEmbedFn 构造指向本服务 AI 网关的嵌入函数。
 // baseURL 形如 http://127.0.0.1:8090（不带路径）；token 为网关开发令牌
-// （BBW_AIGW_DEV_TOKEN）；hc 可空（默认 30s 超时客户端）
+// （BBC_AIGW_DEV_TOKEN）；hc 可空（默认 30s 超时客户端）
 func GatewayEmbedFn(baseURL, token string, hc *http.Client) EmbedFn {
 	client := hc
 	if client == nil {
@@ -31,7 +31,7 @@ func GatewayEmbedFn(baseURL, token string, hc *http.Client) EmbedFn {
 		if len(input) > 64 {
 			return nil, fmt.Errorf("embed input 单请求 ≤64 条")
 		}
-		body, err := json.Marshal(map[string]any{"model": "bbw-embed", "input": input})
+		body, err := json.Marshal(map[string]any{"model": "bbc-embed", "input": input})
 		if err != nil {
 			return nil, err
 		}
@@ -92,7 +92,7 @@ func truncateStr(s string, n int) string {
 }
 
 // GatewayRerankFn 构造指向本服务 AI 网关的重排函数（D24 N3b：POST /v1/rerank，
-// model=bbw-rerank；Cohere 风格 {query, documents, top_n} → {results:[{index, relevance_score}]}）
+// model=bbc-rerank；Cohere 风格 {query, documents, top_n} → {results:[{index, relevance_score}]}）
 func GatewayRerankFn(baseURL, token string, hc *http.Client) RerankFn {
 	client := hc
 	if client == nil {
@@ -103,7 +103,7 @@ func GatewayRerankFn(baseURL, token string, hc *http.Client) RerankFn {
 		if len(documents) == 0 {
 			return nil, fmt.Errorf("rerank documents 为空")
 		}
-		body, err := json.Marshal(map[string]any{"model": "bbw-rerank", "query": query, "documents": documents, "top_n": topN})
+		body, err := json.Marshal(map[string]any{"model": "bbc-rerank", "query": query, "documents": documents, "top_n": topN})
 		if err != nil {
 			return nil, err
 		}

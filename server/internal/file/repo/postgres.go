@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // advisory lock 键（表级 ID 分配互斥；message 域已占 9102-9108，本表 9109）
@@ -57,7 +57,7 @@ func (p *Postgres) Insert(ctx context.Context, f File) (File, error) {
 	}
 	defer tx.Rollback(ctx)
 	if f.ID == 0 {
-		if f.ID, err = bbwpg.AllocID(ctx, tx, lockKeyFile, "file"); err != nil {
+		if f.ID, err = bbcpg.AllocID(ctx, tx, lockKeyFile, "file"); err != nil {
 			return File{}, err
 		}
 	}
@@ -227,7 +227,7 @@ func (p *PostgresTransfers) Insert(ctx context.Context, t TransferRecord) (Trans
 	}
 	defer tx.Rollback(ctx)
 	if t.ID == 0 {
-		if t.ID, err = bbwpg.AllocID(ctx, tx, lockKeyTransfer, "transfer_record"); err != nil {
+		if t.ID, err = bbcpg.AllocID(ctx, tx, lockKeyTransfer, "transfer_record"); err != nil {
 			return TransferRecord{}, err
 		}
 	}

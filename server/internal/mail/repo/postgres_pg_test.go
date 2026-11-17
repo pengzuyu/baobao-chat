@@ -2,10 +2,10 @@
 
 // mail 域 PG 仓储冒烟（build tag `pg`，默认 go test 不编译；file 域同款）。
 //
-//	本地：BBW_PG_TEST_DSN='postgres://bbw:...@127.0.0.1:5432/bbw?sslmode=disable' \
+//	本地：BBC_PG_TEST_DSN='postgres://bbc:...@127.0.0.1:5432/bbc?sslmode=disable' \
 //	      go test -tags pg ./internal/mail/repo/ -run TestPGMailSmoke -v
 //
-// 未设置 BBW_PG_TEST_DSN 即 skip。直接用库：测试数据带纳秒后缀，结束清理。
+// 未设置 BBC_PG_TEST_DSN 即 skip。直接用库：测试数据带纳秒后缀，结束清理。
 package mailrepo
 
 import (
@@ -16,21 +16,21 @@ import (
 	"testing"
 	"time"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 func TestPGMailSmoke(t *testing.T) {
-	dsn := os.Getenv("BBW_PG_TEST_DSN")
+	dsn := os.Getenv("BBC_PG_TEST_DSN")
 	if dsn == "" {
-		t.Skip("BBW_PG_TEST_DSN 未设置，跳过 PG 集成测试")
+		t.Skip("BBC_PG_TEST_DSN 未设置，跳过 PG 集成测试")
 	}
 	ctx := context.Background()
-	pool, err := bbwpg.New(ctx, dsn)
+	pool, err := bbcpg.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("建池: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	if err := bbwpg.Migrate(ctx, pool); err != nil {
+	if err := bbcpg.Migrate(ctx, pool); err != nil {
 		t.Fatalf("迁移（应含 0016 mail 表）: %v", err)
 	}
 	sfx := strconv.FormatInt(time.Now().UnixNano(), 10)

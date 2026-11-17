@@ -1,4 +1,4 @@
 # 构建上下文瘦身（distroless 运行层只带二进制；开发产物不入镜像）
 data/
-bbw-server
+bbc-server
 *.log

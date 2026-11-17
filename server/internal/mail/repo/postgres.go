@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 const (
@@ -81,7 +81,7 @@ func (p *Postgres) CreateMailbox(ctx context.Context, mb Mailbox) (Mailbox, erro
 	}
 	defer tx.Rollback(ctx)
 	if mb.ID == 0 {
-		if mb.ID, err = bbwpg.AllocID(ctx, tx, lockKeyMail, "mailbox"); err != nil {
+		if mb.ID, err = bbcpg.AllocID(ctx, tx, lockKeyMail, "mailbox"); err != nil {
 			return Mailbox{}, err
 		}
 	}
@@ -101,7 +101,7 @@ func (p *Postgres) CreateMailbox(ctx context.Context, mb Mailbox) (Mailbox, erro
 	}
 	for _, name := range SystemFolders {
 		var fid int64
-		if fid, err = bbwpg.AllocID(ctx, tx, lockKeyMail, "mail_folder_meta"); err != nil {
+		if fid, err = bbcpg.AllocID(ctx, tx, lockKeyMail, "mail_folder_meta"); err != nil {
 			return Mailbox{}, err
 		}
 		if _, err = tx.Exec(ctx, `
@@ -242,7 +242,7 @@ func (p *Postgres) InsertMessage(ctx context.Context, m Message) (Message, error
 	}
 	defer tx.Rollback(ctx)
 	if m.ID == 0 {
-		if m.ID, err = bbwpg.AllocID(ctx, tx, lockKeyMailMsg, "mail_message"); err != nil {
+		if m.ID, err = bbcpg.AllocID(ctx, tx, lockKeyMailMsg, "mail_message"); err != nil {
 			return Message{}, err
 		}
 	}
@@ -443,7 +443,7 @@ func (p *Postgres) CreateAppPassword(ctx context.Context, pwd AppPassword) (AppP
 	}
 	defer tx.Rollback(ctx)
 	if pwd.ID == 0 {
-		if pwd.ID, err = bbwpg.AllocID(ctx, tx, lockKeyMail, "mail_app_password"); err != nil {
+		if pwd.ID, err = bbcpg.AllocID(ctx, tx, lockKeyMail, "mail_app_password"); err != nil {
 			return AppPassword{}, err
 		}
 	}

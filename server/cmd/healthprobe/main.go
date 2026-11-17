@@ -1,5 +1,5 @@
 // healthprobe 容器健康探针（16 篇 §3.4 镜像清单）。
-// bbw-app 为 distroless（无 shell/wget），compose healthcheck 直接 exec 本二进制：
+// bbc-app 为 distroless（无 shell/wget），compose healthcheck 直接 exec 本二进制：
 //
 //	/healthprobe http://127.0.0.1:8080/healthz
 //

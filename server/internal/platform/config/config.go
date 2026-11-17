@@ -27,10 +27,10 @@ type Config struct {
 }
 
 // DevJWTSecret 开发默认 HS256 密钥（≥32 字节仅为通过长度校验；生产必经
-// BBW_JWT_SECRET/KMS 覆盖，15 篇。main 据此打"开发密钥在用"警告）。
+// BBC_JWT_SECRET/KMS 覆盖，15 篇。main 据此打"开发密钥在用"警告）。
 const DevJWTSecret = "dev-only-secret-change-me-0123456789abcdef"
 
-// Load 从环境变量装载（BBW_ 前缀）
+// Load 从环境变量装载（BBC_ 前缀）
 func Load() *Config {
 	c := &Config{
 		HTTPAddr:      ":8080",
@@ -43,30 +43,30 @@ func Load() *Config {
 		LoginMaxFails: 5,
 		LoginLockTTL:  10 * time.Minute,
 	}
-	if v := os.Getenv("BBW_HTTP_ADDR"); v != "" {
+	if v := os.Getenv("BBC_HTTP_ADDR"); v != "" {
 		c.HTTPAddr = v
 	}
-	if v := os.Getenv("BBW_JWT_SECRET"); v != "" {
+	if v := os.Getenv("BBC_JWT_SECRET"); v != "" {
 		c.JWTSecret = v
 	}
-	if v := os.Getenv("BBW_DB_DSN"); v != "" {
+	if v := os.Getenv("BBC_DB_DSN"); v != "" {
 		c.DBDSN = v
 	}
-	if v := os.Getenv("BBW_SEED_DEMO"); v == "0" || v == "false" {
+	if v := os.Getenv("BBC_SEED_DEMO"); v == "0" || v == "false" {
 		c.SeedDemoData = false
 	}
 	// OIDC（D28 批次 Q1）：issuer 缺省按 HTTPAddr 推导本地联调地址（:8090 →
 	// http://127.0.0.1:8090/oauth2）；签名密钥未配走模块内临时密钥口径（仅联调）
-	c.OIDCIssuer = os.Getenv("BBW_OIDC_ISSUER")
+	c.OIDCIssuer = os.Getenv("BBC_OIDC_ISSUER")
 	if c.OIDCIssuer == "" {
 		c.OIDCIssuer = "http://127.0.0.1" + strings.TrimPrefix(c.HTTPAddr, "") + "/oauth2"
 	}
-	c.OIDCSigningKey = os.Getenv("BBW_OIDC_SIGNING_KEY")
+	c.OIDCSigningKey = os.Getenv("BBC_OIDC_SIGNING_KEY")
 	// 品牌白标（D31）：默认值=上游身份，部署方按 brand/brand.json 对齐覆盖——
 	// DeepLinkScheme 改动必须与客户端同步，否则 OIDC 深链确认登录静默失效
-	c.BrandName = envOr("BBW_BRAND_NAME", "BaobaoChat")
-	c.DeepLinkScheme = envOr("BBW_DEEP_LINK_SCHEME", "bbw")
-	c.BootstrapMailDomain = envOr("BBW_BOOTSTRAP_MAIL_DOMAIN", "bbw.io")
+	c.BrandName = envOr("BBC_BRAND_NAME", "BaobaoChat")
+	c.DeepLinkScheme = envOr("BBC_DEEP_LINK_SCHEME", "bbc")
+	c.BootstrapMailDomain = envOr("BBC_BOOTSTRAP_MAIL_DOMAIN", "bbc.io")
 	return c
 }
 

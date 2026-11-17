@@ -9,7 +9,7 @@ COMPOSE_DIR    := deploy/compose
 # .env 不存在时退回 .env.tpl（只读校验场景）
 COMPOSE_ENV    := $(if $(wildcard $(COMPOSE_DIR)/.env),.env,.env.tpl)
 COMPOSE        := cd $(COMPOSE_DIR) && docker compose --env-file $(COMPOSE_ENV)
-HELM_DIR       := deploy/helm/bbw
+HELM_DIR       := deploy/helm/bbc
 
 .DEFAULT_GOAL := help
 
@@ -48,22 +48,22 @@ server-build: ## 编译服务端（go build ./...）
 	@if [ -d server ]; then cd server && go build ./...; else echo "[make] server/ 尚未创建（设计阶段），跳过"; fi
 
 .PHONY: server-run
-server-run: dev-up ## 本地运行 bbw-server（依赖 compose core，DSN 指向 127.0.0.1）
+server-run: dev-up ## 本地运行 bbc-server（依赖 compose core，DSN 指向 127.0.0.1）
 	@if [ -d server ]; then \
-	  cd server && BBW_DB_DSN='postgres://bbw:bbw_change_me@127.0.0.1:5432/bbw?sslmode=disable' \
-	    BBW_REDIS_ADDR=127.0.0.1:6379 BBW_S3_ENDPOINT=http://127.0.0.1:9000 \
-	    BBW_S3_ACCESS_KEY=bbw_rustfs_change_me BBW_S3_SECRET_KEY=bbw_rustfs_secret_change_me \
-	    go run ./cmd/bbw-server --enable auth,org,message,file,kb,eco,admin,audit,notify,aigw; \
+	  cd server && BBC_DB_DSN='postgres://bbc:bbc_change_me@127.0.0.1:5432/bbc?sslmode=disable' \
+	    BBC_REDIS_ADDR=127.0.0.1:6379 BBC_S3_ENDPOINT=http://127.0.0.1:9000 \
+	    BBC_S3_ACCESS_KEY=bbc_rustfs_change_me BBC_S3_SECRET_KEY=bbc_rustfs_secret_change_me \
+	    go run ./cmd/bbc-server --enable auth,org,message,file,kb,eco,admin,audit,notify,aigw; \
 	  else echo "[make] server/ 尚未创建（设计阶段），跳过"; fi
 
 .PHONY: server-image
-server-image: ## 构建 bbw-app 容器镜像（版本/tag 取 .env；基础镜像源可经 BBW_GO_BUILDER/BBW_RUNTIME_IMAGE 覆盖）
+server-image: ## 构建 bbc-app 容器镜像（版本/tag 取 .env；基础镜像源可经 BBC_GO_BUILDER/BBC_RUNTIME_IMAGE 覆盖）
 	@if [ -f server/Dockerfile ]; then \
 	  source deploy/compose/.env 2>/dev/null || source deploy/compose/.env.tpl; \
 	  docker build \
-	    --build-arg GO_BUILDER_IMAGE="$${BBW_GO_BUILDER:-golang:1.26-alpine}" \
-	    --build-arg RUNTIME_IMAGE="$${BBW_RUNTIME_IMAGE:-alpine:3.20}" \
-	    -t $${BBW_IMAGE_REGISTRY}/bbw-app:$${BBW_IMAGE_TAG} server/; \
+	    --build-arg GO_BUILDER_IMAGE="$${BBC_GO_BUILDER:-golang:1.26-alpine}" \
+	    --build-arg RUNTIME_IMAGE="$${BBC_RUNTIME_IMAGE:-alpine:3.20}" \
+	    -t $${BBC_IMAGE_REGISTRY}/bbc-app:$${BBC_IMAGE_TAG} server/; \
 	  else echo "[make] server/Dockerfile 尚未创建（随 server/ 落地），跳过"; fi
 
 # ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ lint-agent: ## Agent Runtime 静态检查（cargo clippy）
 check-deploy: ## 校验部署交付物：compose config + helm 静态检查（无 helm 时）
 	@$(COMPOSE) config --quiet && echo "✔ docker compose config 通过（$(COMPOSE_DIR)/$(COMPOSE_ENV)）"
 	@if command -v helm >/dev/null; then \
-	  helm lint $(HELM_DIR) && helm template bbw $(HELM_DIR) >/dev/null && echo "✔ helm template 渲染通过"; \
+	  helm lint $(HELM_DIR) && helm template bbc $(HELM_DIR) >/dev/null && echo "✔ helm template 渲染通过"; \
 	else \
 	  python3 scripts/check-helm-static.py; \
 	fi
@@ -177,13 +177,13 @@ compose-logs: ## 跟随查看 app 日志
 
 .PHONY: helm-template
 helm-template: ## 渲染 Helm 模板到 stdout（需要 helm）
-	@if command -v helm >/dev/null; then helm template bbw $(HELM_DIR); \
+	@if command -v helm >/dev/null; then helm template bbc $(HELM_DIR); \
 	  else echo "[make] 未安装 helm，改用静态检查：make check-deploy"; fi
 
 .PHONY: helm-install
 helm-install: ## 安装到 K8s（默认 values；中/大规模加 -f values-mid/large.yaml）
 	@if command -v helm >/dev/null; then \
-	  helm upgrade --install bbw $(HELM_DIR) --create-namespace -n bbw \
+	  helm upgrade --install bbc $(HELM_DIR) --create-namespace -n baobao-chat \
 	  $$( [ -f $(HELM_DIR)/.local-values.yaml ] && echo -f $(HELM_DIR)/.local-values.yaml ); \
 	  else echo "[make] 未安装 helm"; fi
 
@@ -207,9 +207,9 @@ verify-server: ## 服务端硬门禁：build + vet + gofmt -l 须空 + go test .
 	  && go test ./...
 
 .PHONY: verify-server-pg
-verify-server-pg: ## 服务端 PG 集成门禁（需 BBW_PG_TEST_DSN 或本机 bbw 容器）
-	@cd server && if [ -z "$$BBW_PG_TEST_DSN" ]; then \
-	  BBW_PG_TEST_DSN='postgres://bbw:bbw_change_me@127.0.0.1:5432/bbw?sslmode=disable' \
+verify-server-pg: ## 服务端 PG 集成门禁（需 BBC_PG_TEST_DSN 或本机 bbc 容器）
+	@cd server && if [ -z "$$BBC_PG_TEST_DSN" ]; then \
+	  BBC_PG_TEST_DSN='postgres://bbc:bbc_change_me@127.0.0.1:5432/bbc?sslmode=disable' \
 	  go test -tags pg ./internal/...; else go test -tags pg ./internal/...; fi
 
 .PHONY: verify-client
@@ -249,7 +249,7 @@ e2e: ## 协议级 E2E 回归套件（进程内全栈：登录→WS→IM 全流�
 
 .PHONY: smoke
 smoke: ## 启动冒烟门（mux 路由二义在注册期 panic，build/test 抓不到——真启动 1.5s + healthz）
-	@cd server && go build -o /tmp/bbw-smoke ./cmd/bbw-server
-	@BBW_HTTP_ADDR=:18099 BBW_JWT_SECRET=dev-only-secret-change-me-0123456789abcdef BBW_SEED_DEMO=0 /tmp/bbw-smoke > /tmp/bbw-smoke.log 2>&1 & echo $$! > /tmp/bbw-smoke.pid
-	@sleep 1.5 && curl -sf http://localhost:18099/healthz > /dev/null && echo "smoke ✓" || { echo "smoke ✗ 启动失败："; tail -3 /tmp/bbw-smoke.log; kill $$(cat /tmp/bbw-smoke.pid) 2>/dev/null; exit 1; }
-	@kill $$(cat /tmp/bbw-smoke.pid) 2>/dev/null; rm -f /tmp/bbw-smoke /tmp/bbw-smoke.pid
+	@cd server && go build -o /tmp/bbc-smoke ./cmd/bbc-server
+	@BBC_HTTP_ADDR=:18099 BBC_JWT_SECRET=dev-only-secret-change-me-0123456789abcdef BBC_SEED_DEMO=0 /tmp/bbc-smoke > /tmp/bbc-smoke.log 2>&1 & echo $$! > /tmp/bbc-smoke.pid
+	@sleep 1.5 && curl -sf http://localhost:18099/healthz > /dev/null && echo "smoke ✓" || { echo "smoke ✗ 启动失败："; tail -3 /tmp/bbc-smoke.log; kill $$(cat /tmp/bbc-smoke.pid) 2>/dev/null; exit 1; }
+	@kill $$(cat /tmp/bbc-smoke.pid) 2>/dev/null; rm -f /tmp/bbc-smoke /tmp/bbc-smoke.pid

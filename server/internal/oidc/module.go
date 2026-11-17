@@ -1,4 +1,4 @@
-// module.go：OIDC Provider 装配（D28 拍板 8：单体内模块，挂 bbw-server /oauth2/*）。
+// module.go：OIDC Provider 装配（D28 拍板 8：单体内模块，挂 bbc-server /oauth2/*）。
 // zitadel/oidc v3 op.NewProvider + 我们的 Storage；等待页/web-login 同子树先行注册
 // （std mux 最长前缀优先，未命中的落 provider——authorize/token/jwks/discovery/userinfo/
 // introspection/revoke 全由库路由）。
@@ -24,7 +24,7 @@ import (
 	"golang.org/x/text/language"
 
 	authservice "github.com/baobaochat/server/internal/auth/service"
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 type Module struct {
@@ -35,18 +35,18 @@ type Module struct {
 	defaultTenant  int64
 	insecure       bool   // issuer 为 http（本地联调）时 cookie 不加 Secure
 	brandName      string // 品牌显示名（D31；等待页文案）
-	deepLinkScheme string // 深链 scheme（D31；与客户端 brand.json 对齐，默认 bbw）
+	deepLinkScheme string // 深链 scheme（D31；与客户端 brand.json 对齐，默认 bbc）
 }
 
 // New 装配 OIDC 模块。signingKeyPEM 为空时生成临时密钥并打警告（重启即换，
-// 已签 token 失效——仅限本地联调；生产必须配 BBW_OIDC_SIGNING_KEY）。
-// brandName/deepLinkScheme 为 D31 白标参数（空回落 BaobaoChat/bbw）。
+// 已签 token 失效——仅限本地联调；生产必须配 BBC_OIDC_SIGNING_KEY）。
+// brandName/deepLinkScheme 为 D31 白标参数（空回落 BaobaoChat/bbc）。
 func New(db *pgxpool.Pool, auth *authservice.Service, issuer, signingKeyPEM, brandName, deepLinkScheme string, defaultTenant int64) (*Module, error) {
 	if brandName == "" {
 		brandName = "BaobaoChat"
 	}
 	if deepLinkScheme == "" {
-		deepLinkScheme = "bbw"
+		deepLinkScheme = "bbc"
 	}
 	key, err := loadSigningKey(signingKeyPEM)
 	if err != nil {
@@ -54,7 +54,7 @@ func New(db *pgxpool.Pool, auth *authservice.Service, issuer, signingKeyPEM, bra
 	}
 	insecure := strings.HasPrefix(issuer, "http://")
 	if key == nil {
-		fmt.Println("[oidc] 警告：BBW_OIDC_SIGNING_KEY 未配置，使用临时密钥（重启后已签 token 失效；生产必须配置）")
+		fmt.Println("[oidc] 警告：BBC_OIDC_SIGNING_KEY 未配置，使用临时密钥（重启后已签 token 失效；生产必须配置）")
 		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			return nil, fmt.Errorf("oidc: 生成临时密钥: %w", err)
@@ -114,18 +114,18 @@ func i64toa(v int64) string { return strconv.FormatInt(v, 10) }
 
 func (s *Storage) createClient(r *http.Request, name string, redirectURIs, scopes []string, createdBy int64) (*clientDTO, error) {
 	ctx := r.Context()
-	// client_id：bbw- + 8 位随机（一期 public client=PKCE-only，不签 secret——D28 §9-4）
+	// client_id：bbc- + 8 位随机（一期 public client=PKCE-only，不签 secret——D28 §9-4）
 	suffix := make([]byte, 6)
 	if _, err := rand.Read(suffix); err != nil {
 		return nil, err
 	}
-	clientID := "bbw-" + hex.EncodeToString(suffix)
+	clientID := "bbc-" + hex.EncodeToString(suffix)
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyOIDCClient, "oidc_client")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyOIDCClient, "oidc_client")
 	if err != nil {
 		return nil, err
 	}

@@ -5,7 +5,7 @@
 --   * 0009→0037_kb、0003→0023 等「建了再改列」一律落为终态定义；
 --   * 运行时月分区 message_YYYY_MM 与 schema_migrations 不入基线（前者服务端按月自建，
 --     后者迁移器自举）。
--- 执行通道：bbw-server 内嵌 Migrate（单通道权威；compose init 只做 pg 等待+扩展）。
+-- 执行通道：bbc-server 内嵌 Migrate（单通道权威；compose init 只做 pg 等待+扩展）。
 -- 语义：仅面向全新库执行（无 IF NOT EXISTS；已存库由 schema_migrations 版本记录
 -- 或 Probe=public.users 兜底跳过——见 internal/platform/pgxpool/migrate.go）。
 -- 域速查：认证 users/role/user_role/user_dept/dept/tenant/device/refresh_token |

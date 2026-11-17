@@ -2,10 +2,10 @@
 
 // PG 集成冒烟（build tag `pg`，默认 go test 不编译）。
 //
-//	本地：BBW_PG_TEST_DSN='postgres://bbw:...@127.0.0.1:5432/bbw?sslmode=disable' \
+//	本地：BBC_PG_TEST_DSN='postgres://bbc:...@127.0.0.1:5432/bbc?sslmode=disable' \
 //	      go test -tags pg ./internal/message/repo/ -run TestPGSmoke -v
 //
-// 未设置 BBW_PG_TEST_DSN 即 skip；CI 后续以 service container 注入同变量。
+// 未设置 BBC_PG_TEST_DSN 即 skip；CI 后续以 service container 注入同变量。
 // 直接用库（不建临时表）：测试数据带纳秒后缀，结束清理。
 package messagerepo
 
@@ -20,19 +20,19 @@ import (
 
 	orgapi "github.com/baobaochat/server/internal/org/api"
 	orgrepo "github.com/baobaochat/server/internal/org/repo"
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 
 	authrepo "github.com/baobaochat/server/internal/auth/repo"
 	messageapi "github.com/baobaochat/server/internal/message/api"
 )
 
 func TestPGSmoke(t *testing.T) {
-	dsn := os.Getenv("BBW_PG_TEST_DSN")
+	dsn := os.Getenv("BBC_PG_TEST_DSN")
 	if dsn == "" {
-		t.Skip("BBW_PG_TEST_DSN 未设置，跳过 PG 集成测试")
+		t.Skip("BBC_PG_TEST_DSN 未设置，跳过 PG 集成测试")
 	}
 	ctx := context.Background()
-	pool, err := bbwpg.New(ctx, dsn)
+	pool, err := bbcpg.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("建池: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestPGSmoke(t *testing.T) {
 	// cleanup 之前跑（函数 defer 先于框架 cleanup），清理必然失败。
 	t.Cleanup(pool.Close)
 	// 迁移幂等：外部通道（compose init）已直灌时按 Probe 补登记跳过
-	if err := bbwpg.Migrate(ctx, pool); err != nil {
+	if err := bbcpg.Migrate(ctx, pool); err != nil {
 		t.Fatalf("迁移: %v", err)
 	}
 
@@ -62,7 +62,7 @@ func TestPGSmoke(t *testing.T) {
 	orgR := orgrepo.NewPostgres(pool)
 	u1, err := orgR.CreateUser(ctx, orgapi.User{
 		TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "pgsmoke-a-" + sfx,
-		DisplayName: "SmokeA", Email: "pgsmoke-a-" + sfx + "@bbw.io",
+		DisplayName: "SmokeA", Email: "pgsmoke-a-" + sfx + "@bbc.io",
 		PasswordHash: "x", Status: orgapi.UserStatusActive,
 	})
 	if err != nil {
@@ -81,7 +81,7 @@ func TestPGSmoke(t *testing.T) {
 	if got, err := orgR.GetUser(ctx, u1.ID); err != nil || got.DisplayName != "SmokeA" {
 		t.Fatalf("GetUser: %v %+v", err, got)
 	}
-	if got, err := orgR.GetUserByLogin(ctx, 1, "pgsmoke-a-"+sfx+"@bbw.io"); err != nil || got.ID != u1.ID { // 邮箱登录名
+	if got, err := orgR.GetUserByLogin(ctx, 1, "pgsmoke-a-"+sfx+"@bbc.io"); err != nil || got.ID != u1.ID { // 邮箱登录名
 		t.Fatalf("GetUserByLogin(email): %v %+v", err, got)
 	}
 	if _, err := orgR.GetUser(ctx, -1); err != orgapi.ErrUserNotFound {

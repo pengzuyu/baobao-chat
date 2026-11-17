@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/baobaochat/server/internal/admin/api"
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // advisory lock 键（表级 ID 分配互斥；org 9101 / message 9102-9108 / file 9109 /
@@ -51,7 +51,7 @@ func (p *Postgres) InsertAudit(ctx context.Context, a AuditAction) (AuditAction,
 		return AuditAction{}, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
-	if a.ID, err = bbwpg.AllocID(ctx, tx, lockKeyAdminAudit, "admin_audit_action"); err != nil {
+	if a.ID, err = bbcpg.AllocID(ctx, tx, lockKeyAdminAudit, "admin_audit_action"); err != nil {
 		return AuditAction{}, err
 	}
 	detail := a.Detail
@@ -109,7 +109,7 @@ func (p *Postgres) InsertSensitiveWord(ctx context.Context, w SensitiveWord) (Se
 		return SensitiveWord{}, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	if w.ID, err = bbwpg.AllocID(ctx, tx, lockKeySenseWord, "sensitive_word"); err != nil {
+	if w.ID, err = bbcpg.AllocID(ctx, tx, lockKeySenseWord, "sensitive_word"); err != nil {
 		return SensitiveWord{}, err
 	}
 	_, err = tx.Exec(ctx, `
@@ -279,7 +279,7 @@ func (p *PostgresRoles) InsertRole(ctx context.Context, r Role) (Role, error) {
 	}
 	defer tx.Rollback(ctx)
 	if r.ID == 0 {
-		if r.ID, err = bbwpg.AllocID(ctx, tx, 9122, "role"); err != nil {
+		if r.ID, err = bbcpg.AllocID(ctx, tx, 9122, "role"); err != nil {
 			return Role{}, err
 		}
 	}
@@ -399,7 +399,7 @@ func (p *PostgresRoles) InsertUserRole(ctx context.Context, ur UserRole) error {
 		return ErrDupGrant
 	}
 	var id int64
-	if id, err = bbwpg.AllocID(ctx, tx, 9123, "user_role"); err != nil {
+	if id, err = bbcpg.AllocID(ctx, tx, 9123, "user_role"); err != nil {
 		return err
 	}
 	// scope 透传（D10）：缺省 4=全租户（与 v0.1 行为兼容）；2/3 携 scope_dept_id
@@ -534,7 +534,7 @@ func (p *PostgresNotices) InsertNotice(ctx context.Context, n Notice) (Notice, e
 	}
 	defer tx.Rollback(ctx)
 	if n.ID == 0 {
-		if n.ID, err = bbwpg.AllocID(ctx, tx, 9124, "admin_notice"); err != nil {
+		if n.ID, err = bbcpg.AllocID(ctx, tx, 9124, "admin_notice"); err != nil {
 			return Notice{}, err
 		}
 	}
@@ -601,7 +601,7 @@ func (p *ToolPolicyPostgres) UpsertToolPolicy(ctx context.Context, tp ToolPolicy
 	}
 	defer tx.Rollback(ctx)
 	if tp.ID == 0 {
-		if tp.ID, err = bbwpg.AllocID(ctx, tx, lockKeyToolPolicy, "agent_tool_policy"); err != nil {
+		if tp.ID, err = bbcpg.AllocID(ctx, tx, lockKeyToolPolicy, "agent_tool_policy"); err != nil {
 			return ToolPolicy{}, err
 		}
 	}

@@ -10,7 +10,7 @@
 # 1. 拷示例包改名（示例包含四类组件全量写法 + 零依赖 MCP server）
 cp -r examples/plugins/hello-baobao examples/plugins/my-plugin
 cd examples/plugins/my-plugin
-#    改 .bbw-plugin/plugin.json 的 name/description（name 即全局唯一 id）
+#    改 .bbc-plugin/plugin.json 的 name/description（name 即全局唯一 id）
 
 # 2. 本地自测 stdio 工具（可选；行协议=每行一个 JSON）
 node server.mjs   # 粘贴一行 initialize 看应答，Ctrl-C 退出
@@ -27,7 +27,7 @@ zip -qr my-plugin.zip my-plugin -x "*.DS_Store"
 
 ```
 my-plugin/
-├── .bbw-plugin/plugin.json   # 清单（也认 .claude-plugin/ 与 .zcode-plugin/——Claude/ZCode 生态包可直装）
+├── .bbc-plugin/plugin.json   # 清单（也认 .claude-plugin/ 与 .zcode-plugin/——Claude/ZCode 生态包可直装）
 ├── skills/<名>/SKILL.md      # ① 技能：知识/流程，按触发词注入会话
 ├── commands/<名>.md          # ② 命令：提示词模板，输入框 / 唤起
 ├── agents/<名>.md            # ③ 专家：受限子会话人格
@@ -50,8 +50,8 @@ zip 打包时**顶层允许套一层目录**（`my-plugin/...` 或直接根内�
   "commands": "./commands",
   "agents": "./agents",
   "mcpServers": "./.mcp.json",  // 或直接内联对象：{"mcpServers": {...}}
-  "bbw": {                      // BaobaoChat 扩展块（Claude/ZCode 兼容包可无此块）
-    "risk": "low",              // low|medium|high：插件级默认风险（工具级 x-bbw-risk 优先）
+  "bbc": {                      // BaobaoChat 扩展块（Claude/ZCode 兼容包可无此块）
+    "risk": "low",              // low|medium|high：插件级默认风险（工具级 x-bbc-risk 优先）
     "category": "devops",       // 市场分类
     "netAllow": ["*.corp.internal"], // 网络访问声明（v0.1 安装确认页展示，强制执行阶段二）
     "config": [                 // 用户配置项：详情页渲染表单
@@ -92,8 +92,8 @@ risk: medium               # 可省，缺省 low
     },
     // 形态二：远程 HTTP（内网服务/网关；secret 型鉴权头走这里）
     "my-remote": {
-      "url": "https://bbw.corp.internal/mcp/kb",
-      "headers": { "Authorization": "Bearer ${BBW_USER_TOKEN}" }
+      "url": "https://bbc.corp.internal/mcp/kb",
+      "headers": { "Authorization": "Bearer ${BBC_USER_TOKEN}" }
     }
   }
 }
@@ -101,7 +101,7 @@ risk: medium               # 可省，缺省 low
 
 - server 名（`my-plugin`/`my-remote`）= 工具命名空间段：模型侧工具全名 `mcp.<server名>.<工具名>`；**不能叫 `corp`**（系统级保留）
 - stdio 行协议与最小实现：**直接抄 `hello-baobao/server.mjs`**（~100 行零依赖，initialize/tools/list/tools/call 四方法注释齐全）
-- 工具风险标注：tools/list 的 `annotations["x-bbw-risk"] = "low|medium|high"`（缺省承插件 bbw.risk，再缺省 medium）；所有工具与内置工具走同一审批门控，无特权
+- 工具风险标注：tools/list 的 `annotations["x-bbc-risk"] = "low|medium|high"`（缺省承插件 bbc.risk，再缺省 medium）；所有工具与内置工具走同一审批门控，无特权
 - 业务失败请返回 `isError: true` 的**结果**（模型可自行处置），JSON-RPC error 只用于协议错误
 
 ### ③ 命令 commands/*.md
@@ -132,8 +132,8 @@ model: fast                                     # fast|strong（缺省 strong）
 | 变量 | 值 | 替换时机 |
 |---|---|---|
 | `${PLUGIN_ROOT}` | 安装后的版本目录绝对路径 | 宿主装配时（静态） |
-| `${BBW_USER_TOKEN}` | 当前登录用户 JWT | **仅 HTTP headers**，Runtime 每次请求动态替换（15 分钟轮换不失效）；stdio env 中会置空——**同生态身份一律走 HTTP 形态** |
-| `${BBW_USER_ID}` / `${BBW_USER_NAME}` | 工号 / 姓名 | 宿主装配时（换账号自动重推） |
+| `${BBC_USER_TOKEN}` | 当前登录用户 JWT | **仅 HTTP headers**，Runtime 每次请求动态替换（15 分钟轮换不失效）；stdio env 中会置空——**同生态身份一律走 HTTP 形态** |
+| `${BBC_USER_ID}` / `${BBC_USER_NAME}` | 工号 / 姓名 | 宿主装配时（换账号自动重推） |
 | `${CONFIG:<key>}` | 用户在详情页配置的值（secret 型存系统钥匙串，不落盘） | 宿主装配时；未配置保留占位符（外部系统 401 比伪值诚实），**保存配置即自动重推装配** |
 
 ## 发布校验清单（过审要点）

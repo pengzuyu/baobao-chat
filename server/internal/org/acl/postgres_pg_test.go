@@ -2,7 +2,7 @@
 
 // resource_acl PG 仓储冒烟（build tag `pg`，默认不编译；mail 域同款）。
 //
-//	BBW_PG_TEST_DSN='postgres://bbw:...@127.0.0.1:5432/bbw?sslmode=disable' \
+//	BBC_PG_TEST_DSN='postgres://bbc:...@127.0.0.1:5432/bbc?sslmode=disable' \
 //	  go test -tags pg ./internal/org/acl/ -run TestPGACLSmoke -v
 package acl
 
@@ -13,21 +13,21 @@ import (
 	"testing"
 	"time"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 func TestPGACLSmoke(t *testing.T) {
-	dsn := os.Getenv("BBW_PG_TEST_DSN")
+	dsn := os.Getenv("BBC_PG_TEST_DSN")
 	if dsn == "" {
-		t.Skip("BBW_PG_TEST_DSN 未设置，跳过 PG 集成测试")
+		t.Skip("BBC_PG_TEST_DSN 未设置，跳过 PG 集成测试")
 	}
 	ctx := context.Background()
-	pool, err := bbwpg.New(ctx, dsn)
+	pool, err := bbcpg.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("建池: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	if err := bbwpg.Migrate(ctx, pool); err != nil {
+	if err := bbcpg.Migrate(ctx, pool); err != nil {
 		t.Fatalf("迁移（应含 0017 resource_acl）: %v", err)
 	}
 	sfx := strconv.FormatInt(time.Now().UnixNano(), 10)

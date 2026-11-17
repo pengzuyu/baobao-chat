@@ -45,7 +45,7 @@ func sseFrames(rec *httptest.ResponseRecorder) []string {
 
 func TestChatStreamShapeAndUsageFrame(t *testing.T) {
 	gw, meter, _ := newTestGateway(0, "dev-tok")
-	body := `{"model":"bbw-strong","stream":true,"messages":[{"role":"user","content":"读一下 foo.txt"}],"tools":[{"type":"function","function":{"name":"read_file"}}]}`
+	body := `{"model":"bbc-strong","stream":true,"messages":[{"role":"user","content":"读一下 foo.txt"}],"tools":[{"type":"function","function":{"name":"read_file"}}]}`
 	rec := postChat(gw, body, "dev-tok")
 
 	if rec.Code != http.StatusOK {
@@ -58,7 +58,7 @@ func TestChatStreamShapeAndUsageFrame(t *testing.T) {
 	if len(frames) < 3 {
 		t.Fatalf("帧数不足: %v", frames)
 	}
-	// 末两帧：X-BBW-Usage 终帧 + [DONE]（§6.2）
+	// 末两帧：X-BBC-Usage 终帧 + [DONE]（§6.2）
 	last := frames[len(frames)-1]
 	if last != "[DONE]" {
 		t.Fatalf("末帧应为 [DONE]: %s", last)
@@ -87,7 +87,7 @@ func TestChatStreamShapeAndUsageFrame(t *testing.T) {
 
 func TestChatFinalAnswerAfterToolResult(t *testing.T) {
 	gw, _, _ := newTestGateway(0, "dev-tok")
-	body := `{"model":"bbw-strong","stream":true,"messages":[
+	body := `{"model":"bbc-strong","stream":true,"messages":[
 		{"role":"user","content":"读一下 foo.txt"},
 		{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"foo.txt\"}"}}]},
 		{"role":"tool","tool_call_id":"read_file:call-1","content":"hello runtime"}]}`
@@ -110,7 +110,7 @@ func TestModelAliasGuards(t *testing.T) {
 		t.Fatalf("具体模型名应 9001: %d %s", rec.Code, rec.Body.String())
 	}
 	// 未知别名 → 8052
-	rec = postChat(gw, `{"model":"bbw-vision","messages":[{"role":"user","content":"hi"}]}`, "dev-tok")
+	rec = postChat(gw, `{"model":"bbc-vision","messages":[{"role":"user","content":"hi"}]}`, "dev-tok")
 	if rec.Code != 404 || !strings.Contains(rec.Body.String(), `"code":8052`) {
 		t.Fatalf("未知别名应 8052: %d %s", rec.Code, rec.Body.String())
 	}
@@ -118,7 +118,7 @@ func TestModelAliasGuards(t *testing.T) {
 
 func TestAuthRequired(t *testing.T) {
 	gw, _, _ := newTestGateway(0, "") // 无开发令牌且无 JWT 校验
-	rec := postChat(gw, `{"model":"bbw-fast","messages":[]}`, "whatever")
+	rec := postChat(gw, `{"model":"bbc-fast","messages":[]}`, "whatever")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("无可用鉴权应 401: %d %s", rec.Code, rec.Body.String())
 	}
@@ -128,7 +128,7 @@ func TestRateLimit8050(t *testing.T) {
 	mock := NewMockProvider(1, "m")
 	gw := NewGateway(nil, NewRouter(mock, nil), NewLimiter(6, 2), NewQuota(0), NewMeter(nil), "dev", nil)
 	for i := 0; i < 3; i++ { // burst=2：第 3 次应拒绝
-		rec := postChat(gw, `{"model":"bbw-fast","messages":[{"role":"user","content":"hi"}]}`, "dev")
+		rec := postChat(gw, `{"model":"bbc-fast","messages":[{"role":"user","content":"hi"}]}`, "dev")
 		if i < 2 && rec.Code != 200 {
 			t.Fatalf("第 %d 次不应限流: %d", i, rec.Code)
 		}
@@ -147,7 +147,7 @@ func TestQuota8005(t *testing.T) {
 	gw, _, quota := newTestGateway(100, "dev")
 	// 预置配额耗尽
 	quota.Add("1:dev-agent", 200)
-	rec := postChat(gw, `{"model":"bbw-fast","messages":[{"role":"user","content":"hi"}]}`, "dev")
+	rec := postChat(gw, `{"model":"bbc-fast","messages":[{"role":"user","content":"hi"}]}`, "dev")
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":8005`) {
 		t.Fatalf("应 8005: %d %s", rec.Code, rec.Body.String())
 	}
@@ -156,7 +156,7 @@ func TestQuota8005(t *testing.T) {
 func TestEmbeddings(t *testing.T) {
 	gw, meter, _ := newTestGateway(0, "dev")
 	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings",
-		strings.NewReader(`{"model":"bbw-embed","input":["hello","world"]}`))
+		strings.NewReader(`{"model":"bbc-embed","input":["hello","world"]}`))
 	req.Header.Set("Authorization", "Bearer dev")
 	rec := httptest.NewRecorder()
 	gw.HandleEmbeddings(rec, req)
@@ -190,10 +190,10 @@ func TestEmbeddings(t *testing.T) {
 func TestMeteringSceneAndSessionHeader(t *testing.T) {
 	gw, meter, _ := newTestGateway(0, "dev")
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
-		strings.NewReader(`{"model":"bbw-fast","messages":[{"role":"user","content":"普通问题"}]}`))
+		strings.NewReader(`{"model":"bbc-fast","messages":[{"role":"user","content":"普通问题"}]}`))
 	req.Header.Set("Authorization", "Bearer dev")
-	req.Header.Set("X-BBW-Scene", "delegate")
-	req.Header.Set("X-BBW-Agent-Session", "sess-42")
+	req.Header.Set("X-BBC-Scene", "delegate")
+	req.Header.Set("X-BBC-Agent-Session", "sess-42")
 	rec := httptest.NewRecorder()
 	gw.HandleChat(rec, req)
 	if rec.Code != 200 {
@@ -242,7 +242,7 @@ func TestMockEmbedSemanticSimilarity(t *testing.T) {
 func TestRerank(t *testing.T) {
 	gw, meter, _ := newTestGateway(0, "dev")
 	req := httptest.NewRequest(http.MethodPost, "/v1/rerank",
-		strings.NewReader(`{"model":"bbw-rerank","query":"token 过期处理","documents":["关于红烧肉的做法","token 过期时应静默刷新","API 清单"],"top_n":2}`))
+		strings.NewReader(`{"model":"bbc-rerank","query":"token 过期处理","documents":["关于红烧肉的做法","token 过期时应静默刷新","API 清单"],"top_n":2}`))
 	req.Header.Set("Authorization", "Bearer dev")
 	rec := httptest.NewRecorder()
 	gw.HandleRerank(rec, req)
@@ -269,7 +269,7 @@ func TestRerank(t *testing.T) {
 	}
 	// 非法档位 → 8052
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/rerank",
-		strings.NewReader(`{"model":"bbw-fast","query":"q","documents":["d"]}`))
+		strings.NewReader(`{"model":"bbc-fast","query":"q","documents":["d"]}`))
 	req2.Header.Set("Authorization", "Bearer dev")
 	rec2 := httptest.NewRecorder()
 	gw.HandleRerank(rec2, req2)

@@ -46,7 +46,7 @@ type Options struct {
 	// ScopesOf RBAC 权限聚合闭包（main 注入 roleStore.PermissionPointsOf；nil=退回
 	// users 行内 Scopes）。IsAdmin/PermPointsOf/守卫判定统一经此口径。
 	ScopesOf func(ctx context.Context, tenantID, userID int64) ([]string, error)
-	// AdminAccounts empno 白名单（BBW_ADMIN_ACCOUNTS，逗号分隔）：应急通道——
+	// AdminAccounts empno 白名单（BBC_ADMIN_ACCOUNTS，逗号分隔）：应急通道——
 	// 角色链路装配异常/冷启动救砖用；日常管理员走「管理员」内置角色授权（bootstrap 自动挂）。
 	AdminAccounts []string
 
@@ -135,7 +135,7 @@ func (s *Service) effectiveScopesOf(ctx context.Context, u *orgapi.User) []strin
 	return out
 }
 
-// isWhitelisted 应急白名单命中（BBW_ADMIN_ACCOUNTS）——视为管理域全集
+// isWhitelisted 应急白名单命中（BBC_ADMIN_ACCOUNTS）——视为管理域全集
 func (s *Service) isWhitelisted(u *orgapi.User) bool {
 	for _, emp := range s.opts.AdminAccounts {
 		if emp != "" && emp == u.EmployeeNo {
@@ -164,7 +164,7 @@ func (s *Service) HasPerm(ctx context.Context, tenantID, userID int64, code stri
 }
 
 // IsAdmin 口径 v0.2（03 篇 §4）：有效权限点（行内 ∪ 角色聚合）含任一
-// "admin"/"admin:*"/"platform:*"，或 empno 命中 BBW_ADMIN_ACCOUNTS 应急白名单。
+// "admin"/"admin:*"/"platform:*"，或 empno 命中 BBC_ADMIN_ACCOUNTS 应急白名单。
 func (s *Service) IsAdmin(ctx context.Context, tenantID, userID int64) bool {
 	u, err := s.same.GetUser(ctx, userID)
 	if err != nil || u == nil {
@@ -1001,7 +1001,7 @@ func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int
 			// 初始口令 = 工号 + 固定盐后缀（首登强制改密已接：must_change_password 置位；HashPassword 闭包注入）
 			hash := ""
 			if s.opts.HashPassword != nil {
-				if h, herr := s.opts.HashPassword(row.Empno + "!BBW"); herr == nil {
+				if h, herr := s.opts.HashPassword(row.Empno + "!BBC"); herr == nil {
 					hash = h
 				}
 			}
@@ -1010,7 +1010,7 @@ func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int
 				DisplayName: row.Name, Email: strings.TrimSpace(r.Email),
 				PasswordHash: hash, Status: orgapi.UserStatusActive,
 				Scopes: []string{"im:message:send"}, // 新用户基础权限（角色化随 RBAC 收口）
-				MustChangePassword: true,            // D11：初始口令=工号+!BBW，首登强制改密
+				MustChangePassword: true,            // D11：初始口令=工号+!BBC，首登强制改密
 			}); cerr != nil {
 				row.Reason = "创建失败：" + cerr.Error()
 			} else {
@@ -1084,7 +1084,7 @@ func (s *Service) CreateUser(ctx context.Context, tenantID, operatorID int64, re
 	// 初始口令 = 工号 + 固定盐后缀（批量导入同口径；首登强制改密）
 	hash := ""
 	if s.opts.HashPassword != nil {
-		if h, herr := s.opts.HashPassword(empno + "!BBW"); herr == nil {
+		if h, herr := s.opts.HashPassword(empno + "!BBC"); herr == nil {
 			hash = h
 		}
 	}

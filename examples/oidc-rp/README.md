@@ -1,18 +1,18 @@
 # 最小 OIDC RP 示例（D28 批4/Q4）
 
-演示 bbw 统一登录（OIDC Provider）的**标准第三方客户端**接入全链：
+演示 bbc 统一登录（OIDC Provider）的**标准第三方客户端**接入全链：
 discovery 自动发现 → 授权码 + PKCE(S256) → **ID Token 经 jwks 公钥本地验签**（签名/iss/aud/exp/nonce 全校验，库内完成）→ userinfo 拉取。
 
 任何语言的标准 OIDC 库（Spring Security / passport / next-auth / Grafana Generic OAuth）接线方式同理：**填 issuer + client_id + 回调地址即可**。
 
 ## 使用
 
-1. 起服务端（`:8090`），在 bbw 客户端「管理 · 登录接入」新建客户端，回调地址填 `http://localhost:7070/cb`，记下 `client_id`；
+1. 起服务端（`:8090`），在 bbc 客户端「管理 · 登录接入」新建客户端，回调地址填 `http://localhost:7070/cb`，记下 `client_id`；
 2. 启动本示例：
 
    ```sh
-   BBW_CLIENT_ID=bbw-xxxxxxxxxxxx go run .
-   # 可选 env：BBW_ISSUER（默认 http://127.0.0.1:8090/oauth2）/ PORT（默认 7070）
+   BBC_CLIENT_ID=bbc-xxxxxxxxxxxx go run .
+   # 可选 env：BBC_ISSUER（默认 http://127.0.0.1:8090/oauth2）/ PORT（默认 7070）
    ```
 
 3. 浏览器打开 <http://localhost:7070> → 「使用 BaobaoChat 登录」；
@@ -25,7 +25,7 @@ discovery 自动发现 → 授权码 + PKCE(S256) → **ID Token 经 jwks 公钥
 
 ```sh
 J=/tmp/jar; rm -f $J
-L=$(curl -s -o /dev/null -w '%{redirect_url}' -c $J http://localhost:7070/login)        # → bbw authorize
+L=$(curl -s -o /dev/null -w '%{redirect_url}' -c $J http://localhost:7070/login)        # → bbc authorize
 L=$(curl -s -o /dev/null -w '%{redirect_url}' -b $J -c $J "$L")                          # → wait 页（拿 id）
 RID=$(echo "$L" | sed 's/.*id=//')
 W=$(curl -s -o /dev/null -w '%{redirect_url}' -b $J -c $J -X POST \

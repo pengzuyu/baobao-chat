@@ -2,10 +2,10 @@
 
 // kb 域 PG 仓储 + 服务冒烟（build tag `pg`，默认 go test 不编译）。
 //
-//	本地：BBW_PG_TEST_DSN='postgres://bbw:...@127.0.0.1:5432/bbw?sslmode=disable' \
+//	本地：BBC_PG_TEST_DSN='postgres://bbc:...@127.0.0.1:5432/bbc?sslmode=disable' \
 //	      go test -tags pg ./internal/kb/repo/ -run TestPGKB -v
 //
-// 未设置 BBW_PG_TEST_DSN 即 skip。租户走池默认 app.tenant=1（RLS 口径与生产一致），
+// 未设置 BBC_PG_TEST_DSN 即 skip。租户走池默认 app.tenant=1（RLS 口径与生产一致），
 // 每轮分配唯一 user（personal 空间幂等不受历史数据干扰），结束按 owner 级联清理。
 // 覆盖：
 //   - 迁移 0009（kb_* 四表 + RLS；pgvector 可用则 kb_chunk.embedding=vector(1024)）
@@ -23,21 +23,21 @@ import (
 
 	kbrepo "github.com/baobaochat/server/internal/kb/repo"
 	kbservice "github.com/baobaochat/server/internal/kb/service"
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 func TestPGKBSmoke(t *testing.T) {
-	dsn := os.Getenv("BBW_PG_TEST_DSN")
+	dsn := os.Getenv("BBC_PG_TEST_DSN")
 	if dsn == "" {
-		t.Skip("BBW_PG_TEST_DSN 未设置，跳过 PG 集成测试")
+		t.Skip("BBC_PG_TEST_DSN 未设置，跳过 PG 集成测试")
 	}
 	ctx := context.Background()
-	pool, err := bbwpg.New(ctx, dsn)
+	pool, err := bbcpg.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("建池: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	if err := bbwpg.Migrate(ctx, pool); err != nil {
+	if err := bbcpg.Migrate(ctx, pool); err != nil {
 		t.Fatalf("迁移（应含 0009 kb_*）: %v", err)
 	}
 	r := kbrepo.NewPostgres(pool)

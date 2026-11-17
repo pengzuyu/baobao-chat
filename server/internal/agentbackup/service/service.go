@@ -28,7 +28,7 @@ const ticketTTL = 120 * time.Second
 
 // Options 服务配置
 type Options struct {
-	// DataDir BBW_DATA_DIR（密文落盘根；空=当前目录，测试可指 t.TempDir）
+	// DataDir BBC_DATA_DIR（密文落盘根；空=当前目录，测试可指 t.TempDir）
 	DataDir string
 	// Now 时钟注入（测试）
 	Now func() time.Time
@@ -39,7 +39,7 @@ func (o *Options) fillDefaults() {
 		o.Now = time.Now
 	}
 	if o.DataDir == "" {
-		o.DataDir = os.Getenv("BBW_DATA_DIR")
+		o.DataDir = os.Getenv("BBC_DATA_DIR")
 	}
 	if o.DataDir == "" {
 		o.DataDir = "."

@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/baobaochat/server/internal/org/api"
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // lockKeyUsers users 表 ID 分配的 advisory lock 键（全局唯一，见 AllocID）
@@ -51,7 +51,7 @@ func (p *Postgres) CreateUser(ctx context.Context, u orgapi.User) (orgapi.User, 
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
 	if u.ID == 0 {
-		if u.ID, err = bbwpg.AllocID(ctx, tx, lockKeyUsers, "users"); err != nil {
+		if u.ID, err = bbcpg.AllocID(ctx, tx, lockKeyUsers, "users"); err != nil {
 			return orgapi.User{}, err
 		}
 	}
@@ -171,7 +171,7 @@ func (p *Postgres) CreateDept(ctx context.Context, tenantID, parentID int64, nam
 			return nil, orgapi.ErrDeptNotFound
 		}
 	}
-	id, err := bbwpg.AllocID(ctx, tx, lockKeyDept, "dept")
+	id, err := bbcpg.AllocID(ctx, tx, lockKeyDept, "dept")
 	if err != nil {
 		return nil, err
 	}

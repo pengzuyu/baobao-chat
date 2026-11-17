@@ -131,7 +131,7 @@ func (reg *Registry) encryptKey(plain string) (string, error) {
 		return "", nil // 无鉴权上游（内网 vLLM）
 	}
 	if reg.kms == nil {
-		return "", errx.New(errx.CodeDependencyDown, "服务端未配置 BBW_KMS_MASTER_KEY，无法保存密钥")
+		return "", errx.New(errx.CodeDependencyDown, "服务端未配置 BBC_KMS_MASTER_KEY，无法保存密钥")
 	}
 	ref, err := reg.kms.Encrypt(plain)
 	if err != nil {
@@ -399,7 +399,7 @@ func (reg *Registry) Reload(ctx context.Context) error {
 			key := ""
 			if rec.keyRef != "" {
 				if reg.kms == nil {
-					log.Printf("[aigw] provider#%d 跳过：存有密钥但未配置 BBW_KMS_MASTER_KEY", rec.id)
+					log.Printf("[aigw] provider#%d 跳过：存有密钥但未配置 BBC_KMS_MASTER_KEY", rec.id)
 					continue
 				}
 				plain, kerr := reg.kms.Decrypt(rec.keyRef)
@@ -492,7 +492,7 @@ func (reg *Registry) GetRoutes(ctx context.Context) ([]RouteRuleDTO, error) {
 }
 
 // PutRoutes 整表替换 fast/strong/embed/rerank 路由（版本化：旧 active→archived，新
-// version+1 active；D24 N3a 放开 embed/rerank 档——管理员经此配 bbw-embed/bbw-rerank
+// version+1 active；D24 N3a 放开 embed/rerank 档——管理员经此配 bbc-embed/bbc-rerank
 // 上游）。候选校验：供应商存在且启用、公司级（个人 BYOK 不进路由表）、model 在清单。
 func (reg *Registry) PutRoutes(ctx context.Context, rules []RouteRuleDTO, tenantID, uid int64) error {
 	for _, rr := range rules {

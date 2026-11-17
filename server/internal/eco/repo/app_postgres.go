@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 const lockKeyEcoApp int64 = 9135
@@ -51,7 +51,7 @@ func (p *AppPostgres) InsertApp(ctx context.Context, a App) (App, error) {
 	}
 	defer tx.Rollback(ctx)
 	if a.ID == 0 {
-		if a.ID, err = bbwpg.AllocID(ctx, tx, lockKeyEcoApp, "eco_app"); err != nil {
+		if a.ID, err = bbcpg.AllocID(ctx, tx, lockKeyEcoApp, "eco_app"); err != nil {
 			return App{}, err
 		}
 	}
@@ -154,7 +154,7 @@ func (p *AppPostgres) InsertAppVersion(ctx context.Context, v AppVersion) (AppVe
 	}
 	defer tx.Rollback(ctx)
 	if v.ID == 0 {
-		if v.ID, err = bbwpg.AllocID(ctx, tx, lockKeyEcoApp, "eco_app_version"); err != nil {
+		if v.ID, err = bbcpg.AllocID(ctx, tx, lockKeyEcoApp, "eco_app_version"); err != nil {
 			return AppVersion{}, err
 		}
 	}

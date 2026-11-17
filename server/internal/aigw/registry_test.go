@@ -50,7 +50,7 @@ func TestResolveForRefGuards(t *testing.T) {
 		{"p:abc:glm-4.7", 42, errx.CodeBadRequest},             // 非数字 id
 		{"p:100:", 42, errx.CodeBadRequest},                    // 空模型
 		{"glm-4.7", 42, errx.CodeBadRequest},                   // 裸具体模型名=绕过路由
-		{"bbw-vision", 42, errx.CodeAIGWRouteNotDefined},       // 未知别名
+		{"bbc-vision", 42, errx.CodeAIGWRouteNotDefined},       // 未知别名
 		{"", 42, errx.CodeBadRequest},                          // 空 model
 	}
 	for _, tc := range cases {

@@ -16,7 +16,7 @@ import (
 	"github.com/baobaochat/server/internal/platform/httpx"
 )
 
-const sessionCookie = "bbw_oidc_session"
+const sessionCookie = "bbc_oidc_session"
 
 var pageTpl = template.Must(template.New("wait").Parse(`<!DOCTYPE html>
 <html lang="zh">
@@ -94,8 +94,8 @@ type waitPageData struct {
 	AppName   string // 接入应用名（per-app，非产品品牌）
 	Code6     string
 	Error     string
-	BrandName string // 产品品牌（D31，BBW_BRAND_NAME）
-	Scheme    string // 深链 scheme（D31，BBW_DEEP_LINK_SCHEME）
+	BrandName string // 产品品牌（D31，BBC_BRAND_NAME）
+	Scheme    string // 深链 scheme（D31，BBC_DEEP_LINK_SCHEME）
 }
 
 // registerWebRoutes 等待页/兜底登录/desktop 确认端点（挂 /oauth2 子树）。

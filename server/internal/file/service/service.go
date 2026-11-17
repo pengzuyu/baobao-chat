@@ -30,7 +30,7 @@ import (
 
 // Options 策略参数（Now 时钟注入供测试）
 type Options struct {
-	DataDir        string                                            // 本地磁盘根目录（BBW_DATA_DIR）
+	DataDir        string                                            // 本地磁盘根目录（BBC_DATA_DIR）
 	MaxUploadBytes int64                                             // 单文件上限（默认 20MB，4009）
 	TicketTTL      time.Duration                                     // 下载票据有效期（默认 120s，4014）
 	Now            func() time.Time                                  // 时钟注入（票据过期可测）

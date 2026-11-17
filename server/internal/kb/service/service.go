@@ -24,7 +24,7 @@ import (
 	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
-// EmbedFn 嵌入函数注入（生产=HTTP 自调 AI 网关 bbw-embed 1024 维；测试=假嵌入不走网络）
+// EmbedFn 嵌入函数注入（生产=HTTP 自调 AI 网关 bbc-embed 1024 维；测试=假嵌入不走网络）
 type EmbedFn func(ctx context.Context, input []string) ([][]float32, error)
 
 // RerankHit 重排命中（与 aigw RerankHit 同构；闭包传值解耦不引包）
@@ -33,7 +33,7 @@ type RerankHit struct {
 	Score float64
 }
 
-// RerankFn 重排函数注入（生产=HTTP 自调 AI 网关 bbw-rerank；nil/失败=RRF 序直出降级）
+// RerankFn 重排函数注入（生产=HTTP 自调 AI 网关 bbc-rerank；nil/失败=RRF 序直出降级）
 type RerankFn func(ctx context.Context, query string, documents []string, topN int) ([]RerankHit, error)
 
 // FileSource D06 文件内容（IngestDoc file 来源经 OpenFile 取回）
@@ -405,9 +405,9 @@ func (s *Service) runPipeline(ctx context.Context, d kbrepo.Doc, content string)
 		return &dto, nil
 	}
 	// D24 §5.3 维度防护（pgvector 定维轨）：真实供应商维度≠配置 → failed
-	// （管理员须对齐 bbw-embed 路由模型或触发跨维度重建）
+	// （管理员须对齐 bbc-embed 路由模型或触发跨维度重建）
 	if s.opts.EnforceEmbedDims && len(embeds) > 0 && len(embeds[0]) != st.EmbedDims {
-		msg := fmt.Sprintf("嵌入维度 %d ≠ 配置 %d（bbw-embed 路由模型与 kb_settings 不一致，请联系管理员触发重建）", len(embeds[0]), st.EmbedDims)
+		msg := fmt.Sprintf("嵌入维度 %d ≠ 配置 %d（bbc-embed 路由模型与 kb_settings 不一致，请联系管理员触发重建）", len(embeds[0]), st.EmbedDims)
 		_ = s.repo.FailDoc(ctx, d.ID, msg, s.opts.Now())
 		if d2, gerr := s.repo.GetDoc(ctx, d.ID); gerr == nil {
 			dto := toDocDTO(*d2)
@@ -1386,7 +1386,7 @@ func (s *Service) RebuildEmbeddings(ctx context.Context, tenantID int64, model s
 		return nil, errx.New(errx.CodeBadRequest, "model 必填且 dims 须为 (0, 20000]")
 	}
 	if s.opts.Embedder == nil {
-		return nil, errx.New(errx.CodeBadRequest, "嵌入服务未装配（BBW_AIGW_DEV_TOKEN 或表路由 bbw-embed）")
+		return nil, errx.New(errx.CodeBadRequest, "嵌入服务未装配（BBC_AIGW_DEV_TOKEN 或表路由 bbc-embed）")
 	}
 	s.rebuildMu.Lock()
 	defer s.rebuildMu.Unlock()
@@ -1398,7 +1398,7 @@ func (s *Service) RebuildEmbeddings(ctx context.Context, tenantID int64, model s
 		return nil, errx.New(errx.CodeKBRebuildRunning, "向量重建已在进行（force=true 可强制续跑，幂等覆盖）")
 	}
 	// 样本探测：实际维度须与声明一致（7018）
-	probe, err := s.embedBatched(ctx, []string{"bbw-embed 维度探测样本"})
+	probe, err := s.embedBatched(ctx, []string{"bbc-embed 维度探测样本"})
 	if err != nil {
 		return nil, errx.New(errx.CodeBadRequest, "嵌入服务探测失败: "+err.Error())
 	}

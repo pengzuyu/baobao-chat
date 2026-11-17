@@ -1,7 +1,7 @@
 // 接入层（docs/19 §4.1/§6.1/§6.2/§6.3）：
 // /v1/chat/completions（SSE 流式+非流式）与 /v1/embeddings；
 // 鉴权（用户 JWT / OBO / 开发令牌）→ 限流 8050 → 配额 8005 → 路由 → 供应商 →
-// SSE 透传 + X-BBW-Usage 终帧 + [DONE] → 计量开票。
+// SSE 透传 + X-BBC-Usage 终帧 + [DONE] → 计量开票。
 package aigw
 
 import (
@@ -31,7 +31,7 @@ type Gateway struct {
 	limiter  *Limiter
 	quota    *Quota
 	meter    *Meter
-	devToken string // BBW_AIGW_DEV_TOKEN：开发/联调通道（空=禁用）
+	devToken string // BBC_AIGW_DEV_TOKEN：开发/联调通道（空=禁用）
 	// agentKillOn 平台总闸（D9：on → OBO 请求 503 拒；nil=未装配）
 	agentKillOn func() bool
 }
@@ -89,7 +89,7 @@ func writeErr(w http.ResponseWriter, status int, code int, msg string, retryAfte
 	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{"code": code, "message": msg, "type": "bbw_ai_gateway"},
+		"error": map[string]any{"code": code, "message": msg, "type": "bbc_ai_gateway"},
 	})
 }
 
@@ -134,8 +134,8 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scene := headerOr(r, "X-BBW-Scene", "chat")
-	session := r.Header.Get("X-BBW-Agent-Session")
+	scene := headerOr(r, "X-BBC-Scene", "chat")
+	session := r.Header.Get("X-BBC-Agent-Session")
 	dim := MeterDim{Tenant: who.TenantID, User: uidOf(who), Svc: svcSubject(who), Session: session, Scene: scene, Tier: tierLabel(alias)}
 
 	// 供应商链（§4.4：逐候选降级——以「首帧产出或错误」为选定依据：StreamChat 异步，
@@ -167,11 +167,11 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, 8051, "供应商不可用（全部候选失败）", 0)
 		return
 	}
-	// SSE 回传（§6.2：透传帧 → X-BBW-Usage 终帧 → [DONE]）
+	// SSE 回传（§6.2：透传帧 → X-BBC-Usage 终帧 → [DONE]）
 	flusher, _ := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-BBW-Request-Id", r.Header.Get("Idempotency-Key"))
+	w.Header().Set("X-BBC-Request-Id", r.Header.Get("Idempotency-Key"))
 	w.WriteHeader(http.StatusOK)
 
 	var usage *UsageOpenAI
@@ -198,14 +198,14 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		// 流中失败：状态码已 200 不可改——以错误帧收束（调用方按断流/8051 语义处理）
 		failed = true
 		errFrame, _ := json.Marshal(map[string]any{
-			"error": map[string]any{"code": 8051, "message": res.Err.Error(), "type": "bbw_ai_gateway"},
+			"error": map[string]any{"code": 8051, "message": res.Err.Error(), "type": "bbc_ai_gateway"},
 		})
 		fmt.Fprintf(w, "data: %s\n\n", errFrame)
 	}
 	if usage == nil {
 		usage = &UsageOpenAI{PromptTokens: estimateTokens(req.Messages), CompletionTokens: 0}
 	}
-	// 终帧（§6.2 X-BBW-Usage；request_id 对账口径）
+	// 终帧（§6.2 X-BBC-Usage；request_id 对账口径）
 	usageFrame, _ := json.Marshal(map[string]any{
 		"request_id":        r.Header.Get("Idempotency-Key"),
 		"prompt_tokens":     usage.PromptTokens,
@@ -221,7 +221,7 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 	g.quota.Add(quotaKey, int64(usage.Total()))
 }
 
-// HandleEmbeddings POST /v1/embeddings（§6.3：bbw-embed，1024 维）
+// HandleEmbeddings POST /v1/embeddings（§6.3：bbc-embed，1024 维）
 func (g *Gateway) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	who, err := g.auth(r)
 	if err != nil {
@@ -277,7 +277,7 @@ func (g *Gateway) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		data[i] = map[string]any{"embedding": v, "index": i}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-BBW-Request-Id", r.Header.Get("Idempotency-Key"))
+	w.Header().Set("X-BBC-Request-Id", r.Header.Get("Idempotency-Key"))
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": data, "usage": usage, "model": AliasEmbed})
 }
 
@@ -289,7 +289,7 @@ func (u *UsageOpenAI) Total() int {
 	return u.PromptTokens + u.CompletionTokens
 }
 
-// HandleRerank POST /v1/rerank（D24 N3a：bbw-rerank；kb Query RRF 候选重排消费）。
+// HandleRerank POST /v1/rerank（D24 N3a：bbc-rerank；kb Query RRF 候选重排消费）。
 // 结构同 HandleEmbeddings：鉴权→OBO 闸→解码→限流→路由→调用→计量开票
 func (g *Gateway) HandleRerank(w http.ResponseWriter, r *http.Request) {
 	who, err := g.auth(r)
@@ -340,7 +340,7 @@ func (g *Gateway) HandleRerank(w http.ResponseWriter, r *http.Request) {
 	dim := MeterDim{Tenant: who.TenantID, User: uidOf(who), Svc: svcSubject(who), Scene: "rerank", Tier: "rerank", Provider: candidates[0].Provider.ID()}
 	g.meter.Invoice(dim, int64(usage.PromptTokens), 0, false)
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-BBW-Request-Id", r.Header.Get("Idempotency-Key"))
+	w.Header().Set("X-BBC-Request-Id", r.Header.Get("Idempotency-Key"))
 	_ = json.NewEncoder(w).Encode(map[string]any{"results": hits, "usage": usage, "model": AliasRerank})
 }
 

@@ -4,8 +4,8 @@
       "command": "node",
       "args": ["${PLUGIN_ROOT}/server.mjs"],
       "env": {
-        "BBW_CONFIG_GREET_NAME": "${CONFIG:greet_name}",
-        "BBW_DEMO_USER_ID": "${BBW_USER_ID}"
+        "BBC_CONFIG_GREET_NAME": "${CONFIG:greet_name}",
+        "BBC_DEMO_USER_ID": "${BBC_USER_ID}"
       }
     }
   }

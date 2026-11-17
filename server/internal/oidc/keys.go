@@ -1,4 +1,4 @@
-// Package oidc 实现 D28：bbw auth 对外的标准 OIDC Provider（zitadel/oidc v3 嵌入）。
+// Package oidc 实现 D28：bbc auth 对外的标准 OIDC Provider（zitadel/oidc v3 嵌入）。
 // keys.go：ES256 签名密钥装载（env PEM 单密钥，手工轮换=拍板 10①；kid 静态）。
 package oidc
 
@@ -16,7 +16,7 @@ import (
 
 // keyID 静态 kid：手工轮换口径下换 env 私钥即换内容，kid 不需要区分新旧
 // （旧 token ≤15min 自然过期后 jwks 无需双密钥窗口——D28 §10 收缩候选①落定）。
-const keyID = "bbw-oidc-es256-1"
+const keyID = "bbc-oidc-es256-1"
 
 type esSigningKey struct{ key *ecdsa.PrivateKey }
 
@@ -39,7 +39,7 @@ func loadSigningKey(pemStr string) (*ecdsa.PrivateKey, error) {
 	}
 	block, _ := pem.Decode([]byte(pemStr))
 	if block == nil {
-		return nil, errors.New("BBW_OIDC_SIGNING_KEY 不是合法 PEM")
+		return nil, errors.New("BBC_OIDC_SIGNING_KEY 不是合法 PEM")
 	}
 	if k, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
 		if k.Curve != elliptic.P256() {
@@ -61,5 +61,5 @@ func loadSigningKey(pemStr string) (*ecdsa.PrivateKey, error) {
 // deriveCryptoKey op 库加密密钥（auth code 等对称加密用）：从签名密钥 PEM 派生
 // sha256——单 env 双用途，轮换签名密钥即同步轮换加密密钥（code 60s 一次性，无兼容负担）。
 func deriveCryptoKey(pemStr string) [32]byte {
-	return sha256.Sum256([]byte("bbw-oidc-crypto|" + pemStr))
+	return sha256.Sum256([]byte("bbc-oidc-crypto|" + pemStr))
 }

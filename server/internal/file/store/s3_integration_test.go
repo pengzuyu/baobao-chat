@@ -1,11 +1,11 @@
 // S3 集成测试（D29 批次 R2）：对真实 S3 兼容后端（部署=RustFS）全链验证。
-// 门控（D25 §10 预留名落地）：BBW_TEST_S3_ADDR 非空才跑，离线 CI 零负担。
+// 门控（D25 §10 预留名落地）：BBC_TEST_S3_ADDR 非空才跑，离线 CI 零负担。
 // 本地冒烟（RustFS 临时容器）：
 //   docker run -d --name rustfs-smoke -p 9100:9000 -p 9101:9001 \
-//     -e RUSTFS_ACCESS_KEY=bbw_smoke_ak -e RUSTFS_SECRET_KEY=bbw_smoke_sk888888 rustfs/rustfs:1.0.5
-//   # 建桶（或复用 compose rustfs-init 语义）：aws s3api create-bucket --bucket bbw-data
-//   BBW_TEST_S3_ADDR=http://127.0.0.1:9100 \
-//   BBW_TEST_S3_ACCESS_KEY=bbw_smoke_ak BBW_TEST_S3_SECRET_KEY=bbw_smoke_sk888888 \
+//     -e RUSTFS_ACCESS_KEY=bbc_smoke_ak -e RUSTFS_SECRET_KEY=bbc_smoke_sk888888 rustfs/rustfs:1.0.5
+//   # 建桶（或复用 compose rustfs-init 语义）：aws s3api create-bucket --bucket bbc-data
+//   BBC_TEST_S3_ADDR=http://127.0.0.1:9100 \
+//   BBC_TEST_S3_ACCESS_KEY=bbc_smoke_ak BBC_TEST_S3_SECRET_KEY=bbc_smoke_sk888888 \
 //   go test ./internal/file/store -run Integration -v
 // 覆盖面=D29 §6：Save/Promote/Open/Head、CopyTo、relay staging、multipart 预签名真链
 // （UNSIGNED-PAYLOAD 验签/分片 PUT/ListParts/Complete/Abort）、预签名 GET（含变体
@@ -26,24 +26,24 @@ import (
 	"time"
 )
 
-// itStore 构造被测实例（门控：BBW_TEST_S3_ADDR 空=跳过）
+// itStore 构造被测实例（门控：BBC_TEST_S3_ADDR 空=跳过）
 func itStore(t *testing.T) *S3 {
 	t.Helper()
-	addr := os.Getenv("BBW_TEST_S3_ADDR")
+	addr := os.Getenv("BBC_TEST_S3_ADDR")
 	if addr == "" {
-		t.Skip("BBW_TEST_S3_ADDR 未配置，跳过 S3 集成链（D29 R2 门控）")
+		t.Skip("BBC_TEST_S3_ADDR 未配置，跳过 S3 集成链（D29 R2 门控）")
 	}
-	ak := os.Getenv("BBW_TEST_S3_ACCESS_KEY")
+	ak := os.Getenv("BBC_TEST_S3_ACCESS_KEY")
 	if ak == "" {
-		ak = "bbw_smoke_ak"
+		ak = "bbc_smoke_ak"
 	}
-	sk := os.Getenv("BBW_TEST_S3_SECRET_KEY")
+	sk := os.Getenv("BBC_TEST_S3_SECRET_KEY")
 	if sk == "" {
-		sk = "bbw_smoke_sk888888"
+		sk = "bbc_smoke_sk888888"
 	}
-	bucket := os.Getenv("BBW_TEST_S3_BUCKET")
+	bucket := os.Getenv("BBC_TEST_S3_BUCKET")
 	if bucket == "" {
-		bucket = "bbw-data"
+		bucket = "bbc-data"
 	}
 	s, err := NewS3(S3Options{
 		Endpoint: addr, PublicEndpoint: addr, // 直连形态（无 /oss 前缀链——那是 nginx 层，归真机验收）

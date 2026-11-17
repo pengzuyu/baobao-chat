@@ -83,7 +83,7 @@ func newFixture(t *testing.T, mutate func(o *Options)) *fixture {
 	}
 	_, err = orgMem.CreateUser(context.Background(), orgapi.User{
 		TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "alice",
-		DisplayName: "Alice", Email: "alice@bbw.io", PasswordHash: hash,
+		DisplayName: "Alice", Email: "alice@bbc.io", PasswordHash: hash,
 		Status: orgapi.UserStatusActive,
 		Scopes: []string{"im:message:send", "im:group:create", "agent:session:use"},
 	})

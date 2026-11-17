@@ -33,13 +33,13 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-// S3Options 构造参数（main 从 BBW_S3_* 环境变量装配）
+// S3Options 构造参数（main 从 BBC_S3_* 环境变量装配）
 type S3Options struct {
 	Endpoint      string // 服务端→对象存储内部端点（http://rustfs:9000）
 	PublicEndpoint string // 客户端可达基址（https://dom/oss 或 http://ip:9000）；空=同 Endpoint；可含一级路径前缀
 	AccessKey     string
 	SecretKey     string
-	Bucket        string // 空=bbw-data
+	Bucket        string // 空=bbc-data
 }
 
 // S3 对象存储实现
@@ -73,7 +73,7 @@ func NewS3(o S3Options) (*S3, error) {
 		return nil, fmt.Errorf("s3: public endpoint path prefix must be single-level: %q", prefix)
 	}
 	if o.Bucket == "" {
-		o.Bucket = "bbw-data"
+		o.Bucket = "bbc-data"
 	}
 	region := "us-east-1" // RustFS 忽略 region；S3 兼容端点通用占位
 	creds := aws.NewCredentialsCache(awscred.NewStaticCredentialsProvider(o.AccessKey, o.SecretKey, ""))

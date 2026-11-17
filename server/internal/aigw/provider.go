@@ -256,7 +256,7 @@ func bagOfTokens(s string) map[string]bool {
 func mockEmbedOne(s string) []float32 {
 	vec := make([]float32, 1024)
 	add := func(tok string, weight float32) {
-		mac := hmac.New(sha256.New, []byte("bbw-embed-mock"))
+		mac := hmac.New(sha256.New, []byte("bbc-embed-mock"))
 		mac.Write([]byte(tok))
 		sum := mac.Sum(nil)
 		dim := binary.BigEndian.Uint32(sum[4:8]) % 1024
@@ -304,7 +304,7 @@ func isSpaceASCII(b byte) bool {
 
 // ---- openai_compatible 供应商（真实上游透传）----
 
-// OpenAICompatConfig 环境装配：BBW_AIGW_OPENAI_BASE / _KEY / _MODELS("strong=glm-4.7,fast=glm-4.7-air")
+// OpenAICompatConfig 环境装配：BBC_AIGW_OPENAI_BASE / _KEY / _MODELS("strong=glm-4.7,fast=glm-4.7-air")
 type OpenAICompatConfig struct {
 	BaseURL string            // 如 https://open.bigmodel.cn/api/paas/v4
 	APIKey  string            // 网关侧持有（§1.2-2），仅环境注入不落库
@@ -329,7 +329,7 @@ func (p *OpenAICompatProvider) Name() string { return p.NameOf }
 func (p *OpenAICompatProvider) Kind() string { return "openai_compatible" }
 
 // StreamChat 透传（model 换上游实名；流式逐帧回传；非流式转单帧）。
-// model 两形态（0023）：bbw- 档位别名=env 兜底装配路径（Cfg.Models 档位映射）；
+// model 两形态（0023）：bbc- 档位别名=env 兜底装配路径（Cfg.Models 档位映射）；
 // 其余=表驱动路径的具体模型名（handler/路由已按清单校验），直接透传上游。
 func (p *OpenAICompatProvider) StreamChat(ctx context.Context, req *ChatRequest) *ProviderResult {
 	frames := make(chan string, 32)
@@ -337,7 +337,7 @@ func (p *OpenAICompatProvider) StreamChat(ctx context.Context, req *ChatRequest)
 	go func() {
 		defer close(frames)
 		upstream := req.Model
-		if strings.HasPrefix(req.Model, "bbw-") {
+		if strings.HasPrefix(req.Model, "bbc-") {
 			var ok bool
 			upstream, ok = p.Cfg.Models[tierOf(req.Model)]
 			if !ok {
@@ -578,7 +578,7 @@ func normalizeToolsForUpstream(tools []map[string]any) []map[string]any {
 }
 
 func tierOf(alias string) string {
-	return strings.TrimPrefix(alias, "bbw-")
+	return strings.TrimPrefix(alias, "bbc-")
 }
 
 func usageOfFrame(data string) *UsageOpenAI {
@@ -619,12 +619,12 @@ func firstLine(s string) string {
 
 // envLoadOpenAICompat 从环境装配上游（空 base=未启用）
 func envLoadOpenAICompat() *OpenAICompatProvider {
-	base := os.Getenv("BBW_AIGW_OPENAI_BASE")
+	base := os.Getenv("BBC_AIGW_OPENAI_BASE")
 	if base == "" {
 		return nil
 	}
 	models := map[string]string{}
-	for _, kv := range strings.Split(os.Getenv("BBW_AIGW_OPENAI_MODELS"), ",") {
+	for _, kv := range strings.Split(os.Getenv("BBC_AIGW_OPENAI_MODELS"), ",") {
 		if parts := strings.SplitN(kv, "=", 2); len(parts) == 2 && parts[1] != "" {
 			models[parts[0]] = parts[1]
 		}
@@ -634,7 +634,7 @@ func envLoadOpenAICompat() *OpenAICompatProvider {
 		NameOf: "openai-compat-upstream",
 		Cfg: OpenAICompatConfig{
 			BaseURL: base,
-			APIKey:  os.Getenv("BBW_AIGW_OPENAI_KEY"),
+			APIKey:  os.Getenv("BBC_AIGW_OPENAI_KEY"),
 			Models:  models,
 		},
 	}

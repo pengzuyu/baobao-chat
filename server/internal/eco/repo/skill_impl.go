@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // ── memory ──
@@ -206,7 +206,7 @@ func (p *SkillPostgres) InsertSkill(ctx context.Context, s Skill) (Skill, error)
 	}
 	defer tx.Rollback(ctx)
 	if s.ID == 0 {
-		if s.ID, err = bbwpg.AllocID(ctx, tx, lockKeyEcoSkill, "eco_skill"); err != nil {
+		if s.ID, err = bbcpg.AllocID(ctx, tx, lockKeyEcoSkill, "eco_skill"); err != nil {
 			return Skill{}, err
 		}
 	}

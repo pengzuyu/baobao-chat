@@ -1,4 +1,4 @@
-// bbw-server 模块化单体入口（阶段一）。
+// bbc-server 模块化单体入口（阶段一）。
 // 装配：org/auth/message 模块 + 事件总线 + gateway(hub) + HTTP/WS 监听。
 // 文档映射：D02 §1/§2/§6；拆分部署（--enable）与 gRPC 化留待阶段三。
 package main
@@ -70,7 +70,7 @@ import (
 	errx "github.com/baobaochat/server/internal/platform/errors"
 	"github.com/baobaochat/server/internal/platform/eventbus"
 	"github.com/baobaochat/server/internal/platform/httpx"
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 	stickerapi "github.com/baobaochat/server/internal/sticker/api"
 	stickerrepo "github.com/baobaochat/server/internal/sticker/repo"
 	stickerservice "github.com/baobaochat/server/internal/sticker/service"
@@ -93,22 +93,22 @@ func main() {
 				runAdminBootstrap(os.Args[3:])
 				return
 			}
-			log.Fatal("用法: bbw-server admin bootstrap --admin-password <强密码> [--empno admin]")
+			log.Fatal("用法: bbc-server admin bootstrap --admin-password <强密码> [--empno admin]")
 		default:
 			log.Printf("忽略未识别参数 %q（--enable 拆分部署留待阶段三，当前单体全量启动）", os.Args[1])
 		}
 	}
 	cfg := config.Load()
 	if len(cfg.JWTSecret) < 32 {
-		log.Fatal("BBW_JWT_SECRET 长度需 ≥32 字节")
+		log.Fatal("BBC_JWT_SECRET 长度需 ≥32 字节")
 	}
 	if cfg.JWTSecret == config.DevJWTSecret {
-		log.Println("⚠ BBW_JWT_SECRET 未设置，使用开发默认密钥（测试可用；生产必改，15 篇）")
+		log.Println("⚠ BBC_JWT_SECRET 未设置，使用开发默认密钥（测试可用；生产必改，15 篇）")
 	}
 	signer := authjwt.NewSigner([]byte(cfg.JWTSecret))
 	bus := eventbus.New()
 
-	// ── 存储装配：BBW_DB_DSN 非空 → PostgreSQL（迁移 + 三域 PG 仓）；空 → 内存回退 ──
+	// ── 存储装配：BBC_DB_DSN 非空 → PostgreSQL（迁移 + 三域 PG 仓）；空 → 内存回退 ──
 	var (
 		orgRepo     orgrepo.Repo
 		msgRepo     messagerepo.Repo
@@ -118,13 +118,13 @@ func main() {
 	)
 	var pgPool *pgxpool.Pool
 	if cfg.DBDSN != "" {
-		pool, err := bbwpg.New(context.Background(), cfg.DBDSN) // AfterConnect 会话级 SET app.tenant=1（RLS 兜底）
+		pool, err := bbcpg.New(context.Background(), cfg.DBDSN) // AfterConnect 会话级 SET app.tenant=1（RLS 兜底）
 		if err != nil {
 			log.Fatalf("PG 连接失败: %v", err)
 		}
 		defer pool.Close()
 		pgPool = pool
-		if err := bbwpg.Migrate(context.Background(), pool); err != nil {
+		if err := bbcpg.Migrate(context.Background(), pool); err != nil {
 			log.Fatalf("PG 迁移失败: %v", err)
 		}
 		orgRepo = orgrepo.NewPostgres(pool)
@@ -132,13 +132,13 @@ func main() {
 		tokenRepo = authrepo.NewPostgresTokens(pool)
 		deviceRepo = authrepo.NewPostgresDevices(pool)
 		attemptRepo = authrepo.NewMemory() // 防爆破计数短时态：保留内存（生产 Redis TTL，03 篇 §2.3）
-		log.Printf("存储模式：PostgreSQL（RLS app.tenant=%d 兜底已启用）", bbwpg.DefaultTenantID)
+		log.Printf("存储模式：PostgreSQL（RLS app.tenant=%d 兜底已启用）", bbcpg.DefaultTenantID)
 	} else {
 		orgRepo = orgrepo.NewMemory()
 		msgRepo = messagerepo.NewMemory()
 		memAuth := authrepo.NewMemory()
 		tokenRepo, deviceRepo, attemptRepo = memAuth, memAuth, memAuth
-		log.Println("存储模式：memory（未设置 BBW_DB_DSN）")
+		log.Println("存储模式：memory（未设置 BBC_DB_DSN）")
 	}
 
 	// ── 模块装配（D02 §3：构造注入，禁止全局单例） ──
@@ -181,27 +181,27 @@ func main() {
 			}
 		})
 
-	// 文件域（D06 + D25）：存储层双实现——BBW_S3_ENDPOINT 配了走 S3 对象存储
+	// 文件域（D06 + D25）：存储层双实现——BBC_S3_ENDPOINT 配了走 S3 对象存储
 	// （部署后端=RustFS，D29；任意 S3 兼容实现均可）
 	// （t/{tenant}/{sha2}/{sha} 布局 + 预签名直传，D25）；空=本地盘回落
 	// （开发机/CI/单机裸跑零负担，D25 拍板③）。会话成员判定经闭包查 message 仓（D02 §4）
 	var fileStore filestore.Storage
-	if ep := envOr("BBW_S3_ENDPOINT", ""); ep != "" {
+	if ep := envOr("BBC_S3_ENDPOINT", ""); ep != "" {
 		s3Store, err := filestore.NewS3(filestore.S3Options{
 			Endpoint:       ep,
-			PublicEndpoint: envOr("BBW_S3_PUBLIC_ENDPOINT", ""),
-			AccessKey:      envOr("BBW_S3_ACCESS_KEY", ""),
-			SecretKey:      envOr("BBW_S3_SECRET_KEY", ""),
-			Bucket:         envOr("BBW_S3_BUCKET", ""),
+			PublicEndpoint: envOr("BBC_S3_PUBLIC_ENDPOINT", ""),
+			AccessKey:      envOr("BBC_S3_ACCESS_KEY", ""),
+			SecretKey:      envOr("BBC_S3_SECRET_KEY", ""),
+			Bucket:         envOr("BBC_S3_BUCKET", ""),
 		})
 		if err != nil {
 			log.Fatalf("S3 存储构造失败: %v", err)
 		}
 		fileStore = s3Store
-		log.Printf("文件存储：S3 对象存储（%s，对外 %s；后端 RustFS，D29）", ep, envOr("BBW_S3_PUBLIC_ENDPOINT", ep))
+		log.Printf("文件存储：S3 对象存储（%s，对外 %s；后端 RustFS，D29）", ep, envOr("BBC_S3_PUBLIC_ENDPOINT", ep))
 	} else {
-		fileStore = filestore.NewLocal(envOr("BBW_DATA_DIR", "./data"))
-		log.Printf("文件存储：本地磁盘（%s；未配置 BBW_S3_ENDPOINT，D25 回落）", envOr("BBW_DATA_DIR", "./data"))
+		fileStore = filestore.NewLocal(envOr("BBC_DATA_DIR", "./data"))
+		log.Printf("文件存储：本地磁盘（%s；未配置 BBC_S3_ENDPOINT，D25 回落）", envOr("BBC_DATA_DIR", "./data"))
 	}
 	var fileRepo filerepo.Repo
 	var fileTransfers filerepo.TransferRepo
@@ -213,12 +213,12 @@ func main() {
 		fileTransfers = filerepo.NewMemoryTransfers()
 	}
 	// 单文件上限：Local=20MB（磁盘+中转形态）；S3=2GB（presign 直传大文件，D25；
-	// BBW_MAX_UPLOAD_MB 可覆盖——relay 中转另有 20MB 硬顶见 service.relayMaxBytes）
+	// BBC_MAX_UPLOAD_MB 可覆盖——relay 中转另有 20MB 硬顶见 service.relayMaxBytes）
 	fileMaxBytes := int64(20 << 20)
 	if fileStore != nil {
 		if _, isS3 := fileStore.(*filestore.S3); isS3 {
 			fileMaxBytes = int64(2 << 30)
-			if mb := envOr("BBW_MAX_UPLOAD_MB", ""); mb != "" {
+			if mb := envOr("BBC_MAX_UPLOAD_MB", ""); mb != "" {
 				if v, perr := strconv.ParseInt(mb, 10, 64); perr == nil && v > 0 && v <= 10240 {
 					fileMaxBytes = v << 20
 				}
@@ -357,7 +357,7 @@ func main() {
 	var oidcMod *oidc.Module
 	if pgPool != nil {
 		var oidcErr error
-		oidcMod, oidcErr = oidc.New(pgPool, authMod.Service(), cfg.OIDCIssuer, cfg.OIDCSigningKey, cfg.BrandName, cfg.DeepLinkScheme, bbwpg.DefaultTenantID)
+		oidcMod, oidcErr = oidc.New(pgPool, authMod.Service(), cfg.OIDCIssuer, cfg.OIDCSigningKey, cfg.BrandName, cfg.DeepLinkScheme, bbcpg.DefaultTenantID)
 		if oidcErr != nil {
 			log.Fatalf("OIDC 模块装配失败: %v", oidcErr)
 		}
@@ -477,10 +477,10 @@ func main() {
 	}, func() bool { return agentKillOn != nil && agentKillOn() })
 	mux.HandleFunc("POST /v1/chat/completions", aigwMod.Gateway.HandleChat)
 	mux.HandleFunc("POST /v1/embeddings", aigwMod.Gateway.HandleEmbeddings)
-	mux.HandleFunc("POST /v1/rerank", aigwMod.Gateway.HandleRerank) // D24：kb 检索重排档（bbw-rerank）
+	mux.HandleFunc("POST /v1/rerank", aigwMod.Gateway.HandleRerank) // D24：kb 检索重排档（bbc-rerank）
 
 	// 知识库域（D24 两维度博客版）：公司知识库+我的笔记两维度行（grants 授权与
-	// CreateSpace 已下线）+ 摄入管线同步版（嵌入经网关 bbw-embed，AI/IM 通道）+
+	// CreateSpace 已下线）+ 摄入管线同步版（嵌入经网关 bbc-embed，AI/IM 通道）+
 	// 混合检索（向量余弦 + 关键词 ILIKE，RRF 融合，权限前置过滤）
 	var kbRepo kbrepo.Repo
 	kbEnforceDims := false // 维度防护仅 pgvector 定维轨（D24 §5.3）
@@ -497,16 +497,16 @@ func main() {
 	} else {
 		kbRepo = kbrepo.NewMemory()
 	}
-	// 嵌入链路：优先 HTTP 自调本服务网关 /v1/embeddings（bbw-embed，开发令牌通道——
+	// 嵌入链路：优先 HTTP 自调本服务网关 /v1/embeddings（bbc-embed，开发令牌通道——
 	// 与真实调用方同路径：鉴权/限流/计量全过）；未配开发令牌时直调网关 Router 的
 	// mock 供应商（联调零配置兜底）。测试注入假 EmbedFn 不走网络（任务约束）
 	var kbEmbed kbservice.EmbedFn
 	var kbRerank kbservice.RerankFn // D24 N3b：仅 dev token 通道装配（直调 Router 的
-	// rerank 供应商留作装配位——表驱动配 bbw-rerank 后 dev token 链路即真实上游）
-	if devTok := os.Getenv("BBW_AIGW_DEV_TOKEN"); devTok != "" {
+	// rerank 供应商留作装配位——表驱动配 bbc-rerank 后 dev token 链路即真实上游）
+	if devTok := os.Getenv("BBC_AIGW_DEV_TOKEN"); devTok != "" {
 		kbEmbed = kbservice.GatewayEmbedFn("http://127.0.0.1"+cfg.HTTPAddr, devTok, nil)
 		kbRerank = kbservice.GatewayRerankFn("http://127.0.0.1"+cfg.HTTPAddr, devTok, nil)
-		log.Printf("kb 嵌入链路：HTTP 网关 http://127.0.0.1%s/v1/embeddings（bbw-embed，开发令牌）；重排链路：/v1/rerank（bbw-rerank）", cfg.HTTPAddr)
+		log.Printf("kb 嵌入链路：HTTP 网关 http://127.0.0.1%s/v1/embeddings（bbc-embed，开发令牌）；重排链路：/v1/rerank（bbc-rerank）", cfg.HTTPAddr)
 	} else if cands, ok := aigwMod.Router.Route(aigw.AliasEmbed); ok && len(cands) > 0 {
 		prov := cands[0].Provider
 		kbEmbed = func(ctx context.Context, in []string) ([][]float32, error) {
@@ -527,7 +527,7 @@ func main() {
 				return out, nil
 			}
 		}
-		log.Println("kb 嵌入链路：直调网关 Router 供应商（未配 BBW_AIGW_DEV_TOKEN；表驱动路由生效后为真实上游，否则 mock 确定性向量）")
+		log.Println("kb 嵌入链路：直调网关 Router 供应商（未配 BBC_AIGW_DEV_TOKEN；表驱动路由生效后为真实上游，否则 mock 确定性向量）")
 	}
 	kbMod := kb.NewModule(kbservice.Options{
 		Embedder:         kbEmbed,
@@ -702,15 +702,15 @@ func main() {
 			usageRows, usageMode = ur.UsageRows, "pg"
 		}
 	}
-	// 管理员白名单（BBW_ADMIN_ACCOUNTS，empno 逗号分隔）：PG 模式 scopes 不落库时的判定兜底
+	// 管理员白名单（BBC_ADMIN_ACCOUNTS，empno 逗号分隔）：PG 模式 scopes 不落库时的判定兜底
 	adminAccounts := []string{}
-	for _, s := range strings.Split(envOr("BBW_ADMIN_ACCOUNTS", ""), ",") {
+	for _, s := range strings.Split(envOr("BBC_ADMIN_ACCOUNTS", ""), ",") {
 		if s = strings.TrimSpace(s); s != "" {
 			adminAccounts = append(adminAccounts, s)
 		}
 	}
 	if len(adminAccounts) > 0 {
-		log.Printf("admin 白名单（BBW_ADMIN_ACCOUNTS）：%v", adminAccounts)
+		log.Printf("admin 白名单（BBC_ADMIN_ACCOUNTS）：%v", adminAccounts)
 	}
 	adminOpts := adminservice.Options{
 		UsersTotal:     orgAdmin.CountUsers,
@@ -1076,7 +1076,7 @@ func main() {
 	}
 	mailPush := gateway.UserPusher{Hub: hub} // mail.new 直推（瞬态不经 eventbus）
 	mailMod := mail.NewModule(mailservice.Options{
-		DefaultDomain: envOr("BBW_MAIL_DOMAIN", "corp.company.internal"),
+		DefaultDomain: envOr("BBC_MAIL_DOMAIN", "corp.company.internal"),
 		// 懒开户寻址：employee_no@默认域（22 §4.1 命名策略）
 		UserEmployeeNo: func(tenantID, userID int64) (string, error) {
 			u, err := orgMod.API().GetUser(context.Background(), userID)
@@ -1110,7 +1110,7 @@ func main() {
 
 	// 全局中间件链（D02 §6 固定顺序：trace→recovery→access-log→rate-limit→…）
 	limiter := httpx.NewLimiter(50, 100)                                                  // 阶段一按 IP；三档（租户/用户/Agent）阶段二接 Redis
-	corsOrigins := strings.Split(envOr("BBW_CORS_ORIGINS", "http://localhost:5173"), ",") // 开发态跨域；生产同源反代空转
+	corsOrigins := strings.Split(envOr("BBC_CORS_ORIGINS", "http://localhost:5173"), ",") // 开发态跨域；生产同源反代空转
 	handler := httpx.Chain(mux,
 		httpx.Trace,
 		httpx.Recovery,
@@ -1121,7 +1121,7 @@ func main() {
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
-		log.Printf("bbw-server(阶段一) 监听 %s | WS: /ws/connect | 健康检查: /healthz", cfg.HTTPAddr)
+		log.Printf("bbc-server(阶段一) 监听 %s | WS: /ws/connect | 健康检查: /healthz", cfg.HTTPAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %v", err)
 		}
@@ -1296,7 +1296,7 @@ type setupBootstrapReq struct {
 // handleSetupStatus 初始化状态（免认证；仅回布尔）
 func handleSetupStatus(orgs orgrepo.Repo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n, err := orgs.CountUsers(r.Context(), bbwpg.DefaultTenantID)
+		n, err := orgs.CountUsers(r.Context(), bbcpg.DefaultTenantID)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return
@@ -1305,7 +1305,7 @@ func handleSetupStatus(orgs orgrepo.Repo) http.HandlerFunc {
 	}
 }
 
-// setupAdvisoryKey 初始化引导互斥的 advisory lock 键（"bbwsetup" ASCII hex，正 int64）
+// setupAdvisoryKey 初始化引导互斥的 advisory lock 键（"bbcsetup" ASCII hex，正 int64）
 const setupAdvisoryKey int64 = 0x6262777365747570
 
 // setupGate 初始化引导互斥：收两笔并发 bootstrap 在 CountUsers 空检查的双写
@@ -1375,7 +1375,7 @@ func handleSetupBootstrap(orgs orgrepo.Repo, roles adminrepo.RoleRepo, gate *set
 			return
 		}
 		defer unlock()
-		n, err := orgs.CountUsers(ctx, bbwpg.DefaultTenantID)
+		n, err := orgs.CountUsers(ctx, bbcpg.DefaultTenantID)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return
@@ -1390,7 +1390,7 @@ func handleSetupBootstrap(orgs orgrepo.Repo, roles adminrepo.RoleRepo, gate *set
 			return
 		}
 		created, err := orgs.CreateUser(ctx, orgapi.User{
-			TenantID: bbwpg.DefaultTenantID, Type: orgapi.UserTypeHuman,
+			TenantID: bbcpg.DefaultTenantID, Type: orgapi.UserTypeHuman,
 			EmployeeNo: req.EmployeeNo, DisplayName: req.DisplayName,
 			Email: req.EmployeeNo + "@" + mailDomain, PasswordHash: hash, Status: orgapi.UserStatusActive,
 		})
@@ -2158,7 +2158,7 @@ func handleFileUpload(svc fileapi.FileService) http.HandlerFunc {
 			switch part.FormName() {
 			case "file":
 				if !gotFile { // 多文件只取首个（D06 §3.3 多文件逐张成消息由端侧拆分）
-					tmp, terr := os.CreateTemp("", "bbw-upload-*")
+					tmp, terr := os.CreateTemp("", "bbc-upload-*")
 					if terr != nil {
 						httpx.Fail(w, r, errx.New(errx.CodeInternal, "临时文件创建失败"))
 						return
@@ -2691,18 +2691,18 @@ func pathID(r *http.Request, name string) (int64, error) {
 }
 
 // runMigrate 独立迁移子命令（upgrade.sh 第 3 步 / helm pre-install Job 引用；
-// 与启动自动迁移同实现 bbwpg.Migrate，幂等可重复执行，完成后退出）。
+// 与启动自动迁移同实现 bbcpg.Migrate，幂等可重复执行，完成后退出）。
 func runMigrate() {
 	cfg := config.Load()
 	if cfg.DBDSN == "" {
-		log.Fatal("migrate: 需设置 BBW_DB_DSN（空 DSN 为内存模式，无库可迁）")
+		log.Fatal("migrate: 需设置 BBC_DB_DSN（空 DSN 为内存模式，无库可迁）")
 	}
-	pool, err := bbwpg.New(context.Background(), cfg.DBDSN)
+	pool, err := bbcpg.New(context.Background(), cfg.DBDSN)
 	if err != nil {
 		log.Fatalf("migrate: PG 连接失败: %v", err)
 	}
 	defer pool.Close()
-	if err := bbwpg.Migrate(context.Background(), pool); err != nil {
+	if err := bbcpg.Migrate(context.Background(), pool); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
 	log.Printf("migrate: 迁移完成（注册表 %d 个版本，已应用项幂等跳过）", len(migrations.List))
@@ -2711,26 +2711,26 @@ func runMigrate() {
 // runAdminBootstrap 内置平台管理员引导（16 篇 §2.2；init/01-init.sh 与 helm NOTES
 // 引用的命令）。口令仅经 flag/环境注入，不落盘不落日志；幂等：工号已存在则拒绝
 // 重复建户、不重置口令（重置走管理端）。RBAC 阶段二：建户后自动授予内置
-// 「管理员」角色——登录即得 admin:* 全集，无需配置白名单；BBW_ADMIN_ACCOUNTS
+// 「管理员」角色——登录即得 admin:* 全集，无需配置白名单；BBC_ADMIN_ACCOUNTS
 // 降级为应急通道（角色链路失效时救砖用）。
 func runAdminBootstrap(args []string) {
 	fs := flag.NewFlagSet("admin bootstrap", flag.ContinueOnError)
-	password := fs.String("admin-password", os.Getenv("BBW_ADMIN_BOOTSTRAP_PASSWORD"),
-		"管理员口令（优先经 KMS 注入；兜底读 BBW_ADMIN_BOOTSTRAP_PASSWORD）")
+	password := fs.String("admin-password", os.Getenv("BBC_ADMIN_BOOTSTRAP_PASSWORD"),
+		"管理员口令（优先经 KMS 注入；兜底读 BBC_ADMIN_BOOTSTRAP_PASSWORD）")
 	empno := fs.String("empno", "admin", "管理员工号")
 	if err := fs.Parse(args); err != nil || *password == "" {
-		log.Fatal("用法: bbw-server admin bootstrap --admin-password <强密码> [--empno admin]")
+		log.Fatal("用法: bbc-server admin bootstrap --admin-password <强密码> [--empno admin]")
 	}
 	cfg := config.Load()
 	if cfg.DBDSN == "" {
-		log.Fatal("admin bootstrap: 需设置 BBW_DB_DSN（管理员账号持久化于 PG）")
+		log.Fatal("admin bootstrap: 需设置 BBC_DB_DSN（管理员账号持久化于 PG）")
 	}
-	pool, err := bbwpg.New(context.Background(), cfg.DBDSN)
+	pool, err := bbcpg.New(context.Background(), cfg.DBDSN)
 	if err != nil {
 		log.Fatalf("admin bootstrap: PG 连接失败: %v", err)
 	}
 	defer pool.Close()
-	if err := bbwpg.Migrate(context.Background(), pool); err != nil {
+	if err := bbcpg.Migrate(context.Background(), pool); err != nil {
 		log.Fatalf("admin bootstrap: 迁移失败（先迁库后建户）: %v", err)
 	}
 	repo := orgrepo.NewPostgres(pool)
@@ -2756,7 +2756,7 @@ func runAdminBootstrap(args []string) {
 	seedBuiltinRoles(roleStore)
 	grantAdminRole(ctx, roleStore, created.ID)
 	log.Printf("admin bootstrap: 管理员就绪（uid=%d 工号=%s 租户=1，已授予内置「管理员」角色）。"+
-		"BBW_ADMIN_ACCOUNTS 白名单仅为应急通道，默认无需配置", created.ID, *empno)
+		"BBC_ADMIN_ACCOUNTS 白名单仅为应急通道，默认无需配置", created.ID, *empno)
 }
 
 // grantAdminRole 给用户挂内置「管理员」角色（幂等：重复授权静默忽略；失败不阻断
@@ -2764,7 +2764,7 @@ func runAdminBootstrap(args []string) {
 func grantAdminRole(ctx context.Context, store adminrepo.RoleRepo, userID int64) {
 	roles, err := store.ListRoles(ctx, 1)
 	if err != nil {
-		log.Printf("admin bootstrap: 角色读取失败（%v）——可稍后在管理端授权，或配置 BBW_ADMIN_ACCOUNTS 应急", err)
+		log.Printf("admin bootstrap: 角色读取失败（%v）——可稍后在管理端授权，或配置 BBC_ADMIN_ACCOUNTS 应急", err)
 		return
 	}
 	for _, r := range roles {
@@ -2774,11 +2774,11 @@ func grantAdminRole(ctx context.Context, store adminrepo.RoleRepo, userID int64)
 		if err := store.InsertUserRole(ctx, adminrepo.UserRole{
 			TenantID: 1, UserID: userID, RoleID: r.ID,
 		}); err != nil && err != adminrepo.ErrDupGrant {
-			log.Printf("admin bootstrap: 角色授权失败（%v）——可稍后在管理端授权，或配置 BBW_ADMIN_ACCOUNTS 应急", err)
+			log.Printf("admin bootstrap: 角色授权失败（%v）——可稍后在管理端授权，或配置 BBC_ADMIN_ACCOUNTS 应急", err)
 		}
 		return
 	}
-	log.Printf("admin bootstrap: 未找到内置「管理员」角色（种子异常）——可稍后在管理端授权，或配置 BBW_ADMIN_ACCOUNTS 应急")
+	log.Printf("admin bootstrap: 未找到内置「管理员」角色（种子异常）——可稍后在管理端授权，或配置 BBC_ADMIN_ACCOUNTS 应急")
 }
 
 // seedDemo 演示数据：alice/bob（口令 demo-pass-123）+ 单聊会话。
@@ -2796,12 +2796,12 @@ func seedDemo(orgRepo orgrepo.Repo, msgRepo messagerepo.Repo) {
 	}
 	users := []orgapi.User{
 		{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "alice", DisplayName: "Alice",
-			Email: "alice@bbw.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
+			Email: "alice@bbc.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
 			// admin 权限点 v0.1：seed 即授权（阶段二换 role/user_role 表装配；PG 模式
-			// scopes 不落库，管理判定走 BBW_ADMIN_ACCOUNTS=alice 白名单，登记）
+			// scopes 不落库，管理判定走 BBC_ADMIN_ACCOUNTS=alice 白名单，登记）
 			Scopes: []string{"im:message:send", "agent:session:use", "admin", "admin:user:manage", "admin:policy:manage", "admin:audit:read", "admin:usage:read"}},
 		{TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: "bob", DisplayName: "Bob",
-			Email: "bob@bbw.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
+			Email: "bob@bbc.io", PasswordHash: hash, Status: orgapi.UserStatusActive,
 			Scopes: []string{"im:message:send"}},
 	}
 	ids := make([]int64, 0, len(users))

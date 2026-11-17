@@ -10,13 +10,13 @@
 //	① 连接层：单体部署下连接即本服务，无独立互信凭证（生态外部 connector 的
 //	   KMS 代持凭证为 10 篇 §5 路径 B，随 D09 落地）；
 //	② 主体层：sub=用户——每请求携带 OBO/用户 JWT（Authorization: Bearer，
-//	   stdio 语义的 params._meta.bbwObo 同样收下），权限唯一依据；数据过滤
+//	   stdio 语义的 params._meta.bbcObo 同样收下），权限唯一依据；数据过滤
 //	   （空间可见性）由域服务按 uid 执行（防线三 RLS）；
 //	③ 归因层：act（agent:{session} / expert:{personaId}:{activationId}）——
-//	   params._meta.bbwAct 或 X-BBW-Act 头，仅审计不影响权限。
+//	   params._meta.bbcAct 或 X-BBC-Act 头，仅审计不影响权限。
 //
 // 工具治理属性（风险级/OBO scope/门控）权威源仍是 09 篇 §3.1 表——供给方式与
-// 治理解耦：风险级经 tools/list annotations["x-bbw-risk"] 声明（客户端默认"中"），
+// 治理解耦：风险级经 tools/list annotations["x-bbc-risk"] 声明（客户端默认"中"），
 // OBO scope 最小化在本层验签后校验（防线二），客户端九步管线 gate/审批照常执行。
 //
 // 工具范围（OQ-B26 试点 kb_query 已落；im_send/file_upload 治理属性

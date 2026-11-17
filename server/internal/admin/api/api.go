@@ -199,7 +199,7 @@ type NoticeDTO struct {
 	CreatedAt int64  `json:"created_at"` // ms
 }
 
-// ImportUserRow 导入输入行（empno,name,email；初始口令=工号+!BBW，首登改密阶段二接 03 篇）
+// ImportUserRow 导入输入行（empno,name,email；初始口令=工号+!BBC，首登改密阶段二接 03 篇）
 type ImportUserRow struct {
 	Empno string `json:"empno"`
 	Name  string `json:"name"`
@@ -207,7 +207,7 @@ type ImportUserRow struct {
 }
 
 // CreateUserReq 单建用户（2026-11-12 通讯录合并页：组织树上直接开人）——
-// 初始口令=工号+!BBW 首登强制改密（与批量导入同口径）；EmployeeNo 空则服务端
+// 初始口令=工号+!BBC 首登强制改密（与批量导入同口径）；EmployeeNo 空则服务端
 // 按姓名全拼自动生成（重名两位补零递增 zhangsan02，用户拍板口径）
 type CreateUserReq struct {
 	EmployeeNo  string `json:"employee_no,omitempty"` // 空串=自动生成建议值
@@ -239,7 +239,7 @@ type AgentUserRow struct {
 	Name     string `json:"name"`
 	Requests int64  `json:"requests"`  // 计量窗内请求数
 	Tokens   int64  `json:"tokens"`    // prompt+completion
-	Sessions int    `json:"sessions"`  // 活跃会话数（X-BBW-Agent-Session 去重）
+	Sessions int    `json:"sessions"`  // 活跃会话数（X-BBC-Agent-Session 去重）
 	LastHour int64  `json:"last_hour"` // 最近开票小时（ms）
 }
 
@@ -278,7 +278,7 @@ type AdminService interface {
 	// ── 批量导入（PAD-06；v0.1 同步 ≤100 行/次，admin_task 异步化阶段二登记）──
 	BatchImportUsers(ctx context.Context, tenantID, operatorID int64, rows []ImportUserRow) (*ImportResult, error)
 	// ── 单建用户（2026-11-12 通讯录合并页）──
-	// CreateUser 单建（工号空=按姓名全拼自动生成；可选挂部门/授权/审计；初始口令=工号+!BBW）
+	// CreateUser 单建（工号空=按姓名全拼自动生成；可选挂部门/授权/审计；初始口令=工号+!BBC）
 	CreateUser(ctx context.Context, tenantID, operatorID int64, req CreateUserReq) (*AdminUser, error)
 	// SuggestEmpno 工号建议（姓名→全拼小写；重名 zhangsan02 两位补零递增；前端预填可改）
 	SuggestEmpno(ctx context.Context, tenantID int64, name string) (string, error)

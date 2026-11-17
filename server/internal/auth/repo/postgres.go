@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // advisory lock 键（表级 ID 分配互斥，见 AllocID）
@@ -45,7 +45,7 @@ func (t *PostgresTokens) Create(ctx context.Context, tk RefreshToken) (RefreshTo
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
 	if tk.ID == 0 {
-		if tk.ID, err = bbwpg.AllocID(ctx, tx, lockKeyRefreshToken, "refresh_token"); err != nil {
+		if tk.ID, err = bbcpg.AllocID(ctx, tx, lockKeyRefreshToken, "refresh_token"); err != nil {
 			return RefreshToken{}, err
 		}
 	}
@@ -133,7 +133,7 @@ func (d *PostgresDevices) Upsert(ctx context.Context, dv Device) (Device, error)
 		dv.ID = id
 	case errors.Is(err, pgx.ErrNoRows): // 新设备：锁内分配 ID 插入
 		if dv.ID == 0 {
-			if dv.ID, err = bbwpg.AllocID(ctx, tx, lockKeyDevice, "device"); err != nil {
+			if dv.ID, err = bbcpg.AllocID(ctx, tx, lockKeyDevice, "device"); err != nil {
 				return Device{}, err
 			}
 		}

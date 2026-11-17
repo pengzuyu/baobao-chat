@@ -21,7 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	messageapi "github.com/baobaochat/server/internal/message/api"
-	bbwpg "github.com/baobaochat/server/internal/platform/pgxpool"
+	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
 // advisory lock 键（表级 ID 分配互斥，见 AllocID）
@@ -140,7 +140,7 @@ func (p *Postgres) CreateConversation(ctx context.Context, c Conversation) (Conv
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
 	if c.ID == 0 {
-		if c.ID, err = bbwpg.AllocID(ctx, tx, lockKeyConversation, "conversation"); err != nil {
+		if c.ID, err = bbcpg.AllocID(ctx, tx, lockKeyConversation, "conversation"); err != nil {
 			return Conversation{}, err
 		}
 	}
@@ -751,7 +751,7 @@ func (p *Postgres) CreateApply(ctx context.Context, a Apply) (Apply, error) {
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
 	if a.ID == 0 {
-		if a.ID, err = bbwpg.AllocID(ctx, tx, lockKeyConvApply, "conversation_apply"); err != nil {
+		if a.ID, err = bbcpg.AllocID(ctx, tx, lockKeyConvApply, "conversation_apply"); err != nil {
 			return Apply{}, err
 		}
 	}
@@ -924,7 +924,7 @@ func (p *Postgres) AddFavorite(ctx context.Context, userID, msgID, convID int64)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
 	var favID int64
-	if favID, err = bbwpg.AllocID(ctx, tx, lockKeyMsgFavorite, "message_favorite"); err != nil {
+	if favID, err = bbcpg.AllocID(ctx, tx, lockKeyMsgFavorite, "message_favorite"); err != nil {
 		return Favorite{}, false, err
 	}
 	tag, err := tx.Exec(ctx, `
@@ -1080,7 +1080,7 @@ func (p *Postgres) InsertNotification(ctx context.Context, n Notification) (Noti
 		return Notification{}, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 Rollback 为 no-op
-	if n.ID, err = bbwpg.AllocID(ctx, tx, lockKeyUserNotif, "user_notification"); err != nil {
+	if n.ID, err = bbcpg.AllocID(ctx, tx, lockKeyUserNotif, "user_notification"); err != nil {
 		return Notification{}, err
 	}
 	tenantExpr := notifTenantExpr()
@@ -1135,7 +1135,7 @@ func (p *Postgres) InsertMergedNotification(ctx context.Context, n Notification,
 		return Notification{}, false, err
 	}
 	// 未命中：新行（同 InsertNotification 路径，事务内完成）
-	if n.ID, err = bbwpg.AllocID(ctx, tx, lockKeyUserNotif, "user_notification"); err != nil {
+	if n.ID, err = bbcpg.AllocID(ctx, tx, lockKeyUserNotif, "user_notification"); err != nil {
 		return Notification{}, false, err
 	}
 	if _, err = tx.Exec(ctx, `
