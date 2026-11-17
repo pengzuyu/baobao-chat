@@ -1,6 +1,6 @@
 /**
  * OIDC desktop 确认链 API（D28 批2/Q2b）：
- * 深链 bbw://auth → 确认卡数据（GET confirm/info）→ 点头像确认（POST confirm）。
+ * 深链 bbc://auth → 确认卡数据（GET confirm/info）→ 点头像确认（POST confirm）。
  * 端点在 /oauth2/*（非 /api/v1 前缀）——path 传绝对 URL，http.ts resolveUrl 直通。
  */
 

@@ -428,8 +428,8 @@ function RoutesPanel() {
   const TIERS: Array<{ tier: Tier; label: string; desc: string }> = [
     { tier: 'fast', label: '快速档', desc: '轻量任务/工具调用循环' },
     { tier: 'strong', label: '强力档', desc: '复杂推理/长文写作' },
-    { tier: 'embed', label: '嵌入档', desc: '知识库向量化（bbw-embed；可选，未配走 mock 兜底向量）' },
-    { tier: 'rerank', label: '重排档', desc: '知识库检索重排（bbw-rerank；可选，未配走词面重排兜底）' },
+    { tier: 'embed', label: '嵌入档', desc: '知识库向量化（bbc-embed；可选，未配走 mock 兜底向量）' },
+    { tier: 'rerank', label: '重排档', desc: '知识库检索重排（bbc-rerank；可选，未配走词面重排兜底）' },
   ];
 
   const routesColumns: ColumnsType<(typeof TIERS)[number]> = [
@@ -509,7 +509,7 @@ function RoutesPanel() {
         title={
           <Space size={8}>
             默认模型（全员路由）
-            <Typography.Text type="secondary">档位别名 bbw-fast/bbw-strong/bbw-embed/bbw-rerank → 此处主选；主选失败自动切备选（§4.4 降级链）；embed/rerank 可选——留空=沿用现有配置/内置兜底</Typography.Text>
+            <Typography.Text type="secondary">档位别名 bbc-fast/bbc-strong/bbc-embed/bbc-rerank → 此处主选；主选失败自动切备选（§4.4 降级链）；embed/rerank 可选——留空=沿用现有配置/内置兜底</Typography.Text>
           </Space>
         }
       >

@@ -1,6 +1,6 @@
 /**
  * 按钮基元（D26-O1 包装化）：内部换 antd Button，对外 API 不动（variant/loading/原生属性），
- * 调用点零改动。观感随 antd theme（antdThemeFrom 单源）——旧 bbw-btn 自研样式已退役
+ * 调用点零改动。观感随 antd theme（antdThemeFrom 单源）——旧 bbc-btn 自研样式已退役
  * （2026-11-13 拍板：不自带样式，统一 antd 原生，微调走 theme）。
  */
 

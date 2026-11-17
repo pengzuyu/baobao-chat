@@ -9,7 +9,7 @@
  * D26-O3 antd 换装：树→antd Tree（titleRender 图标/人数 Tag/hover Popover 详情卡/徽标）；
  * 搜索下拉→Popover+Menu（分组段+禁用占位行）；右侧档案→Card+Descriptions+Breadcrumb；
  * 头像→Avatar、等宽字→Text code、提示→Text secondary、alert→Modal.error；
- * 布局内联 style + antd token（bbw-contacts / org-node / icon-btn 等自研样式全退役，
+ * 布局内联 style + antd token（bbc-contacts / org-node / icon-btn 等自研样式全退役，
  * 定位闪烁由 CSS 类改 WAAPI el.animate——无 CSS 依赖）。
  */
 

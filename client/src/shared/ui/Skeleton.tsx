@@ -13,7 +13,7 @@ interface SkeletonProps {
 
 /** 单条骨架（保留自研：IM 流式气泡等保留域专用） */
 export function Skeleton({ width = '100%', height = 14, className }: SkeletonProps) {
-  return <div className={className ? `bbw-skeleton ${className}` : 'bbw-skeleton'} style={{ width, height }} />;
+  return <div className={className ? `bbc-skeleton ${className}` : 'bbc-skeleton'} style={{ width, height }} />;
 }
 
 /** 列表骨架（条形×N，默认 8 条；antd 段落骨架驱动） */

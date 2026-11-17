@@ -1,7 +1,7 @@
 /**
  * 全局样式：reset + 应用壳 + 各页面布局（D01 §5 断点四档规则落点）
  * 断点以窗口宽度近似实现（XL/L/M/S），正式版应以内容区 ResizeObserver 宽度为准。
- * 主题：全部色值经 var(--bbw-*) 令牌引用（tokens.css 亮/暗双映射），禁止硬编码。
+ * 主题：全部色值经 var(--bbc-*) 令牌引用（tokens.css 亮/暗双映射），禁止硬编码。
  */
 
 * {
@@ -17,22 +17,22 @@ body,
 }
 
 html[data-theme='dark'] {
-  background: var(--bbw-gray-1); /* 防 CSS 加载前白闪（与 index.html 内联脚本兜底配合） */
+  background: var(--bbc-gray-1); /* 防 CSS 加载前白闪（与 index.html 内联脚本兜底配合） */
 }
 
 body {
-  font-family: var(--bbw-font-family);
-  font-size: var(--bbw-font-14);
-  line-height: var(--bbw-line-height);
-  color: var(--bbw-gray-8);
-  background: var(--bbw-gray-1);
+  font-family: var(--bbc-font-family);
+  font-size: var(--bbc-font-14);
+  line-height: var(--bbc-line-height);
+  color: var(--bbc-gray-8);
+  background: var(--bbc-gray-1);
   -webkit-font-smoothing: antialiased;
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* 焦点环（D01 §10 可访问性基线：2px primary） */
 :focus-visible {
-  outline: 2px solid var(--bbw-primary);
+  outline: 2px solid var(--bbc-primary);
   outline-offset: 1px;
 }
 
@@ -42,11 +42,11 @@ body {
   height: 6px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--bbw-gray-3);
+  background: var(--bbc-gray-3);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--bbw-gray-4);
+  background: var(--bbc-gray-4);
 }
 
 /* D26-O6b：原「动效」段已随 antd 全量收口退役（2026-11-14） */
@@ -77,17 +77,17 @@ body {
   background: transparent;
   width: 28px;
   height: 28px;
-  border-radius: var(--bbw-radius-control);
+  border-radius: var(--bbc-radius-control);
   cursor: pointer;
-  color: var(--bbw-gray-7);
+  color: var(--bbc-gray-7);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   transition: background 0.15s ease, color 0.15s ease;
 }
 .icon-btn:hover {
-  background: var(--bbw-gray-2);
-  color: var(--bbw-gray-8);
+  background: var(--bbc-gray-2);
+  color: var(--bbc-gray-8);
 }
 
 /* D26-O6b：原「输入区工具栏按钮（MessageInput）」段已随 antd 全量收口退役（2026-11-14） */
@@ -111,21 +111,21 @@ body {
 
 /* 二级列表栏 264px */
 .im-list-col {
-  width: var(--bbw-list-width);
+  width: var(--bbc-list-width);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--bbw-gray-3);
-  background: var(--bbw-gray-1);
+  border-right: 1px solid var(--bbc-gray-3);
+  background: var(--bbc-gray-1);
   min-height: 0;
 }
 
 .im-list-col__header {
-  padding: var(--bbw-space-2) var(--bbw-space-3);
+  padding: var(--bbc-space-2) var(--bbc-space-3);
   display: flex;
-  gap: var(--bbw-space-2);
+  gap: var(--bbc-space-2);
   align-items: center;
-  border-bottom: 1px solid var(--bbw-gray-3);
+  border-bottom: 1px solid var(--bbc-gray-3);
 }
 /* D26-O6b：原「.im-list-col__body」段已随 antd 全量收口退役（2026-11-14） */
 
@@ -140,7 +140,7 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bbw-gray-1);
+  background: var(--bbc-gray-1);
   min-height: 0;
 }
 
@@ -157,10 +157,10 @@ body {
 /* D26-O6b：原「禁言态（广播群普通成员）」段已随 antd 全量收口退役（2026-11-14） */
 /* 详情侧栏 304px */
 .im-detail-col {
-  width: var(--bbw-detail-width);
+  width: var(--bbc-detail-width);
   flex-shrink: 0;
-  border-left: 1px solid var(--bbw-gray-3);
-  background: var(--bbw-gray-1);
+  border-left: 1px solid var(--bbc-gray-3);
+  background: var(--bbc-gray-1);
   overflow-y: auto;
   min-height: 0;
 }
@@ -171,15 +171,15 @@ body {
   top: 0;
   right: 0;
   bottom: 0;
-  z-index: var(--bbw-z-drawer);
-  box-shadow: var(--bbw-shadow-pop);
+  z-index: var(--bbc-z-drawer);
+  box-shadow: var(--bbc-shadow-pop);
 }
 
 .im-detail-mask {
   position: absolute;
   inset: 0;
-  z-index: calc(var(--bbw-z-drawer) - 1);
-  background: var(--bbw-mask);
+  z-index: calc(var(--bbc-z-drawer) - 1);
+  background: var(--bbc-mask);
 }
 
 /* D26-O6b：原「详情面板（卡片分区）」段已随 antd 全量收口退役（2026-11-14） */
@@ -195,21 +195,21 @@ body {
 /* D26-O6：原「设置页族（D01 §4.2）」段已随 antd 换装退役（2026-11-13） */
 
 /* ============ 骨架屏 shimmer ============ */
-.bbw-skeleton {
-  background: var(--bbw-gray-2);
-  border-radius: var(--bbw-radius-control);
+.bbc-skeleton {
+  background: var(--bbc-gray-2);
+  border-radius: var(--bbc-radius-control);
   position: relative;
   overflow: hidden;
 }
-.bbw-skeleton::after {
+.bbc-skeleton::after {
   content: '';
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, var(--bbw-shimmer), transparent);
-  animation: bbw-shimmer 1.4s infinite;
+  background: linear-gradient(90deg, transparent, var(--bbc-shimmer), transparent);
+  animation: bbc-shimmer 1.4s infinite;
 }
-@keyframes bbw-shimmer {
+@keyframes bbc-shimmer {
   100% {
     transform: translateX(100%);
   }
@@ -223,16 +223,16 @@ body {
   width: 100%;
 }
 .skl-list {
-  gap: var(--bbw-space-4);
-  padding: var(--bbw-space-4);
+  gap: var(--bbc-space-4);
+  padding: var(--bbc-space-4);
 }
 .skl-stream {
   gap: 14px;
-  padding: var(--bbw-space-4);
+  padding: var(--bbc-space-4);
 }
 .skl-stream__row {
   display: flex;
-  gap: var(--bbw-space-2);
+  gap: var(--bbc-space-2);
 }
 .skl-stream__row--end {
   align-self: flex-end;
@@ -242,7 +242,7 @@ body {
   border-radius: 8px;
 }
 .skl-bubble {
-  border-radius: var(--bbw-radius-bubble);
+  border-radius: var(--bbc-radius-bubble);
 }
 
 /* ============ 断点四档（D01 §5.2，M/S 档布局降级）============ */
@@ -250,7 +250,7 @@ body {
 /* M 档 1024-1279：二级列表栏收窄 56px 图标条 */
 @media (max-width: 1279px) and (min-width: 1024px) {
   .im-list-col {
-    width: var(--bbw-nav-width);
+    width: var(--bbc-nav-width);
   }
   .im-list-col__header {
     display: none;
@@ -272,7 +272,7 @@ body {
 
 @keyframes msg-flash {
   50% {
-    background: var(--bbw-primary-light);
+    background: var(--bbc-primary-light);
   }
 }
 
@@ -292,7 +292,7 @@ body {
   width: 40px;
   height: 40px;
   border-radius: 6px;
-  background: var(--bbw-gray-2);
+  background: var(--bbc-gray-2);
   display: inline-block;
 }
 /* D26-O6b：原「.sticker-panel__del、.sticker-panel__item:hover .sticker-pane」段已随 antd 全量收口退役（2026-11-14） */
@@ -325,8 +325,8 @@ body {
 .agent-md {
   display: flex;
   flex-direction: column;
-  gap: var(--bbw-space-2);
-  font-size: var(--bbw-font-14);
+  gap: var(--bbc-space-2);
+  font-size: var(--bbc-font-14);
 }
 
 .agent-md__p {
@@ -334,21 +334,21 @@ body {
 }
 
 .agent-md__h {
-  color: var(--bbw-gray-10);
+  color: var(--bbc-gray-10);
   font-weight: 600;
   line-height: 1.4;
 }
 
 .agent-md__h--1 {
-  font-size: var(--bbw-font-16);
+  font-size: var(--bbc-font-16);
 }
 
 .agent-md__h--2 {
-  font-size: var(--bbw-font-14);
+  font-size: var(--bbc-font-14);
 }
 
 .agent-md__h--3 {
-  font-size: var(--bbw-font-13);
+  font-size: var(--bbc-font-13);
 }
 
 .agent-md__list {
@@ -359,18 +359,18 @@ body {
 }
 
 .agent-md__code {
-  background: var(--bbw-gray-1);
-  border: 1px solid var(--bbw-gray-3);
-  border-radius: var(--bbw-radius-control);
-  padding: var(--bbw-space-2) var(--bbw-space-3);
+  background: var(--bbc-gray-1);
+  border: 1px solid var(--bbc-gray-3);
+  border-radius: var(--bbc-radius-control);
+  padding: var(--bbc-space-2) var(--bbc-space-3);
   overflow-x: auto;
-  font-family: var(--bbw-font-mono);
-  font-size: var(--bbw-font-12);
+  font-family: var(--bbc-font-mono);
+  font-size: var(--bbc-font-12);
   line-height: 1.6;
 }
 
 .agent-md code {
-  font-family: var(--bbw-font-mono);
+  font-family: var(--bbc-font-mono);
   font-size: 0.92em;
   background: rgba(127, 134, 145, 0.14);
   border-radius: 4px;
@@ -380,19 +380,19 @@ body {
 .agent-md__table {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--bbw-font-13);
+  font-size: var(--bbc-font-13);
 }
 
 .agent-md__table td {
-  border: 1px solid var(--bbw-gray-3);
-  padding: 4px var(--bbw-space-2);
+  border: 1px solid var(--bbc-gray-3);
+  padding: 4px var(--bbc-space-2);
   text-align: left;
 }
 
 .agent-md__tr--head td {
-  background: var(--bbw-gray-2);
+  background: var(--bbc-gray-2);
   font-weight: 500;
-  color: var(--bbw-gray-9);
+  color: var(--bbc-gray-9);
 }
 
 /* 思考摘要折叠（channel=reasoning）——旧 ReasoningCollapse 已删（2026-11-11 过程区
@@ -422,14 +422,14 @@ body {
 /* 列表头动作区（收藏入口 + 新建） */
 .im-list-col__header-actions {
   display: flex;
-  gap: var(--bbw-space-1);
+  gap: var(--bbc-space-1);
   flex-shrink: 0;
 }
 
 /* D26-O6b：原「搜索面板：输入框 + 绝对定位下拉结果」段已随 antd 全量收口退役（2026-11-14） */
 /* D26-O6b：原「六态提示（empty/offline/error 黄条）」段已随 antd 全量收口退役（2026-11-14） */
 /* D26-O6b：原「loading shimmer×5（服务端态查询中）」段已随 antd 全量收口退役（2026-11-14） */
-/* D26-O6b：原「D26-O6：与骨架 bbw-shimmer 同名级联覆盖（存量隐患）——background-position 版拆分」段已随 antd 全量收口退役（2026-11-14） */
+/* D26-O6b：原「D26-O6：与骨架 bbc-shimmer 同名级联覆盖（存量隐患）——background-position 版拆分」段已随 antd 全量收口退役（2026-11-14） */
 /* D26-O6b：原「结果条目：命中片段高亮 + 会话名/发送人/日期」段已随 antd 全量收口退役（2026-11-14） */
 /* ══════════════ PIM-08 我的收藏（D03 §3.8 /im/favorites） ══════════════ */
 /* D26-O6b：原「PIM-08 我的收藏（D03 §3.8 /im/favorites）」段已随 antd 全量收口退役（2026-11-14） */
@@ -449,8 +449,8 @@ body {
   height: 16px;
   padding: 0 4px;
   border-radius: 8px;
-  background: var(--bbw-danger);
-  color: var(--bbw-text-on-fill);
+  background: var(--bbc-danger);
+  color: var(--bbc-text-on-fill);
   font-size: 11px;
   line-height: 16px;
   text-align: center;
@@ -490,7 +490,7 @@ body {
 .merge-drawer__entry {
   display: flex;
   flex-direction: column;
-  margin-bottom: var(--bbw-space-1);
+  margin-bottom: var(--bbc-space-1);
 }
 
 .merge-drawer__item {
@@ -503,18 +503,18 @@ body {
   border-radius: 8px;
   cursor: pointer;
   text-align: left;
-  color: var(--bbw-gray-5);
+  color: var(--bbc-gray-5);
 }
 
 .merge-drawer__item:hover {
-  background: var(--bbw-gray-2);
+  background: var(--bbc-gray-2);
 }
 
 .merge-drawer__sender {
   flex-shrink: 0;
-  font-size: var(--bbw-font-13);
+  font-size: var(--bbc-font-13);
   font-weight: 500;
-  color: var(--bbw-gray-8);
+  color: var(--bbc-gray-8);
   max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -527,8 +527,8 @@ body {
   gap: 4px;
   flex: 1;
   min-width: 0;
-  font-size: var(--bbw-font-13);
-  color: var(--bbw-gray-6);
+  font-size: var(--bbc-font-13);
+  color: var(--bbc-gray-6);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -536,10 +536,10 @@ body {
 
 .merge-drawer__snap {
   margin: 0 10px 6px 30px;
-  padding: var(--bbw-space-2);
-  border-left: 3px solid var(--bbw-gray-3);
+  padding: var(--bbc-space-2);
+  border-left: 3px solid var(--bbc-gray-3);
   border-radius: 4px;
-  background: var(--bbw-gray-1);
+  background: var(--bbc-gray-1);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -548,8 +548,8 @@ body {
 .merge-drawer__snap--loading {
   flex-direction: row;
   align-items: center;
-  color: var(--bbw-gray-5);
-  font-size: var(--bbw-font-12);
+  color: var(--bbc-gray-5);
+  font-size: var(--bbc-font-12);
 }
 
 .merge-drawer__snap--loading .skeleton-block {
@@ -561,8 +561,8 @@ body {
   flex-direction: row;
   align-items: center;
   gap: 5px;
-  color: var(--bbw-gray-4);
-  font-size: var(--bbw-font-12);
+  color: var(--bbc-gray-4);
+  font-size: var(--bbc-font-12);
   font-style: normal;
 }
 
@@ -572,8 +572,8 @@ body {
   gap: 3px;
   border: none;
   background: transparent;
-  color: var(--bbw-primary);
-  font-size: var(--bbw-font-12);
+  color: var(--bbc-primary);
+  font-size: var(--bbc-font-12);
   cursor: pointer;
   padding: 0;
 }
@@ -581,30 +581,30 @@ body {
 .merge-drawer__snap-msg {
   display: flex;
   gap: 6px;
-  font-size: var(--bbw-font-12);
+  font-size: var(--bbc-font-12);
   line-height: 1.5;
 }
 
 .merge-drawer__snap-sender {
   flex-shrink: 0;
-  color: var(--bbw-gray-6);
+  color: var(--bbc-gray-6);
 }
 
 .merge-drawer__snap-text {
-  color: var(--bbw-gray-6);
+  color: var(--bbc-gray-6);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .merge-drawer__snap-msg--target .merge-drawer__snap-sender,
 .merge-drawer__snap-msg--target .merge-drawer__snap-text {
-  color: var(--bbw-gray-10);
+  color: var(--bbc-gray-10);
   font-weight: 500;
 }
 
 .merge-drawer__snap-msg--target {
   padding: 3px 6px;
-  background: var(--bbw-primary-light);
+  background: var(--bbc-primary-light);
   border-radius: 4px;
 }
 
@@ -612,7 +612,7 @@ body {
 /* ── 角色编辑器（D10 PAD-08） ── */
 /* D26-O6b：原「角色编辑器」段已随 antd 全量收口退役（2026-11-14）；下条 .tag 为 EmbeddedAgentSync 审批弹框在用（`tag${risk==='high' ? ' tag--danger' : ''}` 拼接），非本段遗物 */
 
-.tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--bbw-gray-2, #f5f6f7); color: var(--bbw-text-2, #5f6a7a); }
+.tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--bbc-gray-2, #f5f6f7); color: var(--bbc-text-2, #5f6a7a); }
 
 /* ── 公告发布（D10 PAD-15） ── */
 
@@ -676,10 +676,10 @@ body {
 .agc-perm { display: flex; flex-direction: column; gap: 10px; }
 .agc-perm__tool { display: flex; align-items: center; gap: 8px; }
 .agc-perm__tool code { font-size: 13px; }
-.agc-perm__reason { font-size: 12px; color: var(--bbw-text-3, #86909c); }
-.agc-perm__preview { background: var(--bbw-gray-1, #f7f8fa); border-radius: 8px; padding: 8px 10px; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+.agc-perm__reason { font-size: 12px; color: var(--bbc-text-3, #86909c); }
+.agc-perm__preview { background: var(--bbc-gray-1, #f7f8fa); border-radius: 8px; padding: 8px 10px; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
 .agc-perm__scope { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.agc-perm__hint { font-size: 12px; color: var(--bbw-text-4, #c9cdd4); }
+.agc-perm__hint { font-size: 12px; color: var(--bbc-text-4, #c9cdd4); }
 
 /* D26-O6b：原「Agent 模式按钮点亮态（MessageInput tool-btn 扩展）」段已随 antd 全量收口退役（2026-11-14） */
 /* ============ D19 工作台过程显示对齐（change-my-life agent-web）============ */
@@ -706,14 +706,14 @@ body {
 /* D26-O6：原「插件斜杠命令下拉（D22 §2/L5；工作台输入框上方浮层）」段已随 antd 换装退役（2026-11-13） */
 
 /* D26-O6b：原「通讯录页（2026-11-12 二改：组织+用户单棵树 + 搜索定位 + hover 详情卡；树行复用 org-node」段已随 antd 全量收口退役（2026-11-14） */
-/* D26-O6b：原「通讯录选人器（M3：发起单聊/建群/邀请成员共用； bbw-contacts__avatar--sm 复用通讯录头像）」段已随 antd 全量收口退役（2026-11-14） */
+/* D26-O6b：原「通讯录选人器（M3：发起单聊/建群/邀请成员共用； bbc-contacts__avatar--sm 复用通讯录头像）」段已随 antd 全量收口退役（2026-11-14） */
 /* D26-O6b：原「搜索面板联系人段（M3）」段已随 antd 全量收口退役（2026-11-14） */
 /* ── 登录页注册（M4：三态 login/register/registered）── */
 /* D26-O6：原「登录页注册（M4：三态 login/register/registered）」段已随 antd 换装退役（2026-11-13） */
 
 /* ── 左侧栏拖拽分界线（全站共用；SplitHandle 5px 透明带 + hover/拖拽 2px 主色线） ── */
-/* D26-O6b：原「.bbw-split、.bbw-split::after、.bbw-split:hover::after, .bbw-s」段已随 antd 全量收口退役（2026-11-14） */
-body.bbw-col-resizing {
+/* D26-O6b：原「.bbc-split、.bbc-split::after、.bbc-split:hover::after, .bbc-s」段已随 antd 全量收口退役（2026-11-14） */
+body.bbc-col-resizing {
   cursor: col-resize;
   user-select: none;
   -webkit-user-select: none;
@@ -742,7 +742,7 @@ body.bbw-col-resizing {
 }
 
 .agent-md__a {
-  color: var(--bbw-primary);
+  color: var(--bbc-primary);
   text-decoration: none;
 }
 

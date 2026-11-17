@@ -476,7 +476,7 @@ export function MessageInput({
                 alignItems: 'center',
                 justifyContent: 'center',
                 color: agentMode ? token.colorPrimary : token.colorTextSecondary,
-                background: agentMode ? 'var(--bbw-primary-light)' : 'transparent',
+                background: agentMode ? 'var(--bbc-primary-light)' : 'transparent',
               }}
               onClick={() => onToggleAgentMode()}
             >

@@ -1,7 +1,7 @@
 /**
  * 主题单源（D27 主题机制与色彩规范——见 docs/detail/D27-主题机制与色彩规范.md）：
  * 1) antd theme：providers 只调 antdThemeFrom(mode, accent)，antd 组件取色全走 ConfigProvider；
- * 2) CSS 变量：cssVarsFrom(mode, accent) 由 providers 注入 document root 的 --bbw-*，
+ * 2) CSS 变量：cssVarsFrom(mode, accent) 由 providers 注入 document root 的 --bbc-*，
  *    残余自研 CSS（气泡/markdown 等）与 antd 组件**同一份令牌源**，切主题即时联动。
  * tokens.css 仅作 React 挂载前的首屏兜底基线（值=默认 accent 晨蓝，与本文件一致）。
  *
@@ -112,14 +112,14 @@ export function antdThemeFrom(mode: Mode, accent: ThemeAccent = DEFAULT_ACCENT):
       colorBgContainer: c.bgContainer,
       colorBgLayout: c.bgLayout,
       colorBgBase: mode === 'dark' ? '#0b0e14' : '#ffffff',
-      borderRadius: 6, // = --bbw-radius-control
-      fontSize: 14, // = --bbw-font-14
+      borderRadius: 6, // = --bbc-radius-control
+      fontSize: 14, // = --bbc-font-14
       controlHeight: 32,
       fontFamily: FONT_FAMILY,
     },
     components: {
       Button: { borderRadius: 6 },
-      Modal: { titleFontSize: 16 }, // = --bbw-font-16
+      Modal: { titleFontSize: 16 }, // = --bbc-font-16
       Table: { headerBg: mode === 'dark' ? '#151a24' : '#f5f5f5' },
       // D27 修订2：显式覆写选中态——antd 默认 itemSelectedBg=colorPrimaryBg（主色调色板派生
       // 第 1 档），纯黑/近白主色派生异常（炭灰黑块），走 accent 注册表三档才可控；
@@ -131,22 +131,22 @@ export function antdThemeFrom(mode: Mode, accent: ThemeAccent = DEFAULT_ACCENT):
 
 /**
  * CSS 变量注入源（D27 机制核心）：providers 在主题/accent 切换时把本表写入 document root，
- * 使残余自研 CSS（var(--bbw-*)）与 antd 组件同源取色。键名与 tokens.css 对齐。
+ * 使残余自研 CSS（var(--bbc-*)）与 antd 组件同源取色。键名与 tokens.css 对齐。
  */
 export function cssVarsFrom(mode: Mode, accent: ThemeAccent = DEFAULT_ACCENT): Record<string, string> {
   const c = of(mode);
   const t = toneOf(mode, accent);
   const vars: Record<string, string> = {
-    '--bbw-primary': t.primary,
-    '--bbw-primary-hover': t.hover,
-    '--bbw-primary-light': t.light,
-    '--bbw-success': c.success,
-    '--bbw-warning': c.warning,
-    '--bbw-danger': c.danger,
-    '--bbw-info': t.primary, // info 跟随主题色
+    '--bbc-primary': t.primary,
+    '--bbc-primary-hover': t.hover,
+    '--bbc-primary-light': t.light,
+    '--bbc-success': c.success,
+    '--bbc-warning': c.warning,
+    '--bbc-danger': c.danger,
+    '--bbc-info': t.primary, // info 跟随主题色
   };
   c.gray.forEach((v, i) => {
-    vars[`--bbw-gray-${i + 1}`] = v;
+    vars[`--bbc-gray-${i + 1}`] = v;
   });
   return vars;
 }

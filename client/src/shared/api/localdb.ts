@@ -1,12 +1,12 @@
 /**
  * 本地持久层（IndexedDB，零依赖手写；D03 §6.2 的 web 形态落地）：
- * - bbw-local v1：messages（按 conv 分键）/ convState（游标+态）/ outbox（待发队列）/ meta
+ * - bbc-local v1：messages（按 conv 分键）/ convState（游标+态）/ outbox（待发队列）/ meta
  * - 正式 Tauri 版换 Rust SQLite（D01 §12 im_* 命令），本层接口对齐 local_message/
  *   local_conv_state/outbox 三表语义，端内只经本模块读写，迁移面收敛
  * - 非阻塞兜底：IDB 不可用（隐私模式等）时全部 no-op，功能退化为现内存态
  */
 
-const DB_NAME = 'bbw-local';
+const DB_NAME = 'bbc-local';
 const DB_VERSION = 1;
 const S = { messages: 'messages', convState: 'convState', outbox: 'outbox', meta: 'meta' } as const;
 

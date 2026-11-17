@@ -1,7 +1,7 @@
 /**
  * 设置 · 通用（D01 §4.2）：
  * - 主题三态（浅色/深色/跟随系统）+ 主题色六套（D27 修订2 accent 化）
- *   ——经 shared/store/theme 持久化（UI 偏好，localStorage bbw-theme / bbw-accent）
+ *   ——经 shared/store/theme 持久化（UI 偏好，localStorage bbc-theme / bbc-accent）
  * - 语言三态真实生效（E12：zh-CN/en/system——切换即时生效，antd 内置文案联动）
  * D26-O3：主题三选卡→Segmented、语言下拉→Select、卡片壳→Card（theme-card/settings-* 退役）。
  */

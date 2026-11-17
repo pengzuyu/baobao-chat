@@ -1,7 +1,7 @@
 /**
  * 批量导入向导（D10 PAD-06 三步）：粘贴 CSV 或上传 Excel（.xlsx/.xls，SheetJS
  * 解析首表，表头列：工号/姓名/邮箱——顺序同 CSV）→ 预览解析 → 提交导入。
- * v0.1 同步 ≤100 行/次；初始口令=工号+!BBW，**导入即置首登强制改密**（D11：
+ * v0.1 同步 ≤100 行/次；初始口令=工号+!BBC，**导入即置首登强制改密**（D11：
  * 登录响应 must_change_pwd → 登录页二步改密表单，改密成功清位）。
  * D26-O2：Input.TextArea/Button/Table/Tag 化（隐藏 file input 保留——antd Upload 不参与）。
  */
@@ -108,7 +108,7 @@ export function ImportPage() {
         <Typography.Title level={5} style={{ margin: 0 }}>
           批量导入用户
         </Typography.Title>
-        <Typography.Text type="secondary">CSV 每行：工号,姓名[,邮箱] · ≤100 行/次 · 初始口令=工号+!BBW</Typography.Text>
+        <Typography.Text type="secondary">CSV 每行：工号,姓名[,邮箱] · ≤100 行/次 · 初始口令=工号+!BBC</Typography.Text>
       </Flex>
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
 
@@ -148,7 +148,7 @@ export function ImportPage() {
             解析 {parsed.rows.length} 行（{excelRows ? 'Excel' : 'CSV 粘贴'}）
             {parsed.bad > 0 ? `（${parsed.bad} 行格式非法将被跳过）` : ''}
           </Typography.Text>
-          <Typography.Text type="secondary">初始口令=工号+!BBW，导入用户首登强制改密（登录后弹二步改密表单）</Typography.Text>
+          <Typography.Text type="secondary">初始口令=工号+!BBC，导入用户首登强制改密（登录后弹二步改密表单）</Typography.Text>
           <Button
             disabled={busy || parsed.rows.length === 0 || parsed.rows.length > 100}
             onClick={() => void submit()}

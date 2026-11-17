@@ -52,8 +52,8 @@ export function ModelThinkPicker({ providers, policy, override, onSelect }: Mode
       {
         title: '模型',
         rows: [
-          { key: 'tier:fast', name: '快', sub: 'bbw-fast · 公司默认快档' },
-          { key: 'tier:strong', name: '强', sub: 'bbw-strong · 公司默认强档' },
+          { key: 'tier:fast', name: '快', sub: 'bbc-fast · 公司默认快档' },
+          { key: 'tier:strong', name: '强', sub: 'bbc-strong · 公司默认强档' },
         ] as ModelRow[],
       },
       ...(providers.shared.length > 0 ? [{ title: '公司供应商', rows: providers.shared.flatMap((p) => ofProvider(p, '')) }] : []),

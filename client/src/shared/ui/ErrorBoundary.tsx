@@ -5,7 +5,7 @@
  *   导航栏存活，重试=重挂子树；
  * - page：main.tsx 根部整页兜底——Provider 层也炸时仍有可读提示+整页刷新入口。
  * D26-O6：state-view/err-boundary 类退役——观感同 StateView error 态，内联（class 组件
- * 不便取 token，中性色走 var(--bbw-*) 令牌）；console.error 留现场。
+ * 不便取 token，中性色走 var(--bbc-*) 令牌）；console.error 留现场。
  */
 
 import { Component, type ErrorInfo, type ReactNode } from 'react';
@@ -52,10 +52,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       <div style={{ flex: 1, minHeight: 0, display: 'flex', ...(fullPage ? { minHeight: '100vh' } : null) }} role="alert">
         <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative' }}>
           <div style={{ textAlign: 'center', maxWidth: 360 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--bbw-warning)', marginBottom: 12 }} aria-hidden>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--bbc-warning)', marginBottom: 12 }} aria-hidden>
               <AlertTriangle size={40} strokeWidth={1.4} />
             </div>
-            <div style={{ color: 'var(--bbw-gray-6)', fontSize: 14 }}>页面渲染出错了：{error.message || '未知错误'}</div>
+            <div style={{ color: 'var(--bbc-gray-6)', fontSize: 14 }}>页面渲染出错了：{error.message || '未知错误'}</div>
             <div style={{ marginTop: 12, display: 'flex', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
               <Button variant="secondary" onClick={this.reset}>
                 重试
@@ -67,7 +67,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               ) : null}
             </div>
             <div
-              style={{ marginTop: 8, fontSize: 12, color: 'var(--bbw-gray-5)', fontFamily: 'var(--bbw-font-mono)', cursor: 'pointer', wordBreak: 'break-all' }}
+              style={{ marginTop: 8, fontSize: 12, color: 'var(--bbc-gray-5)', fontFamily: 'var(--bbc-font-mono)', cursor: 'pointer', wordBreak: 'break-all' }}
               onClick={() => void navigator.clipboard?.writeText(`${error.name}: ${error.message}\n${error.stack ?? ''}`)}
               title="点击复制错误详情，供问题排查"
             >

@@ -78,7 +78,7 @@ export function ExtAgentCard() {
           {
             key: 'token',
             name: '本机 token',
-            desc: '外部 Agent（Claude Code / zcode / bbw CLI）接入凭证；仅本机有效',
+            desc: '外部 Agent（Claude Code / zcode / bbc CLI）接入凭证；仅本机有效',
             control: (
               <Space size={4}>
                 <Typography.Text code style={{ fontSize: 12 }}>
@@ -123,13 +123,13 @@ export function ExtAgentCard() {
         Claude Code 挂载：
       </Typography.Paragraph>
       <Typography.Paragraph code copyable style={{ fontSize: 11, whiteSpace: 'pre-wrap', marginBottom: 6 }}>
-        {`claude mcp add --transport http bbw http://127.0.0.1:${port}/mcp \\\n  --header "Authorization: Bearer ${token}"`}
+        {`claude mcp add --transport http bbc http://127.0.0.1:${port}/mcp \\\n  --header "Authorization: Bearer ${token}"`}
       </Typography.Paragraph>
       <Typography.Paragraph style={{ fontSize: 12, marginBottom: 2 }}>
-        CLI（bbw ask）：
+        CLI（bbc ask）：
       </Typography.Paragraph>
       <Typography.Paragraph code copyable style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>
-        {`bbw ask "帮我查一下…"        # 新会话\nbbw ask --session <id> "续问"  # 续聊`}
+        {`bbc ask "帮我查一下…"        # 新会话\nbbc ask --session <id> "续问"  # 续聊`}
       </Typography.Paragraph>
       {error ? <Alert type="error" showIcon message={error} /> : null}
     </Card>

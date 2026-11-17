@@ -12,7 +12,7 @@ import { create } from 'zustand';
 
 export type SpeedLimit = 'none' | '1' | '4' | '10'; // MB/s
 
-const STORAGE_KEY = 'bbw-transfer';
+const STORAGE_KEY = 'bbc-transfer';
 
 export interface TransferPref {
   downloadDir: string; // 空=默认（~/Downloads/<APP_NAME>，随引擎落盘时使用）

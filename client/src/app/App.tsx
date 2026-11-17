@@ -94,7 +94,7 @@ function useEmergencyStopHotkey(): void {
         const { emergencyStop } = useAgentStore.getState();
         emergencyStop();
         // 多屏提示（OQ-C30）：主窗 toast + 系统通知（免打扰不拦——紧急语义优先于偏好闸门）
-        window.dispatchEvent(new CustomEvent('bbw:toast', { detail: '已触发紧急停止：Agent 进程终止、未决审批作废' }));
+        window.dispatchEvent(new CustomEvent('bbc:toast', { detail: '已触发紧急停止：Agent 进程终止、未决审批作废' }));
         void sendSystemNotification(`${APP_NAME} · 紧急停止`, 'Agent 进程已终止，未决审批已作废');
       }
     };
@@ -119,18 +119,18 @@ function useDevReloadHotkey(): void {
   }, []);
 }
 
-/** 全局轻提示（bbw:toast CustomEvent → antd message；E7 紧急停止等主窗提示） */
+/** 全局轻提示（bbc:toast CustomEvent → antd message；E7 紧急停止等主窗提示） */
 function useGlobalToast(): void {
   const [api, contextHolder] = antdMessage.useMessage();
   useEffect(() => {
     const onToast = (e: Event) => {
       api.warning((e as CustomEvent<string>).detail);
     };
-    window.addEventListener('bbw:toast', onToast);
-    return () => window.removeEventListener('bbw:toast', onToast);
+    window.addEventListener('bbc:toast', onToast);
+    return () => window.removeEventListener('bbc:toast', onToast);
   }, [api]);
   // 挂到路由树外层（render 里消费 contextHolder）
-  (window as unknown as { __bbwToastHolder?: unknown }).__bbwToastHolder = contextHolder;
+  (window as unknown as { __bbcToastHolder?: unknown }).__bbcToastHolder = contextHolder;
 }
 
 function useWsLifecycle(): void {
@@ -207,7 +207,7 @@ function useWsLifecycle(): void {
 
 export function App() {
   useWsLifecycle();
-  // OIDC 深链确认请求（D28 批2/Q2b）：bbw://auth?req= 唤起 → Rust emit → 确认卡
+  // OIDC 深链确认请求（D28 批2/Q2b）：bbc://auth?req= 唤起 → Rust emit → 确认卡
   const [oidcConfirmReq, setOidcConfirmReq] = useState<string | null>(null);
   useEffect(() => {
     if (USE_MOCK || typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
@@ -254,7 +254,7 @@ export function App() {
 
   return (
     <BrowserRouter>
-      {(window as unknown as { __bbwToastHolder?: React.ReactNode }).__bbwToastHolder}
+      {(window as unknown as { __bbcToastHolder?: React.ReactNode }).__bbcToastHolder}
       <Routes>
         <Route path="/auth" element={<LoginPage />} />
         {/* 初始化向导（16 篇 §2.2 Web 化）：空系统引导首个管理员；已初始化自动回 /auth */}

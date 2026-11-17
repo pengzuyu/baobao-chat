@@ -4,7 +4,7 @@
  * - 右：选中「全公司」=全量用户表（原 UsersPage 能力：搜索/状态过滤/禁用/启用/离职交接）；
  *       选中部门=该部门成员表（工号/姓名/邮箱/主部门/状态/操作——挂靠已有用户/移出）
  * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/邮箱/
- *   所属组织（默认=触发节点）/角色（默认不授权）——初始口令=工号+!BBW 首登强制改密
+ *   所属组织（默认=触发节点）/角色（默认不授权）——初始口令=工号+!BBC 首登强制改密
  * D26-O2：Table/Modal/Select/Input/Segmented/Alert/Tag 化；补充轮：组织树→antd Tree
  * titleRender（内联建子部门/双击改名/行内 ops，样板对齐 kb ArticleTree——org-node 自研样式退役）。
  */
@@ -199,7 +199,7 @@ function CreateUserModal({
             ...roles.map((r) => ({ value: r.id, label: `${r.name}${r.is_builtin ? '（内置）' : ''}` })),
           ]}
         />
-        <Typography.Text type="secondary">初始口令 = 工号 +“!BBW”，首次登录强制修改</Typography.Text>
+        <Typography.Text type="secondary">初始口令 = 工号 +“!BBC”，首次登录强制修改</Typography.Text>
         {err ? <Alert type="error" showIcon message={err} /> : null}
       </Space>
     </Modal>
@@ -309,7 +309,7 @@ export function OrgDirectoryPage() {
 
   const onCreated = (u: AdminUser) => {
     setModalOpen(false);
-    setActionOk(`已创建 ${u.display_name}（${u.employee_no}）——初始口令=工号+“!BBW”，首登强制改密`);
+    setActionOk(`已创建 ${u.display_name}（${u.employee_no}）——初始口令=工号+“!BBC”，首登强制改密`);
     void query.refetch();
     if (selected) void reloadMembers(selected);
   };

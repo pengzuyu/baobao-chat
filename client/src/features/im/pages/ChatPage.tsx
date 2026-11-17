@@ -824,7 +824,7 @@ export function ChatPage() {
       style={
         bp === 'S'
           ? { width: '100%', borderRight: 'none' }
-          : ({ '--bbw-list-width': `${listSplit.width}px` } as CSSProperties)
+          : ({ '--bbc-list-width': `${listSplit.width}px` } as CSSProperties)
       }
     >
       <div className="im-list-col__header">
@@ -943,7 +943,7 @@ export function ChatPage() {
           {/* 未读分隔线（INT-IM-08 简版：首条未读之前插入一次；主色文案） */}
           {unreadAnchorSeq !== null && m.seq > unreadAnchorSeq && (i === 0 || messages[i - 1].seq <= unreadAnchorSeq) ? (
             <Divider style={{ margin: '8px 0' }}>
-              <span style={{ color: 'var(--bbw-primary)', fontSize: 12 }}>以下为未读消息</span>
+              <span style={{ color: 'var(--bbc-primary)', fontSize: 12 }}>以下为未读消息</span>
             </Divider>
           ) : null}
           <MessageBubble

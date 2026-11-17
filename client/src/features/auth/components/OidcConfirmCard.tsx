@@ -1,6 +1,6 @@
 /**
  * OIDC desktop 授权确认卡（D28 批2/Q2b，§5.1）：
- * 深链 bbw://auth 拉起 → 应用名/scope/6 位码展示 → 用户核对与浏览器页面一致后
+ * 深链 bbc://auth 拉起 → 应用名/scope/6 位码展示 → 用户核对与浏览器页面一致后
  * 点自己头像确认。grant 已覆盖 → 轻量形态（免码即点）。未登录 → 引导先登录。
  */
 
@@ -143,7 +143,7 @@ export function OidcConfirmCard({ reqId, onClose }: { reqId: string; onClose: ()
           {info.covered_by_grant ? (
             <Alert type="info" showIcon message="你此前已授权过该应用，点头像即可完成本次登录。" />
           ) : (
-            <div style={{ textAlign: 'center', border: '1px dashed var(--bbw-gray-3)', borderRadius: 8, padding: '10px 0' }}>
+            <div style={{ textAlign: 'center', border: '1px dashed var(--bbc-gray-3)', borderRadius: 8, padding: '10px 0' }}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 确认码（与浏览器页面核对一致后再确认）
               </Typography.Text>
@@ -156,7 +156,7 @@ export function OidcConfirmCard({ reqId, onClose }: { reqId: string; onClose: ()
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
             <Avatar
               size={44}
-              style={{ backgroundColor: 'var(--bbw-primary)', cursor: submitting ? 'wait' : 'pointer', flexShrink: 0 }}
+              style={{ backgroundColor: 'var(--bbc-primary)', cursor: submitting ? 'wait' : 'pointer', flexShrink: 0 }}
               onClick={() => void approve()}
             >
               {(user?.name ?? '?').slice(0, 1)}

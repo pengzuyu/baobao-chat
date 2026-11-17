@@ -20,7 +20,7 @@ export interface PersonalMcpServer {
   headers?: Record<string, string>;
   /** secret 值键名（文件存空串占位；真值钥匙串 account={name}/{key}） */
   secretKeys?: string[];
-  /** 任一值引用 ${BBW_USER_TOKEN}（壳侧保存时探测；UI 警示「将以你的身份调用」） */
+  /** 任一值引用 ${BBC_USER_TOKEN}（壳侧保存时探测；UI 警示「将以你的身份调用」） */
   usesIdentity?: boolean;
   note?: string;
   updatedAt?: number;

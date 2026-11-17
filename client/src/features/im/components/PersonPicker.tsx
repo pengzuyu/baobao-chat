@@ -6,7 +6,7 @@
  *   single 点行即回调；multiple 底栏「确认（n）」
  * 数据源 GET /org/users（登录后含 uid 口径）；excludeUids 客户端过滤（如已有成员）。
  * D26-O5：外壳/搜索框已 antd 化（Modal/Input）。
- * D26-O6（本批）：列表内容行的 bbw-pp 与 bbw-contacts 自研类残留退役——内联 + shared
+ * D26-O6（本批）：列表内容行的 bbc-pp 与 bbc-contacts 自研类残留退役——内联 + shared
  * Avatar + Typography，加载更多→shared Button。
  */
 
@@ -91,7 +91,7 @@ export function PersonPickerCore({ multiple, selected, onToggle, onPick, exclude
       });
   };
 
-  /** 提示行（搜索中/空态/错误；原 bbw-pp__hint） */
+  /** 提示行（搜索中/空态/错误；原 bbc-pp__hint） */
   const hint = (text: string, warn = false): React.ReactNode => (
     <Typography.Text type={warn ? 'warning' : 'secondary'} style={{ display: 'block', padding: '18px 8px', textAlign: 'center', fontSize: 12 }}>
       {text}

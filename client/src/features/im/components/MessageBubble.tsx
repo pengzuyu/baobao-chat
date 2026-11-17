@@ -1,6 +1,6 @@
 /**
  * 消息气泡族（D03 §3.2；D26-O7 全量 antd 换装）：
- * - text：己方 var(--bbw-bubble-self) / 对方 var(--bbw-bubble-peer)，圆角 12 带 4 尾巴
+ * - text：己方 var(--bbc-bubble-self) / 对方 var(--bbc-bubble-peer)，圆角 12 带 4 尾巴
  *   （壳体内联 + theme.useToken 取色；自研 msg-bubble 族样式退役）
  * - 图片/表情灯箱 → antd Image preview（缩放/旋转/下载工具条免费获得；原图
  *   票据仍按需懒加载——preview 打开才取 origin，失败回落缩略）
@@ -257,7 +257,7 @@ function TextWithMentions({ text, mentions }: { text: string; mentions?: Mention
         p.mention ? (
           <span
             key={i}
-            style={{ color: token.colorPrimary, background: 'var(--bbw-primary-light)', borderRadius: 3, padding: '0 2px' }}
+            style={{ color: token.colorPrimary, background: 'var(--bbc-primary-light)', borderRadius: 3, padding: '0 2px' }}
           >
             {p.s}
           </span>
@@ -283,7 +283,7 @@ function ReplyQuote({ message, onLocate }: { message: Message; onLocate?: (seq: 
         display: 'flex',
         flexDirection: 'column',
         gap: 1,
-        background: 'var(--bbw-quote-bg)',
+        background: 'var(--bbc-quote-bg)',
         borderLeft: `3px solid ${token.colorPrimary}`,
         borderRadius: 4,
         padding: '4px 8px',
@@ -337,7 +337,7 @@ function ReactionBar({ message, myUid, onReact }: { message: Message; myUid: str
               lineHeight: 1.5,
               userSelect: 'none',
               ...(mine
-                ? { color: token.colorPrimary, background: 'var(--bbw-primary-light)', borderColor: token.colorPrimary }
+                ? { color: token.colorPrimary, background: 'var(--bbc-primary-light)', borderColor: token.colorPrimary }
                 : { color: token.colorText, background: token.colorBgContainer, borderColor: token.colorBorderSecondary }),
             }}
           >
@@ -425,7 +425,7 @@ function FileCard({ body }: { body: FileMessageBody }) {
         // 拖出（INT-IM-25）：dataTransfer 携带文件标识（自描述 JSON + 纯文本名兜底）
         e.dataTransfer.effectAllowed = 'copy';
         e.dataTransfer.setData(
-          'application/x-bbw-file',
+          'application/x-bbc-file',
           JSON.stringify({ file_id: body.file_id, name: body.name ?? '', size: body.size ?? 0 }),
         );
         e.dataTransfer.setData('text/plain', body.name ?? body.file_id);
@@ -440,7 +440,7 @@ function FileCard({ body }: { body: FileMessageBody }) {
           height: 36,
           flexShrink: 0,
           borderRadius: token.borderRadius,
-          background: 'var(--bbw-primary-light)',
+          background: 'var(--bbc-primary-light)',
           color: token.colorPrimary,
         }}
       >
@@ -630,7 +630,7 @@ function StickerCard({ body }: { body: FileMessageBody }) {
         alt="表情"
         title={body.name}
         style={{ maxWidth: 120, maxHeight: 120, borderRadius: 8, objectFit: 'contain' }}
-        preview={{ src: objUrl, rootClassName: 'bbw-image-lightbox' }}
+        preview={{ src: objUrl, rootClassName: 'bbc-image-lightbox' }}
       />
     </span>
   ) : (
@@ -726,7 +726,7 @@ function AudioClipCard({ body, mine }: { body: FileMessageBody; mine: boolean })
         minWidth: 150,
         padding: '8px 12px',
         borderRadius: 12,
-        background: mine ? 'var(--bbw-bubble-self)' : 'var(--bbw-bubble-peer)',
+        background: mine ? 'var(--bbc-bubble-self)' : 'var(--bbc-bubble-peer)',
       }}
     >
       {objUrl ? (
@@ -877,7 +877,7 @@ function ImageCard({ body }: { body: FileMessageBody }) {
             visible: zoom,
             onVisibleChange: (v) => setZoom(v),
             src: originUrl ?? objUrl,
-            rootClassName: 'bbw-image-lightbox',
+            rootClassName: 'bbc-image-lightbox',
           }}
         />
       </span>
@@ -890,7 +890,7 @@ function ImageCard({ body }: { body: FileMessageBody }) {
             marginTop: 4,
             padding: '6px 10px',
             borderRadius: 12,
-            background: 'var(--bbw-gray-2)',
+            background: 'var(--bbc-gray-2)',
             fontSize: 13,
             lineHeight: 1.5,
             whiteSpace: 'pre-wrap',
@@ -962,7 +962,7 @@ export function MessageBubble({
       return (
         <div
           data-testid="msg-system"
-          style={{ alignSelf: 'center', color: 'var(--bbw-system-msg)', fontSize: 12, padding: '8px 0' }}
+          style={{ alignSelf: 'center', color: 'var(--bbc-system-msg)', fontSize: 12, padding: '8px 0' }}
           {...menuTriggerProps}
         >
           {systemMessageText(body)}
@@ -974,7 +974,7 @@ export function MessageBubble({
     return (
       <div
         data-testid="msg-system"
-        style={{ alignSelf: 'center', color: 'var(--bbw-system-msg)', fontSize: 12, padding: '8px 0' }}
+        style={{ alignSelf: 'center', color: 'var(--bbc-system-msg)', fontSize: 12, padding: '8px 0' }}
         {...menuTriggerProps}
       >
         {text}
@@ -985,7 +985,7 @@ export function MessageBubble({
   // 与实时 msg.recall 推送同款占位（实时路径由 store 转 system 形态，此处兜底）；无菜单
   if (message.status === 2) {
     return (
-      <div style={{ alignSelf: 'center', color: 'var(--bbw-system-msg)', fontSize: 12, padding: '8px 0' }}>
+      <div style={{ alignSelf: 'center', color: 'var(--bbc-system-msg)', fontSize: 12, padding: '8px 0' }}>
         {mine ? '你撤回了一条消息' : `${message.senderName} 撤回了一条消息`}
       </div>
     );
@@ -1028,7 +1028,7 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
     display: 'inline-block',
     padding: card ? 4 : '8px 12px',
     borderRadius: 12,
-    background: mine ? 'var(--bbw-bubble-self)' : 'var(--bbw-bubble-peer)',
+    background: mine ? 'var(--bbc-bubble-self)' : 'var(--bbc-bubble-peer)',
     ...(mine ? { borderTopRightRadius: 4 } : { borderTopLeftRadius: 4 }),
   });
 
@@ -1045,7 +1045,7 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
           ? {
               cursor: 'pointer',
               borderRadius: 8,
-              background: selected ? 'var(--bbw-primary-light)' : hovered ? token.colorFillQuaternary : undefined,
+              background: selected ? 'var(--bbc-primary-light)' : hovered ? token.colorFillQuaternary : undefined,
             }
           : undefined),
       }}
@@ -1248,7 +1248,7 @@ function FileCardFallback({ name }: { name: string }) {
           height: 36,
           flexShrink: 0,
           borderRadius: token.borderRadius,
-          background: 'var(--bbw-primary-light)',
+          background: 'var(--bbc-primary-light)',
           color: token.colorPrimary,
         }}
       >
@@ -1490,7 +1490,7 @@ export function AgentCardMsg({ body }: { body: AgentCardBody }) {
           <Flex
             align="center"
             gap={5}
-            style={{ flexShrink: 0, color: token.colorPrimary, background: 'var(--bbw-primary-light)', borderRadius: 6, padding: '3px 8px', minWidth: 0 }}
+            style={{ flexShrink: 0, color: token.colorPrimary, background: 'var(--bbc-primary-light)', borderRadius: 6, padding: '3px 8px', minWidth: 0 }}
           >
             <Lightbulb size={12} />
             <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'left' }}>

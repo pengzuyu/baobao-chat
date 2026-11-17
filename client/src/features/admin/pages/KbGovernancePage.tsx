@@ -275,7 +275,7 @@ function EmbeddingPanel() {
           </Space>
           {msg ? <Typography.Text type="danger">{msg}</Typography.Text> : null}
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
-            提示：嵌入/重排上游在「AI 供应商」页配置（路由 bbw-embed/bbw-rerank 档）；切换模型后在此触发重建。
+            提示：嵌入/重排上游在「AI 供应商」页配置（路由 bbc-embed/bbc-rerank 档）；切换模型后在此触发重建。
           </Typography.Paragraph>
         </>
       )}

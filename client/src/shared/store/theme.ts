@@ -5,7 +5,7 @@
  * - accent 主题色（D27 修订2）：六套预置主色，与 mode 正交组合；只影响主色系
  *   （primary/hover/light 三档，见 themeConstants ACCENTS 注册表），不动灰阶/语义色；
  *   无需 html 属性/防闪烁——providers 在首帧内容前经 ConfigProvider + CSS 变量注入生效
- * - 持久化：localStorage('bbw-theme' / 'bbw-accent')。主题是 UI 偏好而非业务数据，
+ * - 持久化：localStorage('bbc-theme' / 'bbc-accent')。主题是 UI 偏好而非业务数据，
  *   不受"业务数据禁止 localStorage（D01 §12.2-5）"红线约束；后续统一设置存储迁 Rust 层。
  * - 防闪烁：index.html 内联脚本在 React 挂载前已先行设置 data-theme。
  */
@@ -17,8 +17,8 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 export type ResolvedTheme = 'light' | 'dark';
 export type { ThemeAccent };
 
-const STORAGE_KEY = 'bbw-theme';
-const ACCENT_STORAGE_KEY = 'bbw-accent';
+const STORAGE_KEY = 'bbc-theme';
+const ACCENT_STORAGE_KEY = 'bbc-accent';
 
 function resolveMode(mode: ThemeMode): ResolvedTheme {
   if (mode !== 'system') return mode;

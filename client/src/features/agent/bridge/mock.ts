@@ -113,7 +113,7 @@ function seedSessions(): AgentSessionMeta[] {
     {
       id: 'sess-mock-01',
       title: '修复登录超时',
-      workspace: '~/code/bbw-server',
+      workspace: '~/code/bbc-server',
       mode: 'auto-edit',
       modelPolicy: 'auto',
       status: 'paused',
@@ -151,8 +151,8 @@ function seedWorkspaces(): AgentWorkspaceInfo[] {
   return [
     {
       id: 'ws-mock-01',
-      path: '/Users/demo/code/bbw-server',
-      name: 'bbw-server',
+      path: '/Users/demo/code/bbc-server',
+      name: 'bbc-server',
       isRepo: true,
       trusted: true,
       lastOpenedAt: now - 40 * MIN,
@@ -180,7 +180,7 @@ function seedMemories(): MemoryEntry[] {
       updatedAt: now - 2 * DAY,
       sessionId: 'sess-mock-02',
       scope: 'project',
-      workspaceName: 'bbw-server-3f2a91c04d8e57b1',
+      workspaceName: 'bbc-server-3f2a91c04d8e57b1',
     },
     {
       name: 'pref-plan-first',
@@ -227,7 +227,7 @@ function seedReports(): AgentReport[] {
         '',
         '| 会话 | 工作区 | 时长 | 工具 | 结果 |',
         '| --- | --- | --- | --- | --- |',
-        '| s-102 | bbw-server | 48m | 19 | 已完成 |',
+        '| s-102 | bbc-server | 48m | 19 | 已完成 |',
         '| s-101 | docs-site | 26m | 15 | 已完成 |',
         '| s-099 | baobao-chat | 60m | 13 | 已暂停 |',
       ].join('\n'),
@@ -237,7 +237,7 @@ function seedReports(): AgentReport[] {
       stats: { sessions: 2, tools: 23, blocked: 0, files: 5, memorySaved: 1 },
       markdown: [
         `# ${dayStr(2)} Agent 日报`,
-        '- 会话 2 个（累计 51m）；工作区 bbw-server',
+        '- 会话 2 个（累计 51m）；工作区 bbc-server',
         '- 工具调用 23 次：read_file×12 search_files×6 edit_file×5',
         '- 被拦截 0 次',
         '- 文件变更 5：edit×5；检查点 2（pre-edit×2）',
@@ -247,8 +247,8 @@ function seedReports(): AgentReport[] {
         '',
         '| 会话 | 工作区 | 时长 | 工具 | 结果 |',
         '| --- | --- | --- | --- | --- |',
-        '| s-087 | bbw-server | 36m | 14 | 已完成 |',
-        '| s-086 | bbw-server | 15m | 9 | 已完成 |',
+        '| s-087 | bbc-server | 36m | 14 | 已完成 |',
+        '| s-086 | bbc-server | 15m | 9 | 已完成 |',
       ].join('\n'),
     },
   ];
@@ -826,7 +826,7 @@ export class MockAgentBridge implements AgentBridge {
           stats,
           markdown: [
             `# ${today} Agent 日报`,
-            `- 会话 ${stats.sessions} 个（累计 2h48m）；工作区 bbw-server`,
+            `- 会话 ${stats.sessions} 个（累计 2h48m）；工作区 bbc-server`,
             `- 工具调用 ${stats.tools} 次：read_file×22 run_command×9 edit_file×9 search_files×11`,
             '- 被拦截 2 次（8020 审批拒绝 / 8024 链接逃逸）',
             `- 文件变更 ${stats.files}：edit×10 create×3；检查点 5（pre-edit×3 pre-command×1 manual×1）`,
@@ -836,8 +836,8 @@ export class MockAgentBridge implements AgentBridge {
             '',
             '| 会话 | 工作区 | 时长 | 工具 | 结果 |',
             '| --- | --- | --- | --- | --- |',
-            `| ${sid} | bbw-server | 18m | 9 | 已完成 |`,
-            '| s-102 | bbw-server | 48m | 19 | 已完成 |',
+            `| ${sid} | bbc-server | 18m | 9 | 已完成 |`,
+            '| s-102 | bbc-server | 48m | 19 | 已完成 |',
             '| s-101 | docs-site | 26m | 15 | 已完成 |',
           ].join('\n'),
         },

@@ -210,7 +210,7 @@ export async function fetchMyPlugins(): Promise<PluginEntry[]> {
 
 /** 清单识别（三目录名，兼容顶层单目录；服务端 Go 校验器同口径的轻量子集） */
 function findManifest(files: Record<string, Uint8Array>): { base: string; manifest: Record<string, unknown> } | null {
-  for (const dir of ['.bbw-plugin', '.claude-plugin', '.zcode-plugin']) {
+  for (const dir of ['.bbc-plugin', '.claude-plugin', '.zcode-plugin']) {
     const direct = `${dir}/plugin.json`;
     if (files[direct]) {
       try {

@@ -1,10 +1,10 @@
 /**
  * 左侧栏拖拽分界线（2026-11-12 用户口径：每个页面的左侧栏都支持拖动调宽）：
- * - useSplitWidth(key, initial, min, max)：宽度状态 + localStorage 持久化（bbw:split:{key}，
+ * - useSplitWidth(key, initial, min, max)：宽度状态 + localStorage 持久化（bbc:split:{key}，
  *   按页记忆；夹取 min~max）+ pointer 拖拽（pointermove 免独立 capture 分支）
  * - SplitHandle：5px 竖分界条（hover 态 2px 主色线，col-resize；默认隐形只留光标），
- *   拖拽期间 body 加 bbw-col-resizing（全局 col-resize 光标 + 禁文本选中）
- * D26-O6：bbw-split 类退役——视觉内联（token 主色 2px 线），拖拽交互逻辑不动。
+ *   拖拽期间 body 加 bbc-col-resizing（全局 col-resize 光标 + 禁文本选中）
+ * D26-O6：bbc-split 类退役——视觉内联（token 主色 2px 线），拖拽交互逻辑不动。
  * 用法：const split = useSplitWidth('im', 264, 200, 420);
  *       <aside style={{ width: split.width }}>…</aside><SplitHandle {...split.bind} />
  */
@@ -12,7 +12,7 @@
 import { useCallback, useRef, useState, type CSSProperties } from 'react';
 import { theme } from 'antd';
 
-const STORAGE_PREFIX = 'bbw:split:';
+const STORAGE_PREFIX = 'bbc:split:';
 
 export interface SplitBind {
   onPointerDown: (e: React.PointerEvent) => void;
@@ -38,7 +38,7 @@ export function useSplitWidth(storageKey: string, initialWidth: number, min: num
       const startX = e.clientX;
       const startW = widthRef.current;
       setDragging(true);
-      document.body.classList.add('bbw-col-resizing');
+      document.body.classList.add('bbc-col-resizing');
       const onMove = (ev: PointerEvent) => {
         const w = Math.min(max, Math.max(min, startW + (ev.clientX - startX)));
         widthRef.current = w;
@@ -47,7 +47,7 @@ export function useSplitWidth(storageKey: string, initialWidth: number, min: num
       const onUp = () => {
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
-        document.body.classList.remove('bbw-col-resizing');
+        document.body.classList.remove('bbc-col-resizing');
         setDragging(false);
         try {
           localStorage.setItem(STORAGE_PREFIX + storageKey, String(Math.round(widthRef.current)));
@@ -85,7 +85,7 @@ export function SplitHandle({ bind, style }: { bind: SplitBind; style?: CSSPrope
       }}
       data-testid="split-handle"
     >
-      {/* 2px 视觉线：hover/拖拽显主色（原 bbw-split::after） */}
+      {/* 2px 视觉线：hover/拖拽显主色（原 bbc-split::after） */}
       <span
         aria-hidden
         style={{

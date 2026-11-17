@@ -9,7 +9,7 @@ import { Check } from 'lucide-react';
 import { ACCENTS, type ThemeAccent } from './themeConstants';
 import { useThemeStore } from '../store/theme';
 
-/** 色块上对勾前景色（近白主色如墨黑暗档需深色对勾；--bbw-text-on-fill 的对比推导，D27 白名单） */
+/** 色块上对勾前景色（近白主色如墨黑暗档需深色对勾；--bbc-text-on-fill 的对比推导，D27 白名单） */
 const checkColorOf = (hex: string) => {
   const n = parseInt(hex.slice(1), 16);
   const luma = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
@@ -45,8 +45,8 @@ export function AccentSwatches({ size = 24 }: { size?: number }) {
                 justifyContent: 'center',
                 // 选中=外环（gap 用容器底色隔开）；未选中=1px 中性描边。均走 boxShadow 无布局抖动
                 boxShadow: selected
-                  ? `0 0 0 2px var(--bbw-gray-1), 0 0 0 ${Math.max(3, Math.round(size / 7))}px ${tone.primary}`
-                  : '0 0 0 1px var(--bbw-gray-3)',
+                  ? `0 0 0 2px var(--bbc-gray-1), 0 0 0 ${Math.max(3, Math.round(size / 7))}px ${tone.primary}`
+                  : '0 0 0 1px var(--bbc-gray-3)',
               }}
             >
               {selected && <Check size={Math.round(size * 0.55)} strokeWidth={2.5} color={checkColorOf(tone.primary)} />}

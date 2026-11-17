@@ -170,7 +170,7 @@ const mockMessage = (
   id,
   mailbox_id: MOCK_MAILBOX_ID,
   folder_id: MOCK_FOLDER_ID,
-  message_id: `<${id}@bbw.mail>`,
+  message_id: `<${id}@bbc.mail>`,
   from_addr: from,
   to_addrs: ['E100001@corp.company.internal'],
   cc_addrs: [],

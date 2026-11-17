@@ -143,7 +143,7 @@ export const PermissionCard = memo(function PermissionCard({ item, onRespond }: 
               <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
                 工作目录
               </Typography.Text>
-              <Typography.Text style={{ fontFamily: 'var(--bbw-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
+              <Typography.Text style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
                 {commandPreview.cwd}（白名单内 ✓）
               </Typography.Text>
             </div>
@@ -160,7 +160,7 @@ export const PermissionCard = memo(function PermissionCard({ item, onRespond }: 
                 readOnly={!waiting || expired}
                 spellCheck={false}
                 aria-label="待执行命令（可编辑）"
-                style={{ fontFamily: 'var(--bbw-font-mono)', fontSize: 13 }}
+                style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 13 }}
               />
             </div>
           </>
@@ -169,7 +169,7 @@ export const PermissionCard = memo(function PermissionCard({ item, onRespond }: 
             <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
               参数预览
             </Typography.Text>
-            <Typography.Text style={{ fontFamily: 'var(--bbw-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
+            <Typography.Text style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
               {request.preview.kind}（该形态的预览渲染后续版本接入）
             </Typography.Text>
           </div>

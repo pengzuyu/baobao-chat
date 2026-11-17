@@ -2,7 +2,7 @@
  * 轻量 i18n（E12 / D01 §12.1 资源键 `域.页面.键`；不引运行时依赖——字典即模块）：
  * - locale 三态：zh-CN（默认）/ en / system（跟 navigator.language）
  * - t(key, params?)：字典未命中回退 zh-CN，再未命中回 key 本身（开发期可见缺译）
- * - 存储：localStorage('bbw-locale')（设备 UI 偏好，主题同款口径）
+ * - 存储：localStorage('bbc-locale')（设备 UI 偏好，主题同款口径）
  * - antd 组件内置文案：main 的 ConfigProvider 消费 localeOf()
  * - 覆盖范围 v0.1：设置页族 + 主导航/登录页骨架键（全量文案迁移随阶段二渐入）
  */
@@ -11,7 +11,7 @@ import { create } from 'zustand';
 
 export type Locale = 'zh-CN' | 'en';
 
-const STORAGE_KEY = 'bbw-locale';
+const STORAGE_KEY = 'bbc-locale';
 
 type LocalePref = Locale | 'system';
 

@@ -225,7 +225,7 @@ export function FileSendPreview({ convId, file, onClose }: FileSendPreviewProps)
               height: 52,
               flexShrink: 0,
               borderRadius: token.borderRadius,
-              background: 'var(--bbw-primary-light)',
+              background: 'var(--bbc-primary-light)',
               color: token.colorPrimary,
             }}
           >

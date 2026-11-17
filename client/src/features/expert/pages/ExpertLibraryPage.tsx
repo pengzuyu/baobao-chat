@@ -214,7 +214,7 @@ export function ExpertLibraryPage() {
             {detailManifest}
           </pre>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Agent Runtime 启动时经 BBW_RT_EXPERTS_URL 自动同步本库（D14 §5 分发）。
+            Agent Runtime 启动时经 BBC_RT_EXPERTS_URL 自动同步本库（D14 §5 分发）。
           </Typography.Text>
         </Space>
       </Drawer>

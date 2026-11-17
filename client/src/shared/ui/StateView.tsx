@@ -186,7 +186,7 @@ export function StateView({
           style={{
             position: 'absolute',
             inset: 0,
-            background: 'var(--bbw-veil)',
+            background: 'var(--bbc-veil)',
             backdropFilter: 'blur(1px)',
             display: 'flex',
             alignItems: 'center',

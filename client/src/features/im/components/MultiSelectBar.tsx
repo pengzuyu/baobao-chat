@@ -42,7 +42,7 @@ export function MultiSelectBar({
       style={{
         position: 'sticky',
         top: 0,
-        zIndex: 'var(--bbw-z-sticky)',
+        zIndex: 'var(--bbc-z-sticky)',
         flexShrink: 0,
         height: 52,
         padding: '0 16px',

@@ -74,7 +74,7 @@ const headToggleStyle: CSSProperties = {
 
 /** 等宽内容块样式（参数/结果/日志，原 tool-card__mono；底色对齐 agent-md 行内码口径） */
 const monoBlockStyle: CSSProperties = {
-  fontFamily: 'var(--bbw-font-mono)',
+  fontFamily: 'var(--bbc-font-mono)',
   fontSize: 12,
   background: 'rgba(127, 134, 145, 0.14)',
   borderRadius: 4,
@@ -141,7 +141,7 @@ export const ToolCard = memo(function ToolCard({ item }: { item: ToolItem }) {
           style={{ color: token.colorTextQuaternary, flexShrink: 0, transition: 'transform 0.15s ease', transform: open ? 'rotate(90deg)' : undefined }}
         />
         <Icon size={13} aria-hidden style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
-        <Typography.Text style={{ fontFamily: 'var(--bbw-font-mono)', fontSize: 12, flexShrink: 0 }}>
+        <Typography.Text style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 12, flexShrink: 0 }}>
           {isTerm ? '终端' : call.tool}
         </Typography.Text>
         {cmd ? (

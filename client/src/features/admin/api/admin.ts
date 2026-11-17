@@ -53,8 +53,8 @@ export async function fetchUsers(params: { keyword?: string; status?: number; cu
     await delay(300);
     const items: AdminUser[] = (
       [
-        { id: '10001', employee_no: 'alice', display_name: 'Alice', email: 'alice@bbw.io', status: 1, scopes: ['admin', 'im:message:send'] },
-        { id: '10002', employee_no: 'bob', display_name: 'Bob', email: 'bob@bbw.io', status: 1, scopes: ['im:message:send'] },
+        { id: '10001', employee_no: 'alice', display_name: 'Alice', email: 'alice@bbc.io', status: 1, scopes: ['admin', 'im:message:send'] },
+        { id: '10002', employee_no: 'bob', display_name: 'Bob', email: 'bob@bbc.io', status: 1, scopes: ['im:message:send'] },
       ] as AdminUser[]
     ).filter((u) => (!params.status || u.status === params.status) && (!params.keyword || u.employee_no.includes(params.keyword) || u.display_name.toLowerCase().includes(params.keyword.toLowerCase())));
     return { items, has_more: false, next_cursor: '' };
@@ -556,7 +556,7 @@ export interface CreateUserInput {
   role_id?: number;
 }
 
-/** 单建用户（初始口令=工号+!BBW 首登强制改密——批量导入同口径） */
+/** 单建用户（初始口令=工号+!BBC 首登强制改密——批量导入同口径） */
 export async function createUser(input: CreateUserInput): Promise<AdminUser> {
   if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持创建用户');
   return http.post<AdminUser>('/admin/users', input);

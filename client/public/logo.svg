@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36">
   <defs>
-    <linearGradient id="bbw-g" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="bbc-g" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#4c84f0" />
       <stop offset="1" stop-color="#2456b8" />
     </linearGradient>
   </defs>
-  <rect width="36" height="36" rx="9" fill="url(#bbw-g)" />
+  <rect width="36" height="36" rx="9" fill="url(#bbc-g)" />
   <path
     d="M11 10.5h14a2.5 2.5 0 0 1 2.5 2.5v7a2.5 2.5 0 0 1-2.5 2.5h-8.2l-4.3 3.4a.8.8 0 0 1-1.3-.65V22.5A2.5 2.5 0 0 1 8.5 20v-7a2.5 2.5 0 0 1 2.5-2.5Z"
     fill="#ffffff"

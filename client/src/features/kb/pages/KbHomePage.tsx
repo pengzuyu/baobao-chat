@@ -1,7 +1,7 @@
 /**
  * 知识库首页（D24 博客化）：概览卡+居中大搜索+榜单三列（最新/最热窗口/作者榜）+最近查看。
  * 榜单只收公司知识库文章（公平攀比口径）；「我的文章/公司知识库」入口在左栏（MainLayout 二级导航随 N5）。
- * 最近查看=localStorage 简版（bbw:kb:recent ≤10；SQLite 化随 P1 登记）。
+ * 最近查看=localStorage 简版（bbc:kb:recent ≤10；SQLite 化随 P1 登记）。
  * D26-O1 补充轮：页面骨架+榜单/概览卡/最近查看全 antd 化（Card+Statistic+List+Tag+Typography，
  * 布局内联 style+theme token——kb-home/kb-board/kb-summary-card 自研样式退役）。
  */
@@ -15,7 +15,7 @@ import { StateView } from '../../../shared/ui/StateView';
 import { SkeletonBlock, SkeletonList } from '../../../shared/ui/Skeleton';
 import { formatListTime } from '../../../shared/utils/time';
 
-const RECENT_KEY = 'bbw:kb:recent';
+const RECENT_KEY = 'bbc:kb:recent';
 
 interface RecentItem {
   docId: string;
@@ -128,14 +128,14 @@ export function KbHomePage() {
                 <Statistic
                   title={<span style={{ fontSize: 12 }}>7 日新增浏览</span>}
                   value={`▲${fmtNum(summary.data.views_7d)}`}
-                  valueStyle={{ color: 'var(--bbw-success)' }}
+                  valueStyle={{ color: 'var(--bbc-success)' }}
                 />
                 <Statistic
                   title={<span style={{ fontSize: 12 }}>全公司作者榜</span>}
                   value={summary.data.author_rank > 0 ? `#${summary.data.author_rank}` : '未上榜'}
                 />
               </Flex>
-              <Flex justify="space-between" align="center" gap={12} wrap="wrap" style={{ borderTop: '1px solid var(--bbw-gray-3)', paddingTop: 8 }}>
+              <Flex justify="space-between" align="center" gap={12} wrap="wrap" style={{ borderTop: '1px solid var(--bbc-gray-3)', paddingTop: 8 }}>
                 {summary.data.last_doc ? (
                   <Typography.Link onClick={() => navigate(`/kb/d/${summary.data!.last_doc!.id}`)}>
                     最近发表：《{summary.data.last_doc.title}》 {formatListTime(summary.data.last_doc.created_at)}

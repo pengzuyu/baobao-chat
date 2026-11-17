@@ -3,7 +3,7 @@
  * + 详情抽屉（组件清单/权限声明/版本线/配置表单）。
  * 技能=单组件插件，本页为技能市场超集（SkillTab 已删并入；旧 /eco/skills 接口保留）。
  * 装配生效（skills 注入/MCP 工具面）随 L3——安装后提示重启会话兜底。
- * D26-O3：eco- / bbw-plugin- 前缀自研结构退役——tabs→Tabs、卡片→Card、上传→Upload
+ * D26-O3：eco- / bbc-plugin- 前缀自研结构退役——tabs→Tabs、卡片→Card、上传→Upload
  * （beforeUpload return false + 受控 fileList）、plugin-drawer→Drawer、
  * window.confirm×2→Modal.confirm（危险卸载 danger 红钮）。
  */
@@ -217,7 +217,7 @@ export function PluginPage() {
   const shown = useMemo(() => entries ?? null, [entries]);
 
   return (
-    <div data-testid="bbw-plugin">
+    <div data-testid="bbc-plugin">
       <Flex align="center" gap={8} style={{ marginBottom: 8 }} wrap>
         <Puzzle size={16} />
         <Typography.Title level={5} style={{ margin: 0 }}>
@@ -274,7 +274,7 @@ export function PluginPage() {
             aria-label="组件类型"
             options={COMPONENTS.map((c) => ({ value: c.value, label: c.label }))}
           />
-          <Button variant="secondary" onClick={() => setUploadOpen(true)} data-testid="bbw-plugin-upload">
+          <Button variant="secondary" onClick={() => setUploadOpen(true)} data-testid="bbc-plugin-upload">
             <UploadIcon size={12} /> 上传插件
           </Button>
         </Flex>
@@ -336,7 +336,7 @@ export function PluginPage() {
                 hoverable
                 style={{ width: 320 }}
                 onClick={() => openDetail(e)}
-                data-testid={`bbw-plugin-card-${e.plugin_id}`}
+                data-testid={`bbc-plugin-card-${e.plugin_id}`}
               >
                 <Flex align="center" gap={8} wrap>
                   <Typography.Text strong ellipsis style={{ minWidth: 0 }}>
@@ -375,7 +375,7 @@ export function PluginPage() {
                         ev.stopPropagation();
                         doInstall(e);
                       }}
-                      data-testid={`bbw-plugin-install-${e.plugin_id}`}
+                      data-testid={`bbc-plugin-install-${e.plugin_id}`}
                     >
                       {e.has_update ? <RefreshCw size={12} /> : <Download size={12} />}
                       {e.has_update ? '更新' : '安装'}

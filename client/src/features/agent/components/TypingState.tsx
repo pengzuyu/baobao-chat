@@ -38,7 +38,7 @@ export const TypingState = memo(function TypingState({ text = 'Agent 正在处�
         gap: 8,
         padding: '4px 12px',
         borderRadius: 999,
-        background: 'var(--bbw-primary-light)',
+        background: 'var(--bbc-primary-light)',
       }}
     >
       <Spin size="small" aria-hidden />

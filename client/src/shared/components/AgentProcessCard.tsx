@@ -123,7 +123,7 @@ function ToolRow({ s }: { s: AgentStage }) {
   const isTerm = s.name === 'run_command';
   const inline = s.command ?? (isTerm ? undefined : s.summary);
   const expandable = !!(s.command || s.result || (!isTerm && s.summary));
-  const mono = { fontFamily: 'var(--bbw-font-mono)', fontSize: 12 } as const;
+  const mono = { fontFamily: 'var(--bbc-font-mono)', fontSize: 12 } as const;
   return (
     <Collapse
       ghost

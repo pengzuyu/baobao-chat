@@ -16,7 +16,7 @@ const PBKDF2_ITERATIONS = 210_000;
 const DEK_BITS = 256;
 /** 恢复码字母表（去 0/O/1/I 混淆；5bit/字符×24 字符=120bit 熵） */
 const RECOVERY_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-const VERIFIER_PLAINTEXT = 'bbw-agent-backup-v1';
+const VERIFIER_PLAINTEXT = 'bbc-agent-backup-v1';
 
 /** 密钥信封（随备份行存储；服务端不可解） */
 export interface BackupKeyEnvelope {
@@ -167,7 +167,7 @@ export async function decryptJson<T>(dek: DekMaterial, sealed: Uint8Array): Prom
 }
 
 /** 本机受信缓存（DEK+envelope；清缓存/换机后走恢复码） */
-const LOCAL_CACHE_KEY = 'bbw.agent-backup.keys';
+const LOCAL_CACHE_KEY = 'bbc.agent-backup.keys';
 
 export interface LocalBackupKeys {
   dek: string; // b64

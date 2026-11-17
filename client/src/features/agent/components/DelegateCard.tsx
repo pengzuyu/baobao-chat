@@ -34,7 +34,7 @@ const headToggleStyle = {
 
 /** 等宽内容块（原 tool-card__mono） */
 const monoBlockStyle = {
-  fontFamily: 'var(--bbw-font-mono)',
+  fontFamily: 'var(--bbc-font-mono)',
   fontSize: 12,
   background: 'rgba(127, 134, 145, 0.14)',
   borderRadius: 4,
@@ -192,7 +192,7 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
             </div>
           ) : null}
           {(item.end.checkpointId || item.end.childSessionRef) && (
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: token.colorTextSecondary, fontFamily: 'var(--bbw-font-mono)' }}>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: token.colorTextSecondary, fontFamily: 'var(--bbc-font-mono)' }}>
               {item.end.checkpointId ? <span>回滚锚点 {item.end.checkpointId}</span> : null}
               {item.end.childSessionRef ? <span>可续接 {item.end.childSessionRef}</span> : null}
             </div>

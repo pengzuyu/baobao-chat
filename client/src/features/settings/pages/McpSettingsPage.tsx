@@ -3,10 +3,10 @@
  * - 列表：启停/编辑/删除/测试连接（RT 真实链路回显工具清单）
  * - 编辑器：stdio（command/args/env）与 HTTP（url/headers）双形态；
  *   env/header 逐值「密文」→ 钥匙串（文件空串占位，真值不落盘）
- * - 变量族 D22 子集：${BBW_USER_TOKEN}（仅 HTTP 头；stdio env 置空）/
- *   ${BBW_USER_ID} / ${BBW_USER_NAME}
+ * - 变量族 D22 子集：${BBC_USER_TOKEN}（仅 HTTP 头；stdio env 置空）/
+ *   ${BBC_USER_ID} / ${BBC_USER_NAME}
  * - 新增/修改后需重启会话工具才进模型列表（注册表快照限制，同插件口径）
- * D26-O3：服务表→Table、编辑器控件→Input/TextArea/Select/Checkbox、删除走 Modal.confirm（settings-、admin-、bbw- 系自研类退役）。
+ * D26-O3：服务表→Table、编辑器控件→Input/TextArea/Select/Checkbox、删除走 Modal.confirm（settings-、admin-、bbc- 系自研类退役）。
  */
 
 import { useEffect, useState } from 'react';
@@ -188,7 +188,7 @@ function McpServersCard() {
     <Card size="small" data-testid="settings-mcp" title={<Space size={6}><Server size={14} /> 个人 MCP 服务</Space>}>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
         自配 MCP server 接入 Agent（仅本人生效）：stdio 本地命令或 HTTP(S) 端点，工具以 mcp.名称.* 进入会话。
-        变量：{'${BBW_USER_TOKEN}'}（仅 HTTP 头，stdio 环境变量置空）/ {'${BBW_USER_ID}'} / {'${BBW_USER_NAME}'}。
+        变量：{'${BBC_USER_TOKEN}'}（仅 HTTP 头，stdio 环境变量置空）/ {'${BBC_USER_ID}'} / {'${BBC_USER_NAME}'}。
         新增或修改后需重启会话，工具才会进入模型工具列表（与插件同口径）。
       </Typography.Paragraph>
 
@@ -341,7 +341,7 @@ function McpEditForm({ initial, onDone, onCancel }: { initial: PersonalMcpServer
         </Space>
       )}
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {kind === 'http' ? '请求头（鉴权如 Authorization / X-Api-Key；值支持 ${BBW_USER_TOKEN} 动态注入）' : '环境变量（值支持 ${BBW_USER_ID}/${BBW_USER_NAME}；TOKEN 不进子进程环境——HTTP-only）'}——勾选「密文」的值存钥匙串不落盘，留空=保持旧值
+        {kind === 'http' ? '请求头（鉴权如 Authorization / X-Api-Key；值支持 ${BBC_USER_TOKEN} 动态注入）' : '环境变量（值支持 ${BBC_USER_ID}/${BBC_USER_NAME}；TOKEN 不进子进程环境——HTTP-only）'}——勾选「密文」的值存钥匙串不落盘，留空=保持旧值
       </Typography.Text>
       {rows.map((r, i) => (
         <Space key={i} size={8} align="center" wrap={false}>

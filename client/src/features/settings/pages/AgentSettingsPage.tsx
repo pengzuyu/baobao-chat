@@ -4,7 +4,7 @@
  *   发起会话时客户端解析为 p:<providerId>:<model> 直达引用）
  * - 我的供应商：个人 BYOK CRUD（≤5 个；密钥服务端加密落库，仅本人可用）
  * - 权限模式/紧急停止为 D08 既定约定（骨架）；三级记忆管理入口在 /agent/memory 实现后开放
- * D26-O3：卡片壳→Card、行→List.Item、BYOK 表→Table、表单控件→Input/Select（settings-、admin-、bbw- 系自研类退役）。
+ * D26-O3：卡片壳→Card、行→List.Item、BYOK 表→Table、表单控件→Input/Select（settings-、admin-、bbc- 系自研类退役）。
  */
 
 import { useEffect, useState, type ReactNode } from 'react';

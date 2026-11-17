@@ -1,151 +1,151 @@
 /**
  * 设计令牌（D01 §6 权威取值，全部变量化）
- * 使用方：全局样式与组件一律引用 var(--bbw-*)，禁止散落硬编码色值。
+ * 使用方：全局样式与组件一律引用 var(--bbc-*)，禁止散落硬编码色值。
  * 主题：亮色 = :root 默认；暗色 = [data-theme='dark'] 全量映射（D01 §14 开放问题 2 已冻结）。
  */
 
 :root {
   color-scheme: light;
 
-  /* ---- 主色（D27 修订2 accent 化——此处为默认晨蓝兜底；运行时由 providers 按 bbw-accent 注入覆盖）---- */
-  --bbw-primary: #1677ff;
-  --bbw-primary-hover: #4096ff;
-  --bbw-primary-light: #e6f4ff; /* 己方气泡底 / 选中态浅底 */
+  /* ---- 主色（D27 修订2 accent 化——此处为默认晨蓝兜底；运行时由 providers 按 bbc-accent 注入覆盖）---- */
+  --bbc-primary: #1677ff;
+  --bbc-primary-hover: #4096ff;
+  --bbc-primary-light: #e6f4ff; /* 己方气泡底 / 选中态浅底 */
 
   /* ---- 中性阶 10 阶（D27 全中性化去蓝调；语义：1=最浅表面 … 10=最强文字）---- */
-  --bbw-gray-1: #ffffff;
-  --bbw-gray-2: #f5f5f5; /* 对方气泡底 / 布局底 */
-  --bbw-gray-3: #e5e5e5; /* 分隔线/边框 */
-  --bbw-gray-4: #d4d4d4; /* 系统消息文本（弱化） */
-  --bbw-gray-5: #a3a3a3;
-  --bbw-gray-6: #737373; /* 次要文字 */
-  --bbw-gray-7: #525252;
-  --bbw-gray-8: #3f3f3f; /* 正文主色 */
-  --bbw-gray-9: #262626;
-  --bbw-gray-10: #171717;
+  --bbc-gray-1: #ffffff;
+  --bbc-gray-2: #f5f5f5; /* 对方气泡底 / 布局底 */
+  --bbc-gray-3: #e5e5e5; /* 分隔线/边框 */
+  --bbc-gray-4: #d4d4d4; /* 系统消息文本（弱化） */
+  --bbc-gray-5: #a3a3a3;
+  --bbc-gray-6: #737373; /* 次要文字 */
+  --bbc-gray-7: #525252;
+  --bbc-gray-8: #3f3f3f; /* 正文主色 */
+  --bbc-gray-9: #262626;
+  --bbc-gray-10: #171717;
 
   /* ---- 语义色（白底压深一档）---- */
-  --bbw-success: #16a34a;
-  --bbw-warning: #d97706;
-  --bbw-danger: #dc2626;
-  --bbw-info: #1677ff; /* info 跟随主色 */
+  --bbc-success: #16a34a;
+  --bbc-warning: #d97706;
+  --bbc-danger: #dc2626;
+  --bbc-info: #1677ff; /* info 跟随主色 */
 
   /* ---- 语义浅底（横幅/提示条底色，随主题映射）---- */
-  --bbw-danger-light: #fdecec;
-  --bbw-warning-light: #fdf6ec;
-  --bbw-success-light: #e8f7ee;
+  --bbc-danger-light: #fdecec;
+  --bbc-warning-light: #fdf6ec;
+  --bbc-success-light: #e8f7ee;
 
   /* ---- 填充色上的文字（徽标/主按钮等）---- */
-  --bbw-text-on-fill: #ffffff;
+  --bbc-text-on-fill: #ffffff;
 
   /* ---- 遮罩与阴影 ---- */
-  --bbw-mask: rgba(31, 35, 41, 0.4);
-  --bbw-veil: rgba(255, 255, 255, 0.6); /* offline 态半透明面纱（保留缓存内容可辨） */
-  --bbw-shadow-card: 0 8px 32px rgba(31, 35, 41, 0.08);
-  --bbw-shadow-pop: 0 4px 16px rgba(31, 35, 41, 0.12);
-  --bbw-shimmer: rgba(255, 255, 255, 0.6);
+  --bbc-mask: rgba(31, 35, 41, 0.4);
+  --bbc-veil: rgba(255, 255, 255, 0.6); /* offline 态半透明面纱（保留缓存内容可辨） */
+  --bbc-shadow-card: 0 8px 32px rgba(31, 35, 41, 0.08);
+  --bbc-shadow-pop: 0 4px 16px rgba(31, 35, 41, 0.12);
+  --bbc-shimmer: rgba(255, 255, 255, 0.6);
 
   /* ---- 聊天专用 ---- */
-  --bbw-bubble-self: var(--bbw-primary-light); /* 己方气泡 */
-  --bbw-bubble-peer: var(--bbw-gray-2); /* 对方气泡 */
-  --bbw-quote-bg: var(--bbw-gray-1); /* 引用条底 */
-  --bbw-quote-bar: var(--bbw-primary); /* 引用条左侧 3px 主色 */
-  --bbw-system-msg: var(--bbw-gray-4); /* 系统消息文本 */
+  --bbc-bubble-self: var(--bbc-primary-light); /* 己方气泡 */
+  --bbc-bubble-peer: var(--bbc-gray-2); /* 对方气泡 */
+  --bbc-quote-bg: var(--bbc-gray-1); /* 引用条底 */
+  --bbc-quote-bar: var(--bbc-primary); /* 引用条左侧 3px 主色 */
+  --bbc-system-msg: var(--bbc-gray-4); /* 系统消息文本 */
 
   /* ---- 字体栈 ---- */
-  --bbw-font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Inter', sans-serif;
-  --bbw-font-mono: ui-monospace, 'JetBrains Mono', Consolas, monospace;
+  --bbc-font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Inter', sans-serif;
+  --bbc-font-mono: ui-monospace, 'JetBrains Mono', Consolas, monospace;
 
   /* ---- 字号（行高 1.5）---- */
-  --bbw-font-12: 12px; /* 辅助 */
-  --bbw-font-13: 13px; /* 列表项 */
-  --bbw-font-14: 14px; /* 正文默认 */
-  --bbw-font-16: 16px; /* 区块标题 */
-  --bbw-font-20: 20px; /* 页面标题 */
-  --bbw-line-height: 1.5;
+  --bbc-font-12: 12px; /* 辅助 */
+  --bbc-font-13: 13px; /* 列表项 */
+  --bbc-font-14: 14px; /* 正文默认 */
+  --bbc-font-16: 16px; /* 区块标题 */
+  --bbc-font-20: 20px; /* 页面标题 */
+  --bbc-line-height: 1.5;
 
   /* ---- 间距（4px 栅格）---- */
-  --bbw-space-1: 4px;
-  --bbw-space-2: 8px;
-  --bbw-space-3: 12px;
-  --bbw-space-4: 16px;
-  --bbw-space-6: 24px;
-  --bbw-space-8: 32px;
-  --bbw-space-12: 48px;
+  --bbc-space-1: 4px;
+  --bbc-space-2: 8px;
+  --bbc-space-3: 12px;
+  --bbc-space-4: 16px;
+  --bbc-space-6: 24px;
+  --bbc-space-8: 32px;
+  --bbc-space-12: 48px;
 
   /* ---- 圆角 ---- */
-  --bbw-radius-control: 6px; /* 控件 */
-  --bbw-radius-card: 10px; /* 卡片 */
-  --bbw-radius-bubble: 12px; /* 气泡（尾巴 4） */
-  --bbw-radius-bubble-tail: 4px;
-  --bbw-radius-modal: 12px; /* 弹窗 */
+  --bbc-radius-control: 6px; /* 控件 */
+  --bbc-radius-card: 10px; /* 卡片 */
+  --bbc-radius-bubble: 12px; /* 气泡（尾巴 4） */
+  --bbc-radius-bubble-tail: 4px;
+  --bbc-radius-modal: 12px; /* 弹窗 */
 
   /* ---- 层级 z-index ---- */
-  --bbw-z-content: 0; /* 内容 */
-  --bbw-z-sticky: 100; /* 吸顶 */
-  --bbw-z-dropdown: 200; /* 下拉 */
-  --bbw-z-popover: 300; /* 气泡 */
-  --bbw-z-drawer: 400; /* 抽屉 */
-  --bbw-z-modal: 500; /* 弹窗 */
-  --bbw-z-toast: 600; /* toast */
-  --bbw-z-notify: 700; /* 系统通知 */
-  --bbw-z-drag-preview: 800; /* 拖拽预览 */
+  --bbc-z-content: 0; /* 内容 */
+  --bbc-z-sticky: 100; /* 吸顶 */
+  --bbc-z-dropdown: 200; /* 下拉 */
+  --bbc-z-popover: 300; /* 气泡 */
+  --bbc-z-drawer: 400; /* 抽屉 */
+  --bbc-z-modal: 500; /* 弹窗 */
+  --bbc-z-toast: 600; /* toast */
+  --bbc-z-notify: 700; /* 系统通知 */
+  --bbc-z-drag-preview: 800; /* 拖拽预览 */
 
   /* ---- 布局常量（D01 §5.1）---- */
-  --bbw-nav-width: 56px; /* 一级导航栏 */
-  --bbw-list-width: 264px; /* 二级列表栏 */
-  --bbw-detail-width: 304px; /* 详情侧栏 */
-  --bbw-settings-nav-width: 208px; /* 设置页左侧 tab 栏 */
+  --bbc-nav-width: 56px; /* 一级导航栏 */
+  --bbc-list-width: 264px; /* 二级列表栏 */
+  --bbc-detail-width: 304px; /* 详情侧栏 */
+  --bbc-settings-nav-width: 208px; /* 设置页左侧 tab 栏 */
 
   /*
    * 断点四档（D01 §5.2，以主窗内容区宽度计；此处登记供 JS/文档对照，
    * CSS media query 需用字面量，见 global.css）：
    * XL >=1600 / L 1280-1599 / M 1024-1279 / S 720-1023
    */
-  --bbw-bp-s: 720px;
-  --bbw-bp-m: 1024px;
-  --bbw-bp-l: 1280px;
-  --bbw-bp-xl: 1600px;
+  --bbc-bp-s: 720px;
+  --bbc-bp-m: 1024px;
+  --bbc-bp-l: 1280px;
+  --bbc-bp-xl: 1600px;
 }
 
 /*
  * 暗色主题全量映射（D01 §14 开放问题 2，2026-11 冻结；2026-11-16 D27 修订=蓝调分层黑+彩色主色，
- * 修订2=主色系 accent 化——本段主色三值为默认晨蓝暗档兜底，运行时随 bbw-accent 覆盖）：
+ * 修订2=主色系 accent 化——本段主色三值为默认晨蓝暗档兜底，运行时随 bbc-accent 覆盖）：
  * 中性阶语义反转（1=最深表面 … 10=最亮文字）且整体带蓝调，
  * 浅底语义色/遮罩/阴影/shimmer 高光同步压暗。
  */
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bbw-primary: #5b8cff; /* 默认 accent 晨蓝暗档（蓝调分层黑底上的彩色主色，Slack/Linear 风） */
-  --bbw-primary-hover: #7ba3ff;
-  --bbw-primary-light: #1d2739; /* 己方气泡底 / 选中态（accent 调深底一档） */
+  --bbc-primary: #5b8cff; /* 默认 accent 晨蓝暗档（蓝调分层黑底上的彩色主色，Slack/Linear 风） */
+  --bbc-primary-hover: #7ba3ff;
+  --bbc-primary-light: #1d2739; /* 己方气泡底 / 选中态（accent 调深底一档） */
 
-  --bbw-gray-1: #11151d; /* 页面/卡片表面（分层蓝黑：布局 #0b0e14 上一档） */
-  --bbw-gray-2: #161b26; /* 次级表面 / 对方气泡（须与布局底拉开一档） */
-  --bbw-gray-3: #232a36; /* 分隔线/边框 */
-  --bbw-gray-4: #2c3442;
-  --bbw-gray-5: #3d4757;
-  --bbw-gray-6: #8a93a5; /* 次要文字 */
-  --bbw-gray-7: #9aa3b2;
-  --bbw-gray-8: #c6ccd8; /* 正文主色 */
-  --bbw-gray-9: #dde2ec;
-  --bbw-gray-10: #e8eaf0; /* 最亮文字=米白非纯白（降对比刺眼） */
+  --bbc-gray-1: #11151d; /* 页面/卡片表面（分层蓝黑：布局 #0b0e14 上一档） */
+  --bbc-gray-2: #161b26; /* 次级表面 / 对方气泡（须与布局底拉开一档） */
+  --bbc-gray-3: #232a36; /* 分隔线/边框 */
+  --bbc-gray-4: #2c3442;
+  --bbc-gray-5: #3d4757;
+  --bbc-gray-6: #8a93a5; /* 次要文字 */
+  --bbc-gray-7: #9aa3b2;
+  --bbc-gray-8: #c6ccd8; /* 正文主色 */
+  --bbc-gray-9: #dde2ec;
+  --bbc-gray-10: #e8eaf0; /* 最亮文字=米白非纯白（降对比刺眼） */
 
-  --bbw-success: #4ade80; /* 暗底提亮一档 */
-  --bbw-warning: #fbbf24;
-  --bbw-danger: #f87171;
-  --bbw-info: #5b8cff; /* info 跟随主色 */
+  --bbc-success: #4ade80; /* 暗底提亮一档 */
+  --bbc-warning: #fbbf24;
+  --bbc-danger: #f87171;
+  --bbc-info: #5b8cff; /* info 跟随主色 */
 
-  --bbw-danger-light: #3d2729;
-  --bbw-warning-light: #3b3106;
-  --bbw-success-light: #1d3328;
+  --bbc-danger-light: #3d2729;
+  --bbc-warning-light: #3b3106;
+  --bbc-success-light: #1d3328;
 
-  --bbw-text-on-fill: #ffffff;
+  --bbc-text-on-fill: #ffffff;
 
-  --bbw-mask: rgba(0, 0, 0, 0.45);
-  --bbw-veil: rgba(11, 14, 20, 0.65);
-  --bbw-shadow-card: 0 8px 32px rgba(0, 0, 0, 0.45);
-  --bbw-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.5);
-  --bbw-shimmer: rgba(255, 255, 255, 0.07);
+  --bbc-mask: rgba(0, 0, 0, 0.45);
+  --bbc-veil: rgba(11, 14, 20, 0.65);
+  --bbc-shadow-card: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --bbc-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --bbc-shimmer: rgba(255, 255, 255, 0.07);
 }

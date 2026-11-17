@@ -179,7 +179,7 @@ export function MainLayout() {
   return (
     <Layout style={{ height: '100%', background: 'transparent' }}>
       <Layout.Sider
-        width={56} /* = --bbw-nav-width（D01 §5.1 一级导航栏基线；竖排化时曾放宽到 76 致两侧留白，2026-11-16 用户拍板收窄回归） */
+        width={56} /* = --bbc-nav-width（D01 §5.1 一级导航栏基线；竖排化时曾放宽到 76 致两侧留白，2026-11-16 用户拍板收窄回归） */
         style={{ background: token.colorBgContainer, borderRight: `1px solid ${token.colorBorderSecondary}` }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '8px 0' }}>

@@ -131,7 +131,7 @@ export const SubagentCard = memo(function SubagentCard({ item }: { item: Subagen
             </Typography.Text>
             <div
               style={{
-                fontFamily: 'var(--bbw-font-mono)',
+                fontFamily: 'var(--bbc-font-mono)',
                 fontSize: 12,
                 background: 'rgba(127, 134, 145, 0.14)',
                 borderRadius: 4,
