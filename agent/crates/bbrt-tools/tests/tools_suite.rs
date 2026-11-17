@@ -16,9 +16,7 @@ use bbrt_sec::gate::{
     Decision, GateCtx, PermissionMode, ToolCall, ToolPolicy, PERM_FULL_AUTO, PERM_RUN_COMMAND,
 };
 use bbrt_sec::memory::{GrantScope, GrantStore};
-use bbrt_sec::sandbox::launcher::{
-    DegradedInfo, MemoryViolationSink, SandboxLauncher, SandboxLevel, SandboxProbe,
-};
+use bbrt_sec::sandbox::launcher::{MemoryViolationSink, SandboxLauncher};
 use bbrt_session::{CheckOutcome, LoopDeps, ToolExecutor, ToolInvocation, ToolOutcome};
 use bbrt_tools::{PipelineExecutor, ToolsConfig};
 
@@ -482,31 +480,22 @@ fn run_command_越界写命令violation加blocked8020() {
 }
 
 #[test]
-fn run_command_seatbelt不可用降级baseline仍执行() {
+fn run_command_注入执行器仍执行() {
     let f = Fixture::new();
-    // 注入 Baseline 探测结果（模拟 sandbox-exec 不可用；B11 降级矩阵）
-    let probe = SandboxProbe {
-        level: SandboxLevel::Baseline,
-        degraded: Some(DegradedInfo {
-            reason: "测试注入：模拟 sandbox-exec 不可用".into(),
-            mode_cap: "auto-edit",
-            network_denied: true,
-            per_confirm: true,
-        }),
-    };
+    // D32 起 launcher 无探测/降级概念（原 from_probe 注入位保留为默认构造对照）
     let mut cfg = ToolsConfig::new(f.ws.path());
     cfg.policy = Some(ToolPolicy::default());
-    cfg.launcher = Some(SandboxLauncher::from_probe(probe));
+    cfg.launcher = Some(SandboxLauncher::new());
     let ex = PipelineExecutor::new(Arc::new(cfg));
     let (summary, _, exit_code, _) = ok_of(ex.execute(
         PermissionMode::Ask,
         &call(
             "run_command",
-            serde_json::json!({"command": "echo degraded-ok"}),
+            serde_json::json!({"command": "echo injected-ok"}),
         ),
     ));
-    assert_eq!(exit_code, Some(0), "降级档仍应执行: {summary}");
-    assert!(summary.contains("degraded-ok"));
+    assert_eq!(exit_code, Some(0), "注入执行器仍应执行: {summary}");
+    assert!(summary.contains("injected-ok"));
 }
 
 #[test]

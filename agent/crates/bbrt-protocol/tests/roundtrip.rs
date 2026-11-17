@@ -1146,7 +1146,7 @@ enum TransitionProbe {
 
 #[test]
 fn golden_d19_workspace_and_session_list_messages() {
-    use bbrt_protocol::{MemoryScope, SessionListItem, WorkspaceItem};
+    use bbrt_protocol::{SessionListItem, WorkspaceItem};
 
     let item = WorkspaceItem {
         id: "ws-1790000000-0".into(),

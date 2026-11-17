@@ -41,7 +41,7 @@ pub use gate::{
 pub use masking::{args_digest, mask, mask_and_digest};
 pub use memory::{Grant, GrantMatch, GrantScope, GrantStore, MemoryError};
 pub use sandbox::{
-    Cidr, DegradedInfo, ExitResult, JsonlViolationSink, MemoryViolationSink, NetPolicy,
-    NetworkError, PathError, PathIntent, PathPolicy, ResourceLimits, RunOpts, RunSpec,
-    SandboxLauncher, SandboxLevel, SandboxProbe, Violation, ViolationKind, ViolationSink,
+    Cidr, ExitResult, JsonlViolationSink, MemoryViolationSink, NetPolicy, NetworkError, PathError,
+    PathIntent, PathPolicy, ResourceLimits, RunOpts, RunSpec, SandboxLauncher, Violation,
+    ViolationKind, ViolationSink,
 };

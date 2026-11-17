@@ -1,10 +1,10 @@
 //! http_fetch 工具（D11 §2.4 builtin/http.rs）。
 //!
-//! 两段防线（09 §3.2.4 / §4.1.1）：
+//! 两段防线（09 §3.2.4 / §4.1.1；D32 起第 2 段不再有 OS 断网层，网络约束=白名单唯一）：
 //! 1. **NetPolicy 白名单**（纯逻辑，8025）：URL 主机 ∉ 域名后缀 ∪ CIDR →
 //!    violation（network）+ blocked；内网 GET 白名单命中可走记忆豁免（gate 层）；
-//! 2. **沙箱执行**：v0.1 经 SandboxLauncher 跑系统 curl（`--max-time` 限 30s、
-//!    `allow_network=true` 仅放行该次出站；无 curl 可执行文件则拒绝执行）。
+//! 2. **进程执行**：v0.1 经 SandboxLauncher 跑系统 curl（`--max-time` 限 30s；
+//!    无 curl 可执行文件则拒绝执行）。
 //!
 //! 未做：响应体大小限制沿用 launcher 的 1MB 输出截断；HTTPS 证书校验跟随系统 curl。
 
@@ -74,8 +74,7 @@ pub(crate) fn fetch(env: &ExecEnv, args: &Value) -> Result<ExecOutput, ToolBlock
         cwd: Some(env.workspace.clone()),
         env: Vec::new(),
     };
-    let mut opts = super::cmd::base_run_opts(env);
-    opts.allow_network = true; // 白名单已过，profile 省略 deny network*
+    let opts = super::cmd::base_run_opts(env);
     run_with_launcher(env, spec, opts)
 }
 

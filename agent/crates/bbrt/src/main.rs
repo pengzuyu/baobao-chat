@@ -156,7 +156,7 @@ fn run() -> Result<(), String> {
         // D19：兜底根置空=未登记会话一切读写被拒（安全失败方向）；真实会话
         // 恒经 session_workspaces 表路由到各自项目目录（修旧全局 "." 占位缺口）
         workspace: PathBuf::new(),
-        launcher: None, // detect() 探测（Seatbelt/Baseline + 降级徽标）
+        launcher: None, // D32 起 launcher 无探测/等级概念（None=default 进程执行器）
         memory: Some(memory.clone()),
         // 恒 Some（D22/L3）：空配置零成本（连接表空），插件 mcp.config 动态
         // 下发后无需重启即注入工具面

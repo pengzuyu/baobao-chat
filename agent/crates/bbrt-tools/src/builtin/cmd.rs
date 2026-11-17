@@ -5,12 +5,12 @@
 //! 2. cwd 校验 ∈ 工作区（Write 意图，8020）；
 //! 3. **L2 词法写意图预检**：重定向目标（`>`/`>>`/`2>`）与写类命令的操作数路径
 //!    逐一经 PathPolicy.validate(Write) 校验，越界 → violation + blocked（8020/8024）；
-//! 4. program 解析为绝对路径（Seatbelt 内 PATH 解析受 profile 约束，D11 §2.5 建议）；
-//! 5. SandboxLauncher 真实执行：writable_roots=工作区∪例外目录、violation sink、
-//!    超时/资源超限映射 8023/8022、输出截断标注（launcher 内建 1MB 头尾各 50%）。
+//! 4. program 解析为绝对路径；
+//! 5. SandboxLauncher 真实执行：violation sink、超时/资源超限映射 8023/8022、
+//!    输出截断标注（launcher 内建 1MB 头尾各 50%）。
 //!
-//! 预检（步骤 3）是词法启发式（v0.1）：OS 层 Seatbelt/Baseline 是最终防线，
-//! 预检用于给出确定性的 8020 阻断与 violation 记录（UI"被阻止的操作"）。
+//! 预检（步骤 3）是词法启发式（v0.1）；D32 起 Seatbelt OS 层退场，词法预检
+//! （本步骤 + PathPolicy）即命令写路径的唯一确定性防线。
 
 use std::path::{Path, PathBuf};
 
@@ -109,13 +109,12 @@ fn cmd_array(args: &Value) -> Option<Vec<String>> {
 // 共享执行辅助（git/http 复用）
 // ---------------------------------------------------------------------------
 
-/// 组装标准 RunOpts：工作区可写根 + violation sink + 默认超时 300s
+/// 组装标准 RunOpts：violation sink + 默认超时 300s
+/// （D32 起 launcher 无 OS 沙箱层，可写根不再随执行器下发——
+/// 词法围栏由本 builtin 的 precheck_write_targets/PathPolicy 承担）
 pub(crate) fn base_run_opts(env: &ExecEnv) -> RunOpts {
-    let mut writable: Vec<PathBuf> = env.path_policy.workspace_roots.clone();
-    writable.extend(env.path_policy.writable_exceptions.iter().cloned());
     RunOpts {
         timeout_secs: DEFAULT_TIMEOUT_SECS,
-        writable_roots: writable,
         sink: Some(std::sync::Arc::clone(&env.sink)),
         ..RunOpts::default()
     }
@@ -473,14 +472,9 @@ mod tests {
     }
 
     #[test]
-    fn 沙箱执行器默认构造可探测() {
-        // detect() 本身在 bbrt-sec 有测试；这里只验证类型可构造（编译期契约）
-        let l: SandboxLauncher = SandboxLauncher::new();
-        assert!(matches!(
-            l.level(),
-            bbrt_sec::sandbox::launcher::SandboxLevel::Seatbelt
-                | bbrt_sec::sandbox::launcher::SandboxLevel::Baseline
-        ));
+    fn 进程执行器默认构造可用() {
+        // D32 起 launcher 无探测/等级概念；这里只验证类型可构造（编译期契约）
+        let _l: SandboxLauncher = SandboxLauncher::new();
         let _ = fs::canonicalize("/tmp");
     }
 }

@@ -30,7 +30,7 @@ pub struct ToolsConfig {
     pub net_allow_domains: Vec<String>,
     /// 网络白名单：CIDR 网段（含内网段与 ai-gateway VIP）
     pub net_allow_cidrs: Vec<String>,
-    /// 沙箱执行器；None = 构造期 detect() 探测（不可用自动降级 Baseline，B11）
+    /// 进程执行器；None = 默认构造（D32 起 launcher 无探测/降级概念，纯生命周期管理）
     pub launcher: Option<SandboxLauncher>,
     /// 记忆引擎；None = memory_save 返回不可用
     pub memory: Option<Arc<MemoryEngine>>,

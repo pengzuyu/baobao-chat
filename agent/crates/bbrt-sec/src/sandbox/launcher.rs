@@ -1,19 +1,14 @@
-//! L3/L5 沙箱执行器（D13-B10 macOS 档 + B9 管线 3–5 层；D11 §2.5 sandbox/launcher）。
+//! 进程执行器（原 L3/L5 沙箱执行器；**D32-2026-11-17 收缩：Seatbelt OS 层退场**，
+//! 保留进程生命周期管理。词法层 path.rs/network.rs 不受影响，仍由 builtin 工具内部执行）。
 //!
-//! 两条执行路径：
-//! - **Seatbelt**（macOS 标准档）：`/usr/bin/sandbox-exec -f profile cmd`，profile 语义
-//!   =全盘只读 + 仅工作区/临时目录可写 + 断网（`(deny network*)`，D13-B10 原文）；
-//! - **Baseline**（降级档，B11）：不带 sandbox-exec，但保留 rlimit + 进程组 + 超时 +
-//!   输出截断 + RSS 看门狗，结果带 `sandbox_level=baseline` 供 UI 徽标展示。
-//!
-//! 探测：`detect()` 检查 /usr/bin/sandbox-exec 存在 + 最小命令冒烟（profile 执行
-//! /bin/echo，2s 超时）；不可用 → Baseline + [`DegradedInfo`]（按 B11：命令逐次确认、
-//! 网络类命令一律拒绝、模式上限压到 auto-edit）。
-//!
-//! 生命周期（L5）：新进程组（pre_exec setpgid(0,0)）→ 墙钟超时（默认 300s，可配 1–600s）
-//! → SIGINT → 3s 宽限 → SIGKILL 杀**整组**（kill(-pgid)）；主进程退出后防御性补杀
-//! 组内残留（nohup 后台进程场景，B12 行 8）。输出经临时文件捕获（不受残留进程持管道
-//! 影响而挂起），累计 1 MB 截断（头尾各 50% + `[truncated, total=N bytes]` 标注）。
+//! 执行语义：
+//! - 直接 spawn 目标程序（无 OS 包装）；进程组隔离（pre_exec setpgid(0,0)），
+//!   `BBC_SANDBOX=1` 环境标记保留（bbrt-delegate procmgr 孤儿扫描依赖该标记，名字不改）
+//! - **生命周期（L5）**：新进程组 → 墙钟超时（默认 300s，可配 1–600s）
+//!   → SIGINT → 3s 宽限 → SIGKILL 杀**整组**（kill(-pgid)）；主进程退出后防御性补杀
+//!   组内残留（nohup 后台进程场景，B12 行 8）。输出经临时文件捕获（不受残留进程持管道
+//!   影响而挂起），累计 1 MB 截断（头尾各 50% + `[truncated, total=N bytes]` 标注）。
+//! - violation 记录（词法越界/资源超限/超时）经 [`ViolationSink`] 出口，语义不变。
 //!
 //! darwin/arm64 实测注（2026-11，macOS 26.5）：RLIMIT_AS 设置 EINVAL、RLIMIT_CPU 不被
 //! 强制 → 内存上限由 **RSS 看门狗**执行（ps 轮询进程组 RSS，超限杀组记 8022），
@@ -36,9 +31,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::{CODE_RESOURCE_LIMIT, CODE_TIMEOUT};
 use crate::sandbox::resource::ResourceLimits;
-
-/// sandbox-exec 二进制路径（macOS 固定位置）
-const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
 /// 输出捕获上限：1 MB（09 §4.3 管线 [6]），截断保头尾各 50%
 pub const OUTPUT_LIMIT: u64 = 1024 * 1024;
@@ -204,117 +196,43 @@ impl ViolationSink for JsonlViolationSink {
 }
 
 // ---------------------------------------------------------------------------
-// 探测与降级（B10/B11）
+// 执行器
 // ---------------------------------------------------------------------------
 
-/// 沙箱等级
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SandboxLevel {
-    /// macOS Seatbelt（sandbox-exec profile：全盘只读+白名单可写+断网）
-    Seatbelt,
-    /// Baseline（仅 rlimit + 门控 + 进程组/超时/截断/看门狗；无 OS 文件/网络隔离）
-    Baseline,
-}
-
-/// 降级信息（B11 降级矩阵的用户可见面：徽标 + 模式上限 + 网络命令处置）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DegradedInfo {
-    /// 降级原因（徽标 tooltip 展示）
-    pub reason: String,
-    /// 模式上限压低（"auto-edit"：完全控制不可进，B11 规则）
-    pub mode_cap: &'static str,
-    /// 网络类命令是否一律拒绝（B11：sandbox-exec 不可用 → 网络命令拒绝）
-    pub network_denied: bool,
-    /// 命令是否一律逐次确认（等同 ask 档命令语义）
-    pub per_confirm: bool,
-}
-
-/// 探测结果：等级 + 降级信息（Seatbelt 可用时 degraded=None）
-#[derive(Debug, Clone, PartialEq)]
-pub struct SandboxProbe {
-    /// 探测到的等级
-    pub level: SandboxLevel,
-    /// 降级信息（level=Baseline 时必有）
-    pub degraded: Option<DegradedInfo>,
-}
-
-/// 沙箱执行器（detect 一次，run 多次）
-#[derive(Debug, Clone)]
-pub struct SandboxLauncher {
-    probe: SandboxProbe,
-}
-
-impl Default for SandboxLauncher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// 进程执行器（无状态；构造无副作用，run 多次。原 detect()/SandboxLevel/DegradedInfo
+/// 已随 D32 Seatbelt 退场移除——launcher.rs 曾 unix-only 编不过 Windows，收缩后
+/// Windows 移植只剩进程组/信号语义一摊）
+#[derive(Debug, Clone, Default)]
+pub struct SandboxLauncher;
 
 impl SandboxLauncher {
-    /// 探测并构造（sandbox-exec 存在性 + 2s 冒烟）
+    /// 构造（保留历史 API 形状：原为 detect() 探测构造）
     pub fn new() -> Self {
-        Self { probe: detect() }
-    }
-
-    /// 使用指定探测结果构造（测试注入/缓存复用）
-    pub fn from_probe(probe: SandboxProbe) -> Self {
-        Self { probe }
-    }
-
-    /// 当前等级
-    pub fn level(&self) -> SandboxLevel {
-        self.probe.level
-    }
-
-    /// 降级信息
-    pub fn degraded(&self) -> Option<&DegradedInfo> {
-        self.probe.degraded.as_ref()
+        Self
     }
 
     /// 执行命令（同步；见模块注释的生命周期与截断语义）
     pub fn run(&self, spec: &RunSpec, opts: &RunOpts) -> ExitResult {
         let started = Instant::now();
         let timeout = Duration::from_secs(clamp_timeout(opts.timeout_secs));
-        let level = match opts.force_level {
-            Some(l) => l,
-            None => self.probe.level,
-        };
 
-        // 临时目录：输出捕获文件 + Seatbelt profile + 命令 TMPDIR（自管理则不清理）
+        // 临时目录：输出捕获文件 + 命令 TMPDIR（自管理则不清理）
         let temp_dir = match &opts.temp_dir {
             Some(p) => p.clone(),
             None => unique_temp_dir(),
         };
         if let Err(e) = fs::create_dir_all(&temp_dir) {
-            return ExitResult::spawn_fail(&temp_dir, level, &format!("临时目录创建失败: {e}"));
+            return ExitResult::spawn_fail(&temp_dir, &format!("临时目录创建失败: {e}"));
         }
         let _temp_guard = TempDirGuard {
             path: temp_dir.clone(),
             keep: opts.keep_temp || opts.temp_dir.is_some(),
         };
 
-        let mut writable_roots = opts.writable_roots.clone();
-        if !writable_roots.contains(&temp_dir) {
-            writable_roots.push(temp_dir.clone());
-        }
-
-        // 组装命令：Seatbelt 包一层 sandbox-exec -f profile
+        // 组装命令
         let stdout_file = temp_dir.join("stdout.bin");
         let stderr_file = temp_dir.join("stderr.bin");
         let mut argv: Vec<String> = Vec::new();
-        let profile_path;
-        if level == SandboxLevel::Seatbelt {
-            profile_path = temp_dir.join("sb.profile");
-            let profile = build_seatbelt_profile(&writable_roots, opts.allow_network);
-            if fs::write(&profile_path, &profile).is_err() {
-                return ExitResult::spawn_fail(&temp_dir, level, "profile 写入失败");
-            }
-            argv.push(SANDBOX_EXEC.to_string());
-            argv.push("-f".into());
-            argv.push(profile_path.to_string_lossy().into_owned());
-        }
         argv.push(spec.program.clone());
         argv.extend(spec.args.iter().cloned());
 
@@ -322,21 +240,13 @@ impl SandboxLauncher {
         let out_f = match fs::File::create(&stdout_file) {
             Ok(f) => f,
             Err(e) => {
-                return ExitResult::spawn_fail(
-                    &temp_dir,
-                    level,
-                    &format!("stdout 文件创建失败: {e}"),
-                )
+                return ExitResult::spawn_fail(&temp_dir, &format!("stdout 文件创建失败: {e}"))
             }
         };
         let err_f = match fs::File::create(&stderr_file) {
             Ok(f) => f,
             Err(e) => {
-                return ExitResult::spawn_fail(
-                    &temp_dir,
-                    level,
-                    &format!("stderr 文件创建失败: {e}"),
-                )
+                return ExitResult::spawn_fail(&temp_dir, &format!("stderr 文件创建失败: {e}"))
             }
         };
 
@@ -369,7 +279,7 @@ impl SandboxLauncher {
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                return ExitResult::spawn_fail(&temp_dir, level, &format!("spawn 失败: {e}"));
+                return ExitResult::spawn_fail(&temp_dir, &format!("spawn 失败: {e}"));
             }
         };
         let pgid = child.id() as i32;
@@ -467,7 +377,6 @@ impl SandboxLauncher {
             total_output_bytes: stdout_total + stderr_total,
             timeout_killed,
             resource_killed,
-            sandbox_level: level,
             pgid,
             temp_dir: temp_dir.clone(),
         }
@@ -477,77 +386,6 @@ impl SandboxLauncher {
 /// 超时收敛到 [1,600]s
 fn clamp_timeout(secs: u64) -> u64 {
     secs.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS)
-}
-
-/// 探测：sandbox-exec 存在 + 最小命令冒烟（2s 超时；执行 /bin/echo）
-pub fn detect() -> SandboxProbe {
-    let baseline = |reason: String| SandboxProbe {
-        level: SandboxLevel::Baseline,
-        degraded: Some(DegradedInfo {
-            reason,
-            mode_cap: "auto-edit",
-            network_denied: true,
-            per_confirm: true,
-        }),
-    };
-    if !Path::new(SANDBOX_EXEC).exists() {
-        return baseline(format!("{SANDBOX_EXEC} 不存在"));
-    }
-    // 冒烟：最小 profile 执行 /bin/echo（inline -p，2s 墙钟超时）
-    let spawned = Command::new(SANDBOX_EXEC)
-        .args(["-p", "(version 1)(allow default)", "/bin/echo", "ok"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-    let mut child = match spawned {
-        Ok(c) => c,
-        Err(e) => return baseline(format!("{SANDBOX_EXEC} spawn 失败: {e}")),
-    };
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        match child.try_wait() {
-            Ok(Some(st)) if st.success() => {
-                return SandboxProbe {
-                    level: SandboxLevel::Seatbelt,
-                    degraded: None,
-                };
-            }
-            Ok(Some(st)) => {
-                return baseline(format!("冒烟命令非零退出: {st}"));
-            }
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                return baseline("冒烟命令超时（2s）".into());
-            }
-            Err(e) => return baseline(format!("冒烟 wait 失败: {e}")),
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-        }
-    }
-}
-
-/// Seatbelt profile（D13-B10 语义；subpath 匹配需要**规范路径**——macOS 上
-/// /var、/tmp 均为符号链接，传入前须 realpath 成 /private/… 前缀）。
-/// 规则顺序 = SBPL 后匹配优先：deny file-write* 之后的 allow 覆盖白名单子树。
-fn build_seatbelt_profile(writable_roots: &[PathBuf], allow_network: bool) -> String {
-    let mut sb = String::from("(version 1)\n(allow default)\n(deny file-write*)\n");
-    for root in writable_roots {
-        let p = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
-        sb.push_str(&format!(
-            "(allow file-write* (subpath \"{}\"))\n",
-            escape_sbpl(&p.to_string_lossy())
-        ));
-    }
-    // /dev/null 是命令通用出口（2>/dev/null 等），单独放行
-    sb.push_str("(allow file-write* (literal \"/dev/null\"))\n");
-    if !allow_network {
-        sb.push_str("(deny network*)\n");
-    }
-    sb
-}
-
-/// SBPL 字符串字面量转义（反斜杠与双引号）
-fn escape_sbpl(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// 组装唯一临时目录（$TMPDIR/bbc-sec-run-<pid>-<nanos>）
@@ -695,14 +533,8 @@ pub struct RunOpts {
     pub timeout_secs: u64,
     /// 资源限制（rlimit + RSS 看门狗）
     pub limits: ResourceLimits,
-    /// 强制等级（None=按 launcher 探测结果；测试用 Some(Baseline) 对照）
-    pub force_level: Option<SandboxLevel>,
-    /// 可写根（工作区；临时目录自动并入）
-    pub writable_roots: Vec<PathBuf>,
     /// 外部指定临时目录（指定则不自动清理）
     pub temp_dir: Option<PathBuf>,
-    /// 联网例外（B10：白名单命令需要网络时 profile 省略 deny network*）
-    pub allow_network: bool,
     /// violation 出口
     pub sink: Option<Arc<dyn ViolationSink>>,
     /// 保留临时目录（调试/测试检查中间产物）
@@ -714,17 +546,14 @@ impl Default for RunOpts {
         Self {
             timeout_secs: DEFAULT_TIMEOUT_SECS,
             limits: ResourceLimits::default(),
-            force_level: None,
-            writable_roots: Vec::new(),
             temp_dir: None,
-            allow_network: false,
             sink: None,
             keep_temp: false,
         }
     }
 }
 
-/// 执行结果（09 §4.3 [8]：exit_code/时长/是否截断回填 + 沙箱档位）
+/// 执行结果（09 §4.3 [8]：exit_code/时长/是否截断回填）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExitResult {
@@ -748,8 +577,6 @@ pub struct ExitResult {
     pub timeout_killed: bool,
     /// 是否因资源超限被杀/推断为资源死亡（8022）
     pub resource_killed: bool,
-    /// 实际使用的沙箱等级（baseline 时 UI 打"基础门控"徽标）
-    pub sandbox_level: SandboxLevel,
     /// 进程组 id（残留进程排查）
     pub pgid: i32,
     /// 本次执行临时目录（keep_temp 时保留可查）
@@ -758,7 +585,7 @@ pub struct ExitResult {
 
 impl ExitResult {
     /// spawn 前置失败的快捷结果
-    fn spawn_fail(temp_dir: &Path, level: SandboxLevel, detail: &str) -> Self {
+    fn spawn_fail(temp_dir: &Path, detail: &str) -> Self {
         Self {
             exit_code: None,
             signal: None,
@@ -770,7 +597,6 @@ impl ExitResult {
             total_output_bytes: 0,
             timeout_killed: false,
             resource_killed: false,
-            sandbox_level: level,
             pgid: 0,
             temp_dir: temp_dir.to_path_buf(),
         }
@@ -818,39 +644,6 @@ mod tests {
         assert_eq!(clamp_timeout(0), 1);
         assert_eq!(clamp_timeout(300), 300);
         assert_eq!(clamp_timeout(60_000), 600);
-    }
-
-    #[test]
-    fn seatbelt_profile_contains_roots_deny_network_and_devnull() {
-        let p = build_seatbelt_profile(&[PathBuf::from("/private/tmp/ws")], false);
-        assert!(p.starts_with("(version 1)"));
-        assert!(p.contains("(deny file-write*)"));
-        assert!(p.contains("(allow file-write* (subpath \"/private/tmp/ws\"))"));
-        assert!(p.contains("(allow file-write* (literal \"/dev/null\"))"));
-        assert!(p.contains("(deny network*)"));
-        // 联网例外：无 deny network*
-        let p2 = build_seatbelt_profile(&[PathBuf::from("/ws")], true);
-        assert!(!p2.contains("(deny network*)"));
-    }
-
-    #[test]
-    fn sbpl_escaping() {
-        assert_eq!(escape_sbpl(r#"/a"b\c"#), r#"/a\"b\\c"#);
-    }
-
-    #[test]
-    fn detect_returns_valid_probe() {
-        let probe = detect();
-        if Path::new(SANDBOX_EXEC).exists() {
-            // 本机存在 sandbox-exec 时冒烟应通过（CI 其他机器可能降级）
-            assert_eq!(probe.level, SandboxLevel::Seatbelt);
-            assert!(probe.degraded.is_none());
-        } else {
-            assert_eq!(probe.level, SandboxLevel::Baseline);
-            let d = probe.degraded.unwrap();
-            assert_eq!(d.mode_cap, "auto-edit");
-            assert!(d.network_denied && d.per_confirm);
-        }
     }
 
     #[test]
@@ -907,9 +700,8 @@ mod tests {
     }
 
     #[test]
-    fn run_echo_under_seatbelt_or_baseline() {
+    fn run_echo_direct_spawn() {
         let launcher = SandboxLauncher::new();
-        let ws = TempDir::new("echo");
         let spec = RunSpec {
             program: "/bin/echo".into(),
             args: vec!["hello-sec".into()],
@@ -917,13 +709,11 @@ mod tests {
         };
         let opts = RunOpts {
             timeout_secs: 10,
-            writable_roots: vec![ws.path().clone()],
             ..RunOpts::default()
         };
         let r = launcher.run(&spec, &opts);
         assert!(r.ok, "stdout={:?} stderr={:?}", r.stdout, r.stderr);
         assert_eq!(r.stdout.trim(), "hello-sec");
         assert!(!r.truncated);
-        assert_eq!(r.sandbox_level, launcher.level());
     }
 }
