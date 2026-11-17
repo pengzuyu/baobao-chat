@@ -262,8 +262,9 @@ export function AgentWorkbenchPage() {
     },
     [selectSession, navigate],
   );
-  /** D19 新建日常对话（无工作目录；文件/命令类工具在该会话不可用） */
-  const handleNewDaily = useCallback(() => {
+  /** 新建任务会话（无工作目录；文件/命令类工具在该会话不可用）。workspace='' 且
+   *  非 IM 来源——左栏落「任务」区（2026-11-17 分区口径，此前误落日常对话区） */
+  const handleNewTask = useCallback(() => {
     const currentMode = activeSession?.mode ?? 'ask';
     void resolveDefaultModel()
       .then((model) => startSession(currentMode, model))
@@ -354,7 +355,7 @@ export function AgentWorkbenchPage() {
       bridgeKind={bridgeKind}
       createError={createError}
       onSelect={handleSelect}
-      onNewTask={handleNewDaily}
+      onNewTask={handleNewTask}
       onOpenProject={handleOpenProject}
       onNewProjectSession={openProjectSession}
       onForgetProject={forgetProjectById}
@@ -411,7 +412,7 @@ export function AgentWorkbenchPage() {
           {sessionsCollapsed ? (
             <>
               <Button variant="text" icon={<PanelLeftOpen size={16} aria-hidden />} onClick={() => setSessionsCollapsed(false)} title="展开会话列表" />
-              <Button variant="text" icon={<Plus size={16} aria-hidden />} onClick={handleNewDaily} title="新建任务会话" />
+              <Button variant="text" icon={<Plus size={16} aria-hidden />} onClick={handleNewTask} title="新建任务会话" />
             </>
           ) : listState === 'ok' ? (
             sessionListNode
@@ -423,7 +424,7 @@ export function AgentWorkbenchPage() {
               onRetry={() => void init()}
               emptyText="从任务区新建，或打开一个项目目录"
               emptyAction={
-                <Button onClick={handleNewDaily}>
+                <Button onClick={handleNewTask}>
                   <Square size={12} aria-hidden />
                   新建任务会话
                 </Button>
@@ -453,14 +454,19 @@ export function AgentWorkbenchPage() {
                   background: token.colorBgContainer,
                 }}
               >
-                <div style={{ minWidth: 0, marginRight: 8 }} title={activeSession.workspace || '日常对话（无工作目录）'}>
+                <div
+                  style={{ minWidth: 0, marginRight: 8 }}
+                  title={activeSession.workspace || (embeddedConvId ? '聊天会话（IM 来源）· 无工作目录' : '任务会话 · 无工作目录')}
+                >
                   <Typography.Text strong ellipsis style={{ display: 'block', maxWidth: 220, fontSize: 14 }}>
                     {activeSession.title}
                   </Typography.Text>
                   <Typography.Text type="secondary" ellipsis style={{ display: 'block', maxWidth: 220, fontSize: 12 }}>
                     {activeSession.workspace
                       ? `${workspaces.find((w) => w.path === activeSession.workspace)?.name ?? activeSession.workspace.split('/').filter(Boolean).pop()} · ${activeSession.workspace}`
-                      : '日常对话 · 无工作目录'}
+                      : embeddedConvId
+                        ? '聊天会话 · 无工作目录'
+                        : '任务会话 · 无工作目录'}
                   </Typography.Text>
                 </div>
                 {/* 模式/模型选择 2026-11-11 挪入输入框（Composer）；头部只留状态 */}
@@ -535,7 +541,7 @@ export function AgentWorkbenchPage() {
           ) : streamState === 'loading' ? (
             <StateView state="loading" skeleton={<SkeletonStream count={5} />} />
           ) : (
-            <StateView state="empty" emptyText="从左侧选择或新建一个会话" emptyAction={<Button onClick={handleNewDaily}>新建任务会话</Button>} />
+            <StateView state="empty" emptyText="从左侧选择或新建一个会话" emptyAction={<Button onClick={handleNewTask}>新建任务会话</Button>} />
           )}
         </section>
 

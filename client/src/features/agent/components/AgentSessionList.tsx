@@ -2,15 +2,19 @@
  * 工作台左栏：项目/日常对话/任务三分区（2026-11-11 在 D19 两分区上增任务区，ZCode 同款形态）：
  * - 项目区：登记表（workspace.list）∪ 会话中出现的目录兜底；项目行（名称+路径+会话数）
  *   可折叠内嵌该项目会话；行内动作=新会话/移除登记
- * - 日常对话区：workspace='' 的会话平铺（无工作目录——文件/命令类工具不可用）；
- *   IM @agent 来源的 embedded 会话带 💬 徽标（标题=「与xxx的对话」/「xxx · 群聊」）
- * - 任务区：runs.list 跨会话全量（子代理探查/专家会诊/委派），运行中置顶，点击跳所属会话
- * - 顶部双入口：[+ 日常对话] [打开项目目录]（plugin-dialog 目录选择）
+ * - 日常对话区：workspace='' 且 IM 来源（embeddedIds 命中，💬 徽标，标题=「与xxx的对话」/
+ *   「xxx · 群聊」）的会话平铺；2026-11-17 收窄——工作台建的空目录会话改落任务区
+ * - 任务区：任务会话（workspace='' 非 IM 来源——含任务区「+」新建与历史数据）平铺在前，
+ *   runs.list 跨会话全量（子代理探查/专家会诊/委派）随其后，运行中置顶，点击跳所属会话
+ * - 顶部双入口：[+ 新建任务会话（任务区头）] [打开项目目录（项目区头，plugin-dialog 目录选择）]
  * - 会话项：状态点（●运行/◐等待/○暂停/✕错误/▪结束）+ 标题 + 相对时间 + 状态 chip
  * - 六态由父层推导后传入（loading/empty/error/offline 走 StateView）
  * D26-O4：列表体→antd Menu（分组标签=分区头、SubMenu=项目分组、选中态=活跃会话），
  * 状态点→Badge、chip→Tag、失败条→Alert、底部链接内联化（agent-session-item/agent-proj-*
  * /agent-task-item/agent-sublink 等自研样式退役）。
+ * 行高（2026-11-17 高度重叠报修）：antd Menu 项定高 40px 且行高 40px 会向内层继承，
+ * 双行 label（标题+时间）按 40px/行撑破定高项→裁切串行——各 label 统一 inline-flex +
+ * verticalAlign:middle + lineHeight 1.4 自管行高，双行内容 ~36px 收进 40px 项内。
  */
 
 import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
@@ -183,10 +187,18 @@ export const AgentSessionList = memo(function AgentSessionList({
     return { projectGroups: groups, dailySessions: daily };
   }, [sessions, workspaces]);
 
-  // 日常区=全部日常会话（2026-11-12 用户报修：新建任务（工作台日常会话）发送后
-  // 不落左栏——旧口径只显示 IM embedded 来源，工作台新建的日常会话无处渲染；
-  // 现平铺全部 workspace='' 会话，embedded 徽标仍按来源标注）
-  const chatSessions = dailySessions;
+  // 空 workspace 会话二分（2026-11-17 用户报修：任务区「+」新建的会话发送消息后落进
+  // 了日常区——2026-11-12 曾把全部 workspace='' 平铺进日常区兜底「新建不落左栏」，
+  // 副作用即本Bug）。现按来源分区：embeddedIds 命中=IM 来源（💬）→「日常对话」；
+  // 其余（工作台建的空目录会话，含历史未标记数据）→「任务」区与子任务 run 同区。
+  // embedded 映射（IndexedDB）由 IM 侧在 ensureEmbeddedSession 建会话时恒写入，
+  // 未命中即工作台来源——口径对历史数据同样成立
+  const { chatSessions, taskSessions } = useMemo(() => {
+    const chats: AgentSessionMeta[] = [];
+    const tasks: AgentSessionMeta[] = [];
+    for (const s of dailySessions) (embeddedIds.has(s.id) ? chats : tasks).push(s);
+    return { chatSessions: chats, taskSessions: tasks };
+  }, [dailySessions, embeddedIds]);
 
   // 折叠态：默认展开含活跃会话的项目；切项目即用（状态不持久化，v0.1 简化）
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -195,9 +207,22 @@ export const AgentSessionList = memo(function AgentSessionList({
 
   const sessionTitleOf = (sid: string): string => sessions.find((s) => s.id === sid)?.title ?? '';
 
-  /** 分区头（Menu group 标签）：图标 + 标题 + 尾部动作 */
+  /** 分区头（Menu group 标签）：图标 + 标题 + 尾部动作（inline-flex 自管行高——
+   *  24px 动作钮须脱离 group 标题 22px 行高，见文件头「行高」注） */
   const sectionHead = (icon: ReactNode, title: string, extra?: ReactNode, after?: ReactNode) => (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 4, width: '100%', fontSize: 11, color: token.colorTextTertiary, userSelect: 'none' }}>
+    <span
+      style={{
+        display: 'inline-flex',
+        verticalAlign: 'middle',
+        alignItems: 'center',
+        gap: 4,
+        width: '100%',
+        fontSize: 11,
+        lineHeight: 1.4,
+        color: token.colorTextTertiary,
+        userSelect: 'none',
+      }}
+    >
       {icon}
       {title}
       {after}
@@ -212,11 +237,12 @@ export const AgentSessionList = memo(function AgentSessionList({
       <Button variant="text" size="small" icon={<Plus size={12} aria-hidden />} title={title} onClick={onClick} />
     ) : null;
 
-  /** 会话行 label（状态点 + 标题/时间两行 + 状态 chip） */
-  const sessionLabel = (s: AgentSessionMeta) => (
+  /** 会话行 label（状态点 + 标题/时间两行 + 状态 chip）。origin=无 workspace 时的
+   *  来源文案（日常区=IM 来源 / 任务区=任务会话）；inline-flex 自管行高见文件头注 */
+  const sessionLabel = (s: AgentSessionMeta, origin = '日常对话（无工作目录）') => (
     <span
-      style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, width: '100%' }}
-      title={`${s.title} · ${SESSION_STATUS_LABELS[s.status]} · ${s.workspace || '日常对话（无工作目录）'}`}
+      style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 8, minWidth: 0, width: '100%', lineHeight: 1.4 }}
+      title={`${s.title} · ${SESSION_STATUS_LABELS[s.status]} · ${s.workspace || origin}`}
     >
       <Badge status={statusBadge(s.status)} />
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -238,12 +264,12 @@ export const AgentSessionList = memo(function AgentSessionList({
     </span>
   );
 
-  /** 任务行 label（类型徽标 + 摘要/会话两行 + 状态） */
+  /** 任务行 label（类型徽标 + 摘要/会话两行 + 状态；inline-flex 自管行高见文件头注） */
   const taskLabel = (r: RunInfo) => {
     const statusColor = r.status === 'running' ? token.colorSuccess : r.status === 'failed' ? token.colorError : token.colorTextTertiary;
     return (
       <span
-        style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, width: '100%' }}
+        style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 6, minWidth: 0, width: '100%', lineHeight: 1.4 }}
         title={`${RUN_KIND_LABELS[r.kind]} · ${sessionTitleOf(r.sessionId) || r.sessionId} · ${RUN_STATUS_LABELS[r.status]}`}
       >
         <Tag color={runKindColor(r.kind)} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 4, flexShrink: 0 }}>
@@ -287,7 +313,7 @@ export const AgentSessionList = memo(function AgentSessionList({
               key: projKey(g.path),
               title: g.path,
               label: (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, width: '100%' }} title={g.path}>
+                <span style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 6, minWidth: 0, width: '100%', lineHeight: 1.4 }} title={g.path}>
                   <span
                     style={{
                       fontWeight: 600,
@@ -348,7 +374,7 @@ export const AgentSessionList = memo(function AgentSessionList({
       children:
         chatSessions.length === 0
           ? [hintItem('hint:no-daily', '在私聊/群聊里 @Agent 或点聊天头 🤖 即产生对应会话')]
-          : chatSessions.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s) })),
+          : chatSessions.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s, 'IM 来源 · 无工作目录') })),
     },
     {
       key: 'grp:tasks',
@@ -363,10 +389,15 @@ export const AgentSessionList = memo(function AgentSessionList({
           </Tag>
         ) : undefined,
       ),
+      // 任务会话在前（+ 新建即落此区），子任务 run 随后；两组同现时以小节头分隔
       children:
-        taskRuns.length === 0
-          ? [hintItem('hint:no-task', '子代理探查/专家会诊/委派任务在此汇总')]
-          : taskRuns.map((r) => ({ key: runKey(r.id), label: taskLabel(r) })),
+        taskSessions.length === 0 && taskRuns.length === 0
+          ? [hintItem('hint:no-task', '点右上 + 新建任务会话；探查/专家会诊/委派的子任务也在此汇总')]
+          : [
+              ...taskSessions.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s, '任务会话 · 无工作目录') })),
+              ...(taskSessions.length > 0 && taskRuns.length > 0 ? [hintItem('subhead:task-runs', '子任务运行')] : []),
+              ...taskRuns.map((r) => ({ key: runKey(r.id), label: taskLabel(r) })),
+            ],
     },
   ];
 
