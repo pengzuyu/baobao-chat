@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 fn task_brief() -> TaskBrief {
     TaskBrief {
         task: "修复登录超时并跑通测试".into(),
-        workspace: "~/code/bbw-server".into(),
+        workspace: "~/code/bbc-server".into(),
         constraints: vec!["不修改 migrations/".into()],
         context: vec![BriefContextItem {
             source: "src/auth.rs:L42".into(),
@@ -46,7 +46,7 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
         },
         HostToRuntime::SessionStart {
             session_id: "sess-1".into(),
-            workspace: "~/code/bbw".into(),
+            workspace: "~/code/bbc".into(),
             mode: PermissionMode::AutoEdit,
             model_policy: ModelPolicy::Auto,
             model: Some("p:1:glm-5.3".into()),
@@ -88,7 +88,7 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             backend: "claude".into(),
             task_brief: Some(task_brief()),
             mode: PermissionMode::FullAuto,
-            workspace: "~/code/bbw".into(),
+            workspace: "~/code/bbc".into(),
         },
         HostToRuntime::DelegateInput {
             delegate_task_id: "dt-1".into(),
@@ -238,7 +238,7 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
                 del: 4,
             }],
             reason: CheckpointReason::PreEdit,
-            git_ref: Some("refs/bbw-agent/sess-1/cp-1".into()),
+            git_ref: Some("refs/bbc-agent/sess-1/cp-1".into()),
         },
         RuntimeToHost::CheckpointRestored {
             ok: true,
@@ -447,7 +447,7 @@ fn golden_session_start() {
     golden(
         &HostToRuntime::SessionStart {
             session_id: "sess-1".into(),
-            workspace: "~/code/bbw".into(),
+            workspace: "~/code/bbc".into(),
             mode: PermissionMode::Ask,
             model_policy: ModelPolicy::Fast,
             model: None, // None=缺席不序列化(golden)
@@ -459,7 +459,7 @@ fn golden_session_start() {
         json!({
             "type": "session.start",
             "sessionId": "sess-1",
-            "workspace": "~/code/bbw",
+            "workspace": "~/code/bbc",
             "mode": "ask",
             "modelPolicy": "fast",
             "skills": ["sql-review"]
@@ -702,7 +702,7 @@ fn golden_delegate_brief_launch_end_review() {
         json!({
             "type":"delegate.brief","sessionId":"s","backendSuggestion":"zcode",
             "brief":{
-                "task":"修复登录超时并跑通测试","workspace":"~/code/bbw-server",
+                "task":"修复登录超时并跑通测试","workspace":"~/code/bbc-server",
                 "constraints":["不修改 migrations/"],
                 "context":[{"source":"src/auth.rs:L42","excerpt":"db.wait(30s)"}],
                 "acceptance":["cargo test --lib 全绿"],
@@ -997,7 +997,7 @@ fn unknown_fields_are_tolerated() {
 fn envelope_wrap_unwrap_roundtrip() {
     let msg = HostToRuntime::SessionStart {
         session_id: "sess-1".into(),
-        workspace: "~/code/bbw".into(),
+        workspace: "~/code/bbc".into(),
         mode: PermissionMode::Ask,
         model_policy: ModelPolicy::Auto,
         model: None,
@@ -1010,14 +1010,14 @@ fn envelope_wrap_unwrap_roundtrip() {
     assert_eq!(env.msg_type, "session.start");
     assert_eq!(
         env.payload,
-        json!({"sessionId":"sess-1","workspace":"~/code/bbw","mode":"ask","modelPolicy":"auto","skills":[]})
+        json!({"sessionId":"sess-1","workspace":"~/code/bbc","mode":"ask","modelPolicy":"auto","skills":[]})
     );
     // 线路形态：type 在信封层、payload 嵌套，reply_to/ts 缺席
     assert_eq!(
         serde_json::to_value(&env).unwrap(),
         json!({
             "v":1,"id":"h-1","type":"session.start",
-            "payload":{"sessionId":"sess-1","workspace":"~/code/bbw","mode":"ask","modelPolicy":"auto","skills":[]}
+            "payload":{"sessionId":"sess-1","workspace":"~/code/bbc","mode":"ask","modelPolicy":"auto","skills":[]}
         })
     );
     let back: HostToRuntime = env.unwrap().expect("unwrap");

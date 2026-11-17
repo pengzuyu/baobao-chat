@@ -289,14 +289,14 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5), "超时应及时返回");
 
         // 不存在
-        assert!(probe_version("/nonexistent/bbw-backend", Duration::from_secs(5)).is_none());
+        assert!(probe_version("/nonexistent/bbc-backend", Duration::from_secs(5)).is_none());
     }
 
     #[test]
     fn resolve_bin_finds_sh() {
         assert!(resolve_bin("sh").is_some());
         assert!(resolve_bin("/bin/sh").is_some());
-        assert!(resolve_bin("bbw-nonexistent-backend-xyz").is_none());
+        assert!(resolve_bin("bbc-nonexistent-backend-xyz").is_none());
     }
 
     #[test]

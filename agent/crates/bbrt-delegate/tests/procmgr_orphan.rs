@@ -1,6 +1,6 @@
 //! 遗留进程扫描清理集成测试（D11 §8.4 / 09 §4.6）。
 //!
-//! 场景：spawn 一个"孤儿制造器"（父立即退出，留下带 BBW_SANDBOX=1 标记 + 唯一
+//! 场景：spawn 一个"孤儿制造器"（父立即退出，留下带 BBC_SANDBOX=1 标记 + 唯一
 //! 命令标记的死循环 shell → reparent 到 ppid=1）→ scan_orphans 按（标记+父死+过滤）
 //! 找到 → cleanup_orphans SIGKILL 清理 → 复扫为空。
 //! 附：存活且父在的自身委派进程不被误杀（pgid/父活过滤回归）。
@@ -29,9 +29,9 @@ fn wait_until(timeout: Duration, mut pred: impl FnMut() -> bool) -> bool {
 fn orphan_scan_finds_and_cleanup_kills_marked_orphans() {
     let dir = TestDir::new("orphan");
     // 唯一标记进 argv（$0 位）：macOS ps 无 env 视图，标记验证退化为命令过滤
-    //（BBW_SANDBOX=1 env 由 procmgr::spawn 注入并被子进程继承，Linux 上经 /proc 精确验证）
+    //（BBC_SANDBOX=1 env 由 procmgr::spawn 注入并被子进程继承，Linux 上经 /proc 精确验证）
     let tag = format!(
-        "BBWORPHAN-{}-{:x}",
+        "BBCORPHAN-{}-{:x}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -41,7 +41,7 @@ fn orphan_scan_finds_and_cleanup_kills_marked_orphans() {
     let body = format!("#!/bin/sh\nsh -c 'while true; do sleep 1; done' \"{tag}\" &\nexit 0\n");
     let stub = write_script(dir.path(), "maker.sh", &body);
 
-    // 经 procmgr 启动（注入 BBW_SANDBOX=1 + 新进程组）；制造器父进程立即退出。
+    // 经 procmgr 启动（注入 BBC_SANDBOX=1 + 新进程组）；制造器父进程立即退出。
     // 注意用 wait（不杀组）收割：孤儿与制造器同组，cancel 的组杀会把孤儿一并杀掉
     let (maker, _stdout) = procmgr::spawn(&stub, &[], None, &[]).unwrap();
     let st = maker.wait().unwrap();
@@ -75,7 +75,7 @@ fn orphan_scan_finds_and_cleanup_kills_marked_orphans() {
 fn live_child_of_ours_is_not_matched_as_orphan() {
     // 存活且父进程（本测试进程）健在的委派子进程：不满足"父已死"→ 不入扫描
     let dir = TestDir::new("live");
-    let tag = format!("BBWLIVE-{}", std::process::id());
+    let tag = format!("BBCLIVE-{}", std::process::id());
     let body = format!("#!/bin/sh\nwhile true; do sleep 1; done # {tag}\n");
     let stub = write_script(dir.path(), "live.sh", &body);
     let (proc, _stdout) = procmgr::spawn(&stub, &[], None, &[]).unwrap();
@@ -97,7 +97,7 @@ fn cleanup_without_filter_on_macos_wont_target_unmarked_launchd_agents() {
     // 见 procmgr.rs 登记说明）；Linux 上走 /proc 精确验证，语义不受影响
     let targets = procmgr::scan_orphans(None);
     if std::path::Path::new("/proc").exists() {
-        // Linux：仅含 BBW_SANDBOX=1 的真孤儿；不预置断言数量
+        // Linux：仅含 BBC_SANDBOX=1 的真孤儿；不预置断言数量
         assert!(targets.iter().all(|o| o.marker_verified));
     } else {
         assert!(

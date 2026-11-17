@@ -1,7 +1,7 @@
 //! bbrt-mcp HTTP 传输集成测试：进程内假网关（std TcpListener，行为镜像
-//! 服务端 mcpgw——JSON-RPC 2.0 / Content-Length / Bearer 鉴权 / x-bbw-risk
+//! 服务端 mcpgw——JSON-RPC 2.0 / Content-Length / Bearer 鉴权 / x-bbc-risk
 //! 注记），全链路验证 connect→discover→call 与身份双通道（Authorization 头 +
-//! _meta.bbwObo）。两侧契约由 server/internal/mcpgw/server_test.go 共同冻结。
+//! _meta.bbcObo）。两侧契约由 server/internal/mcpgw/server_test.go 共同冻结。
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -13,7 +13,7 @@ use bbrt_mcp::{McpClient, McpServerConfig, PolicyFilter, TransportConfig};
 #[derive(Default, Clone)]
 struct Seen {
     auth_headers: Arc<Mutex<Vec<String>>>,
-    /// tools/call 收到的 _meta.bbwObo（服务端双通道兜底来源）
+    /// tools/call 收到的 _meta.bbcObo（服务端双通道兜底来源）
     obo_meta: Arc<Mutex<Vec<String>>>,
 }
 
@@ -114,11 +114,11 @@ fn respond(req: &serde_json::Value, auth: String, seen: &Seen) -> Option<String>
     let params = req.get("params").cloned().unwrap_or_default();
     let id = req.get("id").cloned()?;
     seen.auth_headers.lock().unwrap().push(auth.clone());
-    // 镜像 Go 端口径：所有请求都要求主体令牌，_meta.bbwObo 为兜底通道（双通道任收）
+    // 镜像 Go 端口径：所有请求都要求主体令牌，_meta.bbcObo 为兜底通道（双通道任收）
     //（通知无 id 已在 ? 处返回 None——客户端 notify 不等响应，等效静默）
     let meta_obo = params
         .get("_meta")
-        .and_then(|m| m.get("bbwObo"))
+        .and_then(|m| m.get("bbcObo"))
         .and_then(|o| o.as_str())
         .unwrap_or_default();
     if auth.is_empty() && meta_obo.is_empty() {
@@ -128,7 +128,7 @@ fn respond(req: &serde_json::Value, auth: String, seen: &Seen) -> Option<String>
         "initialize" => serde_json::json!({
             "protocolVersion": params.get("protocolVersion").cloned().unwrap_or(serde_json::json!("2024-11-05")),
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": "bbw-corp", "version": "0.1.0" },
+            "serverInfo": { "name": "bbc-corp", "version": "0.1.0" },
         }),
         "tools/list" => serde_json::json!({
             "tools": [
@@ -136,20 +136,20 @@ fn respond(req: &serde_json::Value, auth: String, seen: &Seen) -> Option<String>
                     "name": "kb_query",
                     "description": "知识库混合检索",
                     "inputSchema": { "type": "object", "properties": { "keyword": { "type": "string" } }, "required": ["keyword"] },
-                    "annotations": { "x-bbw-risk": "low" },
+                    "annotations": { "x-bbc-risk": "low" },
                 },
                 {
                     "name": "doc_read",
                     "description": "读在线文档",
                     "inputSchema": { "type": "object", "properties": { "doc_id": { "type": "integer" } }, "required": ["doc_id"] },
-                    "annotations": { "x-bbw-risk": "low" },
+                    "annotations": { "x-bbc-risk": "low" },
                 },
             ],
         }),
         "tools/call" => {
             let obo = params
                 .get("_meta")
-                .and_then(|m| m.get("bbwObo"))
+                .and_then(|m| m.get("bbcObo"))
                 .and_then(|o| o.as_str())
                 .unwrap_or_default()
                 .to_string();
@@ -176,7 +176,7 @@ fn error_frame(id: serde_json::Value, code: i32, msg: &str) -> String {
 }
 
 /// 全链路：握手→发现（kb_query/doc_read 命名空间化 + low 风险）→调用
-/// （Authorization 头与 _meta.bbwObo 双通道均达服务端）。
+/// （Authorization 头与 _meta.bbcObo 双通道均达服务端）。
 #[test]
 fn http_gateway_discover_and_call_with_bearer() {
     let (base, seen) = spawn_fake_gateway(false);
@@ -197,7 +197,7 @@ fn http_gateway_discover_and_call_with_bearer() {
     assert_eq!(
         tools[0].risk,
         bbrt_protocol::RiskLevel::Low,
-        "x-bbw-risk=low 应生效"
+        "x-bbc-risk=low 应生效"
     );
 
     let out = client
@@ -211,7 +211,7 @@ fn http_gateway_discover_and_call_with_bearer() {
     );
     assert!(
         out.text.contains("obo=obo-token-7"),
-        "_meta.bbwObo 应随行: {}",
+        "_meta.bbcObo 应随行: {}",
         out.text
     );
     // 每请求都带了头（initialize/list/call 至少 3 帧全有 Bearer）

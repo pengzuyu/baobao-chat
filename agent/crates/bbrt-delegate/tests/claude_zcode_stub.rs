@@ -122,7 +122,7 @@ fn claude_adapter_end_to_end_stream_json() {
 
 #[test]
 fn claude_detect_missing_binary_not_installed() {
-    let backend = ClaudeBackend::with_bin("/nonexistent/claude-bbw-test");
+    let backend = ClaudeBackend::with_bin("/nonexistent/claude-bbc-test");
     assert!(!backend.detect().installed);
     let health = backend.probe_health();
     assert!(!health.ok);

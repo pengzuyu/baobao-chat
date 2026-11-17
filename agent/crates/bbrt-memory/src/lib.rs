@@ -304,7 +304,7 @@ impl MemoryEngine {
         Self::open_root(data_dir, None, clock)
     }
 
-    /// D23/M3：`BBW_MEMORY_ROOT` 覆盖入口——记忆根（global/projects/archive）
+    /// D23/M3：`BBC_MEMORY_ROOT` 覆盖入口——记忆根（global/projects/archive）
     /// 可整体指到别处（联调隔离：防 :8090 测试期 agent 脏记忆污染日常
     /// USER.md）；活动 journal/日报仍在 dataDir（被动轨与记忆存储无关）。
     pub fn open_root(
@@ -498,7 +498,7 @@ impl MemoryEngine {
         Some(entry.body)
     }
 
-    /// D23：装配公共层压实器（bbrt main 接 bbw-fast；见 bbrt_session::FastCompactor）
+    /// D23：装配公共层压实器（bbrt main 接 bbc-fast；见 bbrt_session::FastCompactor）
     pub fn set_compactor(&self, c: Option<Arc<dyn global::Compactor>>) {
         self.global.set_compactor(c);
     }
@@ -689,7 +689,7 @@ mod scoped_tests {
     impl TempDir {
         fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "bbw-mem-scope-{tag}-{}-{}",
+                "bbc-mem-scope-{tag}-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)

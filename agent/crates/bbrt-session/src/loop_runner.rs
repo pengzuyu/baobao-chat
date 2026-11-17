@@ -227,7 +227,7 @@ fn unix_now_ms() -> i64 {
 /// 快模型摘要器（compaction 用；08 §4.6 降档语义的正面应用）
 struct FastSummarizer<'a> {
     client: &'a dyn ChatClient,
-    /// 档位别名（预留：AigwClient 按别名路由，请求体 model 已固定 bbw-fast）
+    /// 档位别名（预留：AigwClient 按别名路由，请求体 model 已固定 bbc-fast）
     #[allow(dead_code)]
     model: String,
 }
@@ -237,15 +237,15 @@ impl Summarizer for FastSummarizer<'_> {
     }
 }
 
-/// bbw-fast 单轮调用共用壳（system+user → 流式汇总全文）；
-/// compaction 摘要、W3 记忆提炼与探查 planner 共用（19 篇档位别名固定 bbw-fast）
+/// bbc-fast 单轮调用共用壳（system+user → 流式汇总全文）；
+/// compaction 摘要、W3 记忆提炼与探查 planner 共用（19 篇档位别名固定 bbc-fast）
 pub(crate) fn chat_text(
     client: &dyn ChatClient,
     system: &str,
     user: &str,
 ) -> Result<String, String> {
     let req = ChatRequest {
-        model: "bbw-fast".to_string(),
+        model: "bbc-fast".to_string(),
         messages: vec![
             ChatMessage {
                 role: "system".into(),
@@ -484,7 +484,7 @@ impl SessionRunner {
                 let hub = self.delegate_hub.clone();
                 let (ttx, trx) = std::sync::mpsc::channel::<Option<crate::team::TeamResult>>();
                 let _ = std::thread::Builder::new()
-                    .name("bbw-team".into())
+                    .name("bbc-team".into())
                     .spawn(move || {
                         let team = crate::team::run_team(
                             &ctx,
@@ -575,8 +575,8 @@ impl SessionRunner {
                     self.model_override
                         .clone()
                         .unwrap_or_else(|| match self.model_policy {
-                            ModelTier::Fast => "bbw-fast".to_string(),
-                            ModelTier::Strong => "bbw-strong".to_string(),
+                            ModelTier::Fast => "bbc-fast".to_string(),
+                            ModelTier::Strong => "bbc-strong".to_string(),
                         });
                 let outcome = crate::subagent::fanout_probes(
                     &self.session_id,
@@ -678,7 +678,7 @@ impl SessionRunner {
                 });
                 let summarizer = FastSummarizer {
                     client: deps.model.as_ref(),
-                    model: "bbw-fast".into(), // 19 篇档位别名
+                    model: "bbc-fast".into(), // 19 篇档位别名
                 };
                 match compact(&deps.budget, &self.history, &summarizer) {
                     Ok(CompactionOutcome {
@@ -770,8 +770,8 @@ impl SessionRunner {
                 self.model_override
                     .clone()
                     .unwrap_or_else(|| match self.model_policy {
-                        ModelTier::Fast => "bbw-fast".to_string(),
-                        ModelTier::Strong => "bbw-strong".to_string(),
+                        ModelTier::Fast => "bbc-fast".to_string(),
+                        ModelTier::Strong => "bbc-strong".to_string(),
                     });
             let req = ChatRequest {
                 model: model_name,
@@ -2145,7 +2145,7 @@ fn emit(deps: &LoopDeps, session_id: &str, f: impl FnOnce(String) -> SessionEven
 }
 
 // ---------------------------------------------------------------------------
-// W3 会话结束提炼（D15 §2.2 表第 3 行；bbw-fast，尽力而为）
+// W3 会话结束提炼（D15 §2.2 表第 3 行；bbc-fast，尽力而为）
 // ---------------------------------------------------------------------------
 
 /// W3 每会话最多提炼条数（防记忆膨胀）

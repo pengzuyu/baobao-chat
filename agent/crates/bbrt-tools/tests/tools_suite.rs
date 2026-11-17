@@ -441,12 +441,12 @@ fn run_command_echo真实沙箱exit0() {
         PermissionMode::Ask,
         &call(
             "run_command",
-            serde_json::json!({"command": "echo bbw-tools-echo"}),
+            serde_json::json!({"command": "echo bbc-tools-echo"}),
         ),
     ));
     assert_eq!(exit_code, Some(0), "stderr 分支: {summary}");
     assert!(!truncated);
-    assert!(summary.contains("bbw-tools-echo"));
+    assert!(summary.contains("bbc-tools-echo"));
     assert!(duration < 30_000, "沙箱 echo 不应超过 30s");
 }
 
@@ -739,7 +739,7 @@ fn memory_save_十类直通公共层与四类回落() {
 /// 独立工作区（memory 测试不依赖主夹具的 tempdir 生命周期）
 fn fixture_workspace() -> PathBuf {
     std::env::temp_dir().join(format!(
-        "bbw-tools-mem-ws-{}-{}",
+        "bbc-tools-mem-ws-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -43,7 +43,7 @@ CREATE INDEX idx_event_session ON agent_event(session_id, seq);
 CREATE TABLE agent_checkpoint (
   id             TEXT PRIMARY KEY,             -- cp-<ulid>
   session_id     TEXT NOT NULL REFERENCES agent_session(id),
-  git_ref        TEXT,                         -- refs/bbw-agent/{session}/cp-{n}
+  git_ref        TEXT,                         -- refs/bbc-agent/{session}/cp-{n}
   untracked      TEXT,                         -- JSON: 未跟踪文件清单
   files_changed  TEXT NOT NULL,                -- JSON: [{path,add,del}]
   reason         TEXT NOT NULL CHECK(reason IN('pre-edit','pre-command','manual','delegate','pre-restore')),

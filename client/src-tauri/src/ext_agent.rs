@@ -1,11 +1,11 @@
 //! 外部智能体接入面（D30）：打开中的壳对外长出本机回环 A2A server 面。
 //!
 //! 一个内核两张脸：A2A 正身（本模块，批1）+ MCP 方言脸（批3，同监听器
-//! POST /mcp）；`bbw ask` CLI 为第三客户端（批2）。会话执行完全复用
+//! POST /mcp）；`bbc ask` CLI 为第三客户端（批2）。会话执行完全复用
 //! AgentHost（agent_start_session → user.message → 事件泵，零改动），
 //! D14 不破——服务端照旧不跑 agent 会话。
 //!
-//! 任务生命周期映射（D30 §3）：task.id = bbw sessionId（续聊天然）；
+//! 任务生命周期映射（D30 §3）：task.id = bbc sessionId（续聊天然）；
 //! working ← user.message；input-required ← permission.request/clarify.question
 //! （卡照弹 App 内，人点后自动回 working）；completed ← session.state idle
 //! （首次 tasks/get 触发 session.history 提取最后一条 assistant 原文）；
@@ -25,7 +25,7 @@ use tiny_http::{Header, Method, Response, Server};
 
 use crate::agent_bridge::AgentHost;
 
-/// 缺省端口（D30 §2）；env BBW_EXT_AGENT_PORT 可覆盖；占用时 +1 重试至 +9
+/// 缺省端口（D30 §2）；env BBC_EXT_AGENT_PORT 可覆盖；占用时 +1 重试至 +9
 pub const DEFAULT_PORT: u16 = 8791;
 
 fn now_ms() -> i64 {
@@ -168,7 +168,7 @@ impl ExtHub {
     /// 答案惰性提取：completed 且未取过 → session.history 最后一条 assistant
     /// 原文（REQ 回执为协议 camelCase，不经 normalize）。结果须同时回写调用方
     /// 的 task 快照与 map 行——handle_get 返回的是快照，只写 map 会让首轮
-    /// completed 永远拿到占位空串（2026-11-16 bbw ask 实测空答案事故）
+    /// completed 永远拿到占位空串（2026-11-16 bbc ask 实测空答案事故）
     fn ensure_answer(&self, host: &AgentHost, sid: &str, task: &mut ExtTask) {
         if task.state != "completed" || task.answer.is_some() {
             return;
@@ -239,11 +239,11 @@ fn write_status_file(data_dir: &Path, port: u16) {
 }
 
 /// 启动接入面（lib.rs setup 调用）：装 token → 绑定（冲突 +1 重试至 +9，
-/// env BBW_EXT_AGENT_PORT 起点可覆盖）→ 状态文件 → 监听线程。
+/// env BBC_EXT_AGENT_PORT 起点可覆盖）→ 状态文件 → 监听线程。
 /// App 关闭即面消失（D30 前提=打开状态）。
 pub fn start(app: AppHandle, hub: Arc<ExtHub>, data_dir: PathBuf) {
     hub.set_token(load_or_create_token(&data_dir));
-    let base = std::env::var("BBW_EXT_AGENT_PORT")
+    let base = std::env::var("BBC_EXT_AGENT_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(DEFAULT_PORT);
@@ -260,16 +260,16 @@ pub fn start(app: AppHandle, hub: Arc<ExtHub>, data_dir: PathBuf) {
         }
     }
     let Some(server) = server else {
-        eprintln!("[bbw-ext] 外部接入面端口 {base}~{} 全部占用，未启动", base + 9);
+        eprintln!("[bbc-ext] 外部接入面端口 {base}~{} 全部占用，未启动", base + 9);
         return;
     };
     if bound != base {
-        eprintln!("[bbw-ext] 端口 {base} 被占用，回落 {bound}");
+        eprintln!("[bbc-ext] 端口 {base} 被占用，回落 {bound}");
     }
     hub.port
         .store(bound, std::sync::atomic::Ordering::SeqCst);
     write_status_file(&data_dir, bound);
-    eprintln!("[bbw-ext] 外部智能体接入面在线: http://127.0.0.1:{bound}/");
+    eprintln!("[bbc-ext] 外部智能体接入面在线: http://127.0.0.1:{bound}/");
     hub.online.store(true, std::sync::atomic::Ordering::SeqCst);
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
@@ -335,7 +335,7 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
                 "defaultOutputModes": ["text"],
                 "skills": [{
                     "id": "chat", "name": "智能体对话",
-                    "description": "发起/续聊一轮 bbw agent 会话（task.id=sessionId 可续）；知识检索走本人权限"
+                    "description": "发起/续聊一轮 bbc agent 会话（task.id=sessionId 可续）；知识检索走本人权限"
                 }]
             }),
         );
@@ -382,7 +382,7 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
     }
     let id = rpc["id"].clone();
     // A2A 即 JSON-RPC：成功响应必须 {"jsonrpc","id","result"} 信封包裹——裸 task
-    // 对象会被调用方按 result 解包拿到 Null（2026-11-16 bbw ask 轮询
+    // 对象会被调用方按 result 解包拿到 Null（2026-11-16 bbc ask 轮询
     // 「params.id 缺失」事故：send 响应 task.id 解析为空）
     let reply = match rpc["method"].as_str().unwrap_or("") {
         "message/send" => match handle_send(&app, &hub, rpc["params"].clone()) {
@@ -404,7 +404,7 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
 
 // ---------------------------------------------------------------------------
 // MCP 方言脸（D30 §4）：stateless streamable HTTP——initialize / ping /
-// tools/list / tools/call + notifications 202；单工具 bbw_agent_chat 内联
+// tools/list / tools/call + notifications 202；单工具 bbc_agent_chat 内联
 // 等待终态（对 A2A 任务内核的纯翻译，无第二套实现）
 // ---------------------------------------------------------------------------
 
@@ -425,7 +425,7 @@ fn mcp_dispatch(app: &AppHandle, hub: &ExtHub, rpc: &Value) -> McpReply {
             // 回显客户端协议版本（不识别回落 2025-03-26 基线）
             "protocolVersion": rpc["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": "bbw-agent", "version": "0.1.0" }
+            "serverInfo": { "name": "bbc-agent", "version": "0.1.0" }
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": [tool_def()] })),
@@ -440,7 +440,7 @@ fn mcp_dispatch(app: &AppHandle, hub: &ExtHub, rpc: &Value) -> McpReply {
 
 fn tool_def() -> Value {
     json!({
-        "name": "bbw_agent_chat",
+        "name": "bbc_agent_chat",
         "description": "把打开中的 BaobaoChat agent 当子智能体调用：发起/续聊一轮完整 agent 会话\
 （知识检索/记忆/专家/公司工具，按当前登录用户权限）。返回本轮最终回答；\
 审批/澄清卡会弹在 BaobaoChat 窗口内等待人工确认，调用侧自动等待。",
@@ -456,9 +456,9 @@ fn tool_def() -> Value {
     })
 }
 
-/// bbw_agent_chat：message/send → 内联轮询 ExtHub 至终态 → content 文本
+/// bbc_agent_chat：message/send → 内联轮询 ExtHub 至终态 → content 文本
 fn mcp_tool_call(app: &AppHandle, hub: &ExtHub, params: &Value) -> Result<Value, (i64, String)> {
-    if params["name"].as_str() != Some("bbw_agent_chat") {
+    if params["name"].as_str() != Some("bbc_agent_chat") {
         return Err((-32602, format!("unknown tool: {}", params["name"].as_str().unwrap_or("?"))));
     }
     let args = &params["arguments"];
@@ -506,7 +506,7 @@ fn mcp_tool_call(app: &AppHandle, hub: &ExtHub, params: &Value) -> Result<Value,
                 if started.elapsed().as_secs() >= timeout {
                     return Ok(json!({
                         "content": [{ "type": "text", "text": format!(
-                            "等待超时（{timeout}s）——会话仍在 BaobaoChat 内运行；续查：bbw ask --session {sid}"
+                            "等待超时（{timeout}s）——会话仍在 BaobaoChat 内运行；续查：bbc ask --session {sid}"
                         ) }],
                         "isError": true
                     }));
@@ -607,7 +607,7 @@ fn task_json(sid: &str, state: &str, answer: Option<&str>, note: Option<&str>) -
     }
     let mut task = json!({
         "id": sid, "contextId": sid, "status": status,
-        "metadata": { "session_id": sid, "kind": "bbw-session" }
+        "metadata": { "session_id": sid, "kind": "bbc-session" }
     });
     if state == "completed" {
         task["artifacts"] = json!([{ "parts": [{ "kind": "text", "text": answer.unwrap_or("") }] }]);

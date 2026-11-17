@@ -151,7 +151,7 @@ fn sse_line(data: &str) -> String {
     format!("data: {data}\n\n")
 }
 
-/// fanout 判定轮（FastPlanner 首个 bbw-fast 请求的响应：不分解）
+/// fanout 判定轮（FastPlanner 首个 bbc-fast 请求的响应：不分解）
 fn planner_noop() -> String {
     format!(
         "{}{}{}",
@@ -196,9 +196,9 @@ fn e2e_full_runtime_process() {
     serve_mock_gateway(listener, script);
 
     let mut child: Child = Command::new(env!("CARGO_BIN_EXE_bbrt"))
-        .env("BBW_RT_DATA_DIR", tmp.path())
-        .env("BBW_RT_GATEWAY", format!("http://127.0.0.1:{port}"))
-        .env("BBW_RT_TOKEN", "e2e-token")
+        .env("BBC_RT_DATA_DIR", tmp.path())
+        .env("BBC_RT_GATEWAY", format!("http://127.0.0.1:{port}"))
+        .env("BBC_RT_TOKEN", "e2e-token")
         .current_dir(tmp.path()) // 工作区=进程 cwd（bin v0.1 workspace 解析口径）
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -353,17 +353,17 @@ fn e2e_delegate_via_generic_cli() {
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::write(ws.join("a.rs"), "fn main() {}\n").unwrap();
 
-    // fake codex：--version 探测 + 无参启动读 stdin 简报 → ##BBW:EVT 事件流
+    // fake codex：--version 探测 + 无参启动读 stdin 简报 → ##BBC:EVT 事件流
     let bin = tmp.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let codex = bin.join("codex");
     // 行协议事件字面量（事件 JSON 无嵌套引号，字面量安全；带嵌套的参数帧才需 serde 构造）
-    let meta = r#"##BBW:EVT:{"kind":"meta","text":"fake codex ready","session_ref":"fake-sess-1"}"#;
-    let output = r#"##BBW:EVT:{"kind":"output","text":"正在修复构建"}"#;
+    let meta = r#"##BBC:EVT:{"kind":"meta","text":"fake codex ready","session_ref":"fake-sess-1"}"#;
+    let output = r#"##BBC:EVT:{"kind":"output","text":"正在修复构建"}"#;
     let tool_use =
-        r#"##BBW:EVT:{"kind":"tool_use","call_id":"t1","tool":"Edit","args":{"file":"a.rs"}}"#;
+        r#"##BBC:EVT:{"kind":"tool_use","call_id":"t1","tool":"Edit","args":{"file":"a.rs"}}"#;
     let tool_result =
-        r#"##BBW:EVT:{"kind":"tool_result","call_id":"t1","ok":true,"summary":"已编辑 a.rs"}"#;
+        r#"##BBC:EVT:{"kind":"tool_result","call_id":"t1","ok":true,"summary":"已编辑 a.rs"}"#;
     // 桩不读 stdin（后端写简报入管道缓冲、退出后 EPIPE 由后端容忍——generic.rs 注释口径）
     std::fs::write(
         &codex,
@@ -415,9 +415,9 @@ fn e2e_delegate_via_generic_cli() {
 
     let path_env = std::env::var("PATH").unwrap_or_default();
     let mut child = Command::new(env!("CARGO_BIN_EXE_bbrt"))
-        .env("BBW_RT_DATA_DIR", tmp.path())
-        .env("BBW_RT_GATEWAY", format!("http://127.0.0.1:{port}"))
-        .env("BBW_RT_TOKEN", "e2e-token")
+        .env("BBC_RT_DATA_DIR", tmp.path())
+        .env("BBC_RT_GATEWAY", format!("http://127.0.0.1:{port}"))
+        .env("BBC_RT_TOKEN", "e2e-token")
         .env("PATH", format!("{}:{}", bin.display(), path_env)) // detect 命中 fake codex
         .current_dir(&ws)
         .stdin(Stdio::piped())

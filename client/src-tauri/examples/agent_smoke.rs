@@ -1,7 +1,7 @@
-//! 端到端冒烟（脱离 Tauri 窗口）：宿主桥 → 真 bbrt → 真网关（BBW_RT_GATEWAY）→ 真模型。
+//! 端到端冒烟（脱离 Tauri 窗口）：宿主桥 → 真 bbrt → 真网关（BBC_RT_GATEWAY）→ 真模型。
 //! 跑法：cargo run --example agent_smoke
 //! 前置：cargo build -p bbrt（workspace 内）；网关在跑（默认 http://127.0.0.1:8090，
-//! BBW_RT_TOKEN=dev-token 类）；会连真实模型（planner 走 bbw-fast 档）。
+//! BBC_RT_TOKEN=dev-token 类）；会连真实模型（planner 走 bbc-fast 档）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -23,7 +23,7 @@ fn main() {
             d2.store(true, Ordering::SeqCst);
         }
     });
-    let data_dir = std::env::temp_dir().join(format!("bbw-smoke-{}", std::process::id()));
+    let data_dir = std::env::temp_dir().join(format!("bbc-smoke-{}", std::process::id()));
     let host = AgentHost::new(data_dir, emit);
 
     let model = std::env::var("SMOKE_MODEL").ok();

@@ -193,7 +193,7 @@ fn assemble_filters_and_builds_system() {
     assert!(dropped_names.contains(&"oa.lookup"));
     assert!(a.dropped_skills.is_empty());
 
-    assert_eq!(a.model, "bbw-strong");
+    assert_eq!(a.model, "bbc-strong");
     assert_eq!(a.max_steps, 40);
     // system：persona + 技能正文 + 约束引导 + 知识视野缺省无
     assert!(a.system_prompt.contains("资深评审员"));
@@ -216,7 +216,7 @@ fn assemble_drops_uninstalled_skill() {
     assert!(!a.system_prompt.contains("评审基线"));
 }
 
-/// 受限子会话全链：独立上下文（persona system、无主历史）+ bbw-strong 路由
+/// 受限子会话全链：独立上下文（persona system、无主历史）+ bbc-strong 路由
 /// + 工具真实执行（仅白名单）+ WAL expert.activate/done 审计流（act 值域）
 #[test]
 fn run_expert_full_chain() {
@@ -258,7 +258,7 @@ fn run_expert_full_chain() {
     let seen = model.seen.lock().unwrap().clone();
     assert!(seen
         .iter()
-        .all(|(s, model_)| s.contains("资深评审员") && model_ == "bbw-strong"));
+        .all(|(s, model_)| s.contains("资深评审员") && model_ == "bbc-strong"));
     // 工具真实执行（经白名单子集）
     assert_eq!(*tools.0.lock().unwrap(), vec!["git_diff"]);
     // WAL：activate（act=expert:{persona}:{activation}）→ done

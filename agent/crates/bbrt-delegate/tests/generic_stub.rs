@@ -1,4 +1,4 @@
-//! 通用 CLI 适配器 × sh 桩脚本集成测试（任务书要求的 fake 后端 `##BBW:EVT:` 行协议场景）。
+//! 通用 CLI 适配器 × sh 桩脚本集成测试（任务书要求的 fake 后端 `##BBC:EVT:` 行协议场景）。
 //!
 //! 场景表（全部真实跑子进程）：
 //! | 场景 | 桩脚本 | 断言要点 |
@@ -75,12 +75,12 @@ fn stream_stub(dir: &TestDir) -> String {
         dir.path(),
         "stream.sh",
         &with_drain(concat!(
-            "printf '%s\\n' '##BBW:EVT:{\"kind\":\"meta\",\"text\":\"session start\",\"session_ref\":\"g-77\"}'\n",
+            "printf '%s\\n' '##BBC:EVT:{\"kind\":\"meta\",\"text\":\"session start\",\"session_ref\":\"g-77\"}'\n",
             "printf '%s\\n' 'plain working text'\n",
-            "printf '%s\\n' '##BBW:EVT:{\"kind\":\"tool_use\",\"call_id\":\"t1\",\"tool\":\"Edit\",\"args\":{\"file_path\":\"src/a.rs\"}}'\n",
-            "printf '%s\\n' '##BBW:EVT:{\"kind\":\"tool_result\",\"call_id\":\"t1\",\"ok\":true,\"summary\":\"+3 -1\"}'\n",
+            "printf '%s\\n' '##BBC:EVT:{\"kind\":\"tool_use\",\"call_id\":\"t1\",\"tool\":\"Edit\",\"args\":{\"file_path\":\"src/a.rs\"}}'\n",
+            "printf '%s\\n' '##BBC:EVT:{\"kind\":\"tool_result\",\"call_id\":\"t1\",\"ok\":true,\"summary\":\"+3 -1\"}'\n",
             "IFS= read -r extra\n",
-            "printf '##BBW:EVT:{\"kind\":\"output\",\"text\":\"got: %s\"}\\n' \"$extra\"\n",
+            "printf '##BBC:EVT:{\"kind\":\"output\",\"text\":\"got: %s\"}\\n' \"$extra\"\n",
             "exit 0\n",
         )),
     )
@@ -233,7 +233,7 @@ fn graceful_cancel_sigint_exits_cleanly_without_escalation() {
         "hang.sh",
         &with_drain(concat!(
             "trap 'exit 0' INT\n",
-            "printf '%s\\n' '##BBW:EVT:{\"kind\":\"meta\",\"text\":\"long running\"}'\n",
+            "printf '%s\\n' '##BBC:EVT:{\"kind\":\"meta\",\"text\":\"long running\"}'\n",
             "while true; do sleep 1; done\n",
         )),
     );
@@ -287,7 +287,7 @@ fn force_kill_escalates_after_grace_when_int_ignored() {
         "hard.sh",
         &with_drain(concat!(
             "trap '' INT\n",
-            "printf '%s\\n' '##BBW:EVT:{\"kind\":\"meta\",\"text\":\"unkillable\"}'\n",
+            "printf '%s\\n' '##BBC:EVT:{\"kind\":\"meta\",\"text\":\"unkillable\"}'\n",
             "while true; do sleep 5; done\n",
         )),
     );
@@ -406,7 +406,7 @@ fn brief_render_and_forbidden_env_integration() {
     assert!(text.contains("forbidden:"));
     assert!(text.contains("修改 go.mod"));
     let envs = bbrt_delegate::child_env(&brief);
-    assert_eq!(envs[0].0, "BBW_BRIEF_FORBIDDEN");
+    assert_eq!(envs[0].0, "BBC_BRIEF_FORBIDDEN");
     let parsed: Vec<String> = serde_json::from_str(&envs[0].1).unwrap();
     assert_eq!(parsed.len(), 2);
 }

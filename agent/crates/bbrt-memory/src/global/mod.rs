@@ -4,7 +4,7 @@
 //!   保护——硬条目不进 LLM 输入）；目标=时敏（重放时过期即清）；其余软（新盖旧）；
 //! - journal 只追加永不删行（remove=tombstone）；**USER.md=journal 纯派生物**，
 //!   每次写入重投影——规则渲染 ≤3000 字直写，超限**保留旧视图**（宁旧勿错；
-//!   M2 compact.rs 接 bbw-fast 后超限路径改为压缩）；
+//!   M2 compact.rs 接 bbc-fast 后超限路径改为压缩）；
 //! - 写入收敛（D23 §3.6）：W1 工具/W2 启发/W3 提炼/设置页（M3）→ `add()`/`forget()`
 //!   两个入口，全进程单写者=本 crate 调用方（MemoryEngine）进程内 Mutex 串行；
 //! - 与 D15 被动轨活动日志（`agent/journal/*.jsonl`）是**两个东西**：目录隔离、
@@ -234,7 +234,7 @@ impl GlobalStore {
         })
     }
 
-    /// 装配压实器（bbrt main 接 bbw-fast；见 bbrt_session::FastCompactor）
+    /// 装配压实器（bbrt main 接 bbc-fast；见 bbrt_session::FastCompactor）
     pub fn set_compactor(&self, c: Option<Arc<dyn Compactor>>) {
         *self.compactor.lock().unwrap_or_else(|p| p.into_inner()) = c;
     }

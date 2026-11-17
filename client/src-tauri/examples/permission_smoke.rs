@@ -3,7 +3,7 @@
 //! 发「执行 echo」→ 观察 permission.request 是否经 emit 回调到达（壳侧全链）
 //! → 立即 permission.response allow → 观察 tool.result ok + turn 收口。
 //! 跑法：cargo run --example permission_smoke
-//! 前置：网关在跑（BBW_RT_GATEWAY，默认 http://127.0.0.1:8090）。
+//! 前置：网关在跑（BBC_RT_GATEWAY，默认 http://127.0.0.1:8090）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -50,8 +50,8 @@ fn main() {
         })
     };
 
-    let data_dir = std::env::temp_dir().join(format!("bbw-perm-smoke-{}", std::process::id()));
-    let ws = std::env::temp_dir().join(format!("bbw-perm-smoke-ws-{}", std::process::id()));
+    let data_dir = std::env::temp_dir().join(format!("bbc-perm-smoke-{}", std::process::id()));
+    let ws = std::env::temp_dir().join(format!("bbc-perm-smoke-ws-{}", std::process::id()));
     std::fs::create_dir_all(&ws).expect("create workspace");
     let host = Arc::new(AgentHost::new(data_dir, emit));
 

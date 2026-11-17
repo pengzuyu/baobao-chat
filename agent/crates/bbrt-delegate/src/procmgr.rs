@@ -1,11 +1,11 @@
 //! 进程组管理（D11 §8.4 取消协议；17 §9 "子进程卡死/失控"）。
 //!
 //! - 启动：新进程组（pre_exec `setpgid(0,0)`，效果等价 setsid 建组的委派场景：
-//!   子进程自成组长，pgid==pid，杀组即杀树）+ 环境标记 `BBW_SANDBOX=1`；
+//!   子进程自成组长，pgid==pid，杀组即杀树）+ 环境标记 `BBC_SANDBOX=1`；
 //! - 取消：graceful=true → `SIGINT(pgid)` → 等 3s → 未退出 `SIGKILL` 整组；
 //!   graceful=false → 直接 `SIGKILL` 整组；主进程收割后防御性补杀组内残留
 //!   （nohup/后台子进程场景，同 bbrt-sec/sandbox/launcher.rs 做法）；
-//! - 遗留进程扫描清理：Runtime 启动时扫"带 BBW_SANDBOX=1 标记且父进程已死"的
+//! - 遗留进程扫描清理：Runtime 启动时扫"带 BBC_SANDBOX=1 标记且父进程已死"的
 //!   进程并清理（09 §4.6）。v0.1 实现：
 //!   - Linux：读 `/proc/<pid>/environ` 精确匹配标记（首选，已实现）；
 //!   - macOS：`ps -E` 实测不暴露环境（darwin 25.5），退化为 `ps -eo pid,pgid,ppid,command`
@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 /// 进程组沙箱标记（D11 §8.4；与 bbrt-sec 命名一致，遗留进程扫描按此识别）
-pub const ENV_SANDBOX_MARK: &str = "BBW_SANDBOX";
+pub const ENV_SANDBOX_MARK: &str = "BBC_SANDBOX";
 
 /// graceful 取消的宽限时长（D11 §8.4：SIGINT → 3s → SIGKILL）
 pub const CANCEL_GRACE_SECS: u64 = 3;
@@ -116,7 +116,7 @@ pub struct CancelOutcome {
 // 受管子进程
 // ---------------------------------------------------------------------------
 
-/// 受管子进程：新进程组启动 + BBW_SANDBOX=1 标记 + §8.4 取消协议。
+/// 受管子进程：新进程组启动 + BBC_SANDBOX=1 标记 + §8.4 取消协议。
 /// `child`/`stdin` 各持 Mutex——stream_events 阻塞读 stdout 期间，其他线程可
 /// 并发 send_input/cancel（两把锁不嵌套获取，无死锁路径）。
 #[derive(Debug)]
@@ -130,7 +130,7 @@ pub struct ChildProcess {
 }
 
 /// 启动受管子进程：返回 (进程句柄, stdout)。stdin 由句柄持有（send_input 用）。
-/// 环境注入 BBW_SANDBOX=1（遗留扫描依据）+ 调用方附加 envs（简报 forbidden 等）。
+/// 环境注入 BBC_SANDBOX=1（遗留扫描依据）+ 调用方附加 envs（简报 forbidden 等）。
 pub fn spawn(
     program: &str,
     args: &[String],
@@ -301,7 +301,7 @@ pub struct OrphanInfo {
     pub ppid: i32,
     /// 命令行（ps 输出原样）
     pub command: String,
-    /// BBW_SANDBOX=1 标记是否经 /proc 精确验证（macOS 上恒 false：ps 无 env 视图）
+    /// BBC_SANDBOX=1 标记是否经 /proc 精确验证（macOS 上恒 false：ps 无 env 视图）
     pub marker_verified: bool,
 }
 
@@ -345,7 +345,7 @@ fn process_table() -> Vec<PsRow> {
     rows
 }
 
-/// Linux：读 /proc/<pid>/environ 精确验证 BBW_SANDBOX=1。
+/// Linux：读 /proc/<pid>/environ 精确验证 BBC_SANDBOX=1。
 /// 返回 None = 平台无 /proc（macOS）→ 标记不可验证。
 fn env_marker_verified(pid: i32) -> Option<bool> {
     let environ = Path::new("/proc").join(pid.to_string()).join("environ");
@@ -372,12 +372,12 @@ fn own_pgid() -> i32 {
     unsafe { getpgrp() }
 }
 
-/// 扫描遗留委派进程（带 BBW_SANDBOX=1 标记且父已死）。
+/// 扫描遗留委派进程（带 BBC_SANDBOX=1 标记且父已死）。
 ///
 /// 识别条件（全部满足）：
 /// 1. 排除本进程、自身进程组与 pid/pgid<=1（防自杀/防杀 launchd 组）；
 /// 2. 父已死：ppid==1（reparent 到 launchd/init）或 ppid 不在进程表；
-/// 3. 标记验证：Linux /proc 可验则必须含 BBW_SANDBOX=1；macOS 无法验证时
+/// 3. 标记验证：Linux /proc 可验则必须含 BBC_SANDBOX=1；macOS 无法验证时
 ///    **必须**提供 cmd_filter 且命令行命中（防误杀用户 launchd 代理，登记）；
 /// 4. cmd_filter 给出时命令行还需命中过滤串。
 pub fn scan_orphans(cmd_filter: Option<&str>) -> Vec<OrphanInfo> {
@@ -396,7 +396,7 @@ pub fn scan_orphans(cmd_filter: Option<&str>) -> Vec<OrphanInfo> {
         }
         let marker_verified = match env_marker_verified(row.pid) {
             Some(true) => true,
-            // 明确无标记（/proc 可验且不含 BBW_SANDBOX=1）
+            // 明确无标记（/proc 可验且不含 BBC_SANDBOX=1）
             Some(false) => continue,
             None => match cmd_filter {
                 // macOS：env 不可验证 → 必须有 cmd_filter 且命中才纳入
@@ -449,9 +449,9 @@ mod tests {
         assert_eq!(proc.pgid, proc.pid());
         let _ = proc.cancel(false).unwrap();
 
-        // BBW_SANDBOX=1 标记经子进程自身回显验证（走我们的 spawn 路径）
+        // BBC_SANDBOX=1 标记经子进程自身回显验证（走我们的 spawn 路径）
         let dir = testing::temp_dir("mark");
-        let script = testing::write_script(&dir, "mark.sh", "#!/bin/sh\nprintenv BBW_SANDBOX\n");
+        let script = testing::write_script(&dir, "mark.sh", "#!/bin/sh\nprintenv BBC_SANDBOX\n");
         let script_str = script.to_string_lossy().into_owned();
         let (proc, stdout) = spawn("/bin/sh", &[script_str], None, &[]).unwrap();
         let mut reader = BufReader::new(stdout);

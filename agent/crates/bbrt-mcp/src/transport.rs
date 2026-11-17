@@ -7,7 +7,7 @@
 //!
 //! HTTP：单请求单连接 POST（`Connection: close`，无会话态网关端 D14 §6.1
 //! 与此口径互锁）；**主体令牌（OBO）每请求现取注入 Authorization: Bearer**
-//! （D14 §6.2 ②——`call.rs` 的 `_meta.bbwObo` 同时随行，服务端双通道任收）。
+//! （D14 §6.2 ②——`call.rs` 的 `_meta.bbcObo` 同时随行，服务端双通道任收）。
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -37,7 +37,7 @@ pub enum TransportConfig {
     },
     /// 远程网关（公司域 MCP 网关，如 http://127.0.0.1:8090/mcp/corp；
     /// 主体令牌经 TokenProvider 逐请求注入——装配时与 McpClient 同源）。
-    /// headers：插件外部系统自定义头（D22 §6.1/L4）——值中 `${BBW_USER_TOKEN}`
+    /// headers：插件外部系统自定义头（D22 §6.1/L4）——值中 `${BBC_USER_TOKEN}`
     /// 调用层动态替换；自定义 Authorization 覆盖自动 Bearer
     Http {
         base_url: String,
@@ -213,7 +213,7 @@ impl Transport for StdioTransport {
 
 /// 远程 HTTP 传输（公司域 MCP 网关 / 插件 HTTP server）：单请求单连接，
 /// OBO 逐请求注入 Bearer；插件自定义头（D22 §6.1/L4）值中
-/// `${BBW_USER_TOKEN}` 逐请求动态替换（token 轮换不静态化），
+/// `${BBC_USER_TOKEN}` 逐请求动态替换（token 轮换不静态化），
 /// 自带 Authorization 时覆盖自动 Bearer。
 pub struct HttpTransport {
     url: ParsedUrl,
@@ -235,7 +235,7 @@ impl HttpTransport {
         })
     }
 
-    /// 最终头表：自定义头值替换 ${BBW_USER_TOKEN}（当前 token 现取）；
+    /// 最终头表：自定义头值替换 ${BBC_USER_TOKEN}（当前 token 现取）；
     /// 自带 authorization → 自动 Bearer 压掉（覆盖语义）
     fn effective(&self) -> (Option<String>, Vec<(String, String)>) {
         let token = (self.tokens)().filter(|t| !t.is_empty());
@@ -243,8 +243,8 @@ impl HttpTransport {
         let mut custom_auth = false;
         for (k, v) in &self.headers {
             let val = match token.as_deref() {
-                Some(t) => v.replace("${BBW_USER_TOKEN}", t),
-                None => v.replace("${BBW_USER_TOKEN}", ""),
+                Some(t) => v.replace("${BBC_USER_TOKEN}", t),
+                None => v.replace("${BBC_USER_TOKEN}", ""),
             };
             if k.trim().eq_ignore_ascii_case("authorization") {
                 custom_auth = true;
@@ -347,7 +347,7 @@ mod http_header_tests {
         assert_eq!(extra[0].1, "Private-Token abc");
     }
 
-    /// ${BBW_USER_TOKEN} 动态替换（token 现取——轮换后无需重配）
+    /// ${BBC_USER_TOKEN} 动态替换（token 现取——轮换后无需重配）
     #[test]
     fn effective_replaces_user_token() {
         let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -355,7 +355,7 @@ mod http_header_tests {
         let provider: TokenProvider = Arc::new(move || c.lock().unwrap().clone());
         let tr = HttpTransport::new(
             "http://127.0.0.1:1/mcp",
-            vec![("Authorization".into(), "Bearer ${BBW_USER_TOKEN}".into())],
+            vec![("Authorization".into(), "Bearer ${BBC_USER_TOKEN}".into())],
             provider,
         )
         .unwrap();
@@ -373,7 +373,7 @@ mod http_header_tests {
     #[test]
     fn effective_extra_header_keeps_bearer() {
         let tr = transport(
-            vec![("X-Api-Key".into(), "k-${BBW_USER_TOKEN}".into())],
+            vec![("X-Api-Key".into(), "k-${BBC_USER_TOKEN}".into())],
             Some("tok-2"),
         );
         let (bearer, extra) = tr.effective();

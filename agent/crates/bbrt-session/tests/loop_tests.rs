@@ -1639,7 +1639,7 @@ fn model_override_routes_reference_and_falls_back() {
         None,
     );
     let _ = runner2.run_turn("你好", &d2, None);
-    assert_eq!(*cap2.models.lock().unwrap(), vec!["bbw-strong".to_string()]);
+    assert_eq!(*cap2.models.lock().unwrap(), vec!["bbc-strong".to_string()]);
 }
 
 /// switch_model 带 override：事件携带引用 + agent_session 持久化（含清除）

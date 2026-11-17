@@ -85,7 +85,7 @@ struct Shared {
     did: Mutex<String>,
     obo_scopes: Mutex<Vec<String>>,
     gateway: String,
-    /// 当前登录用户（工号/姓名）——插件装配器静态替换 ${BBW_USER_ID}/${BBW_USER_NAME}
+    /// 当前登录用户（工号/姓名）——插件装配器静态替换 ${BBC_USER_ID}/${BBC_USER_NAME}
     /// 用（D22 §6.1/L4；换账号=set_user 后重推装配，stdio env 是 spawn 快照）
     user: Mutex<(String, String)>,
     /// 紧急停止后抑制惰性重启（下一次显式命令重新拉起）
@@ -132,7 +132,7 @@ impl Shared {
             let (payload_token, exp) = match shared.issue_obo(&access) {
                 Ok(obo) => (obo, now_secs() + OBO_EXP_MARGIN),
                 Err(e) => {
-                    eprintln!("[bbw-bridge] OBO 续签失败，回落重发缓存 access: {e}");
+                    eprintln!("[bbc-bridge] OBO 续签失败，回落重发缓存 access: {e}");
                     (access, now_secs() + OBO_EXP_MARGIN)
                 }
             };
@@ -230,15 +230,15 @@ pub struct AgentHost {
 impl AgentHost {
     pub fn new(data_dir: PathBuf, emit: EventSink) -> Self {
         let bin = resolve_bbrt_bin();
-        // 网关缺省链（D21）：进程 env BBW_RT_GATEWAY（dev/手工覆盖）>
-        // 编译期注入 BBW_DEFAULT_GATEWAY（发布打包由 BBW_PUBLIC_URL 带 build.rs 注入，
+        // 网关缺省链（D21）：进程 env BBC_RT_GATEWAY（dev/手工覆盖）>
+        // 编译期注入 BBC_DEFAULT_GATEWAY（发布打包由 BBC_PUBLIC_URL 带 build.rs 注入，
         // 打包应用无 env 可设）> 本地裸跑服务端 127.0.0.1:8090（联调兜底）。
-        let gateway = std::env::var("BBW_RT_GATEWAY")
+        let gateway = std::env::var("BBC_RT_GATEWAY")
             .ok()
             .filter(|g| !g.is_empty())
-            .or_else(|| option_env!("BBW_DEFAULT_GATEWAY").map(str::to_string))
+            .or_else(|| option_env!("BBC_DEFAULT_GATEWAY").map(str::to_string))
             .unwrap_or_else(|| "http://127.0.0.1:8090".into());
-        let static_token = std::env::var("BBW_RT_TOKEN").ok().filter(|t| !t.is_empty());
+        let static_token = std::env::var("BBC_RT_TOKEN").ok().filter(|t| !t.is_empty());
         Self {
             shared: Arc::new(Shared {
                 proc: Mutex::new(ProcState {
@@ -333,7 +333,7 @@ impl AgentHost {
         let obo = match self.shared.issue_obo(&token) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[bbw-bridge] OBO 签发失败，回落主 token 下发: {e}");
+                eprintln!("[bbc-bridge] OBO 签发失败，回落主 token 下发: {e}");
                 return self.fire(
                     "obo.token",
                     json!({ "token": token, "exp": exp_ms / 1000, "scopes": [] }),
@@ -361,7 +361,7 @@ impl AgentHost {
         *self.shared.user.lock().unwrap() = (String::new(), String::new());
     }
 
-    /// 登录用户信息（D22/L4）：装配器替换 ${BBW_USER_ID}/${BBW_USER_NAME} 用；
+    /// 登录用户信息（D22/L4）：装配器替换 ${BBC_USER_ID}/${BBC_USER_NAME} 用；
     /// 更新后重推装配（换账号 → stdio env 随新 spawn 生效；HTTP 的 TOKEN 是
     /// RT 动态替换不受影响）。失败仅告警（装配重推自愈）
     pub fn set_user(&self, user_id: &str, user_name: &str) -> Result<(), String> {
@@ -373,7 +373,7 @@ impl AgentHost {
             *u = (user_id.to_string(), user_name.to_string());
         }
         if let Err(e) = self.push_mcp_assembly() {
-            eprintln!("[bbw-bridge] 用户变更装配重推失败（降级）: {e}");
+            eprintln!("[bbc-bridge] 用户变更装配重推失败（降级）: {e}");
         }
         Ok(())
     }
@@ -422,7 +422,7 @@ impl AgentHost {
                 // env 已注入，插件级/个人级必须经 mcp.config——RT 重启不丢）。
                 // 失败仅告警不阻断（插件/个人降级标灰，corp 链路不受影响）
                 if let Err(e) = self.push_mcp_assembly_inner() {
-                    eprintln!("[bbw-bridge] MCP 装配推送失败（降级）: {e}");
+                    eprintln!("[bbc-bridge] MCP 装配推送失败（降级）: {e}");
                 }
                 Ok(())
             }
@@ -453,7 +453,7 @@ impl AgentHost {
         std::fs::create_dir_all(&self.data_dir).map_err(|e| format!("数据目录创建失败: {e}"))?;
         if !self.bin.exists() {
             return Err(format!(
-                "bbrt 二进制不存在（{}）；先 cargo build -p bbrt 或设 BBW_RT_BIN",
+                "bbrt 二进制不存在（{}）；先 cargo build -p bbrt 或设 BBC_RT_BIN",
                 self.bin.display()
             ));
         }
@@ -464,12 +464,12 @@ impl AgentHost {
             .append(true)
             .open(self.data_dir.join("bbrt.log"));
         let mut child = Command::new(&self.bin)
-            .env("BBW_RT_DATA_DIR", &self.data_dir)
-            .env("BBW_RT_GATEWAY", &self.gateway)
+            .env("BBC_RT_DATA_DIR", &self.data_dir)
+            .env("BBC_RT_GATEWAY", &self.gateway)
             // 公司域 MCP 网关（D18 §3.5：agent 经 im_history 自读会话上下文等
             // 公司域能力；命名 corp → 工具命名空间 mcp.corp.*）
             .env(
-                "BBW_RT_MCP_SERVERS",
+                "BBC_RT_MCP_SERVERS",
                 format!("corp={}/mcp/corp", self.gateway.trim_end_matches('/')),
             )
             .stdin(Stdio::piped())
@@ -790,10 +790,10 @@ fn camel_to_snake_session(row: &Value) -> Value {
     out
 }
 
-/// bbrt 二进制解析：BBW_RT_BIN → 生产 exe 同目录 sidecar（externalBin 命名
+/// bbrt 二进制解析：BBC_RT_BIN → 生产 exe 同目录 sidecar（externalBin 命名
 /// bbrt-<target-triple>[.exe]）→ workspace 内 target/{debug,release} → bundle binaries/
 fn resolve_bbrt_bin() -> PathBuf {
-    if let Ok(p) = std::env::var("BBW_RT_BIN") {
+    if let Ok(p) = std::env::var("BBC_RT_BIN") {
         return PathBuf::from(p);
     }
     // 生产：Tauri externalBin 把 sidecar 随 main exe 同目录分发（macOS/Linux 包；
@@ -824,7 +824,7 @@ fn resolve_bbrt_bin() -> PathBuf {
 /// externalBin 打包产物名（build.rs 注入 triple；Windows 再补 .exe 后缀）
 fn sidecar_file_name() -> String {
     let ext = if cfg!(windows) { ".exe" } else { "" };
-    format!("bbrt-{}{}", env!("BBW_TARGET_TRIPLE"), ext)
+    format!("bbrt-{}{}", env!("BBC_TARGET_TRIPLE"), ext)
 }
 
 /// UNT payload 键名归一（协议 camelCase → FE agent://event 期望 snake_case；
@@ -881,7 +881,7 @@ fn camel_to_snake(s: &str) -> String {
 //   3. 个人级（D26）：用户自配 eco/mcp/personal.json（stdio/HTTP 双形态，
 //      secret 值钥匙串合并——mcp_commands::read_personal_servers）。
 // `${PLUGIN_ROOT}` 替换为版本目录绝对路径（装配时静态替换）；身份变量
-// （${BBW_USER_TOKEN}/${CONFIG:*}）随 L4 在 RT 调用层动态注入——HTTP
+// （${BBC_USER_TOKEN}/${CONFIG:*}）随 L4 在 RT 调用层动态注入——HTTP
 // headers 本层暂丢弃（TransportConfig::Http 尚无自定义头，登记 L4）。
 // server 名冲突：系统级 > 插件级 > 个人级，同名跳过（防劫持 corp 命名空间、
 // 防个人顶替插件）。
@@ -936,7 +936,7 @@ fn assemble_mcp_servers(
         let config = crate::plugin_commands::read_plugin_config(&base);
         for (name, def) in servers {
             if taken.contains(name) {
-                eprintln!("[bbw-bridge] 插件 {id} MCP server 名 '{name}' 与系统级/先到冲突，跳过");
+                eprintln!("[bbc-bridge] 插件 {id} MCP server 名 '{name}' 与系统级/先到冲突，跳过");
                 continue;
             }
             match mcp_server_wire(name, def, &root, user, &config) {
@@ -945,7 +945,7 @@ fn assemble_mcp_servers(
                     out.push(w);
                 }
                 None => eprintln!(
-                    "[bbw-bridge] 插件 {id} MCP server '{name}' 定义非法（缺 command/url），跳过"
+                    "[bbc-bridge] 插件 {id} MCP server '{name}' 定义非法（缺 command/url），跳过"
                 ),
             }
         }
@@ -955,7 +955,7 @@ fn assemble_mcp_servers(
 }
 
 /// 个人第三源（D26 §4）：启用的自配 server 追加（corp>插件>个人——同名
-/// 跳过防顶替）；`${BBW_USER_ID/NAME}` 经 mcp_server_wire 照常静态替换、
+/// 跳过防顶替）；`${BBC_USER_ID/NAME}` 经 mcp_server_wire 照常静态替换、
 /// TOKEN 留 RT 动态（无 PLUGIN_ROOT/CONFIG 语义——个人面不使用）
 fn append_personal(
     data_dir: &std::path::Path,
@@ -965,7 +965,7 @@ fn append_personal(
 ) {
     for (name, def) in crate::mcp_commands::read_personal_servers(data_dir) {
         if taken.contains(&name) {
-            eprintln!("[bbw-bridge] 个人 MCP server 名 '{name}' 与系统级/插件级冲突，跳过");
+            eprintln!("[bbc-bridge] 个人 MCP server 名 '{name}' 与系统级/插件级冲突，跳过");
             continue;
         }
         match mcp_server_wire(&name, &def, "", user, &serde_json::Map::new()) {
@@ -974,7 +974,7 @@ fn append_personal(
                 out.push(w);
             }
             None => eprintln!(
-                "[bbw-bridge] 个人 MCP server '{name}' 定义非法（缺 command/url），跳过"
+                "[bbc-bridge] 个人 MCP server '{name}' 定义非法（缺 command/url），跳过"
             ),
         }
     }
@@ -987,7 +987,7 @@ fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
     if let Ok(text) = std::fs::read_to_string(ver_dir.join(".mcp.json")) {
         return serde_json::from_str(&text).ok();
     }
-    for dir in [".bbw-plugin", ".claude-plugin", ".zcode-plugin"] {
+    for dir in [".bbc-plugin", ".claude-plugin", ".zcode-plugin"] {
         let Ok(text) = std::fs::read_to_string(ver_dir.join(dir).join("plugin.json")) else {
             continue;
         };
@@ -1009,8 +1009,8 @@ fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
 }
 
 /// 单 server 定义 → wire（D22 §6.1/L4 变量族——装配层静态替换：
-/// `${PLUGIN_ROOT}` 版本目录 / `${BBW_USER_ID}`·`${BBW_USER_NAME}` 当前登录
-/// 用户 / `${CONFIG:key}` 插件配置（config.json+钥匙串合并）；**`${BBW_USER_TOKEN}`
+/// `${PLUGIN_ROOT}` 版本目录 / `${BBC_USER_ID}`·`${BBC_USER_NAME}` 当前登录
+/// 用户 / `${CONFIG:key}` 插件配置（config.json+钥匙串合并）；**`${BBC_USER_TOKEN}`
 /// 仅 HTTP headers 保留给 RT 调用层动态替换**（token 15min 轮换不静态化），
 /// stdio env 遇 TOKEN 置空（HTTP-only 约定——env 是 spawn 快照，D22 决策④）。
 /// 个人面（D26 §6）复用：plugin_root 传空串、config 传空表——USER_ID/NAME
@@ -1024,8 +1024,8 @@ pub(crate) fn mcp_server_wire(
 ) -> Option<Value> {
     let subst_static = |s: &str| -> String {
         let mut out = s.replace("${PLUGIN_ROOT}", plugin_root);
-        out = out.replace("${BBW_USER_ID}", &user.0);
-        out = out.replace("${BBW_USER_NAME}", &user.1);
+        out = out.replace("${BBC_USER_ID}", &user.0);
+        out = out.replace("${BBC_USER_NAME}", &user.1);
         // CONFIG:key（缺省保留占位符——外部系统收到 401 比伪值诚实）
         if out.contains("${CONFIG:") {
             let mut replaced = out.clone();
@@ -1038,7 +1038,7 @@ pub(crate) fn mcp_server_wire(
             out = replaced;
         }
         // stdio 约定：TOKEN 不进子进程 env（HTTP-only）
-        out.replace("${BBW_USER_TOKEN}", "")
+        out.replace("${BBC_USER_TOKEN}", "")
     };
     if let Some(cmd) = def.get("command").and_then(Value::as_str) {
         let args: Vec<String> = def
@@ -1069,13 +1069,13 @@ pub(crate) fn mcp_server_wire(
         }));
     }
     if let Some(url) = def.get("url").and_then(Value::as_str) {
-        // headers：CONFIG 静态替换，${BBW_USER_TOKEN} 保留（RT 调用层动态替换）
+        // headers：CONFIG 静态替换，${BBC_USER_TOKEN} 保留（RT 调用层动态替换）
         let headers = match def.get("headers").and_then(Value::as_object) {
             Some(m) => m
                 .iter()
                 .map(|(k, v)| {
                     let raw = v.to_string().trim_matches('"').to_string();
-                    let val = if raw.contains("${BBW_USER_TOKEN}") {
+                    let val = if raw.contains("${BBC_USER_TOKEN}") {
                         raw // 保留给 RT
                     } else {
                         subst_static(&raw)

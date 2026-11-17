@@ -1,13 +1,13 @@
 [package]
-name = "bbw-cli"
+name = "bbc-cli"
 version = "0.1.0"
 edition = "2021"
-description = "BaobaoChat 外部智能体接入面 CLI（D30 批2）：bbw ask——把打开中的 BaobaoChat agent 当子智能体调用"
+description = "BaobaoChat 外部智能体接入面 CLI（D30 批2）：bbc ask——把打开中的 BaobaoChat agent 当子智能体调用"
 
 # 独立 crate（不入 agent workspace——RT 依赖方向 cargo-deny 强制，CLI 零依赖
 # 手写回环 HTTP 不碰 RT 依赖树；serde_json 唯一依赖）
 [[bin]]
-name = "bbw"
+name = "bbc"
 path = "src/main.rs"
 
 [dependencies]

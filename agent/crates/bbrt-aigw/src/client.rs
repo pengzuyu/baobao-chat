@@ -159,7 +159,7 @@ mod tests {
 
     fn sample_req() -> ChatRequest {
         ChatRequest {
-            model: "bbw-fast".to_string(),
+            model: "bbc-fast".to_string(),
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: "hi".to_string(),

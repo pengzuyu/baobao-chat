@@ -14,7 +14,7 @@ pub struct CheckpointRow {
     /// cp-<ulid>
     pub id: String,
     pub session_id: String,
-    /// refs/bbw-agent/{session}/cp-{n}
+    /// refs/bbc-agent/{session}/cp-{n}
     pub git_ref: Option<String>,
     /// JSON: 未跟踪文件清单
     pub untracked: Option<String>,
@@ -114,7 +114,7 @@ mod tests {
         CheckpointRow {
             id: id.to_string(),
             session_id: session.to_string(),
-            git_ref: Some(format!("refs/bbw-agent/{session}/{id}")),
+            git_ref: Some(format!("refs/bbc-agent/{session}/{id}")),
             untracked: Some(r#"["a.txt"]"#.to_string()),
             files_changed: r#"[{"path":"a.txt","add":3,"del":1}]"#.to_string(),
             reason: "pre-edit".to_string(),

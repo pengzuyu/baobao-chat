@@ -97,7 +97,7 @@ pub struct ExpertManifest {
     /// 知识空间绑定（ACL 服务端兜底，本地声明透传）
     pub knowledge_spaces: Vec<String>,
     pub constraints: ExpertConstraints,
-    /// strong | fast（缺省 strong；映射 bbw-strong/bbw-fast，19 篇档位）
+    /// strong | fast（缺省 strong；映射 bbc-strong/bbc-fast，19 篇档位）
     pub model_tier: String,
     /// company | personal
     pub source: String,
@@ -390,7 +390,7 @@ pub struct AssembledExpert {
     pub manifest: ExpertManifest,
     /// persona + 技能正文 + 约束引导（独立窗口 system）
     pub system_prompt: String,
-    /// bbw-strong / bbw-fast（tier 缺省 strong）
+    /// bbc-strong / bbc-fast（tier 缺省 strong）
     pub model: String,
     pub max_steps: usize,
     /// 上下文预算（tokens；超限自杀返部分结果）
@@ -450,8 +450,8 @@ pub fn assemble(
     AssembledExpert {
         system_prompt: build_system(m, &skill_bodies),
         model: match m.model_tier.as_str() {
-            "fast" => "bbw-fast".into(),
-            _ => "bbw-strong".into(),
+            "fast" => "bbc-fast".into(),
+            _ => "bbc-strong".into(),
         },
         max_steps: m.constraints.max_steps,
         max_context_tokens: m.constraints.max_context_k * 1024,

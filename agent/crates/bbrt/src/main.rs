@@ -8,9 +8,9 @@
 //! request→session 路由表投递。
 //!
 //! 环境变量（宿主拉起时注入）：
-//! - BBW_RT_DATA_DIR   数据目录（默认 {TMPDIR}/bbrt）
-//! - BBW_RT_GATEWAY    AI 网关 base（默认 http://127.0.0.1:8091）
-//! - BBW_RT_TOKEN      网关令牌（v0.1 静态；OBO 通道阶段二接 hostapi::OboCache）
+//! - BBC_RT_DATA_DIR   数据目录（默认 {TMPDIR}/bbrt）
+//! - BBC_RT_GATEWAY    AI 网关 base（默认 http://127.0.0.1:8091）
+//! - BBC_RT_TOKEN      网关令牌（v0.1 静态；OBO 通道阶段二接 hostapi::OboCache）
 
 mod bridge;
 mod delegate_bridge;
@@ -72,15 +72,15 @@ impl Write for StdioDuplex {
 }
 
 fn run() -> Result<(), String> {
-    let data_dir = PathBuf::from(std::env::var("BBW_RT_DATA_DIR").unwrap_or_else(|_| {
+    let data_dir = PathBuf::from(std::env::var("BBC_RT_DATA_DIR").unwrap_or_else(|_| {
         std::env::temp_dir()
             .join("bbrt")
             .to_string_lossy()
             .into_owned()
     }));
     let gateway =
-        std::env::var("BBW_RT_GATEWAY").unwrap_or_else(|_| "http://127.0.0.1:8091".into());
-    let token = std::env::var("BBW_RT_TOKEN").unwrap_or_default();
+        std::env::var("BBC_RT_GATEWAY").unwrap_or_else(|_| "http://127.0.0.1:8091".into());
+    let token = std::env::var("BBC_RT_TOKEN").unwrap_or_default();
 
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("数据目录不可建: {e}"))?;
 
@@ -100,11 +100,11 @@ fn run() -> Result<(), String> {
         }
     }
     let memory = Arc::new(
-        // D23/M3：BBW_MEMORY_ROOT 覆盖记忆根（联调隔离——测试期 agent 脏记忆
-        // 不污染日常 USER.md；与 BBW_RT_DEFAULT_WORKSPACE 同族 env 模式）
+        // D23/M3：BBC_MEMORY_ROOT 覆盖记忆根（联调隔离——测试期 agent 脏记忆
+        // 不污染日常 USER.md；与 BBC_RT_DEFAULT_WORKSPACE 同族 env 模式）
         MemoryEngine::open_root(
             &data_dir,
-            std::env::var_os("BBW_MEMORY_ROOT").map(PathBuf::from),
+            std::env::var_os("BBC_MEMORY_ROOT").map(PathBuf::from),
             Arc::new(bbrt_memory::SystemClock),
         )
         .map_err(|e| format!("记忆引擎打开失败: {e}"))?,
@@ -112,12 +112,12 @@ fn run() -> Result<(), String> {
     // 启动回补漏日日报（D15 §3.2 触发 2；产物经 report.daily 事件补报宿主）
     let backfilled = memory.startup_backfill().unwrap_or_default();
 
-    // OBO 动态令牌：宿主 obo.token 写缓存，过期回退静态 BBW_RT_TOKEN（D11 §10.1）
+    // OBO 动态令牌：宿主 obo.token 写缓存，过期回退静态 BBC_RT_TOKEN（D11 §10.1）
     let obo = Arc::new(std::sync::Mutex::new(bbrt_hostapi::OboCache::default()));
-    // MCP client（D11 §2.10 / D14 §6）：BBW_RT_MCP_SERVERS="name=cmd;name2=cmd --flag"
+    // MCP client（D11 §2.10 / D14 §6）：BBC_RT_MCP_SERVERS="name=cmd;name2=cmd --flag"
     // （stdio 本地 server v0.1；远程 HTTP 网关接入后扩展）。主体令牌逐请求现取
     // OboCache（D14 §6.2 三层身份）；单 server 连接失败降级不阻塞
-    let mcp_configs = parse_mcp_servers(&std::env::var("BBW_RT_MCP_SERVERS").unwrap_or_default());
+    let mcp_configs = parse_mcp_servers(&std::env::var("BBC_RT_MCP_SERVERS").unwrap_or_default());
     let obo_for_mcp = Arc::clone(&obo);
     let mcp_tokens: bbrt_mcp::TokenProvider = Arc::new(move || {
         let now = std::time::SystemTime::now()
@@ -136,11 +136,11 @@ fn run() -> Result<(), String> {
             eprintln!("[bbrt] MCP server '{name}' 连接降级: {e}");
         }
     }
-    // 专家库同步（D14 §5 分发阶段一）：BBW_RT_EXPERTS_URL 指向服务端
+    // 专家库同步（D14 §5 分发阶段一）：BBC_RT_EXPERTS_URL 指向服务端
     // /api/v1/eco/experts（公开只读）→ 清单 → 逐个下载落 {dataDir}/eco/experts/
     // （ExpertIndex 扫描格式；本地手放文件共存——远端不覆盖本地同名，登记）。
     // 失败降级不阻塞启动（内网断连=沿用上次同步产物）
-    if let Ok(base) = std::env::var("BBW_RT_EXPERTS_URL") {
+    if let Ok(base) = std::env::var("BBC_RT_EXPERTS_URL") {
         sync_experts(&data_dir, &base);
     }
 
@@ -177,7 +177,7 @@ fn run() -> Result<(), String> {
             .and_then(|c| c.get(now).map(str::to_string))
             .unwrap_or_else(|| static_token.clone())
     }));
-    // D23/M2：公共层压实器接线（USER.md 超 3000 字时仅软条目进 bbw-fast 凝缩，
+    // D23/M2：公共层压实器接线（USER.md 超 3000 字时仅软条目进 bbc-fast 凝缩，
     // 禁止/授权硬条目引擎侧结构性隔离不进 LLM；失败保留旧视图）
     memory.set_compactor(Some(Arc::new(bbrt_session::FastCompactor::new(
         model.clone(),
@@ -1103,7 +1103,7 @@ fn wire_to_mcp_config(w: &bbrt_protocol::McpServerWire) -> bbrt_mcp::McpServerCo
     }
 }
 
-/// BBW_RT_MCP_SERVERS="corp=http://127.0.0.1:8090/mcp/corp;fake=fake-server --flag"
+/// BBC_RT_MCP_SERVERS="corp=http://127.0.0.1:8090/mcp/corp;fake=fake-server --flag"
 /// （值 http(s):// 前缀=远程 MCP 端点（公司域 mcpgw 或外部 https server——
 /// D26 §5 TLS）；否则=stdio 本地子进程命令行）
 fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {

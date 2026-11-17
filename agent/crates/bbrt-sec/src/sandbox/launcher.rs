@@ -344,7 +344,7 @@ impl SandboxLauncher {
         cmd.args(&argv[1..])
             .stdout(Stdio::from(out_f))
             .stderr(Stdio::from(err_f))
-            .env("BBW_SANDBOX", "1")
+            .env("BBC_SANDBOX", "1")
             .env("TMPDIR", &temp_dir)
             .env("TMP", &temp_dir);
         if let Some(cwd) = &spec.cwd {
@@ -550,12 +550,12 @@ fn escape_sbpl(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// 组装唯一临时目录（$TMPDIR/bbw-sec-run-<pid>-<nanos>）
+/// 组装唯一临时目录（$TMPDIR/bbc-sec-run-<pid>-<nanos>）
 fn unique_temp_dir() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "bbw-sec-run-{}-{}-{seq}",
+        "bbc-sec-run-{}-{}-{seq}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -791,7 +791,7 @@ mod tests {
     impl TempDir {
         fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "bbw-sec-launcher-{tag}-{}-{}",
+                "bbc-sec-launcher-{tag}-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)

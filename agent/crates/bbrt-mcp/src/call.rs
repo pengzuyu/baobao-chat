@@ -2,7 +2,7 @@
 //!
 //! 身份双通道（服务端任收其一，mcpgw server.go 同口径）：
 //! - stdio 传输无 HTTP 头可放——身份进 JSON-RPC params._meta：
-//!   `{"bbwObo": "...", "bbwAct": "..."}`；
+//!   `{"bbcObo": "...", "bbcAct": "..."}`；
 //! - HTTP 传输由 [`crate::transport::HttpTransport`] 额外注入
 //!   `Authorization: Bearer`（_meta 仍随行——同报文双保险）。
 
@@ -23,7 +23,7 @@ pub struct McpCallResult {
     pub is_error: bool,
 }
 
-/// 调用 server 工具（obo 为空则省 _meta.bbwObo；act 归因身份：agent 会话/
+/// 调用 server 工具（obo 为空则省 _meta.bbcObo；act 归因身份：agent 会话/
 /// expert:{personaId}:{activationId}，仅审计不影响权限）
 pub fn call_tool(
     conn: &mut McpConnection,
@@ -34,10 +34,10 @@ pub fn call_tool(
 ) -> Result<McpCallResult, McpError> {
     let mut meta = serde_json::Map::new();
     if !obo.is_empty() {
-        meta.insert("bbwObo".into(), serde_json::json!(obo));
+        meta.insert("bbcObo".into(), serde_json::json!(obo));
     }
     if !act.is_empty() {
-        meta.insert("bbwAct".into(), serde_json::json!(act));
+        meta.insert("bbcAct".into(), serde_json::json!(act));
     }
     let params = serde_json::json!({
         "name": tool,

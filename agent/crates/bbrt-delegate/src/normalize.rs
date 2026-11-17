@@ -12,7 +12,7 @@
 //! | 进程退出 | `Exit` | `delegate.end` | 触发 diff 审查卡 |
 //!
 //! 行协议（两个前缀，载荷共用 [`EventPayload`] JSON 模式）：
-//! - 通用/fake 后端：`##BBW:EVT:{json}`（约定；其余行 → 文本 delta）；
+//! - 通用/fake 后端：`##BBC:EVT:{json}`（约定；其余行 → 文本 delta）；
 //! - zcode（17 §11.1 假定）：`##ZCODE:{json}`（其余行 → 文本 delta）；
 //! - claude stream-json 行解析在 [`crate::claude`]（适配器内隔离）。
 
@@ -20,8 +20,8 @@ use bbrt_protocol::{DelegateEventKind, RiskLevel, RuntimeToHost, StreamChannel, 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// 通用/fake 后端结构化事件行前缀：`##BBW:EVT:{json}`
-pub const GENERIC_EVT_PREFIX: &str = "##BBW:EVT:";
+/// 通用/fake 后端结构化事件行前缀：`##BBC:EVT:{json}`
+pub const GENERIC_EVT_PREFIX: &str = "##BBC:EVT:";
 /// zcode 假定行文本协议的结构化事件行前缀：`##ZCODE:{json}`（17 §11.1，以正式文档为准）
 pub const ZCODE_EVT_PREFIX: &str = "##ZCODE:";
 
@@ -190,7 +190,7 @@ pub fn tool_risk(tool: &str) -> RiskLevel {
 // 前缀行协议载荷
 // ---------------------------------------------------------------------------
 
-/// `##BBW:EVT:` / `##ZCODE:` 行的 JSON 载荷模式（两协议共用；字段全部可缺省，
+/// `##BBC:EVT:` / `##ZCODE:` 行的 JSON 载荷模式（两协议共用；字段全部可缺省，
 /// 由 [`payload_to_events`] 做缺字段防御：缺关键字段降级为 Warning 而非中断流）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn generic_line_tool_use_maps_with_risk() {
         let evs = parse_prefixed_line(
-            r#"##BBW:EVT:{"kind":"tool_use","call_id":"t1","tool":"Edit","args":{"file_path":"a.rs"}}"#,
+            r#"##BBC:EVT:{"kind":"tool_use","call_id":"t1","tool":"Edit","args":{"file_path":"a.rs"}}"#,
             GENERIC_EVT_PREFIX,
         );
         assert_eq!(
@@ -313,7 +313,7 @@ mod tests {
         );
         // Bash → High
         let evs = parse_prefixed_line(
-            r#"##BBW:EVT:{"kind":"tool_use","call_id":"t2","tool":"Bash","args":{"command":"cargo test"}}"#,
+            r#"##BBC:EVT:{"kind":"tool_use","call_id":"t2","tool":"Bash","args":{"command":"cargo test"}}"#,
             GENERIC_EVT_PREFIX,
         );
         assert_eq!(
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn generic_line_tool_result_and_output_and_meta() {
         let evs = parse_prefixed_line(
-            r#"##BBW:EVT:{"kind":"tool_result","call_id":"t1","ok":false,"summary":"boom"}"#,
+            r#"##BBC:EVT:{"kind":"tool_result","call_id":"t1","ok":false,"summary":"boom"}"#,
             GENERIC_EVT_PREFIX,
         );
         assert_eq!(
@@ -342,7 +342,7 @@ mod tests {
             }]
         );
         let evs = parse_prefixed_line(
-            r#"##BBW:EVT:{"kind":"output","text":"hello"}"#,
+            r#"##BBC:EVT:{"kind":"output","text":"hello"}"#,
             GENERIC_EVT_PREFIX,
         );
         assert_eq!(
@@ -353,7 +353,7 @@ mod tests {
             }]
         );
         let evs = parse_prefixed_line(
-            r#"##BBW:EVT:{"kind":"meta","text":"init","session_ref":"s-9"}"#,
+            r#"##BBC:EVT:{"kind":"meta","text":"init","session_ref":"s-9"}"#,
             GENERIC_EVT_PREFIX,
         );
         assert_eq!(
@@ -375,7 +375,7 @@ mod tests {
                 text: "plain text line".into()
             }]
         );
-        let evs = parse_prefixed_line("##BBW:EVT:{not json", GENERIC_EVT_PREFIX);
+        let evs = parse_prefixed_line("##BBC:EVT:{not json", GENERIC_EVT_PREFIX);
         match &evs[0] {
             NormalizedEvent::Warning { text } => assert!(text.contains("事件行解析失败")),
             other => panic!("期望 Warning，实际 {other:?}"),
@@ -428,7 +428,7 @@ mod tests {
             }]
         );
         // 通用前缀不误吞 zcode 行：以 zcode 前缀视角看通用行 → 纯文本 delta
-        let evs = parse_prefixed_line("##BBW:EVT:{}", ZCODE_EVT_PREFIX);
+        let evs = parse_prefixed_line("##BBC:EVT:{}", ZCODE_EVT_PREFIX);
         assert!(matches!(evs[0], NormalizedEvent::Delta { .. }));
     }
 

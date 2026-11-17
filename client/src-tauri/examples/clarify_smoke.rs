@@ -1,8 +1,8 @@
 //! D20 澄清提问链路端到端冒烟：宿主桥 → 真 bbrt（ask 档）→ 假网关 → 真 bbrt 循环。
 //! 驱动 ask_user 工具全程：发「clarify-smoke」→ 观察 clarify.request 到达壳侧 emit
 //! → 回 clarify.response（camelCase 键）→ 观察工具结果含所选答案 → 回合收口 idle。
-//! 跑法：BBW_RT_GATEWAY=http://127.0.0.1:18099 cargo run --example clarify_smoke
-//! 前置：mock-gateway.mjs（/tmp/bbw-perm-debug/）在跑。
+//! 跑法：BBC_RT_GATEWAY=http://127.0.0.1:18099 cargo run --example clarify_smoke
+//! 前置：mock-gateway.mjs（/tmp/bbc-perm-debug/）在跑。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -60,8 +60,8 @@ fn main() {
         })
     };
 
-    let data_dir = std::env::temp_dir().join(format!("bbw-clarify-smoke-{}", std::process::id()));
-    let ws = std::env::temp_dir().join(format!("bbw-clarify-smoke-ws-{}", std::process::id()));
+    let data_dir = std::env::temp_dir().join(format!("bbc-clarify-smoke-{}", std::process::id()));
+    let ws = std::env::temp_dir().join(format!("bbc-clarify-smoke-ws-{}", std::process::id()));
     std::fs::create_dir_all(&ws).expect("create workspace");
     let host = Arc::new(AgentHost::new(data_dir, emit));
 

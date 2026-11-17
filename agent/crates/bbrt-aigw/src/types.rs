@@ -49,7 +49,7 @@ pub struct ToolSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatRequest {
-    /// 模型档位别名（docs/19 §3.2：只允许 bbw-fast / bbw-strong 等，网关侧校验）。
+    /// 模型档位别名（docs/19 §3.2：只允许 bbc-fast / bbc-strong 等，网关侧校验）。
     pub model: String,
     pub messages: Vec<ChatMessage>,
     /// 空时序列化时省略（无工具轮次不占请求体）。
@@ -127,7 +127,7 @@ mod tests {
     fn sample_request() -> ChatRequest {
         ChatRequest {
             thinking: None,
-            model: "bbw-strong".to_string(),
+            model: "bbc-strong".to_string(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -167,7 +167,7 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
 
         // 字段名断言（camelCase 锁定）
-        assert_eq!(json["model"], "bbw-strong");
+        assert_eq!(json["model"], "bbc-strong");
         assert!(json.get("messages").is_some());
         let assistant = &json["messages"][1];
         assert_eq!(assistant["toolCalls"][0]["id"], "call-1");
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn wire_body_injects_stream_and_skips_empty_tools() {
         let body = wire_body(&ChatRequest {
-            model: "bbw-fast".to_string(),
+            model: "bbc-fast".to_string(),
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: "hi".to_string(),
@@ -199,7 +199,7 @@ mod tests {
         });
         assert!(body.contains(r#""stream":true"#), "body={body}");
         assert!(!body.contains("\"tools\""), "空 tools 应省略，body={body}");
-        assert!(body.contains(r#""model":"bbw-fast""#));
+        assert!(body.contains(r#""model":"bbc-fast""#));
 
         let with_tools = wire_body(&sample_request());
         assert!(with_tools.contains(r#""stream":true"#));

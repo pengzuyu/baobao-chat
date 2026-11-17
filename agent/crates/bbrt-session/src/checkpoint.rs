@@ -1,6 +1,6 @@
 //! 变更检查点（08 §4.4 stash 式快照 + D11 §11 agent_checkpoint）。
 //!
-//! 快照 = `git stash create` 等价物落隐藏 ref `refs/bbw-agent/{session}/cp-{n}`
+//! 快照 = `git stash create` 等价物落隐藏 ref `refs/bbc-agent/{session}/cp-{n}`
 //! （不触碰工作区/索引；干净树退化用 HEAD）；未跟踪文件记清单不搬移。
 //! 恢复 = `git read-tree -u --reset` 回放该树（先建 pre-restore 保护快照，
 //! 未跟踪文件不动）。非 git 工作区：快照仍登记（git_ref 空、无差异——
@@ -135,7 +135,7 @@ fn create_snapshot(
         let n = store
             .count_checkpoints(session_id)
             .map_err(|e| e.to_string())?;
-        let r = format!("refs/bbw-agent/{session_id}/cp-{n}");
+        let r = format!("refs/bbc-agent/{session_id}/cp-{n}");
         git(dir, &["update-ref", &r, &sha])?;
         let files = parse_numstat(&git(dir, &["diff", "HEAD", "--numstat"])?);
         let untracked = git(dir, &["ls-files", "--others", "--exclude-standard"])

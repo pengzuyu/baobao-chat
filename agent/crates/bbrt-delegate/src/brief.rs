@@ -5,14 +5,14 @@
 //!
 //! 渲染：17 §4 的 YAML 形态文本（claude 经 `-p` 参数、zcode/通用经 stdin 喂给子进程）。
 //!
-//! forbidden 注入：转成子进程环境变量 `BBW_BRIEF_FORBIDDEN`（JSON 数组字符串），
+//! forbidden 注入：转成子进程环境变量 `BBC_BRIEF_FORBIDDEN`（JSON 数组字符串），
 //! 供受控后端/桩在执行侧自查；同时渲染文本中保留 forbidden 小节（提示模型本身）。
 
 use bbrt_protocol::TaskBrief;
 use serde_json::json;
 
 /// forbidden 约束注入子进程的环境变量名（任务书约定）
-pub const ENV_FORBIDDEN: &str = "BBW_BRIEF_FORBIDDEN";
+pub const ENV_FORBIDDEN: &str = "BBC_BRIEF_FORBIDDEN";
 
 /// 简报校验错误
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -85,7 +85,7 @@ pub fn forbidden_env_value(brief: &TaskBrief) -> String {
     json!(brief.forbidden).to_string()
 }
 
-/// 构造子进程附加环境变量（v0.1：BBW_BRIEF_FORBIDDEN；后续可扩展 BBW_BRIEF_* 系列）
+/// 构造子进程附加环境变量（v0.1：BBC_BRIEF_FORBIDDEN；后续可扩展 BBC_BRIEF_* 系列）
 pub fn child_env(brief: &TaskBrief) -> Vec<(String, String)> {
     vec![(ENV_FORBIDDEN.to_string(), forbidden_env_value(brief))]
 }

@@ -1,6 +1,6 @@
 //! 工具发现：list_tools 结果 → `mcp.{server}.{tool}` 命名空间条目。
 //!
-//! 风险级：server 清单可经 tool.annotations["x-bbw-risk"] 声明
+//! 风险级：server 清单可经 tool.annotations["x-bbc-risk"] 声明
 //! （low|medium|high），缺失默认 **Medium**（D14 §6.1：MCP 工具风险级
 //! 默认"中"，治理属性仍以 09 篇 §3.1 表为权威源）。
 
@@ -30,7 +30,7 @@ impl ToolEntry {
             .to_string();
         let risk = tool
             .get("annotations")
-            .and_then(|a| a.get("x-bbw-risk"))
+            .and_then(|a| a.get("x-bbc-risk"))
             .and_then(|v| v.as_str())
             .map(|s| match s {
                 "low" => RiskLevel::Low,

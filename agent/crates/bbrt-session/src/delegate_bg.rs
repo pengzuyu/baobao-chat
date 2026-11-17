@@ -83,7 +83,7 @@ impl DelegateHub {
         let sid = session_id.clone();
         let be = backend.clone();
         std::thread::Builder::new()
-            .name(format!("bbw-delegate-{rid}"))
+            .name(format!("bbc-delegate-{rid}"))
             .spawn(move || {
                 let mut stream = stream;
                 let cancelled = crate::loop_runner::pump_delegate_stream(

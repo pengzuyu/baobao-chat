@@ -16,7 +16,7 @@ fn fake_server_cfg() -> McpServerConfig {
     }
 }
 
-/// 握手→发现：3 工具命名空间化；风险级默认 Medium、x-bbw-risk 声明 High。
+/// 握手→发现：3 工具命名空间化；风险级默认 Medium、x-bbc-risk 声明 High。
 #[test]
 fn initialize_and_discover_namespaced_tools() {
     let (client, results) = McpClient::connect(&[fake_server_cfg()], no_token());
@@ -37,11 +37,11 @@ fn initialize_and_discover_namespaced_tools() {
     assert_eq!(
         risky.risk,
         bbrt_protocol::RiskLevel::High,
-        "x-bbw-risk 声明应生效"
+        "x-bbc-risk 声明应生效"
     );
 }
 
-/// 主体身份逐请求注入：echo 回显 _meta.bbwObo（D14 §6.2 验证点）。
+/// 主体身份逐请求注入：echo 回显 _meta.bbcObo（D14 §6.2 验证点）。
 #[test]
 fn obo_token_propagates_per_call() {
     let tokens: Arc<dyn Fn() -> Option<String> + Send + Sync> = Arc::new(|| Some("tok-42".into()));
@@ -54,7 +54,7 @@ fn obo_token_propagates_per_call() {
     assert!(!out.is_error);
 }
 
-/// 归因身份（act）：call_as 携带 expert 归因（bbwAct 注入——fake server 不回显，仅验通路不炸）。
+/// 归因身份（act）：call_as 携带 expert 归因（bbcAct 注入——fake server 不回显，仅验通路不炸）。
 #[test]
 fn call_with_expert_attribution() {
     let (client, _) = McpClient::connect(&[fake_server_cfg()], no_token());

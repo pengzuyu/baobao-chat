@@ -56,7 +56,7 @@ pub struct ToolsConfig {
     /// workspace 兜底根（旧行为）
     pub session_workspaces: Option<bbrt_session::SessionWorkspaces>,
     /// 日常会话默认用户工作区（2026-11-12 ZCode 式口径：不绑项目会话共用的
-    /// 用户级工作空间，不跟随项目）。None=运行时解析（env BBW_RT_DEFAULT_WORKSPACE
+    /// 用户级工作空间，不跟随项目）。None=运行时解析（env BBC_RT_DEFAULT_WORKSPACE
     /// > ~/.baobaochat/workspace）；测试注入 tmp 免写真实 HOME
     pub default_workspace: Option<PathBuf>,
 }

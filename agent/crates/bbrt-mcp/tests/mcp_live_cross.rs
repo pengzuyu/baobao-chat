@@ -2,9 +2,9 @@
 //!
 //! 运行方式（服务端先起，内存模式即可）：
 //! ```sh
-//! BBW_HTTP_ADDR=127.0.0.1:18099 BBW_JWT_SECRET=<32B> go run ./cmd/bbw-server &
-//! BBW_MCP_SMOKE_URL=http://127.0.0.1:18099/mcp/corp \
-//! BBW_MCP_SMOKE_TOKEN=<alice access_token> \
+//! BBC_HTTP_ADDR=127.0.0.1:18099 BBC_JWT_SECRET=<32B> go run ./cmd/bbc-server &
+//! BBC_MCP_SMOKE_URL=http://127.0.0.1:18099/mcp/corp \
+//! BBC_MCP_SMOKE_TOKEN=<alice access_token> \
 //! cargo test -p bbrt-mcp --test mcp_live_cross -- --ignored
 //! ```
 //! 与 scripts/ 的 Runtime↔网关互通冒烟同一性质：协议契约两侧共同冻结的可重复验证。
@@ -14,10 +14,10 @@ use std::sync::Arc;
 use bbrt_mcp::{McpClient, McpServerConfig, PolicyFilter, TransportConfig};
 
 #[test]
-#[ignore = "需运行中的 bbw-server 与令牌（见文件头注释）"]
+#[ignore = "需运行中的 bbc-server 与令牌（见文件头注释）"]
 fn live_go_gateway_handshake_discover_call() {
-    let base = std::env::var("BBW_MCP_SMOKE_URL").expect("BBW_MCP_SMOKE_URL 未设置");
-    let token = std::env::var("BBW_MCP_SMOKE_TOKEN").expect("BBW_MCP_SMOKE_TOKEN 未设置");
+    let base = std::env::var("BBC_MCP_SMOKE_URL").expect("BBC_MCP_SMOKE_URL 未设置");
+    let token = std::env::var("BBC_MCP_SMOKE_TOKEN").expect("BBC_MCP_SMOKE_TOKEN 未设置");
     let cfg = McpServerConfig {
         name: "corp".into(),
         transport: TransportConfig::Http {

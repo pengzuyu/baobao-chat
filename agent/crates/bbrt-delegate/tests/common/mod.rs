@@ -25,7 +25,7 @@ impl TestDir {
             .unwrap()
             .as_nanos();
         let dir = std::env::temp_dir().join(format!(
-            "bbw-delegate-it-{tag}-{}-{nanos}",
+            "bbc-delegate-it-{tag}-{}-{nanos}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();

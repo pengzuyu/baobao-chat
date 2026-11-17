@@ -8,13 +8,13 @@
 //! | [`backend`] | `CodingBackend` trait（§8.1 方法表）+ `BackendRegistry` + 会话句柄 | 17 §3.1 |
 //! | [`claude`] | Claude Code 适配器（stream-json 行解析、§8.2 参数映射） | 17 §3.2 |
 //! | [`zcode`] | zcode 适配器（假定 `--mode` headless + 行文本协议，差异隔离于此） | 17 §11.1 |
-//! | [`generic`] | 通用 CLI 适配器（`##BBW:EVT:` 行协议；仅 auto-edit+ 可委派） | 17 §3.2 |
+//! | [`generic`] | 通用 CLI 适配器（`##BBC:EVT:` 行协议；仅 auto-edit+ 可委派） | 17 §3.2 |
 //! | [`builtin`] | 内置后端桥（注册占位；真实循环在编排层进程内，17 §5.2 模式 D） | 17 §5.2 |
 //! | [`normalize`] | 子进程原始事件行 → 归一化事件（§8.3 映射表） | 17 §3.3 |
-//! | [`procmgr`] | 进程组：新 pgid + BBW_SANDBOX=1 标记；§8.4 取消协议；遗留进程扫描清理 | D11 §8.4 |
+//! | [`procmgr`] | 进程组：新 pgid + BBC_SANDBOX=1 标记；§8.4 取消协议；遗留进程扫描清理 | D11 §8.4 |
 //! | [`health`] | detect（`<bin> --version` 5s 超时）+ 版本能力矩阵占位（8031 语义） | D11 §8.5 |
 //! | [`workspace_lock`] | 同工作区互斥文件锁（flock；8035 由上层映射） | 17 §5.1 |
-//! | [`brief`] | TaskBrief 校验/渲染（forbidden → BBW_BRIEF_FORBIDDEN 环境注入） | 17 §4 |
+//! | [`brief`] | TaskBrief 校验/渲染（forbidden → BBC_BRIEF_FORBIDDEN 环境注入） | 17 §4 |
 //!
 //! v0.1 务实口径（取舍均登记在各模块注释与本表）：
 //! - 对 D11 §1.2 依赖方向（delegate 还应依赖 sec/store）的刻意偏差：本 crate 只依赖
@@ -25,7 +25,7 @@
 //!   拉起真实 CLI），提供 [`health::smoke`] 供编排层按需调用（D11 §8.5 登记）。
 //! - 登录态探测（未登录降级）依赖各 CLI 私有凭据位置，v0.1 不实现，枚举占位。
 //! - 遗留进程扫描：macOS `ps` 不暴露环境变量（实测 darwin 25.5 `ps -E` 无效），
-//!   BBW_SANDBOX=1 标记在 macOS 上无法经 ps 验证——退化为 ppid==1/父死 + 命令过滤；
+//!   BBC_SANDBOX=1 标记在 macOS 上无法经 ps 验证——退化为 ppid==1/父死 + 命令过滤；
 //!   Linux 上读 /proc/<pid>/environ 精确匹配标记（v0.1 已实现，ps 路径为兜底）。
 //!
 //! 硬约束：仅 serde/serde_json/thiserror + bbrt-protocol；标准库进程/信号/文件锁经
@@ -102,7 +102,7 @@ pub(crate) mod testing {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "bbw-delegate-{tag}-{}-{seq}",
+            "bbc-delegate-{tag}-{}-{seq}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()

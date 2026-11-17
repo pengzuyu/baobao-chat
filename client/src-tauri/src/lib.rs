@@ -58,12 +58,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // relaunch（D21：更新装完一键重启；无条件注册——updater 禁用时前端不调即无感）
         .plugin(tauri_plugin_process::init())
-        // 深链 bbw://（D28 批2/Q2b：等待页唤起 desktop 确认卡；scheme 声明在
+        // 深链 bbc://（D28 批2/Q2b：等待页唤起 desktop 确认卡；scheme 声明在
         // tauri.conf.json plugins.deep-link，dev 形态运行时注册）
         .plugin(tauri_plugin_deep_link::init());
     if updater_pubkey.is_empty() {
         eprintln!(
-            "[bbw] updater 未配置签名公钥（tauri.conf.json plugins.updater.pubkey），自动更新禁用；\
+            "[bbc] updater 未配置签名公钥（tauri.conf.json plugins.updater.pubkey），自动更新禁用；\
              npm run tauri signer generate 生成密钥后填入启用（16 篇 §5.1）"
         );
     } else {
@@ -74,9 +74,9 @@ pub fn run() {
             // TEMP 排错仪表（2026-11-11 泵静默死亡排查，验收后移除）：任意线程 panic
             // 落 stderr（tauri dev 日志）——事件泵线程 panic 后进程不死但事件全断
             std::panic::set_hook(Box::new(|info| {
-                eprintln!("[bbw-panic] {info}");
+                eprintln!("[bbc-panic] {info}");
             }));
-            // 深链路由（D28 批2/Q2b）：bbw://auth?req={id} → WebView 事件
+            // 深链路由（D28 批2/Q2b）：bbc://auth?req={id} → WebView 事件
             // oidc://confirm-req（确认卡组件监听）。冷启动（链接拉起 App）经
             // get_current 补投；运行中经 deep-link://new-url。dev 形态 macOS 需
             // 运行时 register（发布形态 Info.plist 由构建注入）
@@ -99,7 +99,7 @@ pub fn run() {
                                 let _ = emit_handle.emit("oidc://confirm-req", serde_json::json!({ "req": req }));
                             }
                         } else {
-                            eprintln!("[bbw-deeplink] 未识别的 {}:// 路径: {u}", brand::SCHEME);
+                            eprintln!("[bbc-deeplink] 未识别的 {}:// 路径: {u}", brand::SCHEME);
                         }
                     }
                 };

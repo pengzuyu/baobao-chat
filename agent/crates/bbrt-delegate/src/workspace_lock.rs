@@ -1,7 +1,7 @@
 //! 同工作区互斥文件锁（17 §5.1：同一项目工作区同时只允许一个委派任务运行；
 //! D11 §2.6 workspace_lock.rs）。
 //!
-//! 实现：`<workspace>/.bbw/delegate.lock` 上 flock(LOCK_EX|LOCK_NB)——占用立即失败
+//! 实现：`<workspace>/.bbc/delegate.lock` 上 flock(LOCK_EX|LOCK_NB)——占用立即失败
 //! （排队策略由上层决定：拒绝并提示/排队）。Err 语义 8035 由上层映射
 //! （[`crate::CODE_WORKSPACE_BUSY`]），锁文件内写入持有者 pid 便于排查。
 //!
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use crate::CODE_WORKSPACE_BUSY;
 
 /// 锁文件相对路径（workspace 下）
-pub const LOCK_FILE_REL: &str = ".bbw/delegate.lock";
+pub const LOCK_FILE_REL: &str = ".bbc/delegate.lock";
 
 // flock(2) 操作码（BSD/Linux 一致）
 const LOCK_EX: i32 = 2; // 排他锁
@@ -84,7 +84,7 @@ impl Drop for WorkspaceLockGuard {
 /// 获取工作区互斥锁（非阻塞）：成功返回守卫；被占用返回
 /// [`WorkspaceLockError::Busy`]（上层映射 8035，17 §5.1 "排队或拒绝并提示"）。
 pub fn acquire_workspace_lock(workspace: &Path) -> Result<WorkspaceLockGuard, WorkspaceLockError> {
-    let dir = workspace.join(".bbw");
+    let dir = workspace.join(".bbc");
     fs::create_dir_all(&dir)?;
     let path = dir.join("delegate.lock");
     let file = OpenOptions::new()

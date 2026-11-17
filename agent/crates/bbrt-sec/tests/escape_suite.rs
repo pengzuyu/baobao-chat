@@ -33,7 +33,7 @@ struct TempDir(PathBuf);
 impl TempDir {
     fn new(tag: &str) -> Self {
         let p = std::env::temp_dir().join(format!(
-            "bbw-esc-{tag}-{}-{}",
+            "bbc-esc-{tag}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

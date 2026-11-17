@@ -150,7 +150,7 @@ fn initialize_env(protocol_version: u32) -> Envelope {
         &HostToRuntime::Initialize {
             protocol_version,
             capabilities: vec!["ui.report".into()],
-            data_dir: "/tmp/bbw-agent".into(),
+            data_dir: "/tmp/bbc-agent".into(),
             proxy_config: None,
         },
     )

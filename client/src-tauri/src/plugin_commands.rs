@@ -143,7 +143,7 @@ pub fn plugin_write_files(
         write_state(&root, &state)?;
         sync_plugin_experts(&root, &plugin_id);
         if let Err(e) = host.push_mcp_assembly() {
-            eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
+            eprintln!("[bbc-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
         }
     }
     Ok(())
@@ -168,7 +168,7 @@ pub fn plugin_remove_local(host: Host, plugin_id: String, keep_config: bool) -> 
     }
     remove_plugin_experts(&host, &plugin_id);
     if let Err(e) = host.push_mcp_assembly() {
-        eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
+        eprintln!("[bbc-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
 }
@@ -189,7 +189,7 @@ pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Resul
         remove_plugin_experts(&host, &plugin_id);
     }
     if let Err(e) = host.push_mcp_assembly() {
-        eprintln!("[bbw-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
+        eprintln!("[bbc-plugin] 装配推送失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
 }
@@ -290,7 +290,7 @@ pub fn plugin_write_config(
     fs::write(root.join("config.json"), body).map_err(|e| format!("config 写入失败: {e}"))?;
     // 配置变更 → 装配重推（CONFIG:* 已静态进 wire）
     if let Err(e) = host.push_mcp_assembly() {
-        eprintln!("[bbw-plugin] 配置变更装配重推失败（降级，重启会话后生效）: {e}");
+        eprintln!("[bbc-plugin] 配置变更装配重推失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
 }
@@ -479,7 +479,7 @@ fn sync_plugin_experts(root: &std::path::Path, plugin_id: &str) {
         );
         let dest = experts_dir.join(format!("{prefix}{name}.yaml"));
         if let Err(e) = fs::write(&dest, &yaml) {
-            eprintln!("[bbw-plugin] 专家翻译写入失败 {dest:?}: {e}");
+            eprintln!("[bbc-plugin] 专家翻译写入失败 {dest:?}: {e}");
         }
     }
 }

@@ -79,7 +79,7 @@ fn valid_server_name(name: &str) -> bool {
 
 /// 条目校验（D26 §2）：stdio 须 command；http 须 http(s):// url；
 /// env/header 键非空、值为字符串。返回 usesIdentity（任一值引用
-/// ${BBW_USER_TOKEN}——UI 警示「将以你的身份调用」）
+/// ${BBC_USER_TOKEN}——UI 警示「将以你的身份调用」）
 fn validate_entry(entry: &Value) -> Result<bool, String> {
     let name = entry["name"].as_str().unwrap_or("");
     if !valid_server_name(name) {
@@ -97,7 +97,7 @@ fn validate_entry(entry: &Value) -> Result<bool, String> {
                 let Some(vs) = v.as_str() else {
                     return Err(format!("{field}[{k}] 值须为字符串"));
                 };
-                if vs.contains("${BBW_USER_TOKEN}") {
+                if vs.contains("${BBC_USER_TOKEN}") {
                     uses_identity = true;
                 }
             }
@@ -265,7 +265,7 @@ pub fn mcp_personal_upsert(
     write_doc(&host, &doc)?;
     // 装配重推（失败降级告警——重启会话后由 ready 重推兜底，同插件口径）
     if let Err(e) = host.push_mcp_assembly() {
-        eprintln!("[bbw-mcp] 个人 MCP 装配推送失败（降级，重启会话后生效）: {e}");
+        eprintln!("[bbc-mcp] 个人 MCP 装配推送失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
 }
@@ -292,7 +292,7 @@ pub fn mcp_personal_remove(host: Host, name: String) -> Result<(), String> {
         }
     }
     if let Err(e) = host.push_mcp_assembly() {
-        eprintln!("[bbw-mcp] 个人 MCP 装配推送失败（降级，重启会话后生效）: {e}");
+        eprintln!("[bbc-mcp] 个人 MCP 装配推送失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
 }
@@ -309,7 +309,7 @@ pub fn mcp_personal_set_enabled(host: Host, name: String, enabled: bool) -> Resu
     slot["enabled"] = json!(enabled);
     write_doc(&host, &doc)?;
     if let Err(e) = host.push_mcp_assembly() {
-        eprintln!("[bbw-mcp] 个人 MCP 装配推送失败（降级，重启会话后生效）: {e}");
+        eprintln!("[bbc-mcp] 个人 MCP 装配推送失败（降级，重启会话后生效）: {e}");
     }
     Ok(())
 }

@@ -65,7 +65,7 @@ pub struct McpClient {
 impl McpClient {
     /// 连接全部配置的 server（单条失败不阻塞其余——降级语义 D11 §2.10：
     /// 断连 server 的工具标灰，不拖垮其它来源）；返回 (client, 各 server 结果)。
-    /// tokens 同时供 Http 传输（Authorization 头）与 call 层（_meta.bbwObo）逐请求取用
+    /// tokens 同时供 Http 传输（Authorization 头）与 call 层（_meta.bbcObo）逐请求取用
     pub fn connect(configs: &[McpServerConfig], tokens: TokenProvider) -> (Self, ConnectResults) {
         let mut conns = HashMap::new();
         let mut active = HashMap::new();

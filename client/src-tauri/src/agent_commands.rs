@@ -240,7 +240,7 @@ pub fn report_get(host: Host, date: String) -> Result<Value, String> {
 /// RT 按 sessionId 定向投递 runner 通道）。task_brief=None=沿用模型原稿
 /// （确认不改稿是主路径；编辑稿随 P1 简报编辑器）。mode/workspace 为协议
 /// 必填字段，从会话缓存回填（RT dispatch 侧忽略）。
-/// D30 拍板4 防环：外部会话禁委派（bbw→delegate→claude→bbw 递归熔断，
+/// D30 拍板4 防环：外部会话禁委派（bbc→delegate→claude→bbc 递归熔断，
 /// delegate 必经本命令层，壳层一行拦截、RT 零改动）。
 #[tauri::command]
 pub fn agent_delegate_launch(
@@ -319,7 +319,7 @@ pub fn agent_runs_list(host: Host, session_id: Option<String>) -> Result<Value, 
 
 /// 登录/刷新成功后下发 token（D28 批0/Q0-2：宿主持 access 试签 OBO → obo.token
 /// 下发 RT 的 OboCache；obo.renew 由桥真换签）。user_id/user_name（D22/L4）：
-/// 装配器静态替换 ${BBW_USER_ID}/${BBW_USER_NAME} 用——换账号触发装配重推（stdio
+/// 装配器静态替换 ${BBC_USER_ID}/${BBC_USER_NAME} 用——换账号触发装配重推（stdio
 /// env 是 spawn 快照）；did/perms：OBO agent_session_id 归因前缀与 scope（先于 token）
 #[tauri::command]
 pub fn auth_set_token(

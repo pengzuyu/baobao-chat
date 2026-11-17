@@ -4,7 +4,7 @@
 //! **仅允许 auto-edit 及以上委派 + 强 diff 审查**（17 §5.2 原则：子智能体自主性
 //! 不得超过用户授权档位；ask 模式被 [`GenericCliBackend::mode_args`] 拒绝）。
 //!
-//! 行协议（约定）：结构化事件行 `##BBW:EVT:{json}`（载荷模式见
+//! 行协议（约定）：结构化事件行 `##BBC:EVT:{json}`（载荷模式见
 //! [`crate::normalize::EventPayload`]）→ 归一化事件；其余行 → 文本 delta。
 //! 集成测试全部走本适配器 + sh 桩脚本（任务书约定：fake 后端输出特殊前缀行）。
 
@@ -20,7 +20,7 @@ use crate::normalize::{parse_prefixed_line, LineParser, NormalizedEvent, GENERIC
 use crate::procmgr::{self, CancelOutcome};
 use std::sync::Arc;
 
-/// 通用行文本协议解析器（`##BBW:EVT:` 前缀 → 事件；其余 → delta）
+/// 通用行文本协议解析器（`##BBC:EVT:` 前缀 → 事件；其余 → delta）
 #[derive(Debug, Default)]
 pub struct GenericLineParser;
 
@@ -110,7 +110,7 @@ impl CodingBackend for GenericCliBackend {
                 mode: "ask".into(),
             }),
             PermissionMode::AutoEdit | PermissionMode::FullAuto => {
-                // 无参数可映射；约束经简报文本 + BBW_BRIEF_FORBIDDEN 注入 + 强审查兜底
+                // 无参数可映射；约束经简报文本 + BBC_BRIEF_FORBIDDEN 注入 + 强审查兜底
                 Ok(Vec::new())
             }
         }
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn parser_maps_event_lines_and_plain_text() {
         let mut p = GenericLineParser;
-        let evs = p.parse_line(r#"##BBW:EVT:{"kind":"meta","text":"init"}"#);
+        let evs = p.parse_line(r#"##BBC:EVT:{"kind":"meta","text":"init"}"#);
         assert!(matches!(evs[0], NormalizedEvent::Meta { .. }));
         let evs = p.parse_line("just text");
         assert!(matches!(evs[0], NormalizedEvent::Delta { .. }));

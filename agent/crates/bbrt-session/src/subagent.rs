@@ -52,7 +52,7 @@ pub trait FanoutPlanner: Send + Sync {
     fn plan(&self, model: &dyn ChatClient, user_text: &str) -> Option<Vec<ProbeSpec>>;
 }
 
-/// 快模型判定器（19 篇 bbw-fast；输出 JSON {complex, subtasks[]}，
+/// 快模型判定器（19 篇 bbc-fast；输出 JSON {complex, subtasks[]}，
 /// 解析失败/围栏噪声一律降级为"不分解"——fan-out 是优化不是依赖）
 pub struct FastPlanner;
 
@@ -399,7 +399,7 @@ pub fn fanout_probes(
         let run_id = run_id.clone();
         let spec = spec.clone();
         let _ = std::thread::Builder::new()
-            .name(format!("bbw-subagent-{run_id}"))
+            .name(format!("bbc-subagent-{run_id}"))
             .spawn(move || {
                 // 单任务 panic 不阻塞（结果通道缺项由收口侧兜底标注）
                 let r = run_probe(ctx, &sid, &run_id, &spec, sink, wal);
@@ -432,7 +432,7 @@ pub fn fanout_probes(
     let wal_bg = Arc::clone(&wal);
     let hub = env.hub.clone();
     let _ = std::thread::Builder::new()
-        .name("bbw-fanout-join".into())
+        .name("bbc-fanout-join".into())
         .spawn(move || {
             let mut all = results;
             while all.len() < total {

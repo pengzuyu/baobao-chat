@@ -1,7 +1,7 @@
 //! 压实漏斗（D23 §3.3 第②步，M2）：仅软条目进 LLM，硬条目程序拼回。
 //!
 //! - [`Compactor`] 为引擎侧 trait（bbrt-memory 不依赖模型栈——实现方
-//!   `bbrt_session::FastCompactor` 接 bbw-fast，装配见 bbrt main）；
+//!   `bbrt_session::FastCompactor` 接 bbc-fast，装配见 bbrt main）；
 //! - [`compaction_prompt`] 构造压缩指令（含行格式与禁止虚构约束）；
 //! - [`parse_compacted`] 解析模型输出（`[类型] 内容` 行；坏行跳过）；
 //! - 压实结果的持久化由 store 侧 snapshot op 承接（`global/mod.rs` reproject：

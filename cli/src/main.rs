@@ -1,15 +1,15 @@
-//! bbw CLI（D30 批2）：外部智能体接入面的第三客户端——把打开中的
+//! bbc CLI（D30 批2）：外部智能体接入面的第三客户端——把打开中的
 //! BaobaoChat agent 当子智能体调用。
 //!
 //! 用法：
-//!   bbw ask "查一下XX"                    # 新会话一轮问答
-//!   bbw ask --session <id> "追问…"        # 续聊（id 来自上一轮输出）
-//!   bbw ask --json "…"                    # 机器可读（终态 task JSON）
-//!   bbw status                            # 探活（agent card 无鉴权）
+//!   bbc ask "查一下XX"                    # 新会话一轮问答
+//!   bbc ask --session <id> "追问…"        # 续聊（id 来自上一轮输出）
+//!   bbc ask --json "…"                    # 机器可读（终态 task JSON）
+//!   bbc status                            # 探活（agent card 无鉴权）
 //!
-//! 发现链：BBW_EXT_AGENT_URL > BBW_EXT_AGENT_PORT > 状态文件
+//! 发现链：BBC_EXT_AGENT_URL > BBC_EXT_AGENT_PORT > 状态文件
 //! {appData}/agent-runtime/external-agent.json（端口冲突 +1 重试的兜底）；
-//! token：BBW_EXT_AGENT_TOKEN > {appData}/agent-runtime/external-agent-token。
+//! token：BBC_EXT_AGENT_TOKEN > {appData}/agent-runtime/external-agent-token。
 //! App 未打开 → 连接失败，口径「BaobaoChat 未运行（接入面随 App 生命周期）」。
 //!
 //! HTTP 为手写回环裸 TCP（与 bbrt-mcp/bbrt-aigw v0.1 口径一致：不引 HTTP 库；
@@ -39,7 +39,7 @@ fn run() -> i32 {
             0
         }
         Some(other) => {
-            eprintln!("未知子命令：{other}（bbw --help 查看）");
+            eprintln!("未知子命令：{other}（bbc --help 查看）");
             2
         }
     }
@@ -47,19 +47,19 @@ fn run() -> i32 {
 
 fn print_help() {
     println!(
-        "bbw —— 把打开中的 BaobaoChat agent 当子智能体调用（D30）\n\
+        "bbc —— 把打开中的 BaobaoChat agent 当子智能体调用（D30）\n\
          \n\
          用法：\n\
-         \x20 bbw ask [选项] <文本…>          发起/续聊一轮 agent 会话\n\
-         \x20 bbw status                       接入面探活\n\
+         \x20 bbc ask [选项] <文本…>          发起/续聊一轮 agent 会话\n\
+         \x20 bbc status                       接入面探活\n\
          \n\
          选项：\n\
          \x20 --session <id>   续聊既有会话（新会话省略）\n\
          \x20 --timeout <秒>   等待终态超时（缺省 600；到达即退出，会话仍在 App 内跑）\n\
          \x20 --json           终态 task JSON 输出 stdout（供脚本消费）\n\
-         \x20 --port <端口>    覆盖端口（缺省发现链：BBW_EXT_AGENT_URL/PORT > 状态文件）\n\
+         \x20 --port <端口>    覆盖端口（缺省发现链：BBC_EXT_AGENT_URL/PORT > 状态文件）\n\
          \n\
-         环境变量：BBW_EXT_AGENT_URL / BBW_EXT_AGENT_PORT / BBW_EXT_AGENT_TOKEN"
+         环境变量：BBC_EXT_AGENT_URL / BBC_EXT_AGENT_PORT / BBC_EXT_AGENT_TOKEN"
     );
 }
 
@@ -70,20 +70,20 @@ struct Endpoint {
 
 /// 发现接入面：URL > PORT > 状态文件；token 同目录伴生文件
 fn discover(port_override: Option<u16>) -> Result<Endpoint, String> {
-    if let Ok(url) = std::env::var("BBW_EXT_AGENT_URL") {
+    if let Ok(url) = std::env::var("BBC_EXT_AGENT_URL") {
         if !url.is_empty() {
             return Ok(Endpoint {
                 base: url.trim_end_matches('/').to_string(),
-                token: std::env::var("BBW_EXT_AGENT_TOKEN").unwrap_or_default(),
+                token: std::env::var("BBC_EXT_AGENT_TOKEN").unwrap_or_default(),
             });
         }
     }
     let port = port_override
-        .or_else(|| std::env::var("BBW_EXT_AGENT_PORT").ok().and_then(|p| p.parse().ok()))
+        .or_else(|| std::env::var("BBC_EXT_AGENT_PORT").ok().and_then(|p| p.parse().ok()))
         .or_else(|| read_status_port())
         .unwrap_or(DEFAULT_PORT);
     let dir = app_data_dir()?;
-    let token = std::env::var("BBW_EXT_AGENT_TOKEN")
+    let token = std::env::var("BBC_EXT_AGENT_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
         .or_else(|| std::fs::read_to_string(dir.join("external-agent-token")).ok())
@@ -274,7 +274,7 @@ fn cmd_ask(args: &[String]) -> i32 {
     }
     let text = text_parts.join(" ");
     if text.trim().is_empty() {
-        eprintln!("用法：bbw ask [--session <id>] [--timeout 秒] [--json] <文本…>");
+        eprintln!("用法：bbc ask [--session <id>] [--timeout 秒] [--json] <文本…>");
         return 2;
     }
     let ep = match discover(port) {
@@ -338,7 +338,7 @@ fn cmd_ask(args: &[String]) -> i32 {
             return finish_human(&task, &sid);
         }
         if started.elapsed().as_secs() >= timeout {
-            eprintln!("⏱ 等待超时（{timeout}s）——会话仍在 App 内运行，稍后 bbw ask --session {sid} 续查");
+            eprintln!("⏱ 等待超时（{timeout}s）——会话仍在 App 内运行，稍后 bbc ask --session {sid} 续查");
             return 4;
         }
     }
@@ -355,7 +355,7 @@ fn finish_human(task: &Value, sid: &str) -> i32 {
             } else {
                 println!("{answer}");
             }
-            eprintln!("\n[会话 {sid} · bbw ask --session {sid} 可续聊]");
+            eprintln!("\n[会话 {sid} · bbc ask --session {sid} 可续聊]");
             0
         }
         state => {
