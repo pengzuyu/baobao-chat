@@ -1,6 +1,6 @@
 # D33 工作台 Agent 消息流渲染设计（zcode 式平铺流 + 类型化块 + 子 agent 侧栏）
 
-- 日期：2026-11-17 ｜ 状态：**设计定稿待编码（批0 落稿，批1-5 见 §4）**
+- 日期：2026-11-17 ｜ 状态：**批0-4 编码完成已推（dcf559e→9d3f2bb→9a7d29b→0c91768→387d7c7），程序侧验证全绿（cargo test / tsc / vite build / 壳 check），剩 §5 真机验收（归用户）**
 - 前置：[D08](D08-Agent工作台模块详细设计.md)（PAG-03 会话视图）、[D18](D18-IM内嵌Agent卡详细设计.md)（§3.4 六条效果规则 / stages 投影）、[D19](D19-Agent项目与日常对话及记忆分级详细设计.md)（§7 过程显示对齐 change-my-life）、[D16](D16-子Agent三形态与Run记录模型设计.md)（run 模型）、[D22](D22-插件系统详细设计.md)（技能格式/装配）、[D26](D26-全站UI组件库切换AntDesign详细设计.md)（antd 换制）
 - 动机（用户 2026-11-17 需求原话归纳）：工作台 agent 显示弃「回合卡片」形态，改为 zcode 式消息流——不同类型消息（思考/工具/技能/子 agent/MCP/中间结果）**各自专属形态**；工具细分（读/写/编辑/终端）要丰富；最终正文输出时中间过程完整折叠为一行统计（总耗时）；点子 agent 卡在右侧栏以其完整过程（与主渲染器同款）查看。现状四个硬缺口见 §2。
 
@@ -115,6 +115,8 @@
 | 4 | 前端右栏 | AgentContextSidebar Tabs 化 + 运行详情视图 + SubagentCard/DelegateCard 入口 + aside 动态宽 | 中 |
 | 5 | 验证 | cargo test / tsc / vite build（不做浏览器 UI 测试——既定口径）+ 本篇 §5 验收清单追记 | 小 |
 
+**落地记录（2026-11-17）**：批0 dcf559e / 批1 9d3f2bb（cargo test 全绿：roundtrip 计数 23/38 + D33 golden×5 + wal_history args + wal_run_history + skill 三态 + skills_loop 新口径两用例）/ 批2 9a7d29b / 批3 0c91768（退役删除 TurnBubble/ToolCard/ToolGroup/StreamMessage 四组件）/ 批4 387d7c7；批5 验证：agent workspace `cargo test` 全绿、`tsc -b` 0 错、`vite build` 成功（7.2s）、壳 `cargo check` 通过（唯一 warning 为既有 TEMP 排错宏非本次引入）。
+
 ## 5. 真机验收清单（归用户；批5 追记证据）
 
 | # | 项 | 口径 |
@@ -131,10 +133,12 @@
 
 ## 6. 坑与遗留登记
 
-- **args 双形态坑（存量）**：self 工具 args=JSON 字符串 / backend=对象——批2 normalizeEvent 统一 parse（失败回落 {}）；mock 桥已发对象不受影响。
+- **args 双形态坑（存量）**：self 工具 args=JSON 字符串 / backend=对象——批2 normalizeEvent 统一 parse（parseToolArgs，失败回落 {}）；mock 桥已发对象不受影响。
 - **ToolCard/ToolRow 的 toolCallCommand 在真机 self 形态下取不到 command**——随归一化修复自然痊愈。
 - **mem 中 streams/sideStreams 均内存态**：刷新即失、重开走历史回放（摘要级口径见拍板 #7）。
 - 委派后端外部工具名映射表（Read/Edit/Bash…）按 normalize.rs 已知名+常见 Claude Code 名枚举，未知名落 generic。
+- **【发现项·D16 遗留缺口，本篇不修】probe 子 agent 工具执行绕审批门**：`run_probe`（subagent.rs）对每步工具直接 `ctx.tools.execute()`，不经 `check()` 门控——与模块注释「写操作走同一审批/沙箱」不符（沙箱词法层仍拦 8020-8026，但矩阵/审批/记忆层缺位）。主循环路径正常。修复需 probe 循环接入 check→NeedConfirm 等待链（审批卡挂到侧栏运行详情），建议另立项或并入 D16 遗留清理。
+- **subagent.trace WAL 行 payload 为 camelCase**（SubagentTraceItem 序列化原样），与主循环 WAL 行（snake_case 手拼）风格不一致——wal_run_history 投影按 camelCase 取键，读侧已对齐；登记备将来 WAL 键名统一时收敛。
 
 ## 7. 登记不做（阶段二）
 
