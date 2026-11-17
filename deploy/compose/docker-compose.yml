@@ -10,10 +10,13 @@
 #     mail   邮件栈（22 篇，可选）：stalwart 占位（或替换 docker-mailserver 组件组）
 #   ★ 所有组均需显式启用，例如：docker compose --profile core up -d
 #     （scripts/dev-up.sh 与 README 已封装常用组合）
-# · 镜像版本一律钉死；BBW 自有镜像与 Helm 共用同一 tag 锁定（§3.4“同一组镜像”），
+# · 镜像版本一律钉死；BBC 自有镜像与 Helm 共用同一 tag 锁定（§3.4“同一组镜像”），
 #   生产建议再叠加 @sha256 digest 双重钉死（TODO：CI 注入）。
 # · 配置键与 Helm values 一一对应，见同目录 .env.tpl 行内 “helm:” 注释。
 # =============================================================================
+
+# 显式 project 名：与仓库目录名解耦（目录更名后容器/网络/卷前缀保持 baobao-chat）
+name: baobao-chat
 
 x-logging: &default-logging
   # 日志轮转（低日志量服务沿用引擎默认即可）
@@ -22,42 +25,42 @@ x-logging: &default-logging
     max-size: "50m"
     max-file: "3"
 
-x-bbw-env: &bbw-env
-  # —— 统一配置键（与 Helm 完全一致；K8s 来源见 helm/bbw/templates/configmap.yaml）——
+x-bbc-env: &bbc-env
+  # —— 统一配置键（与 Helm 完全一致；K8s 来源见 helm/bbc/templates/configmap.yaml）——
   TZ: Asia/Shanghai
-  BBW_PUBLIC_DOMAIN: ${BBW_PUBLIC_DOMAIN:-bbw.example.internal}
-  BBW_LOG_LEVEL: ${BBW_LOG_LEVEL:-info}
-  BBW_DB_DSN: ${BBW_DB_DSN}
-  BBW_DB_RO_DSN: ${BBW_DB_RO_DSN:-}
+  BBC_PUBLIC_DOMAIN: ${BBC_PUBLIC_DOMAIN:-bbc.example.internal}
+  BBC_LOG_LEVEL: ${BBC_LOG_LEVEL:-info}
+  BBC_DB_DSN: ${BBC_DB_DSN}
+  BBC_DB_RO_DSN: ${BBC_DB_RO_DSN:-}
   # HS256 签名密钥（03 篇 §2.2；≥32 字节；空回退开发默认密钥并打警告日志，生产必改）
-  BBW_JWT_SECRET: ${BBW_JWT_SECRET:-}
-  # KMS 主密钥（aigw 供应商密钥信封加密；helm: secrets.kmsMasterKey → Secret bbw-secrets）：
+  BBC_JWT_SECRET: ${BBC_JWT_SECRET:-}
+  # KMS 主密钥（aigw 供应商密钥信封加密；helm: secrets.kmsMasterKey → Secret bbc-secrets）：
   # base64(32B)；空=带密钥的供应商无法创建/装配（仅警告不阻断）——容器化联调须与
   # 宿主 dev（server/.env.dev）同一把钥匙，否则存量 kms:v1 密文全部跳过
-  BBW_KMS_MASTER_KEY: ${BBW_KMS_MASTER_KEY:-}
+  BBC_KMS_MASTER_KEY: ${BBC_KMS_MASTER_KEY:-}
   # OIDC Provider（D28 批次 Q1）：ES256 私钥 PEM + 对外 issuer；空=临时密钥仅联调
-  BBW_OIDC_SIGNING_KEY: ${BBW_OIDC_SIGNING_KEY:-}
-  BBW_OIDC_ISSUER: ${BBW_OIDC_ISSUER:-}
-  # 文件域本地盘（容器内固定 /data，卷 bbw-data 持久化；对象存储阶段二替换，07 篇 §4）
-  BBW_DATA_DIR: ${BBW_DATA_DIR:-/data}
+  BBC_OIDC_SIGNING_KEY: ${BBC_OIDC_SIGNING_KEY:-}
+  BBC_OIDC_ISSUER: ${BBC_OIDC_ISSUER:-}
+  # 文件域本地盘（容器内固定 /data，卷 bbc-data 持久化；对象存储阶段二替换，07 篇 §4）
+  BBC_DATA_DIR: ${BBC_DATA_DIR:-/data}
   # 演示种子数据（alice/bob 口令 demo-pass-123）：部署环境默认关；联调置 1 可免引导
-  BBW_SEED_DEMO: ${BBW_SEED_DEMO:-0}
+  BBC_SEED_DEMO: ${BBC_SEED_DEMO:-0}
   # CORS 白名单（逗号分隔；空=服务端默认 http://localhost:5173 即 tauri dev origin）
-  BBW_CORS_ORIGINS: ${BBW_CORS_ORIGINS:-}
-  BBW_REDIS_ADDR: ${BBW_REDIS_ADDR:-redis:6379}
-  BBW_S3_ENDPOINT: ${BBW_S3_ENDPOINT:-http://rustfs:9000}
+  BBC_CORS_ORIGINS: ${BBC_CORS_ORIGINS:-}
+  BBC_REDIS_ADDR: ${BBC_REDIS_ADDR:-redis:6379}
+  BBC_S3_ENDPOINT: ${BBC_S3_ENDPOINT:-http://rustfs:9000}
   # 预签名对外基址（D25）：空=回落本地盘（不起对象存储）；配域名形态 https://host/oss
   # 或内网直连 http://ip:9000——客户端直传/直下走它，签名按对外 host 计算（nginx strip+Host 透传）
-  BBW_S3_PUBLIC_ENDPOINT: ${BBW_S3_PUBLIC_ENDPOINT:-}
-  BBW_S3_USE_PATH_STYLE: ${BBW_S3_USE_PATH_STYLE:-true}
-  BBW_S3_BUCKET: ${BBW_S3_BUCKET:-bbw-data}
-  BBW_S3_BACKUP_BUCKET: ${BBW_S3_BACKUP_BUCKET:-bbw-backup}
-  BBW_S3_ACCESS_KEY: ${BBW_S3_ACCESS_KEY}
-  BBW_S3_SECRET_KEY: ${BBW_S3_SECRET_KEY}
-  BBW_OTEL_EXPORTER_OTLP_ENDPOINT: ${BBW_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
-  BBW_UPDATE_CHANNEL: ${BBW_UPDATE_CHANNEL:-stable}
-  BBW_AI_UPSTREAM_BASE_URL: ${BBW_AI_UPSTREAM_BASE_URL:-}
-  BBW_AI_UPSTREAM_API_KEY: ${BBW_AI_UPSTREAM_API_KEY:-}
+  BBC_S3_PUBLIC_ENDPOINT: ${BBC_S3_PUBLIC_ENDPOINT:-}
+  BBC_S3_USE_PATH_STYLE: ${BBC_S3_USE_PATH_STYLE:-true}
+  BBC_S3_BUCKET: ${BBC_S3_BUCKET:-bbc-data}
+  BBC_S3_BACKUP_BUCKET: ${BBC_S3_BACKUP_BUCKET:-bbc-backup}
+  BBC_S3_ACCESS_KEY: ${BBC_S3_ACCESS_KEY}
+  BBC_S3_SECRET_KEY: ${BBC_S3_SECRET_KEY}
+  BBC_OTEL_EXPORTER_OTLP_ENDPOINT: ${BBC_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+  BBC_UPDATE_CHANNEL: ${BBC_UPDATE_CHANNEL:-stable}
+  BBC_AI_UPSTREAM_BASE_URL: ${BBC_AI_UPSTREAM_BASE_URL:-}
+  BBC_AI_UPSTREAM_API_KEY: ${BBC_AI_UPSTREAM_API_KEY:-}
 
 services:
   # ===========================================================================
@@ -90,23 +93,23 @@ services:
         condition: service_healthy
 
   # ===========================================================================
-  # app×2：模块化单体 bbw-server（auth/org/message/file/doc/kb/eco/admin/audit/
+  # app×2：模块化单体 bbc-server（auth/org/message/file/doc/kb/eco/admin/audit/
   # notify/aigw，D02 §2；--enable 控制启用域）。副本 2 = 滚动升级 + 单实例冗余。
   # 扩缩容：docker compose --profile core up -d --scale app=N
   # ===========================================================================
   app:
-    image: ${BBW_IMAGE_REGISTRY:-registry.example.com/baobaochat}/bbw-app:${BBW_IMAGE_TAG:-0.1.0}
+    image: ${BBC_IMAGE_REGISTRY:-registry.example.com/baobaochat}/bbc-app:${BBC_IMAGE_TAG:-0.1.0}
     profiles: [core]
     restart: unless-stopped
     logging: *default-logging
-    command: ["--enable", "${BBW_APP_MODULES:-auth,org,message,file,kb,eco,admin,audit,notify,aigw}"]
-    environment: *bbw-env
+    command: ["--enable", "${BBC_APP_MODULES:-auth,org,message,file,kb,eco,admin,audit,notify,aigw}"]
+    environment: *bbc-env
     volumes:
-      - bbw-data:/data          # 文件域本地盘（BBW_DATA_DIR=/data；对象存储阶段二替换）
+      - bbc-data:/data          # 文件域本地盘（BBC_DATA_DIR=/data；对象存储阶段二替换）
     expose:
       - "8080"         # http + ws（app 内嵌模式；独立 gateway 拆分见 K8s 形态 §3.2）
     healthcheck:
-      # bbw-app 为 distroless（无 shell/wget）：镜像内自带静态编译 /healthprobe，
+      # bbc-app 为 distroless（无 shell/wget）：镜像内自带静态编译 /healthprobe，
       # 探测 /healthz（§3.4 镜像清单）。TODO：CI 断言镜像内 /healthprobe 存在。
       test: ["CMD", "/healthprobe", "http://127.0.0.1:8080/healthz"]
       interval: 15s
@@ -123,10 +126,10 @@ services:
 
   # ===========================================================================
   # app-init：首次初始化（幂等）。等待 pg 就绪 → 执行 /migrations → 引导内置管理员
-  # 提示（16 篇 §2.2 初始化工具；正式 migrate 通道为 bbw-app migrate，§3.4）
+  # 提示（16 篇 §2.2 初始化工具；正式 migrate 通道为 bbc-app migrate，§3.4）
   # ===========================================================================
   app-init:
-    # 借用 postgres 镜像的 psql/pg_isready 执行 init 脚本（bbw-app 为 distroless 无 shell）
+    # 借用 postgres 镜像的 psql/pg_isready 执行 init 脚本（bbc-app 为 distroless 无 shell）
     image: ${POSTGRES_IMAGE:-postgres:16.4-alpine3.20}   # 国内网络可指内网/加速镜像，如 172.16.105.109:30003/pengzuyu/postgres-pgvector:16（含 pgvector）
     profiles: [core, deps]
     restart: "no"
@@ -134,14 +137,14 @@ services:
     environment:
       POSTGRES_HOST: pg
       POSTGRES_PORT: "5432"
-      POSTGRES_USER: ${POSTGRES_USER:-bbw}
+      POSTGRES_USER: ${POSTGRES_USER:-bbc}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-bbw}
-      BBW_ADMIN_BOOTSTRAP_PASSWORD: ${BBW_ADMIN_BOOTSTRAP_PASSWORD:-}
+      POSTGRES_DB: ${POSTGRES_DB:-bbc}
+      BBC_ADMIN_BOOTSTRAP_PASSWORD: ${BBC_ADMIN_BOOTSTRAP_PASSWORD:-}
     volumes:
       - ./init:/init:ro
       # golang-migrate 迁移目录（D02 §7 按域分目录）；server/ 未落地前目录可为空
-      - ${BBW_MIGRATIONS_DIR:-../../server/migrations}:/migrations:ro   # 2026-11-16 后已不使用：迁移走 bbw-server 内嵌通道（基线见 server/migrations/0001_init.sql）；挂载保留供人工排查
+      - ${BBC_MIGRATIONS_DIR:-../../server/migrations}:/migrations:ro   # 2026-11-16 后已不使用：迁移走 bbc-server 内嵌通道（基线见 server/migrations/0001_init.sql）；挂载保留供人工排查
     depends_on:
       pg:
         condition: service_healthy
@@ -157,9 +160,9 @@ services:
     logging: *default-logging
     environment:
       TZ: Asia/Shanghai
-      POSTGRES_USER: ${POSTGRES_USER:-bbw}
+      POSTGRES_USER: ${POSTGRES_USER:-bbc}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-bbw}
+      POSTGRES_DB: ${POSTGRES_DB:-bbc}
       # pgvector / zhparser 扩展官方镜像未内置：生产需自建镜像预装（13 篇）；
       # init/01-init.sh 对 CREATE EXTENSION 失败仅告警不阻断。
     command:
@@ -167,7 +170,7 @@ services:
       - -c
       - archive_mode=on
       - -c
-      # WAL 连续归档到独立卷（§4.6：RPO≤5min；生产换 pgBackRest/WAL-G → 对象存储 bbw-backup 桶）
+      # WAL 连续归档到独立卷（§4.6：RPO≤5min；生产换 pgBackRest/WAL-G → 对象存储 bbc-backup 桶）
       - archive_command=test ! -f /wal_archive/wal/%f && cp %p /wal_archive/wal/%f
       - -c
       - wal_level=replica
@@ -181,7 +184,7 @@ services:
     ports:
       - "127.0.0.1:5432:5432"   # 仅本机调试（宿主机 go run）；生产可移除
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bbw} -d ${POSTGRES_DB:-bbw}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bbc} -d ${POSTGRES_DB:-bbc}"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -214,8 +217,8 @@ services:
     restart: unless-stopped
     environment:
       # 规范键名（MINIO_ROOT_* 别名已弃用不用）；默认凭据 rustfsadmin 公开已知=必须显式设置
-      RUSTFS_ACCESS_KEY: ${BBW_S3_ACCESS_KEY}
-      RUSTFS_SECRET_KEY: ${BBW_S3_SECRET_KEY}
+      RUSTFS_ACCESS_KEY: ${BBC_S3_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${BBC_S3_SECRET_KEY}
     volumes:
       - rustfs-data:/data
     ports:
@@ -228,7 +231,7 @@ services:
       retries: 5
       start_period: 20s
 
-  # 桶初始化（幂等）：bbw-data（版本化，误删恢复 §4.6）+ bbw-backup（独立备份桶）
+  # 桶初始化（幂等）：bbc-data（版本化，误删恢复 §4.6）+ bbc-backup（独立备份桶）
   # D29：mc（AGPL）退役 → aws-cli（Apache-2.0）全走标准 S3 API
   rustfs-init:
     image: amazon/aws-cli:2.31.4
@@ -243,18 +246,18 @@ services:
       - |
         set -eu
         # 桶初始化占位脚本（生产建议换为 KMS 托管的独立备份桶凭据，15 篇 §3.3）
-        aws s3api create-bucket --bucket bbw-data || true
-        aws s3api put-bucket-versioning --bucket bbw-data \
+        aws s3api create-bucket --bucket bbc-data || true
+        aws s3api put-bucket-versioning --bucket bbc-data \
           --versioning-configuration Status=Enabled || true
-        aws s3api create-bucket --bucket bbw-backup || true
+        aws s3api create-bucket --bucket bbc-backup || true
         # CORS（D25 预签名直传：webview fetch PUT/GET 需过预检；预签名 URL 即凭证无
         # Authorization 头，通配 origin 无泄露面——签名本身即授权）
-        aws s3api put-bucket-cors --bucket bbw-data --cors-configuration \
+        aws s3api put-bucket-cors --bucket bbc-data --cors-configuration \
           '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","POST","HEAD"],"AllowedHeaders":["content-type","x-amz-*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3600}]}' || true
-        echo "[rustfs-init] 桶初始化完成：bbw-data(版本化) / bbw-backup（CORS 已配）"
+        echo "[rustfs-init] 桶初始化完成：bbc-data(版本化) / bbc-backup（CORS 已配）"
     environment:
-      AWS_ACCESS_KEY_ID: ${BBW_S3_ACCESS_KEY}
-      AWS_SECRET_ACCESS_KEY: ${BBW_S3_SECRET_KEY}
+      AWS_ACCESS_KEY_ID: ${BBC_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${BBC_S3_SECRET_KEY}
       AWS_DEFAULT_REGION: us-east-1
       AWS_ENDPOINT_URL: http://rustfs:9000
 
@@ -263,10 +266,10 @@ services:
   # bind 卷 volumes/updates/（rsync 直写，publish.sh 发布）：
   #   latest.json（Tauri updater 标准清单）/ release-info.json（官网数据源）/
   #   releases/v<ver>/…（按版本不可变布局：安装包 + .sig）
-  # 正式 bbw-update-src 镜像（灰度/ed25519 签名清单）后续经 BBW_UPDATE_SRC_IMAGE 替换
+  # 正式 bbc-update-src 镜像（灰度/ed25519 签名清单）后续经 BBC_UPDATE_SRC_IMAGE 替换
   # ===========================================================================
   update-src:
-    image: ${BBW_UPDATE_SRC_IMAGE:-nginx:1.27.4-alpine3.21}
+    image: ${BBC_UPDATE_SRC_IMAGE:-nginx:1.27.4-alpine3.21}
     profiles: [core, deps]
     restart: unless-stopped
     logging: *default-logging
@@ -340,7 +343,7 @@ services:
     # 由 prometheus 侧拉取指标判断（TODO：接入 kubelet/引擎探测）
     expose:
       - "4317"    # OTLP gRPC
-      - "4318"    # OTLP HTTP（app 的 BBW_OTEL_EXPORTER_OTLP_ENDPOINT 指向此处）
+      - "4318"    # OTLP HTTP（app 的 BBC_OTEL_EXPORTER_OTLP_ENDPOINT 指向此处）
       - "13133"   # health_check 扩展
       - "8889"    # prometheus exporter（供 prometheus 抓取）
     depends_on:
@@ -413,7 +416,7 @@ services:
 volumes:
   pg-data:            # PG 主数据
   pg-wal-archive:     # WAL 归档 + 基础备份（backup.sh 使用；§4.6）
-  bbw-data:           # app 文件域本地盘（BBW_DATA_DIR=/data；对象存储阶段二替换）
+  bbc-data:           # app 文件域本地盘（BBC_DATA_DIR=/data；对象存储阶段二替换）
   redis-data:
   rustfs-data:        # 对象存储（单节点 2TB 档，§3.3；D29 MinIO→RustFS）
   prometheus-data:
@@ -443,13 +446,13 @@ configs:
           ''      close;
         }
 
-        upstream bbw_app {
+        upstream bbc_app {
           ip_hash;                                  # WSS 会话保持（见上）
           server app:8080 max_fails=3 fail_timeout=10s;
           keepalive 64;
         }
-        upstream bbw_update { server update-src:80; }
-        upstream bbw_website { server website:80; }
+        upstream bbc_update { server update-src:80; }
+        upstream bbc_website { server website:80; }
 
         # —— 80 主入口（D21 v0.1 统一 http）：内网明文全路由——
         #    官网/更新源明文可接受（静态内容 + 安装包 minisign 签名保完整性）；
@@ -462,7 +465,7 @@ configs:
 
           # REST API
           location /api/ {
-            proxy_pass http://bbw_app;
+            proxy_pass http://bbc_app;
             proxy_set_header Host $$host;
             proxy_set_header X-Real-IP $$remote_addr;
             proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
@@ -472,7 +475,7 @@ configs:
 
           # WS 长连接（/ws/connect）
           location /ws/ {
-            proxy_pass http://bbw_app;
+            proxy_pass http://bbc_app;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $$http_upgrade;
             proxy_set_header Connection $$connection_upgrade;
@@ -499,7 +502,7 @@ configs:
           # AI 网关 OpenAI 兼容端点（/v1/chat/completions、/v1/embeddings；bbrt 生产链路）
           # SSE 流式：关缓冲，长读超时对齐 bbrt 60s 套接字超时留余量
           location /v1/ {
-            proxy_pass http://bbw_app;
+            proxy_pass http://bbc_app;
             proxy_set_header Host $$host;
             proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $$scheme;
@@ -509,7 +512,7 @@ configs:
 
           # MCP 网关（bbrt corp MCP：POST /mcp/corp）
           location /mcp/ {
-            proxy_pass http://bbw_app;
+            proxy_pass http://bbc_app;
             proxy_set_header Host $$host;
             proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $$scheme;
@@ -517,12 +520,12 @@ configs:
 
           # 客户端更新源（latest.json / release-info.json / releases/）
           location /update/ {
-            proxy_pass http://bbw_update/;
+            proxy_pass http://bbc_update/;
           }
 
           # 官网（静态）
           location / {
-            proxy_pass http://bbw_website;
+            proxy_pass http://bbc_website;
             proxy_set_header Host $$host;
           }
         }
@@ -540,7 +543,7 @@ configs:
 
           # REST API
           location /api/ {
-            proxy_pass http://bbw_app;
+            proxy_pass http://bbc_app;
             proxy_set_header Host $$host;
             proxy_set_header X-Real-IP $$remote_addr;
             proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
@@ -551,7 +554,7 @@ configs:
           # WSS 长连接（/ws/connect，14 篇）：升级头透传 + 长读超时
           # （> 心跳 30s 的整数倍，避免接入层空闲断连）
           location /ws/ {
-            proxy_pass http://bbw_app;
+            proxy_pass http://bbc_app;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $$http_upgrade;
             proxy_set_header Connection $$connection_upgrade;
@@ -563,7 +566,7 @@ configs:
 
           # 客户端更新源（manifest + 安装包，16 篇 §5.1）
           location /update/ {
-            proxy_pass http://bbw_update/;
+            proxy_pass http://bbc_update/;
           }
 
           # 对象存储预签名直传（D25；与 80 块同款——strip 前缀+Host 透传；D29 后端=rustfs）
@@ -580,7 +583,7 @@ configs:
 
           # AI 网关 OpenAI 兼容端点（bbrt 生产链路，D21；SSE 关缓冲）
           location /v1/ {
-            proxy_pass http://bbw_app;
+            proxy_pass http://bbc_app;
             proxy_set_header Host $$host;
             proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto https;
@@ -590,7 +593,7 @@ configs:
 
           # MCP 网关（bbrt corp MCP，D21）
           location /mcp/ {
-            proxy_pass http://bbw_app;
+            proxy_pass http://bbc_app;
             proxy_set_header Host $$host;
             proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto https;
@@ -598,7 +601,7 @@ configs:
 
           # 官网（静态，D21）
           location / {
-            proxy_pass http://bbw_website;
+            proxy_pass http://bbc_website;
             proxy_set_header Host $$host;
           }
         }
@@ -615,7 +618,7 @@ configs:
         - job_name: prometheus
           static_configs:
             - targets: ["localhost:9090"]
-        - job_name: bbw-app
+        - job_name: bbc-app
           metrics_path: /metrics
           static_configs:
             - targets: ["app:8080"]
@@ -697,6 +700,6 @@ configs:
         }
         location @placeholder {
           default_type text/plain;
-          return 200 "${BBW_BRAND_NAME:-BaobaoChat} 官网尚未发布：先在构建机执行 scripts/release/publish-website.sh\n";
+          return 200 "${BBC_BRAND_NAME:-BaobaoChat} 官网尚未发布：先在构建机执行 scripts/release/publish-website.sh\n";
         }
       }

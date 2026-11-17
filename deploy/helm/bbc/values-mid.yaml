@@ -1,6 +1,6 @@
 # =============================================================================
 # 中规模档覆盖（16 篇 §3.3：5k 用户 / ~1.5k 在线 / ~1,300 msg/s；4 worker 上下）
-# 用法：helm upgrade --install bbw deploy/helm/bbw -f deploy/helm/bbw/values-mid.yaml -n bbw --create-namespace
+# 用法：helm upgrade --install bbc deploy/helm/bbc -f deploy/helm/bbc/values-mid.yaml -n bbc --create-namespace
 # 仅列出相对 values.yaml 的差异键
 # =============================================================================
 

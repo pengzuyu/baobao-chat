@@ -42,7 +42,7 @@
     "updater": {
       "pubkey": "",
       "endpoints": [
-        "http://bbw.example.internal/update/latest.json"
+        "http://bbc.example.internal/update/latest.json"
       ],
       "windows": {
         "installMode": "passive"
@@ -50,7 +50,7 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["bbw"]
+        "schemes": ["bbc"]
       }
     }
   }

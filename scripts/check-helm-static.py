@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Helm 模板静态校验（无 helm 二进制环境的替代检查）。
 
-对 deploy/helm/bbw/templates/ 逐文件：
+对 deploy/helm/bbc/templates/ 逐文件：
 1. 剔除 {{/* ... */}} 注释块后做 {{ / }} 定界符配平检查；
 2. 将模板表达式替换为占位内容后按多文档 YAML 解析（捕获缩进/结构错误）。
    整行表达式（如 `{{ include ... | nindent 4 }}`）在真实渲染时可为映射/
@@ -9,7 +9,7 @@
    sequence → 空）重试。
 
 局限：无法等价 `helm template` 的语义渲染（条件/循环），仅做语法级把关；
-环境具备 helm 时以 `helm lint` / `helm template bbw .` 为准。
+环境具备 helm 时以 `helm lint` / `helm template bbc .` 为准。
 """
 import re
 import sys
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-CHART = Path(__file__).resolve().parents[1] / "deploy" / "helm" / "bbw"
+CHART = Path(__file__).resolve().parents[1] / "deploy" / "helm" / "bbc"
 COMMENT = re.compile(r"\{\{/\*.*?\*/\}\}", re.DOTALL)
 TMPL_EXPR = re.compile(r"\{\{[^{}]*\}\}")
 

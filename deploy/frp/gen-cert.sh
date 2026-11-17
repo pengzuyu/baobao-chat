@@ -35,7 +35,7 @@ mkdir -p certs
 if [ ! -f certs/ca.crt ]; then
   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
     -keyout certs/ca.key -out certs/ca.crt \
-    -subj "/CN=bbw-frp-lab-CA" \
+    -subj "/CN=bbc-frp-lab-CA" \
     -addext "basicConstraints=critical,CA:TRUE" \
     -addext "keyUsage=critical,keyCertSign,cRLSign"
 fi
@@ -43,7 +43,7 @@ fi
 # 2) 服务端叶证书（825 天，SAN=隧道入口）
 openssl req -newkey rsa:2048 -nodes \
   -keyout certs/server.key -out certs/server.csr \
-  -subj "/CN=bbw-frp-entry"
+  -subj "/CN=bbc-frp-entry"
 cat > certs/san.ext <<EOF
 basicConstraints=CA:FALSE
 keyUsage=digitalSignature,keyEncipherment

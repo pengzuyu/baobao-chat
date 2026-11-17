@@ -16,7 +16,7 @@ brand/
 2. 替换 `assets/logo.svg`（UI 内 logo）与 `assets/icon.png`（1024×1024 应用图标源图）；
 3. 跑 `make brand`（= 生成产物 + `tauri icon` 重生成全套 OS 图标）；
 4. 启用应用内自动更新才需：`npm run tauri signer generate` 自备密钥，公钥填 `brand.json` 的 `updater_pubkey`，出包时带 `TAURI_SIGNING_PRIVATE_KEY` 环境变量；
-5. 按常规出包：`BBW_PUBLIC_URL=http://你的域名 bash scripts/release/build-desktop.sh`（品牌产物一致性由脚本内置 `--check` 门禁把守）。
+5. 按常规出包：`BBC_PUBLIC_URL=http://你的域名 bash scripts/release/build-desktop.sh`（品牌产物一致性由脚本内置 `--check` 门禁把守）。
 
 只改了 `brand.json` 没换图标时，日常跑 `make brand-conf` 即可（不动 icons/）。
 
@@ -27,7 +27,7 @@ brand/
 | 字段 | 改动后果 |
 |---|---|
 | `identifier` | appData/钥匙串数据目录整体迁移——老用户**全员静默登出**、本地数据「消失」无任何报错 |
-| `deep_link_scheme` | 服务端 `BBW_DEEP_LINK_SCHEME` 必须同步改（deploy/compose/.env），否则 OIDC 深链确认登录**静默失效** |
+| `deep_link_scheme` | 服务端 `BBC_DEEP_LINK_SCHEME` 必须同步改（deploy/compose/.env），否则 OIDC 深链确认登录**静默失效** |
 
 确实需要改（如双品牌共存一台机器）时，生成器会打红字警告，请同时评估上表两行。
 

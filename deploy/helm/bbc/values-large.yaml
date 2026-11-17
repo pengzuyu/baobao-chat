@@ -1,12 +1,12 @@
 # =============================================================================
 # 大规模档覆盖（16 篇 §3.3：20k 用户/租户 / 6k 在线 / 5,000 msg/s；8–12 worker）
-# 用法：helm upgrade --install bbw deploy/helm/bbw -f deploy/helm/bbw/values-large.yaml -n bbw --create-namespace
+# 用法：helm upgrade --install bbc deploy/helm/bbc -f deploy/helm/bbc/values-large.yaml -n bbc --create-namespace
 # 仅列出相对 values.yaml 的差异键
 # =============================================================================
 
 app:
   # §3.3：域拆分部署（message 3–4 副本 4C；audit 独立节点组）
-  # TODO：域拆分 = 同一 bbw-app 镜像按 --enable 分域多 Deployment（D02 §2 拆分
+  # TODO：域拆分 = 同一 bbc-app 镜像按 --enable 分域多 Deployment（D02 §2 拆分
   # 原则），当前 chart 渲染单体 Deployment，域拆分清单见 16 篇 §3.2 组件表；
   # 先以副本数+资源抬高承载，压测后落地分域模板。
   replicaCount: 4
@@ -19,7 +19,7 @@ app:
     maxReplicas: 10
     queueDepth:
       enabled: true                    # file/kb worker 队列深度参与伸缩（§3.2）
-      metricName: bbw_queue_depth
+      metricName: bbc_queue_depth
       metricSelector: ""
       targetAverageValue: "200"
   affinity:
@@ -28,7 +28,7 @@ app:
       requiredDuringSchedulingIgnoredDuringExecution:
         nodeSelectorTerms:
           - matchExpressions:
-              - key: bbw.nodeclass
+              - key: bbc.nodeclass
                 operator: In
                 values: [app]
 
@@ -44,9 +44,9 @@ gateway:
 media:
   replicas: 3                          # §3.3：500 路（3–4 专用节点）
   nodeSelector:
-    bbw.media: "true"                  # 专用节点组（万兆）
+    bbc.media: "true"                  # 专用节点组（万兆）
   tolerations:
-    - key: bbw/media
+    - key: bbc/media
       operator: Exists
       effect: NoSchedule               # §3.2：节点污点隔离
   resources:

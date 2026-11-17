@@ -1,4 +1,4 @@
-{{ include "bbw.fullname" . }} 已部署（chart {{ .Chart.Version }} / app {{ .Chart.AppVersion }}）。
+{{ include "bbc.fullname" . }} 已部署（chart {{ .Chart.Version }} / app {{ .Chart.AppVersion }}）。
 
 形态：K8s（16 篇 §3.2 中大规模；Docker compose 形态见 deploy/compose/README.md，
 双形态等价：同一组镜像、同一套配置键）。
@@ -8,28 +8,28 @@
    · 主入口 https://{{ .Values.ingress.hosts.api }}（/api /ws）
    · TLS Secret：{{ .Values.ingress.tls.secretName }}（内部 CA 签发；客户端 pinning 根 CA，15 篇 §3.1）
 {{- else }}
-   · ingress.enabled=false：请自行暴露 {{ include "bbw.fullname" . }}-gateway:80
+   · ingress.enabled=false：请自行暴露 {{ include "bbc.fullname" . }}-gateway:80
 {{- end }}
 
 2. 首次初始化（16 篇 §2.2）
-   · 迁移已由 pre-install Job（{{ include "bbw.fullname" . }}-migrate）执行
+   · 迁移已由 pre-install Job（{{ include "bbc.fullname" . }}-migrate）执行
    · 打开客户端即进入初始化向导：填写管理员工号/姓名/口令即完成引导并自动登录
      （向导仅在系统无任何用户时出现；建户即永久关闭）
-   · 兜底通道（向导不可用时）：kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "bbw.fullname" . }}-app -- \
-       bbw-server admin bootstrap --admin-password '<强密码>'
+   · 兜底通道（向导不可用时）：kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "bbc.fullname" . }}-app -- \
+       bbc-server admin bootstrap --admin-password '<强密码>'
    · 访问 Web 管理台完成租户初始化（12 篇）
 
 3. 依赖确认（本 chart 不渲染，由 Operator/独立 release 提供，§3.2）
 {{- if not .Values.secrets.existingSecretDb }}
-   · Secret bbw-db / bbw-s3 已由本 chart 从 values.secrets 渲染——生产建议改用
+   · Secret bbc-db / bbc-s3 已由本 chart 从 values.secrets 渲染——生产建议改用
      external-secrets 接管（见 templates/secret.yaml 头注释）
 {{- else }}
    · 已引用既有 Secret：{{ .Values.secrets.existingSecretDb }} / {{ .Values.secrets.existingSecretS3 }}
 {{- end }}
    · PostgreSQL（CNPG/StatefulSet 主从+读副本，WAL 归档至对象存储，§4.6）
    · Redis（哨兵 StatefulSet）· 对象存储（RustFS，D29；分布式 StatefulSet，EC）
-   · prometheus-adapter：暴露 bbw_ws_connections / bbw_queue_depth /
-     bbw_rooms_active / bbw_wopi_sessions 自定义指标（HPA 依赖，§3.2）
+   · prometheus-adapter：暴露 bbc_ws_connections / bbc_queue_depth /
+     bbc_rooms_active / bbc_wopi_sessions 自定义指标（HPA 依赖，§3.2）
 
 4. 升级 / 回滚（§3.4 升级路径表）
    · helm upgrade --install {{ .Release.Name }} . -f values[-mid|-large].yaml -n {{ .Release.Namespace }}

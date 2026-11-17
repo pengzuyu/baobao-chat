@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
 # 知识库摄入+检索 E2E（D07 阶段一务实版）：
-#   bbw-server（内存模式，或 BBW_KB_DSN 指定走 PG/pgvector）+ AI 网关开发令牌
+#   bbc-server（内存模式，或 BBC_KB_DSN 指定走 PG/pgvector）+ AI 网关开发令牌
 #   → alice 惰性个人空间/公司空间 → 两主题文档摄入（同步 ready）→
 #   混合检索（关键词字面命中 + 向量路独证：查询词无字面子串）→ 高亮/上下文展开 →
 #   bob 权限隔离（个人空间不可见/显式请求 7002）→ jobs 简版。
 # 用法：
 #   bash scripts/e2e/kb-pipeline.sh                     # 内存模式（默认端口 18093）
-#   BBW_KB_DSN='postgres://bbw:bbw_change_me@127.0.0.1:5432/bbw?sslmode=disable' \
+#   BBC_KB_DSN='postgres://bbc:bbc_change_me@127.0.0.1:5432/bbc?sslmode=disable' \
 #     bash scripts/e2e/kb-pipeline.sh                   # PG 模式（pgvector 真实排序）
 # 预期：全部断言通过输出 ✅。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PORT="${BBW_PORT:-18093}"
+PORT="${BBC_PORT:-18093}"
 TOKEN_TOK="kb-e2e-tok"
 TMP="$(mktemp -d /tmp/kb-e2e.XXXXXX)"
 
 step() { echo ""; echo "── $* ──"; }
 
-# ① 服务端（内存模式 + 网关开发令牌 → kb 嵌入走 HTTP 网关 bbw-embed）
-(cd "$ROOT/server" && go build -o "$TMP/bbw-server" ./cmd/bbw-server)
-ENV_ARGS=(BBW_HTTP_ADDR=":$PORT" BBW_AIGW_DEV_TOKEN="$TOKEN_TOK" BBW_SEED_DEMO=1 BBW_JWT_SECRET="kb-e2e-secret-kb-e2e-secret-0123456789")
-if [ -n "${BBW_KB_DSN:-}" ]; then
-  ENV_ARGS+=("BBW_DB_DSN=$BBW_KB_DSN")
-  echo "PG 模式：${BBW_KB_DSN}（迁移 0009 幂等；kb_chunk.embedding 轨：pgvector/float8[]）"
+# ① 服务端（内存模式 + 网关开发令牌 → kb 嵌入走 HTTP 网关 bbc-embed）
+(cd "$ROOT/server" && go build -o "$TMP/bbc-server" ./cmd/bbc-server)
+ENV_ARGS=(BBC_HTTP_ADDR=":$PORT" BBC_AIGW_DEV_TOKEN="$TOKEN_TOK" BBC_SEED_DEMO=1 BBC_JWT_SECRET="kb-e2e-secret-kb-e2e-secret-0123456789")
+if [ -n "${BBC_KB_DSN:-}" ]; then
+  ENV_ARGS+=("BBC_DB_DSN=$BBC_KB_DSN")
+  echo "PG 模式：${BBC_KB_DSN}（迁移 0009 幂等；kb_chunk.embedding 轨：pgvector/float8[]）"
 fi
-env "${ENV_ARGS[@]}" "$TMP/bbw-server" > "$TMP/server.log" 2>&1 &
+env "${ENV_ARGS[@]}" "$TMP/bbc-server" > "$TMP/server.log" 2>&1 &
 SRV=$!
 trap 'kill $SRV 2>/dev/null || true' EXIT
 sleep 1.5
@@ -148,4 +148,4 @@ echo "文件引用摄入 ✓"
 
 echo ""
 grep -q "kb 嵌入链路" "$TMP/server.log" && sed -n '/kb 嵌入链路/p;/kb 检轨/p' "$TMP/server.log"
-echo "✅ 知识库 E2E 全链路通过（$([ -n "${BBW_KB_DSN:-}" ] && echo PG模式 || echo 内存模式)，端口 ${PORT}）"
+echo "✅ 知识库 E2E 全链路通过（$([ -n "${BBC_KB_DSN:-}" ] && echo PG模式 || echo 内存模式)，端口 ${PORT}）"

@@ -6,27 +6,27 @@
 #       gen-manifest.mjs 已生成 latest.json / release-info.json（缺则此处自动补跑）。
 #
 # 用法（在本机或任一汇集了产物的机器执行；rsync + ssh）：
-#   BBW_PUBLIC_URL=http://bbw.example.internal \
-#   BBW_DEPLOY_HOST=deploy@10.x.x.x \
-#   BBW_DEPLOY_ROOT=/opt/baobaochat/deploy/compose \
+#   BBC_PUBLIC_URL=http://bbc.example.internal \
+#   BBC_DEPLOY_HOST=deploy@10.x.x.x \
+#   BBC_DEPLOY_ROOT=/opt/baobaochat/deploy/compose \
 #     bash scripts/release/publish.sh
 #
 # 环境变量：
-#   BBW_PUBLIC_URL       必填（生成 manifest 绝对 URL）
-#   BBW_DEPLOY_HOST      必填（ssh 目标，user@host；免密或代理按需配 ~/.ssh/config）
-#   BBW_DEPLOY_ROOT      必填（服务器上 deploy/compose 的绝对路径——更新卷 =
+#   BBC_PUBLIC_URL       必填（生成 manifest 绝对 URL）
+#   BBC_DEPLOY_HOST      必填（ssh 目标，user@host；免密或代理按需配 ~/.ssh/config）
+#   BBC_DEPLOY_ROOT      必填（服务器上 deploy/compose 的绝对路径——更新卷 =
 #                        $ROOT/volumes/updates）
-#   BBW_ALLOW_PARTIAL=1  缺平台放行（默认四平台齐全才发，防半截发布）
+#   BBC_ALLOW_PARTIAL=1  缺平台放行（默认四平台齐全才发，防半截发布）
 #
 # 发布后自检：curl 回读 /update/latest.json 校验版本号。
 # =============================================================================
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-URL="${BBW_PUBLIC_URL:?BBW_PUBLIC_URL 必填（http://域名）}"
+URL="${BBC_PUBLIC_URL:?BBC_PUBLIC_URL 必填（http://域名）}"
 URL="${URL%/}"
-HOST="${BBW_DEPLOY_HOST:?BBW_DEPLOY_HOST 必填（ssh user@host）}"
-DEPLOY_ROOT="${BBW_DEPLOY_ROOT:?BBW_DEPLOY_ROOT 必填（服务器上 deploy/compose 绝对路径）}"
+HOST="${BBC_DEPLOY_HOST:?BBC_DEPLOY_HOST 必填（ssh user@host）}"
+DEPLOY_ROOT="${BBC_DEPLOY_ROOT:?BBC_DEPLOY_ROOT 必填（服务器上 deploy/compose 绝对路径）}"
 UPDATES_DIR="$DEPLOY_ROOT/volumes/updates"
 
 VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/client/src-tauri/tauri.conf.json'))['version'])")"
@@ -35,19 +35,19 @@ OUT="$ROOT/out/release/v$VERSION"
 # ---- 1. 产物齐套校验（默认四平台；ALLOW_PARTIAL 放行）----
 if [ ! -f "$OUT/latest.json" ]; then
   echo "[publish] latest.json 缺失——先补跑 gen-manifest"
-  BBW_PUBLIC_URL="$URL" node "$ROOT/scripts/release/gen-manifest.mjs"
+  BBC_PUBLIC_URL="$URL" node "$ROOT/scripts/release/gen-manifest.mjs"
 fi
 
 MISSING=""
 for plat in darwin-x86_64 darwin-aarch64 linux-x86_64 windows-x86_64; do
   if ! ls "$OUT/$plat/"*.sig >/dev/null 2>&1; then MISSING="$MISSING $plat"; fi
 done
-if [ -n "$MISSING" ] && [ "${BBW_ALLOW_PARTIAL:-0}" != 1 ]; then
+if [ -n "$MISSING" ] && [ "${BBC_ALLOW_PARTIAL:-0}" != 1 ]; then
   echo "[publish] ✗ 缺平台产物（无 .sig）：$MISSING" >&2
-  echo "[publish]   各平台机上跑 build-desktop 后把产物汇到 $OUT；确需部分发布加 BBW_ALLOW_PARTIAL=1" >&2
+  echo "[publish]   各平台机上跑 build-desktop 后把产物汇到 $OUT；确需部分发布加 BBC_ALLOW_PARTIAL=1" >&2
   exit 1
 fi
-[ -n "$MISSING" ] && echo "[publish] ⚠ BBW_ALLOW_PARTIAL=1：缺平台（$MISSING）按现状发布"
+[ -n "$MISSING" ] && echo "[publish] ⚠ BBC_ALLOW_PARTIAL=1：缺平台（$MISSING）按现状发布"
 
 # ---- 2. rsync 发布（平台子目录随产物目录原样；清单两份置卷根）----
 echo "[publish] v$VERSION → $HOST:$UPDATES_DIR"

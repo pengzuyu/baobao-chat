@@ -1,22 +1,22 @@
 {{/*
 HPA（16 篇 §3.2 指标表）
 · gateway：在线连接数（目标 3.5 万/实例、上限 5 万，§6.7）——pods 自定义指标，
-  需 prometheus-adapter 将 bbw_ws_connections 暴露为 custom.metrics.k8s.io
+  需 prometheus-adapter 将 bbc_ws_connections 暴露为 custom.metrics.k8s.io
 · app：CPU 70% + 各域队列深度（file/kb worker，external 指标）
 */}}
 {{- if and .Values.gateway.enabled .Values.gateway.autoscaling.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "bbw.fullname" . }}-gateway
+  name: {{ include "bbc.fullname" . }}-gateway
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "bbw.fullname" . }}-gateway
+    name: {{ include "bbc.fullname" . }}-gateway
   minReplicas: {{ .Values.gateway.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.gateway.autoscaling.maxReplicas }}
   metrics:
@@ -45,15 +45,15 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "bbw.fullname" . }}-app
+  name: {{ include "bbc.fullname" . }}-app
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: app
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "bbw.fullname" . }}-app
+    name: {{ include "bbc.fullname" . }}-app
   minReplicas: {{ .Values.app.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.app.autoscaling.maxReplicas }}
   metrics:

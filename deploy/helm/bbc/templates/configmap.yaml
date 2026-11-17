@@ -1,0 +1,23 @@
+{{/*
+非敏感运行配置 → ConfigMap（16 篇 §3.4 配置等价映射：
+键名与 compose .env 完全一致，仅来源不同）
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bbc.fullname" . }}-config
+  labels:
+    {{- include "bbc.labels" . | nindent 4 }}
+data:
+  BBC_PUBLIC_DOMAIN: {{ .Values.global.domain | quote }}
+  BBC_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  BBC_UPDATE_CHANNEL: {{ .Values.config.updateChannel | quote }}
+  BBC_OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelEndpoint | quote }}
+  BBC_REDIS_ADDR: {{ .Values.externalServices.redis.address | quote }}
+  BBC_S3_ENDPOINT: {{ .Values.externalServices.s3.endpoint | quote }}
+  BBC_S3_PUBLIC_ENDPOINT: {{ .Values.externalServices.s3.publicEndpoint | default "" | quote }}
+  BBC_S3_BUCKET: {{ .Values.externalServices.s3.bucket | quote }}
+  BBC_S3_BACKUP_BUCKET: {{ .Values.externalServices.s3.backupBucket | quote }}
+  BBC_S3_USE_PATH_STYLE: {{ .Values.externalServices.s3.usePathStyle | quote | lower }}
+  # 特性开关：BBC_FEATURE_* 键随 2026-11 瘦身移除（服务端零读取的装饰配置；
+  # 模块启停以构建产物为准，租户级灰度走 feature_flag 表阶段二）

@@ -1,6 +1,6 @@
 {{/*
 DB 迁移 Job（16 篇 §3.4 双形态升级路径表：K8s 侧 = helm pre-install/upgrade Job，
-同镜像 `bbw-app migrate`；compose 侧等价物 = upgrade.sh 第 3 步）
+同镜像 `bbc-app migrate`；compose 侧等价物 = upgrade.sh 第 3 步）
 · 迁移仅向后兼容变更（加列/加表/CONCURRENTLY 索引），破坏性变更拆多窗口（§4.4）
 · hook 阶段 chart 内 Secret 尚未创建（pre-install 先于资源应用），
   故 DSN 直接取 values.secrets（与 Secret 同源）；使用 existingSecret 的站点
@@ -10,9 +10,9 @@ DB 迁移 Job（16 篇 §3.4 双形态升级路径表：K8s 侧 = helm pre-insta
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "bbw.fullname" . }}-migrate
+  name: {{ include "bbc.fullname" . }}-migrate
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-5"
@@ -23,7 +23,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "bbw.selectorLabels" . | nindent 8 }}
+        {{- include "bbc.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: migrate
     spec:
       restartPolicy: Never
@@ -36,14 +36,14 @@ spec:
         runAsUser: 65532
       containers:
         - name: migrate
-          image: {{ include "bbw.image" (dict "root" $ "repo" "bbw-app") }}
+          image: {{ include "bbc.image" (dict "root" $ "repo" "bbc-app") }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           # 同镜像迁移子命令（§3.4）；迁移脚本内嵌于镜像（D02 §10）
           args: ["migrate"]
           env:
-            - name: BBW_DB_DSN
+            - name: BBC_DB_DSN
               value: {{ .Values.secrets.dbDsn | quote }}
-            - name: BBW_LOG_LEVEL
+            - name: BBC_LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
           resources:
             {{- toYaml .Values.migrateJob.resources | nindent 12 }}

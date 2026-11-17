@@ -1,6 +1,6 @@
 # frp 最小公网暴露实验台（阶段一）
 
-供 **frp / 樱花frp** 把阶段一内存版 `bbw-server`（单容器，无需 PG/Redis/MinIO）
+供 **frp / 樱花frp** 把阶段一内存版 `bbc-server`（单容器，无需 PG/Redis/MinIO）
 暴露到公网做双端对话测试。安全目标：**即使容器/隧道被攻破，也不波及宿主机**。
 
 ```
@@ -8,8 +8,8 @@ Windows/macOS 桌面端 ──https/wss──► frp 节点（公网）
                                         │ 隧道（launcher 主动出站，宿主机零入站）
                                   内网宿主机
                                     ├─ frp launcher（普通用户运行，只指向 127.0.0.1）
-                                    ├─ 路径B: 127.0.0.1:8443 → nginx(TLS) → bbw:8080
-                                    └─ 路径A: 127.0.0.1:8080 → bbw:8080
+                                    ├─ 路径B: 127.0.0.1:8443 → nginx(TLS) → bbc:8080
+                                    └─ 路径A: 127.0.0.1:8080 → bbc:8080
 ```
 
 ## 0. 先判定你的隧道形态（30 秒）
@@ -25,8 +25,8 @@ L7 → 走 **路径 A**；TCP → 走 **路径 B**（本目录全量）。两条
 ## 路径 A：L7 HTTPS 隧道（TLS 由节点终止）
 
 ```bash
-cp .env.tpl .env && vim .env          # 填 BBW_JWT_SECRET（openssl rand -hex 32）
-docker compose up -d --build          # 只跑 bbw（nginx 属 tls profile，不启）
+cp .env.tpl .env && vim .env          # 填 BBC_JWT_SECRET（openssl rand -hex 32）
+docker compose up -d --build          # 只跑 bbc（nginx 属 tls profile，不启）
 # 樱花frp 隧道本地地址填：127.0.0.1:8080
 ```
 
@@ -36,9 +36,9 @@ docker compose up -d --build          # 只跑 bbw（nginx 属 tls profile，不
 ## 路径 B：TCP 隧道（端到端 TLS 自持，樱花只见密文）
 
 ```bash
-cp .env.tpl .env && vim .env                          # 填 BBW_JWT_SECRET
+cp .env.tpl .env && vim .env                          # 填 BBC_JWT_SECRET
 ./gen-cert.sh <节点IP或域名>                           # 生成 CA + 服务端证书（SAN=入口）
-docker compose --profile tls up -d --build            # bbw + nginx TLS 终止
+docker compose --profile tls up -d --build            # bbc + nginx TLS 终止
 # 樱花frp 隧道本地地址填：127.0.0.1:8443
 ```
 
@@ -55,7 +55,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 ```
 
 WebView2 / WKWebView 均走系统信任库，装完即认。测完删除：
-`certutil -delstore Root bbw-frp-lab-CA` / 钥匙串访问删除 `bbw-frp-lab-CA`。
+`certutil -delstore Root bbc-frp-lab-CA` / 钥匙串访问删除 `bbc-frp-lab-CA`。
 
 ## 3. 外网验证（两种路径通用）
 
@@ -63,7 +63,7 @@ WebView2 / WKWebView 均走系统信任库，装完即认。测完删除：
 # 健康检查：应返回 {"status":"ok","stage":"stage1"}
 curl -v https://<入口>/healthz
 
-# WSS 升级链路（IM 测试的硬前提）：返回 bbw 的 401/400 JSON 即证明透传成功；
+# WSS 升级链路（IM 测试的硬前提）：返回 bbc 的 401/400 JSON 即证明透传成功；
 # 若返回节点自身错误页 / 502 / 超时 → L7 拦了 WebSocket，转路径 B
 curl -vi --http1.1 \
   -H "Connection: Upgrade" -H "Upgrade: websocket" \

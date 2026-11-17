@@ -3,14 +3,14 @@
 # publish-website.sh —— 官网构建与发布（D21）
 #
 # 用法（rsync + ssh）：
-#   BBW_DEPLOY_HOST=deploy@10.x.x.x \
-#   BBW_DEPLOY_ROOT=/opt/baobaochat/deploy/compose \
+#   BBC_DEPLOY_HOST=deploy@10.x.x.x \
+#   BBC_DEPLOY_ROOT=/opt/baobaochat/deploy/compose \
 #     bash scripts/release/publish-website.sh
 #
 # 环境变量：
-#   BBW_DEPLOY_HOST   必填（ssh 目标；官网卷 = $BBW_DEPLOY_ROOT/volumes/website）
-#   BBW_DEPLOY_ROOT   必填（服务器上 deploy/compose 绝对路径）
-#   BBW_VERIFY_URL    可选（发布后回读验证的站点地址，默认 http://<host>/）
+#   BBC_DEPLOY_HOST   必填（ssh 目标；官网卷 = $BBC_DEPLOY_ROOT/volumes/website）
+#   BBC_DEPLOY_ROOT   必填（服务器上 deploy/compose 绝对路径）
+#   BBC_VERIFY_URL    可选（发布后回读验证的站点地址，默认 http://<host>/）
 #
 # 步骤：npm install（缺 node_modules 时）→ vite build → rsync dist/ → 卷目录
 #       （--delete 清旧资产）→ curl 回读验证首页可达。
@@ -19,10 +19,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HOST="${BBW_DEPLOY_HOST:?BBW_DEPLOY_HOST 必填（ssh user@host）}"
-DEPLOY_ROOT="${BBW_DEPLOY_ROOT:?BBW_DEPLOY_ROOT 必填（服务器上 deploy/compose 绝对路径）}"
+HOST="${BBC_DEPLOY_HOST:?BBC_DEPLOY_HOST 必填（ssh user@host）}"
+DEPLOY_ROOT="${BBC_DEPLOY_ROOT:?BBC_DEPLOY_ROOT 必填（服务器上 deploy/compose 绝对路径）}"
 WEBSITE_DIR="$DEPLOY_ROOT/volumes/website"
-VERIFY_URL="${BBW_VERIFY_URL:-http://$(echo "$HOST" | sed 's/^[^@]*@//')/}"
+VERIFY_URL="${BBC_VERIFY_URL:-http://$(echo "$HOST" | sed 's/^[^@]*@//')/}"
 
 [ -d "$ROOT/website" ] || { echo "[publish-website] website/ 工程缺失" >&2; exit 1; }
 

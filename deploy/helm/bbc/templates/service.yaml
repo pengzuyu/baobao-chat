@@ -2,19 +2,19 @@
 服务暴露：app / gateway（media 见 deployment-media.yaml 内 hostNetwork 说明：
 hostNetwork 模式下信令经 Ingress 直连宿主端口，Service 仅作发现占位）
 app 可切 NodePort（app.service.*）：裸 HTTP 直连形态（/api /ws 同口直达，
-桌面端 bbrt 不支持 TLS 的内网环境）；gateway 关闭时不渲染（bbw-gateway 镜像未交付）
+桌面端 bbrt 不支持 TLS 的内网环境）；gateway 关闭时不渲染（bbc-gateway 镜像未交付）
 */}}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "bbw.fullname" . }}-app
+  name: {{ include "bbc.fullname" . }}-app
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: app
 spec:
   type: {{ .Values.app.service.type }}
   selector:
-    {{- include "bbw.selectorLabels" . | nindent 4 }}
+    {{- include "bbc.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: app
   ports:
     - name: http
@@ -28,14 +28,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "bbw.fullname" . }}-gateway
+  name: {{ include "bbc.fullname" . }}-gateway
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
 spec:
   type: ClusterIP
   selector:
-    {{- include "bbw.selectorLabels" . | nindent 4 }}
+    {{- include "bbc.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
   ports:
     - name: http-ws
@@ -47,14 +47,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "bbw.fullname" . }}-media
+  name: {{ include "bbc.fullname" . }}-media
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: media
 spec:
   type: ClusterIP
   selector:
-    {{- include "bbw.selectorLabels" . | nindent 4 }}
+    {{- include "bbc.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: media
   ports:
     - name: signaling

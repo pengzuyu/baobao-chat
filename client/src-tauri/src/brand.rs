@@ -3,5 +3,5 @@
 
 /// 产品显示名
 pub const APP_NAME: &str = "BaobaoChat";
-/// 深链 scheme（`bbw://auth`，D28 OIDC 确认登录）
-pub const SCHEME: &str = "bbw";
+/// 深链 scheme（`bbc://auth`，D28 OIDC 确认登录）
+pub const SCHEME: &str = "bbc";

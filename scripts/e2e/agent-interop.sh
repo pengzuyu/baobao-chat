@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Agent Runtime ↔ AI 网关互通冒烟（docs/19 联调通道）：
-#   bbw-server(mock echo 供应商 + 开发令牌) ← bbrt(stdio 协议脚本)
+#   bbc-server(mock echo 供应商 + 开发令牌) ← bbrt(stdio 协议脚本)
 # 用法：bash scripts/e2e/agent-interop.sh   （需先 cargo build -p bbrt 与 go build）
 # 预期：事件分布含 tool.call/tool.result/stream.delta，工具摘要含文件内容。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PORT="${BBW_PORT:-18090}"
+PORT="${BBC_PORT:-18090}"
 TMP="$(mktemp -d /tmp/bbrt-interop.XXXXXX)"
 TOKEN="interop-tok"
 
 echo "hello from interop" > "$TMP/foo.txt"
 
 # ① 服务端（内存模式 + 网关开发令牌）
-(cd "$ROOT/server" && go build -o "$TMP/bbw-server" ./cmd/bbw-server)
-BBW_HTTP_ADDR=":$PORT" BBW_AIGW_DEV_TOKEN="$TOKEN" BBW_SEED_DEMO=1 \
-  "$TMP/bbw-server" > "$TMP/server.log" 2>&1 &
+(cd "$ROOT/server" && go build -o "$TMP/bbc-server" ./cmd/bbc-server)
+BBC_HTTP_ADDR=":$PORT" BBC_AIGW_DEV_TOKEN="$TOKEN" BBC_SEED_DEMO=1 \
+  "$TMP/bbc-server" > "$TMP/server.log" 2>&1 &
 SRV=$!
 trap 'kill $SRV 2>/dev/null || true' EXIT
 sleep 1.5
@@ -31,7 +31,7 @@ print(env(4,"session.end",**{"sessionId":"sess-interop","reason":"normal"}))
 PY
 
 # ③ 驱动 bbrt（stdin 保持打开等 turn 收尾）
-(cd "$TMP" && BBW_RT_DATA_DIR="$TMP" BBW_RT_GATEWAY="http://127.0.0.1:$PORT" BBW_RT_TOKEN="$TOKEN" \
+(cd "$TMP" && BBC_RT_DATA_DIR="$TMP" BBC_RT_GATEWAY="http://127.0.0.1:$PORT" BBC_RT_TOKEN="$TOKEN" \
   "$ROOT/agent/target/debug/bbrt" < <(cat input.jsonl; sleep 5) > out.jsonl 2> err.txt) || true
 
 echo "=== 事件分布 ==="

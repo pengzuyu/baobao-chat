@@ -2,9 +2,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "bbw.fullname" . }}-gateway
+  name: {{ include "bbc.fullname" . }}-gateway
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
 spec:
   {{- if not .Values.gateway.autoscaling.enabled }}
@@ -12,7 +12,7 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      {{- include "bbc.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: gateway
   strategy:
     type: RollingUpdate
@@ -23,12 +23,12 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "bbw.selectorLabels" . | nindent 8 }}
+        {{- include "bbc.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: gateway
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
-      serviceAccountName: {{ include "bbw.serviceAccountName" . }}
+      serviceAccountName: {{ include "bbc.serviceAccountName" . }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -40,20 +40,20 @@ spec:
         runAsUser: 65532
         fsGroup: 65532
       containers:
-        - name: bbw-gateway
-          image: {{ include "bbw.image" (dict "root" $ "repo" "bbw-gateway") }}
+        - name: bbc-gateway
+          image: {{ include "bbc.image" (dict "root" $ "repo" "bbc-gateway") }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
             - name: TZ
               value: {{ .Values.global.timezone | quote }}
-            - name: BBW_DB_DSN
+            - name: BBC_DB_DSN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.db" . }}
+                  name: {{ include "bbc.secretName.db" . }}
                   key: dbDsn
           envFrom:
             - configMapRef:
-                name: {{ include "bbw.fullname" . }}-config
+                name: {{ include "bbc.fullname" . }}-config
           ports:
             - name: http-ws       # http + ws 同端口（§3.4 镜像清单：8081）
               containerPort: {{ .Values.gateway.port }}
@@ -86,14 +86,14 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 labelSelector:
                   matchLabels:
-                    {{- include "bbw.selectorLabels" . | nindent 20 }}
+                    {{- include "bbc.selectorLabels" . | nindent 20 }}
                     app.kubernetes.io/component: gateway
             - weight: 50
               podAffinityTerm:
                 topologyKey: topology.kubernetes.io/zone
                 labelSelector:
                   matchLabels:
-                    {{- include "bbw.selectorLabels" . | nindent 20 }}
+                    {{- include "bbc.selectorLabels" . | nindent 20 }}
                     app.kubernetes.io/component: gateway
       {{- end }}
       {{- with .Values.gateway.nodeSelector }}

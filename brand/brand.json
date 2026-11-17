@@ -6,7 +6,7 @@
   "device_name": "BaobaoChat Desktop",
   "identity": {
     "identifier": "com.baobaochat.client",
-    "deep_link_scheme": "bbw"
+    "deep_link_scheme": "bbc"
   },
   "updater_pubkey": ""
 }

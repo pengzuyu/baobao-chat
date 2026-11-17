@@ -6,15 +6,15 @@
   "platforms": {
     "darwin-aarch64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNpZ25lciBleGFtcGxlCg==:MEUCIQDK.example",
-      "url": "https://bbw.example.internal/update/BaobaoChat_0.1.1_aarch64.app.tar.gz"
+      "url": "https://bbc.example.internal/update/BaobaoChat_0.1.1_aarch64.app.tar.gz"
     },
     "linux-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNpZ25lciBleGFtcGxlCg==:MEUCIQDK.example",
-      "url": "https://bbw.example.internal/update/baobaochat-client_0.1.1_amd64.AppImage.tar.gz"
+      "url": "https://bbc.example.internal/update/baobaochat-client_0.1.1_amd64.AppImage.tar.gz"
     },
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNpZ25lciBleGFtcGxlCg==:MEUCIQDK.example",
-      "url": "https://bbw.example.internal/update/BaobaoChat_0.1.1_x64-setup.exe.zip"
+      "url": "https://bbc.example.internal/update/BaobaoChat_0.1.1_x64-setup.exe.zip"
     }
   }
 }

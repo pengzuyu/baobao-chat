@@ -1,37 +1,37 @@
 # =============================================================================
 # RustFS 1.0.5 对象存储（baobao-chat 命名空间自建形态，D29）
-# · 凭据不入 git：部署时 kubectl create secret generic bbw-s3-cred（README 步骤 2），
-#   同一份凭据同时喂 RustFS 服务端与 helm values（BBW_S3_ACCESS_KEY/SECRET_KEY）
+# · 凭据不入 git：部署时 kubectl create secret generic bbc-s3-cred（README 步骤 2），
+#   同一份凭据同时喂 RustFS 服务端与 helm values（BBC_S3_ACCESS_KEY/SECRET_KEY）
 # · NodePort 30900：S3 API 直通——D25 预签名直传（>8MB PUT）与 120s 票据下载的
-#   对外基址（BBW_S3_PUBLIC_ENDPOINT=http://<node-ip>:30900，s3.go:39 支持裸 ip:port
+#   对外基址（BBC_S3_PUBLIC_ENDPOINT=http://<node-ip>:30900，s3.go:39 支持裸 ip:port
 #   形态，v4 签名按该 host 计算）
 # · 对齐 compose 形态 rustfs 服务（9001 运维控制台不对外，需要时 kubectl port-forward）
 # =============================================================================
 apiVersion: v1
 kind: Service
 metadata:
-  name: bbw-rustfs
+  name: bbc-rustfs
   namespace: baobao-chat
   labels:
-    app.kubernetes.io/name: bbw-rustfs
+    app.kubernetes.io/name: bbc-rustfs
     app.kubernetes.io/part-of: baobaochat
 spec:
   type: NodePort
   selector:
-    app.kubernetes.io/name: bbw-rustfs
+    app.kubernetes.io/name: bbc-rustfs
   ports:
     - name: s3
       port: 9000
       targetPort: s3
-      nodePort: 30900        # 客户端预签名直达口（BBW_S3_PUBLIC_ENDPOINT 基址）
+      nodePort: 30900        # 客户端预签名直达口（BBC_S3_PUBLIC_ENDPOINT 基址）
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: bbw-rustfs
+  name: bbc-rustfs
   namespace: baobao-chat
   labels:
-    app.kubernetes.io/name: bbw-rustfs
+    app.kubernetes.io/name: bbc-rustfs
     app.kubernetes.io/part-of: baobaochat
 spec:
   replicas: 1
@@ -39,11 +39,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: bbw-rustfs
+      app.kubernetes.io/name: bbc-rustfs
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: bbw-rustfs
+        app.kubernetes.io/name: bbc-rustfs
         app.kubernetes.io/part-of: baobaochat
     spec:
       containers:
@@ -55,12 +55,12 @@ spec:
             - name: RUSTFS_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: bbw-s3-cred
+                  name: bbc-s3-cred
                   key: accessKey
             - name: RUSTFS_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: bbw-s3-cred
+                  name: bbc-s3-cred
                   key: secretKey
           ports:
             - name: s3
@@ -82,15 +82,15 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: bbw-rustfs-data
+            claimName: bbc-rustfs-data
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: bbw-rustfs-data
+  name: bbc-rustfs-data
   namespace: baobao-chat
   labels:
-    app.kubernetes.io/name: bbw-rustfs
+    app.kubernetes.io/name: bbc-rustfs
     app.kubernetes.io/part-of: baobaochat
 spec:
   accessModes: ["ReadWriteOnce"]

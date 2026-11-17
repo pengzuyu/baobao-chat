@@ -34,8 +34,8 @@ if [ ! -f "${CERT_DIR}/tls.crt" ]; then
   log "生成开发自签证书（SAN=localhost,127.0.0.1）..."
   openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
     -keyout "${CERT_DIR}/tls.key" -out "${CERT_DIR}/tls.crt" \
-    -subj "/CN=bbw-dev" \
-    -addext "subjectAltName=DNS:localhost,DNS:bbw.example.internal,IP:127.0.0.1" \
+    -subj "/CN=bbc-dev" \
+    -addext "subjectAltName=DNS:localhost,DNS:bbc.example.internal,IP:127.0.0.1" \
     >/dev/null 2>&1
   # 开发根 CA = 自签证书本身（客户端 pinning 语义与生产一致，15 篇 §3.1）
   cp "${CERT_DIR}/tls.crt" "${CERT_DIR}/ca.crt"
@@ -74,16 +74,16 @@ cat <<'EOF'
   · 后端（server/，宿主机直跑，依赖走 127.0.0.1）：
       make server-run
     或：
-      cd server && BBW_DB_DSN='postgres://bbw:bbw_change_me@127.0.0.1:5432/bbw?sslmode=disable' \
-        BBW_REDIS_ADDR=127.0.0.1:6379 BBW_S3_ENDPOINT=http://127.0.0.1:9000 \
-        BBW_S3_ACCESS_KEY=bbw_rustfs_change_me BBW_S3_SECRET_KEY=bbw_rustfs_secret_change_me \
-        go run ./cmd/bbw-server --enable auth,org,message,file,kb,eco,admin,audit,notify,aigw
+      cd server && BBC_DB_DSN='postgres://bbc:bbc_change_me@127.0.0.1:5432/bbc?sslmode=disable' \
+        BBC_REDIS_ADDR=127.0.0.1:6379 BBC_S3_ENDPOINT=http://127.0.0.1:9000 \
+        BBC_S3_ACCESS_KEY=bbc_rustfs_change_me BBC_S3_SECRET_KEY=bbc_rustfs_secret_change_me \
+        go run ./cmd/bbc-server --enable auth,org,message,file,kb,eco,admin,audit,notify,aigw
 
   · 前端（client/）：        make client-dev     （首次先 make client-install）
   · Agent Runtime（agent/）： make agent-build
   · 数据库迁移（server/migrations 由 app-init 首次自动应用；日常新增迁移后）：
       docker compose --profile core run --rm --no-deps app migrate
-      （正式通道：bbw-app migrate，16 篇 §3.4）
+      （正式通道：bbc-app migrate，16 篇 §3.4）
 
   · 常用：make dev-down 停依赖 | make dev-clean 清数据卷 | make compose-logs 看 app 日志
   · 运维面板（可选）：COMPOSE_PROFILES=core,ops 后 docker compose up -d

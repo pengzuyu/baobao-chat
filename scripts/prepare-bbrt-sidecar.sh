@@ -8,9 +8,9 @@
 #
 # 用法：
 #   bash scripts/prepare-bbrt-sidecar.sh              # host triple（常规打包）
-#   BBW_BBRT_TRIPLE=aarch64-apple-darwin \
+#   BBC_BBRT_TRIPLE=aarch64-apple-darwin \
 #     bash scripts/prepare-bbrt-sidecar.sh            # 交叉/显式指定（如 universal 包前置）
-#   BBW_BBRT_PROFILE=debug bash ...                   # 默认 release
+#   BBC_BBRT_PROFILE=debug bash ...                   # 默认 release
 #
 # 平台限制（bbrt-agent-unix-only）：bbrt 在 Windows 编不过（compile_error 兜底），
 # Windows 包不随带 sidecar（tauri.conf 主文件不含 externalBin），本脚本在
@@ -22,7 +22,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGENT_DIR="$ROOT/agent"
 DEST_DIR="$ROOT/client/src-tauri/binaries"
-PROFILE="${BBW_BBRT_PROFILE:-release}"
+PROFILE="${BBC_BBRT_PROFILE:-release}"
 LIMIT_MB=30
 
 case "$(uname -s)" in
@@ -32,7 +32,7 @@ case "$(uname -s)" in
     ;;
 esac
 
-TRIPLE="${BBW_BBRT_TRIPLE:-$(rustc -vV | sed -n 's/^host: //p')}"
+TRIPLE="${BBC_BBRT_TRIPLE:-$(rustc -vV | sed -n 's/^host: //p')}"
 [ -n "$TRIPLE" ] || { echo "[prepare-bbrt-sidecar] 无法探测 host triple（rustc -vV）" >&2; exit 1; }
 
 # 显式 --target：交叉 triple（如 arm 机器出 x86_64 包，D21 双架构出包）时产物

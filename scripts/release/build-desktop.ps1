@@ -4,7 +4,7 @@
 # Windows 包不随带 bbrt sidecar（既有决策：bbrt 编不过 Windows）。
 #
 # 用法（Windows 机器，PowerShell）：
-#   $env:BBW_PUBLIC_URL = "http://bbw.example.internal"
+#   $env:BBC_PUBLIC_URL = "http://bbc.example.internal"
 #   $env:TAURI_SIGNING_PRIVATE_KEY = "<minisign 私钥内容或路径>"
 #   $env:TAURI_SIGNING_PASSWORD = "<口令>"
 #   powershell -ExecutionPolicy Bypass -File scripts\release\build-desktop.ps1
@@ -14,18 +14,18 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$Url = $env:BBW_PUBLIC_URL
+$Url = $env:BBC_PUBLIC_URL
 
 if (-not $Url -or $Url -notmatch '^https?://[^/]+/?$') {
-  Write-Error "[build-desktop] BBW_PUBLIC_URL 必填且形如 http://bbw.example.internal（不带路径）"
+  Write-Error "[build-desktop] BBC_PUBLIC_URL 必填且形如 http://bbc.example.internal（不带路径）"
 }
 $Url = $Url.TrimEnd('/')
 
 if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
-  if ($env:BBW_ALLOW_UNSIGNED -eq "1") {
-    Write-Warning "[build-desktop] 无签名私钥（BBW_ALLOW_UNSIGNED=1）：出包无 .sig，仅可本地试装、不可发布"
+  if ($env:BBC_ALLOW_UNSIGNED -eq "1") {
+    Write-Warning "[build-desktop] 无签名私钥（BBC_ALLOW_UNSIGNED=1）：出包无 .sig，仅可本地试装、不可发布"
   } else {
-    Write-Error "[build-desktop] 缺 TAURI_SIGNING_PRIVATE_KEY（+TAURI_SIGNING_PASSWORD）；本地试包可 BBW_ALLOW_UNSIGNED=1"
+    Write-Error "[build-desktop] 缺 TAURI_SIGNING_PRIVATE_KEY（+TAURI_SIGNING_PASSWORD）；本地试包可 BBC_ALLOW_UNSIGNED=1"
   }
 }
 

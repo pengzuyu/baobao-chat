@@ -9,15 +9,15 @@ PDB（16 篇 §3.2）
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "bbw.fullname" . }}-gateway
+  name: {{ include "bbc.fullname" . }}-gateway
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
 spec:
   minAvailable: {{ .Values.gateway.pdb.minAvailable }}
   selector:
     matchLabels:
-      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      {{- include "bbc.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: gateway
 ---
 {{- end }}
@@ -25,15 +25,15 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "bbw.fullname" . }}-app
+  name: {{ include "bbc.fullname" . }}-app
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: app
 spec:
   minAvailable: {{ .Values.app.pdb.minAvailable }}
   selector:
     matchLabels:
-      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      {{- include "bbc.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: app
 ---
 {{- end }}
@@ -41,15 +41,15 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "bbw.fullname" . }}-media
+  name: {{ include "bbc.fullname" . }}-media
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: media
 spec:
   maxUnavailable: {{ .Values.media.pdb.maxUnavailable }}
   selector:
     matchLabels:
-      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      {{- include "bbc.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: media
 ---
 {{- end }}

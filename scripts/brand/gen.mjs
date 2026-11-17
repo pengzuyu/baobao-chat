@@ -20,7 +20,7 @@
 //
 // identity 覆盖警告（D31 拍板：品牌可变、身份不变）：identifier/deep_link_scheme
 // 偏离默认值时红字提示后果——改 identifier=appData 目录迁移全员静默登出；
-// 改 scheme=服务端 BBW_DEEP_LINK_SCHEME 必须同步（oidc/web.go 深链 4 处同源）。
+// 改 scheme=服务端 BBC_DEEP_LINK_SCHEME 必须同步（oidc/web.go 深链 4 处同源）。
 // =============================================================================
 
 import { readFileSync, writeFileSync, copyFileSync } from 'node:fs';
@@ -50,13 +50,13 @@ if (typeof brand.updater_pubkey !== 'string') {
 }
 
 // ── identity 偏离默认值警告（D31 §3.2 高级覆盖区）──
-const DEFAULT_IDENTITY = { identifier: 'com.baobaochat.client', deep_link_scheme: 'bbw' };
+const DEFAULT_IDENTITY = { identifier: 'com.baobaochat.client', deep_link_scheme: 'bbc' };
 for (const [k, def] of Object.entries(DEFAULT_IDENTITY)) {
   if (identity[k] !== def) {
     console.warn(`\x1b[31m[brand] ⚠ identity.${k}="${identity[k]}" 偏离默认值 "${def}"：`);
     console.warn(k === 'identifier'
       ? '  identifier 变更 = appData/钥匙串目录迁移，老用户全员静默登出+本地数据不可见（D30 批2 更名史先例）\x1b[0m'
-      : '  scheme 变更 = 服务端 BBW_DEEP_LINK_SCHEME 必须同步改，否则 OIDC 深链确认登录静默失效\x1b[0m');
+      : '  scheme 变更 = 服务端 BBC_DEEP_LINK_SCHEME 必须同步改，否则 OIDC 深链确认登录静默失效\x1b[0m');
   }
 }
 

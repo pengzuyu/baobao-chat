@@ -1,15 +1,15 @@
 # =============================================================================
-# baobao-chat 环境实值模板 → 复制到 deploy/helm/bbw/.local-values.yaml（已 gitignore）
+# baobao-chat 环境实值模板 → 复制到 deploy/helm/bbc/.local-values.yaml（已 gitignore）
 # 填密钥（README 步骤 4：openssl rand 生成）后 helm install -f 生效。
 # 环境口径：单节点群裸 HTTP 直连（app NodePort 30808 / rustfs NodePort 30900），
 # 依赖组件自建于 baobao-chat 命名空间（postgres.yaml / rustfs.yaml）
 # =============================================================================
 global:
-  domain: 172.16.105.109:30808          # BBW_PUBLIC_DOMAIN（信息性：对外基址无域名形态）
+  domain: 172.16.105.109:30808          # BBC_PUBLIC_DOMAIN（信息性：对外基址无域名形态）
   imageRegistry: 172.16.105.109:30003/pengzuyu
   imageTag: "0.1.0"
 
-# bbw-gateway 镜像未交付（单体 app 内嵌 WS）——保持关闭
+# bbc-gateway 镜像未交付（单体 app 内嵌 WS）——保持关闭
 gateway:
   enabled: false
 
@@ -30,17 +30,17 @@ app:
 # 依赖组件指向（自建于 baobao-chat 命名空间）
 externalServices:
   redis:
-    address: bbw-redis.baobao-chat.svc.cluster.local:6379   # 服务端未消费（占位，未部署）
+    address: bbc-redis.baobao-chat.svc.cluster.local:6379   # 服务端未消费（占位，未部署）
   s3:
-    endpoint: http://bbw-rustfs.baobao-chat.svc.cluster.local:9000
+    endpoint: http://bbc-rustfs.baobao-chat.svc.cluster.local:9000
     publicEndpoint: http://172.16.105.109:30900   # 预签名直传/票据下载对外基址（NodePort）
-    bucket: bbw-data
-    backupBucket: bbw-backup
+    bucket: bbc-data
+    backupBucket: bbc-backup
     usePathStyle: true
 
 # ★ 以下四项部署时生成填入（README 步骤 4；与 kubectl create secret 同源同值）
 secrets:
-  dbDsn: postgres://bbw:CHANGE_ME_PG_PASSWORD@bbw-pg.baobao-chat.svc.cluster.local:5432/bbw?sslmode=disable
+  dbDsn: postgres://bbc:CHANGE_ME_PG_PASSWORD@bbc-pg.baobao-chat.svc.cluster.local:5432/bbc?sslmode=disable
   s3AccessKey: CHANGE_ME_S3_AK
   s3SecretKey: CHANGE_ME_S3_SK
   kmsMasterKey: CHANGE_ME_BASE64_32B    # openssl rand -base64 32

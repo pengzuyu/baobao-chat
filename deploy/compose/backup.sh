@@ -6,7 +6,7 @@
 #  2 PG 逻辑备份：pg_dump -Fc（小规模快速恢复通道）
 #  3 WAL 归档确认：pg_switch_wal 强制切换并确认归档目录增长（RPO≤5min 前提）
 #  4 PG 基础备份占位：pg_basebackup 物理全量（PITR 基线）
-#    ★ 生产替换为 pgBackRest / WAL-G → 对象存储 bbw-backup 桶（独立凭据、
+#    ★ 生产替换为 pgBackRest / WAL-G → 对象存储 bbc-backup 桶（独立凭据、
 #      不可删除 30 天，§4.6）；本脚本为占位实现
 #  5 配置与密钥备份：.env + TLS 证书 tar 打包（0600；
 #    ★ 生产应 KMS 信封加密、KEK 双人分持，15 篇 §3.3）
@@ -27,9 +27,9 @@ set +a
 
 BACKUP_DIR="${BACKUP_DIR:-./volumes/backup}"
 TS="$(date +%Y%m%d-%H%M%S)"
-PGUSER_="${POSTGRES_USER:-bbw}"
-PGDATABASE_="${POSTGRES_DB:-bbw}"
-KEEP_DUMPS="${BBW_BACKUP_KEEP:-7}"
+PGUSER_="${POSTGRES_USER:-bbc}"
+PGDATABASE_="${POSTGRES_DB:-bbc}"
+KEEP_DUMPS="${BBC_BACKUP_KEEP:-7}"
 
 mkdir -p "$BACKUP_DIR"
 

@@ -21,8 +21,8 @@ set -a
 set +a
 
 BACKUP_DIR="${BACKUP_DIR:-./volumes/backup}"
-PGUSER_="${POSTGRES_USER:-bbw}"
-PGDATABASE_="${POSTGRES_DB:-bbw}"
+PGUSER_="${POSTGRES_USER:-bbc}"
+PGDATABASE_="${POSTGRES_DB:-bbc}"
 
 # 定位 dump 文件
 DUMP="${1:-}"
@@ -93,7 +93,7 @@ PITR（时点恢复）流程提示——compose 占位实现（§4.6 目标 RPO�
      （restore_command = cp /wal_archive/wal/%f %p）
   3) 创建 recovery_target_time（恢复至目标时点）并启动 pg 前滚
   4) 前滚完成后执行上述校验清单
-  ★ 生产环境建议直接采用 pgBackRest/WAL-G（对象存储 bbw-backup 桶，
+  ★ 生产环境建议直接采用 pgBackRest/WAL-G（对象存储 bbc-backup 桶，
     独立凭据、WORM 30 天），并纳入季度演练清单①实测 RTO/RPO
 ------------------------------------------------------------------
 PITR

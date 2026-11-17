@@ -7,8 +7,8 @@
 //   release-info.json 官网下载区数据源（版本/日期/更新说明/各平台直链/大小/sha256，
 //                     含 .dmg/.deb 等不参与应用内自更新的直链包）
 //
-// 用法（BBW_PUBLIC_URL 必填，产出 URL 绝对地址）：
-//   BBW_PUBLIC_URL=http://bbw.example.internal node scripts/release/gen-manifest.mjs \
+// 用法（BBC_PUBLIC_URL 必填，产出 URL 绝对地址）：
+//   BBC_PUBLIC_URL=http://bbc.example.internal node scripts/release/gen-manifest.mjs \
 //     [--version 0.2.0] [--notes "本次更新说明"] [--notes-file out/release/v0.2.0/RELEASE-NOTES.md]
 //
 // 布局约定（build-desktop 收集产物 → publish.sh 原样 rsync）：
@@ -16,7 +16,7 @@
 //   out/release/v<ver>/darwin-aarch64/…（同名 app.tar.gz——按平台子目录隔离防撞名）
 //   out/release/v<ver>/linux-x86_64/*.AppImage(+.sig) + *.deb
 //   out/release/v<ver>/windows-x86_64/*-setup.exe(+.sig)
-// 服务器 URL 形如 <BBW_PUBLIC_URL>/update/releases/v<ver>/<platform>/<file>
+// 服务器 URL 形如 <BBC_PUBLIC_URL>/update/releases/v<ver>/<platform>/<file>
 // =============================================================================
 
 import { createHash } from 'node:crypto';
@@ -29,7 +29,7 @@ function argOf(flag) {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
 }
-const BASE = (process.env.BBW_PUBLIC_URL || '').replace(/\/+$/, '');
+const BASE = (process.env.BBC_PUBLIC_URL || '').replace(/\/+$/, '');
 const ROOT = resolve(new URL('../..', import.meta.url).pathname);
 const VER = argOf('--version') || JSON.parse(readFileSync(resolve(ROOT, 'client/src-tauri/tauri.conf.json'), 'utf8')).version;
 const notesFile =
@@ -37,7 +37,7 @@ const notesFile =
 const NOTES = argOf('--notes') ?? (existsSync(notesFile) ? readFileSync(notesFile, 'utf8').trim() : '');
 
 if (!/^https?:\/\/[^/]+$/.test(BASE)) {
-  console.error('[gen-manifest] BBW_PUBLIC_URL 必填且形如 http://bbw.example.internal（不带路径）');
+  console.error('[gen-manifest] BBC_PUBLIC_URL 必填且形如 http://bbc.example.internal（不带路径）');
   process.exit(1);
 }
 
@@ -112,5 +112,5 @@ writeFileSync(resolve(OUT, 'release-info.json'), `${JSON.stringify(releaseInfo, 
 console.log(`[gen-manifest] v${VER}：updater 平台 ${found}/${PLATFORMS.length}，官网直链 ${downloads.length} 个`);
 console.log(`[gen-manifest] 已写 ${resolve(OUT, 'latest.json')} 与 release-info.json`);
 if (found < PLATFORMS.length) {
-  console.warn('[gen-manifest] ⚠ 非全量清单——publish.sh 默认拒发（BBW_ALLOW_PARTIAL=1 放行）');
+  console.warn('[gen-manifest] ⚠ 非全量清单——publish.sh 默认拒发（BBC_ALLOW_PARTIAL=1 放行）');
 }

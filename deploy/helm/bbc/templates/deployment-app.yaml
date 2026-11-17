@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "bbw.fullname" . }}-app
+  name: {{ include "bbc.fullname" . }}-app
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
     app.kubernetes.io/component: app
 spec:
   {{- if not .Values.app.autoscaling.enabled }}
@@ -11,7 +11,7 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "bbw.selectorLabels" . | nindent 6 }}
+      {{- include "bbc.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: app
   strategy:
     # §4.4 滚动升级：先增后减，接入层（gateway）最后切换
@@ -22,13 +22,13 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "bbw.selectorLabels" . | nindent 8 }}
+        {{- include "bbc.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: app
       annotations:
         # 配置变更触发滚动（Secret 内容不注入 checksum，避免泄露；凭据轮换走 15 篇 §4.1）
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
-      serviceAccountName: {{ include "bbw.serviceAccountName" . }}
+      serviceAccountName: {{ include "bbc.serviceAccountName" . }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -38,55 +38,55 @@ spec:
         runAsUser: 65532          # distroless nonroot（§3.4 镜像清单）
         fsGroup: 65532
       containers:
-        - name: bbw-server
+        - name: bbc-server
           # 模块化单体：--enable 控制启用域（D02 §2；由 values.modules.* 推导，
-          # 与 compose 侧 BBW_APP_MODULES 等价）
-          args: ["--enable", "{{ include "bbw.app.enabledModules" . }}"]
-          image: {{ include "bbw.image" (dict "root" $ "repo" "bbw-app") }}
+          # 与 compose 侧 BBC_APP_MODULES 等价）
+          args: ["--enable", "{{ include "bbc.app.enabledModules" . }}"]
+          image: {{ include "bbc.image" (dict "root" $ "repo" "bbc-app") }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
             - name: TZ
               value: {{ .Values.global.timezone | quote }}
-            # DB / S3 凭据：来自 Secret bbw-db / bbw-s3（§3.4 配置等价映射）
-            - name: BBW_DB_DSN
+            # DB / S3 凭据：来自 Secret bbc-db / bbc-s3（§3.4 配置等价映射）
+            - name: BBC_DB_DSN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.db" . }}
+                  name: {{ include "bbc.secretName.db" . }}
                   key: dbDsn
-            - name: BBW_DB_RO_DSN
+            - name: BBC_DB_RO_DSN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.db" . }}
+                  name: {{ include "bbc.secretName.db" . }}
                   key: dbReadDsn
-            - name: BBW_S3_ACCESS_KEY
+            - name: BBC_S3_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.s3" . }}
+                  name: {{ include "bbc.secretName.s3" . }}
                   key: s3AccessKey
-            - name: BBW_S3_SECRET_KEY
+            - name: BBC_S3_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.s3" . }}
+                  name: {{ include "bbc.secretName.s3" . }}
                   key: s3SecretKey
-            - name: BBW_AI_UPSTREAM_API_KEY
+            - name: BBC_AI_UPSTREAM_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.app" . }}
+                  name: {{ include "bbc.secretName.app" . }}
                   key: aiUpstreamApiKey
-            - name: BBW_JWT_SECRET
+            - name: BBC_JWT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.app" . }}
+                  name: {{ include "bbc.secretName.app" . }}
                   key: jwtSecret
             # KMS 主密钥（aigw 供应商密钥加密，19 篇 §1.2-2；空=KMS 不初始化）
-            - name: BBW_KMS_MASTER_KEY
+            - name: BBC_KMS_MASTER_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "bbw.secretName.app" . }}
+                  name: {{ include "bbc.secretName.app" . }}
                   key: kmsMasterKey
           envFrom:
             - configMapRef:
-                name: {{ include "bbw.fullname" . }}-config
+                name: {{ include "bbc.fullname" . }}-config
           ports:
             - name: http
               containerPort: {{ .Values.app.port }}

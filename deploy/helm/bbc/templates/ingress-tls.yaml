@@ -1,5 +1,5 @@
 {{/*
-Ingress + TLS（16 篇 §3.4：BBW_TLS_* 的 K8s 形态 = TLS Secret + ingress）
+Ingress + TLS（16 篇 §3.4：BBC_TLS_* 的 K8s 形态 = TLS Secret + ingress）
 · 主域 api：/ /api /ws /v1 /mcp → gateway（WSS 长连接 + aigw/MCP，D21 bbrt 生产链路）
 · 客户端 pinning 企业根 CA（15 篇 §3.1）；叶证书轮换走 §4.7 双证书流程，
   换 Secret 即可，客户端无感。
@@ -9,14 +9,14 @@ Ingress + TLS（16 篇 §3.4：BBW_TLS_* 的 K8s 形态 = TLS Secret + ingress�
 */}}
 {{- if .Values.ingress.enabled }}
 {{- /* 后端选择：gateway 交付前（gateway.enabled=false）全量回落单体 app Service */}}
-{{- $backendSvc := ternary (printf "%s-gateway" (include "bbw.fullname" .)) (printf "%s-app" (include "bbw.fullname" .)) .Values.gateway.enabled }}
+{{- $backendSvc := ternary (printf "%s-gateway" (include "bbc.fullname" .)) (printf "%s-app" (include "bbc.fullname" .)) .Values.gateway.enabled }}
 {{- $backendPort := ternary "http-ws" "http" .Values.gateway.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "bbw.fullname" . }}
+  name: {{ include "bbc.fullname" . }}
   labels:
-    {{- include "bbw.labels" . | nindent 4 }}
+    {{- include "bbc.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 8 }}
