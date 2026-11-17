@@ -35,7 +35,7 @@ export const SubagentCard = memo(function SubagentCard({ item }: { item: Subagen
   const [open, setOpen] = useState(false);
   const sendRunInput = useAgentStore((st) => st.sendRunInput);
   const cancelRun = useAgentStore((st) => st.cancelRun);
-  const { imeComposing, imeCompositionProps } = useImeGuard();
+  const { imeEnterDecision, imeCompositionProps } = useImeGuard();
   const [draft, setDraft] = useState('');
 
   const statusNode =
@@ -99,7 +99,11 @@ export const SubagentCard = memo(function SubagentCard({ item }: { item: Subagen
               style={{ flex: 1, minWidth: 0, fontSize: 12 }}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !imeComposing()) {
+                // IME 三态（useImeGuard v3）：swallow=确认键余波吞掉；ime=交给输入法
+                if (e.key !== 'Enter' || e.shiftKey) return;
+                const d = imeEnterDecision(e.nativeEvent);
+                if (d === 'swallow') e.preventDefault();
+                else if (d === 'send') {
                   sendRunInput(item.runId, draft);
                   setDraft('');
                 }

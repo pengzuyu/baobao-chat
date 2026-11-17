@@ -38,7 +38,7 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
   const { token } = theme.useToken();
   const [text, setText] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const { imeComposing, imeCompositionProps } = useImeGuard();
+  const { imeEnterDecision, imeCompositionProps } = useImeGuard();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
 
@@ -96,8 +96,14 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
         return;
       }
     }
-    // IME 确认键防误发：WKWebView 上 isComposing 常缺，组合窗跟踪兜底（useImeGuard）
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !imeComposing()) {
+    // IME 三态（useImeGuard v3）：ime=组合中交给输入法；swallow=确认键余波，吞掉不换行
+    if (e.key === 'Enter' && !e.shiftKey) {
+      const d = imeEnterDecision(e.nativeEvent);
+      if (d === 'swallow') {
+        e.preventDefault();
+        return;
+      }
+      if (d !== 'send') return;
       // `/name` 严格相等（无参数无尾空格）且在候选中 → Enter=选中进参数态；
       // `/name `（带尾空格）或已输参数 → 正常发送渲染后的模板
       const exact = commands.find((c) => text === `/${c.name}`);

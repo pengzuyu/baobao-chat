@@ -50,7 +50,7 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
   const reviewDelegate = useAgentStore((st) => st.reviewDelegate);
   const cancelDelegate = useAgentStore((st) => st.cancelDelegate);
   const sendRunInput = useAgentStore((st) => st.sendRunInput);
-  const { imeComposing, imeCompositionProps } = useImeGuard();
+  const { imeEnterDecision, imeCompositionProps } = useImeGuard();
   const [draft, setDraft] = useState('');
   const [open, setOpen] = useState(false);
 
@@ -145,12 +145,16 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
               placeholder="运行中补充指令（转发子进程）…"
               style={{ flex: 1, minWidth: 0, fontSize: 12 }}
               onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !imeComposing()) {
-                  sendRunInput(item.runId, draft);
-                  setDraft('');
-                }
-              }}
+                onKeyDown={(e) => {
+                  // IME 三态（useImeGuard v3）：swallow=确认键余波吞掉；ime=交给输入法
+                  if (e.key !== 'Enter' || e.shiftKey) return;
+                  const d = imeEnterDecision(e.nativeEvent);
+                  if (d === 'swallow') e.preventDefault();
+                  else if (d === 'send') {
+                    sendRunInput(item.runId, draft);
+                    setDraft('');
+                  }
+                }}
               {...imeCompositionProps}
             />
             <Button

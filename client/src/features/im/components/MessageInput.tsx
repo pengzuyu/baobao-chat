@@ -334,11 +334,9 @@ export function MessageInput({
     }
   };
 
-  const { imeComposing, imeCompositionProps } = useImeGuard();
+  const { imeEnterDecision, imeCompositionProps } = useImeGuard();
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // IME 确认键防误发（WKWebView 上 isComposing 常缺，组合窗跟踪兜底——useImeGuard）
-    const enterSafe = !e.nativeEvent.isComposing && !imeComposing();
-    // @面板导航：↑↓ + Enter 选择，Esc 关闭（D03 §3.2 富文本输入框）
+    // @面板导航：↑↓（Enter/Esc 归入下方统一处理；D03 §3.2 富文本输入框）
     if (mention && mentionList.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -350,39 +348,39 @@ export function MessageInput({
         setMentionIdx((i) => (i - 1 + mentionList.length) % mentionList.length);
         return;
       }
-      if (e.key === 'Enter' && !e.shiftKey && enterSafe) {
+    }
+    // Enter 三态（useImeGuard v3）：ime=组合中交给输入法；swallow=确认键余波，吞掉不换行；
+    // send=按面板优先级执行（@选中 > 斜杠执行 > 发送）
+    if (e.key === 'Enter' && !e.shiftKey) {
+      const d = imeEnterDecision(e.nativeEvent);
+      if (d === 'swallow') {
         e.preventDefault();
-        const it = mentionList[mentionIdx];
-        pickMention(it.uid, it.name);
         return;
       }
-      if (e.key === 'Escape') {
+      if (d === 'send') {
+        e.preventDefault();
+        if (mention && mentionList.length > 0) {
+          const it = mentionList[mentionIdx];
+          pickMention(it.uid, it.name);
+          return;
+        }
+        if (slashMatches.length > 0) {
+          execSlash(slashMatches[0].cmd);
+          return;
+        }
+        doSend();
+      }
+      return;
+    }
+    if (e.key === 'Escape') {
+      // 面板逐个关（@优先），全关后 Esc 才取消编辑
+      if (mention && mentionList.length > 0) {
         setMention(null);
         return;
       }
-    }
-    if (e.key === 'Escape' && emojiOpen) {
-      setEmojiOpen(false);
-      return;
-    }
-    // 斜杠命令面板：Enter 执行首项，Esc 关闭（@面板同款交互）
-    if (slashMatches.length > 0) {
-      if (e.key === 'Enter' && !e.shiftKey && enterSafe) {
-        e.preventDefault();
-        execSlash(slashMatches[0].cmd);
-        return;
-      }
-      if (e.key === 'Escape') {
-        setSlashOpen(false);
-        return;
-      }
-    }
-    if (e.key === 'Enter' && !e.shiftKey && enterSafe) {
-      e.preventDefault();
-      doSend();
-    }
-    if (e.key === 'Escape' && editing) {
-      onCancelEdit();
+      if (emojiOpen) setEmojiOpen(false);
+      if (slashMatches.length > 0) setSlashOpen(false);
+      if (editing) onCancelEdit();
     }
   };
 

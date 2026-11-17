@@ -11,6 +11,7 @@ import { memo, useMemo, useState } from 'react';
 import { Input, Tag, Typography, theme } from 'antd';
 import { HelpCircle } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
+import { useImeGuard } from '../../../shared/hooks/useImeGuard';
 import type { ClarifyOptionDTO } from '../bridge/types';
 import type { StreamItem } from '../store/agent';
 
@@ -39,6 +40,8 @@ export const ClarifyForm = memo(function ClarifyForm({
   const [picked, setPicked] = useState<string[]>([]);
   const [free, setFree] = useState('');
   const [expanded, setExpanded] = useState(false);
+  // IME 三态守卫（useImeGuard v3）：此前只查 isComposing，WKWebView 确认键会误提交
+  const { imeEnterDecision, imeCompositionProps } = useImeGuard();
 
   const toggle = (label: string) => {
     setPicked((cur) =>
@@ -105,8 +108,13 @@ export const ClarifyForm = memo(function ClarifyForm({
           aria-label="补充说明"
           style={{ fontSize: 13 }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit();
+            // IME 三态（useImeGuard v3）：swallow=确认键余波吞掉；ime=交给输入法
+            if (e.key !== 'Enter' || e.shiftKey) return;
+            const d = imeEnterDecision(e.nativeEvent);
+            if (d === 'swallow') e.preventDefault();
+            else if (d === 'send') submit();
           }}
+          {...imeCompositionProps}
         />
       ) : (
         <Button variant="text" size="small" style={{ alignSelf: 'flex-start', padding: 0, height: 'auto', fontSize: 12 }} onClick={() => setExpanded(true)}>
