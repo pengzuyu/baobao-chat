@@ -11,6 +11,7 @@ metadata:
 data:
   BBC_PUBLIC_DOMAIN: {{ .Values.global.domain | quote }}
   BBC_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  BBC_SEED_DEMO: {{ .Values.config.seedDemo | default "0" | quote }}
   BBC_UPDATE_CHANNEL: {{ .Values.config.updateChannel | quote }}
   BBC_OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelEndpoint | quote }}
   BBC_REDIS_ADDR: {{ .Values.externalServices.redis.address | quote }}
