@@ -16,6 +16,7 @@ import { useNavigate } from 'react-router-dom';
 import { Alert, Input, Modal, Select, Tabs, Tag, Typography, theme } from 'antd';
 import { FileText, Hash, Megaphone, ScrollText, Settings2, Shield, Tag as TagIcon, Users, VolumeX, X } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
+import { PresenceBadge, toPresenceStatus } from '../../../shared/ui/PresenceDot';
 import { Button } from '../../../shared/ui/Button';
 import { getErrorText } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
@@ -495,6 +496,7 @@ function MembersTab({
   onMute: (uid: string, until: number) => void;
 }) {
   const { token } = theme.useToken();
+  const presence = useImStore((s) => s.presence);
   const iAmOwner = myRole === 1;
   const iAmMgr = myRole === 1 || myRole === 2;
   const muted = (m: ConversationMember) => (m.muteUntil ?? 0) > Date.now();
@@ -523,7 +525,9 @@ function MembersTab({
               borderBottom: idx === members.length - 1 ? 'none' : `1px solid ${token.colorBorderSecondary}`,
             }}
           >
-            <Avatar name={m.displayName} size={32} />
+            <PresenceBadge status={toPresenceStatus(presence[m.uid])}>
+              <Avatar name={m.displayName} size={32} />
+            </PresenceBadge>
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                 {m.uid === myUid ? `${m.displayName}（我）` : m.displayName}

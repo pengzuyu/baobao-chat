@@ -64,6 +64,8 @@ interface ImState {
   /** 在线状态：uid → status（presence.changed 维护，D03 §5.3；offline 含 invisible 投影） */
   presence: Record<string, string | undefined>;
   applyPresence: (uid: string, status: string) => void;
+  /** 快照整体替换（GET /presences 登录/重连种子；推送增量走 applyPresence） */
+  applyPresences: (map: Record<string, string>) => void;
 
   /** conv.updated 推送入 store（D03 §5.3：kind=meta/member/setting/status/announcement 分发） */
   applyConvUpdated: (payload: ConvUpdatedPushPayload) => void;
@@ -374,6 +376,7 @@ export const useImStore = create<ImState>((set, get) => ({
       );
       return { presence: { ...s.presence, [uid]: status }, typing };
     }),
+  applyPresences: (map) => set({ presence: map }),
 
   applyConvUpdated: (payload) =>
     set((s) => {

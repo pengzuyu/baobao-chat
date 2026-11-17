@@ -444,3 +444,16 @@
 | X1 | 删 Seatbelt | launcher.rs 收缩纯进程管理器（删 SANDBOX_EXEC 常量/profile/detect/SandboxLevel/DegradedInfo/sandbox-exec 分支）+接线三处（config.rs/main.rs/cmd.rs）+测试同步 | agent cargo test --workspace 全绿；rg sandbox-exec/Seatbelt/SandboxLevel/DegradedInfo 代码零命中；词法层测试无回归 | [x] 2026-11-17（187dd4a；净 -391 行；B 层生命周期+BBC_SANDBOX=1 孤儿标记+violation 记录原样保留；escape_suite B12 行1/3/6 留 L2 断言、行4/5/7/8/9 生命周期用例全绿；顺修 bbrt-mcp fmt 漂移+roundtrip.rs 既有 unused import；581 passed/0 failed+fmt 绿） |
 | X2 | 矩阵+词法收紧 | gate.rs 四函数（matrix/classify_action 白名单守卫/memory_allowed CorpWrite=仅 Session）+测试新语义断言+D13/09/D11 文档追记（推翻 D13-A2 部分须注记） | cargo test 全绿（矩阵新断言）；文档追记可 grep | [x] 2026-11-17（矩阵：任意命令 full-auto✅/网络·push·委派 auto-edit+✅/CorpWrite 唯一三档🔶+Session 记忆（NEVER_PERMANENT_TOOLS 扩 file_upload/app_write 六件双保险）；白名单守卫 is_plain_direct_invocation（复合运算符/执行文件形态落任意命令）；confirm_scopes 删 full-auto 任意命令特例臂；测试重写 row4/rows67 拆分/row7 CorpWrite Session/row9 跟档+新增守卫用例；583 passed/0 failed） |
 | X3 | 真机验收 | 三档走查：auto-edit 修 bug 全程仅跑测试 1 弹；full-auto 0 弹+高危红卡仍拦；im_send Session 记忆二问变一问 | 用户真机走查 | [ ] |
+
+## 批次 Y：通讯录优化 + 用户在线状态全链（2026-11-17 编码完成待真机验收）
+
+> 动机=用户四点：通讯录去 hover 卡/点节点标题可展开/头像去灰底 + 用户可设状态（在线·离开·忙碌·离线=隐身，四档拍板）且全 desktop 可见。
+> 关键发现：presence 后端域 D03 起已完整（pres.set/presence.changed/Tracker+e2e），缺的是 UI 入口与初始快照；灰底根因=ContactsPage 用裸 antd Avatar（默认 colorTextPlaceholder）而全站其余用 shared Avatar 名字取色。
+> 离线显灰点（用户拍板）；dnd 由黄改红、离线由不亮改灰点（ChatHeader 语义随全站统一）。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|------|--------|------|------|
+| Y1 | 通讯录树交互三修 | ContactsPage：删 hover Popover 详情卡（contacts-user-card·card-msg testid 移除）；Tree expandAction="click"；用户头像 4 处换 shared Avatar（树叶子/搜索行 22·成员卡 32·详情 72）；shared Avatar size 放宽 number+style 透传 | tsc+vite build 绿 | [x] 2026-11-17（ce3575e） |
+| Y2 | presence 后端补齐 | gateway.HandlePresences()（presence_http.go，Snapshot 全量投影 uid 升序）+main.go authed 挂 GET /api/v1/presences；ConversationDTO.peerUid（仅 type=1，displayConvName→singlePeer 双返回，列表/详情两处装配）；service 测 TestSingleConvPeerUID+e2e 三段断言；04 篇 §6.1/§3.2 登记 | go build/vet/test 绿（service/gateway/e2e） | [x] 2026-11-17（5601d74） |
+| Y3 | presence 前端全链 | shared/ui/PresenceDot（四态点+PresenceBadge 角标+PresenceTag+usePresenceColors，token 随主题）；快照链 fetchPresences+qk.im.presence+store.applyPresences+useImWsEvents 挂 query（重连失效白拿 onResync invalidate ['im']）；MainLayout 头像下拉四档状态菜单（乐观投影+失败回滚）+导航头像自挂点；ConversationList 单聊 peerUid 点/ChatHeader 收敛 PresenceDot/ConvInfoSidebar 成员行/PersonPicker 行/ContactsPage 树·搜索·成员卡·详情 Tag 挂点；ChatPage peerStatus 优先 conv.peerUid | tsc+vite build 绿 | [x] 2026-11-17（本提交） |
+| Y4 | 真机验收 | ①通讯录 hover 无卡/点部门展开收缩/彩色头像；②两账号互看：A 切忙碌→B 侧会话列表·通讯录·成员行红点即时；离线（隐身）灰点；③重连后状态点恢复（快照重拉）；④登录即可见全员状态（首拉种子，无需等变化） | 用户真机走查 | [ ] |

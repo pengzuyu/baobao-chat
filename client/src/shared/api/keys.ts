@@ -25,6 +25,8 @@ export const qk = {
     ],
     /** 通知未读数（铃铛红点）['im','notifications','badge']（PIM-09；WS notification.new 触发失效） */
     notificationBadge: ['im', 'notifications', 'badge'] as const,
+    /** 在线状态快照 ['im','presence']（04 篇 §6.1；登录/重连首拉，重连失效由 onResync invalidate ['im'] 前缀覆盖） */
+    presence: ['im', 'presence'] as const,
   },
   mail: {
     /** 邮箱摘要（懒开户触发点） ['mail','summary'] */

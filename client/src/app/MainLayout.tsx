@@ -14,11 +14,15 @@
 
 import { useEffect, useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Alert, Badge, ConfigProvider, Dropdown, Flex, Layout, Menu, theme, type MenuProps } from 'antd';
-import { Bell, Bot, BookUser, BrainCircuit, Gauge, Mail, MessageCircle } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Alert, Badge, ConfigProvider, Dropdown, Flex, Layout, Menu, message, theme, type MenuProps } from 'antd';
+import { Bell, Bot, BookUser, BrainCircuit, Check, Gauge, Mail, MessageCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
+import { wsClient } from '../shared/api/ws';
+import { qk } from '../shared/api/keys';
+import { PRESENCE_LABEL, PresenceBadge, PresenceDot, toPresenceStatus, type PresenceStatus } from '../shared/ui/PresenceDot';
 import { APP_NAME } from '../shared/brand';
 import { useImWsEvents } from '../features/im/store/wsEvents';
 import { useUnreadNotificationCount } from '../features/im/api/hooks';
@@ -102,9 +106,41 @@ export function MainLayout() {
     return () => window.removeEventListener('keydown', onKey);
   }, [navigate]);
 
+  // ── 在线状态（pres.set 四档；用户拍板 2026-11-17：在线/离开/忙碌/离线=隐身）──
+  const queryClient = useQueryClient();
+  const myUid = useImStore((s) => s.myUid);
+  const myPresence = toPresenceStatus(useImStore((s) => s.presence[s.myUid ?? '']) ?? 'online');
+  const setMyStatus = (status: 'online' | 'away' | 'dnd' | 'invisible') => {
+    // 乐观投影（隐身对己也按离线显示，对齐服务端广播口径）；失败重拉快照回滚
+    useImStore.getState().applyPresence(myUid ?? '', status === 'invisible' ? 'offline' : status);
+    wsClient.request('pres.set', { status }).catch(() => {
+      message.error('状态设置失败（连接不可用），已回退');
+      void queryClient.invalidateQueries({ queryKey: qk.im.presence });
+    });
+  };
+  const presItem = (key: PresenceStatus | 'invisible', label: string, dot: PresenceStatus) => ({
+    key: `pres-${key}`,
+    label: (
+      <Flex align="center" gap={8} style={{ minWidth: 96 }}>
+        <PresenceDot status={dot} />
+        <span>{label}</span>
+        {myPresence === dot ? <Check size={12} style={{ marginLeft: 'auto', opacity: 0.65 }} /> : null}
+      </Flex>
+    ),
+  });
+
   const avatarMenu: MenuProps = {
     items: [
-      { key: 'profile', label: `在线状态：在线（${user?.name ?? '-'}）`, disabled: true },
+      {
+        key: 'presence',
+        label: `在线状态 · ${PRESENCE_LABEL[myPresence]}`,
+        children: [
+          presItem('online', '在线', 'online'),
+          presItem('away', '离开', 'away'),
+          presItem('dnd', '忙碌', 'dnd'),
+          presItem('invisible', '离线（隐身）', 'offline'),
+        ],
+      },
       { type: 'divider' },
       {
         key: 'theme',
@@ -131,6 +167,10 @@ export function MainLayout() {
       { key: 'logout', label: '退出登录', danger: true },
     ],
     onClick: ({ key }) => {
+      if (key.startsWith('pres-')) {
+        setMyStatus(key.slice(5) as 'online' | 'away' | 'dnd' | 'invisible');
+        return;
+      }
       if (key.startsWith('theme-')) {
         setThemeMode(key.slice(6) as ThemeMode);
         return;
@@ -211,7 +251,9 @@ export function MainLayout() {
           </ConfigProvider>
           <Dropdown menu={avatarMenu} placement="topRight" trigger={['click']}>
             <span title={user?.name ?? '未登录'} style={{ display: 'flex', justifyContent: 'center', padding: 8, cursor: 'pointer' }}>
-              <Avatar name={user?.name ?? '?'} size={32} />
+              <PresenceBadge status={myPresence}>
+                <Avatar name={user?.name ?? '?'} size={32} />
+              </PresenceBadge>
             </span>
           </Dropdown>
         </div>

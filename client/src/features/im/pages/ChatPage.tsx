@@ -539,9 +539,11 @@ export function ChatPage() {
     return () => clearInterval(t);
   }, []);
   const typingUid = convId ? typingMap[convId] : undefined;
-  // 单聊对端在线状态（presence store 投影；对端 uid=会话内非本人成员——由消息流推导）
+  // 单聊对端在线状态（presence store 投影）：对端 uid 优先取 conv.peerUid（服务端 type=1 下发），
+  // 旧缓存会话无 peerUid 时回落消息流推导（会话内非本人 sender）
   const peerStatus = useImStore((s) => {
     if (!activeConv || activeConv.type !== 1) return undefined;
+    if (activeConv.peerUid) return s.presence[activeConv.peerUid];
     const msgs = s.messagesByConv[activeConv.id] ?? [];
     for (let i = msgs.length - 1; i >= 0; i--) {
       const uid = msgs[i].senderId;

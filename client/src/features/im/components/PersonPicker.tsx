@@ -14,6 +14,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Input, Modal, Typography, theme } from 'antd';
 import { Check, Search } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
+import { PresenceBadge, toPresenceStatus } from '../../../shared/ui/PresenceDot';
+import { useImStore } from '../store/im';
 import { Button } from '../../../shared/ui/Button';
 import { errText } from '../../../shared/api/http';
 import { fetchDirectoryUsers } from '../../contacts/api/contacts';
@@ -72,6 +74,7 @@ export function PersonPickerCore({ multiple, selected, onToggle, onPick, exclude
   const excluded = new Set(excludeUids ?? []);
   const rows = items.filter((u) => !excluded.has(u.uid));
   const selectedUids = new Set(selected.map((u) => u.uid));
+  const presence = useImStore((s) => s.presence);
 
   const loadMore = () => {
     if (!nextCursor || loading) return;
@@ -139,7 +142,9 @@ export function PersonPickerCore({ multiple, selected, onToggle, onPick, exclude
                   color: token.colorText,
                 }}
               >
-                <Avatar name={u.display_name || '?'} size={32} />
+                <PresenceBadge status={toPresenceStatus(presence[u.uid])}>
+                  <Avatar name={u.display_name || '?'} size={32} />
+                </PresenceBadge>
                 <Typography.Text style={{ fontSize: 13, fontWeight: 500, flexShrink: 0 }}>
                   {u.display_name}
                 </Typography.Text>

@@ -13,7 +13,9 @@ import { Badge, List, Menu, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import { BellOff, Pin } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
+import { PresenceBadge, toPresenceStatus } from '../../../shared/ui/PresenceDot';
 import { formatListTime } from '../../../shared/utils/time';
+import { useImStore } from '../store/im';
 import type { Conversation } from '../model/types';
 
 interface ConversationListProps {
@@ -42,6 +44,8 @@ function ConvItem({
   onContextMenu: (e: React.MouseEvent, convId: string) => void;
 }) {
   const { token } = theme.useToken();
+  // 单聊对端在线状态（peerUid 后端 type=1 下发；群/广播群不挂点）
+  const peerStatus = useImStore((s) => (conv.type === 1 && conv.peerUid ? s.presence[conv.peerUid] : undefined));
   const unread = conv.my?.unreadBadge ?? 0;
   const mute = conv.my?.mute ?? false;
   const draft = conv.my?.draft ?? '';
@@ -69,7 +73,13 @@ function ConvItem({
         opacity: conv.status === 2 ? 0.55 : undefined,
       }}
     >
-      <Avatar name={conv.name} size={40} group={conv.type === 3 ? 'broadcast' : conv.type === 2 ? 'group' : null} />
+      {conv.type === 1 && conv.peerUid ? (
+        <PresenceBadge status={toPresenceStatus(peerStatus)}>
+          <Avatar name={conv.name} size={40} />
+        </PresenceBadge>
+      ) : (
+        <Avatar name={conv.name} size={40} group={conv.type === 3 ? 'broadcast' : conv.type === 2 ? 'group' : null} />
+      )}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <Typography.Text ellipsis style={{ fontSize: 14, minWidth: 0 }}>

@@ -45,6 +45,12 @@ export async function fetchConvs(filter: string = 'all'): Promise<Paged<Conversa
   return { items: data.items, nextCursor: data.next_cursor, hasMore: data.has_more };
 }
 
+/** 在线状态快照（04 篇 §6.1：登录/重连后首拉种子，此后靠 presence.changed 推送增量） */
+export async function fetchPresences(): Promise<Record<string, string>> {
+  const data = await http.get<{ items: { uid: string; status: string }[] }>('/presences');
+  return Object.fromEntries(data.items.map((it) => [it.uid, it.status]));
+}
+
 /** 会话消息流（API-IM-04：after/before 补洞 + cursor 翻页；骨架阶段拉最新一页） */
 export async function fetchMessages(convId: string): Promise<Paged<Message>> {
   if (USE_MOCK) {

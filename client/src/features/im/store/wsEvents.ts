@@ -5,9 +5,10 @@
  */
 
 import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { wsClient } from '../../../shared/api/ws';
-import { mapMsgNew } from '../api/im';
+import { qk } from '../../../shared/api/keys';
+import { fetchPresences, mapMsgNew } from '../api/im';
 import type {
   ConvStatePushPayload,
   ConvUpdatedPushPayload,
@@ -21,6 +22,13 @@ import { useImStore } from './im';
 
 export function useImWsEvents(): void {
   const queryClient = useQueryClient();
+
+  // 在线状态快照（04 篇 §6.1）：登录首拉种子 + 重连对齐（onResync invalidate ['im'] 前缀命中）；
+  // 此后 presence.changed 推送增量维护 store
+  const presenceQuery = useQuery({ queryKey: qk.im.presence, queryFn: fetchPresences });
+  useEffect(() => {
+    if (presenceQuery.data) useImStore.getState().applyPresences(presenceQuery.data);
+  }, [presenceQuery.data]);
 
   useEffect(() => {
     const invalidateConvs = () => void queryClient.invalidateQueries({ queryKey: ['im', 'convs'] });

@@ -43,7 +43,9 @@ import { qk } from '../../../shared/api/keys';
 import { errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
 import { Avatar as UserAvatar } from '../../../shared/ui/Avatar';
+import { PresenceBadge, PresenceTag, toPresenceStatus } from '../../../shared/ui/PresenceDot';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
+import { useImStore } from '../../im/store/im';
 import { useAuthStore } from '../../auth/store/auth';
 
 /** 搜索防抖（与聊天页/选人器同节奏） */
@@ -73,6 +75,7 @@ export function ContactsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const myUid = useAuthStore((s) => s.user?.uid);
+  const presence = useImStore((s) => s.presence);
   const { token } = theme.useToken();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -300,7 +303,9 @@ export function ContactsPage() {
       onDoubleClick={() => void startDm(u)}
       style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, width: '100%' }}
     >
-      <UserAvatar name={u.display_name || '?'} size={22} style={{ flex: 'none' }} />
+      <PresenceBadge status={toPresenceStatus(presence[u.uid])} dotSize={8}>
+        <UserAvatar name={u.display_name || '?'} size={22} />
+      </PresenceBadge>
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.display_name}</span>
       <Typography.Text code type="secondary" style={{ fontSize: 12, flex: 'none' }}>
         {u.employee_no}
@@ -348,7 +353,9 @@ export function ContactsPage() {
   // ── 搜索下拉行（Popover+Menu；分组段=Menu group，加载/空态=禁用占位行） ──
   const ddUserLabel = (u: DirectoryUser) => (
     <Flex align="center" gap={8} style={{ minWidth: 0 }}>
-      <UserAvatar name={u.display_name || '?'} size={22} style={{ flex: 'none' }} />
+      <PresenceBadge status={toPresenceStatus(presence[u.uid])} dotSize={8}>
+        <UserAvatar name={u.display_name || '?'} size={22} />
+      </PresenceBadge>
       <span style={{ flex: 'none' }}>{u.display_name}</span>
       <Typography.Text code type="secondary" style={{ fontSize: 12, flex: 'none' }}>
         {u.employee_no}
@@ -435,7 +442,9 @@ export function ContactsPage() {
             wrap="wrap"
             style={{ padding: '28px 32px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
           >
-            <UserAvatar name={u.display_name || '?'} size={72} style={{ flex: 'none' }} />
+            <PresenceBadge status={toPresenceStatus(presence[u.uid])} dotSize={16}>
+              <UserAvatar name={u.display_name || '?'} size={72} />
+            </PresenceBadge>
             <Flex vertical gap={8} style={{ minWidth: 0 }}>
               <Flex align="center" gap={10} wrap="wrap">
                 <Typography.Title level={4} style={{ margin: 0 }}>
@@ -451,6 +460,7 @@ export function ContactsPage() {
                 <Tag color="green" style={{ marginInlineEnd: 0 }}>
                   在职
                 </Tag>
+                <PresenceTag status={toPresenceStatus(presence[u.uid])} />
               </Space>
               <Space size={12} wrap align="center" style={{ marginTop: 4 }}>
                 {u.uid === myUid ? (
@@ -565,7 +575,9 @@ export function ContactsPage() {
                     onDoubleClick={() => void startDm(u)}
                   >
                     <Flex align="center" gap={10} style={{ minWidth: 0 }}>
-                      <UserAvatar name={u.display_name || '?'} size={32} style={{ flex: 'none' }} />
+                      <PresenceBadge status={toPresenceStatus(presence[u.uid])}>
+                        <UserAvatar name={u.display_name || '?'} size={32} />
+                      </PresenceBadge>
                       <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {u.display_name}

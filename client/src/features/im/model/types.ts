@@ -135,6 +135,8 @@ export interface Conversation {
   type: ConvType;
   name: string;
   avatarFileId?: string;
+  /** 单聊对端 uid（仅 type=1 下发；在线状态点/资料跳转依据，2026-11-17） */
+  peerUid?: string;
   ownerId?: string;
   latestSeq: number;
   /** 最新消息摘要（类型化文案如 [图片]，D03 §3.1） */
