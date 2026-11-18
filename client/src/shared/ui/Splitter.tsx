@@ -36,6 +36,14 @@ export function useSplitWidth(storageKey: string, initialWidth: number, min: num
   });
   const [dragging, setDragging] = useState(false);
   const widthRef = useRef(width); // pointerup 落盘取最新值（闭包快照会滞后）
+  const liveElRef = useRef<HTMLElement | null>(null);
+
+  /** 拖动中直写容器 style.width 绕过 setState（2026-11-18 卡顿修复：高频 pointermove ×
+   * 整页重渲——AdminLayout 拖宽会连带 Outlet 页面全量重渲）；使用方把 paneRef 挂到
+   * 宽度受控容器即生效，未挂退化回 setState 行为 */
+  const paneRef = useCallback((el: HTMLElement | null) => {
+    liveElRef.current = el;
+  }, []);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -47,13 +55,15 @@ export function useSplitWidth(storageKey: string, initialWidth: number, min: num
       const onMove = (ev: PointerEvent) => {
         const w = Math.min(max, Math.max(min, startW + (ev.clientX - startX)));
         widthRef.current = w;
-        setWidth(w);
+        if (liveElRef.current) liveElRef.current.style.width = `${w}px`; // 直写不重渲
+        else setWidth(w);
       };
       const onUp = () => {
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.body.classList.remove('bbc-col-resizing');
         setDragging(false);
+        setWidth(widthRef.current); // 一次性落盘（与直写值一致无跳变）
         try {
           localStorage.setItem(STORAGE_PREFIX + storageKey, String(Math.round(widthRef.current)));
         } catch {
@@ -66,7 +76,7 @@ export function useSplitWidth(storageKey: string, initialWidth: number, min: num
     [storageKey, min, max],
   );
 
-  return { width, dragging, bind: { onPointerDown } satisfies SplitBind };
+  return { width, dragging, paneRef, bind: { onPointerDown } satisfies SplitBind };
 }
 
 export function SplitHandle({ bind, style }: { bind: SplitBind; style?: CSSProperties }) {
@@ -142,6 +152,12 @@ export function useCollapsibleSplit(storageKey: string, initialWidth: number, mi
   });
   const [dragging, setDragging] = useState(false);
   const widthRef = useRef(width); // pointerup 取最新值（闭包快照滞后）
+  const liveElRef = useRef<HTMLElement | null>(null);
+
+  /** 拖动中直写容器 style.width 绕过 setState（同 useSplitWidth 卡顿修复口径） */
+  const paneRef = useCallback((el: HTMLElement | null) => {
+    liveElRef.current = el;
+  }, []);
 
   const persist = useCallback(
     (key: string, val: string) => {
@@ -177,7 +193,8 @@ export function useCollapsibleSplit(storageKey: string, initialWidth: number, mi
         raw = startW + (ev.clientX - startX);
         const w = clampW(raw, min, max);
         widthRef.current = w;
-        setWidth(w);
+        if (liveElRef.current) liveElRef.current.style.width = `${w}px`; // 直写不重渲
+        else setWidth(w);
       };
       const onUp = () => {
         document.removeEventListener('pointermove', onMove);
@@ -187,6 +204,7 @@ export function useCollapsibleSplit(storageKey: string, initialWidth: number, mi
         if (raw < min - OVERSHRINK) {
           collapse(); // 拖过最小宽度再继续左拖：整栏折叠（宽度值保留=展开回折叠前）
         } else {
+          setWidth(widthRef.current); // 一次性落盘（与直写值一致无跳变）
           persist(`${STORAGE_PREFIX}${storageKey}`, String(Math.round(widthRef.current)));
         }
       };
@@ -196,7 +214,7 @@ export function useCollapsibleSplit(storageKey: string, initialWidth: number, mi
     [storageKey, min, max, collapse, persist],
   );
 
-  return { width, collapsed, dragging, expand, collapse, bind: { onPointerDown } satisfies SplitBind };
+  return { width, collapsed, dragging, paneRef, expand, collapse, bind: { onPointerDown } satisfies SplitBind };
 }
 
 /**
@@ -252,7 +270,8 @@ export function SplitCollapseTab({
         background: hover ? token.colorFillTertiary : token.colorFillQuaternary,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: token.borderRadius,
-        cursor: 'col-resize',
+        // 折叠态只剩点击展开（不可拖）→ 小手；展开态可拖可点 → 分隔线光标
+        cursor: collapsed ? 'pointer' : 'col-resize',
         userSelect: 'none',
       }}
     >

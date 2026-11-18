@@ -887,6 +887,7 @@ export function OrgDirectoryPage() {
       {/* 左栏：组织树——裸容器与左侧管理菜单栏同款观感（背景+右边框+定高内滚；宽度 220~480） */}
       {!split.collapsed && (
         <div
+          ref={split.paneRef}
           style={{
             width: split.width,
             flexShrink: 0,
@@ -921,11 +922,11 @@ export function OrgDirectoryPage() {
       )}
       {/* 分界线（全高拖拽热区——与左侧管理菜单栏分界同款；叠左栏右边框） */}
       {!split.collapsed ? <SplitHandle bind={split.bind} /> : null}
-      {/* 分界缝把手（三改图例口径）叠分界线垂直中央：窄竖条=主色箭头+竖排文字；点击折叠/展开、拖动亦可调宽 */}
+      {/* 分界缝把手（三改图例口径）位于边界线右侧、垂直中央：窄竖条=主色箭头+竖排文字；点击折叠/展开、拖动亦可调宽 */}
       <div
         style={{
           position: 'absolute',
-          left: split.collapsed ? -13 : split.width - 13,
+          left: split.collapsed ? 0 : split.width + 1,
           top: '50%',
           transform: 'translateY(-50%)',
           zIndex: 13,

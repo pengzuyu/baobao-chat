@@ -192,7 +192,7 @@ func (p *Postgres) CreateDept(ctx context.Context, tenantID, parentID int64, nam
 	d := orgapi.Dept{ID: id, TenantID: tenantID, ParentID: parentID, Name: name, Sort: sort,
 		Path: parentPath + strconv.FormatInt(id, 10) + "/"}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO dept (id, tenant_id, NULLIF($2,0), name, path, sort) VALUES ($1,$3,$2,$4,$5,$6)`,
+		INSERT INTO dept (id, tenant_id, parent_id, name, path, sort) VALUES ($1,$3,NULLIF($2,0),$4,$5,$6)`,
 		d.ID, parentID, tenantID, name, d.Path, sort); err != nil {
 		return nil, err
 	}

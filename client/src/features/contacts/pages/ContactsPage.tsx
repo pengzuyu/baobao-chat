@@ -658,6 +658,7 @@ export function ContactsPage() {
       <Flex align="stretch" style={{ flex: 1, minHeight: 0 }}>
         {/* 左：组织+用户树（antd Tree；controlled 展开/选中） */}
         <div
+          ref={split.paneRef}
           style={{
             width: split.width,
             flex: 'none',

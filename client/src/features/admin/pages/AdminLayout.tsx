@@ -55,13 +55,15 @@ export function AdminLayout() {
   return (
     <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
       {navResizable ? (
-        <Menu
-          mode="inline"
-          style={{ width: navSplit.width, flexShrink: 0 }}
-          items={items}
-          selectedKeys={[selectedKey]}
-          onClick={(e) => navigate(e.key)}
-        />
+        <div ref={navSplit.paneRef} style={{ width: navSplit.width, flexShrink: 0 }}>
+          <Menu
+            mode="inline"
+            style={{ width: '100%' }}
+            items={items}
+            selectedKeys={[selectedKey]}
+            onClick={(e) => navigate(e.key)}
+          />
+        </div>
       ) : (
         <Menu mode="horizontal" style={{ flexShrink: 0 }} items={items} selectedKeys={[selectedKey]} onClick={(e) => navigate(e.key)} />
       )}
