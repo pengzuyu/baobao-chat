@@ -101,8 +101,31 @@ impl DelegateHub {
                     wal.as_ref(),
                 );
                 let exit_code = final_rep.exit_code.unwrap_or(-1);
-                if exit_code != 0 {
-                    // 异常退出：不出审查卡（同步路径 8033 同口径），无产物可 park
+                if cancelled || exit_code != 0 {
+                    // 异常退出/取消：不出审查卡（同步路径 8033 同口径），但回执同样
+                    // park 回填主上下文——主 Agent 此前只有「后台运行中」占位工具
+                    // 结果，不 park 则失败/取消信息只在侧栏 run 流可见
+                    // （DelegateEnd/WAL failed），主 Agent 永远不知 run 已终止，
+                    // 无法告知用户或改道（2026-11-18 真机：claude 未登录秒退
+                    // 报错，错误已返回但结果未进主 agent）。cancelled 短路在前：
+                    // claude 捕获 SIGINT 干净退出 exit=0，若落入审查窗口会空等
+                    // review_timeout 后 reject
+                    let summary = if cancelled {
+                        format!("[委派已取消] {rid}（后端 {backend}）用户取消，exit={exit_code}")
+                    } else {
+                        format!(
+                            "[委派失败] {rid}（后端 {backend}）异常退出 exit={exit_code}：{}",
+                            crate::subagent::truncate_chars(&final_rep.summary, 400)
+                        )
+                    };
+                    hub.park_join(
+                        &sid,
+                        DelegateJoin {
+                            name: "delegate.join".into(),
+                            run_id: rid.clone(),
+                            summary,
+                        },
+                    );
                     hub.unregister(&rid);
                     return;
                 }
@@ -244,5 +267,133 @@ mod tests {
         assert_eq!(drained[0].run_id, "r-1");
         assert!(hub.drain_joins("s-1").is_empty(), "drain 一次性取走");
         assert_eq!(hub.drain_joins("s-2").len(), 1, "会话间隔离");
+    }
+
+    /// 后台 run 全链集成（真线程）用的轻量桩
+    mod bg {
+        use crate::delegation::{DelegateFinal, DelegateStream, WaitEvt};
+        use crate::events::{SessionEvent, SessionSink};
+        use crate::loop_runner::EventLog;
+
+        pub struct NoopSink;
+        impl SessionSink for NoopSink {
+            fn emit(&self, _evt: SessionEvent) {}
+        }
+        pub struct NoopLog;
+        impl EventLog for NoopLog {
+            fn append(&self, _s: &str, _t: &str, _p: &str) {}
+            fn append_run(&self, _s: &str, _r: &str, _t: &str, _p: &str) {}
+        }
+
+        /// 秒退失败流：零事件直接终止，finalize 报 exit=1 + 错误摘要
+        /// （模拟 claude 未登录 -p 秒退：stream-json result 行的 result 文本
+        /// 已积累进 summary，进程 exit 1）
+        pub struct FailingStream;
+        impl DelegateStream for FailingStream {
+            fn next(&mut self) -> Option<crate::delegation::DelegateEvt> {
+                None
+            }
+            fn cancel(&mut self, _graceful: bool) {}
+            fn finalize(&mut self) -> DelegateFinal {
+                DelegateFinal {
+                    summary: "Not logged in: Please run /login".into(),
+                    changed_files: vec![],
+                    session_ref: None,
+                    exit_code: Some(1),
+                }
+            }
+        }
+
+        /// 取消流：先 Idle 数轮（给 route Cancel 的投递窗口）再终止；
+        /// finalize exit=0（claude 捕获 SIGINT 干净退出的实测形态）
+        pub struct IdleThenEndStream {
+            pub rounds: u32,
+        }
+        impl DelegateStream for IdleThenEndStream {
+            fn next(&mut self) -> Option<crate::delegation::DelegateEvt> {
+                None
+            }
+            fn next_wait(&mut self, timeout: std::time::Duration) -> WaitEvt {
+                if self.rounds > 0 {
+                    self.rounds -= 1;
+                    std::thread::sleep(timeout.min(std::time::Duration::from_millis(100)));
+                    return WaitEvt::Idle;
+                }
+                WaitEvt::Ended
+            }
+            fn cancel(&mut self, _graceful: bool) {}
+            fn finalize(&mut self) -> DelegateFinal {
+                DelegateFinal {
+                    summary: String::new(),
+                    changed_files: vec![],
+                    session_ref: None,
+                    exit_code: Some(0),
+                }
+            }
+        }
+    }
+
+    /// 轮询等待某会话 park 出回执（drain 取走式；5s 上限）
+    fn wait_for_join(hub: &DelegateHub, sid: &str) -> DelegateJoin {
+        for _ in 0..100 {
+            if let Some(j) = hub.drain_joins(sid).into_iter().next() {
+                return j;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("5s 内未等到后台 run 回执 park");
+    }
+
+    /// 失败回执回归（2026-11-18 真机缺口：claude 报错秒退后错误信息只在
+    /// 侧栏 run 流可见，主 Agent 永远停在「后台运行中」占位结果）：
+    /// exit≠0 必须以 delegate.join park 失败摘要（含 exit 码与错误文本）
+    #[test]
+    fn bg_failing_run_parks_error_join() {
+        use bg::*;
+        let hub = Arc::new(DelegateHub::new());
+        hub.spawn(
+            "r-9".into(),
+            "s-9".into(),
+            "claude".into(),
+            Box::new(FailingStream),
+            Arc::new(NoopSink),
+            Arc::new(NoopLog),
+            Duration::from_secs(8),
+            Instant::now(),
+        );
+        let join = wait_for_join(&hub, "s-9");
+        assert_eq!(join.name, "delegate.join");
+        assert_eq!(join.run_id, "r-9");
+        assert!(join.summary.contains("委派失败"), "summary={}", join.summary);
+        assert!(join.summary.contains("exit=1"), "summary={}", join.summary);
+        assert!(
+            join.summary.contains("Not logged in"),
+            "summary={}",
+            join.summary
+        );
+        assert_eq!(hub.active_count(), 0, "结束后注销");
+    }
+
+    /// 取消短路回归：用户 cancel 且子进程干净退出（exit=0，claude 捕获
+    /// SIGINT 的实测形态）——须短路审查直接 park 取消回执，而非落入
+    /// review 窗口空等超时 reject
+    #[test]
+    fn bg_cancelled_run_skips_review_and_parks_cancel_join() {
+        use bg::*;
+        let hub = Arc::new(DelegateHub::new());
+        hub.spawn(
+            "r-10".into(),
+            "s-10".into(),
+            "claude".into(),
+            Box::new(IdleThenEndStream { rounds: 3 }),
+            Arc::new(NoopSink),
+            Arc::new(NoopLog),
+            Duration::from_secs(8),
+            Instant::now(),
+        );
+        hub.route("r-10", &DelegateHostMsg::Cancel { graceful: true });
+        let join = wait_for_join(&hub, "s-10");
+        assert!(join.summary.contains("委派已取消"), "summary={}", join.summary);
+        assert_eq!(hub.active_count(), 0, "结束后注销");
     }
 }
