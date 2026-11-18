@@ -12,8 +12,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Dropdown, Flex, Modal, Tag, Typography, theme, type MenuProps } from 'antd';
-import { MessageCircle, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, ShieldCheck, Square } from 'lucide-react';
+import { Dropdown, Flex, FloatButton, Modal, Tag, Typography, theme, type MenuProps } from 'antd';
+import { ArrowDown, MessageCircle, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, ShieldCheck, Square } from 'lucide-react';
 import { open as openDirectory } from '@tauri-apps/plugin-dialog';
 import { Button } from '../../../shared/ui/Button';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
@@ -225,7 +225,9 @@ export function AgentWorkbenchPage() {
     onClick: ({ key }) => doSetMode(key as PermissionMode),
   };
 
-  // ---- 滚动吸底（INT-AG-01 简版：距底 <40px 自动吸底；上滚即停随）----
+  // ---- 滚动：智能跟随 + 回到底部浮标（对齐聊天页 INT-IM-13 口径）----
+  // 贴底跟随新内容；用户上滚浏览历史时不抢滚动条；离底浮标常显（新输出计数/
+  // 运行中红点/回到底部三态），点击回底恢复跟随。
   // 2026-11-18 二修：弃 streamTick 签名（条数+尾项文本长度——运行提示 TypingState/
   // 思考 ticker 的挂载不改变 items，签名不变即不吸底，回合启动窗口期的「思考中…」
   // 提示留在折叠线以下被裁掉）→ ResizeObserver 观察内容层实际高度：任何增高
@@ -233,6 +235,13 @@ export function AgentWorkbenchPage() {
   const streamRef = useRef<HTMLDivElement>(null);
   const streamContentRef = useRef<HTMLDivElement>(null);
   const stickBottomRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true); // ref 供 RO/计数读，state 供浮标渲染
+  const [awayCount, setAwayCount] = useState(0); // 离底期间新增流条目数（浮标 Badge）
+  const prevLenRef = useRef(items.length);
+  // 容器挂载标记（loading/empty/none 分支不渲染 streamNode）：跨分支切换时
+  // contentRef 指向新元素，RO 须随挂载重 observe——依赖 [] 的旧写法在「首载
+  // loading→ok」路径空跑后再也不 observe，吸底整体失效
+  const streamMounted = streamState === 'ok' || streamState === 'degraded' || streamState === 'offline';
   useEffect(() => {
     const el = streamRef.current;
     const content = streamContentRef.current;
@@ -253,11 +262,35 @@ export function AgentWorkbenchPage() {
       ro.disconnect();
       cancelAnimationFrame(raf);
     };
-  }, []);
+  }, [streamMounted]);
+  // 切会话重置跟随态 + 首跳兜底：新会话历史全量在 DOM（无上翻分页），进入即
+  // 底部；rAF 直跳兜「两会话内容等高、RO 无变化不触发」的极端情况
+  useEffect(() => {
+    stickBottomRef.current = true;
+    setAtBottom(true);
+    setAwayCount(0);
+    prevLenRef.current = items.length; // 计数基线换会话重置（跨会话差值不计数）
+    const raf = requestAnimationFrame(() => {
+      const el = streamRef.current;
+      if (el && stickBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeSessionId]);
+  // 离底计数（声明序在重置之后：切会话时基线已重置、差值为零不误计）：仅计
+  // items 净增（新块挂载计 1；流式 delta 原地长高不增条目——由 RO 吸底与
+  // 运行中红点表达）
+  useEffect(() => {
+    const prev = prevLenRef.current;
+    prevLenRef.current = items.length;
+    if (items.length > prev && !stickBottomRef.current) setAwayCount((n) => n + (items.length - prev));
+  }, [items]);
   const onStreamScroll = useCallback(() => {
     const el = streamRef.current;
     if (!el) return;
-    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    stickBottomRef.current = near;
+    setAtBottom((v) => (v === near ? v : near)); // 同值不重渲染
+    if (near) setAwayCount(0);
   }, []);
 
   // ---- 动作 ----
@@ -375,13 +408,47 @@ export function AgentWorkbenchPage() {
 
   // ---- 会话流渲染（D33 平铺流：AgentStreamView 分组分发；active=末回合运行中）----
   const turnActive = status !== undefined && TURN_ACTIVE_STATUSES.has(status);
+  // 回到底部浮标（聊天页同款三态）：离底即常显；离底期间新增计数 Badge / 回合
+  // 运行中红点 / 点击回底并恢复贴底跟随
+  const scrollFab = !atBottom ? (
+    <FloatButton
+      icon={<ArrowDown size={14} aria-hidden />}
+      tooltip={
+        awayCount > 0
+          ? `${awayCount > 99 ? '99+' : awayCount} 条新输出`
+          : turnActive
+            ? 'Agent 运行中 · 回到底部'
+            : '回到底部'
+      }
+      badge={
+        awayCount > 0
+          ? { count: awayCount > 99 ? '99+' : awayCount, size: 'small' }
+          : turnActive
+            ? { count: 0, dot: true, size: 'small' }
+            : undefined
+      }
+      onClick={() => {
+        const el = streamRef.current;
+        stickBottomRef.current = true;
+        setAtBottom(true);
+        setAwayCount(0);
+        if (el) el.scrollTop = el.scrollHeight;
+      }}
+      style={{ position: 'absolute', right: 24, bottom: 12, zIndex: 10 }}
+    />
+  ) : null;
   const streamNode = (
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }} ref={streamRef} onScroll={onStreamScroll}>
-      {/* 内容层：padding/gap 自滚动容器移入（RO 观察本层高度，运行提示挂载等
-          非 items 驱动的高度变化也能触发吸底）；视觉口径不变（padding 16/gap 14） */}
-      <div ref={streamContentRef} style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <AgentStreamView items={items} onRespond={handleRespond} active={turnActive} />
+    // 相对定位包裹层（聊天页 messageStream-wrap 同构）：浮标以此为定位祖先，恒浮
+    // 于输入框正上方；ok 与 degraded/offline 两分支共用（内联于 streamNode）
+    <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }} ref={streamRef} onScroll={onStreamScroll}>
+        {/* 内容层：padding/gap 自滚动容器移入（RO 观察本层高度，运行提示挂载等
+            非 items 驱动的高度变化也能触发吸底）；视觉口径不变（padding 16/gap 14） */}
+        <div ref={streamContentRef} style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <AgentStreamView items={items} onRespond={handleRespond} active={turnActive} />
+        </div>
       </div>
+      {scrollFab}
     </div>
   );
 
