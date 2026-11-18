@@ -21,7 +21,8 @@ import { renderCommand, type PluginCommand } from '../../eco/api/plugins';
 interface ComposerProps {
   disabled: boolean;
   disabledHint?: string;
-  /** 运行/等待审批/子任务/委派中展示红色停止（中断当前轮） */
+  /** 运行/等待审批/子任务/委派中展示红色停止（中断当前轮；唯一入口——
+   *  2026-11-18 走查：工作台头部同款重复按钮退役） */
   canStop: boolean;
   onSend: (text: string) => void;
   /** 停止当前会话正在生成的回答（interrupt；会话保留可继续追问） */

@@ -1,7 +1,7 @@
 /**
  * PAG-01/02/03 Agent 工作台（/agent[/s/:sessionId]，D08 §3.1/§3.3）：
  * - 左：会话列表（窄栏 + 新建 + 二级导航入口）
- * - 中：会话视图（头部状态徽标/停止 + 会话流 + 输入区）
+ * - 中：会话视图（头部状态徽标 + 会话流 + 输入区；停止唯一入口=发送旁）
  * - 右：上下文栏（会话信息/检查点时间线/记忆侧写，可折叠）
  * - 会话流渲染（2026-11-17 D33 平铺流）：无气泡全宽消息流——用户消息平铺块 +
  *   类型化过程块（思考/工具族/技能/审批/子任务/中间正文），收口折叠一行统计，
@@ -228,24 +228,34 @@ export function AgentWorkbenchPage() {
   };
 
   // ---- 滚动吸底（INT-AG-01 简版：距底 <40px 自动吸底；上滚即停随）----
+  // 2026-11-18 二修：弃 streamTick 签名（条数+尾项文本长度——运行提示 TypingState/
+  // 思考 ticker 的挂载不改变 items，签名不变即不吸底，回合启动窗口期的「思考中…」
+  // 提示留在折叠线以下被裁掉）→ ResizeObserver 观察内容层实际高度：任何增高
+  // （流式 delta/运行提示挂载/卡片展开）stick 时吸底
   const streamRef = useRef<HTMLDivElement>(null);
+  const streamContentRef = useRef<HTMLDivElement>(null);
   const stickBottomRef = useRef(true);
-  const lastTickRef = useRef('');
-  // 流内容签名：条数 + 尾项文本长度（流式增量驱动；合帧后 ≤20 次/s）
-  const streamTick = `${items.length}:${items[items.length - 1]?.kind === 'agentText' || items[items.length - 1]?.kind === 'reasoning' ? (items[items.length - 1] as { text: string }).text.length : 0}`;
   useEffect(() => {
-    if (streamTick === lastTickRef.current) return;
-    lastTickRef.current = streamTick;
     const el = streamRef.current;
-    if (!el || !stickBottomRef.current) return;
-    // 吸底写滚动经 rAF（2026-11-11 卡顿修复）：读 scrollHeight/写 scrollTop 同帧
-    // 内直执=强制同步 layout，每 delta 一次在长 DOM 上主线程敏感；rAF 让读写
-    // 落到帧边界，同帧多次 tick 合并为末次值
-    const raf = requestAnimationFrame(() => {
-      if (stickBottomRef.current) el.scrollTop = el.scrollHeight;
+    const content = streamContentRef.current;
+    if (!el || !content) return;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      if (!stickBottomRef.current) return;
+      // 吸底写滚动经 rAF（2026-11-11 卡顿修复）：读 scrollHeight/写 scrollTop 同帧
+      // 内直执=强制同步 layout，每 delta 一次在长 DOM 上主线程敏感；rAF 让读写
+      // 落到帧边界，同帧多次触发合并为末次值
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (stickBottomRef.current) el.scrollTop = el.scrollHeight;
+      });
     });
-    return () => cancelAnimationFrame(raf);
-  }, [streamTick]);
+    ro.observe(content);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, []);
   const onStreamScroll = useCallback(() => {
     const el = streamRef.current;
     if (!el) return;
@@ -323,7 +333,8 @@ export function AgentWorkbenchPage() {
   );
 
   const status = activeSession?.status;
-  // 停止=中断当前轮（2026-11-11）：有在跑的流/工具才显示；paused=内部自动暂停
+  // 停止=中断当前轮（2026-11-11）：有在跑的流/工具才显示（唯一入口=发送旁
+  // Composer，2026-11-18 头部重复按钮退役）；paused=内部自动暂停
   // （OBO 到期/步数超限等），无流可断，只能「结束」；全局杀进程兜底=⌘⇧.
   const canStop = status === 'running' || status === 'waiting_permission' || status === 'waiting_clarify' || status === 'subagent_fanout' || status === 'delegating';
   const modeOption = AGENT_MODE_OPTIONS.find((m) => m.value === activeSession?.mode);
@@ -367,12 +378,12 @@ export function AgentWorkbenchPage() {
   // ---- 会话流渲染（D33 平铺流：AgentStreamView 分组分发；active=末回合运行中）----
   const turnActive = status !== undefined && TURN_ACTIVE_STATUSES.has(status);
   const streamNode = (
-    <div
-      style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}
-      ref={streamRef}
-      onScroll={onStreamScroll}
-    >
-      <AgentStreamView items={items} onRespond={handleRespond} active={turnActive} />
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }} ref={streamRef} onScroll={onStreamScroll}>
+      {/* 内容层：padding/gap 自滚动容器移入（RO 观察本层高度，运行提示挂载等
+          非 items 驱动的高度变化也能触发吸底）；视觉口径不变（padding 16/gap 14） */}
+      <div ref={streamContentRef} style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <AgentStreamView items={items} onRespond={handleRespond} active={turnActive} />
+      </div>
     </div>
   );
 
@@ -467,13 +478,8 @@ export function AgentWorkbenchPage() {
                       回到聊天
                     </Button>
                   ) : null}
-                  {/* 「结束」已移除（2026-11-11 会话不死裁决） */}
-                  {canStop ? (
-                    <Button variant="danger" onClick={stopActive} title="停止：中断当前回答，会话保留可继续追问">
-                      <Square size={12} aria-hidden />
-                      停止
-                    </Button>
-                  ) : null}
+                  {/* 「结束」已移除（2026-11-11 会话不死裁决）；「停止」唯一入口在
+                      发送旁（2026-11-18 走查：头部与 Composer 重复展示退役） */}
                   <Button
                     variant="text"
                     size="small"
