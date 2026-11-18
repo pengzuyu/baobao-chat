@@ -131,15 +131,6 @@ pub enum SessionEvent {
         model_override: Option<String>,
         reason: String,
     },
-    /// checkpoint.created（08 §4.4 修改前快照/手动/委派/恢复保护）
-    CheckpointCreated {
-        session_id: String,
-        checkpoint_id: String,
-        files_changed: Vec<bbrt_protocol::FileChange>,
-        /// pre-edit | pre-command | manual | delegate | pre-restore
-        reason: String,
-        git_ref: Option<String>,
-    },
     /// subagent.spawn（08 §4.5 探查子 Agent 派生）
     SubagentSpawned {
         session_id: String,
@@ -189,16 +180,6 @@ pub enum SessionEvent {
         name: String,
         reason: String,
     },
-    /// D15：当日日报产出/重算
-    ReportDaily {
-        date: String,
-        path: String,
-        sessions: u32,
-        tools: u32,
-        blocked: u32,
-        files_changed: u32,
-        memory_saved: u32,
-    },
     /// delegate.brief：简报待确认（等宿主 delegate.launch）
     DelegateBrief {
         session_id: String,
@@ -220,8 +201,6 @@ pub enum SessionEvent {
         exit_code: i32,
         summary: String,
         changed_files: Vec<String>,
-        /// 委派前置检查点（非 git 工作区/快照失败时 None）
-        checkpoint_id: Option<String>,
         /// 子进程会话句柄（--resume 模式 C 追问）
         child_session_ref: Option<String>,
     },

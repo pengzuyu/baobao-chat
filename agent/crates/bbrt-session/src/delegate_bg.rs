@@ -18,8 +18,6 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bbrt_memory::MemoryEngine;
-
 use crate::events::SessionSink;
 use crate::loop_runner::{DelegateHostMsg, EventLog};
 
@@ -60,12 +58,10 @@ impl DelegateHub {
         self: &Arc<Self>,
         run_id: String,
         session_id: String,
-        backend: String,
-        checkpoint_id: Option<String>,
+        _backend: String,
         stream: Box<dyn crate::delegation::DelegateStream>,
         sink: Arc<dyn SessionSink>,
         wal: Arc<dyn EventLog>,
-        memory: Option<Arc<MemoryEngine>>,
         review_timeout: Duration,
         started: Instant,
     ) {
@@ -81,7 +77,6 @@ impl DelegateHub {
         let hub = Arc::clone(self);
         let rid = run_id.clone();
         let sid = session_id.clone();
-        let be = backend.clone();
         std::thread::Builder::new()
             .name(format!("bbc-delegate-{rid}"))
             .spawn(move || {
@@ -98,14 +93,11 @@ impl DelegateHub {
                 let final_rep = crate::loop_runner::finish_delegate_stream(
                     &sid,
                     &rid,
-                    &be,
-                    checkpoint_id.as_deref(),
                     cancelled,
                     started,
                     stream.as_mut(),
                     sink.as_ref(),
                     wal.as_ref(),
-                    memory.as_deref(),
                 );
                 let exit_code = final_rep.exit_code.unwrap_or(-1);
                 if exit_code != 0 {

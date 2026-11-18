@@ -15,7 +15,6 @@
 
 #![forbid(unsafe_code)]
 
-pub mod checkpoint;
 pub mod compactor;
 pub mod delegate_bg;
 pub mod delegation;
@@ -30,7 +29,6 @@ pub mod state;
 pub mod subagent;
 pub mod team;
 
-pub use checkpoint::{GitSnapshots, SnapshotOutcome, SnapshotService};
 pub use compactor::FastCompactor;
 pub use delegation::{
     DelegateChannel, DelegateEvt, DelegateFinal, DelegateLaunchReq, DelegateLauncher,

@@ -25,7 +25,6 @@ use bbrt_hostapi::{IdGen, RuntimeHandler, StdioTransport};
 use bbrt_memory::MemoryEngine;
 use bbrt_protocol::{Envelope, HostToRuntime, RuntimeToHost};
 use bbrt_session::events::ModelTier;
-use bbrt_session::SnapshotService;
 use bbrt_session::{LoopDeps, SessionManager, StartParams, ToolExecutor};
 use bbrt_store::Store;
 
@@ -109,8 +108,6 @@ fn run() -> Result<(), String> {
         )
         .map_err(|e| format!("记忆引擎打开失败: {e}"))?,
     );
-    // 启动回补漏日日报（D15 §3.2 触发 2；产物经 report.daily 事件补报宿主）
-    let backfilled = memory.startup_backfill().unwrap_or_default();
 
     // OBO 动态令牌：宿主 obo.token 写缓存，过期回退静态 BBC_RT_TOKEN（D11 §10.1）
     let obo = Arc::new(std::sync::Mutex::new(bbrt_hostapi::OboCache::default()));
@@ -217,7 +214,6 @@ fn run() -> Result<(), String> {
         memory: Some(memory.clone()),
         wal: store.clone(),
         sink: sink.clone(),
-        snapshots: Some(Arc::new(bbrt_session::GitSnapshots::new(store.clone()))),
         skills: skills_index.clone(),
         fanout: Some(Arc::new(bbrt_session::FastPlanner)),
         experts: Some(caster),
@@ -285,18 +281,6 @@ fn run() -> Result<(), String> {
                 write_env(&env);
             }
         });
-    }
-
-    // 启动回补的日报补报
-    for rep in backfilled {
-        send(
-            &mut ids,
-            &RuntimeToHost::ReportDaily {
-                date: rep.date,
-                path: rep.json_path.display().to_string(),
-                stats: to_lite(&rep.stats),
-            },
-        );
     }
 
     // 主循环：阻塞读信封 → 分发（REQ 成对回执带 reply_to）
@@ -369,7 +353,6 @@ fn dispatch(
                 "session".into(),
                 "tools".into(),
                 "memory".into(),
-                "reports".into(),
             ],
         }),
         HostToRuntime::SessionStart {
@@ -391,12 +374,6 @@ fn dispatch(
                 bbrt_protocol::PermissionMode::AutoEdit => bbrt_sec::gate::PermissionMode::AutoEdit,
                 bbrt_protocol::PermissionMode::FullAuto => bbrt_sec::gate::PermissionMode::FullAuto,
             };
-            // 被动轨：session.started 入 journal（D15 §3.1）
-            let _ = memory.record(&bbrt_memory::ActivityEvent::SessionStarted {
-                session: session_id.clone(),
-                workspace: workspace.clone(),
-                mode: format!("{mode:?}").to_lowercase(),
-            });
             // 崩溃恢复（D11 §9.2）：historyRef 指向本地事件镜像 → 先重放再启动
             let restored = history_ref.as_ref().and_then(|_| {
                 let guard = store.lock().ok()?;
@@ -782,23 +759,6 @@ fn dispatch(
                 .collect();
             Some(RuntimeToHost::SessionListed { items })
         }
-        HostToRuntime::ReportList { limit } => Some(RuntimeToHost::ReportListResult {
-            // reports 目录统计扫描（D15 §3.3；日期倒序，损坏文件跳过）
-            items: memory
-                .list_reports(limit.unwrap_or(0) as usize)
-                .into_iter()
-                .map(|st| bbrt_protocol::ReportListItem {
-                    date: st.date.clone(),
-                    stats: bbrt_protocol::DailyStatsLite {
-                        sessions: st.sessions as u32,
-                        tools: st.tool_calls as u32,
-                        blocked: st.blocked as u32,
-                        files_changed: st.files_changed as u32,
-                        memory_saved: st.memory_saved.len() as u32,
-                    },
-                })
-                .collect(),
-        }),
         HostToRuntime::ModelSwitch {
             session_id,
             to,
@@ -881,76 +841,6 @@ fn dispatch(
         HostToRuntime::RunsList { session_id } => Some(RuntimeToHost::RunsListResult {
             items: mgr.list_runs(session_id.as_deref()),
         }),
-        // 手动检查点（PAG-06；回执即 checkpoint.created）
-        HostToRuntime::CheckpointCreate { session_id, reason } => {
-            let reason = if reason.is_empty() {
-                "manual".into()
-            } else {
-                reason
-            };
-            let Some(ws) = mgr.workspace_of(&session_id) else {
-                return Some(RuntimeToHost::Error {
-                    code: 8001,
-                    message: format!("会话不存在: {session_id}"),
-                    fatal: false,
-                    session_id: Some(session_id),
-                });
-            };
-            let svc = bbrt_session::GitSnapshots::new(store.clone());
-            match svc.create(&session_id, &ws, &reason) {
-                Ok(out) => {
-                    // 回执即 checkpoint.created（REQ 成对 reply_to）；不再经 sink 双发
-                    Some(RuntimeToHost::CheckpointCreated {
-                        checkpoint_id: out.checkpoint_id,
-                        session_id,
-                        files_changed: out.files_changed,
-                        reason: match out.reason.as_str() {
-                            "pre-edit" => bbrt_protocol::CheckpointReason::PreEdit,
-                            "pre-command" => bbrt_protocol::CheckpointReason::PreCommand,
-                            "delegate" => bbrt_protocol::CheckpointReason::Delegate,
-                            "pre-restore" => bbrt_protocol::CheckpointReason::PreRestore,
-                            _ => bbrt_protocol::CheckpointReason::Manual,
-                        },
-                        git_ref: out.git_ref,
-                    })
-                }
-                Err(e) => Some(RuntimeToHost::Error {
-                    code: 8001,
-                    message: format!("检查点创建失败: {e}"),
-                    fatal: false,
-                    session_id: Some(session_id),
-                }),
-            }
-        }
-        // 恢复检查点（先解析归属会话→工作区；自动建 pre-restore 保护快照）
-        HostToRuntime::CheckpointRestore { checkpoint_id } => {
-            let sid = store
-                .lock()
-                .ok()
-                .and_then(|g| g.get_checkpoint(&checkpoint_id).ok().flatten())
-                .map(|r| r.session_id);
-            let Some(sid) = sid else {
-                return Some(RuntimeToHost::CheckpointRestored {
-                    ok: false,
-                    new_checkpoint_id: None,
-                    error: Some("检查点不存在".into()),
-                });
-            };
-            let ws = mgr.workspace_of(&sid).unwrap_or_default();
-            let svc = bbrt_session::GitSnapshots::new(store.clone());
-            match svc.restore(&sid, &ws, &checkpoint_id) {
-                Ok(new_cp) => Some(RuntimeToHost::CheckpointRestored {
-                    ok: true,
-                    new_checkpoint_id: Some(new_cp),
-                    error: None,
-                }),
-                Err(e) => Some(RuntimeToHost::CheckpointRestored {
-                    ok: false,
-                    new_checkpoint_id: None,
-                    error: Some(e),
-                }),
-            }
-        }
         // 工具/技能热重载（10 篇 §4.5：宿主安装/更新/卸载技能包后 tools.reload
         // {reason:skill}；App/Policy/Plugin 亦触发技能重扫——生态内容变更的
         // 统一失效信号。D22/L3：扫描多根=生态根+各启用插件版本目录）
@@ -1291,16 +1181,6 @@ fn revive_session(
     .map_err(|e| e.to_string())
 }
 
-fn to_lite(s: &bbrt_memory::DailyStats) -> bbrt_protocol::DailyStatsLite {
-    bbrt_protocol::DailyStatsLite {
-        sessions: s.sessions as u32,
-        tools: s.tool_calls as u32,
-        blocked: s.blocked as u32,
-        files_changed: s.files_changed as u32,
-        memory_saved: s.memory_saved.len() as u32,
-    }
-}
-
 /// 握手期 capabilities 提供者（后续消息走 dispatch 主循环，不经 serve）
 struct RtHandler {
     #[allow(dead_code)]
@@ -1313,12 +1193,7 @@ impl RuntimeHandler for RtHandler {
         None // 握手只消费 initialize；回执由 handshake 内部生成
     }
     fn capabilities(&self) -> Vec<String> {
-        vec![
-            "session".into(),
-            "tools".into(),
-            "memory".into(),
-            "reports".into(),
-        ]
+        vec!["session".into(), "tools".into(), "memory".into()]
     }
 }
 

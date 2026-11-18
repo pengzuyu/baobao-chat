@@ -271,13 +271,13 @@ fn matrix(category: ActionCategory, mode: PermissionMode) -> bool {
         // 白名单命令：ask/auto-edit 🔶（可记忆），full-auto ✅
         ActionCategory::WhitelistCommand => mode == PermissionMode::FullAuto,
         // 任意命令（含「执行文件」形态）：full-auto ✅（D32：原三档 🔶；
-        // 本机执行+词法围栏+checkpoint 兜底，对齐 ZCode guarded 档语义）
+        // 本机执行+词法围栏兜底，对齐 ZCode guarded 档语义）
         ActionCategory::ArbitraryCommand => mode == PermissionMode::FullAuto,
         // 网络出站：auto-edit+ ✅（D32：原三档 🔶；NetPolicy 白名单兜底目的地）
         ActionCategory::NetworkEgress => mode != PermissionMode::Ask,
         // git push（普通）：auto-edit+ ✅（D32：原三档 🔶；force push 归危险规则库双确认）
         ActionCategory::GitPush => mode != PermissionMode::Ask,
-        // 委派编码：auto-edit+ ✅（D32：原三档 🔶；子 agent 独立 checkpoint 可恢复）
+        // 委派编码：auto-edit+ ✅（D32：原三档 🔶；子 agent 独立工作区隔离）
         ActionCategory::Delegate => mode != PermissionMode::Ask,
         // 高危命令：三档 🔶 双重提示（不可永久记忆）
         // CorpWrite（公司域写）：三档 🔶 **唯一保留硬闸**——效果落他人/共享面不可撤回
@@ -772,7 +772,7 @@ mod tests {
     #[test]
     fn row9_delegate_follow_mode_row10_subagent_allow() {
         let f = Fixture::new();
-        // 委派：ask 🔶，auto-edit+ ✅（D32：子 agent 独立 checkpoint 可恢复）
+        // 委派：ask 🔶，auto-edit+ ✅（D32：子 agent 独立工作区隔离）
         assert!(matches!(
             permission_gate(
                 PermissionMode::Ask,

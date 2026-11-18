@@ -108,24 +108,6 @@ export interface AgentWorkspaceInfo {
   createdAt: number;
 }
 
-/** 日报统计概览（D15 §3.3 report.daily stats） */
-export interface ReportStats {
-  sessions: number;
-  tools: number;
-  blocked: number;
-  files: number;
-  memorySaved: number;
-}
-
-/** 单日日报（D15 §3.2：md 人读产物 + json UI 消费） */
-export interface AgentReport {
-  /** YYYY-MM-DD */
-  date: string;
-  stats: ReportStats;
-  /** 日报 markdown 正文（会话数/工具排行/拦截/文件变更/记忆条目/会话明细表） */
-  markdown: string;
-}
-
 /** 审批卡参数预览（D08 §6.3 preview 联合；本轮 UI 只消费 command 形态） */
 export type PermissionPreview =
   | { kind: 'command'; command: string; cwd: string; dangerFlags: string[] }
@@ -150,7 +132,6 @@ export interface ClarifyOptionDTO {
  * 命名 ↔ 协议：streamDelta=stream.delta / stateChanged=session.state /
  * toolCall=tool.call / toolResult=tool.result / permissionRequest=permission.request /
  * permissionResponse=permission.response / memorySaved=memory.saved（D15 §2.4）/
- * reportDaily=report.daily（D15 §3.3）/ checkpointCreated=checkpoint.created（D11 §4）/
  * modelSwitched=model.switched / sessionEnded=session.ended
  */
 export type AgentEvent =
@@ -218,9 +199,7 @@ export type AgentEvent =
       answers: string;
     }
   | { type: 'memorySaved'; sessionId: string; name: string; title: string; memoryType: MemoryType; updated: boolean; scope?: 'user' | 'project'; workspaceName?: string }
-  | { type: 'reportDaily'; date: string; path: string; stats: ReportStats }
   | { type: 'sessionEnded'; sessionId: string; summary: string }
-  | { type: 'checkpointCreated'; sessionId: string; checkpointId: string; filesChanged: string[]; reason: string }
   | { type: 'modelSwitched'; sessionId: string; from: 'fast' | 'strong' | 'auto'; to: 'fast' | 'strong' | 'auto'; modelOverride?: string; reason: string }
   /**
    * 子 Agent（D16 类型 1：探查/通用子 agent）。sub_id 即持久 run_id（r-{seq}）；
@@ -257,7 +236,6 @@ export type AgentEvent =
       exitCode: number;
       summary: string;
       changedFiles: string[];
-      checkpointId?: string;
       childSessionRef?: string;
     }
   | { type: 'delegateReviewResolved'; sessionId: string; runId: string; decision: 'accept' | 'reject' };
@@ -325,8 +303,6 @@ export interface AgentBridge {
   /** D19 项目移除登记（workspace.forget；只删登记，不动会话/记忆分区） */
   forgetWorkspace(id: string): Promise<void>;
 
-  /** 日报列表（D15 §3.3 report.list + 报告正文） */
-  listReports(): Promise<AgentReport[]>;
   /** run 清单（D16 §3.1 runs.list；sessionId 缺省=全部） */
   listRuns(sessionId?: string): Promise<RunInfo[]>;
 }

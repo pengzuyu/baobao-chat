@@ -91,8 +91,6 @@ const KNOWN_HOST_TYPES: &[&str] = &[
     "session.start",
     "user.message",
     "permission.response",
-    "checkpoint.create",
-    "checkpoint.restore",
     "delegate.launch",
     "delegate.input",
     "delegate.cancel",
@@ -104,10 +102,9 @@ const KNOWN_HOST_TYPES: &[&str] = &[
     "tools.reload",
     "ping",
     "pong",
-    // D15 §2.4/§3.3 追加
+    // D15 §2.4 追加
     "memory.list",
     "memory.delete",
-    "report.list",
     "model.switch",
 ];
 

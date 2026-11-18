@@ -547,7 +547,7 @@ fn gate_fullauto任意命令直接放行() {
     let f = Fixture::new();
     let ex = f.executor();
     // D32 矩阵修订：full-auto 任意命令 ✅（原「首确认可记忆」随矩阵放行消亡；
-    // 词法围栏=precheck_write_targets/PathPolicy，恢复兜底=checkpoint）
+    // 词法围栏=precheck_write_targets/PathPolicy）
     match ex.check(
         PermissionMode::FullAuto,
         &call(
@@ -982,7 +982,6 @@ fn tool_executor_trait对象可装配loopdeps() {
         memory: None,
         wal: Arc::new(bbrt_session::NoopEventLog),
         sink: Arc::new(bbrt_session::NullSink),
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,

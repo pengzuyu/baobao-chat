@@ -92,18 +92,6 @@ pub enum EndReason {
     Revoked,
 }
 
-/// 检查点触发原因（与 §11 agent_checkpoint.reason CHECK 一致）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CheckpointReason {
-    PreEdit,
-    PreCommand,
-    Manual,
-    Delegate,
-    /// 恢复前保护快照（DDL CHECK 五值之一；随 checkpoint.restore 接线补齐协议枚举）
-    PreRestore,
-}
-
 /// 工具热重载原因（tools.reload：app/skill/policy/plugin）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -245,14 +233,6 @@ pub struct Usage {
     pub out_tokens: u64,
 }
 
-/// 检查点改动文件（与 §11 agent_checkpoint.files_changed JSON [{path,add,del}] 一致）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FileChange {
-    pub path: String,
-    pub add: u64,
-    pub del: u64,
-}
-
 /// 子 Agent 汇总结果（summary ≤2k tokens，不回传原文，D11 §7）
 /// 线路契约 camel：嵌套 struct 的 rename_all 不随枚举变体传导，必须自带
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -303,20 +283,9 @@ pub enum Preview {
 }
 
 // ---------------------------------------------------------------------------
-// D15 记忆/日报协议增量（D15 §2.4/§3.3，追加进 D11 §4 全消息表）
+// D15 记忆协议增量（D15 §2.4，追加进 D11 §4 全消息表）
 // 嵌套 struct 一律自带 rename_all（rename_all 不随枚举变体传导，7698c52 教训）
 // ---------------------------------------------------------------------------
-
-/// 日报轻量统计（report.daily.stats 与 report.list 回执条目共用；D15 §3.3）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DailyStatsLite {
-    pub sessions: u32,
-    pub tools: u32,
-    pub blocked: u32,
-    pub files_changed: u32,
-    pub memory_saved: u32,
-}
 
 /// memory.list 回执条目（D15 §2.4：{name,title,type,updated_at,hook}）
 /// wire 字段名逐字照 D15：type 与 updated_at 显式 rename 覆盖 camelCase
@@ -342,15 +311,6 @@ pub struct MemoryListItem {
     /// 删除走 memory.forget 而非 memory.delete）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global_type: Option<String>,
-}
-
-/// report.list 回执条目（D15 §3.3：{date, stats}）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReportListItem {
-    /// YYYY-MM-DD
-    pub date: String,
-    pub stats: DailyStatsLite,
 }
 
 // ---------------------------------------------------------------------------
@@ -599,18 +559,6 @@ pub enum HostToRuntime {
         free_text: Option<String>,
     },
 
-    /// 手动建检查点（REQ→checkpoint.created）
-    #[serde(rename = "checkpoint.create", rename_all = "camelCase")]
-    CheckpointCreate {
-        session_id: String,
-        /// 手动创建，当前固定 "manual"
-        reason: String,
-    },
-
-    /// 恢复检查点（REQ→checkpoint.restored {ok,newCheckpointId}；恢复前自动建 pre-restore 保护快照）
-    #[serde(rename = "checkpoint.restore", rename_all = "camelCase")]
-    CheckpointRestore { checkpoint_id: String },
-
     /// 确认委派启动（REQ→回执{pid}；同上）
     #[serde(rename = "delegate.launch", rename_all = "camelCase")]
     DelegateLaunch {
@@ -757,14 +705,6 @@ pub enum HostToRuntime {
         memory_type: String,
         /// 匹配串
         contains: String,
-    },
-
-    /// 日报列表查询（D15 §3.3；REQ→report.list.result）
-    #[serde(rename = "report.list", rename_all = "camelCase")]
-    ReportList {
-        /// 条数上限（同 memory.list，可缺省）
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        limit: Option<u32>,
     },
 
     // -- D19 项目/日常双区追加（REQ；成对回执见 RuntimeToHost） --
@@ -928,28 +868,6 @@ pub enum RuntimeToHost {
         multi_select: bool,
     },
 
-    /// 检查点已建（=08 篇 checkpoint.event 的 D11 细化命名）
-    #[serde(rename = "checkpoint.created", rename_all = "camelCase")]
-    CheckpointCreated {
-        checkpoint_id: String,
-        session_id: String,
-        #[serde(default)]
-        files_changed: Vec<FileChange>,
-        reason: CheckpointReason,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        git_ref: Option<String>,
-    },
-
-    /// 检查点恢复回执（checkpoint.restore REQ；newCheckpointId=自动创建的 pre-restore 保护快照）
-    #[serde(rename = "checkpoint.restored", rename_all = "camelCase")]
-    CheckpointRestored {
-        ok: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        new_checkpoint_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-    },
-
     /// 上下文压缩通知（UNT；phase=start 时 freed/kept 为空）
     #[serde(rename = "compaction.event", rename_all = "camelCase")]
     CompactionEvent {
@@ -1041,9 +959,6 @@ pub enum RuntimeToHost {
         summary: String,
         #[serde(default)]
         changed_files: Vec<String>,
-        /// 与 §11 DDL nullable 对齐：非 git 工作区/异常退出时无检查点
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        checkpoint_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         child_session_ref: Option<String>,
     },
@@ -1116,15 +1031,6 @@ pub enum RuntimeToHost {
         reason: String,
     },
 
-    /// 日报产出/更新（D15 §3.3；UNT；path 指向 UI 消费的 json 产物）
-    #[serde(rename = "report.daily", rename_all = "camelCase")]
-    ReportDaily {
-        /// YYYY-MM-DD
-        date: String,
-        path: String,
-        stats: DailyStatsLite,
-    },
-
     /// memory.list 回执（D15 §2.4；回执 type 命名沿用 initialize→initialize.result 的 *.result 约定）
     #[serde(rename = "memory.list.result", rename_all = "camelCase")]
     MemoryListResult {
@@ -1142,13 +1048,6 @@ pub enum RuntimeToHost {
         /// 被移除条目文本（0/1/N；同名误伤回显）
         #[serde(default)]
         removed: Vec<String>,
-    },
-
-    /// report.list 回执（D15 §3.3）
-    #[serde(rename = "report.list.result", rename_all = "camelCase")]
-    ReportListResult {
-        #[serde(default)]
-        items: Vec<ReportListItem>,
     },
 
     /// runs.list 回执（D16 §3.1：agent_run 行 camelCase 投影，字段全集）

@@ -26,7 +26,6 @@ import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
 import { AppStorePage } from '../features/eco/pages/AppStorePage';
 import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
-import { AgentReportsPage } from '../features/agent/pages/AgentReportsPage';
 import { PluginPage } from '../features/eco/pages/PluginPage';
 import { ensureAgentEventSubscribed, useAgentStore } from '../features/agent/store/agent';
 import { isLocallyReported, notifyAgentDone } from '../features/agent/bridge/notify';
@@ -290,10 +289,9 @@ export function App() {
         <Route path="/experts" element={<ExpertLibraryPage />} />
         {/* 应用商店（E1/D09 PEC-07：catalog 差异+安装） */}
         <Route path="/apps" element={<AppStorePage />} />
-        {/* Agent 工作台域（D08）：PAG-01/02/03 工作台 + 日报（记忆页已退役——记忆由平台后台组织） */}
+        {/* Agent 工作台域（D08）：PAG-01/02/03 工作台（记忆/日报页已退役——平台后台组织，不做用户浏览面） */}
         <Route path="/agent" element={<AgentWorkbenchPage />} />
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />
-        <Route path="/agent/reports" element={<AgentReportsPage />} />
         <Route path="/agent/plugins" element={<PluginPage />} />
         {/* 管理后台（D10 阶段一务实版）：仪表盘/用户/策略/用量/审计五页；
             一级"管理"入口按 me.perms admin:* 显隐（MainLayout），服务端守卫 2003 兜底 */}

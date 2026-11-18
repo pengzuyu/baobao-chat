@@ -210,7 +210,6 @@ fn deps_for(
         memory: None,
         wal: Arc::new(log),
         sink,
-        snapshots: None,
         skills: Arc::new(Mutex::new(SkillIndex::default())),
         fanout: Some(planner),
         experts: None,

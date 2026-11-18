@@ -254,11 +254,11 @@ export function ChatPage() {
   /** 取/建本会话 embedded Agent 会话。2026-11-11「会话不死」裁决：会话=上下文，
    * ended/error 只是当前未活跃的标记——恒定复用同一会话 id，RT 侧 input 自动
    * 重放事件镜像复活续上下文（不再因死态重建新会话丢历史）。
-   * 事件订阅不在此等待 init（其数据加载=会话/记忆/日报多次 REQ 往返，bbrt 冷启
+   * 事件订阅不在此等待 init（其数据加载=会话列表等 REQ 往返，bbrt 冷启
    * 时含进程拉起+MCP 超时——发送路径曾被串行卡住数百 ms~秒级）：App 挂载即已
    * ensureAgentEventSubscribed（2026-11-11 根因修复），此处只读映射直发 */
   const ensureEmbeddedSession = async (): Promise<string> => {
-    void useAgentStore.getState().init(); // 数据预取并行（左栏/记忆页用）；不 await
+    void useAgentStore.getState().init(); // 数据预取并行（左栏项目区用）；不 await
     // 幽灵映射自愈（2026-11-16）：映射在但 RT 已无此会话（换轨/丢失遗留）——
     // validEmbeddedSessionId 校验并清映射，此处走重建
     const sid = await validEmbeddedSessionId(convId!);

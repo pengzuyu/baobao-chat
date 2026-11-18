@@ -17,11 +17,11 @@
  * verticalAlign:middle + lineHeight 1.4 自管行高，双行内容 ~36px 收进 40px 项内。
  */
 
-import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Alert, Badge, Flex, Menu, Tag, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
-import { Bot, Calendar, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Plus, Trash2 } from 'lucide-react';
+import { Bot, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Plus, Trash2 } from 'lucide-react';
 import type { AgentSessionMeta, AgentWorkspaceInfo, RunInfo } from '../bridge/types';
 import { SESSION_STATUS_LABELS } from '../bridge/types';
 import { Button } from '../../../shared/ui/Button';
@@ -421,18 +421,6 @@ export const AgentSessionList = memo(function AgentSessionList({
     // 分组标签/提示行不响应
   };
 
-  /** 底部链接统一样式（原 agent-sublink 口径 → NavLink style 回调） */
-  const sublinkStyle = ({ isActive }: { isActive: boolean }): CSSProperties => ({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 4,
-    padding: '3px 8px',
-    borderRadius: 6,
-    fontSize: 12,
-    color: isActive ? token.colorText : token.colorTextSecondary,
-    background: isActive ? token.colorBgTextHover : 'transparent',
-    textDecoration: 'none',
-  });
 
   return (
     <>
@@ -467,10 +455,6 @@ export const AgentSessionList = memo(function AgentSessionList({
           borderTop: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <NavLink to="/agent/reports" style={sublinkStyle}>
-          <Calendar size={13} aria-hidden />
-          Agent 日报
-        </NavLink>
         <Tag
           style={{ marginInlineEnd: 0, fontSize: 10 }}
           title={bridgeKind === 'mock' ? '未检测到 Tauri 宿主，正在使用本地演示剧本' : '已连接宿主 Runtime'}

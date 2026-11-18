@@ -191,7 +191,6 @@ fn bg_deps(model: Arc<DelegateModel>, sink: Arc<CollectSink>) -> LoopDeps {
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink,
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,
@@ -264,12 +263,10 @@ fn background_delegate_turn_returns_immediately_and_parks_join() {
             delegate_task_id,
             changed_files,
             child_session_ref,
-            checkpoint_id,
             ..
         } => {
             assert_eq!(changed_files, &vec!["a.rs".to_string(), "b.rs".to_string()]);
             assert_eq!(child_session_ref.as_deref(), Some("claude-sess-9"));
-            assert!(checkpoint_id.is_none(), "未装配快照服务时无检查点");
             // hub 定向路由审查（P0-2②）
             assert!(hub.route(delegate_task_id, &DelegateHostMsg::Review { accept: true }));
         }

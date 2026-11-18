@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use bbrt_protocol::{
-    Blocked, CheckpointReason, CompactionPhase, Envelope, GrantScope, ModelPolicy,
+    Blocked, CompactionPhase, Envelope, GrantScope, ModelPolicy,
     ModelSwitchReason, Preview, RiskLevel, RuntimeToHost, SessionState, StreamChannel, Usage,
 };
 use bbrt_session::events::SessionEvent;
@@ -76,25 +76,6 @@ fn risk(s: &str) -> RiskLevel {
 /// SessionEvent → RuntimeToHost（未映射的事件返回 None 静默）
 pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
     Some(match evt {
-        SessionEvent::CheckpointCreated {
-            session_id,
-            checkpoint_id,
-            files_changed,
-            reason,
-            git_ref,
-        } => RuntimeToHost::CheckpointCreated {
-            session_id: session_id.clone(),
-            checkpoint_id: checkpoint_id.clone(),
-            files_changed: files_changed.clone(),
-            reason: match reason.as_str() {
-                "pre-edit" => CheckpointReason::PreEdit,
-                "pre-command" => CheckpointReason::PreCommand,
-                "delegate" => CheckpointReason::Delegate,
-                "pre-restore" => CheckpointReason::PreRestore,
-                _ => CheckpointReason::Manual,
-            },
-            git_ref: git_ref.clone(),
-        },
         SessionEvent::SubagentSpawned {
             session_id,
             sub_id,
@@ -366,25 +347,6 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             name: name.clone(),
             reason: reason.clone(),
         },
-        SessionEvent::ReportDaily {
-            date,
-            path,
-            sessions,
-            tools,
-            blocked,
-            files_changed,
-            memory_saved,
-        } => RuntimeToHost::ReportDaily {
-            date: date.clone(),
-            path: path.clone(),
-            stats: bbrt_protocol::DailyStatsLite {
-                sessions: *sessions,
-                tools: *tools,
-                blocked: *blocked,
-                files_changed: *files_changed,
-                memory_saved: *memory_saved,
-            },
-        },
         SessionEvent::DelegateBrief {
             session_id,
             delegate_task_id,
@@ -427,19 +389,17 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             exit_code,
             summary,
             changed_files,
-            checkpoint_id,
             child_session_ref,
         } => {
             let delegate_task_id = delegate_task_id.clone();
-            // P0-2③ 修复：此前三字段置空上行——diff 审查卡（changed_files+
-            // checkpoint_id 回滚锚点）与 --resume 续接句柄数据源恢复
+            // P0-2③ 修复：此前字段置空上行——diff 审查卡（changed_files）
+            // 与 --resume 续接句柄数据源恢复
             RuntimeToHost::DelegateEnd {
                 session_id: session_id.clone(),
                 delegate_task_id,
                 exit_code: *exit_code,
                 summary: summary.clone(),
                 changed_files: changed_files.clone(),
-                checkpoint_id: checkpoint_id.clone(),
                 child_session_ref: child_session_ref.clone(),
             }
         }

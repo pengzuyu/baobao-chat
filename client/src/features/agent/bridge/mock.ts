@@ -5,15 +5,14 @@
  *   → toolCall(read_file foo.txt) → 3s 后 toolResult(ok) → 结论流 → streamDone → idle
  * - 再发一条 → modelSwitched(升档) → toolCall(run_command) → permission.request
  *   （cargo test，risk=high，命令预览可编辑，仅 once/session 两档）
- *   → 允许：checkpoint(pre-command) + toolResult(exit 0 通过)；拒绝/超时：toolResult(blocked 红条带)
- *   → memory.saved 事件 → report.daily 事件 → sessionEnded
+ *   → 允许：toolResult(exit 0 通过)；拒绝/超时：toolResult(blocked 红条带)
+ *   → memory.saved 事件 → sessionEnded
  * 暂停会冻结剧本时钟；紧急停止作废未决审批并结束。
  */
 
 import type {
   AgentBridge,
   AgentEvent,
-  AgentReport,
   AgentSessionMeta,
   AgentWorkspaceInfo,
   GrantScope,
@@ -169,55 +168,6 @@ function seedWorkspaces(): AgentWorkspaceInfo[] {
   ];
 }
 
-function dayStr(offsetDays: number): string {
-  const d = new Date(now - offsetDays * DAY);
-  const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-function seedReports(): AgentReport[] {
-  return [
-    {
-      date: dayStr(1),
-      stats: { sessions: 3, tools: 47, blocked: 2, files: 12, memorySaved: 3 },
-      markdown: [
-        `# ${dayStr(1)} Agent 日报`,
-        '- 会话 3 个（累计 2h14m）；工作区 baobao-chat、docs-site',
-        '- 工具调用 47 次：read_file×21 edit_file×9 run_command×8 search_files×9',
-        '- 被拦截 2 次（8021 危险命令 / 8024 链接逃逸）',
-        '- 文件变更 12：edit×9 create×3；检查点 4（pre-edit×3 manual×1）',
-        '- 今日记忆 +3：「端口 8090 约定」「用户偏好先方案后落笔」「Gitee 远端」',
-        '',
-        '## 会话明细',
-        '',
-        '| 会话 | 工作区 | 时长 | 工具 | 结果 |',
-        '| --- | --- | --- | --- | --- |',
-        '| s-102 | bbc-server | 48m | 19 | 已完成 |',
-        '| s-101 | docs-site | 26m | 15 | 已完成 |',
-        '| s-099 | baobao-chat | 60m | 13 | 已暂停 |',
-      ].join('\n'),
-    },
-    {
-      date: dayStr(2),
-      stats: { sessions: 2, tools: 23, blocked: 0, files: 5, memorySaved: 1 },
-      markdown: [
-        `# ${dayStr(2)} Agent 日报`,
-        '- 会话 2 个（累计 51m）；工作区 bbc-server',
-        '- 工具调用 23 次：read_file×12 search_files×6 edit_file×5',
-        '- 被拦截 0 次',
-        '- 文件变更 5：edit×5；检查点 2（pre-edit×2）',
-        '- 今日记忆 +1：「Gitee 远端」',
-        '',
-        '## 会话明细',
-        '',
-        '| 会话 | 工作区 | 时长 | 工具 | 结果 |',
-        '| --- | --- | --- | --- | --- |',
-        '| s-087 | bbc-server | 36m | 14 | 已完成 |',
-        '| s-086 | bbc-server | 15m | 9 | 已完成 |',
-      ].join('\n'),
-    },
-  ];
-}
 
 export class MockAgentBridge implements AgentBridge {
   readonly kind = 'mock' as const;
@@ -226,7 +176,6 @@ export class MockAgentBridge implements AgentBridge {
   private sessions: AgentSessionMeta[] = seedSessions();
   /** D19 项目登记（workspace.list/register/forget 演示数据） */
   private workspaces: AgentWorkspaceInfo[] = seedWorkspaces();
-  private reports: AgentReport[] = seedReports();
   /** sessionId → 已发送轮次（第 2 轮触发审批剧本） */
   private rounds = new Map<string, number>();
   /** sessionId → 剧本上下文 */
@@ -472,7 +421,6 @@ export class MockAgentBridge implements AgentBridge {
 
   async reviewDelegate(_runId: string, _accept: boolean): Promise<void> {}
 
-  // ---- 日报（D15；记忆浏览面已退役，memorySaved 事件仅作会话流回执）----
 
   async registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo> {
     await delay(180);
@@ -503,11 +451,6 @@ export class MockAgentBridge implements AgentBridge {
   async forgetWorkspace(id: string): Promise<void> {
     await delay(150);
     this.workspaces = this.workspaces.filter((w) => w.id !== id);
-  }
-
-  async listReports(): Promise<AgentReport[]> {
-    await delay(300);
-    return [...this.reports].sort((a, b) => (a.date < b.date ? 1 : -1));
   }
 
   // ---- 剧本 ----
@@ -627,7 +570,7 @@ export class MockAgentBridge implements AgentBridge {
     }
   }
 
-  /** 第 2 轮：执行命令 → 审批 → 通过/阻止 两分支 → 记忆/日报/结束 */
+  /** 第 2 轮：执行命令 → 审批 → 通过/阻止 两分支 → 记忆/结束 */
   private async scriptRunCommand(s: AgentSessionMeta, ctx: ScriptContext): Promise<void> {
     const sid = s.id;
     try {
@@ -668,15 +611,7 @@ export class MockAgentBridge implements AgentBridge {
         // ---- 通过分支 ----
         const effectiveCommand = (answer.editedArgs?.command as string | undefined) ?? 'cargo test --lib';
         this.setStatus(sid, 'running', 'permission.allow');
-        // pre-command 检查点（D11 §6：修改/命令类首次执行前）
         await ctx.wait(400);
-        this.emit({
-          type: 'checkpointCreated',
-          sessionId: sid,
-          checkpointId: `cp-${sid}-1`,
-          filesChanged: ['src/auth.rs'],
-          reason: 'pre-command',
-        });
         const startedAt = Date.now();
         await ctx.wait(RUN_COMMAND_RESULT_DELAY_MS);
         ctx.inFlightCalls.delete(`call-${sid}-r2`);
@@ -729,34 +664,7 @@ export class MockAgentBridge implements AgentBridge {
           updated: false,
         });
       }
-      // 收尾：日报产出（D15 §3.2：session.ended 落地后异步重算当日）+ 会话结束
-      await ctx.wait(600);
-      const stats = { sessions: 4, tools: 51, blocked: 2, files: 13, memorySaved: 4 };
-      const today = dayStr(0);
-      this.reports = [
-        {
-          date: today,
-          stats,
-          markdown: [
-            `# ${today} Agent 日报`,
-            `- 会话 ${stats.sessions} 个（累计 2h48m）；工作区 bbc-server`,
-            `- 工具调用 ${stats.tools} 次：read_file×22 run_command×9 edit_file×9 search_files×11`,
-            '- 被拦截 2 次（8020 审批拒绝 / 8024 链接逃逸）',
-            `- 文件变更 ${stats.files}：edit×10 create×3；检查点 5（pre-edit×3 pre-command×1 manual×1）`,
-            `- 今日记忆 +4：「登录超时根因」等`,
-            '',
-            '## 会话明细',
-            '',
-            '| 会话 | 工作区 | 时长 | 工具 | 结果 |',
-            '| --- | --- | --- | --- | --- |',
-            `| ${sid} | bbc-server | 18m | 9 | 已完成 |`,
-            '| s-102 | bbc-server | 48m | 19 | 已完成 |',
-            '| s-101 | docs-site | 26m | 15 | 已完成 |',
-          ].join('\n'),
-        },
-        ...this.reports.filter((r) => r.date !== today),
-      ];
-      this.emit({ type: 'reportDaily', date: today, path: `~/Library/Application Support/baobao-chat/agent/reports/${today}.md`, stats });
+      // 收尾：会话结束
       await ctx.wait(400);
       await this.finishSession(sid, '修复登录超时：定位时钟偏移根因并验证（12/12 测试通过）');
     } catch (e) {

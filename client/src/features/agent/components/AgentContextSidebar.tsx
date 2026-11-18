@@ -1,28 +1,21 @@
 /**
- * 工作台右栏：上下文栏（D33 §3.6 Tabs 化：概览/运行/详情/检查点）：
- * - 概览=会话信息（工作区/模式/模型档位/最近用量/结论摘要）
+ * 工作台右栏：上下文栏（D33 §3.6 Tabs 化：概览/运行/详情）：
+ * - 概览=会话信息（工作区/模式/模型档位/最近用量/结论摘要）；标签带待审批数徽标
  * - 运行=run 记录（D16 §3.1；**点行打开运行详情**）
  * - 详情=运行详情（D33 新）：子 agent 过程流——AgentStreamView 与中栏同款渲染
  *   （「与主 agent 一样，但不在一个窗口」）；sideStreams 直播 / run.history 回放；
  *   delegate 优先 childSessionRef 的会话历史。activeRunView 置位时自动切到本 tab
- * - 检查点时间线（PAG-06 简版）
- * 记忆侧写 tab 已退役（记忆由平台后台组织，不做用户浏览面）。
+ * 记忆侧写/检查点时间线 tab 已退役（检查点机制整域删除，恢复能力留待完整重设计）。
  * D26-O4：分区→Card、KV→Descriptions、清单→List、chip→Tag；
  * D33 aside 宽度：运行详情激活时页面侧加宽至 480（本组件不管宽，页面定）。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Descriptions, Flex, List, Space, Spin, Tabs, Tag, Typography, theme } from 'antd';
-import { useAgentStore, type CheckpointItem } from '../store/agent';
+import { useAgentStore } from '../store/agent';
 import { AGENT_MODE_OPTIONS, MODEL_TIER_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
 import type { AgentSessionMeta, RunInfo } from '../bridge/types';
 import { AgentStreamView } from './stream/AgentStreamView';
-
-function formatClock(ts: number): string {
-  const d = new Date(ts);
-  const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = {
   probe: '子任务',
@@ -52,8 +45,8 @@ function formatDuration(ms: number): string {
 interface AgentContextSidebarProps {
   session: AgentSessionMeta;
   model: 'fast' | 'strong' | 'auto';
-  checkpoints: CheckpointItem[];
   usage?: { in: number; out: number };
+  /** 待审批权限数（概览 tab 标签徽标） */
   pendingCount: number;
   /** run 记录（D16 §3.1；新建在末尾展示最近 8 条倒序） */
   runs: RunInfo[];
@@ -115,7 +108,7 @@ function RunDetailView({ runs }: { runs: RunInfo[] }) {
   );
 }
 
-export function AgentContextSidebar({ session, model, checkpoints, usage, pendingCount, runs }: AgentContextSidebarProps) {
+export function AgentContextSidebar({ session, model, usage, pendingCount, runs }: AgentContextSidebarProps) {
   const { token } = theme.useToken();
   const [activeKey, setActiveKey] = useState('overview');
   const openRunView = useAgentStore((s) => s.openRunView);
@@ -148,7 +141,12 @@ export function AgentContextSidebar({ session, model, checkpoints, usage, pendin
       items={[
         {
           key: 'overview',
-          label: '概览',
+          label: (
+            <Space size={4}>
+              概览
+              {pendingCount > 0 ? <Tag color="warning" style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 4 }}>{pendingCount}</Tag> : null}
+            </Space>
+          ),
           children: (
             <Card size="small" title="会话信息">
               <Descriptions
@@ -220,44 +218,6 @@ export function AgentContextSidebar({ session, model, checkpoints, usage, pendin
               },
             ]
           : []),
-        {
-          key: 'checkpoints',
-          label: (
-            <Space size={4}>
-              检查点
-              {pendingCount > 0 ? <Tag color="warning" style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 4 }}>{pendingCount}</Tag> : null}
-            </Space>
-          ),
-          children:
-            checkpoints.length === 0 ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                暂无检查点（修改类工具执行前自动创建）
-              </Typography.Text>
-            ) : (
-              <List
-                size="small"
-                dataSource={checkpoints}
-                renderItem={(cp) => (
-                  <List.Item style={{ padding: '3px 4px', fontSize: 12 }}>
-                    <Flex align="center" gap={8} style={{ width: '100%', minWidth: 0 }}>
-                      <Typography.Text code style={{ fontSize: 12, maxWidth: 110 }} ellipsis title={cp.id}>
-                        {cp.id.replace(/^cp-/, '')}
-                      </Typography.Text>
-                      <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
-                        {formatClock(cp.createdAt)}
-                      </Typography.Text>
-                      <Typography.Text ellipsis style={{ fontSize: 12, minWidth: 0, flex: 1 }}>
-                        {cp.reason}
-                      </Typography.Text>
-                      <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
-                        {cp.filesChanged.length} 文件
-                      </Typography.Text>
-                    </Flex>
-                  </List.Item>
-                )}
-              />
-            ),
-        },
       ]}
     />
   );

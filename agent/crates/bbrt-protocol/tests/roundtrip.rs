@@ -6,13 +6,12 @@
 use std::io::Cursor;
 
 use bbrt_protocol::{
-    read_message, write_message, Blocked, BriefContextItem, CheckpointReason, ClarifyOption,
-    CodecError, CompactionPhase, DailyStatsLite, Decision, DelegateEventKind, EndReason, Envelope,
-    FileChange, GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy,
-    ModelSwitchReason, PermissionMode, Preview, ProtocolError, RenewReason, ReportListItem,
-    ReviewDecision, RiskLevel, RuntimeToHost, SessionState, StreamChannel, SubagentPhase,
-    SubagentResult, TaskBrief, ThinkingLevel, ToolSource, ToolsReloadReason, Usage,
-    PROTOCOL_VERSION,
+    read_message, write_message, Blocked, BriefContextItem, ClarifyOption,
+    CodecError, CompactionPhase, Decision, DelegateEventKind, EndReason, Envelope,
+    GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy, ModelSwitchReason,
+    PermissionMode, Preview, ProtocolError, RenewReason, ReviewDecision, RiskLevel, RuntimeToHost,
+    SessionState, StreamChannel, SubagentPhase, SubagentResult, TaskBrief, ThinkingLevel,
+    ToolSource, ToolsReloadReason, Usage, PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -75,13 +74,6 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             answers: vec!["加漂移窗口".into()],
             free_text: Some("顺带补一条单测".into()),
         },
-        HostToRuntime::CheckpointCreate {
-            session_id: "sess-1".into(),
-            reason: "manual".into(),
-        },
-        HostToRuntime::CheckpointRestore {
-            checkpoint_id: "cp-1".into(),
-        },
         HostToRuntime::DelegateLaunch {
             session_id: "sess-1".into(),
             delegate_task_id: "dt-1".into(),
@@ -135,7 +127,6 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             workspace_path: None,
             name: "gitee-remote".into(),
         },
-        HostToRuntime::ReportList { limit: None },
         HostToRuntime::ModelSwitch {
             session_id: Some("s1".into()),
             to: bbrt_protocol::ModelPolicy::Fast,
@@ -231,22 +222,6 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             ],
             multi_select: false,
         },
-        RuntimeToHost::CheckpointCreated {
-            checkpoint_id: "cp-1".into(),
-            session_id: "sess-1".into(),
-            files_changed: vec![FileChange {
-                path: "src/main.rs".into(),
-                add: 8,
-                del: 4,
-            }],
-            reason: CheckpointReason::PreEdit,
-            git_ref: Some("refs/bbc-agent/sess-1/cp-1".into()),
-        },
-        RuntimeToHost::CheckpointRestored {
-            ok: true,
-            new_checkpoint_id: Some("cp-2".into()),
-            error: None,
-        },
         RuntimeToHost::CompactionEvent {
             session_id: "sess-1".into(),
             phase: CompactionPhase::Done,
@@ -321,7 +296,6 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             exit_code: 0,
             summary: "完成修复".into(),
             changed_files: vec!["src/auth.rs".into()],
-            checkpoint_id: Some("cp-2".into()),
             child_session_ref: Some("cs-9".into()),
         },
         RuntimeToHost::SessionStateReport {
@@ -373,17 +347,6 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             name: "old-note".into(),
             reason: "capacity".into(),
         },
-        RuntimeToHost::ReportDaily {
-            date: "2026-11-06".into(),
-            path: "/data/agent/reports/2026-11-06.json".into(),
-            stats: DailyStatsLite {
-                sessions: 3,
-                tools: 47,
-                blocked: 2,
-                files_changed: 12,
-                memory_saved: 3,
-            },
-        },
         RuntimeToHost::MemoryListResult {
             items: vec![MemoryListItem {
                 name: "gitee-remote".into(),
@@ -400,18 +363,6 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
         // D23/M3：公共层移除回执
         RuntimeToHost::MemoryForgetResult {
             removed: vec!["[画像] 用户叫小红".into()],
-        },
-        RuntimeToHost::ReportListResult {
-            items: vec![ReportListItem {
-                date: "2026-11-06".into(),
-                stats: DailyStatsLite {
-                    sessions: 3,
-                    tools: 47,
-                    blocked: 2,
-                    files_changed: 12,
-                    memory_saved: 3,
-                },
-            }],
         },
     ]
 }
@@ -442,7 +393,7 @@ fn roundtrip_all_host_to_runtime() {
     let all = all_host_to_runtime();
     assert_eq!(
         all.len(),
-        23,
+        20,
         "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong + D20 clarify.response"
     );
     for msg in &all {
@@ -455,8 +406,8 @@ fn roundtrip_all_runtime_to_host() {
     let all = all_runtime_to_host();
     assert_eq!(
         all.len(),
-        38,
-        "D11 §4 RT→宿主 21 类型 + D15 追加 6 类型 + checkpoint.restored + 双向 ping/pong + 2026-11-11 interrupted/renamed + D20 clarify.request/状态样本 + D23 memory.forget.result"
+        34,
+        "D11 §4 RT→宿主 21 类型 + 双向 ping/pong + 2026-11-11 interrupted/renamed + D20 clarify.request/状态样本 + D23 memory.forget.result"
     );
     for msg in &all {
         roundtrip(msg);
@@ -639,28 +590,6 @@ fn golden_clarify_request_and_response() {
         json!({
             "type":"clarify.response","questionId":"q-call-9",
             "answers":["加漂移窗口"]
-        }),
-    );
-}
-
-#[test]
-fn golden_checkpoint_created() {
-    golden(
-        &RuntimeToHost::CheckpointCreated {
-            checkpoint_id: "cp-3".into(),
-            session_id: "s".into(),
-            files_changed: vec![FileChange {
-                path: "src/auth.rs".into(),
-                add: 8,
-                del: 4,
-            }],
-            reason: CheckpointReason::PreCommand,
-            git_ref: None,
-        },
-        json!({
-            "type":"checkpoint.created","checkpointId":"cp-3","sessionId":"s",
-            "filesChanged":[{"path":"src/auth.rs","add":8,"del":4}],
-            "reason":"pre-command"
         }),
     );
 }
@@ -865,7 +794,7 @@ fn golden_ping_empty_payload() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn golden_d15_memory_and_report_messages() {
+fn golden_d15_memory_messages() {
     // memory.saved：变体字段名 memory_type（内部 tag 模式不得与 tag 名 type 同名），线路名 memoryType
     golden(
         &RuntimeToHost::MemorySaved {
@@ -899,24 +828,6 @@ fn golden_d15_memory_and_report_messages() {
         },
         json!({"type":"memory.evicted","sessionId":"sess-1","name":"old-note","reason":"capacity"}),
     );
-    // report.daily：嵌套 DailyStatsLite 自带 camelCase（filesChanged/memorySaved 逐字）
-    golden(
-        &RuntimeToHost::ReportDaily {
-            date: "2026-11-06".into(),
-            path: "/data/agent/reports/2026-11-06.json".into(),
-            stats: DailyStatsLite {
-                sessions: 3,
-                tools: 47,
-                blocked: 2,
-                files_changed: 12,
-                memory_saved: 3,
-            },
-        },
-        json!({
-            "type":"report.daily","date":"2026-11-06","path":"/data/agent/reports/2026-11-06.json",
-            "stats":{"sessions":3,"tools":47,"blocked":2,"filesChanged":12,"memorySaved":3}
-        }),
-    );
     // 宿主→RT 三个 REQ：limit 可缺省
     golden(
         &HostToRuntime::MemoryList {
@@ -941,10 +852,6 @@ fn golden_d15_memory_and_report_messages() {
             name: "gitee-remote".into(),
         },
         json!({"type":"memory.delete","name":"gitee-remote"}),
-    );
-    golden(
-        &HostToRuntime::ReportList { limit: None },
-        json!({"type":"report.list"}),
     );
 
     // 三个 REQ 回执：条目 wire 名逐字照 D15（type/updated_at 保留原样）
@@ -977,25 +884,6 @@ fn golden_d15_memory_and_report_messages() {
             removed: vec!["用户叫小红".into()],
         },
         json!({"type":"memory.forget.result","removed":["用户叫小红"]}),
-    );
-    golden(
-        &RuntimeToHost::ReportListResult {
-            items: vec![ReportListItem {
-                date: "2026-11-06".into(),
-                stats: DailyStatsLite {
-                    sessions: 3,
-                    tools: 47,
-                    blocked: 2,
-                    files_changed: 12,
-                    memory_saved: 3,
-                },
-            }],
-        },
-        json!({
-            "type":"report.list.result",
-            "items":[{"date":"2026-11-06",
-                      "stats":{"sessions":3,"tools":47,"blocked":2,"filesChanged":12,"memorySaved":3}}]
-        }),
     );
 
     // 信封路径：memory.saved 打包后 payload 不含 type 键，unwrap 可原样还原

@@ -79,6 +79,30 @@ fn until(rx: &receiver::LineRx, want: &str, seen: &mut Vec<Envelope>) -> Envelop
     );
 }
 
+/// 等谓词命中（**先查已见集合再等未来**——后台委派语义下收尾轮的
+/// stream.delta/idle 可能早于 delegate.end 到达、已被前序 until 扫进 seen；
+/// 检查点/记忆写盘延迟移除后两路纯竞速，断言须顺序无关）
+fn until_pred(
+    rx: &receiver::LineRx,
+    seen: &mut Vec<Envelope>,
+    pred: impl Fn(&Envelope) -> bool,
+) -> Envelope {
+    if let Some(pos) = seen.iter().position(|e| pred(e)) {
+        return seen.remove(pos);
+    }
+    for _ in 0..64 {
+        let env = rx.next_envelope("等谓词命中");
+        if pred(&env) {
+            return env;
+        }
+        seen.push(env);
+    }
+    panic!(
+        "64 条信封内谓词未命中（已见: {:?}）",
+        seen.iter().map(|e| e.msg_type.clone()).collect::<Vec<_>>()
+    );
+}
+
 // ---- mock 网关 ----
 
 fn serve_mock_gateway(listener: TcpListener, script: Arc<Mutex<Vec<String>>>) {
@@ -297,7 +321,7 @@ fn e2e_full_runtime_process() {
         Some("idle")
     );
 
-    // ⑤ 结束 → 日报（journal 含 session.started/tool.executed/memory.saved）
+    // ⑤ 结束 → session.ended（日报已随 UI 整域退役移除）
     send_msg(
         &mut stdin,
         "h-4",
@@ -306,29 +330,13 @@ fn e2e_full_runtime_process() {
             reason: bbrt_protocol::EndReason::Normal,
         },
     );
-    // 事件序：report.daily(r-evt) → session.ended(事件) → session.ended(ack)；按发生序断言
-    let daily = until(&pump, "report.daily", &mut seen);
     let _ended = until(&pump, "session.ended", &mut seen);
-    assert!(
-        daily
-            .payload
-            .get("stats")
-            .and_then(|s| s.get("tools"))
-            .and_then(|t| t.as_u64())
-            .unwrap_or(0)
-            >= 1,
-        "日报应含工具计数"
-    );
 
-    // 产物落盘核验：记忆 md + 日报 md + SQLite WAL
+    // 产物落盘核验：记忆 md + SQLite WAL
     let agent_dir = tmp.path().join("agent");
     assert!(
         agent_dir.join("memory").join("MEMORY.md").exists(),
         "MEMORY.md 应存在"
-    );
-    assert!(
-        agent_dir.join("reports").read_dir().unwrap().count() >= 1,
-        "日报产物应存在"
     );
     assert!(tmp.path().join("runtime.db").exists(), "SQLite 应存在");
 
@@ -548,14 +556,18 @@ fn e2e_delegate_via_generic_cli() {
             rejected_hunks: None,
         },
     );
-    let delta = until(&pump, "stream.delta", &mut seen);
+    // 收尾轮与后台委派是两条并发线（D16 §5）：stream.delta/idle 可能早于
+    // delegate.end 已被扫进 seen——until_pred 先查已见，顺序无关
+    let delta = until_pred(&pump, &mut seen, |e| e.msg_type == "stream.delta");
     assert!(delta
         .payload
         .get("delta")
         .and_then(|d| d.as_str())
         .unwrap_or("")
         .contains("委派完成收到"));
-    let idle = until(&pump, "session.state", &mut seen);
+    let idle = until_pred(&pump, &mut seen, |e| {
+        e.msg_type == "session.state" && e.payload.get("state").and_then(|s| s.as_str()) == Some("idle")
+    });
     assert_eq!(
         idle.payload.get("state").and_then(|s| s.as_str()),
         Some("idle")

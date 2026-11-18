@@ -8,7 +8,7 @@ use bbrt_aigw::{
     ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent, ToolCallMsg, ToolSpec, Usage,
 };
 use bbrt_context::{BudgetConfig, Round, Summarizer};
-use bbrt_memory::{ActivityEvent, MemoryEngine};
+use bbrt_memory::MemoryEngine;
 use bbrt_sec::gate::PermissionMode;
 use bbrt_sec::memory::GrantScope;
 
@@ -158,7 +158,6 @@ fn deps<M: bbrt_aigw::ChatClient + 'static>(
         memory,
         wal: Arc::new(NoopEventLog),
         sink,
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,
@@ -550,17 +549,9 @@ fn memory_heuristic_and_daily_report() {
 
     runner.end(&d, "测试会话");
     let evs = events_of(sink.as_ref());
-    assert!(
-        evs.iter()
-            .any(|e| matches!(e, SessionEvent::ReportDaily { .. })),
-        "session.end 应触发日报"
-    );
     assert!(evs
         .iter()
         .any(|e| matches!(e, SessionEvent::SessionEnded { .. })));
-    // 日报文件真实存在
-    let reports = tmp.path().join("agent").join("reports");
-    assert!(reports.read_dir().unwrap().count() >= 1);
 }
 
 #[test]
@@ -649,7 +640,6 @@ fn wal_records_monotonic_events() {
         memory: None,
         wal: log.clone(),
         sink,
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,
@@ -748,7 +738,6 @@ fn compaction_triggers_on_long_history() {
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,
@@ -802,11 +791,6 @@ fn summarizer_trait_object_compatible() {
             arguments: "{}".into(),
         }],
         tool_call_id: None,
-    };
-    let _ = ActivityEvent::SessionStarted {
-        session: "s".into(),
-        workspace: "/w".into(),
-        mode: "ask".into(),
     };
 }
 
@@ -1003,7 +987,6 @@ fn delegate_turn_setup() -> (Arc<CollectSink>, LoopDeps) {
             memory: None,
             wal: Arc::new(NoopEventLog),
             sink,
-            snapshots: None,
             skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
             fanout: None,
             experts: None,
@@ -1113,7 +1096,6 @@ fn delegate_without_launcher_blocked_8030() {
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,
@@ -1404,7 +1386,6 @@ fn delegate_wal_audit_trail() {
         memory: None,
         wal: log.clone(),
         sink,
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,
@@ -1463,7 +1444,6 @@ fn delegate_brief_timeout_wal() {
         memory: None,
         wal: log.clone(),
         sink,
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,
@@ -1512,7 +1492,6 @@ fn manager_switch_model_emits() {
         memory: None,
         wal: log.clone(),
         sink: sink.clone(),
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,
@@ -1602,7 +1581,6 @@ fn capture_deps(model: Arc<CapturingModel>) -> LoopDeps {
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink: Arc::new(CollectSink::default()),
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,
@@ -1666,7 +1644,6 @@ fn switch_model_override_persists() {
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
-        snapshots: None,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
         fanout: None,
         experts: None,

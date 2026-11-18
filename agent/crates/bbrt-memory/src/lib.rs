@@ -1,33 +1,26 @@
-//! bbrt-memory：知识记忆双轨与活动日报（权威 = docs/detail/D15）+
-//! 公共层压实记忆（D23 升级）。
+//! bbrt-memory：知识记忆（权威 = docs/detail/D15）+ 公共层压实记忆（D23 升级）。
 //!
 //! - **主动轨** `knowledge/`：ZCode 式文件记忆（frontmatter + `MEMORY.md` 索引）。
 //!   写入路径 W1（模型工具 `memory.save`）与 W2（规则启发，免模型兜底）；
 //!   W3（会话结束提炼）阶段二随 aigw 压缩摘要接入。
 //! - **公共层** `global/`（D23）：用户级换制——journal.jsonl（真相）+ USER.md
 //!   （压实视图=缓存）；十类硬枚举+硬度轴；user 类与日常会话回落路由至此。
-//! - **被动轨** `journal` + `digest`：活动 JSONL 按日落地 → 确定性聚合出日报
-//!   （md + json 双产物，不依赖 LLM，弱网/离线可用）。
-//! - 装配：`MemoryEngine` 组合 global + knowledge + journal + digest，被
-//!   bbrt-session 依赖（会话事件喂 journal；session.ended 触发当日日报重算）。
+//! - 装配：`MemoryEngine` 组合 global + knowledge，被 bbrt-session 依赖。
+//!   （D15 被动轨 journal/digest 活动日报已随日报 UI 整域退役移除。）
 //!
 //! 约束：同步 API、无 tokio；存储为纯文件（不依赖 SQLite），目录即权威；
 //! 脱敏在记忆正文入口就地拒写（D15 §4；不依赖 bbrt-sec，接入层可叠加 masking）。
 
 #![forbid(unsafe_code)]
 
-pub mod digest;
 pub mod global;
-pub mod journal;
 pub mod knowledge;
 
-pub use digest::{DailyStats, DelegateExit, Digest, DigestError, Report, SessionRow};
 pub use global::{
     compaction_prompt, global_line, parse_compacted, AddOutcome, Compactor, GlobalEntry,
     GlobalError, GlobalOp, GlobalStore, GlobalType, HARD_LIMIT_CHARS, MAX_ENTRY_CHARS,
     SOFT_TARGET_CHARS,
 };
-pub use journal::{ActivityEvent, DayRead, FileChangeKind, Journal, RETENTION_DAYS};
 pub use knowledge::{
     detect_memory_hint, ErrorTracker, Heuristic, IndexOutcome, KnowledgeStore, LessonCandidate,
     MemoryEntry, MemoryError, MemorySummary, MemoryType, SaveInput, SaveResult, MAX_BODY_BYTES,
@@ -47,7 +40,7 @@ use serde::{Deserialize, Serialize};
 // 可注入时钟（时间戳/日界统一出口；测试注入固定值）
 // ---------------------------------------------------------------------------
 
-/// 时钟抽象：RFC3339 时间戳（记忆 frontmatter 用）与本地日（journal/日报日界）。
+/// 时钟抽象：RFC3339 时间戳（记忆 frontmatter 用）与本地日。
 /// std 无本地时区接口且本 crate 不引 chrono，`SystemClock` 取 UTC 日界
 /// （v0.1 已知简化，跨时区用户的"一天"以 UTC 切分）。
 pub trait Clock: Send + Sync {
@@ -105,9 +98,28 @@ impl Clock for FixedClock {
 fn epoch_to_rfc3339(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
-    let (y, m, d) = journal::civil_from_days(days);
+    let (y, m, d) = civil_from_days(days);
     let (h, mi, s) = (rem / 3_600, (rem % 3_600) / 60, rem % 60);
     format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}+00:00")
+}
+
+// ---------------------------------------------------------------------------
+// 日期工具（无 chrono；civil 天数算法采用 Howard Hinnant 的公历互换公式，
+// 原 journal.rs 随被动轨退役后仅时钟换算仍需 days→(y,m,d) 一个方向）
+// ---------------------------------------------------------------------------
+
+/// 天数锚 → (y, m, d)（1970-01-01 = 0）
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    (y + i64::from(m <= 2), m as u32, d as u32)
 }
 
 // ---------------------------------------------------------------------------
@@ -171,18 +183,6 @@ pub struct MemoryEvictedEvent {
     pub reason: String,
 }
 
-/// `report.daily`：日报产出/更新上报（UNT）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReportDailyEvent {
-    /// 日期（YYYY-MM-DD）
-    pub date: String,
-    /// 人读产物路径
-    pub path: String,
-    /// 聚合统计（camelCase）
-    pub stats: DailyStats,
-}
-
 /// `save_memory` 完整结果：写入/更新事件 + 淘汰事件列表
 #[derive(Debug, Clone, PartialEq)]
 pub struct SaveOutcome {
@@ -192,38 +192,23 @@ pub struct SaveOutcome {
     pub evicted: Vec<MemoryEvictedEvent>,
 }
 
-impl Report {
-    /// 日报产物 → `report.daily` 协议事件
-    pub fn to_event(&self) -> ReportDailyEvent {
-        ReportDailyEvent {
-            date: self.date.clone(),
-            path: self.md_path.to_string_lossy().into_owned(),
-            stats: self.stats.clone(),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-// MemoryEngine：knowledge + journal + digest 装配
+// MemoryEngine：knowledge + global 装配
 // ---------------------------------------------------------------------------
 
-/// 记忆引擎：统一打开 `{dataDir}/agent` 下的 memory / journal / reports 三目录。
+/// 记忆引擎：统一打开 `{dataDir}/agent` 下的 memory 目录。
 ///
-/// 目录布局（D15 §2.1 / §3.1 / §3.2；D19 增项目分区；D23 用户级换制+迁移归档）：
+/// 目录布局（D15 §2.1；D19 增项目分区；D23 用户级换制+迁移归档）：
 /// ```text
 /// {dataDir}/agent/memory/global/          D23 公共层：journal.jsonl + USER.md
 /// {dataDir}/agent/memory/projects/<key>/  项目级分区（key=scope_key(工作目录)）
 /// {dataDir}/agent/memory/archive/         D23 一次性迁移归档（旧用户级文件族）
-/// {dataDir}/agent/journal/                YYYY-MM-DD.jsonl（被动轨活动日志）
-/// {dataDir}/agent/reports/                YYYY-MM-DD.md + YYYY-MM-DD.json
 /// ```
 /// MemoryEngine（Clone 为手工实现——见下方 impl）
 pub struct MemoryEngine {
     clock: Arc<dyn Clock>,
     global: GlobalStore,
     knowledge: KnowledgeStore,
-    journal: Journal,
-    digest: Digest,
     /// D19 项目分区根（memory/projects）
     projects_dir: PathBuf,
     /// D19 分区缓存（realpath → store；KnowledgeStore=PathBuf+Arc 时钟，克隆廉价）
@@ -242,8 +227,6 @@ impl Clone for MemoryEngine {
             clock: Arc::clone(&self.clock),
             global: self.global.clone(),
             knowledge: self.knowledge.clone(),
-            journal: self.journal.clone(),
-            digest: self.digest.clone(),
             projects_dir: self.projects_dir.clone(),
             project_stores: Mutex::new(cached),
         }
@@ -256,8 +239,6 @@ impl std::fmt::Debug for MemoryEngine {
         f.debug_struct("MemoryEngine")
             .field("global", &self.global)
             .field("knowledge", &self.knowledge)
-            .field("journal", &self.journal)
-            .field("digest", &self.digest)
             .field("projects_dir", &self.projects_dir)
             .finish()
     }
@@ -305,8 +286,7 @@ impl MemoryEngine {
     }
 
     /// D23/M3：`BBC_MEMORY_ROOT` 覆盖入口——记忆根（global/projects/archive）
-    /// 可整体指到别处（联调隔离：防 :8090 测试期 agent 脏记忆污染日常
-    /// USER.md）；活动 journal/日报仍在 dataDir（被动轨与记忆存储无关）。
+    /// 可整体指到别处（联调隔离：防 :8090 测试期 agent 脏记忆污染日常 USER.md）。
     pub fn open_root(
         data_dir: &Path,
         memory_root: Option<PathBuf>,
@@ -316,8 +296,6 @@ impl MemoryEngine {
         let memory_root = memory_root.unwrap_or_else(|| base.join("memory"));
         let global = GlobalStore::new(memory_root.join("global"), Arc::clone(&clock))?;
         let knowledge = KnowledgeStore::new(&memory_root, Arc::clone(&clock))?;
-        let journal = Journal::new(base.join("journal"))?;
-        let digest = Digest::new(journal.clone(), base.join("reports"))?;
         global::migrate_legacy_user_store(&memory_root, &global, &clock)?;
         knowledge.rebuild_index()?;
         global.reconcile()?;
@@ -325,8 +303,6 @@ impl MemoryEngine {
             clock,
             global,
             knowledge,
-            journal,
-            digest,
             projects_dir: memory_root.join("projects"),
             project_stores: Mutex::new(HashMap::new()),
         })
@@ -362,30 +338,12 @@ impl MemoryEngine {
         Ok(store)
     }
 
-    /// 活动日志（被动轨原始层）
-    pub fn journal(&self) -> &Journal {
-        &self.journal
-    }
-
-    /// 日报生成器（被动轨产物层）
-    pub fn digest(&self) -> &Digest {
-        &self.digest
-    }
-
     /// 当前日（注入时钟）
     pub fn today(&self) -> String {
         self.clock.today()
     }
 
-    /// 活动事件入 journal（写前 append、写后 flush；D15 §3.1）。
-    /// `memory.saved` 事件同样落 journal——日报聚合即读 journal，
-    /// 统计由同一数据源驱动（D15 §3.2 交叉印证）。
-    pub fn record(&self, event: &ActivityEvent) -> io::Result<()> {
-        self.journal.append(&self.clock.today(), event)
-    }
-
-    /// W1 写入路径：知识记忆落盘 + journal 记 `memory.saved` + 产出协议事件。
-    /// journal 记录失败时返回错误——但记忆文件已落盘，重试安全（同题更新不重复）。
+    /// W1 写入路径：知识记忆落盘 + 产出协议事件。
     /// D19 起为本方法的作用域路由入口（None/空 workspace=用户级）。
     pub fn save_memory(&self, input: &SaveInput) -> Result<SaveOutcome, MemoryError> {
         self.save_memory_scoped(None, input)
@@ -417,11 +375,6 @@ impl MemoryEngine {
         let name = scope_key(&real);
         let store = self.project_store(&real).map_err(MemoryError::Io)?;
         let result = store.save(input)?;
-        self.record(&ActivityEvent::MemorySaved {
-            session: input.session.clone(),
-            title: result.title.clone(),
-            memory_type: input.mtype,
-        })?;
         Ok(SaveOutcome {
             saved: MemorySavedEvent {
                 session_id: input.session.clone(),
@@ -446,7 +399,7 @@ impl MemoryEngine {
     }
 
     /// D23 公共层写入（W1 十类直通 / W2·W3 回落统一入口）：
-    /// journal 追加 + 重投影（规则内免 LLM）+ 被动轨统计（best-effort）。
+    /// journal 追加 + 重投影（规则内免 LLM）。
     pub fn save_global(
         &self,
         gtype: GlobalType,
@@ -454,11 +407,6 @@ impl MemoryEngine {
         session: &str,
     ) -> Result<SaveOutcome, MemoryError> {
         let outcome = self.global.add(gtype, text, session)?;
-        let _ = self.record(&ActivityEvent::MemorySaved {
-            session: session.to_string(),
-            title: text.chars().take(40).collect(),
-            memory_type: MemoryType::User,
-        });
         Ok(SaveOutcome {
             saved: MemorySavedEvent {
                 session_id: session.to_string(),
@@ -616,27 +564,6 @@ impl MemoryEngine {
         }
     }
 
-    /// session.ended 落地后的当日日报重算（D15 §3.2 触发 1；幂等覆盖）。
-    /// 空日（当日无 journal）返回 None。
-    pub fn on_session_end(&self) -> Result<Option<Report>, DigestError> {
-        self.digest.generate(&self.clock.today())
-    }
-
-    /// Runtime 启动回补（D15 §3.2 触发 2）：journal 有而 reports 缺的日期
-    /// 逐日补生成（覆盖崩溃漏算；含当日）。返回补出的日报（日期升序）。
-    pub fn startup_backfill(&self) -> Result<Vec<Report>, DigestError> {
-        self.digest.backfill(&self.clock.today())
-    }
-
-    /// 已有日报列表（D15 §3.3 report.list：reports 目录统计，日期倒序）
-    pub fn list_reports(&self, limit: usize) -> Vec<DailyStats> {
-        self.digest.list(limit)
-    }
-
-    /// journal 90 天保留清理（D15 §3.1；im_db_prune 同节奏）。返回被删日期。
-    pub fn rotate_journal(&self) -> io::Result<Vec<String>> {
-        self.journal.rotate(&self.clock.today())
-    }
 }
 
 // ---------------------------------------------------------------------------

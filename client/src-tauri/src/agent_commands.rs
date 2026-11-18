@@ -220,29 +220,6 @@ pub fn workspace_forget(host: Host, id: String) -> Result<Value, String> {
     Ok(json!({ "ok": ok }))
 }
 
-/// 日报列表（REQ→report.list.result；stats 键对齐 FE ReportStats）
-#[tauri::command]
-pub fn report_list(host: Host, limit: Option<u32>) -> Result<Value, String> {
-    let result = host.request("report.list", json!({ "limit": limit.unwrap_or(30) }))?;
-    Ok(json!({ "items": result["items"].clone() }))
-}
-
-/// 日报正文：直接读 {dataDir}/agent/reports/{date}.md（协议无正文查询消息）
-#[tauri::command]
-pub fn report_get(host: Host, date: String) -> Result<Value, String> {
-    // 日期白名单（防路径穿越）
-    if date.len() != 10 || !date.chars().all(|c| c.is_ascii_digit() || c == '-') {
-        return Err("非法日期".into());
-    }
-    let path = host
-        .data_dir()
-        .join("agent")
-        .join("reports")
-        .join(format!("{date}.md"));
-    let markdown = std::fs::read_to_string(&path).map_err(|_| format!("日报不存在: {date}"))?;
-    Ok(json!({ "markdown": markdown }))
-}
-
 /// 确认委派启动（delegate.launch；D16 §5 简报阶段——run 尚未后台化，
 /// RT 按 sessionId 定向投递 runner 通道）。task_brief=None=沿用模型原稿
 /// （确认不改稿是主路径；编辑稿随 P1 简报编辑器）。mode/workspace 为协议

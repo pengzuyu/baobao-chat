@@ -2,7 +2,7 @@
  * Agent feature store（模块 UI 态，D01 §12.2-5 / D08 §8）：
  * - 会话列表 / 当前会话事件流（按序追加的端内投影）/ 状态机投影（session.state 驱动）
  * - 未决审批（requestId → 倒计时/结果；120s 到点置灰=拒绝）
- * - 知识记忆条目 / 日报列表（D15 双轨）
+ * - 记忆回执（memorySaved → 会话流系统消息；记忆/日报浏览面均已退役）
  * - handleEvent() 为唯一事件入口（reducer 式分发；数据源 = bridge.onEvent）
  */
 
@@ -11,7 +11,6 @@ import { getAgentBridge } from '../bridge';
 import { notifyAgentDone, reportAgentTask, sendSystemNotification, workbenchVisible } from '../bridge/notify';
 import type {
   AgentEvent,
-  AgentReport,
   AgentSessionMeta,
   AgentWorkspaceInfo,
   HistoryItem,
@@ -83,14 +82,6 @@ export type StreamItem =
    *  刷新/重开后消失，仅当轮提示重发/换模型可重试） */
   | { kind: 'error'; key: string; code: number; message: string; fatal: boolean };
 
-/** 检查点（checkpoint.created 投影，右栏时间线） */
-export interface CheckpointItem {
-  id: string;
-  reason: string;
-  filesChanged: string[];
-  createdAt: number;
-}
-
 interface AgentState {
   /** 桥类型（mock=本地剧本 / tauri=真实宿主） */
   bridgeKind: 'mock' | 'tauri';
@@ -106,8 +97,6 @@ interface AgentState {
 
   /** sessionId → 事件流（按序追加） */
   streams: Record<string, StreamItem[]>;
-  /** sessionId → 检查点栈（新→旧） */
-  checkpoints: Record<string, CheckpointItem[]>;
   /** sessionId → 当前模型选择（model.switched 维护；override=直达引用 p:<id>:<model>） */
   modelBySession: Record<string, { policy: 'fast' | 'strong' | 'auto'; override?: string }>;
   /** sessionId → 最近一轮用量（stream.done usage） */
@@ -131,9 +120,6 @@ interface AgentState {
   workspaces: AgentWorkspaceInfo[];
   workspacesLoading: boolean;
 
-  reports: AgentReport[];
-  reportsLoading: boolean;
-  reportsError: string | null;
 
   // ---- 动作 ----
   init: () => Promise<void>;
@@ -384,7 +370,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   activeSessionId: null,
 
   streams: {},
-  checkpoints: {},
   modelBySession: {},
   usageBySession: {},
   runsBySession: {},
@@ -396,26 +381,19 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   workspaces: [],
   workspacesLoading: false,
 
-  reports: [],
-  reportsLoading: false,
-  reportsError: null,
 
   init: async () => {
     // 事件订阅只装一次（App 挂载已兜底注册；此处幂等）
     ensureAgentEventSubscribed();
     if (get().ready || get().sessionsLoading) return;
 
-    set({ sessionsLoading: true, sessionsError: null, reportsLoading: true });
+    set({ sessionsLoading: true, sessionsError: null });
     try {
       const sessions = await bridge.listSessions();
       set({ sessions, sessionsLoading: false, ready: true });
     } catch (err) {
       set({ sessionsLoading: false, sessionsError: err instanceof Error ? err.message : '会话列表加载失败', ready: true });
     }
-    void bridge
-      .listReports()
-      .then((reports) => set({ reports, reportsLoading: false }))
-      .catch((err: unknown) => set({ reportsLoading: false, reportsError: err instanceof Error ? err.message : '日报加载失败' }));
     // D19 项目登记表（左栏项目区数据源；失败静默——会话 workspace 路径兜底展示）
     void get().loadWorkspaces();
   },
@@ -789,25 +767,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             },
           };
         }
-        case 'checkpointCreated': {
-          const list = s.streams[event.sessionId] ?? [];
-          return {
-            streams: {
-              ...s.streams,
-              [event.sessionId]: [
-                ...list,
-                { kind: 'system', key: nextKey('sys'), text: `已创建检查点 ${event.checkpointId}（${event.reason}）` },
-              ],
-            },
-            checkpoints: {
-              ...s.checkpoints,
-              [event.sessionId]: [
-                { id: event.checkpointId, reason: event.reason, filesChanged: event.filesChanged, createdAt: Date.now() },
-                ...(s.checkpoints[event.sessionId] ?? []),
-              ],
-            },
-          };
-        }
         case 'modelSwitched': {
           // 2026-11-12 用户口径：切换提示不进回复气泡（chip 即时反映档位/直达引用，
           // 时间线插话打扰阅读）；仅更新会话模型状态
@@ -827,18 +786,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
               ],
             },
           };
-        }
-        case 'reportDaily': {
-          // D15 §3.3：日报产出/更新（同日覆盖；markdown 已在列表缓存则沿用）
-          const report: AgentReport = {
-            date: event.date,
-            stats: event.stats,
-            markdown:
-              s.reports.find((r) => r.date === event.date)?.markdown ??
-              `# ${event.date} Agent 日报\n\n- 会话 ${event.stats.sessions} 个\n- 工具调用 ${event.stats.tools} 次\n- 被拦截 ${event.stats.blocked} 次\n- 文件变更 ${event.stats.files}\n- 今日记忆 +${event.stats.memorySaved}`,
-          };
-          const others = s.reports.filter((r) => r.date !== event.date);
-          return { reports: [report, ...others] };
         }
         case 'sessionEnded': {
           const list = s.streams[event.sessionId] ?? [];
@@ -1050,13 +997,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           return s;
       }
     });
-    // 日报产出 → 重拉全量列表（含当日 markdown 正文，D15 §3.2 幂等重算）
-    if (event.type === 'reportDaily') {
-      void bridge
-        .listReports()
-        .then((reports) => set({ reports }))
-        .catch(() => undefined);
-    }
     // 跨端终态上报（14 篇 §3.3 OQ-C32）：run 终态 → notify 域落卡 + agent.task.completed
     // 推其它在线设备（本端经 markReportedRun 自滤防双响；尽力而为不阻塞事件泵）
     if (event.type === 'delegateEnd') {

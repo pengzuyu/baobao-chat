@@ -40,18 +40,6 @@ CREATE TABLE agent_event (                     -- 事件镜像 WAL（§9.1）
 );
 CREATE INDEX idx_event_session ON agent_event(session_id, seq);
 
-CREATE TABLE agent_checkpoint (
-  id             TEXT PRIMARY KEY,             -- cp-<ulid>
-  session_id     TEXT NOT NULL REFERENCES agent_session(id),
-  git_ref        TEXT,                         -- refs/bbc-agent/{session}/cp-{n}
-  untracked      TEXT,                         -- JSON: 未跟踪文件清单
-  files_changed  TEXT NOT NULL,                -- JSON: [{path,add,del}]
-  reason         TEXT NOT NULL CHECK(reason IN('pre-edit','pre-command','manual','delegate','pre-restore')),
-  last_event_seq INTEGER NOT NULL,             -- 重放起点（§9.2）
-  created_at     INTEGER NOT NULL
-);
-CREATE INDEX idx_cp_session ON agent_checkpoint(session_id, created_at DESC);
-
 CREATE TABLE agent_context (                   -- 上下文持久化（压缩态）
   session_id      TEXT PRIMARY KEY REFERENCES agent_session(id),
   history         TEXT NOT NULL,               -- JSON: 近 N 轮

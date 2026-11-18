@@ -15,8 +15,8 @@ use bbrt_hostapi::{
     MAX_PENDING_WRITE_BYTES,
 };
 use bbrt_protocol::{
-    read_message, write_message, CodecError, DailyStatsLite, DelegateEventKind, Envelope,
-    HostToRuntime, MemoryListItem, ReportListItem, RuntimeToHost, SessionState, PROTOCOL_VERSION,
+    read_message, write_message, CodecError, DelegateEventKind, Envelope, HostToRuntime,
+    MemoryListItem, RuntimeToHost, SessionState, PROTOCOL_VERSION,
 };
 use serde_json::json;
 
@@ -61,18 +61,6 @@ impl RuntimeHandler for TestHandler {
             }),
             HostToRuntime::MemoryDelete { name, .. } => Some(RuntimeToHost::MemoryDeleteResult {
                 ok: name != "missing",
-            }),
-            HostToRuntime::ReportList { .. } => Some(RuntimeToHost::ReportListResult {
-                items: vec![ReportListItem {
-                    date: "2026-11-06".into(),
-                    stats: DailyStatsLite {
-                        sessions: 3,
-                        tools: 47,
-                        blocked: 2,
-                        files_changed: 12,
-                        memory_saved: 3,
-                    },
-                }],
             }),
             _ => None, // NTF 通常无回复
         }
@@ -480,34 +468,15 @@ fn d15_memory_and_report_requests_get_paired_replies() {
     assert_eq!(r2.reply_to.as_deref(), Some("h-m2"));
     assert_eq!(r2.payload, json!({"ok":true}));
 
-    // report.list → 条目 stats 嵌套 camelCase（filesChanged/memorySaved）
-    host.send(
-        &Envelope::wrap(
-            PROTOCOL_VERSION,
-            "h-m3",
-            &HostToRuntime::ReportList { limit: None },
-        )
-        .unwrap(),
-    );
-    let r3 = host.recv();
-    assert_eq!(r3.msg_type, "report.list.result");
-    assert_eq!(r3.reply_to.as_deref(), Some("h-m3"));
-    assert_eq!(
-        r3.payload,
-        json!({"items":[{"date":"2026-11-06","stats":{"sessions":3,"tools":47,
-                         "blocked":2,"filesChanged":12,"memorySaved":3}}]})
-    );
-
     assert_eq!(rx.recv().unwrap(), "memory.list#h-m1");
     assert_eq!(rx.recv().unwrap(), "memory.delete#h-m2");
-    assert_eq!(rx.recv().unwrap(), "report.list#h-m3");
 
     host.close();
     let stats = handle.join().unwrap().unwrap();
     assert_eq!(
         stats,
         ServeStats {
-            envelopes: 3,
+            envelopes: 2,
             unknown_types: 0
         }
     );

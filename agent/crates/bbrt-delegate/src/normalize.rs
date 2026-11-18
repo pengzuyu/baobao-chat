@@ -153,7 +153,6 @@ pub fn exit_to_delegate_end(
     exit_code: i32,
     summary: String,
     changed_files: Vec<String>,
-    checkpoint_id: Option<String>,
     child_session_ref: Option<String>,
 ) -> RuntimeToHost {
     RuntimeToHost::DelegateEnd {
@@ -162,7 +161,6 @@ pub fn exit_to_delegate_end(
         exit_code,
         summary,
         changed_files,
-        checkpoint_id,
         child_session_ref,
     }
 }
@@ -522,7 +520,6 @@ mod tests {
             0,
             "完成".into(),
             vec!["src/a.rs".into()],
-            Some("ckpt-1".into()),
             Some("child-sess".into()),
         );
         assert!(matches!(

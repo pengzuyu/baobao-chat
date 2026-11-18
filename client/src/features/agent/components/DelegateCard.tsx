@@ -2,7 +2,7 @@
  * 委派卡（D16 类型 3 / P0-4）：四相位状态机——
  * - brief：简报待确认（建议后端 + [确认启动] [取消]；不改稿是主路径，编辑稿随 P1）
  * - running：后台执行中（输出尾窗 ≤50 行 + [取消]；会话可继续对话）
- * - review：delegate.end（exit=0）驱动——摘要/改动文件/检查点/续接句柄 + [采纳并回填] [拒绝]
+ * - review：delegate.end（exit=0）驱动——摘要/改动文件/续接句柄 + [采纳并回填] [拒绝]
  * - resolved：终态（已采纳/已拒绝/失败/已取消）
  * D26-O6：delegate-card 类退役——内联 token + antd Input/Spin/Typography。
  */
@@ -208,9 +208,8 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
               </div>
             </div>
           ) : null}
-          {(item.end.checkpointId || item.end.childSessionRef) && (
+          {item.end.childSessionRef && (
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: token.colorTextSecondary, fontFamily: 'var(--bbc-font-mono)' }}>
-              {item.end.checkpointId ? <span>回滚锚点 {item.end.checkpointId}</span> : null}
               {item.end.childSessionRef ? <span>可续接 {item.end.childSessionRef}</span> : null}
             </div>
           )}
@@ -238,7 +237,7 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
           ) : (
             <Typography.Text type="secondary" style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
               <XCircle size={12} aria-hidden />
-              {item.decision === 'reject' ? '结果已拒绝（可用检查点回滚）' : '已取消'}
+              {item.decision === 'reject' ? '结果已拒绝' : '已取消'}
             </Typography.Text>
           )}
         </div>

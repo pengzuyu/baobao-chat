@@ -17,8 +17,8 @@
  * | respondPermission(allow) | `agent_approve` | `{ request_id, scope: 'once'\|'session'\|'permanent', edited_args? }` → `{ ok }` |
  * | respondPermission(deny) | `agent_reject` | `{ request_id, reason? }` → `{ ok }` |
  * | setMode() | `agent_set_mode` | `{ session_id, mode }` → `{ ok, effective }` |
- * | listReports() | `report_list` + `report_get` | `{ limit?: number }` → `{ items: [{ date, stats }] }`；正文需扩展 `report_get { date } → { markdown }`（D15 §3.3 只登记了 list，正文为前端消费扩展） |
- * （memory_list/memory_delete/memory_forget 壳命令仍在——记忆浏览面已退役，前端桥不再封装） |
+ * （memory_list/memory_delete/memory_forget 壳命令仍在——记忆浏览面已退役，前端桥不再封装；
+ *  report_list/report_get 已随日报整域退役一并删除） |
  *
  * 事件 payload 字段（宿主透传 stdio 协议镜像 + 宿主补充）：
  * - `stream.delta` { session_id, delta, seq, channel } / `stream.done` { session_id, finish_reason, usage }
@@ -27,10 +27,8 @@
  * - `tool.result` { session_id, call_id, ok, summary, truncated, exit_code, duration_ms, blocked }
  * - `permission.request` { session_id, request_id, tool, risk, reason, preview, options, expires_at }
  * - `permission.response` { session_id, request_id, decision, scope }
- * - `checkpoint.created` { session_id, checkpoint_id, files_changed, reason }
  * - `model.switched` { session_id, from, to, reason }
  * - `memory.saved` { session_id, name, title, type, updated }（D15 §2.4）
- * - `report.daily` { date, path, stats }（D15 §3.3）
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -39,7 +37,6 @@ import { parseToolArgs } from './types';
 import type {
   AgentBridge,
   AgentEvent,
-  AgentReport,
   AgentSessionMeta,
   AgentWorkspaceInfo,
   ClarifyOptionDTO,
@@ -48,7 +45,6 @@ import type {
   MemoryType,
   PermissionMode,
   PermissionPreview,
-  ReportStats,
   RiskLevel,
   RunInfo,
   SessionStatus,
@@ -75,11 +71,6 @@ interface SessionRow {
   updated_at: number;
   ended_at?: number;
   summary?: string;
-}
-
-interface ReportRow {
-  date: string;
-  stats: ReportStats;
 }
 
 /** 宿主推送的原始事件（snake_case；type 为点号协议名） */
@@ -289,23 +280,6 @@ export class TauriAgentBridge implements AgentBridge {
     return data.items;
   }
 
-  async listReports(): Promise<AgentReport[]> {
-    const data = await invoke<{ items: ReportRow[] }>('report_list', { limit: 30 });
-    // 正文按日拉取（宿主扩展命令；缺省实现可先返回空串，UI 优雅降级）
-    const reports = await Promise.all(
-      data.items.map(async (row) => {
-        let markdown = '';
-        try {
-          const full = await invoke<{ markdown: string }>('report_get', { date: row.date });
-          markdown = full.markdown;
-        } catch {
-          markdown = `# ${row.date} Agent 日报\n\n（正文暂不可用：宿主未实现 report_get）`;
-        }
-        return { date: row.date, stats: row.stats, markdown } satisfies AgentReport;
-      }),
-    );
-    return reports.sort((a, b) => (a.date < b.date ? 1 : -1));
-  }
 }
 
 /** snake_case 原始事件 → camelCase AgentEvent（未知 type 忽略，前向兼容 D11 编解码规则） */
@@ -418,14 +392,6 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         decision: raw.decision === 'answered' ? 'answered' : 'cancelled',
         answers: str(raw.answers),
       };
-    case 'checkpoint.created':
-      return {
-        type: 'checkpointCreated',
-        sessionId: sid,
-        checkpointId: str(raw.checkpoint_id),
-        filesChanged: (raw.files_changed as string[] | undefined) ?? [],
-        reason: str(raw.reason),
-      };
     case 'model.switched':
       return {
         type: 'modelSwitched',
@@ -446,13 +412,6 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         // D19 作用域（协议 optional；缺省 user）
         scope: raw.scope === 'project' ? 'project' : 'user',
         workspaceName: typeof raw.workspaceName === 'string' ? raw.workspaceName : undefined,
-      };
-    case 'report.daily':
-      return {
-        type: 'reportDaily',
-        date: str(raw.date),
-        path: str(raw.path),
-        stats: (raw.stats as ReportStats | undefined) ?? { sessions: 0, tools: 0, blocked: 0, files: 0, memorySaved: 0 },
       };
     case 'subagent.spawn':
       return {
@@ -540,7 +499,6 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         exitCode: num(raw.exit_code, -1),
         summary: str(raw.summary),
         changedFiles: (raw.changed_files as string[] | undefined) ?? [],
-        checkpointId: raw.checkpoint_id ? str(raw.checkpoint_id) : undefined,
         childSessionRef: raw.child_session_ref ? str(raw.child_session_ref) : undefined,
       };
     default:

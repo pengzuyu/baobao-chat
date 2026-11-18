@@ -25,7 +25,7 @@ import { TypingState } from '../TypingState';
 
 type UserItem = Extract<StreamItem, { kind: 'user' }>;
 
-/** 系统提示行（检查点/记忆沉淀/子任务汇总；居中灰条） */
+/** 系统提示行（记忆沉淀/子任务汇总等；居中灰条） */
 export function SystemRow({ text }: { text: string }) {
   const { token } = theme.useToken();
   return (

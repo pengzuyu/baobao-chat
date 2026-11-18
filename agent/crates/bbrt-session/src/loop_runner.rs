@@ -2,7 +2,7 @@
 //!
 //! 一轮 turn：user.message → 上下文组装（必要时 compaction）→ 模型流式
 //! （stream.delta 逐段外发）→ 工具调用轮（门控→审批→沙箱执行→脱敏回填）
-//! → 直至 finish=stop 或步数/失败上限。全程 WAL 先行、journal 喂记忆双轨。
+//! → 直至 finish=stop 或步数/失败上限。全程 WAL 先行。
 //!
 //! 并发模型：同步阻塞；每 turn 在独立线程跑（bin 装配），宿主侧
 //! respond_permission 经 channel 注入，120s 超时=拒绝（09 §7.4）。
@@ -18,7 +18,7 @@ use bbrt_context::{
     assemble, budget_report, compact, AssembleParts, BudgetConfig, CompactionOutcome, Round,
     Summarizer, ToolCallRecord, ToolResultEntry,
 };
-use bbrt_memory::{ActivityEvent, MemoryEngine};
+use bbrt_memory::MemoryEngine;
 use bbrt_sec::gate::PermissionMode;
 use bbrt_sec::memory::GrantScope;
 use bbrt_store::Store;
@@ -328,7 +328,7 @@ impl SessionRunner {
 
     /// 执行侧工作目录（2026-11-12 日常=默认用户工作区口径）：项目会话=目录；
     /// 日常=ZCode 式用户级工作空间（与 tools 管线 session_env 同一解析）。
-    /// 供委派简报/checkpoint/子代理上下文等执行侧使用——记忆路由仍走 ws_path。
+    /// 供委派简报/子代理上下文等执行侧使用——记忆路由仍走 ws_path。
     pub fn exec_ws(&self) -> std::path::PathBuf {
         if self.workspace.is_empty() {
             bbrt_sec::sandbox::default_user_workspace()
@@ -417,8 +417,6 @@ pub struct LoopDeps {
     pub memory: Option<Arc<MemoryEngine>>,
     pub wal: Arc<dyn EventLog>,
     pub sink: Arc<dyn SessionSink>,
-    /// 检查点服务（None=未装配 → pre-edit/委派快照跳过；08 §4.4）
-    pub snapshots: Option<Arc<dyn crate::checkpoint::SnapshotService>>,
     /// 技能索引（10 篇 §4.5：triggers 命中正文注入 skills 区块；tools.reload 热替换）
     pub skills: Arc<Mutex<crate::skills::SkillIndex>>,
     /// 探查子 Agent 判定器（08 §4.5；None=未装配零行为，FastPlanner 见 subagent.rs）
@@ -935,11 +933,6 @@ impl SessionRunner {
                     .to_string(),
                 );
 
-                // 修改类工具前置快照（08 §4.4：stash 式 pre-edit；5min 窗口去重在服务内）
-                if is_modifying(&tc.name) {
-                    self.snapshot_before_edit(deps);
-                }
-
                 let outcome = self.run_tool(deps, &call, &masked, risk);
                 // W2② 连续错误教训（D15 §2.2：同工具同错 ≥2 次 → 自动记 feedback）
                 match &outcome {
@@ -970,15 +963,6 @@ impl SessionRunner {
                         duration_ms,
                     } => {
                         report.tool_calls += 1;
-                        if let Some(m) = deps.memory.as_ref() {
-                            let _ = m.record(&ActivityEvent::ToolExecuted {
-                                session: self.session_id.clone(),
-                                tool: tc.name.clone(),
-                                ok: true,
-                                duration_ms: *duration_ms,
-                                risk: risk.into(),
-                            });
-                        }
                         emit(deps, &self.session_id, |id| SessionEvent::ToolResult {
                             session_id: id,
                             call_id: tc.id.clone(),
@@ -995,13 +979,6 @@ impl SessionRunner {
                         report.tool_calls += 1;
                         report.tool_failures += 1;
                         consecutive_failures += 1;
-                        if let Some(m) = deps.memory.as_ref() {
-                            let _ = m.record(&ActivityEvent::ToolBlocked {
-                                session: self.session_id.clone(),
-                                tool: tc.name.clone(),
-                                code: *code as u16,
-                            });
-                        }
                         emit(deps, &self.session_id, |id| SessionEvent::ToolResult {
                             session_id: id,
                             call_id: tc.id.clone(),
@@ -1280,19 +1257,6 @@ impl SessionRunner {
                 };
             }
         };
-        // 委派前置快照（08 §4.4 reason=delegate；子进程改动可回滚锚点，17 篇）。
-        // checkpoint_id 随 DelegateEnd 上行（P0-2③：审查卡回滚锚点数据源）
-        let mut checkpoint_id: Option<String> = None;
-        if let Some(svc) = deps.snapshots.as_ref() {
-            if let Ok(out) = svc.create(
-                &self.session_id,
-                &self.exec_ws().to_string_lossy(),
-                "delegate",
-            ) {
-                emit_checkpoint(deps, &self.session_id, &out);
-                checkpoint_id = Some(out.checkpoint_id.clone());
-            }
-        }
         deps.wal.append_run(
             &self.session_id,
             &run_id,
@@ -1302,12 +1266,6 @@ impl SessionRunner {
                 req.backend
             ),
         );
-        if let Some(m) = deps.memory.as_ref() {
-            let _ = m.record(&ActivityEvent::DelegateLaunched {
-                session: self.session_id.clone(),
-                backend: req.backend.clone(),
-            });
-        }
 
         // ── 后台路径（D16 §5：hub 装配即后台——launch 后 turn 立即返回，会话
         // 可继续对话；事件流/审查在专用线程，宿主指令经 hub 定向路由）──
@@ -1316,11 +1274,9 @@ impl SessionRunner {
                 run_id.clone(),
                 self.session_id.clone(),
                 req.backend.clone(),
-                checkpoint_id,
                 stream,
                 deps.sink.clone(),
                 deps.wal.clone(),
-                deps.memory.clone(),
                 self.permission_timeout,
                 started,
             );
@@ -1355,14 +1311,11 @@ impl SessionRunner {
         let final_rep = finish_delegate_stream(
             &self.session_id,
             &run_id,
-            &req.backend,
-            checkpoint_id.as_deref(),
             cancelled,
             started,
             stream.as_mut(),
             deps.sink.as_ref(),
             deps.wal.as_ref(),
-            deps.memory.as_deref(),
         );
         let exit_code = final_rep.exit_code.unwrap_or(-1);
         if exit_code != 0 {
@@ -1680,7 +1633,7 @@ impl SessionRunner {
         }
     }
 
-    /// 会话结束：日报重算 + journal 收口（D15 §3.2 触发 1）
+    /// 会话结束：W3 提炼收口（D15 §2.2；D15 被动轨日报已随 UI 退役移除）
     pub fn end(&mut self, deps: &LoopDeps, summary: &str) {
         self.state = state::end(self.state);
         deps.wal.append(
@@ -1688,38 +1641,15 @@ impl SessionRunner {
             "session.ended",
             &format!("{{\"summary_len\":{}}}", summary.len()),
         );
-        if let Some(m) = deps.memory.as_ref() {
-            let _ = m.record(&ActivityEvent::SessionEnded {
-                session: self.session_id.clone(),
-                summary: if summary.is_empty() {
-                    None
-                } else {
-                    Some(summary.to_string())
-                },
-                duration_ms: 0,
-            });
-            // W3 会话结束提炼（D15 §2.2）：在日报重算前落盘——当日日报的
-            // memory_saved 计数即含提炼条目（§3.2 交叉印证）；失败静默不阻塞收口。
-            // D19：按条目类型分级——user→用户级，其余有目录落项目分区
-            let saved = distill_memories(deps, &self.session_id, self.ws_path(), &self.history);
-            if saved > 0 {
-                deps.wal.append(
-                    &self.session_id,
-                    "memory.distill",
-                    &format!("{{\"count\":{saved}}}"),
-                );
-            }
-            if let Ok(Some(rep)) = m.on_session_end() {
-                emit(deps, &self.session_id, |_id| SessionEvent::ReportDaily {
-                    date: rep.date.clone(),
-                    path: rep.md_path.display().to_string(),
-                    sessions: rep.stats.sessions as u32,
-                    tools: rep.stats.tool_calls as u32,
-                    blocked: rep.stats.blocked as u32,
-                    files_changed: rep.stats.files_changed as u32,
-                    memory_saved: rep.stats.memory_saved.len() as u32,
-                });
-            }
+        // W3 会话结束提炼：失败静默不阻塞收口。
+        // D19：按条目类型分级——user→用户级，其余有目录落项目分区
+        let saved = distill_memories(deps, &self.session_id, self.ws_path(), &self.history);
+        if saved > 0 {
+            deps.wal.append(
+                &self.session_id,
+                "memory.distill",
+                &format!("{{\"count\":{saved}}}"),
+            );
         }
         emit(deps, &self.session_id, |id| SessionEvent::SessionEnded {
             session_id: id,
@@ -1844,28 +1774,6 @@ fn parse_brief(call: &ToolInvocation, workspace: &str) -> bbrt_protocol::TaskBri
     }
 }
 
-/// 修改类工具名单（pre-edit 快照判定；只读/网络类不入）
-fn is_modifying(tool: &str) -> bool {
-    matches!(
-        tool,
-        "write_file" | "edit_file" | "run_command" | "git_commit" | "git_push"
-    )
-}
-
-impl SessionRunner {
-    /// pre-edit 检查点（失败不阻塞工具执行——审计缺段由 checkpoint.created 缺失体现）
-    fn snapshot_before_edit(&self, deps: &LoopDeps) {
-        let Some(svc) = deps.snapshots.as_ref() else {
-            return;
-        };
-        match svc.pre_edit(&self.session_id, &self.exec_ws().to_string_lossy()) {
-            Ok(Some(out)) => emit_checkpoint(deps, &self.session_id, &out),
-            Ok(None) => {}
-            Err(_) => {}
-        }
-    }
-}
-
 /// 委派事件流泵（同步/后台两路径共用，D16 §5）：归一化事件外发 + WAL；
 /// Input 回显、Cancel/interrupt 优雅取消。返回是否发生过取消请求
 /// （后台路径 interrupted=None——会话暂停不终止后台委派，仅用户 cancel）。
@@ -1971,20 +1879,17 @@ pub(crate) fn pump_delegate_stream(
 }
 
 /// 委派收尾（两路径共用）：finalize → delegate.end（P0-2③ 全字段上行：
-/// changed_files/checkpoint_id/child_session_ref——diff 审查卡数据源与
-/// --resume 续接句柄）→ WAL + run 终态 → journal。
+/// changed_files/child_session_ref——diff 审查卡数据源与
+/// --resume 续接句柄）→ WAL + run 终态。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_delegate_stream(
     session_id: &str,
     run_id: &str,
-    backend: &str,
-    checkpoint_id: Option<&str>,
     cancelled: bool,
     started: std::time::Instant,
     stream: &mut dyn crate::delegation::DelegateStream,
     sink: &dyn SessionSink,
     wal: &dyn EventLog,
-    memory: Option<&bbrt_memory::MemoryEngine>,
 ) -> crate::delegation::DelegateFinal {
     let final_rep = stream.finalize();
     let exit_code = final_rep.exit_code.unwrap_or(-1);
@@ -1994,7 +1899,6 @@ pub(crate) fn finish_delegate_stream(
         exit_code,
         summary: final_rep.summary.clone(),
         changed_files: final_rep.changed_files.clone(),
-        checkpoint_id: checkpoint_id.map(str::to_string),
         child_session_ref: final_rep.session_ref.clone(),
     });
     wal.append_run(
@@ -2020,13 +1924,6 @@ pub(crate) fn finish_delegate_stream(
             child_session_ref: final_rep.session_ref.as_deref().unwrap_or(""),
         },
     );
-    if let Some(m) = memory {
-        let _ = m.record(&ActivityEvent::DelegateEnded {
-            session: session_id.to_string(),
-            backend: backend.to_string(),
-            exit_code,
-        });
-    }
     final_rep
 }
 
@@ -2075,25 +1972,6 @@ pub(crate) fn resolve_delegate_review(
         session_id: session_id.to_string(),
         delegate_task_id: run_id.to_string(),
         decision: if accepted { "accept" } else { "reject" }.into(),
-    });
-}
-
-/// 检查点落账：WAL + checkpoint.created 事件（pre-edit/manual/delegate/pre-restore 共用）
-fn emit_checkpoint(deps: &LoopDeps, session_id: &str, out: &crate::checkpoint::SnapshotOutcome) {
-    deps.wal.append(
-        session_id,
-        "checkpoint.created",
-        &format!(
-            "{{\"id\":\"{}\",\"reason\":\"{}\"}}",
-            out.checkpoint_id, out.reason
-        ),
-    );
-    emit(deps, session_id, |id| SessionEvent::CheckpointCreated {
-        session_id: id,
-        checkpoint_id: out.checkpoint_id.clone(),
-        files_changed: out.files_changed.clone(),
-        reason: out.reason.clone(),
-        git_ref: out.git_ref.clone(),
     });
 }
 

@@ -1,17 +1,13 @@
 //! 装配与协议集成测试（D15 §6"协议"行 + §5 装配）：
-//! MemoryEngine 的 record → on_session_end 闭环、save_memory 双轨联动、
-//! 启动回补；`memory.saved` / `memory.evicted` / `report.daily` payload
-//! 序列化 roundtrip（嵌套 struct 自带 camelCase——7698c52 教训）。
+//! MemoryEngine 的 save_memory 落盘联动、`memory.saved` / `memory.evicted`
+//! payload 序列化 roundtrip（嵌套 struct 自带 camelCase——7698c52 教训）。
+//! （D15 被动轨 journal/digest 日报已随日报 UI 整域退役移除。）
 
 use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 
 use bbrt_memory::knowledge::store::INDEX_FILE;
-use bbrt_memory::{
-    ActivityEvent, FixedClock, MemoryEngine, MemoryEvictedEvent, MemorySavedEvent, MemoryType,
-    ReportDailyEvent, SaveInput,
-};
+use bbrt_memory::{FixedClock, MemoryEngine, MemoryEvictedEvent, MemorySavedEvent, MemoryType, SaveInput};
 
 /// 引擎 + 可变固定时钟脚手架（保留句柄模拟跨日推进）
 fn setup(now: &str, today: &str) -> (MemoryEngine, Arc<FixedClock>, tempfile::TempDir) {
@@ -19,14 +15,6 @@ fn setup(now: &str, today: &str) -> (MemoryEngine, Arc<FixedClock>, tempfile::Te
     let clock = Arc::new(FixedClock::new(now, today));
     let engine = MemoryEngine::open(dir.path(), clock.clone()).expect("打开引擎");
     (engine, clock, dir)
-}
-
-fn started(session: &str) -> ActivityEvent {
-    ActivityEvent::SessionStarted {
-        session: session.to_string(),
-        workspace: "baobao-chat".to_string(),
-        mode: "interactive".to_string(),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -49,10 +37,8 @@ fn open_creates_layout_and_rebuilds_stale_index() {
     let clock = Arc::new(FixedClock::new("2026-11-06T10:00:00+08:00", "2026-11-06"));
     let engine = MemoryEngine::open(dir.path(), clock).unwrap();
 
-    // 三目录就位
-    for sub in ["memory", "journal", "reports"] {
-        assert!(dir.path().join("agent").join(sub).is_dir(), "缺目录 {sub}");
-    }
+    // 记忆目录就位
+    assert!(dir.path().join("agent/memory").is_dir(), "缺目录 memory");
     // D23 一次性迁移：project 类不迁公共层——旧文件与陈旧索引整体移 archive/，
     // 根索引重建为空（用户级文件族由 global/ 取代）
     let index = fs::read_to_string(dir.path().join("agent/memory").join(INDEX_FILE)).unwrap();
@@ -75,76 +61,11 @@ fn open_creates_layout_and_rebuilds_stale_index() {
 }
 
 // ---------------------------------------------------------------------------
-// record → on_session_end 闭环
+// save_memory：主动轨落盘
 // ---------------------------------------------------------------------------
 
 #[test]
-fn record_then_session_end_recomputes_daily_report() {
-    let (engine, _clock, dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
-    engine.record(&started("s1")).unwrap();
-    for tool in ["read_file", "read_file", "edit_file"] {
-        engine
-            .record(&ActivityEvent::ToolExecuted {
-                session: "s1".into(),
-                tool: tool.into(),
-                ok: true,
-                duration_ms: 50,
-                risk: "低".into(),
-            })
-            .unwrap();
-    }
-    engine
-        .record(&ActivityEvent::SessionEnded {
-            session: "s1".into(),
-            summary: None,
-            duration_ms: 120_000,
-        })
-        .unwrap();
-
-    // 当日无产物时 on_session_end 前 reports 为空
-    let report = engine
-        .on_session_end()
-        .unwrap()
-        .expect("当日有 journal 必有产物");
-    assert_eq!(report.stats.sessions, 1);
-    assert_eq!(report.stats.tool_calls, 3);
-    assert_eq!(report.stats.total_duration_ms, 120_000);
-    assert_eq!(
-        report.md_path,
-        dir.path().join("agent/reports/2026-11-06.md")
-    );
-    assert_eq!(
-        report.json_path,
-        dir.path().join("agent/reports/2026-11-06.json")
-    );
-    assert!(report.md_path.is_file() && report.json_path.is_file());
-
-    // 再记录再触发 → 覆盖重算（幂等闭环）
-    engine
-        .record(&ActivityEvent::MemorySaved {
-            session: "s1".into(),
-            title: "新事实".into(),
-            memory_type: MemoryType::User,
-        })
-        .unwrap();
-    let report2 = engine.on_session_end().unwrap().unwrap();
-    assert_eq!(report2.stats.memory_saved, vec!["新事实"]);
-    let md = fs::read_to_string(report2.md_path).unwrap();
-    assert!(md.contains("今日记忆 +1：「新事实」"));
-}
-
-#[test]
-fn session_end_on_empty_day_returns_none() {
-    let (engine, _clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
-    assert!(engine.on_session_end().unwrap().is_none(), "空日不出产物");
-}
-
-// ---------------------------------------------------------------------------
-// save_memory：主动轨落盘 + 被动轨记事件（双轨联动）
-// ---------------------------------------------------------------------------
-
-#[test]
-fn save_memory_persists_and_journals() {
+fn save_memory_persists_and_updates() {
     let (engine, clock, dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
     // D23：Project 类走项目分区（日常会话会回落公共层，见 tests/global.rs）
     let ws = dir.path().join("proj");
@@ -166,12 +87,7 @@ fn save_memory_persists_and_journals() {
     assert_eq!(outcome.saved.name, "端口-8090-约定");
     assert_eq!(outcome.saved.scope, "project");
 
-    // 被动轨：journal 记了 memory.saved
-    let day = engine.journal().read_day("2026-11-06");
-    assert_eq!(day.events.len(), 1);
-    assert!(matches!(day.events[0], ActivityEvent::MemorySaved { .. }));
-
-    // 同题再写：updated=true，journal 累计 2 行，条目仍 1 条
+    // 同题再写：updated=true，条目仍 1 条
     clock.set("2026-11-06T12:00:00+08:00", "2026-11-06");
     let outcome2 = engine
         .save_memory_scoped(
@@ -186,19 +102,9 @@ fn save_memory_persists_and_journals() {
         )
         .unwrap();
     assert!(outcome2.saved.updated);
-    assert_eq!(engine.journal().read_day("2026-11-06").events.len(), 2);
     assert_eq!(engine.list_scoped(Some(&ws)).len(), 1);
 
-    // 日报聚合到 memory_saved 标题（交叉印证）
-    let report = engine.on_session_end().unwrap().unwrap();
-    assert_eq!(
-        report.stats.memory_saved,
-        vec!["端口 8090 约定", "端口 8090 约定"]
-    );
-    assert!(dir.path().join("agent/reports/2026-11-06.json").is_file());
-
-    // 拒敏路径：save_memory 不落盘也不记事件
-    let before = engine.journal().read_day("2026-11-06").events.len();
+    // 拒敏路径：save_memory 不落盘
     assert!(engine
         .save_memory(&SaveInput {
             title: "秘密".into(),
@@ -208,58 +114,7 @@ fn save_memory_persists_and_journals() {
             links: vec![],
         })
         .is_err());
-    assert_eq!(engine.journal().read_day("2026-11-06").events.len(), before);
     assert_eq!(engine.list_scoped(Some(&ws)).len(), 1);
-}
-
-// ---------------------------------------------------------------------------
-// 启动回补（引擎视角：换日用 FixedClock 推进）
-// ---------------------------------------------------------------------------
-
-#[test]
-fn startup_backfill_fills_missed_days_across_dates() {
-    let dir = tempfile::tempdir().unwrap();
-    let clock = Arc::new(FixedClock::new("2026-11-04T10:00:00+08:00", "2026-11-04"));
-    {
-        let engine = MemoryEngine::open(dir.path(), clock.clone()).unwrap();
-        engine.record(&started("s1")).unwrap();
-        engine
-            .record(&ActivityEvent::SessionEnded {
-                session: "s1".into(),
-                summary: None,
-                duration_ms: 1_000,
-            })
-            .unwrap();
-        clock.set("2026-11-06T10:00:00+08:00", "2026-11-06");
-        engine.record(&started("s2")).unwrap(); // 当日会话尚未结束
-    }
-    // 重新打开（模拟下次启动）：两天都无产物 → 全部回补
-    let engine = MemoryEngine::open(dir.path(), clock.clone()).unwrap();
-    let filled = engine.startup_backfill().unwrap();
-    assert_eq!(
-        filled.iter().map(|r| r.date.as_str()).collect::<Vec<_>>(),
-        vec!["2026-11-04", "2026-11-06"]
-    );
-    let md = fs::read_to_string(dir.path().join("agent/reports/2026-11-04.md")).unwrap();
-    assert!(md.contains("会话 1 个"));
-    // 再跑一次：无漏日
-    assert!(engine.startup_backfill().unwrap().is_empty());
-}
-
-#[test]
-fn rotate_journal_via_engine() {
-    let (engine, _clock, dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
-    engine
-        .journal()
-        .append("2026-08-08", &started("s1"))
-        .unwrap();
-    engine
-        .journal()
-        .append("2026-11-06", &started("s2"))
-        .unwrap();
-    let removed = engine.rotate_journal().unwrap();
-    assert_eq!(removed, vec!["2026-08-08"]);
-    assert!(Path::new(&dir.path().join("agent/journal/2026-11-06.jsonl")).is_file());
 }
 
 // ---------------------------------------------------------------------------
@@ -334,34 +189,5 @@ fn memory_evicted_payload_roundtrip_camel_case() {
     assert_eq!(
         serde_json::from_str::<MemoryEvictedEvent>(&json).unwrap(),
         bare
-    );
-}
-
-#[test]
-fn report_daily_payload_roundtrip_nested_camel_case() {
-    let (engine, _clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
-    engine.record(&started("s1")).unwrap();
-    engine
-        .record(&ActivityEvent::SessionEnded {
-            session: "s1".into(),
-            summary: None,
-            duration_ms: 8_040_000,
-        })
-        .unwrap();
-    let report = engine.on_session_end().unwrap().unwrap();
-    let event = report.to_event();
-
-    let json = serde_json::to_string(&event).unwrap();
-    // 顶层 camelCase + 嵌套 stats 自带 camelCase（rename_all 不随结构传导，逐字锁定）
-    assert!(json.starts_with(r#"{"date":"2026-11-06","path":""#));
-    assert!(json.contains(r#""stats":{"date":"2026-11-06""#));
-    assert!(json.contains(r#""totalDurationMs":8040000"#));
-    assert!(json.contains(r#""memorySaved":[]"#));
-    assert!(json.contains(r#""filesChanged":0"#));
-    assert!(!json.contains("total_duration_ms"));
-    // roundtrip
-    assert_eq!(
-        serde_json::from_str::<ReportDailyEvent>(&json).unwrap(),
-        event
     );
 }
