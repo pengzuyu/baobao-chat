@@ -18,7 +18,6 @@ import type {
   AgentWorkspaceInfo,
   GrantScope,
   HistoryItem,
-  MemoryEntry,
   RunInfo,
   PermissionMode,
   PermissionPreview,
@@ -170,40 +169,6 @@ function seedWorkspaces(): AgentWorkspaceInfo[] {
   ];
 }
 
-function seedMemories(): MemoryEntry[] {
-  return [
-    {
-      name: 'dev-server-port',
-      title: '开发服务器端口约定 8090',
-      type: 'project',
-      hook: '本地联调一律用 8090，避免与网关 8080 冲突',
-      updatedAt: now - 2 * DAY,
-      sessionId: 'sess-mock-02',
-      scope: 'project',
-      workspaceName: 'bbc-server-3f2a91c04d8e57b1',
-    },
-    {
-      name: 'pref-plan-first',
-      title: '用户偏好：先方案后落笔',
-      type: 'user',
-      hook: '较大的改动先给方案要点，确认后再写代码',
-      updatedAt: now - 5 * DAY,
-      sessionId: 'sess-mock-01',
-      scope: 'user',
-    },
-    {
-      name: 'gitee-remote',
-      title: '公司仓库走 Gitee 远端',
-      type: 'reference',
-      hook: 'push 前确认 remote 指向 gitee.corp，勿用镜像源',
-      updatedAt: now - 8 * DAY,
-      sessionId: 'sess-mock-03',
-      scope: 'project',
-      workspaceName: 'order-svc-8c1d47f0b2ae6935',
-    },
-  ];
-}
-
 function dayStr(offsetDays: number): string {
   const d = new Date(now - offsetDays * DAY);
   const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
@@ -259,7 +224,6 @@ export class MockAgentBridge implements AgentBridge {
 
   private listeners = new Set<(event: AgentEvent) => void>();
   private sessions: AgentSessionMeta[] = seedSessions();
-  private memories: MemoryEntry[] = seedMemories();
   /** D19 项目登记（workspace.list/register/forget 演示数据） */
   private workspaces: AgentWorkspaceInfo[] = seedWorkspaces();
   private reports: AgentReport[] = seedReports();
@@ -508,38 +472,7 @@ export class MockAgentBridge implements AgentBridge {
 
   async reviewDelegate(_runId: string, _accept: boolean): Promise<void> {}
 
-  // ---- 记忆 / 日报（D15）----
-
-  async listMemories(scope?: 'user' | 'project', workspacePath?: string): Promise<MemoryEntry[]> {
-    await delay(300);
-    // D19 作用域过滤：project+路径 → 该项目分区名匹配；project 无路径 → 全部项目条目
-    let items = [...this.memories];
-    if (scope) {
-      items = items.filter((m) => (m.scope ?? 'user') === scope);
-      if (scope === 'project' && workspacePath) {
-        const name = workspacePath.split('/').filter(Boolean).pop() ?? '';
-        items = items.filter((m) => (m.workspaceName ?? '').startsWith(`${name}-`));
-      }
-    }
-    return items.sort((a, b) => b.updatedAt - a.updatedAt);
-  }
-
-  async deleteMemory(name: string, scope?: 'user' | 'project', workspacePath?: string): Promise<void> {
-    await delay(150);
-    const [list] = await Promise.resolve([await this.listMemories(scope, workspacePath)]);
-    const names = new Set(list.filter((m) => m.name === name).map((m) => m.name));
-    this.memories = this.memories.filter((m) => !(names.has(m.name) && (scope ? (m.scope ?? 'user') === scope : true)));
-  }
-
-  async forgetMemory(memoryType: string, contains: string): Promise<{ removed: string[] }> {
-    // D23 §3.5：公共层条目撤销 mock（globalType 匹配 + 文本包含）
-    await delay(150);
-    const hit = this.memories.filter(
-      (m) => m.globalType === memoryType && m.title.includes(contains),
-    );
-    this.memories = this.memories.filter((m) => !hit.includes(m));
-    return { removed: hit.map((m) => m.title) };
-  }
+  // ---- 日报（D15；记忆浏览面已退役，memorySaved 事件仅作会话流回执）----
 
   async registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo> {
     await delay(180);
@@ -575,14 +508,6 @@ export class MockAgentBridge implements AgentBridge {
   async listReports(): Promise<AgentReport[]> {
     await delay(300);
     return [...this.reports].sort((a, b) => (a.date < b.date ? 1 : -1));
-  }
-
-  /** D19 记忆作用域推导：项目会话→project+分区名（演示哈希），日常→user */
-  private memScopeOf(sessionId: string): { scope: 'user' | 'project'; workspaceName?: string } {
-    const ws = this.sessions.find((x) => x.id === sessionId)?.workspace ?? '';
-    if (!ws) return { scope: 'user' };
-    const dir = ws.split('/').filter(Boolean).pop() ?? 'project';
-    return { scope: 'project', workspaceName: `${dir}-3f2a91c04d8e57b1` };
   }
 
   // ---- 剧本 ----
@@ -777,15 +702,6 @@ export class MockAgentBridge implements AgentBridge {
           memoryType: 'project',
           updated: false,
         });
-        this.memories.unshift({
-          name: 'login-timeout-drift',
-          title: '登录超时根因：token 时钟偏移',
-          type: 'project',
-          hook: 'verify_token 需容忍 ±60s 时钟漂移；测试基线 cargo test --lib 12 例',
-          updatedAt: Date.now(),
-          sessionId: sid,
-          ...this.memScopeOf(sid),
-        });
       } else {
         // ---- 阻止分支（用户拒绝 / 120s 超时=拒绝）----
         this.setStatus(sid, 'running', 'permission.deny');
@@ -811,15 +727,6 @@ export class MockAgentBridge implements AgentBridge {
           title: '本会话不执行 cargo test',
           memoryType: 'feedback',
           updated: false,
-        });
-        this.memories.unshift({
-          name: 'no-cargo-test-in-session',
-          title: '本会话不执行 cargo test',
-          type: 'feedback',
-          hook: '用户倾向自行在本地跑全量测试；Why: 保持测试环境一致 How to apply: 会话内只做静态核验',
-          updatedAt: Date.now(),
-          sessionId: sid,
-          ...this.memScopeOf(sid),
         });
       }
       // 收尾：日报产出（D15 §3.2：session.ended 落地后异步重算当日）+ 会话结束

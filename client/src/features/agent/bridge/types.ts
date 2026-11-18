@@ -95,26 +95,6 @@ export interface RunInfo {
   endedAt?: number;
 }
 
-/** 知识记忆条目（D15 §2.1：一文件一事实 + MEMORY.md 索引行；D19 增作用域） */
-export interface MemoryEntry {
-  /** slug（文件名），删除即 memory.delete(name) */
-  name: string;
-  /** 一句话标题 ≤40 字 */
-  title: string;
-  type: MemoryType;
-  /** 钩子摘要（索引行 "- [标题](文件) — 钩子"的钩子部分） */
-  hook: string;
-  updatedAt: number;
-  /** 产生该记忆的会话 */
-  sessionId: string;
-  /** D19 作用域（缺省 user=旧口径兼容） */
-  scope?: 'user' | 'project';
-  /** D19 项目分区名（scope=project 时；目录名-路径短哈希） */
-  workspaceName?: string;
-  /** D23 公共层十类标签（画像/偏好/…；携带=该条在 USER.md 压实视图，删除走 forgetMemory） */
-  globalType?: string;
-}
-
 /** D19 项目（agent_workspace 投影；workspace.list/register 数据形状） */
 export interface AgentWorkspaceInfo {
   /** ws-<ms>-<n> */
@@ -338,13 +318,6 @@ export interface AgentBridge {
   /** 委派审查结论（agent_delegate_review；delegate.end 到达后出现审查卡） */
   reviewDelegate(runId: string, accept: boolean): Promise<void>;
 
-  /** 知识记忆列表（D15 §2.4 memory.list；D19 作用域过滤：scope=project 需给项目路径） */
-  listMemories(scope?: 'user' | 'project', workspacePath?: string): Promise<MemoryEntry[]>;
-  /** 删除知识记忆（D15 §2.4 memory.delete；PAG-11 撤销；D19 作用域参数） */
-  deleteMemory(name: string, scope?: 'user' | 'project', workspacePath?: string): Promise<void>;
-  /** 公共层记忆移除（D23 §3.5 memory.forget：条目粒度 tombstone；返回被移除清单） */
-  forgetMemory(memoryType: string, contains: string): Promise<{ removed: string[] }>;
-
   /** D19 项目登记（workspace.register：realpath upsert，同目录重复打开不换身份） */
   registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo>;
   /** D19 项目列表（workspace.list；last_opened_at 倒序） */
@@ -383,14 +356,6 @@ export const AGENT_MODE_OPTIONS: Array<{ value: PermissionMode; label: string; d
 
 /** 风险级中文（工具卡/审批卡徽标） */
 export const RISK_LABELS: Record<RiskLevel, string> = { low: '低危', mid: '中危', high: '高危' };
-
-/** 记忆类型中文（D15 §2.1 四类） */
-export const MEMORY_TYPE_LABELS: Record<MemoryType, string> = {
-  user: '用户偏好',
-  project: '项目事实',
-  feedback: '工作反馈',
-  reference: '外部参考',
-};
 
 /** 模型档位显示（model_policy / model.switched） */
 export const MODEL_TIER_LABELS: Record<'fast' | 'strong' | 'auto', string> = { fast: '快', strong: '强', auto: '自动' };

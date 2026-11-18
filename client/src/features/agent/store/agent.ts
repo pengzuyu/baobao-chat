@@ -17,7 +17,6 @@ import type {
   HistoryItem,
   RunInfo,
   GrantScope,
-  MemoryEntry,
   PermissionMode,
   SessionStatus,
 } from '../bridge/types';
@@ -127,13 +126,6 @@ interface AgentState {
   /** 思考强度档位（2026-11-11 zcode 同款三档；全局用户选择，随每条消息下发） */
   thinkLevel: 'low' | 'medium' | 'high';
   setThinkLevel: (level: 'low' | 'medium' | 'high') => void;
-  memories: MemoryEntry[];
-  memoriesLoading: boolean;
-  memoriesError: string | null;
-  /** D19 当前记忆视图作用域（记忆页页签驱动；user=用户级 / project=项目级） */
-  memoryScope: 'user' | 'project';
-  /** D19 项目记忆视图的当前项目路径（scope=project 时有效） */
-  memoryWorkspacePath: string | null;
 
   /** D19 项目登记表（workspace.list；last_opened_at 倒序） */
   workspaces: AgentWorkspaceInfo[];
@@ -179,11 +171,6 @@ interface AgentState {
   setMode: (mode: PermissionMode) => void;
   /** 会话内切换模型（model=直达引用；缺省=档位；回执 modelSwitched 事件驱动 UI） */
   switchModel: (to: 'fast' | 'strong' | 'auto', model?: string) => void;
-  deleteMemory: (name: string, scope?: 'user' | 'project', workspacePath?: string) => Promise<void>;
-  /** D23 §3.5：公共层（USER.md）条目撤销（条目粒度；globalType+contains 匹配） */
-  forgetMemory: (memoryType: string, contains: string) => Promise<void>;
-  /** D19 切换记忆视图作用域并拉取（记忆页页签；project 需项目路径） */
-  loadMemories: (scope?: 'user' | 'project', workspacePath?: string | null) => Promise<void>;
   /** D19 拉取项目登记表 */
   loadWorkspaces: () => Promise<void>;
   /** D19 登记项目（workspace.register：realpath upsert；返回登记行） */
@@ -406,13 +393,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   sideStreams: {},
   activeRunView: null,
 
-  memories: [],
-  memoriesLoading: false,
-  memoryScope: 'user',
-  memoryWorkspacePath: null,
   workspaces: [],
   workspacesLoading: false,
-  memoriesError: null,
 
   reports: [],
   reportsLoading: false,
@@ -423,17 +405,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     ensureAgentEventSubscribed();
     if (get().ready || get().sessionsLoading) return;
 
-    set({ sessionsLoading: true, sessionsError: null, memoriesLoading: true, reportsLoading: true });
+    set({ sessionsLoading: true, sessionsError: null, reportsLoading: true });
     try {
       const sessions = await bridge.listSessions();
       set({ sessions, sessionsLoading: false, ready: true });
     } catch (err) {
       set({ sessionsLoading: false, sessionsError: err instanceof Error ? err.message : '会话列表加载失败', ready: true });
     }
-    void bridge
-      .listMemories()
-      .then((memories) => set({ memories, memoriesLoading: false }))
-      .catch((err: unknown) => set({ memoriesLoading: false, memoriesError: err instanceof Error ? err.message : '记忆加载失败' }));
     void bridge
       .listReports()
       .then((reports) => set({ reports, reportsLoading: false }))
@@ -625,40 +603,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     if (!sid) return;
     // 状态更新与时间线提示以 modelSwitched 回执事件驱动（与 Runtime 口径一致）
     void bridge.switchModel(sid, to, model).catch(() => undefined);
-  },
-
-  deleteMemory: async (name, scope, workspacePath) => {
-    // 乐观移除 + 桥删除（PAG-11 撤销，即时生效；D19 作用域参数随当前视图）
-    const effScope = scope ?? get().memoryScope;
-    const effPath = workspacePath ?? get().memoryWorkspacePath;
-    set((s) => ({ memories: s.memories.filter((m) => m.name !== name) }));
-    await bridge.deleteMemory(name, effScope, effPath ?? undefined).catch(() => undefined);
-  },
-
-  forgetMemory: async (memoryType, contains) => {
-    // D23 §3.5：公共层（USER.md）条目撤销——条目粒度 tombstone；
-    // 乐观移除 + 回执清单兜底刷新（同名多条被一并移除时靠 reload 对齐）
-    set((s) => ({
-      memories: s.memories.filter(
-        (m) => !(m.globalType === memoryType && m.title.includes(contains)),
-      ),
-    }));
-    await bridge
-      .forgetMemory(memoryType, contains)
-      .then(() => get().loadMemories())
-      .catch(() => undefined);
-  },
-
-  loadMemories: async (scope, workspacePath) => {
-    const effScope = scope ?? get().memoryScope;
-    const effPath = workspacePath === undefined ? get().memoryWorkspacePath : workspacePath;
-    set({ memoriesLoading: true, memoriesError: null, memoryScope: effScope, memoryWorkspacePath: effPath ?? null });
-    await bridge
-      .listMemories(effScope, effPath ?? undefined)
-      .then((memories) => set({ memories, memoriesLoading: false }))
-      .catch((err: unknown) =>
-        set({ memoriesLoading: false, memoriesError: err instanceof Error ? err.message : '记忆加载失败' }),
-      );
   },
 
   loadWorkspaces: async () => {
@@ -872,20 +816,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           };
         }
         case 'memorySaved': {
-          // D15 §2.4：知识记忆写入/更新（同题更新不重复）
-          const entry: MemoryEntry = {
-            name: event.name,
-            title: event.title,
-            type: event.memoryType,
-            hook: '由本会话自动沉淀',
-            updatedAt: Date.now(),
-            sessionId: event.sessionId,
-          };
-          const exists = s.memories.some((m) => m.name === event.name);
-          const memories = exists ? s.memories.map((m) => (m.name === event.name ? { ...m, ...entry } : m)) : [entry, ...s.memories];
+          // D15 §2.4：知识记忆写入/更新——仅会话流回执（记忆浏览面已退役，列表不再维护）
           const list = s.streams[event.sessionId] ?? [];
           return {
-            memories,
             streams: {
               ...s.streams,
               [event.sessionId]: [

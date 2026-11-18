@@ -21,7 +21,7 @@ import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode 
 import { NavLink, useNavigate } from 'react-router-dom';
 import { Alert, Badge, Flex, Menu, Tag, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
-import { Book, Bot, Calendar, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Plus, Trash2 } from 'lucide-react';
+import { Bot, Calendar, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Plus, Trash2 } from 'lucide-react';
 import type { AgentSessionMeta, AgentWorkspaceInfo, RunInfo } from '../bridge/types';
 import { SESSION_STATUS_LABELS } from '../bridge/types';
 import { Button } from '../../../shared/ui/Button';
@@ -467,10 +467,6 @@ export const AgentSessionList = memo(function AgentSessionList({
           borderTop: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <NavLink to="/agent/memory" style={sublinkStyle}>
-          <Book size={13} aria-hidden />
-          记忆管理
-        </NavLink>
         <NavLink to="/agent/reports" style={sublinkStyle}>
           <Calendar size={13} aria-hidden />
           Agent 日报

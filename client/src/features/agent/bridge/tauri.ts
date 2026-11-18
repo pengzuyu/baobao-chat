@@ -17,9 +17,8 @@
  * | respondPermission(allow) | `agent_approve` | `{ request_id, scope: 'once'\|'session'\|'permanent', edited_args? }` → `{ ok }` |
  * | respondPermission(deny) | `agent_reject` | `{ request_id, reason? }` → `{ ok }` |
  * | setMode() | `agent_set_mode` | `{ session_id, mode }` → `{ ok, effective }` |
- * | listMemories() | `memory_list` | `{}` → `{ items: [{ name, title, type, updated_at, hook, session }] }`（D15 §2.4） |
- * | deleteMemory() | `memory_delete` | `{ name }` → `{ ok }`（D15 §2.4） |
  * | listReports() | `report_list` + `report_get` | `{ limit?: number }` → `{ items: [{ date, stats }] }`；正文需扩展 `report_get { date } → { markdown }`（D15 §3.3 只登记了 list，正文为前端消费扩展） |
+ * （memory_list/memory_delete/memory_forget 壳命令仍在——记忆浏览面已退役，前端桥不再封装） |
  *
  * 事件 payload 字段（宿主透传 stdio 协议镜像 + 宿主补充）：
  * - `stream.delta` { session_id, delta, seq, channel } / `stream.done` { session_id, finish_reason, usage }
@@ -46,7 +45,6 @@ import type {
   ClarifyOptionDTO,
   GrantScope,
   HistoryItem,
-  MemoryEntry,
   MemoryType,
   PermissionMode,
   PermissionPreview,
@@ -77,20 +75,6 @@ interface SessionRow {
   updated_at: number;
   ended_at?: number;
   summary?: string;
-}
-
-interface MemoryRow {
-  name: string;
-  title: string;
-  type: MemoryType;
-  hook: string;
-  updated_at: number;
-  session?: string;
-  /** D19 作用域（协议 optional） */
-  scope?: 'user' | 'project';
-  workspaceName?: string;
-  /** D23 公共层十类标签（协议 optional；携带=USER.md 条目） */
-  globalType?: string;
 }
 
 interface ReportRow {
@@ -284,33 +268,6 @@ export class TauriAgentBridge implements AgentBridge {
 
   async reviewDelegate(runId: string, accept: boolean): Promise<void> {
     await invoke('agent_delegate_review', { delegateTaskId: runId, accept });
-  }
-
-  async listMemories(scope?: 'user' | 'project', workspacePath?: string): Promise<MemoryEntry[]> {
-    const data = await invoke<{ items: MemoryRow[] }>('memory_list', {
-      scope: scope ?? null,
-      workspacePath: workspacePath ?? null,
-    });
-    return data.items.map((m) => ({
-      name: m.name,
-      title: m.title,
-      type: m.type,
-      hook: m.hook,
-      updatedAt: m.updated_at,
-      sessionId: m.session ?? '',
-      scope: m.scope,
-      workspaceName: m.workspaceName,
-      globalType: m.globalType,
-    }));
-  }
-
-  async deleteMemory(name: string, scope?: 'user' | 'project', workspacePath?: string): Promise<void> {
-    await invoke('memory_delete', { name, scope: scope ?? null, workspacePath: workspacePath ?? null });
-  }
-
-  async forgetMemory(memoryType: string, contains: string): Promise<{ removed: string[] }> {
-    // D23 §3.5：公共层条目撤销（memory_forget 壳命令 → RT memory.forget REQ）
-    return invoke('memory_forget', { memoryType, contains });
   }
 
   async registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo> {

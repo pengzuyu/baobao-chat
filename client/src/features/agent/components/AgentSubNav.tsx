@@ -1,17 +1,17 @@
 /**
- * Agent 域二级导航（工作台 / 记忆 / 日报 / 插件）：四页共用顶栏。
+ * Agent 域二级导航（工作台 / 日报 / 插件）：三页共用顶栏。
  * 一级导航（侧边栏 Agent）已有；本栏承载域内路由。
  * D26-O4：换 antd Menu horizontal（原 agent-subnav 自研样式退役；写法对齐 SettingsLayout/AdminLayout）。
+ * 记忆页已退役（记忆由平台后台组织，不做用户浏览面）。
  */
 
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Menu } from 'antd';
 import type { MenuProps } from 'antd';
-import { Bot, Book, Calendar, Puzzle } from 'lucide-react';
+import { Bot, Calendar, Puzzle } from 'lucide-react';
 
 const TABS = [
   { to: '/agent', icon: Bot, label: '工作台' },
-  { to: '/agent/memory', icon: Book, label: '记忆' },
   { to: '/agent/reports', icon: Calendar, label: '日报' },
   { to: '/agent/plugins', icon: Puzzle, label: '插件' },
 ] as const;

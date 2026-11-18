@@ -2,7 +2,7 @@
  * PAG-01/02/03 Agent 工作台（/agent[/s/:sessionId]，D08 §3.1/§3.3）：
  * - 左：会话列表（窄栏 + 新建 + 二级导航入口）
  * - 中：会话视图（头部状态徽标 + 会话流 + 输入区；停止唯一入口=发送旁）
- * - 右：上下文栏（会话信息/检查点时间线/记忆侧写，可折叠）
+ * - 右：上下文栏（会话信息/检查点时间线/运行详情，可折叠）
  * - 会话流渲染（2026-11-17 D33 平铺流）：无气泡全宽消息流——用户消息平铺块 +
  *   类型化过程块（思考/工具族/技能/审批/子任务/中间正文），收口折叠一行统计，
  *   最终回答常开（AgentStreamView/TurnBlock；回合气泡/AgentProcessCard 归 IM 专用）
@@ -105,7 +105,6 @@ export function AgentWorkbenchPage() {
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
   const selectSession = useAgentStore((s) => s.selectSession);
   const checkpoints = useAgentStore((s) => s.checkpoints);
-  const memories = useAgentStore((s) => s.memories);
   const modelBySession = useAgentStore((s) => s.modelBySession);
   const usageBySession = useAgentStore((s) => s.usageBySession);
   const runsBySession = useAgentStore((s) => s.runsBySession);
@@ -553,7 +552,6 @@ export function AgentWorkbenchPage() {
               session={activeSession}
               model={modelTier}
               checkpoints={activeSessionId ? (checkpoints[activeSessionId] ?? []) : []}
-              memories={memories}
               usage={activeSessionId ? usageBySession[activeSessionId] : undefined}
               pendingCount={pendingPerms.length}
               runs={runs}

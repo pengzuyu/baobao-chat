@@ -1,21 +1,21 @@
 /**
- * 工作台右栏：上下文栏（D33 §3.6 Tabs 化：概览/运行/详情/检查点/记忆）：
+ * 工作台右栏：上下文栏（D33 §3.6 Tabs 化：概览/运行/详情/检查点）：
  * - 概览=会话信息（工作区/模式/模型档位/最近用量/结论摘要）
  * - 运行=run 记录（D16 §3.1；**点行打开运行详情**）
  * - 详情=运行详情（D33 新）：子 agent 过程流——AgentStreamView 与中栏同款渲染
  *   （「与主 agent 一样，但不在一个窗口」）；sideStreams 直播 / run.history 回放；
  *   delegate 优先 childSessionRef 的会话历史。activeRunView 置位时自动切到本 tab
- * - 检查点时间线（PAG-06 简版）；记忆侧写（D15 主动轨）
+ * - 检查点时间线（PAG-06 简版）
+ * 记忆侧写 tab 已退役（记忆由平台后台组织，不做用户浏览面）。
  * D26-O4：分区→Card、KV→Descriptions、清单→List、chip→Tag；
  * D33 aside 宽度：运行详情激活时页面侧加宽至 480（本组件不管宽，页面定）。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { Card, Descriptions, Flex, List, Space, Spin, Tabs, Tag, Typography, theme } from 'antd';
 import { useAgentStore, type CheckpointItem } from '../store/agent';
-import { AGENT_MODE_OPTIONS, MEMORY_TYPE_LABELS, MODEL_TIER_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
-import type { AgentSessionMeta, MemoryEntry, RunInfo } from '../bridge/types';
+import { AGENT_MODE_OPTIONS, MODEL_TIER_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
+import type { AgentSessionMeta, RunInfo } from '../bridge/types';
 import { AgentStreamView } from './stream/AgentStreamView';
 
 function formatClock(ts: number): string {
@@ -44,14 +44,6 @@ function runKindColor(kind: RunInfo['kind']): string | undefined {
   return kind === 'delegate' ? 'blue' : undefined;
 }
 
-/** 记忆类型徽标色（原 agent-mem-chip--* 四色口径） */
-function memoryChipColor(type: MemoryEntry['type']): string | undefined {
-  if (type === 'user') return 'blue';
-  if (type === 'project') return 'green';
-  if (type === 'feedback') return 'gold';
-  return undefined;
-}
-
 function formatDuration(ms: number): string {
   if (ms <= 0) return '';
   return ms >= 60_000 ? `${Math.round(ms / 60_000)}min` : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
@@ -61,7 +53,6 @@ interface AgentContextSidebarProps {
   session: AgentSessionMeta;
   model: 'fast' | 'strong' | 'auto';
   checkpoints: CheckpointItem[];
-  memories: MemoryEntry[];
   usage?: { in: number; out: number };
   pendingCount: number;
   /** run 记录（D16 §3.1；新建在末尾展示最近 8 条倒序） */
@@ -124,7 +115,7 @@ function RunDetailView({ runs }: { runs: RunInfo[] }) {
   );
 }
 
-export function AgentContextSidebar({ session, model, checkpoints, memories, usage, pendingCount, runs }: AgentContextSidebarProps) {
+export function AgentContextSidebar({ session, model, checkpoints, usage, pendingCount, runs }: AgentContextSidebarProps) {
   const { token } = theme.useToken();
   const [activeKey, setActiveKey] = useState('overview');
   const openRunView = useAgentStore((s) => s.openRunView);
@@ -266,39 +257,6 @@ export function AgentContextSidebar({ session, model, checkpoints, memories, usa
                 )}
               />
             ),
-        },
-        {
-          key: 'memory',
-          label: '记忆',
-          children: (
-            <Card size="small" title="记忆侧写">
-              {memories.length === 0 ? (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  还没有沉淀的记忆
-                </Typography.Text>
-              ) : (
-                <List
-                  size="small"
-                  dataSource={memories.slice(0, 5)}
-                  renderItem={(m) => (
-                    <List.Item style={{ padding: '3px 0', fontSize: 12 }} title={m.hook}>
-                      <Space size={6} style={{ minWidth: 0 }}>
-                        <Tag color={memoryChipColor(m.type)} style={{ marginInlineEnd: 0 }}>
-                          {MEMORY_TYPE_LABELS[m.type]}
-                        </Tag>
-                        <Typography.Text ellipsis style={{ fontSize: 12 }}>
-                          {m.title}
-                        </Typography.Text>
-                      </Space>
-                    </List.Item>
-                  )}
-                />
-              )}
-              <Link to="/agent/memory" style={{ fontSize: 12 }}>
-                查看全部记忆 →
-              </Link>
-            </Card>
-          ),
         },
       ]}
     />
