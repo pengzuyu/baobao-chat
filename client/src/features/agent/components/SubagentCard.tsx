@@ -6,8 +6,7 @@
  */
 
 import { memo, useState } from 'react';
-import { Input, Spin, Typography, theme } from 'antd';
-import { useImeGuard } from '../../../shared/hooks/useImeGuard';
+import { Spin, Typography, theme } from 'antd';
 import { ChevronRight, Radar } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useAgentStore } from '../store/agent';
@@ -33,11 +32,8 @@ const headToggleStyle = {
 export const SubagentCard = memo(function SubagentCard({ item }: { item: SubagentItem }) {
   const { token } = theme.useToken();
   const [open, setOpen] = useState(false);
-  const sendRunInput = useAgentStore((st) => st.sendRunInput);
   const cancelRun = useAgentStore((st) => st.cancelRun);
   const openRunView = useAgentStore((st) => st.openRunView);
-  const { imeEnterDecision, imeCompositionProps } = useImeGuard();
-  const [draft, setDraft] = useState('');
 
   const statusNode =
     item.status === 'running' ? (
@@ -100,44 +96,13 @@ export const SubagentCard = memo(function SubagentCard({ item }: { item: Subagen
             borderTop: `1px solid ${token.colorBorderSecondary}`,
             padding: 12,
             display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
+            justifyContent: 'flex-end',
           }}
         >
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <Input
-              size="small"
-              value={draft}
-              placeholder="运行中补充指令（下一轮生效）…"
-              style={{ flex: 1, minWidth: 0, fontSize: 12 }}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                // IME 三态（useImeGuard v3）：swallow=确认键余波吞掉；ime=交给输入法
-                if (e.key !== 'Enter' || e.shiftKey) return;
-                const d = imeEnterDecision(e.nativeEvent);
-                if (d === 'swallow') e.preventDefault();
-                else if (d === 'send') {
-                  sendRunInput(item.runId, draft);
-                  setDraft('');
-                }
-              }}
-              {...imeCompositionProps}
-            />
-            <Button
-              variant="secondary"
-              size="small"
-              disabled={!draft.trim()}
-              onClick={() => {
-                sendRunInput(item.runId, draft);
-                setDraft('');
-              }}
-            >
-              下发
-            </Button>
-            <Button variant="secondary" size="small" onClick={() => cancelRun(item.runId)}>
-              取消
-            </Button>
-          </div>
+          {/* 补充指令输入框已随「运行中补充指令」退役（宿主通道断链+委派 stdin 死锁，2026-11-18）；模型侧 subagent.adjust 不受影响 */}
+          <Button variant="secondary" size="small" onClick={() => cancelRun(item.runId)}>
+            取消
+          </Button>
         </div>
       ) : null}
       {open ? (

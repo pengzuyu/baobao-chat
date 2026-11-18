@@ -46,8 +46,13 @@ export type StreamItem =
       kind: 'permission';
       key: string;
       request: Extract<AgentEvent, { type: 'permissionRequest' }>;
-      /** null=等待中；'timeout'=120s 到点（灰显=拒绝）；对象=已决策 */
-      outcome: null | 'timeout' | { decision: 'allow' | 'deny' | 'cancelled'; scope?: GrantScope; at: number };
+      /** null=等待中；'timeout'=120s 到点（灰显=拒绝）；对象=已决策。
+       *  editedArgs=允许时用户改过的命令（本地随决策落——镜像回执不带，
+       *  供终态「原命令 → 实际执行」对比回看） */
+      outcome:
+        | null
+        | 'timeout'
+        | { decision: 'allow' | 'deny' | 'cancelled'; scope?: GrantScope; at: number; editedArgs?: Record<string, unknown> };
     }
   /** 澄清提问卡（D20 ask_user；不超时——等回答或「停止」中断收口） */
   | {
@@ -145,8 +150,6 @@ interface AgentState {
   reviewDelegate: (runId: string, accept: boolean) => void;
   /** 取消委派（简报期/后台运行/审查期） */
   cancelDelegate: (runId: string) => void;
-  /** 运行中子任务补充指令（D16 决策⑧：探查/专家/委派通用——delegate.input 通道） */
-  sendRunInput: (runId: string, text: string) => void;
   /** 运行中子任务取消（探查/专家/委派通用） */
   cancelRun: (runId: string) => void;
   /** 中断当前轮（2026-11-11：取代旧暂停/恢复——收口 idle，会话保留可继续追问） */
@@ -499,7 +502,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       for (const [sid, list] of Object.entries(s.streams)) {
         next[sid] = list.map((it) =>
           it.kind === 'permission' && it.request.requestId === requestId && it.outcome === null
-            ? { ...it, outcome: { decision, scope, at: Date.now() } }
+            ? { ...it, outcome: { decision, scope, at: Date.now(), editedArgs } }
             : it,
         );
       }
@@ -542,11 +545,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // 乐观置 resolved（终态展示"已取消"；RT 侧 delegate.cancel → cancelled run）
     patchDelegateCard(get, set, runId, (it) => (it.phase === 'brief' ? { ...it, phase: 'resolved' } : it));
     void bridge.cancelDelegate(runId).catch(() => undefined);
-  },
-
-  sendRunInput: (runId, text) => {
-    if (!text.trim()) return;
-    void bridge.delegateInput(runId, text.trim()).catch(() => undefined);
   },
 
   cancelRun: (runId) => {

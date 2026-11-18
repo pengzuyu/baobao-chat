@@ -134,6 +134,13 @@ impl CodingBackend for GenericCliBackend {
         let mut envs = brief::child_env(brief);
         envs.extend(opts.env_allow.iter().cloned());
         let (proc, stdout, stderr) = procmgr::spawn(&self.bin, &[], Some(&opts.workspace), &envs)?;
+        // stdin 喂简报（17 §3.2 启动形态）；对端不读且退出时可能 EPIPE——
+        // 尽力投递，静默降级
+        let _ = proc.write_line(&brief::render(brief));
+        // stdin 死锁修复（2026-11-18）：简报投递完即关 stdin（EOF=投递完毕）——
+        // 对端若读完简报继续等 stdin 下一行，同样永久挂死（claude -p 实验实锤
+        // 的同族问题）；运行中补充指令已整链退役（D16 决策⑧废止）
+        proc.close_stdin();
         let session = DelegateSession::new(
             self.id,
             &opts.delegate_task_id,
@@ -142,9 +149,6 @@ impl CodingBackend for GenericCliBackend {
             Some(stderr),
             Box::new(GenericLineParser),
         );
-        // stdin 喂简报（17 §3.2 启动形态）；子进程不读 stdin 且退出时可能 EPIPE——
-        // 写失败不致命（简报已尽力投递），记录为 raw_tail 不可行（无事件流），静默降级
-        let _ = session.send_input(&brief::render(brief));
         Ok(session)
     }
 
@@ -153,10 +157,6 @@ impl CodingBackend for GenericCliBackend {
         session: &DelegateSession,
     ) -> Result<Option<NormalizedEvent>, DelegateError> {
         session.next_event()
-    }
-
-    fn send_input(&self, session: &DelegateSession, text: &str) -> Result<(), DelegateError> {
-        session.send_input(text)
     }
 
     fn cancel(

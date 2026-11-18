@@ -118,7 +118,7 @@ pub struct CancelOutcome {
 
 /// 受管子进程：新进程组启动 + BBC_SANDBOX=1 标记 + §8.4 取消协议。
 /// `child`/`stdin` 各持 Mutex——stream_events 阻塞读 stdout 期间，其他线程可
-/// 并发 send_input/cancel（两把锁不嵌套获取，无死锁路径）。
+/// 并发 cancel（两把锁不嵌套获取，无死锁路径）。
 #[derive(Debug)]
 pub struct ChildProcess {
     child: Mutex<Child>,
@@ -129,7 +129,7 @@ pub struct ChildProcess {
     pub program: String,
 }
 
-/// 启动受管子进程：返回 (进程句柄, stdout, stderr)。stdin 由句柄持有（send_input 用）。
+/// 启动受管子进程：返回 (进程句柄, stdout, stderr)。stdin 由句柄持有（简报投递用，投毕即关）。
 /// 环境注入 BBC_SANDBOX=1（遗留扫描依据）+ 调用方附加 envs（简报 forbidden 等）。
 /// stderr 改管道捕获（2026-11-18：claude 卡死排查时 stderr 全不可见——API 重试/
 /// 权限/网络报错直接丢失；调用方经 DelegateSession 读线程转发为 warning 事件）。
@@ -189,7 +189,7 @@ impl ChildProcess {
         self.child.lock().unwrap_or_else(|p| p.into_inner()).id() as i32
     }
 
-    /// 向 stdin 写一行（send_input；末尾补 \n）。stdin 已关闭/对端退出 → Err。
+    /// 向 stdin 写一行（简报投递；末尾补 \n）。stdin 已关闭/对端退出 → Err。
     pub fn write_line(&self, line: &str) -> io::Result<()> {
         let mut guard = self.stdin.lock().unwrap_or_else(|p| p.into_inner());
         let Some(w) = guard.as_mut() else {

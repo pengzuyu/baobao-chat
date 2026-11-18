@@ -411,7 +411,6 @@ export class MockAgentBridge implements AgentBridge {
 
   async launchDelegate(_sessionId: string, _runId: string, _backend: string): Promise<void> {}
 
-  async delegateInput(_runId: string, _text: string): Promise<void> {}
 
   async cancelDelegate(_runId: string): Promise<void> {}
 

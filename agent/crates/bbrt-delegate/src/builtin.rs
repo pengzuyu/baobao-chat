@@ -74,10 +74,6 @@ impl CodingBackend for BuiltinBackend {
         Err(Self::not_implemented())
     }
 
-    fn send_input(&self, _session: &DelegateSession, _text: &str) -> Result<(), DelegateError> {
-        Err(Self::not_implemented())
-    }
-
     fn cancel(
         &self,
         _session: &DelegateSession,

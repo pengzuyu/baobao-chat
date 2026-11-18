@@ -82,10 +82,6 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             mode: PermissionMode::FullAuto,
             workspace: "~/code/bbc".into(),
         },
-        HostToRuntime::DelegateInput {
-            delegate_task_id: "dt-1".into(),
-            text: "补一条单测".into(),
-        },
         HostToRuntime::DelegateCancel {
             delegate_task_id: "dt-1".into(),
             graceful: true,
@@ -395,8 +391,8 @@ fn roundtrip_all_host_to_runtime() {
     let all = all_host_to_runtime();
     assert_eq!(
         all.len(),
-        20,
-        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong + D20 clarify.response"
+        19,
+        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong + D20 clarify.response（delegate.input 已随补充指令退役移除）"
     );
     for msg in &all {
         roundtrip(msg);

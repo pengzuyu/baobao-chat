@@ -118,11 +118,6 @@ impl DelegateStream for SessionStream {
         let _ = self.backend.cancel(&self.session, graceful);
     }
 
-    fn send_input(&mut self, text: &str) {
-        // D16 决策⑧：delegate.input 真正下发子进程（此前仅事件回显）
-        let _ = self.backend.send_input(&self.session, text);
-    }
-
     fn finalize(&mut self) -> DelegateFinal {
         match self.backend.finalize(&self.session) {
             Ok(rep) => DelegateFinal {

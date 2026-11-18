@@ -136,11 +136,8 @@ impl ChatClient for DelegateModel {
     }
 }
 
-/// 委派流 send_input 转发记录器（后台线程 → 测试线程经 static 共享）
-static STREAM_INPUTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-/// 剧本委派流：首调 next 延时（留运行窗给 Input 下发）→ EOF；
-/// send_input 记录（D16 决策⑧转发断言）；finalize 带 changed_files/session_ref
+/// 剧本委派流：首调 next 延时（留后台注册窗）→ EOF；
+/// finalize 带 changed_files/session_ref（补充指令转发已随功能退役删除断言）
 struct ScriptedStream {
     first: bool,
 }
@@ -148,7 +145,7 @@ impl DelegateStream for ScriptedStream {
     fn next(&mut self) -> Option<DelegateEvt> {
         if self.first {
             self.first = false;
-            std::thread::sleep(Duration::from_millis(120)); // 运行窗（Input 在此到达）
+            std::thread::sleep(Duration::from_millis(120)); // 后台注册窗
             Some(DelegateEvt::Delta {
                 channel: bbrt_session::delegation::DelegateChannel::Text,
                 text: "开工".into(),
@@ -158,9 +155,6 @@ impl DelegateStream for ScriptedStream {
         }
     }
     fn cancel(&mut self, _graceful: bool) {}
-    fn send_input(&mut self, text: &str) {
-        STREAM_INPUTS.lock().unwrap().push(text.to_string());
-    }
     fn finalize(&mut self) -> DelegateFinal {
         DelegateFinal {
             summary: "改了 2 个文件".into(),
@@ -178,7 +172,6 @@ impl DelegateLauncher for FakeDelegator {
     }
     fn launch(&self, req: &DelegateLaunchReq) -> Result<Box<dyn DelegateStream>, String> {
         assert!(!req.session_id.is_empty(), "P0-2①：父会话关联必须接线");
-        STREAM_INPUTS.lock().unwrap().clear();
         Ok(Box::new(ScriptedStream { first: true }))
     }
 }
@@ -236,7 +229,7 @@ fn background_delegate_turn_returns_immediately_and_parks_join() {
 
     // run_id 取自简报事件（turn 内同步发出）；运行窗内（首调 next 延时
     // 120ms）经 hub 下发补充指令——D16 决策⑧：应真正转发子进程
-    let rid = match wait_event(&sink, 2_000, |e| {
+    let _rid = match wait_event(&sink, 2_000, |e| {
         matches!(e, SessionEvent::DelegateBrief { .. })
     })
     .expect("简报事件应在 turn 内已发出")
@@ -246,13 +239,6 @@ fn background_delegate_turn_returns_immediately_and_parks_join() {
         } => delegate_task_id,
         _ => unreachable!(),
     };
-    assert!(hub.route(
-        &rid,
-        &DelegateHostMsg::Input {
-            text: "顺带补个单测".into()
-        }
-    ));
-
     // turn 已返回；后台线程异步产出 end（P0-2③：全字段上行）
     let end = wait_event(&sink, 5_000, |e| {
         matches!(e, SessionEvent::DelegateEnd { exit_code: 0, .. })
@@ -284,13 +270,6 @@ fn background_delegate_turn_returns_immediately_and_parks_join() {
         matches!(e, SessionEvent::DelegateReviewResolved { decision, .. } if decision == "accept")
     })
     .is_some());
-
-    // 补充指令真正到达子进程（转发断言）
-    assert_eq!(
-        STREAM_INPUTS.lock().unwrap().clone(),
-        vec!["顺带补个单测".to_string()],
-        "delegate.input 应经 pump 转发子进程"
-    );
 
     // 产物 parking + 手动注入（manager 级注入由测试②覆盖）
     let joins = hub.drain_joins("s-bg1");

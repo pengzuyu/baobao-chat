@@ -586,12 +586,6 @@ pub enum HostToRuntime {
         workspace: String,
     },
 
-    /// 委派追加指令（17 send_input）
-    #[serde(rename = "delegate.input", rename_all = "camelCase")]
-    DelegateInput {
-        delegate_task_id: String,
-        text: String,
-    },
 
     /// 取消委派（graceful=true: SIGINT→3s→SIGKILL 进程组）
     #[serde(rename = "delegate.cancel", rename_all = "camelCase")]

@@ -148,7 +148,6 @@ pub fn run() {
             agent_commands::agent_reject,
             agent_commands::agent_clarify_respond,
             agent_commands::agent_delegate_launch,
-            agent_commands::agent_delegate_input,
             agent_commands::agent_delegate_cancel,
             agent_commands::agent_delegate_review,
             agent_commands::agent_runs_list,

@@ -91,9 +91,6 @@ pub trait DelegateStream: Send {
     }
     /// 取消（graceful=SIGINT→3s→SIGKILL，D11 §8.4）
     fn cancel(&mut self, graceful: bool);
-    /// 运行中补充指令（17 §8 send_input；D16 决策⑧——默认 no-op，
-    /// 不支持的后端（generic）静默忽略，指令仍以事件回显留痕）
-    fn send_input(&mut self, _text: &str) {}
     /// 收尾：summary/changed_files/session_ref
     fn finalize(&mut self) -> DelegateFinal;
 }

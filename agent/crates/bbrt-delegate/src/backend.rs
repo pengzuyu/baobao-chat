@@ -8,7 +8,6 @@
 //! | probe_health() | — | ok / 降级原因（版本不符 8031 / 未登录 / 冒烟失败） |
 //! | launch(task_brief, opts{mode, workspace, env_allow}) | 简报+权限映射 | 子进程（新进程组）+ 会话句柄 |
 //! | stream_events() | — | 归一化事件（§8.3；本实现为逐事件拉取式） |
-//! | send_input(text) | 追加指令 | —（17 模式 C 续接基础） |
 //! | cancel(graceful) | bool | §8.4 取消协议 |
 //! | finalize() | — | {summary, changed_files, session_ref}（续接句柄） |
 //!
@@ -315,7 +314,7 @@ struct SessionInner {
 }
 
 /// 委派会话句柄：持有受管子进程与行解析器；线程安全（Send+Sync）。
-/// 生命周期：launch →（stream_events/send_input/cancel）* → 退出 → finalize。
+/// 生命周期：launch →（stream_events/cancel）* → 退出 → finalize。
 pub struct DelegateSession {
     backend_id: String,
     delegate_task_id: String,
@@ -570,11 +569,6 @@ impl DelegateSession {
         }
     }
 
-    /// 追加输入（模式 C 续接基础；写入子进程 stdin 一行）
-    pub fn send_input(&self, text: &str) -> Result<(), DelegateError> {
-        self.proc.write_line(text).map_err(DelegateError::Io)
-    }
-
     /// 取消（§8.4 委托 procmgr）；收割结果回填会话（finalize 可立即进行）
     pub fn cancel(&self, graceful: bool) -> Result<CancelOutcome, DelegateError> {
         let outcome = self.proc.cancel(graceful).map_err(DelegateError::Io)?;
@@ -652,8 +646,6 @@ pub trait CodingBackend: Send + Sync {
         session: &DelegateSession,
     ) -> Result<Option<NormalizedEvent>, DelegateError>;
 
-    /// 追加指令（子进程 stdin）
-    fn send_input(&self, session: &DelegateSession, text: &str) -> Result<(), DelegateError>;
 
     /// 取消（§8.4：SIGINT→3s→SIGKILL 进程树 / 直接强杀）
     fn cancel(

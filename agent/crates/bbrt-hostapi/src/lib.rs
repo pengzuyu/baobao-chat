@@ -92,7 +92,6 @@ const KNOWN_HOST_TYPES: &[&str] = &[
     "user.message",
     "permission.response",
     "delegate.launch",
-    "delegate.input",
     "delegate.cancel",
     "delegate.review",
     "session.pause",

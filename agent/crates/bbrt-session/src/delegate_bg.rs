@@ -2,7 +2,7 @@
 //! 会话可继续对话；事件流与审查在专用线程）。
 //!
 //! 职责：
-//! - **后台 run 注册表**（run_id → 指令通道）：宿主 delegate.input/cancel/review
+//! - **后台 run 注册表**（run_id → 指令通道）：宿主 cancel/review
 //!   经 manager 定向路由到具体 run（P0-2②——取代对全部活跃会话的广播，
 //!   修多会话并存时的误投）；
 //! - **产物 parking**：审查通过的摘要按会话入队，manager 在下一次 run_turn 前

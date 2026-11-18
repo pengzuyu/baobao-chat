@@ -149,6 +149,11 @@ impl CodingBackend for ZcodeBackend {
         let mut envs = brief::child_env(brief);
         envs.extend(opts.env_allow.iter().cloned());
         let (proc, stdout, stderr) = procmgr::spawn(&self.bin, &args, Some(&opts.workspace), &envs)?;
+        // 简报经 stdin 投递（假定口径；对端不读且退出时可能 EPIPE，尽力投递）
+        let _ = proc.write_line(&brief::render(brief));
+        // stdin 死锁修复（2026-11-18）：简报投递完即关 stdin（EOF=投递完毕，
+        // 防对端等 stdin 下一行永久挂死——claude -p 实验实锤的同族问题）
+        proc.close_stdin();
         let session = DelegateSession::new(
             "zcode",
             &opts.delegate_task_id,
@@ -157,8 +162,6 @@ impl CodingBackend for ZcodeBackend {
             Some(stderr),
             Box::new(ZcodeLineParser),
         );
-        // 简报经 stdin 投递（假定口径；对端不读且退出时可能 EPIPE，尽力投递）
-        let _ = session.send_input(&brief::render(brief));
         Ok(session)
     }
 
@@ -167,10 +170,6 @@ impl CodingBackend for ZcodeBackend {
         session: &DelegateSession,
     ) -> Result<Option<NormalizedEvent>, DelegateError> {
         session.next_event()
-    }
-
-    fn send_input(&self, session: &DelegateSession, text: &str) -> Result<(), DelegateError> {
-        session.send_input(text)
     }
 
     fn cancel(

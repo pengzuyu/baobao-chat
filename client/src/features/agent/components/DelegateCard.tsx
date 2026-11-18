@@ -8,8 +8,7 @@
  */
 
 import { memo, useState } from 'react';
-import { Input, Spin, Typography, theme } from 'antd';
-import { useImeGuard } from '../../../shared/hooks/useImeGuard';
+import { Spin, Typography, theme } from 'antd';
 import { CheckCircle2, ChevronRight, TerminalSquare, XCircle } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useAgentStore } from '../store/agent';
@@ -49,10 +48,7 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
   const confirmDelegate = useAgentStore((st) => st.confirmDelegate);
   const reviewDelegate = useAgentStore((st) => st.reviewDelegate);
   const cancelDelegate = useAgentStore((st) => st.cancelDelegate);
-  const sendRunInput = useAgentStore((st) => st.sendRunInput);
   const openRunView = useAgentStore((st) => st.openRunView);
-  const { imeEnterDecision, imeCompositionProps } = useImeGuard();
-  const [draft, setDraft] = useState('');
   const [open, setOpen] = useState(false);
 
   const failed = item.end !== undefined && item.end.exitCode !== 0;
@@ -150,41 +146,11 @@ export const DelegateCard = memo(function DelegateCard({ item }: { item: Delegat
       ) : null}
 
       {item.phase === 'running' ? (
-        <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <Input
-              size="small"
-              value={draft}
-              placeholder="运行中补充指令（转发子进程）…"
-              style={{ flex: 1, minWidth: 0, fontSize: 12 }}
-              onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  // IME 三态（useImeGuard v3）：swallow=确认键余波吞掉；ime=交给输入法
-                  if (e.key !== 'Enter' || e.shiftKey) return;
-                  const d = imeEnterDecision(e.nativeEvent);
-                  if (d === 'swallow') e.preventDefault();
-                  else if (d === 'send') {
-                    sendRunInput(item.runId, draft);
-                    setDraft('');
-                  }
-                }}
-              {...imeCompositionProps}
-            />
-            <Button
-              variant="secondary"
-              size="small"
-              disabled={!draft.trim()}
-              onClick={() => {
-                sendRunInput(item.runId, draft);
-                setDraft('');
-              }}
-            >
-              下发
-            </Button>
-            <Button variant="secondary" size="small" onClick={() => cancelDelegate(item.runId)}>
-              取消委派
-            </Button>
-          </div>
+        <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: 12, display: 'flex', justifyContent: 'flex-end' }}>
+          {/* 补充指令输入框已随「运行中补充指令」退役（stdin 死锁根因，2026-11-18） */}
+          <Button variant="secondary" size="small" onClick={() => cancelDelegate(item.runId)}>
+            取消委派
+          </Button>
         </div>
       ) : null}
 

@@ -176,7 +176,11 @@ impl CodingBackend for ClaudeBackend {
         let mut envs = brief::child_env(brief);
         envs.extend(opts.env_allow.iter().cloned());
         let (proc, stdout, stderr) = procmgr::spawn(&self.bin, &args, Some(&opts.workspace), &envs)?;
-        // 简报经 -p 参数传入；stdin 保留给 send_input（模式 C 追问）
+        // stdin 死锁修复（2026-11-18 实验实锤）：`claude -p` 即使带 prompt 参数
+        // 也先读 stdin 至 EOF（管道内容并入 prompt）才开跑——stdin 保持打开 =
+        // 零输出零退出零网络的永久挂死（真机 38 分钟事故根因）。简报走 -p
+        // 参数、续接走 --resume；运行中补充指令已整链退役（D16 决策⑧废止）
+        proc.close_stdin();
         Ok(DelegateSession::new(
             "claude",
             &opts.delegate_task_id,
@@ -192,10 +196,6 @@ impl CodingBackend for ClaudeBackend {
         session: &DelegateSession,
     ) -> Result<Option<NormalizedEvent>, DelegateError> {
         session.next_event()
-    }
-
-    fn send_input(&self, session: &DelegateSession, text: &str) -> Result<(), DelegateError> {
-        session.send_input(text)
     }
 
     fn cancel(
@@ -413,6 +413,35 @@ mod tests {
 
     fn sample_brief() -> TaskBrief {
         testing::testing_brief(std::path::Path::new("/Users/dev/repos/order-svc"))
+    }
+
+    /// stdin 死锁回归（2026-11-18 真机 38 分钟挂死根因）：`claude -p` 先读
+    /// stdin 至 EOF 才开跑——launch 必须立即关 stdin。桩脚本读完 stdin 才
+    /// 输出（模拟该行为），若未关则 next_event 永远等不到事件（测试超时挂死）
+    #[test]
+    fn launch_closes_stdin_immediately() {
+        let dir = testing::temp_dir("clstdin");
+        // 桩：读完 stdin（EOF）才输出一行并退出——不关 stdin 就永远 read 不到 EOF
+        let stub = testing::write_script(
+            &dir,
+            "cl.sh",
+            "#!/bin/sh\ncat > /dev/null\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nexit 0\n",
+        );
+        let backend = ClaudeBackend::with_bin(stub.to_string_lossy().into_owned());
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let brief = crate::testing::testing_brief(&ws);
+        let opts = LaunchOpts::new("d-std", "s-std", PermissionMode::AutoEdit, &ws);
+        let session = backend.launch(&brief, &opts).unwrap();
+        // 5s 内必须见到首事件（桩依赖 stdin EOF；不关即挂死超时）
+        match session
+            .next_event_wait(Some(std::time::Duration::from_secs(5)))
+            .unwrap()
+        {
+            crate::backend::EventWait::Ready(crate::normalize::NormalizedEvent::Meta { .. }) => {}
+            other => panic!("桩退出前应产出 meta 事件: {other:?}"),
+        }
+        session.cancel(false).unwrap();
     }
 
     #[test]

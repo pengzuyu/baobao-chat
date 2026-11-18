@@ -6,7 +6,7 @@
 //! | 版本探测成功 | version.sh | detect installed + 1.4.2 + probe_health ok |
 //! | 版本探测失败 | version-fail.sh | detect 未安装 + 降级 NotInstalled（8030 语义） |
 //! | 流式事件行逐条归一化 | stream.sh | Meta/Delta/ToolUse(风险)/ToolResult/Exit + finalize |
-//! | send_input 追加指令 | stream.sh | 回显 output 事件 "got: ..." |
+//! | 简报 stdin 投递+关闭 | stream.sh | 桩读 stdin 得简报行（launch 内投递后即关） |
 //! | 非零退出码 | exit7.sh | Exit{7} + finalize exit.abnormal（8033 语义） |
 //! | graceful cancel | hang.sh（trap INT→exit） | SIGINT 后退出，未升级强杀 |
 //! | 强杀升级 | hard.sh（trap '' INT） | 3s 宽限 → SIGKILL（信号 9） |
@@ -136,14 +136,9 @@ fn stream_lines_normalize_one_by_one_and_finalize() {
             summary: "+3 -1".into()
         }
     );
-    // send_input 响应（模式 C 续接基础）
-    backend.send_input(&session, "extra-input").unwrap();
-    assert_eq!(
-        next(),
-        NormalizedEvent::Delta {
-            channel: StreamChannel::Text,
-            text: "got: extra-input".into()
-        }
+    // launch 内已投递简报并关 stdin（stdin 死锁修复）——桩 read 到的是简报首行
+    assert!(
+        matches!(next(), NormalizedEvent::Delta { ref text, .. } if text.starts_with("got: "))
     );
     // 正常退出 → Exit 事件，随后流终止
     assert_eq!(
@@ -160,37 +155,7 @@ fn stream_lines_normalize_one_by_one_and_finalize() {
     assert_eq!(report.changed_files, vec!["src/a.rs".to_string()]);
     assert_eq!(report.session_ref.as_deref(), Some("g-77"));
     assert!(report.summary.contains("plain working text"));
-    assert!(report.summary.contains("got: extra-input"));
-}
-
-#[test]
-fn send_input_can_come_before_events_drained() {
-    // send_input 在事件未消费时先行写入（管道缓冲），桩阻塞读 stdin 前已可读到
-    let dir = TestDir::new("earlyinput");
-    let stub = stream_stub(&dir);
-    let ws = dir.workspace();
-    let brief = sample_brief(&ws);
-    let opts = LaunchOpts::new("d-106", "sess-6", PermissionMode::AutoEdit, &ws);
-    let backend = GenericCliBackend::new(stub);
-    let session = backend.launch(&brief, &opts).unwrap();
-    backend.send_input(&session, "early-line").unwrap();
-    let mut kinds = Vec::new();
-    while let Some(ev) = backend.stream_events(&session).unwrap() {
-        kinds.push(ev);
-    }
-    // 全序列：meta/delta/tool_use/tool_result/output(got: early-line)/exit
-    assert_eq!(kinds.len(), 6);
-    assert!(
-        matches!(kinds[4], NormalizedEvent::Delta { ref text, .. } if text == "got: early-line")
-    );
-    assert!(matches!(
-        kinds[5],
-        NormalizedEvent::Exit {
-            exit_code: Some(0),
-            ..
-        }
-    ));
-    assert!(backend.finalize(&session).unwrap().exit.ok());
+    assert!(report.summary.contains("got: "));
 }
 
 #[test]
@@ -364,9 +329,19 @@ fn workspace_lock_blocks_second_delegate_on_same_workspace() {
 
 #[test]
 fn generic_backend_usable_as_trait_object() {
-    // 编排层实际持有形态：Arc<dyn CodingBackend>
+    // 编排层实际持有形态：Arc<dyn CodingBackend>。
+    // 桩：输出 meta 后读 stdin（launch 投递简报即关）再长眠——保持运行态
+    // 供 cancel（SIGKILL → 信号死亡），验证 trait 对象全链路 + finalize
     let dir = TestDir::new("traitobj");
-    let stub = stream_stub(&dir);
+    let stub = write_script(
+        dir.path(),
+        "longwork.sh",
+        &with_drain(concat!(
+            "printf '%s\n' '##BBC:EVT:{\"kind\":\"meta\",\"text\":\"start\"}'\n",
+            "IFS= read -r extra\n",
+            "sleep 60\n",
+        )),
+    );
     let ws = dir.workspace();
     let brief = sample_brief(&ws);
     let opts = LaunchOpts::new("d-107", "sess-7", PermissionMode::AutoEdit, &ws);

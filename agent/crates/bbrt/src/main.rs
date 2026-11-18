@@ -799,18 +799,6 @@ fn dispatch(
             .ok();
             None // 委派事件流（delegate.event/end）即回显
         }
-        HostToRuntime::DelegateInput {
-            delegate_task_id,
-            text,
-        } => {
-            mgr.respond_delegate(
-                &delegate_task_id,
-                "",
-                bbrt_session::loop_runner::DelegateHostMsg::Input { text },
-            )
-            .ok();
-            None
-        }
         HostToRuntime::DelegateCancel {
             delegate_task_id,
             graceful,

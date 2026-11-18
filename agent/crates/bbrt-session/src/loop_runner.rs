@@ -88,6 +88,8 @@ pub enum DelegateHostMsg {
         /// 用户编辑后的简报（None=用模型产出原稿）
         brief: Option<bbrt_protocol::TaskBrief>,
     },
+    /// 进程内子 agent 补充指令（probe/expert 经 subagent.adjust 注入下一模型轮；
+    /// 委派 stdin 下发已随「运行中补充指令」退役——委派泵不再消费此变体）
     Input {
         text: String,
     },
@@ -1856,12 +1858,12 @@ pub(crate) fn pump_delegate_stream_timed(
     let mut tool_started: std::collections::HashMap<String, std::time::Instant> =
         std::collections::HashMap::new();
     loop {
-        cancelled |= pump_host_msgs(session_id, run_id, stream, rx, interrupted, sink, wal);
+        cancelled |= pump_host_msgs(session_id, run_id, stream, rx, interrupted, wal);
         let evt = match stream.next_wait(tick) {
             crate::delegation::WaitEvt::Ready(evt) => evt,
             crate::delegation::WaitEvt::Idle => {
                 // 回旋：静默期宿主指令（cancel/补充指令）也要能送达
-                cancelled |= pump_host_msgs(session_id, run_id, stream, rx, interrupted, sink, wal);
+                cancelled |= pump_host_msgs(session_id, run_id, stream, rx, interrupted, wal);
                 let idle_for = last_event.elapsed();
                 if idle_for >= idle_hint && last_hint.elapsed() >= idle_hint {
                     last_hint = std::time::Instant::now();
@@ -1988,16 +1990,15 @@ pub(crate) fn pump_delegate_stream_timed(
     cancelled
 }
 
-/// 泵内宿主指令 drain（interrupt 旗标 + Input/Cancel 通道消息）。
+/// 泵内宿主指令 drain（interrupt 旗标 + Cancel 通道消息；Input 已随
+/// 「运行中补充指令」退役——进程内 probe/expert 的 Input 走 subagent.adjust 不经此泵）。
 /// 超时轮询的每个回旋点调用——静默期 cancel 也能及时送达。
-#[allow(clippy::too_many_arguments)]
 fn pump_host_msgs(
     session_id: &str,
     run_id: &str,
     stream: &mut dyn crate::delegation::DelegateStream,
     rx: &Receiver<DelegateHostMsg>,
     interrupted: Option<&AtomicBool>,
-    sink: &dyn SessionSink,
     wal: &dyn EventLog,
 ) -> bool {
     let mut cancelled = false;
@@ -2013,16 +2014,6 @@ fn pump_host_msgs(
     }
     while let Ok(msg) = rx.try_recv() {
         match msg {
-            DelegateHostMsg::Input { text } => {
-                // D16 决策⑧：真正下发子进程（不支持的 backend 静默忽略）+ 事件回显留痕
-                stream.send_input(&text);
-                sink.emit(SessionEvent::DelegateEvt {
-                    session_id: session_id.to_string(),
-                    delegate_task_id: run_id.to_string(),
-                    kind: "input".into(),
-                    payload: format!("{{\"text\":\"{}\"}}", escape_json(&text)),
-                });
-            }
             DelegateHostMsg::Cancel { graceful } => {
                 wal.append_run(
                     session_id,

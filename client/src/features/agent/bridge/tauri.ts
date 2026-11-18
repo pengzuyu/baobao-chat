@@ -249,9 +249,6 @@ export class TauriAgentBridge implements AgentBridge {
     await invoke('agent_delegate_launch', { sessionId, delegateTaskId: runId, backend, taskBrief: null });
   }
 
-  async delegateInput(runId: string, text: string): Promise<void> {
-    await invoke('agent_delegate_input', { delegateTaskId: runId, text });
-  }
 
   async cancelDelegate(runId: string): Promise<void> {
     await invoke('agent_delegate_cancel', { delegateTaskId: runId });

@@ -258,19 +258,6 @@ pub fn agent_delegate_launch(
     )
 }
 
-/// 委派追加指令（模式 C 续问；17 §8 send_input）
-#[tauri::command]
-pub fn agent_delegate_input(
-    host: Host,
-    delegate_task_id: String,
-    text: String,
-) -> Result<(), String> {
-    host.fire(
-        "delegate.input",
-        json!({ "delegateTaskId": delegate_task_id, "text": text }),
-    )
-}
-
 /// 取消委派（SIGINT→3s→SIGKILL 进程组；后台/简报期均可）
 #[tauri::command]
 pub fn agent_delegate_cancel(host: Host, delegate_task_id: String) -> Result<(), String> {

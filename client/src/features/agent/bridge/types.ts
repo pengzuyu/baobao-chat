@@ -292,8 +292,6 @@ export interface AgentBridge {
   /** 确认委派启动（agent_delegate_launch；backend=简报卡建议后端；
    *  D16 主路径=不改简报直接确认，编辑稿随 P1 简报编辑器） */
   launchDelegate(sessionId: string, runId: string, backend: string): Promise<void>;
-  /** 委派追加指令（agent_delegate_input；模式 C 续问） */
-  delegateInput(runId: string, text: string): Promise<void>;
   /** 取消委派（agent_delegate_cancel；简报期/后台运行/审查期均可） */
   cancelDelegate(runId: string): Promise<void>;
   /** 委派审查结论（agent_delegate_review；delegate.end 到达后出现审查卡） */
