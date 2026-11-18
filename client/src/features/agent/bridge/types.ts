@@ -28,10 +28,13 @@ export type RiskLevel = 'low' | 'mid' | 'high';
 
 /** 会话历史条目（session.history 回执；WAL 摘要级投影——工作台打开会话加载
  *  聊天记录，IM embedded 与工作台同一会话跨端共用。ok/summary 旧 WAL 行可缺；
- *  args=脱敏 JSON 字符串（D33 §3.4 工具卡回放保真），旧行可缺 */
+ *  args=脱敏 JSON 字符串（D33 §3.4 工具卡回放保真），旧行可缺；
+ *  ts/turnDoneAt=turn 行 created_at 配对（折叠统计行冻结用时回放，旧行可缺）；
+ *  reasoning=思考全文（assistant.thinking 行投影，重开还原过程区） */
 export type HistoryItem =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; ts?: number; turnDoneAt?: number }
   | { kind: 'assistant'; text: string }
+  | { kind: 'reasoning'; text: string }
   | { kind: 'tool'; callId: string; tool: string; ok?: boolean; summary?: string; args?: string };
 
 /**

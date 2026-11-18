@@ -783,6 +783,7 @@ impl SessionRunner {
                 }
             };
             let mut text = String::new();
+            let mut thinking = String::new();
             let mut tool_calls: Vec<ToolCallMsg> = vec![];
             let mut finish = FinishReason::Stop;
             let mut usage = (0u64, 0u64);
@@ -799,8 +800,10 @@ impl SessionRunner {
                             channel: StreamChannel::Text,
                         });
                     }
-                    // 思考增量（2026-11-11）：只外发不并入正文——前端思考折叠卡消费
+                    // 思考增量（2026-11-11）：只外发不并入正文——前端思考折叠卡消费；
+                    // 全文积累随步落 WAL（D33 思考回放：session.history 重开还原过程区）
                     Ok(StreamEvent::ReasoningDelta { text: t }) => {
+                        thinking.push_str(&t);
                         let seq = self.delta_seq.fetch_add(1, Ordering::Relaxed) as u32;
                         emit(deps, &self.session_id, |id| SessionEvent::StreamDelta {
                             session_id: id,
@@ -859,6 +862,15 @@ impl SessionRunner {
                 usage_in: usage.0,
                 usage_out: usage.1,
             });
+            // 思考全文先行落 WAL（非空才落；置于 assistant.done 前——回放顺序
+            // =直播顺序 thinking→正文。D33 思考回放批次，正文前的过程条目）
+            if !thinking.is_empty() {
+                deps.wal.append(
+                    &self.session_id,
+                    "assistant.thinking",
+                    &serde_json::json!({ "text": thinking }).to_string(),
+                );
+            }
             // 崩溃恢复契约：一轮模型输出完成（recovery 以 assistant.done
             // 配对 user.text 落 assistant 轮，摘要级重建即可续会话）。
             // text=本轮回复原文（工作台 session.history 加载聊天记录数据源；

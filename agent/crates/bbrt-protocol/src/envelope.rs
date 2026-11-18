@@ -373,10 +373,23 @@ pub struct SessionListItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum HistoryItem {
-    #[serde(rename = "user")]
-    User { text: String },
+    #[serde(rename = "user", rename_all = "camelCase")]
+    User {
+        text: String,
+        /// 回合起点毫秒（turn.start 行 created_at 投影；旧 WAL 行可缺 →
+        /// 前端 ts=0 降级，折叠统计行不带冻结用时）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ts: Option<i64>,
+        /// 回合收口时刻毫秒（turn.end 行 created_at 投影）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_done_at: Option<i64>,
+    },
     #[serde(rename = "assistant")]
     Assistant { text: String },
+    /// 思考全文（assistant.thinking WAL 行投影；与 stream.delta(reasoning)
+    /// 同一词。D33 思考回放批次：纯聊天轮过程区不再重开即丢）
+    #[serde(rename = "reasoning")]
+    Reasoning { text: String },
     #[serde(rename = "tool", rename_all = "camelCase")]
     // 变体级：enum 级 rename_all 只管变体名不管字段
     Tool {

@@ -230,8 +230,11 @@ pub fn ready_event(session_id: &str, report: &ReplayReport) -> SessionEvent {
 /// WAL → 会话历史条目（session.history 回执投影，与 recover 同一数据源）。
 /// user.text/assistant.done 落原文；tool.call+tool.result 按 call_id 配对
 /// （ok/summary 旧行可缺 → name-only）。审批/澄清卡是即时交互不入历史。
+/// turn.start/end 行的 created_at 配对盖 user 条目 ts/turnDoneAt——折叠统计行
+/// 冻结用时回放还原；assistant.thinking → Reasoning（D33 思考回放批次）。
 pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
     let mut items: Vec<HistoryItem> = Vec::new();
+    let mut turn_started_at: Option<i64> = None;
     for ev in events {
         let payload: serde_json::Value = match serde_json::from_str(&ev.payload) {
             Ok(v) => v,
@@ -244,9 +247,22 @@ pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
                 .map(str::to_string)
         };
         match ev.type_.as_str() {
+            "turn.start" => turn_started_at = Some(ev.created_at),
             "user.text" => {
                 if let Some(text) = str_field("text") {
-                    items.push(HistoryItem::User { text });
+                    items.push(HistoryItem::User {
+                        text,
+                        ts: turn_started_at,
+                        turn_done_at: None,
+                    });
+                }
+            }
+            // 思考全文（D33 思考回放：置于 assistant.done 前，回放顺序=直播顺序）
+            "assistant.thinking" => {
+                if let Some(text) = str_field("text") {
+                    if !text.is_empty() {
+                        items.push(HistoryItem::Reasoning { text });
+                    }
                 }
             }
             // 旧 WAL 行无 text → 跳过（无法渲染的空 assistant 轮）
@@ -273,6 +289,14 @@ pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
                 {
                     *ok = payload.get("ok").and_then(|x| x.as_bool());
                     *summary = str_field("summary");
+                }
+            }
+            // 收口时刻回填最后一个 user 条目（与直播收口盖 turnDoneAt 同口径）
+            "turn.end" => {
+                if let Some(HistoryItem::User { turn_done_at, .. }) =
+                    items.iter_mut().rev().find(|it| matches!(it, HistoryItem::User { .. }))
+                {
+                    *turn_done_at = Some(ev.created_at);
                 }
             }
             _ => {}
@@ -302,7 +326,12 @@ pub fn wal_run_history(events: &[EventRow]) -> Vec<HistoryItem> {
             "subagent.spawn" => {
                 if let Some(task) = str_field("task") {
                     if !items.iter().any(|it| matches!(it, HistoryItem::User { .. })) {
-                        items.push(HistoryItem::User { text: task });
+                        items.push(HistoryItem::User {
+                            text: task,
+                            // run 级行无 turn.start/end——侧栏回放不带冻结用时
+                            ts: None,
+                            turn_done_at: None,
+                        });
                     }
                 }
             }
@@ -347,13 +376,17 @@ mod history_tests {
     use super::*;
 
     fn ev(seq: i64, type_: &str, payload: &str) -> EventRow {
+        ev_at(seq, 0, type_, payload)
+    }
+
+    fn ev_at(seq: i64, created_at: i64, type_: &str, payload: &str) -> EventRow {
         EventRow {
             id: seq,
             session_id: "sess-1".into(),
             seq,
             type_: type_.into(),
             payload: payload.into(),
-            created_at: 0,
+            created_at,
             run_id: String::new(),
         }
     }
@@ -362,7 +395,7 @@ mod history_tests {
     fn wal_history_projects_roundtrip_items() {
         let events = vec![
             ev(1, "session.start", r#"{"workspace":""}"#),
-            ev(2, "turn.start", r#"{"text_len":6}"#),
+            ev_at(2, 1_000, "turn.start", r#"{"text_len":6}"#),
             ev(3, "user.text", r#"{"text":"修复登录"}"#),
             ev(4, "tool.call", r#"{"call_id":"c1","tool":"read_file"}"#),
             ev(
@@ -375,8 +408,9 @@ mod history_tests {
                 "assistant.done",
                 r#"{"finish":"stop","usage_in":10,"usage_out":5,"text":"已修复"}"#,
             ),
-            ev(
+            ev_at(
                 7,
+                8_000,
                 "turn.end",
                 r#"{"steps":1,"paused":false,"interrupted":false}"#,
             ),
@@ -384,8 +418,11 @@ mod history_tests {
         assert_eq!(
             wal_history(&events),
             vec![
+                // turn.start/end 行 created_at 配对盖 ts/turnDoneAt（冻结用时还原）
                 HistoryItem::User {
-                    text: "修复登录".into()
+                    text: "修复登录".into(),
+                    ts: Some(1_000),
+                    turn_done_at: Some(8_000),
                 },
                 HistoryItem::Tool {
                     call_id: "c1".into(),
@@ -396,6 +433,41 @@ mod history_tests {
                 },
                 HistoryItem::Assistant {
                     text: "已修复".into()
+                },
+            ]
+        );
+    }
+
+    /// D33 思考回放：assistant.thinking → Reasoning（置于正文前，回放顺序=
+    /// 直播顺序）；空思考行跳过
+    #[test]
+    fn wal_history_projects_thinking() {
+        let events = vec![
+            ev_at(1, 1_000, "turn.start", r#"{"text_len":4}"#),
+            ev(2, "user.text", r#"{"text":"查下日志"}"#),
+            ev(3, "assistant.thinking", r#"{"text":"先 grep error 再看时间线"}"#),
+            ev(
+                4,
+                "assistant.done",
+                r#"{"finish":"stop","usage_in":9,"usage_out":3,"text":"结论如下"}"#,
+            ),
+            ev_at(5, 5_000, "turn.end", r#"{"steps":1,"paused":false,"interrupted":false}"#),
+            // 空思考不落条目
+            ev(6, "assistant.thinking", r#"{"text":""}"#),
+        ];
+        assert_eq!(
+            wal_history(&events),
+            vec![
+                HistoryItem::User {
+                    text: "查下日志".into(),
+                    ts: Some(1_000),
+                    turn_done_at: Some(5_000),
+                },
+                HistoryItem::Reasoning {
+                    text: "先 grep error 再看时间线".into()
+                },
+                HistoryItem::Assistant {
+                    text: "结论如下".into()
                 },
             ]
         );
@@ -423,8 +495,11 @@ mod history_tests {
         assert_eq!(
             wal_history(&events),
             vec![
+                // 无 turn.start/end 行 → 时间戳降级 None（折叠行不带冻结用时）
                 HistoryItem::User {
-                    text: "旧会话问题".into()
+                    text: "旧会话问题".into(),
+                    ts: None,
+                    turn_done_at: None,
                 },
                 HistoryItem::Tool {
                     call_id: "c9".into(),
@@ -456,7 +531,11 @@ mod history_tests {
         assert_eq!(
             wal_history(&events),
             vec![
-                HistoryItem::User { text: "跑测试".into() },
+                HistoryItem::User {
+                    text: "跑测试".into(),
+                    ts: None,
+                    turn_done_at: None,
+                },
                 HistoryItem::Tool {
                     call_id: "c2".into(),
                     tool: "run_command".into(),
@@ -503,7 +582,11 @@ mod history_tests {
         assert_eq!(
             wal_run_history(&events),
             vec![
-                HistoryItem::User { text: "定位超时来源".into() },
+                HistoryItem::User {
+                    text: "定位超时来源".into(),
+                    ts: None,
+                    turn_done_at: None,
+                },
                 HistoryItem::Tool {
                     call_id: "c1".into(),
                     tool: "read_file".into(),

@@ -265,13 +265,16 @@ function nextKey(prefix: string): string {
 
 /** 历史条目 → 流条目（回合气泡同构渲染；key 前缀 h- 区分直播条目。
  *  工具行合成 call/result 事件（args=脱敏 JSON 串 parse——D33 §3.4 WAL 补记后
- *  重启回放工具卡保真；旧行无 args → {} 降级） */
+ *  重启回放工具卡保真；旧行无 args → {} 降级）；reasoning 行→思考条目、
+ *  user 行 ts/turnDoneAt 透传（折叠统计行冻结用时回放，旧行缺省 0/undefined） */
 function historyToStreamItem(sid: string, it: HistoryItem, i: number): StreamItem {
   switch (it.kind) {
     case 'user':
-      return { kind: 'user', key: `h-u${i}`, text: it.text, ts: 0 };
+      return { kind: 'user', key: `h-u${i}`, text: it.text, ts: it.ts ?? 0, turnDoneAt: it.turnDoneAt };
     case 'assistant':
       return { kind: 'agentText', key: `h-a${i}`, text: it.text, streaming: false };
+    case 'reasoning':
+      return { kind: 'reasoning', key: `h-r${i}`, text: it.text, streaming: false };
     case 'tool':
       return {
         kind: 'tool',

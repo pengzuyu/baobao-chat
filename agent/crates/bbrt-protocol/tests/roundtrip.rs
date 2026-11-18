@@ -277,6 +277,8 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             run_id: "r-9".into(),
             items: vec![bbrt_protocol::HistoryItem::User {
                 text: "定位超时来源".into(),
+                ts: None,
+                turn_done_at: None,
             }],
         },
         RuntimeToHost::DelegateBrief {
@@ -1226,6 +1228,11 @@ fn golden_session_history_messages() {
             items: vec![
                 HistoryItem::User {
                     text: "修复登录超时".into(),
+                    ts: Some(1_000),
+                    turn_done_at: Some(8_000),
+                },
+                HistoryItem::Reasoning {
+                    text: "先看超时阈值再查连接池".into(),
                 },
                 HistoryItem::Tool {
                     call_id: "c1".into(),
@@ -1243,7 +1250,8 @@ fn golden_session_history_messages() {
             "type":"session.history.result",
             "sessionId":"sess-1",
             "items":[
-                {"kind":"user","text":"修复登录超时"},
+                {"kind":"user","text":"修复登录超时","ts":1000,"turnDoneAt":8000},
+                {"kind":"reasoning","text":"先看超时阈值再查连接池"},
                 {"kind":"tool","callId":"c1","tool":"read_file","ok":true,"summary":"42 行"},
                 {"kind":"assistant","text":"已修复"}
             ]
