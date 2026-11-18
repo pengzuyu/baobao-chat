@@ -378,7 +378,7 @@ func main() {
 	// 建户即关（租户内有任何用户 → bootstrap 永久 1014）。CLI bootstrap 降级为兜底
 	setupGate := newSetupGate(pgPool)
 	mux.HandleFunc("GET /api/v1/setup/status", handleSetupStatus(orgRepo))
-	mux.HandleFunc("POST /api/v1/setup/bootstrap", handleSetupBootstrap(orgRepo, roleStore, setupGate, cfg.BootstrapMailDomain))
+	mux.HandleFunc("POST /api/v1/setup/bootstrap", handleSetupBootstrap(orgRepo, roleStore, setupGate, cfg.MailDomain))
 
 	// 受保护路由：auth → tenant（D02 §6 链尾两环）
 	authed := func(h http.HandlerFunc) http.Handler {
@@ -820,6 +820,26 @@ func main() {
 	adminOpts.AttachDeptMember = func(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error {
 		return orgRepo.AttachUser(ctx, tenantID, userID, deptID, isPrimary)
 	}
+	// 组织存在预检（批量导入目标组织前置校验——user_dept 无外键，不预检会静默挂空；
+	// 部门量小走 ListTree 全量树走查）
+	adminOpts.DeptExists = func(ctx context.Context, tenantID, deptID int64) (bool, error) {
+		tree, err := orgRepo.ListTree(ctx, tenantID)
+		if err != nil {
+			return false, err
+		}
+		var walk func(nodes []orgapi.DeptNode) bool
+		walk = func(nodes []orgapi.DeptNode) bool {
+			for _, n := range nodes {
+				if n.ID == deptID || walk(n.Children) {
+					return true
+				}
+			}
+			return false
+		}
+		return walk(tree), nil
+	}
+	// 生成邮箱后缀（批量导入 工号@邮件域；与 /setup 首超管同源 BBC_MAIL_DOMAIN）
+	adminOpts.MailDomain = cfg.MailDomain
 	adminOpts.BroadcastNotice = func(ctx context.Context, tenantID int64, title, digest string) int {
 		users, _, err := orgAdmin.ListUsers(ctx, orgapi.UserListFilter{TenantID: tenantID, Status: orgapi.UserStatusActive, Limit: 5000})
 		if err != nil {
@@ -1080,7 +1100,9 @@ func main() {
 	}
 	mailPush := gateway.UserPusher{Hub: hub} // mail.new 直推（瞬态不经 eventbus）
 	mailMod := mail.NewModule(mailservice.Options{
-		DefaultDomain: envOr("BBC_MAIL_DOMAIN", "corp.company.internal"),
+		// 2026-11-18 收敛单源：懒开户默认域与 /setup 首超管/批量导入同走 cfg.MailDomain
+		// （BBC_MAIL_DOMAIN，默认 bbc.io；原独立 envOr 兜底 corp.company.internal 退役）
+		DefaultDomain: cfg.MailDomain,
 		// 懒开户寻址：employee_no@默认域（22 §4.1 命名策略）
 		UserEmployeeNo: func(tenantID, userID int64) (string, error) {
 			u, err := orgMod.API().GetUser(context.Background(), userID)
@@ -2749,7 +2771,7 @@ func runAdminBootstrap(args []string) {
 	}
 	created, err := repo.CreateUser(ctx, orgapi.User{
 		TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: *empno,
-		DisplayName: "平台管理员", Email: *empno + "@" + cfg.BootstrapMailDomain,
+		DisplayName: "平台管理员", Email: *empno + "@" + cfg.MailDomain,
 		PasswordHash: hash, Status: orgapi.UserStatusActive,
 	})
 	if err != nil {
@@ -3427,7 +3449,8 @@ func handleAdminListNotices(svc adminapi.AdminService) http.HandlerFunc {
 	}
 }
 
-// handleAdminImportUsers 批量导入（PAD-06；v0.1 同步 ≤100 行/次）
+// handleAdminImportUsers 批量导入（PAD-06；2026-11-18 收编组织用户页：仅姓名列，
+// 工号/邮箱服务端按规范生成；dept_id>0 建成即挂该组织标主部门；v0.1 同步 ≤100 行/次）
 func handleAdminImportUsers(svc adminapi.AdminService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		op, err := adminActor(r)
@@ -3436,13 +3459,14 @@ func handleAdminImportUsers(svc adminapi.AdminService) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			Rows []adminapi.ImportUserRow `json:"rows"`
+			DeptID int64                     `json:"dept_id"`
+			Rows   []adminapi.ImportUserRow `json:"rows"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			httpx.Fail(w, r, err)
 			return
 		}
-		res, err := svc.BatchImportUsers(r.Context(), httpx.TenantID(r.Context()), op, req.Rows)
+		res, err := svc.BatchImportUsers(r.Context(), httpx.TenantID(r.Context()), op, req.DeptID, req.Rows)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return

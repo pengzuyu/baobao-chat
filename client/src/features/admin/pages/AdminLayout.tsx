@@ -1,6 +1,7 @@
 /**
  * 管理台壳（D10 阶段一务实版，路由 /admin/*）：
- * - 左侧二级导航：仪表盘/用户/批量导入/角色/组织/公告/Agent/知识库/策略/用量/审计
+ * - 左侧二级导航：仪表盘/组织用户/角色/公告/Agent/知识库/策略/用量/审计
+ *   （2026-11-18 批量导入收编组织用户页弹窗，「批量导入」独立菜单退役）
  * - 内容区 <Outlet/>；一级"管理"入口显隐由 MainLayout 按 me.perms admin:* 判定
  * - 阶段一无 perm.changed 实时显隐/二次验证票据条（取舍登记，见 D10 §3.0 裁剪）
  * D26-O2 补充：导航换 antd Menu（原 settings-nav 自研样式退役）；布局内联化。
@@ -9,7 +10,7 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Menu } from 'antd';
 import type { MenuProps } from 'antd';
-import { BookOpen, Bot, FileUp, Gauge, KeyRound, Megaphone, Network, Puzzle, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
+import { BookOpen, Bot, Gauge, KeyRound, Megaphone, Network, Puzzle, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
@@ -18,7 +19,6 @@ const TABS = [
   { to: '/admin', icon: Gauge, label: '仪表盘', end: true },
   // 2026-11-12 用户裁决：用户+组织合并为「组织用户」通讯录页（组织树上直接开人）
   { to: '/admin/org', icon: Network, label: '组织用户' },
-  { to: '/admin/users/import', icon: FileUp, label: '批量导入' },
   { to: '/admin/roles', icon: UserCog, label: '角色' },
   { to: '/admin/notices', icon: Megaphone, label: '公告' },
   { to: '/admin/agent', icon: Bot, label: 'Agent' },

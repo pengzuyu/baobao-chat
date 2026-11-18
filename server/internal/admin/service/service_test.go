@@ -64,6 +64,24 @@ func newFixture(adminAccounts []string) (*Service, *orgrepo.Memory, adminrepo.Re
 		AttachDeptMember: func(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error {
 			return orgRepo.AttachUser(ctx, tenantID, userID, deptID, isPrimary)
 		},
+		// 批量导入目标组织预检（与 main 装配同口径：ListTree 全量树走查）
+		DeptExists: func(ctx context.Context, tenantID, deptID int64) (bool, error) {
+			tree, err := orgRepo.ListTree(ctx, tenantID)
+			if err != nil {
+				return false, err
+			}
+			var walk func(nodes []orgapi.DeptNode) bool
+			walk = func(nodes []orgapi.DeptNode) bool {
+				for _, n := range nodes {
+					if n.ID == deptID || walk(n.Children) {
+						return true
+					}
+				}
+				return false
+			}
+			return walk(tree), nil
+		},
+		MailDomain: "corp.io", // 生成邮箱断言域（区分默认 bbc.io）
 		HashPassword: func(p string) (string, error) { return "pbkdf2$test$" + p, nil },
 		UsersTotal:       func(context.Context, int64) (int64, error) { return 2, nil },
 		OnlineNow:        func() int64 { return 2 },
@@ -386,35 +404,65 @@ func TestPublishNotice(t *testing.T) {
 func TestBatchImportUsers(t *testing.T) {
 	svc, orgRepo, _, _ := newFixture([]string{"alice"})
 	ctx := context.Background()
-	// alice 已存在（fixture 种子）——同名工号应失败
-	res, err := svc.BatchImportUsers(ctx, 1, 10001, []adminapi.ImportUserRow{
-		{Empno: "alice", Name: "重名"},                 // 已存在
-		{Empno: "", Name: "无工号"},                     // 格式
-		{Empno: "u1", Name: "张三", Email: "z@x.io"},   // OK
-		{Empno: "u1", Name: "重复"},                    // 批内重复
-		{Empno: "u2", Name: strings.Repeat("超", 51)}, // 姓名超长
-		{Empno: "u3", Name: "李四"},                    // OK
+	// 2026-11-18 起：仅姓名列——工号拼音自动生成（批内同名自动 zhangsan→zhangsan02）、
+	// 邮箱=工号@fixture 域 corp.io、可选统一挂组织
+	res, err := svc.BatchImportUsers(ctx, 1, 10001, 0, []adminapi.ImportUserRow{
+		{Name: "张三"},                                // OK → zhangsan
+		{Name: "张三"},                                // 批内同名 → zhangsan02 自动递增
+		{Name: "  "},                                  // 空姓名（trim 后非法）
+		{Name: strings.Repeat("超", 51)},             // 姓名超长
+		{Name: "爱丽"},                                // 与 alice 种子无碰撞（pinyin=aili）→ OK
 	})
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if res.Created != 2 || res.Failed != 4 || len(res.Rows) != 6 {
+	if res.Created != 3 || res.Failed != 2 || len(res.Rows) != 5 {
 		t.Fatalf("结果: %+v", res)
 	}
-	// 创建可登录（工号命中）+ 首登强制改密置位（D11）
-	u1, u1err := orgRepo.GetUserByLogin(ctx, 1, "u1")
+	if res.Rows[0].Empno != "zhangsan" || res.Rows[0].Email != "zhangsan@corp.io" || !res.Rows[0].OK {
+		t.Fatalf("行1 工号/邮箱生成: %+v", res.Rows[0])
+	}
+	if res.Rows[1].Empno != "zhangsan02" || res.Rows[1].Email != "zhangsan02@corp.io" {
+		t.Fatalf("行2 批内同名递增: %+v", res.Rows[1])
+	}
+	if res.Rows[2].OK || res.Rows[2].Reason == "" || res.Rows[3].OK || res.Rows[3].Reason == "" {
+		t.Fatalf("非法行应失败并带原因: %+v %+v", res.Rows[2], res.Rows[3])
+	}
+	// 创建可登录（工号命中）+ 首登强制改密置位（D11）+ 生成邮箱落库
+	u1, u1err := orgRepo.GetUserByLogin(ctx, 1, "zhangsan")
 	if u1err != nil || u1 == nil || u1.DisplayName != "张三" {
-		t.Fatalf("u1: %v %+v", u1err, u1)
+		t.Fatalf("zhangsan: %v %+v", u1err, u1)
 	}
 	if !u1.MustChangePassword {
 		t.Fatalf("导入用户应置首登强制改密: %+v", u1)
 	}
+	if u1.Email != "zhangsan@corp.io" {
+		t.Fatalf("生成邮箱应落库: %+v", u1)
+	}
+	// 目标组织：正路（建成即挂+主部门）+ 假 deptID 整批拒
+	dept, derr := orgRepo.CreateDept(ctx, 1, 0, "研发部", 0)
+	if derr != nil || dept == nil {
+		t.Fatalf("建部门: %v %+v", derr, dept)
+	}
+	dres, ierr := svc.BatchImportUsers(ctx, 1, 10001, dept.ID, []adminapi.ImportUserRow{{Name: "王五"}})
+	if ierr != nil || dres.Created != 1 {
+		t.Fatalf("挂组织导入: %v %+v", ierr, dres)
+	}
+	members, merr := orgRepo.ListDeptUsers(ctx, 1, dept.ID)
+	if merr != nil || len(members) != 1 || !members[0].IsPrimary {
+		t.Fatalf("挂靠应标主部门: %v %+v", merr, members)
+	}
+	if _, err := svc.BatchImportUsers(ctx, 1, 10001, 99999, []adminapi.ImportUserRow{{Name: "赵六"}}); err == nil {
+		t.Fatal("假 deptID 应整批拒")
+	} else if u, _ := orgRepo.GetUserByLogin(ctx, 1, "zhaoliu"); u != nil {
+		t.Fatal("整批拒不应落任何用户")
+	}
 	// 超量拒绝
 	big := make([]adminapi.ImportUserRow, 101)
 	for i := range big {
-		big[i] = adminapi.ImportUserRow{Empno: fmt.Sprintf("b%d", i), Name: "x"}
+		big[i] = adminapi.ImportUserRow{Name: fmt.Sprintf("名%d", i)}
 	}
-	if _, err := svc.BatchImportUsers(ctx, 1, 10001, big); err == nil {
+	if _, err := svc.BatchImportUsers(ctx, 1, 10001, 0, big); err == nil {
 		t.Fatal("超 100 行应拒")
 	}
 }

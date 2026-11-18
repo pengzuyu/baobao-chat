@@ -383,12 +383,13 @@ export async function publishNotice(title: string, content: string): Promise<Adm
   return http.post<AdminNotice>('/admin/notices', { title, content });
 }
 
-/* ── 批量导入（PAD-06） ── */
+/* ── 批量导入（PAD-06；2026-11-18 收编组织用户页：仅姓名列，工号/邮箱服务端按规范生成） ── */
 
 export interface ImportRowResult {
   row: number;
-  empno: string;
   name: string;
+  empno?: string; // 成功=生成工号（挂靠失败行也回显——用户已落库）
+  email?: string; // 成功=生成邮箱（工号@BBC_MAIL_DOMAIN）
   ok: boolean;
   reason?: string;
 }
@@ -400,14 +401,13 @@ export interface ImportResult {
 }
 
 export interface ImportInputRow {
-  empno: string;
   name: string;
-  email?: string;
 }
 
-export async function batchImportUsers(rows: ImportInputRow[]): Promise<ImportResult> {
+/** deptId：'' = 无组织（未分组）；否则统一挂该组织并标主部门 */
+export async function batchImportUsers(deptId: string, rows: ImportInputRow[]): Promise<ImportResult> {
   if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持批量导入');
-  return http.post<ImportResult>('/admin/users/import', { rows });
+  return http.post<ImportResult>('/admin/users/import', { dept_id: deptId ? Number(deptId) : 0, rows });
 }
 
 /* ── Agent 治理（PAD-14） ── */

@@ -39,7 +39,6 @@ import { SkillsPage } from '../features/admin/pages/SkillsPage';
 import { OrgDirectoryPage } from '../features/admin/pages/OrgDirectoryPage';
 import { RolesPage } from '../features/admin/pages/RolesPage';
 import { NoticesPage } from '../features/admin/pages/NoticesPage';
-import { ImportPage } from '../features/admin/pages/ImportPage';
 import { AgentGovernancePage } from '../features/admin/pages/AgentGovernancePage';
 import { PluginGovernancePage } from '../features/admin/pages/PluginGovernancePage';
 import { KbGovernancePage } from '../features/admin/pages/KbGovernancePage';
@@ -304,7 +303,8 @@ export function App() {
           <Route index element={<DashboardPage />} />
           {/* 2026-11-12 用户裁决：用户+组织合并为通讯录页；旧 /admin/users 重定向 */}
           <Route path="users" element={<Navigate to="/admin/org" replace />} />
-          <Route path="users/import" element={<ImportPage />} />
+          {/* 2026-11-18 批量导入收编组织用户页（弹窗）；旧独立页重定向 */}
+          <Route path="users/import" element={<Navigate to="/admin/org" replace />} />
           <Route path="roles" element={<RolesPage />} />
           <Route path="notices" element={<NoticesPage />} />
           <Route path="agent" element={<AgentGovernancePage />} />

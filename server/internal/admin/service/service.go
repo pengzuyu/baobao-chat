@@ -64,6 +64,12 @@ type Options struct {
 	CreateUser func(ctx context.Context, u orgapi.User) (orgapi.User, error)
 	// AttachDeptMember 挂部门闭包（2026-11-12 通讯录单建用户；main 注入 orgRepo.AttachUser）
 	AttachDeptMember func(ctx context.Context, tenantID, userID, deptID int64, isPrimary bool) error
+	// DeptExists 组织存在预检闭包（2026-11-18 批量导入前置校验；main 注入 ListTree 走查；
+	// nil=跳过预检——测试形态）
+	DeptExists func(ctx context.Context, tenantID, deptID int64) (bool, error)
+	// MailDomain 生成邮箱后缀（2026-11-18 批量导入 工号@邮件域；main 注入 cfg.MailDomain；
+	// 空=bbc.io——与 /setup 首超管邮箱同源）
+	MailDomain string
 	// AgentUsage Agent 计量聚合闭包（PAD-14；main 注入 aigw Meter Snapshot 按用户聚合；nil=空列表）
 	AgentUsage func(tenantID int64) []AgentUsageRow
 	// KBSpaces KB 空间总览闭包（PAD-10；main 注入 kb repo 全量空间+文档数；nil=空列表）
@@ -81,6 +87,9 @@ func (o *Options) fillDefaults() {
 	}
 	if o.UsageMode == "" {
 		o.UsageMode = "memory"
+	}
+	if o.MailDomain == "" {
+		o.MailDomain = "bbc.io"
 	}
 }
 
@@ -983,57 +992,80 @@ func firstLine(s string, max int) string {
 	return s
 }
 
-/* ── 批量导入（PAD-06；v0.1 同步 ≤100 行/次；admin_task 异步化+初始口令首登改密阶段二登记） ── */
+/* ── 批量导入（PAD-06；2026-11-18 收编组织用户页：仅姓名列，工号/邮箱按规范自动
+   生成不支持自定义；可选统一挂目标组织；v0.1 同步 ≤100 行/次；admin_task 异步化
+   +初始口令首登改密阶段二登记） ── */
 
 const maxImportRows = 100
 
-func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int64, rows []adminapi.ImportUserRow) (*adminapi.ImportResult, error) {
+func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID, deptID int64, rows []adminapi.ImportUserRow) (*adminapi.ImportResult, error) {
 	if len(rows) == 0 {
 		return nil, errx.New(errx.CodeBadRequest, "导入行为空")
 	}
 	if len(rows) > maxImportRows {
 		return nil, errx.New(errx.CodeBadRequest, "单次 ≤100 行（更大批量走异步任务，阶段二）")
 	}
+	// 目标组织前置校验（user_dept 无外键——不预检会逐行静默挂空；DeptExists nil=测试形态跳过）
+	if deptID > 0 && s.opts.DeptExists != nil {
+		ok, derr := s.opts.DeptExists(ctx, tenantID, deptID)
+		if derr != nil {
+			return nil, s.internal("目标组织校验失败")
+		}
+		if !ok {
+			return nil, errx.New(errx.CodeBadRequest, "目标组织不存在")
+		}
+	}
+	if deptID > 0 && s.opts.AttachDeptMember == nil {
+		return nil, s.internal("部门挂靠通道未装配")
+	}
 	res := &adminapi.ImportResult{Rows: make([]adminapi.ImportRow, 0, len(rows))}
-	seen := map[string]bool{}
 	for i, r := range rows {
-		row := adminapi.ImportRow{Row: i + 1, Empno: strings.TrimSpace(r.Empno), Name: strings.TrimSpace(r.Name)}
+		row := adminapi.ImportRow{Row: i + 1, Name: strings.TrimSpace(r.Name)}
 		switch {
-		case row.Empno == "" || len(row.Empno) > 32:
-			row.Reason = "工号非法（非空 ≤32）"
 		case row.Name == "" || len([]rune(row.Name)) > 50:
 			row.Reason = "姓名非法（非空 ≤50 字）"
-		case seen[row.Empno]:
-			row.Reason = "工号与本批次重复"
 		default:
-			seen[row.Empno] = true
-			// 既有用户查重（UserReader——org 域读取通道）
-			if u, err := s.same.GetUserByLogin(ctx, tenantID, row.Empno); err == nil && u != nil {
-				row.Reason = "工号已存在"
-				break
-			}
 			if s.opts.CreateUser == nil {
 				row.Reason = "用户创建通道未装配"
 				break
 			}
+			// 工号=拼音基名+重名两位补零递增（SuggestEmpno 逐行落库后查重——批内同名自然
+			// zhangsan→zhangsan02 递增；生僻字/超 99 同名行级失败透出原因）
+			empno, serr := s.SuggestEmpno(ctx, tenantID, row.Name)
+			if serr != nil {
+				row.Reason = serr.Error()
+				break
+			}
+			// 邮箱=工号@邮件域（MailDomain 与 /setup 首超管同源 BBC_MAIL_DOMAIN）
+			email := empno + "@" + s.opts.MailDomain
+			row.Empno, row.Email = empno, email // 先行回显——挂靠失败行用户已落库，工号仍需透出
 			// 初始口令 = 工号 + 固定盐后缀（首登强制改密已接：must_change_password 置位；HashPassword 闭包注入）
 			hash := ""
 			if s.opts.HashPassword != nil {
-				if h, herr := s.opts.HashPassword(row.Empno + "!BBC"); herr == nil {
+				if h, herr := s.opts.HashPassword(empno + "!BBC"); herr == nil {
 					hash = h
 				}
 			}
-			if _, cerr := s.opts.CreateUser(ctx, orgapi.User{
-				TenantID: tenantID, Type: orgapi.UserTypeHuman, EmployeeNo: row.Empno,
-				DisplayName: row.Name, Email: strings.TrimSpace(r.Email),
+			created, cerr := s.opts.CreateUser(ctx, orgapi.User{
+				TenantID: tenantID, Type: orgapi.UserTypeHuman, EmployeeNo: empno,
+				DisplayName: row.Name, Email: email,
 				PasswordHash: hash, Status: orgapi.UserStatusActive,
 				Scopes: []string{"im:message:send"}, // 新用户基础权限（角色化随 RBAC 收口）
 				MustChangePassword: true,            // D11：初始口令=工号+!BBC，首登强制改密
-			}); cerr != nil {
+			})
+			if cerr != nil {
 				row.Reason = "创建失败：" + cerr.Error()
-			} else {
-				row.OK = true
+				break
 			}
+			// 统一挂目标组织标主部门（组织已预检——此处失败仅异常态；部分失败语义同单建：
+			// 用户已落库不回滚，行级透出原因）
+			if deptID > 0 {
+				if aerr := s.opts.AttachDeptMember(ctx, tenantID, created.ID, deptID, true); aerr != nil {
+					row.Reason = "用户已建但挂部门失败：" + aerr.Error()
+					break
+				}
+			}
+			row.OK = true
 		}
 		if row.OK {
 			res.Created++
@@ -1042,7 +1074,7 @@ func (s *Service) BatchImportUsers(ctx context.Context, tenantID, operatorID int
 		}
 		res.Rows = append(res.Rows, row)
 	}
-	_ = s.audit(ctx, tenantID, operatorID, "users.import", "", map[string]any{"created": res.Created, "failed": res.Failed})
+	_ = s.audit(ctx, tenantID, operatorID, "users.import", "", map[string]any{"created": res.Created, "failed": res.Failed, "dept_id": deptID})
 	return res, nil
 }
 

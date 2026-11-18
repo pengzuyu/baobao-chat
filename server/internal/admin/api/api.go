@@ -206,11 +206,10 @@ type NoticeDTO struct {
 	CreatedAt int64  `json:"created_at"` // ms
 }
 
-// ImportUserRow 导入输入行（empno,name,email；初始口令=工号+!BBC，首登改密阶段二接 03 篇）
+// ImportUserRow 导入输入行（2026-11-18 起仅姓名——工号=拼音自动生成（重名两位补零
+// 递增）、邮箱=工号@BBC_MAIL_DOMAIN，均不支持自定义；初始口令=工号+!BBC 首登强制改密）
 type ImportUserRow struct {
-	Empno string `json:"empno"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
+	Name string `json:"name"`
 }
 
 // CreateUserReq 单建用户（2026-11-12 通讯录合并页：组织树上直接开人）——
@@ -224,13 +223,14 @@ type CreateUserReq struct {
 	RoleID      int64  `json:"role_id,omitempty"` // >0 建成即授予角色（scope=4 全租户）
 }
 
-// ImportRow 导入行结果（PAD-06）
+// ImportRow 导入行结果（PAD-06；成功行回填生成的工号/邮箱供管理员分发首登凭据）
 type ImportRow struct {
-	Row    int    `json:"row"` // 1 起行号（不含表头）
-	Empno  string `json:"empno"`
-	Name   string `json:"name"`
-	OK     bool   `json:"ok"`
-	Reason string `json:"reason,omitempty"` // 失败原因（工号已存在/格式非法）
+	Row   int    `json:"row"` // 1 起行号（不含表头）
+	Name  string `json:"name"`
+	Empno string `json:"empno,omitempty"` // 成功=生成工号；失败=空
+	Email string `json:"email,omitempty"` // 成功=生成邮箱（工号@邮件域）
+	OK    bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"` // 失败原因（姓名非法/工号生成失败/挂部门失败）
 }
 
 // ImportResult 批量导入结果
@@ -278,8 +278,10 @@ type AdminService interface {
 	AgentKillswitch(ctx context.Context, tenantID, operatorID int64, on bool) (bool, error)
 	// AgentKillOn 总闸状态读（main 装配消费：auth OBO 签发 + aigw 每请求双点）
 	AgentKillOn() bool
-	// ── 批量导入（PAD-06；v0.1 同步 ≤100 行/次，admin_task 异步化阶段二登记）──
-	BatchImportUsers(ctx context.Context, tenantID, operatorID int64, rows []ImportUserRow) (*ImportResult, error)
+	// ── 批量导入（PAD-06；2026-11-18 收编组织用户页：仅姓名列，工号/邮箱服务端
+	// 按规范生成（SuggestEmpno/工号@邮件域）；deptID>0 建成即挂该组织标主部门；
+	// v0.1 同步 ≤100 行/次，admin_task 异步化阶段二登记）──
+	BatchImportUsers(ctx context.Context, tenantID, operatorID, deptID int64, rows []ImportUserRow) (*ImportResult, error)
 	// ── 单建用户（2026-11-12 通讯录合并页）──
 	// CreateUser 单建（工号空=按姓名全拼自动生成；可选挂部门/授权/审计；初始口令=工号+!BBC）
 	CreateUser(ctx context.Context, tenantID, operatorID int64, req CreateUserReq) (*AdminUser, error)

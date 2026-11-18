@@ -8,6 +8,8 @@
  * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/
  *   邮箱=前缀@统一后缀 MAIL_DOMAIN（前缀默认跟工号可改；2026-11-18 品牌单源）/
  *   所属组织（默认=触发节点）/角色（默认不授权）——初始口令=工号+!BBC 首登强制改密
+ * - 批量导入弹窗（2026-11-18 收编，原独立 ImportPage 退役）：导入前选目标组织（可
+ *   无组织）；文件只认姓名，工号/邮箱服务端按规范生成不支持自定义（邮箱同走 MAIL_DOMAIN）
  * - 用户表角色列（2026-11-18）：服务端 ListUsers 聚合 roles 引用，点击角色 Tag 开
  *   右抽屉只读展示全量权限字典（勾上该角色已授权项；编辑仍走角色管理页）
  * D26-O2：Table/Modal/Select/Input/Segmented/Alert/Tag 化；补充轮：组织树→antd Tree
@@ -20,6 +22,7 @@ import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
 import {
   Building2,
+  FileUp,
   FolderPlus,
   FolderTree,
   PanelLeftClose,
@@ -30,6 +33,7 @@ import {
 import { ApiError, getErrorText, errText } from '../../../shared/api/http';
 import { MAIL_DOMAIN } from '../../../shared/brand';
 import { Button } from '../../../shared/ui/Button';
+import { ImportUsersModal, flattenTree } from '../components/ImportUsersModal';
 import { SplitExpandBar, SplitHandle, useCollapsibleSplit } from '../../../shared/ui/Splitter';
 import {
   attachDeptMember,
@@ -46,6 +50,7 @@ import {
   type AdminRole,
   type DeptMemberRow,
   type DeptNode,
+  type ImportResult,
   type PermPointsDoc,
 } from '../api/admin';
 import type { AdminUser } from '../model/types';
@@ -58,14 +63,6 @@ function toTreeData(nodes: DeptNode[]): DataNode[] {
     title: n.name,
     children: n.children?.length ? toTreeData(n.children) : undefined,
   }));
-}
-
-function flattenTree(nodes: DeptNode[], depth = 0, out: { id: string; name: string; depth: number }[] = []): { id: string; name: string; depth: number }[] {
-  for (const n of nodes) {
-    out.push({ id: n.id, name: n.name, depth });
-    if (n.children?.length) flattenTree(n.children, depth + 1, out);
-  }
-  return out;
 }
 
 /* ── 创建用户弹窗 ── */
@@ -416,6 +413,9 @@ export function OrgDirectoryPage() {
   const [modalDept, setModalDept] = useState('');
   const [deptModalOpen, setDeptModalOpen] = useState(false);
   const [deptModalParent, setDeptModalParent] = useState('');
+  // 弹窗：批量导入（2026-11-18 收编；默认挂当前选中部门）
+  const [importOpen, setImportOpen] = useState(false);
+  const [importDept, setImportDept] = useState('');
   // 角色权限只读抽屉（用户表角色 Tag 点击打开）
   const [permRole, setPermRole] = useState<{ id: string; name: string } | null>(null);
   // 右栏（全公司=用户列表原 UsersPage 能力）
@@ -510,6 +510,13 @@ export function OrgDirectoryPage() {
   const onCreated = (u: AdminUser) => {
     setModalOpen(false);
     setActionOk(`已创建 ${u.display_name}（${u.employee_no}）——初始口令=工号+“!BBC”，首登强制改密`);
+    void query.refetch();
+    if (selected) void reloadMembers(selected);
+  };
+
+  // 批量导入提交回调（结果明细由弹窗自展示；此处刷新列表+汇总提示）
+  const onImported = (r: ImportResult) => {
+    setActionOk(`批量导入完成：成功 ${r.created} · 失败 ${r.failed}——工号与邮箱已按规范生成，初始口令=工号+“!BBC”`);
     void query.refetch();
     if (selected) void reloadMembers(selected);
   };
@@ -833,6 +840,17 @@ export function OrgDirectoryPage() {
           <Typography.Text type="secondary">
             {selected ? '组织成员（含主部门标记）——新建入口在左侧组织树底部或节点上' : '全量用户（跨部门检索）——点左侧部门查看该组织通讯录'}
           </Typography.Text>
+          <span style={{ flex: 1 }} />
+          {/* 批量导入（2026-11-18 收编入口；默认挂当前选中部门，弹窗内可改/可无组织） */}
+          <Button
+            onClick={() => {
+              setImportDept(selected ?? '');
+              setImportOpen(true);
+            }}
+            data-testid="dir-import-users"
+          >
+            <FileUp size={14} /> 批量导入
+          </Button>
         </Flex>
 
         {actionError ? <Alert type="error" showIcon message={actionError} style={{ marginBottom: 8 }} /> : null}
@@ -917,6 +935,7 @@ export function OrgDirectoryPage() {
 
       <CreateUserModal open={modalOpen} deptId={modalDept} tree={tree ?? []} onClose={() => setModalOpen(false)} onCreated={onCreated} />
       <CreateDeptModal open={deptModalOpen} parentId={deptModalParent} tree={tree ?? []} onClose={() => setDeptModalOpen(false)} onCreated={onDeptCreated} />
+      <ImportUsersModal open={importOpen} tree={tree ?? []} defaultDeptId={importDept} onClose={() => setImportOpen(false)} onImported={onImported} />
       <RolePermDrawer role={permRole} onClose={() => setPermRole(null)} />
     </Flex>
   );

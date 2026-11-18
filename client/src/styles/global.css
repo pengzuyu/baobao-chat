@@ -919,6 +919,8 @@ th[aria-sort='descending'] .agent-md__th-ind {
 
 /* ── 批量导入（D10 PAD-06） ── */
 
+/* 2026-11-18 批量导入收编组织用户页弹窗（antd 组件化），独立页样式随 ImportPage 退役 */
+
 /* ── 组织树（D10 PAD-04） ── */
 
 /* D26-O6：原「组织树（D10 PAD04）」段已随 antd 换装退役（2026-11-13） */

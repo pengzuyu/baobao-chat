@@ -73,7 +73,7 @@ BBC_OIDC_ISSUER=                             # 对外 issuer（生产形如 http
 # —— 品牌白标（D31：与构建侧 brand/brand.json 对齐；改 scheme 必须与客户端同步重出包）——
 BBC_BRAND_NAME=                              # 产品显示名（OIDC 等待页/nginx 官网占位等文案源；空=BaobaoChat）
 BBC_DEEP_LINK_SCHEME=                        # 桌面端深链 scheme（空=bbc；须与客户端 brand.json identity 一致，否则深链确认登录静默失效）
-BBC_BOOTSTRAP_MAIL_DOMAIN=                   # 初始管理员邮箱后缀（/setup 与 CLI bootstrap 建户；空=bbc.io）
+BBC_MAIL_DOMAIN=                             # 生成邮箱后缀（/setup 首超管+批量导入 工号@该域；空=bbc.io；2026-11-18 由 BBC_BOOTSTRAP_MAIL_DOMAIN 改名通用化）
 # BBC_DATA_DIR=/data                         # 文件域本地盘（容器内固定 /data 挂 bbc-data 卷，一般无需覆盖；对象存储阶段二替换）
 
 # -----------------------------------------------------------------------------

@@ -23,7 +23,7 @@ type Config struct {
 	OIDCSigningKey      string        // ES256 私钥 PEM（D28 拍板⑩①手工轮换；空=临时密钥仅联调）
 	BrandName           string        // 品牌显示名（D31 白标；OIDC 等待页等文案源）
 	DeepLinkScheme      string        // 桌面端深链 scheme（D31；须与客户端 brand/brand.json 对齐）
-	BootstrapMailDomain string        // 初始管理员邮箱后缀（D31；/setup 与 CLI bootstrap 建户用）
+	MailDomain          string        // 生成邮箱后缀（/setup 首超管+批量导入；D31 曾名 BootstrapMailDomain，2026-11-18 通用化改名）
 }
 
 // DevJWTSecret 开发默认 HS256 密钥（≥32 字节仅为通过长度校验；生产必经
@@ -66,7 +66,7 @@ func Load() *Config {
 	// DeepLinkScheme 改动必须与客户端同步，否则 OIDC 深链确认登录静默失效
 	c.BrandName = envOr("BBC_BRAND_NAME", "BaobaoChat")
 	c.DeepLinkScheme = envOr("BBC_DEEP_LINK_SCHEME", "bbc")
-	c.BootstrapMailDomain = envOr("BBC_BOOTSTRAP_MAIL_DOMAIN", "bbc.io")
+	c.MailDomain = envOr("BBC_MAIL_DOMAIN", "bbc.io")
 	return c
 }
 
