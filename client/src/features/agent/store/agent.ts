@@ -62,7 +62,7 @@ export type StreamItem =
       /** null=等待回答；对象=已回答/中断（answers=所选 label 串） */
       answer: null | { decision: 'answered' | 'cancelled'; answers: string; at: number };
     }
-  /** 子 Agent 卡（D16 类型 1；runId=持久 r-{seq}，状态由 subagent.event 驱动） */
+  /** 子 Agent 卡（D16 类型 1；runId=持久 r-{随机 8 hex}，状态由 subagent.event 驱动） */
   | {
       kind: 'subagent';
       key: string;
@@ -1021,6 +1021,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         }
         case 'delegateReviewResolved': {
           const list = s.streams[event.sessionId] ?? [];
+          // C 批：审查结论后台触达（此前后台审查超时=拒绝无任何二次通知）
+          if (!workbenchVisible()) {
+            void notifyAgentDone(
+              event.decision === 'accept' ? '委派结果已回填' : '委派结果已拒绝（审查超时）',
+              event.runId,
+            );
+          }
           return {
             streams: {
               ...s.streams,

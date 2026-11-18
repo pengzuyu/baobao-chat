@@ -160,6 +160,19 @@ pub trait EventLog: Send + Sync {
     fn append_run(&self, session_id: &str, _run_id: &str, type_: &str, payload: &str) {
         self.append(session_id, type_, payload);
     }
+    /// 按 id 查 run 终态快照（subagent.wait 轮询；None=未接 Store 或 run 不存在）
+    fn run_snapshot(&self, _run_id: &str) -> Option<EventRunSnapshot> {
+        None
+    }
+}
+
+/// run 终态快照（EventLog::run_snapshot 返回；跨 crate 不引 RunRow）
+#[derive(Debug, Clone)]
+pub struct EventRunSnapshot {
+    pub status: String,
+    pub kind: String,
+    pub summary: String,
+    pub child_session_ref: String,
 }
 pub struct NoopEventLog;
 impl EventLog for NoopEventLog {
@@ -222,6 +235,16 @@ impl EventLog for std::sync::Mutex<Store> {
                 let _ = store.append_event_with_run(session_id, seq, type_, payload, run_id);
             }
         }
+    }
+    fn run_snapshot(&self, run_id: &str) -> Option<EventRunSnapshot> {
+        self.lock().ok().and_then(|s| {
+            s.run_by_id(run_id).ok().flatten().map(|r| EventRunSnapshot {
+                status: r.status,
+                kind: r.kind,
+                summary: r.summary,
+                child_session_ref: r.child_session_ref,
+            })
+        })
     }
 }
 
@@ -508,6 +531,23 @@ impl SessionRunner {
                         };
                         if ttx.send(team.ok()).is_err() {
                             if let (Some(hub), Some(team)) = (hub, parked) {
+                                // C 批：超窗 team 完成也发事件（通知/run 面板刷新；
+                                // 与窗内收口同构——此前后台完成零协议级终态）
+                                sink_bg.emit(SessionEvent::SubagentJoined {
+                                    session_id: sid.clone(),
+                                    results: team
+                                        .nodes
+                                        .iter()
+                                        .map(|n| bbrt_protocol::SubagentResult {
+                                            sub_id: n.result.run_id.clone(),
+                                            ok: n.result.ok,
+                                            summary: crate::subagent::truncate_chars(
+                                                &n.result.summary,
+                                                120,
+                                            ),
+                                        })
+                                        .collect(),
+                                });
                                 hub.park_join(
                                     &sid,
                                     crate::delegate_bg::DelegateJoin {
@@ -543,6 +583,19 @@ impl SessionRunner {
                         call_id: format!("team-{}", team.run_id),
                         name: "team.join".to_string(),
                         summary: format!("## 专家会诊结果\n{}", team.summary),
+                    });
+                    // C 批：team 完成事件（此前零协议级终态——通知/run 面板刷新断链）
+                    emit(deps, &self.session_id, |id| SessionEvent::SubagentJoined {
+                        session_id: id,
+                        results: team
+                            .nodes
+                            .iter()
+                            .map(|n| bbrt_protocol::SubagentResult {
+                                sub_id: n.result.run_id.clone(),
+                                ok: n.result.ok,
+                                summary: crate::subagent::truncate_chars(&n.result.summary, 120),
+                            })
+                            .collect(),
                     });
                     emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
                         session_id: id,
@@ -1086,6 +1139,108 @@ impl SessionRunner {
         report
     }
 
+    /// 等待子 Agent/委派 run 终态并取回结果（B 批 2026-11-18）：异步委派/
+    /// 后台子任务发起后，模型需要其输出才能继续时主动等待——已完成立即
+    /// 返回结果摘要；超时返回「仍在运行」（非错误，可再次调用或先做别的）。
+    /// 等待期响应 interrupt（紧急停止收口等待，run 本身不受影响）。
+    fn run_subagent_wait(&mut self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
+        let v: serde_json::Value =
+            serde_json::from_str(&call.args_json).unwrap_or(serde_json::json!({}));
+        let run_id = v
+            .get("run_id")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if run_id.is_empty() {
+            return ToolOutcome::Blocked {
+                code: 8002,
+                summary: "缺少 run_id 参数".into(),
+            };
+        }
+        // 默认 120s（对齐 SUBAGENT_WAIT_WINDOW），上限 3600s 防呆
+        let timeout_secs = v
+            .get("timeout_secs")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(SUBAGENT_WAIT_WINDOW.as_secs())
+            .min(3600);
+        let Some(mut snap) = deps.wal.run_snapshot(&run_id) else {
+            return ToolOutcome::Blocked {
+                code: 8002,
+                summary: format!("未知 run {run_id}（未落库或来自其他环境）"),
+            };
+        };
+        let started = std::time::Instant::now();
+        let deadline = started + Duration::from_secs(timeout_secs);
+        let is_final =
+            |st: &str| matches!(st, "done" | "failed" | "cancelled" | "interrupted");
+        loop {
+            if is_final(&snap.status) {
+                deps.wal.append(
+                    &self.session_id,
+                    "subagent.wait",
+                    &serde_json::json!({
+                        "run_id": run_id,
+                        "waited_ms": started.elapsed().as_millis() as u64,
+                        "status": snap.status,
+                    })
+                    .to_string(),
+                );
+                let summary = match snap.kind.as_str() {
+                    "delegate" => format!(
+                        "[委派完成·{}] {}{}",
+                        snap.status,
+                        snap.summary,
+                        if snap.child_session_ref.is_empty() {
+                            String::new()
+                        } else {
+                            format!("；可续接句柄 {}（下次委派续上下文）", snap.child_session_ref)
+                        }
+                    ),
+                    _ => format!("[子任务完成·{}] {}", snap.status, snap.summary),
+                };
+                return ToolOutcome::Ok {
+                    summary,
+                    truncated: false,
+                    exit_code: None,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                };
+            }
+            if self.interrupted.load(Ordering::Relaxed) {
+                return ToolOutcome::Blocked {
+                    code: 8002,
+                    summary: format!("等待被中断（{run_id} 仍在后台运行，不受影响）"),
+                };
+            }
+            if std::time::Instant::now() >= deadline {
+                deps.wal.append(
+                    &self.session_id,
+                    "subagent.wait",
+                    &serde_json::json!({
+                        "run_id": run_id,
+                        "waited_ms": started.elapsed().as_millis() as u64,
+                        "status": snap.status,
+                        "timeout": true,
+                    })
+                    .to_string(),
+                );
+                return ToolOutcome::Ok {
+                    summary: format!(
+                        "{run_id} 仍在运行（状态 {}，已等 {}s）——可再次调用 subagent.wait 继续等待，或先处理其他事务",
+                        snap.status,
+                        started.elapsed().as_secs()
+                    ),
+                    truncated: false,
+                    exit_code: None,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                };
+            }
+            std::thread::sleep(Duration::from_millis(500));
+            if let Some(next) = deps.wal.run_snapshot(&run_id) {
+                snap = next;
+            }
+        }
+    }
+
     /// 子 Agent 运行中调整（D16 决策⑧）：subagent.adjust{run_id,instruction} /
     /// subagent.cancel{run_id} → hub 定向 Input/Cancel（探查/专家/委派通用）
     fn run_subagent_adjust(&self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
@@ -1403,6 +1558,10 @@ impl SessionRunner {
         // ——适用探查/专家/委派全部在跑 run（bbrt-tools 门面仅提供可发现性）
         if call.name == "subagent.adjust" || call.name == "subagent.cancel" {
             return self.run_subagent_adjust(deps, call);
+        }
+        // 等待子 Agent/委派结果（B 批 2026-11-18）：异步发起后主动等待/取回
+        if call.name == "subagent.wait" {
+            return self.run_subagent_wait(deps, call);
         }
         // D20 ask_user：向用户提问——专用路径（不走 pipeline 门控/执行）：
         // waiting_clarify 态 + clarify.request 事件 + **不超时**等待（1s 轮询查

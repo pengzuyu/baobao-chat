@@ -205,7 +205,7 @@ export type AgentEvent =
   | { type: 'sessionEnded'; sessionId: string; summary: string }
   | { type: 'modelSwitched'; sessionId: string; from: 'fast' | 'strong' | 'auto'; to: 'fast' | 'strong' | 'auto'; modelOverride?: string; reason: string }
   /**
-   * 子 Agent（D16 类型 1：探查/通用子 agent）。sub_id 即持久 run_id（r-{seq}）；
+   * 子 Agent（D16 类型 1：探查/通用子 agent）。sub_id 即持久 run_id（r-{随机 8 hex}）；
    * spawn 携 session 归属，event 按 runId 定位会话流内卡片
    */
   | { type: 'subagentSpawn'; sessionId: string; runId: string; taskDigest: string; toolSubset: string[] }

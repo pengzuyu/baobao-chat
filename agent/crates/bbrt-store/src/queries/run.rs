@@ -73,16 +73,35 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<RunRow> {
 }
 
 impl Store {
-    /// 持久发号：r-{max(seq)+1}（库内唯一，重启不重号）。
-    /// 2026-11-18 起序号零填充 6 位（r-000001）——ID 固定宽度，UI 对齐；
-    /// 存量短 id（r-41）不迁移：CAST(substr) 解析兼容，排序按 created_at 不受影响。
+    /// 持久发号：r-{uuid 前 8 hex}（如 r-a1b2c3d4）——随机不暴露计数
+    /// （用户拍板 UUID 形式；弃序号制）。碰撞概率 16^8 分之一，命中查重重试
+    /// 兜底。存量 id（r-1/r-000003）不迁移；排序按 created_at 不受影响；
+    /// subagent.cancel 等消费方只认 r- 前缀不变。
     pub fn next_run_id(&self) -> Result<String, StoreError> {
-        let n: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(CAST(substr(id, 3) AS INTEGER)), 0) + 1 FROM agent_run",
-            [],
-            |row| row.get(0),
-        )?;
-        Ok(format!("r-{n:06}"))
+        for _ in 0..5 {
+            let id = format!("r-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+            let hit: bool = self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_run WHERE id = ?1)",
+                [&id],
+                |row| row.get(0),
+            )?;
+            if !hit {
+                return Ok(id);
+            }
+        }
+        Err(StoreError::Sqlite("run id 随机发号连续碰撞（5 次重试）".into()))
+    }
+
+    /// 按 id 单查（subagent.wait 终态轮询/结果取回）
+    pub fn run_by_id(&self, run_id: &str) -> Result<Option<RunRow>, StoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {RUN_COLS} FROM agent_run WHERE id = ?1"
+        ))?;
+        let mut rows = stmt.query(params![run_id])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(from_row(row)?)),
+            None => Ok(None),
+        }
     }
 
     /// run 起始落库（status=running；created_at/started_at 存储侧取 now）。
@@ -210,21 +229,44 @@ mod tests {
         }
     }
 
-    /// 发号：空库 r-1 起、单调、跨 Store 重开不重号
+    /// 发号（2026-11-18 起随机制）：r-{8 hex} 格式、连发不重、不暴露计数、
+    /// 跨 Store 重开不撞存量
     #[test]
-    fn next_run_id_is_monotonic_across_reopen() {
+    fn next_run_id_random_unique_across_reopen() {
         let (dir, store) = testutil::open_store();
-        assert_eq!(store.next_run_id().unwrap(), "r-000001");
         testutil::seed_session(&store, "sess-1");
-        let id = store.next_run_id().unwrap();
-        assert_eq!(id, "r-000001"); // 未占用可重复取（调用方串行发号后立即落库）
-        store
-            .insert_run(&start_row(&id, "sess-1", "probe"))
-            .unwrap();
-        assert_eq!(store.next_run_id().unwrap(), "r-000002");
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..32 {
+            let id = store.next_run_id().unwrap();
+            assert!(
+                id.starts_with("r-") && id.len() == 10 && id[2..].chars().all(|c| c.is_ascii_hexdigit()),
+                "格式应为 r-XXXXXXXX: {id}"
+            );
+            assert!(seen.insert(id.clone()), "连发不应重复: {id}");
+        }
+        // 落库后重开：新号不撞存量
+        for id in seen.iter().take(4) {
+            store.insert_run(&start_row(id, "sess-1", "probe")).unwrap();
+        }
         drop(store);
         let store2 = crate::Store::open(&dir.path().join("agent").join("runtime.sqlite3")).unwrap();
-        assert_eq!(store2.next_run_id().unwrap(), "r-000002", "重开后接续 max+1");
+        for _ in 0..8 {
+            let id = store2.next_run_id().unwrap();
+            assert!(!seen.contains(&id), "重开后不应撞存量: {id}");
+        }
+    }
+
+    /// 按 id 单查：run_by_id 命中/未命中
+    #[test]
+    fn run_by_id_hit_and_miss() {
+        let (_dir, store) = testutil::open_store();
+        testutil::seed_session(&store, "sess-1");
+        let id = store.next_run_id().unwrap();
+        store.insert_run(&start_row(&id, "sess-1", "delegate")).unwrap();
+        let row = store.run_by_id(&id).unwrap().expect("应命中");
+        assert_eq!(row.kind, "delegate");
+        assert_eq!(row.status, "running");
+        assert!(store.run_by_id("r-nope").unwrap().is_none());
     }
 
     /// 生命周期：insert 强制 running → finish 覆盖终态字段 → runs_of 可查

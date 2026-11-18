@@ -50,7 +50,10 @@ fn eventlog_impl_records_run_lifecycle_into_sqlite() {
     let wal: &dyn EventLog = &Mutex::new(store);
 
     let run_id = wal.next_run_id().expect("发号失败");
-    assert_eq!(run_id, "r-000001");
+    assert!(
+        run_id.starts_with("r-") && run_id.len() == 10,
+        "随机制 r-XXXXXXXX: {run_id}"
+    );
 
     wal.run_start(&RunStart {
         run_id: run_id.clone(),
@@ -88,7 +91,7 @@ fn eventlog_impl_records_run_lifecycle_into_sqlite() {
     let r = &runs[0];
     assert_eq!(
         (r.id.as_str(), r.kind.as_str(), r.status.as_str()),
-        ("r-000001", "delegate", "done")
+        (run_id.as_str(), "delegate", "done")
     );
     assert_eq!(r.def_ref, "backend:claude");
     assert_eq!(r.parent_call_id, "call-9");
@@ -99,7 +102,7 @@ fn eventlog_impl_records_run_lifecycle_into_sqlite() {
     // 事件归属：主循环事件 run_id 空；delegate.* 两条挂本 run
     let events = store2.events_after("sess-1", 0, 100).unwrap();
     let with_run: Vec<&bbrt_store::EventRow> =
-        events.iter().filter(|e| e.run_id == "r-000001").collect();
+        events.iter().filter(|e| e.run_id == run_id).collect();
     assert_eq!(with_run.len(), 2);
     assert!(with_run.iter().all(|e| e.type_.starts_with("delegate.")));
 }

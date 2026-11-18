@@ -1699,3 +1699,168 @@ fn switch_model_override_persists() {
         assert_eq!(row.model_override.as_deref(), Some("p:1:glm-5.3"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// B 批：subagent.wait（等待子任务/委派 run 终态并取回结果）
+// ---------------------------------------------------------------------------
+
+/// 出一轮 subagent.wait 工具调用、其余纯文本收尾的假模型（args 可脚本化）
+struct FakeWaitModel {
+    calls: AtomicUsize,
+    args: String,
+}
+impl ChatClient for FakeWaitModel {
+    fn chat(
+        &self,
+        _req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if n == 0 {
+            vec![
+                Ok(StreamEvent::ToolCallBegin {
+                    index: 0,
+                    id: "call-w1".into(),
+                    name: "subagent.wait".into(),
+                }),
+                Ok(StreamEvent::ToolCallDelta {
+                    index: 0,
+                    args_delta: self.args.clone(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::ToolCalls,
+                    usage: Usage {
+                        prompt_tokens: 10,
+                        completion_tokens: 4,
+                    },
+                }),
+            ]
+        } else {
+            vec![
+                Ok(StreamEvent::TextDelta { text: "拿到结果了".into() }),
+                Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 10,
+                        completion_tokens: 4,
+                    },
+                }),
+            ]
+        };
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+/// 带 run 快照表的假 WAL（run_snapshot 查表；append 丢弃）
+struct SnapLog {
+    rows: Mutex<std::collections::HashMap<String, bbrt_session::loop_runner::EventRunSnapshot>>,
+}
+impl EventLog for SnapLog {
+    fn append(&self, _session_id: &str, _t: &str, _p: &str) {}
+    fn run_snapshot(
+        &self,
+        run_id: &str,
+    ) -> Option<bbrt_session::loop_runner::EventRunSnapshot> {
+        self.rows.lock().unwrap().get(run_id).cloned()
+    }
+}
+
+fn wait_deps(
+    model: Arc<FakeWaitModel>,
+    wal: Arc<SnapLog>,
+    sink: Arc<CollectSink>,
+) -> LoopDeps {
+    LoopDeps {
+        model,
+        delegator: None,
+        tools: Arc::new(FakeTools {
+            confirm: false,
+            executed: Mutex::new(vec![]),
+            fail: false,
+        }),
+        memory: None,
+        wal,
+        sink,
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    }
+}
+
+/// 已完成 run：立即返回结果摘要（委派带可续接句柄提示）
+#[test]
+fn subagent_wait_finished_run_returns_result() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeWaitModel {
+        calls: AtomicUsize::new(0),
+        args: r#"{"run_id":"r-ab12cd34"}"#.into(),
+    });
+    let wal = Arc::new(SnapLog {
+        rows: Mutex::new(
+            [(
+                "r-ab12cd34".to_string(),
+                bbrt_session::loop_runner::EventRunSnapshot {
+                    status: "done".into(),
+                    kind: "delegate".into(),
+                    summary: "委派完成：新增 2 个文件并通过测试".into(),
+                    child_session_ref: "claude-sess-9".into(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ),
+    });
+    let d = wait_deps(model, wal, sink.clone());
+    let mut runner = SessionRunner::new(
+        "s-w1".into(),
+        "/tmp/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    let report = runner.run_turn("等那个委派的结果", &d, None);
+    assert_eq!(report.tool_calls, 1);
+    let evs = events_of(sink.as_ref());
+    assert!(
+        evs.iter().any(|e| matches!(
+            e,
+            SessionEvent::ToolResult { summary, .. }
+                if summary.contains("[委派完成·done]") && summary.contains("可续接句柄 claude-sess-9")
+        )),
+        "应返回委派结果摘要: {evs:?}"
+    );
+}
+
+/// 未知 run：8002 拒绝（不挂起不误等）
+#[test]
+fn subagent_wait_unknown_run_rejected() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeWaitModel {
+        calls: AtomicUsize::new(0),
+        args: r#"{"run_id":"r-nope"}"#.into(),
+    });
+    let wal = Arc::new(SnapLog {
+        rows: Mutex::new(std::collections::HashMap::new()),
+    });
+    let d = wait_deps(model, wal, sink.clone());
+    let mut runner = SessionRunner::new(
+        "s-w2".into(),
+        "/tmp/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    let report = runner.run_turn("等结果", &d, None);
+    assert_eq!(report.tool_calls, 1);
+    let evs = events_of(sink.as_ref());
+    assert!(
+        evs.iter().any(|e| matches!(
+            e,
+            SessionEvent::ToolResult { summary, .. } if summary.contains("未知 run r-nope")
+        )),
+        "未知 run 应 8002 拒绝: {evs:?}"
+    );
+}

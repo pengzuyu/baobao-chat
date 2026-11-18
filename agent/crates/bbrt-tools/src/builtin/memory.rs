@@ -337,6 +337,26 @@ pub fn subagent_adjust_def() -> ToolDef {
     }
 }
 
+/// subagent.wait 薄门面（B 批 2026-11-18：等待子任务/委派 run 终态并取回结果；
+/// 执行由 session 循环专用路径承接，execute 不会收到）
+pub fn subagent_wait_def() -> ToolDef {
+    ToolDef {
+        name: "subagent.wait".into(),
+        description: "等待指定的子任务/委派（run_id）完成并返回其结果摘要。                      异步发起委派或后台子任务后，需要其输出才能继续下一步时调用；                      已完成的 run 立即返回结果；超时则返回「仍在运行」                      （可再次调用继续等待，或先处理其他事务）"
+            .into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string", "description": "目标 run（r- 前缀）"},
+                "timeout_secs": {"type": "integer", "description": "最长等待秒数（默认 120，上限 3600）"}
+            },
+            "required": ["run_id"]
+        }),
+        risk: RiskLevel::Low,
+        category: bbrt_sec::gate::ActionCategory::ReadOnly,
+    }
+}
+
 /// subagent.cancel 薄门面（运行中子任务取消；同上专用路径承接）
 pub fn subagent_cancel_def() -> ToolDef {
     ToolDef {
