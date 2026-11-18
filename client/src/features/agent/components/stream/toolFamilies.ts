@@ -13,6 +13,7 @@ import {
   FileText,
   GitBranch,
   Globe,
+  HelpCircle,
   Plug,
   Radar,
   Search,
@@ -30,6 +31,7 @@ export type ToolFamily =
   | 'git'
   | 'web'
   | 'memory'
+  | 'ask'
   | 'mcp'
   | 'internal'
   | 'generic';
@@ -101,6 +103,8 @@ export function classifyTool(tool: string): ToolFamilyMeta {
     case 'WebFetch':
     case 'WebSearch':
       return { family: 'web', label: '网络', icon: Globe };
+    case 'ask_user':
+      return { family: 'ask', label: '提问', icon: HelpCircle };
     default:
       break;
   }
@@ -134,7 +138,8 @@ export function toolHeadParam(tool: string, args: Record<string, unknown>): stri
     case 'web':
       return pickStr(args, ['url', 'input', 'query']);
     case 'memory':
-      return pickStr(args, ['name', 'memory_type', 'contains']);
+    case 'ask':
+      return pickStr(args, ['name', 'memory_type', 'contains', 'question']);
     case 'mcp': {
       const m = splitMcpName(tool);
       return m?.rest || tool;

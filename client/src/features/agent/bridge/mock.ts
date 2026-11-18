@@ -591,7 +591,8 @@ export class MockAgentBridge implements AgentBridge {
       });
       ctx.inFlightCalls.add(`call-${sid}-r2`);
       const preview: PermissionPreview = { kind: 'command', command: 'cargo test --lib', cwd: s.workspace, dangerFlags: [] };
-      const requestId = `pr-${sid}-1`;
+      // 真机约定 requestId="pr-{callId}"（loop_runner）——前端按此前缀配对内嵌工具卡
+      const requestId = `pr-call-${sid}-r2`;
       this.emit({
         type: 'permissionRequest',
         sessionId: sid,
@@ -679,7 +680,30 @@ export class MockAgentBridge implements AgentBridge {
     try {
       this.setStatus(sid, 'running', 'user.message');
       await this.streamOut(ctx, sid, '修复前有个方向问题需要你拍板：', 'text');
-      const questionId = `q-${sid}-1`;
+      // 真机时序（loop_runner run_ask_user）：先落 toolCall（ask_user 工具卡）
+      // 再发 clarify.request，questionId="q-{callId}"——前端按此前缀配对内嵌工具卡
+      const callId = `call-${sid}-r3`;
+      this.emit({
+        type: 'toolCall',
+        sessionId: sid,
+        callId,
+        tool: 'ask_user',
+        args: {
+          question: '登录超时的修复方式选哪种？',
+          header: '修复方式',
+          options: [
+            { label: '加漂移窗口', description: 'claims 校验 ±60s 容忍时钟偏移（改动小）' },
+            { label: '对齐 NTP', description: '统一各机器时钟源（治本但要运维配合）' },
+            { label: '两者都做', description: '先加窗口止血，再排期 NTP' },
+          ],
+          multi_select: false,
+        },
+        risk: 'low',
+        parallel: false,
+        source: 'self',
+      });
+      ctx.inFlightCalls.add(callId);
+      const questionId = `q-${callId}`;
       this.emit({
         type: 'clarifyRequest',
         sessionId: sid,
@@ -697,6 +721,16 @@ export class MockAgentBridge implements AgentBridge {
       const answer = await this.awaitClarify(ctx, sid, questionId);
       this.setStatus(sid, 'running', 'clarify.answered');
       const label = answer ? answer.answers.join('、') + (answer.freeText ? `（补充：${answer.freeText}）` : '') : '';
+      // 回答以工具结果回给模型（真机 run_ask_user ToolOutcome 语义）
+      ctx.inFlightCalls.delete(callId);
+      this.emit({
+        type: 'toolResult',
+        sessionId: sid,
+        callId,
+        ok: !!answer,
+        summary: answer ? (answer.freeText?.trim() ? `${label}；补充：${answer.freeText.trim()}` : label) : '已被中断',
+        truncated: false,
+      });
       await this.streamOut(
         ctx,
         sid,

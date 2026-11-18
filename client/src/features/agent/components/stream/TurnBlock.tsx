@@ -77,15 +77,33 @@ export function MidText({ children }: { children: ReactNode }) {
   );
 }
 
+/** 澄清作答默认回调（模块级引用稳定——ToolBlock memo 不因 inline 闭包失效） */
+const defaultRespondClarify = (questionId: string, s: ClarifySubmit) => {
+  void useAgentStore.getState().respondClarify(questionId, s.answers, s.freeText || undefined);
+};
+
 /** 过程条目 → 平铺块（D33：工具不归组，逐条平铺；skill 走专属卡）。
- *  首个 user 前的散条（历史残留）也经此渲染 */
+ *  首个 user 前的散条（历史残留）也经此渲染。
+ *  2026-11-18 门控内嵌：审批/澄清不再独立开框——Runtime 约定
+ *  requestId="pr-{callId}" / questionId="q-{callId}"（toolCall 先落流、
+ *  门控请求后到），先扫一遍建 callId 映射把 permission/clarify 挂到
+ *  对应工具卡；配对成功的独立门控条目消融（不渲染——避免同命令双卡），
+ *  配对失败（时序异常防御）回落原独立卡 */
 export function renderStreamItems(
   items: StreamItem[],
   onRespond: (d: PermissionDecision) => void,
-  onRespondClarify: (questionId: string, s: ClarifySubmit) => void = (qid, s) => {
-    void useAgentStore.getState().respondClarify(qid, s.answers, s.freeText || undefined);
-  },
+  onRespondClarify: (questionId: string, s: ClarifySubmit) => void = defaultRespondClarify,
 ): ReactNode[] {
+  const permByCallId = new Map<string, Extract<StreamItem, { kind: 'permission' }>>();
+  const clarifyByCallId = new Map<string, Extract<StreamItem, { kind: 'clarify' }>>();
+  const callIds = new Set<string>();
+  for (const it of items) {
+    if (it.kind === 'tool') callIds.add(it.call.callId);
+    else if (it.kind === 'permission' && it.request.requestId.startsWith('pr-')) permByCallId.set(it.request.requestId.slice(3), it);
+    else if (it.kind === 'clarify' && it.request.questionId.startsWith('q-')) clarifyByCallId.set(it.request.questionId.slice(2), it);
+  }
+  const gateMatched = (id: string, prefix: 'pr-' | 'q-'): boolean => id.startsWith(prefix) && callIds.has(id.slice(prefix.length));
+
   return items.map((item) => {
     switch (item.kind) {
       case 'reasoning':
@@ -94,7 +112,14 @@ export function renderStreamItems(
         return item.call.tool === 'skill' ? (
           <SkillCard key={item.key} item={item} />
         ) : (
-          <ToolBlock key={item.key} item={item} />
+          <ToolBlock
+            key={item.key}
+            item={item}
+            permission={permByCallId.get(item.call.callId)}
+            clarify={clarifyByCallId.get(item.call.callId)}
+            onRespond={onRespond}
+            onClarify={onRespondClarify}
+          />
         );
       case 'agentText':
         return (
@@ -103,9 +128,11 @@ export function renderStreamItems(
           </MidText>
         );
       case 'permission':
-        return <PermissionCard key={item.key} item={item} onRespond={onRespond} />;
+        return gateMatched(item.request.requestId, 'pr-') ? null : <PermissionCard key={item.key} item={item} onRespond={onRespond} />;
       case 'clarify':
-        return <ClarifyCard key={item.key} item={item} onRespond={(qid, s) => onRespondClarify(qid, s)} />;
+        return gateMatched(item.request.questionId, 'q-') ? null : (
+          <ClarifyCard key={item.key} item={item} onRespond={(qid, s) => onRespondClarify(qid, s)} />
+        );
       case 'subagent':
         return <SubagentCard key={item.key} item={item} />;
       case 'delegate':

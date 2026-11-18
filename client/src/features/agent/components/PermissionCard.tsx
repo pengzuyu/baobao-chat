@@ -1,10 +1,13 @@
 /**
- * 审批卡 · 命令确认形态（PAG-04 §3.4.1 / INT-AG-03/20；审批卡状态机 §4.2）：
- * - 工具名 + 风险 + 参数预览（命令文本框可编辑，允许时回传 editedArgs）
- * - 记忆粒度三选（antd Segmented）：本次 / 本会话 / 永久（高危不出现永久，options 由 Runtime 下发）
- * - [允许] [拒绝]；120s 倒计时进度条，到点自动置灰 = 已超时拒绝
- * - 终态折叠：已允许（含粒度）/ 已拒绝 / 已超时 / 已作废（紧急停止）
- * D26-O6：perm-card/perm-scope 类退役——内联 token + antd Tag/Segmented/Input/Typography。
+ * 审批 · 命令确认（PAG-04 §3.4.1 / INT-AG-03/20；审批卡状态机 §4.2）：
+ * 2026-11-18 用户口径——审批不再独立开框，内嵌到本来的工具卡（ToolBlock）
+ * 展示（Runtime 时序：toolCall 先落流，permissionRequest 后到且
+ * requestId="pr-{callId}" 可精确配对）。本文件提供：
+ * - PermissionControls：控件核心（命令可编辑/判定说明/粒度三选/允许拒绝/
+ *   120s 倒计时进度条），工具卡内嵌与兜底卡共用
+ * - permissionSettledText：终态文案（工具卡头行/展开体终态行共用）
+ * - PermissionCard：配对失败兜底独立卡（时序异常防御；正常路径不渲染）
+ * D26-O6：内联 token + antd Tag/Segmented/Input/Typography。
  */
 
 import { memo, useEffect, useMemo, useState } from 'react';
@@ -15,7 +18,7 @@ import type { StreamItem } from '../store/agent';
 import { RISK_LABELS } from '../bridge/types';
 import type { GrantScope } from '../bridge/types';
 
-type PermissionItem = Extract<StreamItem, { kind: 'permission' }>;
+export type PermissionItem = Extract<StreamItem, { kind: 'permission' }>;
 
 const SCOPE_OPTIONS: Array<{ value: GrantScope; label: string; desc: string }> = [
   { value: 'once', label: '仅本次', desc: '只放行这一次调用' },
@@ -32,10 +35,58 @@ export interface PermissionDecision {
   editedArgs?: Record<string, unknown>;
 }
 
-interface PermissionCardProps {
-  item: PermissionItem;
-  onRespond: (d: PermissionDecision) => void;
+export function scopeLabel(s?: GrantScope): string {
+  return SCOPE_OPTIONS.find((o) => o.value === s)?.label ?? '';
 }
+
+/** 审批终态文案（工具卡头行状态/展开体终态行共用；null=仍在等待） */
+export function permissionSettledText(item: PermissionItem): { text: string; tone: 'ok' | 'dim' } | null {
+  const { outcome } = item;
+  if (outcome === null) return null;
+  if (outcome === 'timeout') return { text: '审批超时（视为拒绝）', tone: 'dim' };
+  if (outcome.decision === 'cancelled') return { text: '审批已作废（会话暂停/紧急停止）', tone: 'dim' };
+  if (outcome.decision === 'deny') return { text: '拒绝执行', tone: 'dim' };
+  return { text: `审批通过 · ${scopeLabel(outcome.scope)}`, tone: 'ok' };
+}
+
+/** 允许且用户改过命令 → 实际执行的命令（原命令=审批 preview；null=未改/非 allow） */
+export function permissionEditedCommand(item: PermissionItem): string | null {
+  const { outcome } = item;
+  if (!outcome || outcome === 'timeout' || outcome.decision !== 'allow') return null;
+  const edited = outcome.editedArgs?.command;
+  const original = item.request.preview.kind === 'command' ? item.request.preview.command : undefined;
+  if (typeof edited !== 'string' || !edited || edited === original) return null;
+  return edited;
+}
+
+/** 审批终态详情（状态行 + 改过命令时的「原命令 → 实际执行」对比）——
+ *  工具卡展开体与兜底卡共用；落定后回看：是否通过、按什么粒度、实际执行了什么 */
+export const PermissionSettled = memo(function PermissionSettled({ item }: { item: PermissionItem }) {
+  const settled = permissionSettledText(item);
+  if (!settled) return null;
+  const edited = permissionEditedCommand(item);
+  const original = item.request.preview.kind === 'command' ? item.request.preview.command : undefined;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Typography.Text type={settled.tone === 'ok' ? 'success' : 'secondary'} style={{ fontSize: 12 }}>
+        {settled.text}
+      </Typography.Text>
+      {edited && original ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 12, color: 'inherit', opacity: 0.72, textDecoration: 'line-through', wordBreak: 'break-all' }}>
+            $ {original}
+          </div>
+          <div style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 12, wordBreak: 'break-all' }}>
+            <Typography.Text type="warning" style={{ fontSize: 12 }}>
+              改后执行：
+            </Typography.Text>
+            $ {edited}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+});
 
 /** 风险等级 → antd Tag 色（原 agent-risk--low/mid/high：绿/橙/红） */
 function riskTagColor(risk: string): 'success' | 'warning' | 'error' {
@@ -44,7 +95,15 @@ function riskTagColor(risk: string): 'success' | 'warning' | 'error' {
   return 'error';
 }
 
-export const PermissionCard = memo(function PermissionCard({ item, onRespond }: PermissionCardProps) {
+/** 审批控件核心（等待中渲染）：倒计时进度条 + 工作目录 + 命令（可编辑）+
+ *  判定说明 + 粒度三选 + 允许/拒绝。倒计时自驱（每秒 setNow），宿主卡无需随秒重渲 */
+export const PermissionControls = memo(function PermissionControls({
+  item,
+  onRespond,
+}: {
+  item: PermissionItem;
+  onRespond: (d: PermissionDecision) => void;
+}) {
   const { token } = theme.useToken();
   const { request, outcome } = item;
   const waiting = outcome === null;
@@ -66,8 +125,6 @@ export const PermissionCard = memo(function PermissionCard({ item, onRespond }: 
   const remainingSec = Math.ceil(remainingMs / 1000);
   const progress = Math.min(100, Math.max(0, (remainingMs / PERMISSION_WINDOW_MS) * 100));
   const expired = waiting && remainingMs <= 0;
-  const approved = !!outcome && outcome !== 'timeout' && outcome.decision === 'allow';
-  const timeoutLook = expired || outcome === 'timeout';
 
   const doAllow = () => {
     if (!waiting || expired) return;
@@ -82,33 +139,121 @@ export const PermissionCard = memo(function PermissionCard({ item, onRespond }: 
     onRespond({ requestId: request.requestId, decision: 'deny', scope });
   };
 
-  const scopeLabel = (s?: GrantScope): string => SCOPE_OPTIONS.find((o) => o.value === s)?.label ?? '';
+  if (!waiting && !expired) {
+    return <PermissionSettled item={item} />;
+  }
 
-  /** 终态文案（先窄化再取值，避免联合类型上的属性访问） */
-  const outcomeInfo = (): { text: string; dim: boolean } => {
-    if (outcome === 'timeout' || (outcome === null && expired)) return { text: '已超时（视为拒绝）', dim: true };
-    if (outcome === null) return { text: '等待决策', dim: true };
-    if (outcome.decision === 'cancelled') return { text: '已作废（会话暂停/紧急停止）', dim: true };
-    if (outcome.decision === 'deny') return { text: '已拒绝', dim: true };
-    const editedNote = commandPreview && editedCommand !== null && editedCommand !== commandPreview.command ? ' · 已改命令' : '';
-    return { text: `已允许 · ${scopeLabel(outcome.scope)}${editedNote}`, dim: false };
-  };
-  const settled = outcomeInfo();
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+      {/* 120s 倒计时进度条（到点自动置灰=拒绝，D08 §3.4） */}
+      <div style={{ height: 3, background: token.colorBorderSecondary, borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${progress}%`, background: token.colorWarning, transition: 'width 1s linear' }} />
+      </div>
+      {commandPreview ? (
+        <>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
+            <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
+              工作目录
+            </Typography.Text>
+            <Typography.Text style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
+              {commandPreview.cwd}（白名单内 ✓）
+            </Typography.Text>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
+            <Typography.Text type="secondary" style={{ flexShrink: 0 }}>
+              命令
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                （可编辑，改后按新命令执行；剩余 {remainingSec}s）
+              </Typography.Text>
+            </Typography.Text>
+            <Input
+              value={editedCommand ?? commandPreview.command}
+              onChange={(e) => setEditedCommand(e.target.value)}
+              readOnly={expired}
+              spellCheck={false}
+              aria-label="待执行命令（可编辑）"
+              style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 13 }}
+            />
+          </div>
+        </>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
+          <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
+            参数预览
+          </Typography.Text>
+          <Typography.Text style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
+            {request.preview.kind}（该形态的预览渲染后续版本接入）
+          </Typography.Text>
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
+        <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
+          判定说明
+        </Typography.Text>
+        <Typography.Text style={{ minWidth: 0 }}>{request.reason}</Typography.Text>
+      </div>
 
-  // 头带底色口径：等待=警示黄、已允许=成功绿、终态=中性
-  const headBandBg = waiting && !expired ? token.colorWarningBg : approved ? token.colorSuccessBg : token.colorFillQuaternary;
+      {/* 记忆粒度三选（antd Segmented radiogroup；高危 options 不含 permanent；D08 §3.4/09 §4.2） */}
+      {!expired ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+          <Segmented<GrantScope>
+            size="small"
+            aria-label="记忆粒度"
+            value={scope}
+            onChange={(v) => setScope(v)}
+            options={SCOPE_OPTIONS.filter((o) => request.options.includes(o.value)).map((o) => ({
+              value: o.value,
+              label: <span title={o.desc}>{o.label}</span>,
+            }))}
+          />
+          {!request.options.includes('permanent') ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              高危工具不提供永久记忆
+            </Typography.Text>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!expired ? (
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <Button onClick={doAllow}>允许</Button>
+          <Button variant="secondary" onClick={doDeny}>
+            拒绝
+          </Button>
+        </div>
+      ) : (
+        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+          已超时（视为拒绝）
+        </Typography.Text>
+      )}
+    </div>
+  );
+});
+
+/** 兜底独立卡（renderStreamItems 配对失败时才渲染：时序异常防御） */
+export const PermissionCard = memo(function PermissionCard({
+  item,
+  onRespond,
+}: {
+  item: PermissionItem;
+  onRespond: (d: PermissionDecision) => void;
+}) {
+  const { token } = theme.useToken();
+  const { request, outcome } = item;
+  const waiting = outcome === null;
+  const approved = !!outcome && outcome !== 'timeout' && outcome.decision === 'allow';
+  const headBandBg = waiting ? token.colorWarningBg : approved ? token.colorSuccessBg : token.colorFillQuaternary;
 
   return (
     <div
       data-request-id={request.requestId}
       style={{
         alignSelf: 'stretch',
-        border: `1px solid ${waiting && !expired ? token.colorWarning : approved ? token.colorSuccess : token.colorBorderSecondary}`,
+        border: `1px solid ${waiting ? token.colorWarning : approved ? token.colorSuccess : token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
         background: token.colorBgContainer,
-        boxShadow: waiting && !expired ? token.boxShadowTertiary : 'none',
         overflow: 'hidden',
-        opacity: timeoutLook ? 0.72 : 1,
+        opacity: outcome === 'timeout' ? 0.72 : 1,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: headBandBg }}>
@@ -122,101 +267,9 @@ export const PermissionCard = memo(function PermissionCard({ item, onRespond }: 
         <Typography.Text code copyable={false} style={{ fontSize: 12, background: 'transparent', border: 'none', padding: 0, flexShrink: 0 }}>
           {request.tool}
         </Typography.Text>
-        {waiting ? (
-          <Typography.Text type="warning" style={{ marginLeft: 'auto', fontSize: 12, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
-            剩余 {remainingSec}s
-          </Typography.Text>
-        ) : null}
       </div>
-
-      {/* 120s 倒计时进度条（到点自动置灰=拒绝，D08 §3.4） */}
-      {waiting ? (
-        <div style={{ height: 3, background: token.colorBorderSecondary }}>
-          <div style={{ height: '100%', width: `${progress}%`, background: token.colorWarning, transition: 'width 1s linear' }} />
-        </div>
-      ) : null}
-
-      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {commandPreview ? (
-          <>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
-              <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
-                工作目录
-              </Typography.Text>
-              <Typography.Text style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
-                {commandPreview.cwd}（白名单内 ✓）
-              </Typography.Text>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
-              <Typography.Text type="secondary" style={{ flexShrink: 0 }}>
-                命令
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  （可编辑，改后按新命令执行）
-                </Typography.Text>
-              </Typography.Text>
-              <Input
-                value={editedCommand ?? commandPreview.command}
-                onChange={(e) => setEditedCommand(e.target.value)}
-                readOnly={!waiting || expired}
-                spellCheck={false}
-                aria-label="待执行命令（可编辑）"
-                style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 13 }}
-              />
-            </div>
-          </>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
-            <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
-              参数预览
-            </Typography.Text>
-            <Typography.Text style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 }}>
-              {request.preview.kind}（该形态的预览渲染后续版本接入）
-            </Typography.Text>
-          </div>
-        )}
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
-          <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
-            判定说明
-          </Typography.Text>
-          <Typography.Text style={{ minWidth: 0 }}>{request.reason}</Typography.Text>
-        </div>
-
-        {/* 记忆粒度三选（antd Segmented radiogroup；高危 options 不含 permanent；D08 §3.4/09 §4.2） */}
-        {waiting && !expired ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-            <Segmented<GrantScope>
-              size="small"
-              aria-label="记忆粒度"
-              value={scope}
-              onChange={(v) => setScope(v)}
-              options={SCOPE_OPTIONS.filter((o) => request.options.includes(o.value)).map((o) => ({
-                value: o.value,
-                label: <span title={o.desc}>{o.label}</span>,
-              }))}
-            />
-            {!request.options.includes('permanent') ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                高危工具不提供永久记忆
-              </Typography.Text>
-            ) : null}
-          </div>
-        ) : null}
-
-        {waiting && !expired ? (
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <Button onClick={doAllow}>允许</Button>
-            <Button variant="secondary" onClick={doDeny}>
-              拒绝
-            </Button>
-          </div>
-        ) : (
-          <Typography.Text
-            type={settled.dim ? 'secondary' : 'success'}
-            style={{ fontSize: 13, alignSelf: 'flex-start', padding: '2px 8px', borderRadius: token.borderRadiusSM }}
-          >
-            {settled.text}
-          </Typography.Text>
-        )}
+      <div style={{ padding: 12 }}>
+        <PermissionControls item={item} onRespond={onRespond} />
       </div>
     </div>
   );
