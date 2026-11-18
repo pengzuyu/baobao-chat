@@ -20,6 +20,7 @@ import type {
   SessionStatus,
 } from '../bridge/types';
 import { parseToolArgs } from '../bridge/types';
+import { toolHeadParam } from '../components/stream/toolFamilies';
 
 /** 会话流条目（UI 投影模型；stream.delta 增量拼进 agentText/reasoning 尾项） */
 export type StreamItem =
@@ -261,6 +262,19 @@ export function isPlaceholderTitle(title: string, sessionId: string): boolean {
 function nextKey(prefix: string): string {
   itemSeq += 1;
   return `${prefix}-${itemSeq}`;
+}
+
+/** 主流尾部倒扫最近的 coding.delegate 工具卡，取 args.task（委派 run 流播种
+ *  的任务摘要源——delegateBrief 事件本身不带简报原文，数据就在主流工具卡上） */
+function lastDelegateTask(list: StreamItem[]): string {
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const it = list[i];
+    if (it.kind !== 'tool') continue;
+    if (it.call.tool !== 'coding.delegate' && it.call.tool !== 'coding_delegate') continue;
+    const task = it.call.args?.task;
+    return typeof task === 'string' ? task : '';
+  }
+  return '';
 }
 
 /** 历史条目 → 流条目（回合气泡同构渲染；key 前缀 h- 区分直播条目。
@@ -948,6 +962,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         // ---- 委派卡（D16 类型 3：launch 后 turn 立即返回，end 异步驱动审查）----
         case 'delegateBrief': {
           const list = s.streams[event.sessionId] ?? [];
+          // 侧栏 run 流播种（与 subagentSpawn 同构）：任务摘要取主流最近的
+          // coding.delegate 工具卡 args.task——右栏运行详情头部即刻有标题
+          const taskText = lastDelegateTask(list);
+          const side = s.sideStreams[event.runId] ?? [
+            { kind: 'user' as const, key: `su-${event.runId}`, text: taskText || '（委派任务）', ts: Date.now() },
+          ];
           const item: StreamItem = {
             kind: 'delegate',
             key: `dg-${event.runId}`,
@@ -956,11 +976,27 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             phase: 'brief',
             logs: [],
           };
-          return { streams: { ...s.streams, [event.sessionId]: [...list, item] } };
+          return {
+            streams: { ...s.streams, [event.sessionId]: [...list, item] },
+            sideStreams: { ...s.sideStreams, [event.runId]: side },
+          };
         }
         case 'delegateEvt': {
           const list = s.streams[event.sessionId] ?? [];
-          const line = typeof event.payload.text === 'string' ? event.payload.text : '';
+          // 日志行组装（2026-11-18 参数可见性）：text 行（delta/warning/心跳/stderr）
+          // 直出；tool_use/tool_result 组装「⚙ 工具 · 首参」/「✓ 摘要」行——
+          // 此前 payload 无 text 即静默丢弃，工具动作完全不可见
+          const p = (event.payload && typeof event.payload === 'object' ? event.payload : {}) as Record<string, unknown>;
+          let line = typeof p.text === 'string' ? p.text : '';
+          if (!line && event.kind === 'tool_use') {
+            const tool = typeof p.tool === 'string' ? p.tool : '?';
+            const args = parseToolArgs(typeof p.args_masked === 'string' ? p.args_masked : '');
+            const head = toolHeadParam(tool, args);
+            line = `⚙ ${tool}${head ? ` · ${head}` : ''}`;
+          } else if (!line && event.kind === 'tool_result') {
+            const summary = typeof p.summary === 'string' && p.summary ? p.summary : '工具执行完成';
+            line = `${p.ok === true ? '✓' : '✗'} ${summary}`;
+          }
           return {
             streams: {
               ...s.streams,

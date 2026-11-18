@@ -65,8 +65,8 @@ pub const CODE_DELEGATE_TIMEOUT: u32 = 8034;
 pub const CODE_WORKSPACE_BUSY: u32 = 8035;
 
 pub use backend::{
-    BackendProbe, BackendRegistry, CodingBackend, DelegateError, DelegateSession, FinalReport,
-    HealthIssue, HealthReport, LaunchOpts,
+    BackendProbe, BackendRegistry, CodingBackend, DelegateError, DelegateSession, EventWait,
+    FinalReport, HealthIssue, HealthReport, LaunchOpts,
 };
 pub use brief::{child_env, forbidden_env_value, render, validate, BriefError, ENV_FORBIDDEN};
 pub use builtin::BuiltinBackend;

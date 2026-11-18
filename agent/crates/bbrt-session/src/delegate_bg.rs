@@ -58,7 +58,7 @@ impl DelegateHub {
         self: &Arc<Self>,
         run_id: String,
         session_id: String,
-        _backend: String,
+        backend: String,
         stream: Box<dyn crate::delegation::DelegateStream>,
         sink: Arc<dyn SessionSink>,
         wal: Arc<dyn EventLog>,
@@ -84,6 +84,7 @@ impl DelegateHub {
                 let cancelled = crate::loop_runner::pump_delegate_stream(
                     &sid,
                     &rid,
+                    &backend,
                     stream.as_mut(),
                     &rx,
                     None, // 会话暂停不终止后台委派（D16 §5）；仅用户 cancel

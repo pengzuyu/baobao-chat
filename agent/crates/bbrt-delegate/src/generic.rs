@@ -133,12 +133,13 @@ impl CodingBackend for GenericCliBackend {
         }
         let mut envs = brief::child_env(brief);
         envs.extend(opts.env_allow.iter().cloned());
-        let (proc, stdout) = procmgr::spawn(&self.bin, &[], Some(&opts.workspace), &envs)?;
+        let (proc, stdout, stderr) = procmgr::spawn(&self.bin, &[], Some(&opts.workspace), &envs)?;
         let session = DelegateSession::new(
             self.id,
             &opts.delegate_task_id,
             proc,
             stdout,
+            Some(stderr),
             Box::new(GenericLineParser),
         );
         // stdin 喂简报（17 §3.2 启动形态）；子进程不读 stdin 且退出时可能 EPIPE——

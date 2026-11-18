@@ -306,9 +306,11 @@ pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
 }
 
 /// WAL → run 历史条目（D33 §3.3 run.history 回执投影，侧栏子 agent 过程回放）。
-/// 数据源=events_by_run 过滤行：subagent.spawn→User（payload.task 摘要）、
+/// 数据源=events_by_run 过滤行：subagent.spawn / delegate.launch→User
+/// （payload.task 摘要——委派 2026-11-18 起落 task，回放有任务种子）、
 /// subagent.trace 的 text→Assistant / tool_call+tool_result 按 call_id 配对→Tool
-/// （args=脱敏原文）。其余 run 行（input/cancel/join 等）忽略——侧栏只要过程流。
+/// （args=脱敏原文；委派过程行同款复用）。其余 run 行（input/cancel/join 等）
+/// 忽略——侧栏只要过程流。
 pub fn wal_run_history(events: &[EventRow]) -> Vec<HistoryItem> {
     let mut items: Vec<HistoryItem> = Vec::new();
     for ev in events {
@@ -323,9 +325,9 @@ pub fn wal_run_history(events: &[EventRow]) -> Vec<HistoryItem> {
                 .map(str::to_string)
         };
         match ev.type_.as_str() {
-            "subagent.spawn" => {
+            "subagent.spawn" | "delegate.launch" => {
                 if let Some(task) = str_field("task") {
-                    if !items.iter().any(|it| matches!(it, HistoryItem::User { .. })) {
+                    if !task.is_empty() && !items.iter().any(|it| matches!(it, HistoryItem::User { .. })) {
                         items.push(HistoryItem::User {
                             text: task,
                             // run 级行无 turn.start/end——侧栏回放不带冻结用时
@@ -374,6 +376,43 @@ pub fn wal_run_history(events: &[EventRow]) -> Vec<HistoryItem> {
 #[cfg(test)]
 mod history_tests {
     use super::*;
+
+    /// 委派 run 回放（2026-11-18）：delegate.launch 带 task → User 种子；
+    /// 过程 subagent.trace tool_call/tool_result 配对 → Tool（args=脱敏原文）
+    #[test]
+    fn run_history_projects_delegate_launch_and_trace() {
+        let events = vec![
+            ev(1, "delegate.launch", r#"{"run_id":"r-1","backend":"claude","task":"修复登录 bug"}"#),
+            ev(2, "subagent.trace", r#"{"kind":"tool_call","callId":"t1","tool":"Bash","argsMasked":"{\"command\":\"cargo test\"}","risk":"low"}"#),
+            ev(3, "subagent.trace", r#"{"kind":"tool_result","callId":"t1","ok":true,"summary":"51 passed","durationMs":1200}"#),
+        ];
+        let items = wal_run_history(&events);
+        assert_eq!(items.len(), 2);
+        match &items[0] {
+            HistoryItem::User { text, .. } => assert_eq!(text, "修复登录 bug"),
+            other => panic!("首条应为 User: {other:?}"),
+        }
+        match &items[1] {
+            HistoryItem::Tool { tool, ok, args, .. } => {
+                assert_eq!(tool, "Bash");
+                assert_eq!(*ok, Some(true));
+                assert!(args.as_deref().unwrap_or_default().contains("cargo test"));
+            }
+            other => panic!("次条应为 Tool: {other:?}"),
+        }
+    }
+
+    /// 存量兼容：delegate.launch 无 task（旧行）不产出空 User 条目
+    #[test]
+    fn run_history_legacy_delegate_launch_without_task() {
+        let events = vec![
+            ev(1, "delegate.launch", r#"{"run_id":"r-1","backend":"claude"}"#),
+            ev(2, "subagent.trace", r#"{"kind":"text","text":"done"}"#),
+        ];
+        let items = wal_run_history(&events);
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], HistoryItem::Assistant { text } if text == "done"));
+    }
 
     fn ev(seq: i64, type_: &str, payload: &str) -> EventRow {
         ev_at(seq, 0, type_, payload)

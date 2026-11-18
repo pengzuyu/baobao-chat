@@ -36,6 +36,13 @@ pub const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 /// 子任务同步等待窗（D16 决策④：探查/专家 120s 超窗转后台；委派直接后台）
 pub const SUBAGENT_WAIT_WINDOW: Duration = Duration::from_secs(120);
 
+/// 委派泵轮询节拍（宿主指令 drain/心跳检查粒度=读线程 recv_timeout 的超时值）
+pub(crate) const DELEGATE_POLL_TICK: Duration = Duration::from_millis(500);
+
+/// 委派空闲心跳阈值（距上条子进程事件超过该值发提示行；D16 决策④无执行
+/// 时长上限不动——本提示只补可见性，不做任何自动终止）
+pub(crate) const DELEGATE_IDLE_HINT: Duration = Duration::from_secs(90);
+
 /// ETA 静态初值表毫秒（D16 §5/P1-6：滚动统计无样本时的兜底）
 pub(crate) fn static_eta_ms(kind: &str) -> i64 {
     match kind {
@@ -1203,6 +1210,8 @@ impl SessionRunner {
         };
         let brief =
             brief_override.unwrap_or_else(|| parse_brief(call, &self.exec_ws().to_string_lossy()));
+        // 任务摘要先取（brief 随 req move；delegate.launch WAL 的回放 User 种子）
+        let task_digest = crate::subagent::truncate_chars(&brief.task, 60);
         let req = DelegateLaunchReq {
             delegate_task_id: run_id.clone(),
             // P0-2①：父会话关联接线（delegate_bridge → LaunchOpts.parent_session_id）
@@ -1274,8 +1283,9 @@ impl SessionRunner {
             &run_id,
             "delegate.launch",
             &format!(
-                "{{\"run_id\":\"{run_id}\",\"backend\":\"{}\"}}",
-                req.backend
+                "{{\"run_id\":\"{run_id}\",\"backend\":\"{}\",\"task\":\"{}\"}}",
+                req.backend,
+                escape_json(&task_digest)
             ),
         );
 
@@ -1314,6 +1324,7 @@ impl SessionRunner {
         let cancelled = pump_delegate_stream(
             &self.session_id,
             &run_id,
+            &req.backend,
             stream.as_mut(),
             &self.delegate_rx,
             Some(&self.interrupted),
@@ -1787,9 +1798,200 @@ fn parse_brief(call: &ToolInvocation, workspace: &str) -> bbrt_protocol::TaskBri
 }
 
 /// 委派事件流泵（同步/后台两路径共用，D16 §5）：归一化事件外发 + WAL；
-/// Input 回显、Cancel/interrupt 优雅取消。返回是否发生过取消请求
-/// （后台路径 interrupted=None——会话暂停不终止后台委派，仅用户 cancel）。
+/// Input 回显、Cancel/interrupt 优雅取消。2026-11-18 重构（真机 claude 委派
+/// 38 分钟零反馈事故）：
+/// - **超时轮询**：next_wait(DELEGATE_POLL_TICK) 取代阻塞 next()——子进程
+///   静默期不再卡死，cancel/补充指令秒级送达（此前只能等子进程吐下一行）；
+/// - **空闲心跳**：静默超过 DELEGATE_IDLE_HINT 发提示行（只补可见性，
+///   D16 决策④无时长上限不动）；
+/// - **参数全链路**：ToolUse 的 args 脱敏后随 DelegateEvt 上行（委派卡
+///   日志行见「后端在干什么」）+ subagent.trace 落 WAL/侧栏 run 流
+///   （run.history 回放同构投影；delegate.tool_use/tool_result 行退役
+///   ——全仓无消费者，过程明细统一走 subagent.trace 与 probe 一致）。
+/// 返回是否发生过取消请求（后台路径 interrupted=None——会话暂停不终止
+/// 后台委派，仅用户 cancel）。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pump_delegate_stream(
+    session_id: &str,
+    run_id: &str,
+    backend: &str,
+    stream: &mut dyn crate::delegation::DelegateStream,
+    rx: &Receiver<DelegateHostMsg>,
+    interrupted: Option<&AtomicBool>,
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
+) -> bool {
+    pump_delegate_stream_timed(
+        session_id,
+        run_id,
+        backend,
+        stream,
+        rx,
+        interrupted,
+        sink,
+        wal,
+        DELEGATE_POLL_TICK,
+        DELEGATE_IDLE_HINT,
+    )
+}
+
+/// 参数化节拍版（生产包装用常量；测试注入毫秒级验证心跳/静默期取消）
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pump_delegate_stream_timed(
+    session_id: &str,
+    run_id: &str,
+    backend: &str,
+    stream: &mut dyn crate::delegation::DelegateStream,
+    rx: &Receiver<DelegateHostMsg>,
+    interrupted: Option<&AtomicBool>,
+    sink: &dyn SessionSink,
+    wal: &dyn EventLog,
+    tick: Duration,
+    idle_hint: Duration,
+) -> bool {
+    let mut cancelled = false;
+    let mut last_event = std::time::Instant::now();
+    let mut last_hint = std::time::Instant::now();
+    // 工具发起时刻（call_id→t0；ToolResult 配对计算 duration_ms 进 trace）
+    let mut tool_started: std::collections::HashMap<String, std::time::Instant> =
+        std::collections::HashMap::new();
+    loop {
+        cancelled |= pump_host_msgs(session_id, run_id, stream, rx, interrupted, sink, wal);
+        let evt = match stream.next_wait(tick) {
+            crate::delegation::WaitEvt::Ready(evt) => evt,
+            crate::delegation::WaitEvt::Idle => {
+                // 回旋：静默期宿主指令（cancel/补充指令）也要能送达
+                cancelled |= pump_host_msgs(session_id, run_id, stream, rx, interrupted, sink, wal);
+                let idle_for = last_event.elapsed();
+                if idle_for >= idle_hint && last_hint.elapsed() >= idle_hint {
+                    last_hint = std::time::Instant::now();
+                    let text = format!(
+                        "⏱ {backend} 已 {} 秒无输出（进程仍在运行，可取消）",
+                        idle_for.as_secs()
+                    );
+                    sink.emit(SessionEvent::DelegateEvt {
+                        session_id: session_id.to_string(),
+                        delegate_task_id: run_id.to_string(),
+                        kind: "warning".into(),
+                        payload: format!("{{\"text\":\"{}\"}}", escape_json(&text)),
+                    });
+                }
+                continue;
+            }
+            crate::delegation::WaitEvt::Ended => break,
+        };
+        last_event = std::time::Instant::now();
+        let (kind, payload) = match evt {
+            DelegateEvt::Meta { text, .. } => ("meta", text),
+            DelegateEvt::Delta { channel, text } => {
+                // 侧栏 run 流：文本叙述（reasoning 通道同 probe 口径不外发）
+                if matches!(channel, crate::delegation::DelegateChannel::Text) && !text.is_empty() {
+                    crate::subagent::trace_out(
+                        sink,
+                        wal,
+                        session_id,
+                        run_id,
+                        bbrt_protocol::SubagentTraceItem::Text {
+                            text: crate::subagent::clamp_summary(&text),
+                        },
+                    );
+                }
+                (
+                    "delta",
+                    match channel {
+                        crate::delegation::DelegateChannel::Text => format!(
+                            "{{\"channel\":\"text\",\"text\":\"{}\"}}",
+                            escape_json(&text)
+                        ),
+                        crate::delegation::DelegateChannel::Reasoning => format!(
+                            "{{\"channel\":\"reasoning\",\"text\":\"{}\"}}",
+                            escape_json(&text)
+                        ),
+                    },
+                )
+            }
+            DelegateEvt::ToolUse {
+                call_id,
+                tool,
+                args,
+                risk,
+            } => {
+                let (masked, _) = bbrt_sec::masking::mask_and_digest(&args.to_string());
+                let risk_level = match risk {
+                    "low" => bbrt_protocol::RiskLevel::Low,
+                    "medium" => bbrt_protocol::RiskLevel::Medium,
+                    _ => bbrt_protocol::RiskLevel::High,
+                };
+                tool_started.insert(call_id.clone(), std::time::Instant::now());
+                crate::subagent::trace_out(
+                    sink,
+                    wal,
+                    session_id,
+                    run_id,
+                    bbrt_protocol::SubagentTraceItem::ToolCall {
+                        call_id: call_id.clone(),
+                        tool: tool.clone(),
+                        args_masked: masked.clone(),
+                        risk: risk_level,
+                    },
+                );
+                (
+                    "tool_use",
+                    format!(
+                        "{{\"call_id\":\"{}\",\"tool\":\"{}\",\"args_masked\":\"{}\",\"risk\":\"{risk}\"}}",
+                        escape_json(&call_id),
+                        escape_json(&tool),
+                        escape_json(&masked)
+                    ),
+                )
+            }
+            DelegateEvt::ToolResult { call_id, ok, summary } => {
+                let duration_ms = tool_started
+                    .remove(&call_id)
+                    .map(|t| t.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
+                crate::subagent::trace_out(
+                    sink,
+                    wal,
+                    session_id,
+                    run_id,
+                    bbrt_protocol::SubagentTraceItem::ToolResult {
+                        call_id: call_id.clone(),
+                        ok,
+                        summary: crate::subagent::truncate_chars(&summary, 400),
+                        duration_ms,
+                    },
+                );
+                (
+                    "tool_result",
+                    format!(
+                        "{{\"call_id\":\"{}\",\"ok\":{ok},\"summary\":\"{}\",\"duration_ms\":{duration_ms}}}",
+                        escape_json(&call_id),
+                        escape_json(&summary)
+                    ),
+                )
+            }
+            DelegateEvt::Warning { text } => (
+                "warning",
+                // JSON 包装（payload.text）使前端日志行可渲染（此前裸文本不显示）
+                format!("{{\"text\":\"{}\"}}", escape_json(&text)),
+            ),
+            DelegateEvt::Exit { .. } => ("exit", String::new()),
+        };
+        sink.emit(SessionEvent::DelegateEvt {
+            session_id: session_id.to_string(),
+            delegate_task_id: run_id.to_string(),
+            kind: kind.to_string(),
+            payload,
+        });
+    }
+    cancelled
+}
+
+/// 泵内宿主指令 drain（interrupt 旗标 + Input/Cancel 通道消息）。
+/// 超时轮询的每个回旋点调用——静默期 cancel 也能及时送达。
+#[allow(clippy::too_many_arguments)]
+fn pump_host_msgs(
     session_id: &str,
     run_id: &str,
     stream: &mut dyn crate::delegation::DelegateStream,
@@ -1799,93 +2001,40 @@ pub(crate) fn pump_delegate_stream(
     wal: &dyn EventLog,
 ) -> bool {
     let mut cancelled = false;
-    loop {
-        if interrupted.is_some_and(|f| f.load(Ordering::Relaxed)) {
-            wal.append_run(
-                session_id,
-                run_id,
-                "delegate.cancel",
-                &format!("{{\"run_id\":\"{run_id}\",\"graceful\":true,\"source\":\"interrupt\"}}"),
-            );
-            cancelled = true;
-            stream.cancel(true);
-        }
-        while let Ok(msg) = rx.try_recv() {
-            match msg {
-                DelegateHostMsg::Input { text } => {
-                    // D16 决策⑧：真正下发子进程（不支持的 backend 静默忽略）+ 事件回显留痕
-                    stream.send_input(&text);
-                    sink.emit(SessionEvent::DelegateEvt {
-                        session_id: session_id.to_string(),
-                        delegate_task_id: run_id.to_string(),
-                        kind: "input".into(),
-                        payload: text,
-                    });
-                }
-                DelegateHostMsg::Cancel { graceful } => {
-                    wal.append_run(
-                        session_id,
-                        run_id,
-                        "delegate.cancel",
-                        &format!("{{\"run_id\":\"{run_id}\",\"graceful\":{graceful}}}"),
-                    );
-                    cancelled = true;
-                    stream.cancel(graceful);
-                }
-                _ => {}
+    if interrupted.is_some_and(|f| f.load(Ordering::Relaxed)) {
+        wal.append_run(
+            session_id,
+            run_id,
+            "delegate.cancel",
+            &format!("{{\"run_id\":\"{run_id}\",\"graceful\":true,\"source\":\"interrupt\"}}"),
+        );
+        cancelled = true;
+        stream.cancel(true);
+    }
+    while let Ok(msg) = rx.try_recv() {
+        match msg {
+            DelegateHostMsg::Input { text } => {
+                // D16 决策⑧：真正下发子进程（不支持的 backend 静默忽略）+ 事件回显留痕
+                stream.send_input(&text);
+                sink.emit(SessionEvent::DelegateEvt {
+                    session_id: session_id.to_string(),
+                    delegate_task_id: run_id.to_string(),
+                    kind: "input".into(),
+                    payload: format!("{{\"text\":\"{}\"}}", escape_json(&text)),
+                });
             }
-        }
-        let Some(evt) = stream.next() else { break };
-        let (kind, payload) = match evt {
-            DelegateEvt::Meta { text, .. } => ("meta", text),
-            DelegateEvt::Delta { channel, text } => (
-                "delta",
-                match channel {
-                    crate::delegation::DelegateChannel::Text => format!(
-                        "{{\"channel\":\"text\",\"text\":\"{}\"}}",
-                        escape_json(&text)
-                    ),
-                    crate::delegation::DelegateChannel::Reasoning => format!(
-                        "{{\"channel\":\"reasoning\",\"text\":\"{}\"}}",
-                        escape_json(&text)
-                    ),
-                },
-            ),
-            DelegateEvt::ToolUse { call_id, tool, .. } => {
+            DelegateHostMsg::Cancel { graceful } => {
                 wal.append_run(
                     session_id,
                     run_id,
-                    "delegate.tool_use",
-                    &format!(
-                        "{{\"run_id\":\"{run_id}\",\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"
-                    ),
+                    "delegate.cancel",
+                    &format!("{{\"run_id\":\"{run_id}\",\"graceful\":{graceful}}}"),
                 );
-                (
-                    "tool_use",
-                    format!("{{\"call_id\":\"{call_id}\",\"tool\":\"{tool}\"}}"),
-                )
+                cancelled = true;
+                stream.cancel(graceful);
             }
-            DelegateEvt::ToolResult { call_id, ok, .. } => {
-                wal.append_run(
-                    session_id,
-                    run_id,
-                    "delegate.tool_result",
-                    &format!("{{\"run_id\":\"{run_id}\",\"call_id\":\"{call_id}\",\"ok\":{ok}}}"),
-                );
-                (
-                    "tool_result",
-                    format!("{{\"call_id\":\"{call_id}\",\"ok\":{ok}}}"),
-                )
-            }
-            DelegateEvt::Warning { text } => ("warning", text),
-            DelegateEvt::Exit { .. } => ("exit", String::new()),
-        };
-        sink.emit(SessionEvent::DelegateEvt {
-            session_id: session_id.to_string(),
-            delegate_task_id: run_id.to_string(),
-            kind: kind.to_string(),
-            payload,
-        });
+            _ => {}
+        }
     }
     cancelled
 }
@@ -2208,5 +2357,214 @@ fn emit_memory_saved(deps: &LoopDeps, session_id: &str, outcome: &bbrt_memory::S
             name: ev.name.clone(),
             reason: ev.reason.clone(),
         });
+    }
+}
+
+#[cfg(test)]
+mod pump_tests {
+    //! 委派泵超时轮询重构（2026-11-18）的单元覆盖：空闲心跳、静默期取消
+    //! 及时性、ToolUse args 脱敏上行 + subagent.trace WAL 行。
+    use super::*;
+    use crate::delegation::{DelegateStream, WaitEvt};
+    use std::sync::Mutex;
+
+    /// 静默脚本流：next_wait 先 Idle N 次再按脚本吐事件，最后 Ended
+    struct IdleScriptStream {
+        idle_rounds: std::sync::atomic::AtomicU32,
+        events: Mutex<std::collections::VecDeque<DelegateEvt>>,
+        cancelled: Mutex<Option<bool>>,
+    }
+    impl DelegateStream for IdleScriptStream {
+        fn next(&mut self) -> Option<DelegateEvt> {
+            self.events.lock().unwrap().pop_front()
+        }
+        fn next_wait(&mut self, timeout: Duration) -> WaitEvt {
+            let n = self.idle_rounds.load(Ordering::Relaxed);
+            if n > 0 {
+                self.idle_rounds.store(n - 1, Ordering::Relaxed);
+                // 真实等一拍（模拟读线程 recv_timeout 超时；封顶防慢测试）
+                std::thread::sleep(timeout.min(Duration::from_millis(50)));
+                return WaitEvt::Idle;
+            }
+            self.events.lock().unwrap().pop_front().map(WaitEvt::Ready).unwrap_or(WaitEvt::Ended)
+        }
+        fn cancel(&mut self, graceful: bool) {
+            *self.cancelled.lock().unwrap() = Some(graceful);
+        }
+        fn finalize(&mut self) -> crate::delegation::DelegateFinal {
+            crate::delegation::DelegateFinal {
+                summary: String::new(),
+                changed_files: vec![],
+                session_ref: None,
+                exit_code: Some(0),
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct CollectSink {
+        evts: Mutex<Vec<SessionEvent>>,
+    }
+    impl SessionSink for CollectSink {
+        fn emit(&self, evt: SessionEvent) {
+            self.evts.lock().unwrap().push(evt);
+        }
+    }
+
+    #[derive(Default)]
+    struct CollectLog {
+        rows: Mutex<Vec<(String, String)>>,
+    }
+    impl EventLog for CollectLog {
+        fn append(&self, _session_id: &str, _type_: &str, _payload: &str) {}
+        fn append_run(&self, _session_id: &str, run_id: &str, type_: &str, payload: &str) {
+            self.rows.lock().unwrap().push((format!("{type_}:{run_id}"), payload.to_string()));
+        }
+    }
+
+    fn delegate_evts(sink: &CollectSink) -> Vec<(String, String)> {
+        sink.evts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                SessionEvent::DelegateEvt { kind, payload, .. } => {
+                    Some((kind.clone(), payload.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 静默期心跳：无事件超过 idle_hint 发 warning 提示行（含后端名），
+    /// 且按 idle_hint 节流重复
+    #[test]
+    fn pump_emits_idle_heartbeat() {
+        let sink = std::sync::Arc::new(CollectSink::default());
+        let wal = std::sync::Arc::new(CollectLog::default());
+        let stream = IdleScriptStream {
+            idle_rounds: std::sync::atomic::AtomicU32::new(40), // 40×20ms≈800ms 静默
+            events: Mutex::new(std::collections::VecDeque::new()),
+            cancelled: Mutex::new(None),
+        };
+        let (_tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
+        let cancelled = pump_delegate_stream_timed(
+            "s-1",
+            "r-1",
+            "claude",
+            &mut { stream },
+            &rx,
+            None,
+            sink.as_ref(),
+            wal.as_ref(),
+            Duration::from_millis(20),
+            Duration::from_millis(80),
+        );
+        assert!(!cancelled);
+        let beats: Vec<_> = delegate_evts(&sink)
+            .into_iter()
+            .filter(|(k, p)| k == "warning" && p.contains("claude") && p.contains("无输出"))
+            .collect();
+        assert!(!beats.is_empty(), "静默期应有心跳提示：{beats:?}");
+        assert!(beats.len() <= 12, "心跳应按阈值节流：{}", beats.len());
+    }
+
+    /// 静默期取消：cancel 消息在无任何子进程事件的情况下送达（Idle 回旋 drain）
+    #[test]
+    fn pump_delivers_cancel_while_silent() {
+        let sink = std::sync::Arc::new(CollectSink::default());
+        let wal = std::sync::Arc::new(CollectLog::default());
+        let (tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
+        let stream = IdleScriptStream {
+            idle_rounds: std::sync::atomic::AtomicU32::new(50),
+            events: Mutex::new(std::collections::VecDeque::new()),
+            cancelled: Mutex::new(None),
+        };
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            let _ = tx.send(DelegateHostMsg::Cancel { graceful: false });
+        });
+        let cancelled = pump_delegate_stream_timed(
+            "s-1",
+            "r-1",
+            "claude",
+            &mut { stream },
+            &rx,
+            None,
+            sink.as_ref(),
+            wal.as_ref(),
+            Duration::from_millis(20),
+            Duration::from_secs(3600), // 心跳不干扰本用例
+        );
+        handle.join().unwrap();
+        assert!(cancelled, "静默期 cancel 应送达");
+        assert!(
+            wal.rows.lock().unwrap().iter().any(|(t, _)| t == "delegate.cancel:r-1"),
+            "cancel 应落 WAL"
+        );
+    }
+
+    /// ToolUse args 全链路：payload 带 args_masked/risk 上行 + WAL 落 subagent.trace
+    /// （delegate.tool_use 行退役）+ SubagentTrace host 事件（侧栏 run 流数据源）
+    #[test]
+    fn pump_tool_args_reach_host_and_wal() {
+        let sink = std::sync::Arc::new(CollectSink::default());
+        let wal = std::sync::Arc::new(CollectLog::default());
+        let events = vec![
+            DelegateEvt::ToolUse {
+                call_id: "t1".into(),
+                tool: "Bash".into(),
+                args: serde_json::json!({"command": "cargo test"}),
+                risk: "medium",
+            },
+            DelegateEvt::ToolResult {
+                call_id: "t1".into(),
+                ok: true,
+                summary: "51 passed".into(),
+            },
+        ];
+        let stream = IdleScriptStream {
+            idle_rounds: std::sync::atomic::AtomicU32::new(0),
+            events: Mutex::new(events.into_iter().collect()),
+            cancelled: Mutex::new(None),
+        };
+        let (_tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
+        let _ = pump_delegate_stream_timed(
+            "s-1",
+            "r-1",
+            "claude",
+            &mut { stream },
+            &rx,
+            None,
+            sink.as_ref(),
+            wal.as_ref(),
+            Duration::from_millis(20),
+            Duration::from_secs(3600),
+        );
+        // 上行 payload：args_masked + risk（注意 mask 后 command 内容可能变化，只断言键存在）
+        let tool_use = delegate_evts(&sink)
+            .iter()
+            .find(|(k, _)| k == "tool_use")
+            .map(|(_, p)| p.clone())
+            .expect("应有 tool_use 上行");
+        assert!(tool_use.contains("args_masked"), "{tool_use}");
+        assert!(tool_use.contains("cargo test"), "args 未脱敏丢失：{tool_use}");
+        assert!(tool_use.contains("\"risk\":\"medium\""), "{tool_use}");
+        // WAL：subagent.trace 行（tool_call/tool_result），无 delegate.tool_use 残留
+        let rows = wal.rows.lock().unwrap().clone();
+        assert!(
+            rows.iter().any(|(t, p)| t == "subagent.trace:r-1" && p.contains("tool_call")),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(t, p)| t == "subagent.trace:r-1" && p.contains("tool_result")),
+            "{rows:?}"
+        );
+        assert!(!rows.iter().any(|(t, _)| t.starts_with("delegate.tool_")), "{rows:?}");
+        // host SubagentTrace 事件（侧栏 run 流）
+        assert!(
+            sink.evts.lock().unwrap().iter().any(|e| matches!(e, SessionEvent::SubagentTrace { .. })),
+            "应有 SubagentTrace host 事件"
+        );
     }
 }

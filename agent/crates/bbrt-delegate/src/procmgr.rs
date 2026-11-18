@@ -20,7 +20,7 @@
 use std::io::{self, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -129,20 +129,21 @@ pub struct ChildProcess {
     pub program: String,
 }
 
-/// 启动受管子进程：返回 (进程句柄, stdout)。stdin 由句柄持有（send_input 用）。
+/// 启动受管子进程：返回 (进程句柄, stdout, stderr)。stdin 由句柄持有（send_input 用）。
 /// 环境注入 BBC_SANDBOX=1（遗留扫描依据）+ 调用方附加 envs（简报 forbidden 等）。
+/// stderr 改管道捕获（2026-11-18：claude 卡死排查时 stderr 全不可见——API 重试/
+/// 权限/网络报错直接丢失；调用方经 DelegateSession 读线程转发为 warning 事件）。
 pub fn spawn(
     program: &str,
     args: &[String],
     cwd: Option<&Path>,
     envs: &[(String, String)],
-) -> io::Result<(ChildProcess, ChildStdout)> {
+) -> io::Result<(ChildProcess, ChildStdout, ChildStderr)> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        // v0.1：stderr 丢弃防管道阻塞（见模块注释登记）
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .env(ENV_SANDBOX_MARK, "1");
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -166,6 +167,10 @@ pub fn spawn(
         .stdout
         .take()
         .ok_or_else(|| io::Error::other("stdout 管道未创建"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("stderr 管道未创建"))?;
     Ok((
         ChildProcess {
             child: Mutex::new(child),
@@ -174,6 +179,7 @@ pub fn spawn(
             program: program.to_string(),
         },
         stdout,
+        stderr,
     ))
 }
 
@@ -445,7 +451,7 @@ mod tests {
     #[test]
     fn spawn_creates_own_process_group_with_sandbox_mark() {
         // pgid==pid（pre_exec setpgid(0,0)）
-        let (proc, _stdout) = spawn("/bin/sleep", &["5".into()], None, &[]).unwrap();
+        let (proc, _stdout, _stderr) = spawn("/bin/sleep", &["5".into()], None, &[]).unwrap();
         assert_eq!(proc.pgid, proc.pid());
         let _ = proc.cancel(false).unwrap();
 
@@ -453,7 +459,7 @@ mod tests {
         let dir = testing::temp_dir("mark");
         let script = testing::write_script(&dir, "mark.sh", "#!/bin/sh\nprintenv BBC_SANDBOX\n");
         let script_str = script.to_string_lossy().into_owned();
-        let (proc, stdout) = spawn("/bin/sh", &[script_str], None, &[]).unwrap();
+        let (proc, stdout, _stderr) = spawn("/bin/sh", &[script_str], None, &[]).unwrap();
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
@@ -463,7 +469,7 @@ mod tests {
 
     #[test]
     fn write_line_roundtrip_through_cat() {
-        let (proc, stdout) = spawn("/bin/cat", &[], None, &[]).unwrap();
+        let (proc, stdout, _stderr) = spawn("/bin/cat", &[], None, &[]).unwrap();
         proc.write_line("hello-procmgr").unwrap();
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -476,7 +482,7 @@ mod tests {
 
     #[test]
     fn force_cancel_kills_stubborn_process() {
-        let (proc, _stdout) = spawn("/bin/sleep", &["120".into()], None, &[]).unwrap();
+        let (proc, _stdout, _stderr) = spawn("/bin/sleep", &["120".into()], None, &[]).unwrap();
         let outcome = proc.cancel(false).unwrap();
         assert!(outcome.escalated_to_kill);
         assert!(!outcome.graceful);
@@ -490,7 +496,7 @@ mod tests {
         let dir = testing::temp_dir("epipe");
         let script = testing::write_script(&dir, "quick.sh", "#!/bin/sh\nexit 0\n");
         let script_str = script.to_string_lossy().into_owned();
-        let (proc, stdout) = spawn("/bin/sh", &[script_str], None, &[]).unwrap();
+        let (proc, stdout, _stderr) = spawn("/bin/sh", &[script_str], None, &[]).unwrap();
         let mut reader = BufReader::new(stdout);
         let mut buf = String::new();
         while reader.read_line(&mut buf).unwrap_or(0) > 0 {

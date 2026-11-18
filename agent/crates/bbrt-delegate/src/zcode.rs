@@ -148,12 +148,13 @@ impl CodingBackend for ZcodeBackend {
         let args = build_args(opts.mode, opts.resume.as_deref());
         let mut envs = brief::child_env(brief);
         envs.extend(opts.env_allow.iter().cloned());
-        let (proc, stdout) = procmgr::spawn(&self.bin, &args, Some(&opts.workspace), &envs)?;
+        let (proc, stdout, stderr) = procmgr::spawn(&self.bin, &args, Some(&opts.workspace), &envs)?;
         let session = DelegateSession::new(
             "zcode",
             &opts.delegate_task_id,
             proc,
             stdout,
+            Some(stderr),
             Box::new(ZcodeLineParser),
         );
         // 简报经 stdin 投递（假定口径；对端不读且退出时可能 EPIPE，尽力投递）

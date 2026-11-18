@@ -65,9 +65,30 @@ pub struct DelegateFinal {
     pub exit_code: Option<i32>,
 }
 
+/// next_wait 结果（超时轮询三态）
+#[derive(Debug, Clone)]
+pub enum WaitEvt {
+    Ready(DelegateEvt),
+    /// 超时无事件（调用方回旋：drain 宿主指令/空闲心跳）
+    Idle,
+    /// 流终止（Exit 已产出）
+    Ended,
+}
+
 /// 委派事件流（next=None 即流终止；Exit 事件之后终止）
 pub trait DelegateStream: Send {
     fn next(&mut self) -> Option<DelegateEvt>;
+
+    /// 带超时拉取（pump 轮询用）：Ready=下一条事件 / Idle=超时无事件
+    /// （调用方回旋处理宿主指令/空闲心跳）/ Ended=流终止。
+    /// 默认实现=阻塞 next() 忽略超时（mock/脚本流语义不变）；真实后端
+    /// 覆盖为读线程 recv_timeout——子进程静默期不再卡死取消息路径。
+    fn next_wait(&mut self, _timeout: std::time::Duration) -> WaitEvt {
+        match self.next() {
+            Some(evt) => WaitEvt::Ready(evt),
+            None => WaitEvt::Ended,
+        }
+    }
     /// 取消（graceful=SIGINT→3s→SIGKILL，D11 §8.4）
     fn cancel(&mut self, graceful: bool);
     /// 运行中补充指令（17 §8 send_input；D16 决策⑧——默认 no-op，

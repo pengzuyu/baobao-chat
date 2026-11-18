@@ -74,13 +74,15 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<RunRow> {
 
 impl Store {
     /// 持久发号：r-{max(seq)+1}（库内唯一，重启不重号）。
+    /// 2026-11-18 起序号零填充 6 位（r-000001）——ID 固定宽度，UI 对齐；
+    /// 存量短 id（r-41）不迁移：CAST(substr) 解析兼容，排序按 created_at 不受影响。
     pub fn next_run_id(&self) -> Result<String, StoreError> {
         let n: i64 = self.conn.query_row(
             "SELECT COALESCE(MAX(CAST(substr(id, 3) AS INTEGER)), 0) + 1 FROM agent_run",
             [],
             |row| row.get(0),
         )?;
-        Ok(format!("r-{n}"))
+        Ok(format!("r-{n:06}"))
     }
 
     /// run 起始落库（status=running；created_at/started_at 存储侧取 now）。
@@ -212,17 +214,17 @@ mod tests {
     #[test]
     fn next_run_id_is_monotonic_across_reopen() {
         let (dir, store) = testutil::open_store();
-        assert_eq!(store.next_run_id().unwrap(), "r-1");
+        assert_eq!(store.next_run_id().unwrap(), "r-000001");
         testutil::seed_session(&store, "sess-1");
         let id = store.next_run_id().unwrap();
-        assert_eq!(id, "r-1"); // 未占用可重复取（调用方串行发号后立即落库）
+        assert_eq!(id, "r-000001"); // 未占用可重复取（调用方串行发号后立即落库）
         store
             .insert_run(&start_row(&id, "sess-1", "probe"))
             .unwrap();
-        assert_eq!(store.next_run_id().unwrap(), "r-2");
+        assert_eq!(store.next_run_id().unwrap(), "r-000002");
         drop(store);
         let store2 = crate::Store::open(&dir.path().join("agent").join("runtime.sqlite3")).unwrap();
-        assert_eq!(store2.next_run_id().unwrap(), "r-2", "重开后接续 max+1");
+        assert_eq!(store2.next_run_id().unwrap(), "r-000002", "重开后接续 max+1");
     }
 
     /// 生命周期：insert 强制 running → finish 覆盖终态字段 → runs_of 可查

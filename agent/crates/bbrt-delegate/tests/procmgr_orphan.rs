@@ -43,7 +43,7 @@ fn orphan_scan_finds_and_cleanup_kills_marked_orphans() {
 
     // 经 procmgr 启动（注入 BBC_SANDBOX=1 + 新进程组）；制造器父进程立即退出。
     // 注意用 wait（不杀组）收割：孤儿与制造器同组，cancel 的组杀会把孤儿一并杀掉
-    let (maker, _stdout) = procmgr::spawn(&stub, &[], None, &[]).unwrap();
+    let (maker, _stdout, _stderr) = procmgr::spawn(&stub, &[], None, &[]).unwrap();
     let st = maker.wait().unwrap();
     assert!(st.success(), "孤儿制造器应正常退出");
 
@@ -78,7 +78,7 @@ fn live_child_of_ours_is_not_matched_as_orphan() {
     let tag = format!("BBCLIVE-{}", std::process::id());
     let body = format!("#!/bin/sh\nwhile true; do sleep 1; done # {tag}\n");
     let stub = write_script(dir.path(), "live.sh", &body);
-    let (proc, _stdout) = procmgr::spawn(&stub, &[], None, &[]).unwrap();
+    let (proc, _stdout, _stderr) = procmgr::spawn(&stub, &[], None, &[]).unwrap();
     let pid = proc.pid();
     assert!(proc.pgid == pid);
 

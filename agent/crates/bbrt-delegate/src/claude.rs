@@ -175,13 +175,14 @@ impl CodingBackend for ClaudeBackend {
         let args = build_args(brief, opts.mode, opts.resume.as_deref());
         let mut envs = brief::child_env(brief);
         envs.extend(opts.env_allow.iter().cloned());
-        let (proc, stdout) = procmgr::spawn(&self.bin, &args, Some(&opts.workspace), &envs)?;
+        let (proc, stdout, stderr) = procmgr::spawn(&self.bin, &args, Some(&opts.workspace), &envs)?;
         // 简报经 -p 参数传入；stdin 保留给 send_input（模式 C 追问）
         Ok(DelegateSession::new(
             "claude",
             &opts.delegate_task_id,
             proc,
             stdout,
+            Some(stderr),
             Box::new(ClaudeStreamParser),
         ))
     }

@@ -569,8 +569,9 @@ pub fn transition_join(state: SessionState) -> SessionState {
 // ---------------------------------------------------------------------------
 
 /// 过程明细外发 + WAL 同步落行（D33 §3.2）：事件按 sub_id 路由侧栏 run 流；
-/// WAL 行 type=subagent.trace、payload=item 序列化（run.history 回放同构投影）
-fn trace_out(
+/// WAL 行 type=subagent.trace、payload=item 序列化（run.history 回放同构投影）。
+/// 2026-11-18 起委派 run 过程流同款复用（loop_runner pump）
+pub(crate) fn trace_out(
     sink: &dyn SessionSink,
     wal: &dyn EventLog,
     session_id: &str,

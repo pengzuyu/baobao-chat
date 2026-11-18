@@ -12,7 +12,7 @@ use bbrt_protocol::RiskLevel;
 
 use bbrt_session::delegation::{
     DelegateChannel, DelegateEvt, DelegateFinal, DelegateLaunchReq, DelegateLauncher,
-    DelegateStream,
+    DelegateStream, WaitEvt,
 };
 
 /// 装配：注册三真实后端 + builtin 占位（可用性由 detect 决定）
@@ -97,6 +97,18 @@ impl DelegateStream for SessionStream {
             Ok(Some(evt)) => Some(map_event(evt)),
             Ok(None) => None,
             Err(e) => Some(DelegateEvt::Warning {
+                text: e.to_string(),
+            }),
+        }
+    }
+
+    fn next_wait(&mut self, timeout: std::time::Duration) -> WaitEvt {
+        // 直连会话超时拉取（读线程 recv_timeout；Err=Warning 事件继续流的同款语义）
+        match self.session.next_event_wait(Some(timeout)) {
+            Ok(bbrt_delegate::EventWait::Ready(evt)) => WaitEvt::Ready(map_event(evt)),
+            Ok(bbrt_delegate::EventWait::Idle) => WaitEvt::Idle,
+            Ok(bbrt_delegate::EventWait::Ended) => WaitEvt::Ended,
+            Err(e) => WaitEvt::Ready(DelegateEvt::Warning {
                 text: e.to_string(),
             }),
         }

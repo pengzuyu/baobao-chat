@@ -21,9 +21,10 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::ChildStdout;
+use std::process::{ChildStderr, ChildStdout};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bbrt_protocol::{PermissionMode, TaskBrief};
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,18 @@ const RAW_TAIL_LINES: usize = 32;
 
 /// 会话内累积的 assistant 文本上限（防内存放大）
 const SUMMARY_BUF_MAX_CHARS: usize = 64 * 1024;
+
+/// stderr 聚合转发最小间隔（防刷屏：API 重试风暴/进度条类输出每行都转事件会淹卡片）
+const STDERR_MIN_INTERVAL: Duration = Duration::from_secs(2);
+
+/// stderr 缓冲行数上限（环形丢弃最旧）
+const STDERR_BUF_LINES: usize = 16;
+
+/// 单次 stderr Warning 事件聚合的行数上限
+const STDERR_EVT_LINES: usize = 4;
+
+/// 单行 stderr 截断字符数
+const STDERR_LINE_MAX_CHARS: usize = 400;
 
 // ---------------------------------------------------------------------------
 // 探测/健康/启动/收尾结构
@@ -217,9 +230,69 @@ impl DelegateError {
 // 委派会话（launch 产物；内部可变以支持读流/取消并发）
 // ---------------------------------------------------------------------------
 
-/// 会话内部状态（Mutex 保护）
+/// 读线程转发消息（stdout/stderr 行；读线程独占管道读端，
+/// 消费侧在 SessionInner 锁外 recv——2026-11-18 修复：此前 next_event
+/// 持锁阻塞 read_line，子进程静默期 cancel/finalize 的锁获取被卡死）
+enum LineMsg {
+    Line(String),
+    /// 管道 EOF（读线程终止前最后一条）
+    Eof,
+    /// 行级错误（超长行跳过继续读；IO 错误读线程随后终止）
+    Fail(String),
+}
+
+/// stdout/stderr 行转发线程：独占读端逐行投递（EOF/错误也走通道）
+fn spawn_line_reader<R: std::io::Read + Send + 'static>(out: R) -> Receiver<LineMsg> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("bbc-delegate-reader".into())
+        .spawn(move || {
+            let mut reader = BufReader::new(out);
+            let mut buf = String::new();
+            loop {
+                buf.clear();
+                match reader.read_line(&mut buf) {
+                    Ok(0) => {
+                        let _ = tx.send(LineMsg::Eof);
+                        break;
+                    }
+                    Ok(_) => {
+                        let line = buf.trim_end_matches(['\r', '\n']).to_string();
+                        if line.len() > MAX_LINE_BYTES {
+                            // 超长行：报错后跳过继续读（原语义 Err 上抛、流继续）
+                            let _ = tx.send(LineMsg::Fail(format!(
+                                "事件行超长（{} 字节 > 上限 {}）",
+                                line.len(),
+                                MAX_LINE_BYTES
+                            )));
+                            continue;
+                        }
+                        if tx.send(LineMsg::Line(line)).is_err() {
+                            break; // 消费侧已放弃
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(LineMsg::Fail(e.to_string()));
+                        let _ = tx.send(LineMsg::Eof);
+                        break;
+                    }
+                }
+            }
+        })
+        .expect("委派读线程启动失败");
+    rx
+}
+
+/// 带超时拉取的结果（pump 轮询用：Idle=超时无行，可回旋处理宿主指令/心跳）
+#[derive(Debug, Clone, PartialEq)]
+pub enum EventWait {
+    Ready(NormalizedEvent),
+    Idle,
+    Ended,
+}
+
+/// 会话内部状态（Mutex 保护；**不含**行通道——等待必须在锁外进行）
 struct SessionInner {
-    reader: BufReader<ChildStdout>,
     parser: Box<dyn LineParser>,
     /// 一行多事件时的待吐队列（如 claude assistant 消息含 text+tool_use 多块）
     pending: VecDeque<NormalizedEvent>,
@@ -235,6 +308,10 @@ struct SessionInner {
     session_ref: Option<String>,
     /// 原始输出尾部（诊断）
     raw_tail: VecDeque<String>,
+    /// stderr 行缓冲（读线程投递；限频聚合为 Warning 事件外发）
+    stderr_buf: VecDeque<String>,
+    /// 上次 stderr Warning 外发时刻（限频基准）
+    last_stderr_evt: Option<Instant>,
 }
 
 /// 委派会话句柄：持有受管子进程与行解析器；线程安全（Send+Sync）。
@@ -245,24 +322,29 @@ pub struct DelegateSession {
     started_at: Instant,
     proc: ChildProcess,
     inner: Mutex<SessionInner>,
+    /// stdout 行通道（读线程 → 消费侧；独立于 inner 锁）
+    lines: Mutex<Receiver<LineMsg>>,
+    /// stderr 行通道（None=无 stderr 管道）
+    err_lines: Mutex<Option<Receiver<LineMsg>>>,
 }
 
 impl DelegateSession {
-    /// 组装（适配器 launch 内部调用；stdout 来自 [`crate::procmgr::spawn`])
+    /// 组装（适配器 launch 内部调用；stdout/stderr 来自 [`crate::procmgr::spawn`])
     pub(crate) fn new(
         backend_id: impl Into<String>,
         delegate_task_id: impl Into<String>,
         proc: ChildProcess,
         stdout: ChildStdout,
+        stderr: Option<ChildStderr>,
         parser: Box<dyn LineParser>,
     ) -> Self {
+        let err_lines = stderr.map(spawn_line_reader);
         Self {
             backend_id: backend_id.into(),
             delegate_task_id: delegate_task_id.into(),
             started_at: Instant::now(),
             proc,
             inner: Mutex::new(SessionInner {
-                reader: BufReader::new(stdout),
                 parser,
                 pending: VecDeque::new(),
                 exit_emitted: false,
@@ -271,7 +353,11 @@ impl DelegateSession {
                 changed_files: Vec::new(),
                 session_ref: None,
                 raw_tail: VecDeque::new(),
+                stderr_buf: VecDeque::new(),
+                last_stderr_evt: None,
             }),
+            lines: Mutex::new(spawn_line_reader(stdout)),
+            err_lines: Mutex::new(err_lines),
         }
     }
 
@@ -314,42 +400,130 @@ impl DelegateSession {
     /// 拉取下一条归一化事件（阻塞直至一行可用/EOF）。
     /// 返回 Ok(None) = 流已终止（Exit 已产出）。EOF 时收割子进程并产出 Exit 事件。
     pub fn next_event(&self) -> Result<Option<NormalizedEvent>, DelegateError> {
-        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        if inner.exit_emitted && inner.pending.is_empty() {
-            return Ok(None);
+        match self.next_event_wait(None)? {
+            EventWait::Ready(ev) => Ok(Some(ev)),
+            EventWait::Idle => Ok(None), // 阻塞模式不会 Idle（防御语义：视同终止）
+            EventWait::Ended => Ok(None),
         }
+    }
+
+    /// 带超时拉取下一条归一化事件（timeout=None 为阻塞语义）。
+    /// 关键路径：stdout 行等待在 SessionInner 锁外进行——子进程静默期
+    /// cancel()/finalize() 的锁获取不再被阻塞的 read_line 卡死；
+    /// 超时返回 Idle 供调用方回旋（drain 宿主指令/空闲心跳）。
+    pub fn next_event_wait(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<EventWait, DelegateError> {
         loop {
-            if let Some(ev) = inner.pending.pop_front() {
-                Self::note_side_effects(&mut inner, &ev);
-                return Ok(Some(ev));
+            // 1) stderr 聚合 + pending 出队（短临界区）
+            {
+                let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+                Self::drain_stderr(&self.err_lines, &mut inner);
+                Self::flush_stderr_warning(&mut inner);
+                if inner.exit_emitted && inner.pending.is_empty() {
+                    return Ok(EventWait::Ended);
+                }
+                if let Some(ev) = inner.pending.pop_front() {
+                    Self::note_side_effects(&mut inner, &ev);
+                    return Ok(EventWait::Ready(ev));
+                }
             }
-            let mut buf = String::new();
-            let n = inner.reader.read_line(&mut buf)?;
-            if n == 0 {
-                // EOF：收割（孙进程持管道场景由 reap_after_eof 兜底强杀）
-                let rec = self.proc.reap_after_eof()?;
-                inner.exited = Some(rec);
-                inner.exit_emitted = true;
-                return Ok(Some(NormalizedEvent::Exit {
-                    exit_code: rec.exit_code,
-                    signal: rec.signal,
-                }));
+            // 2) 锁外等 stdout 行
+            let msg = {
+                let rx = self.lines.lock().unwrap_or_else(|p| p.into_inner());
+                match timeout {
+                    Some(t) => match rx.recv_timeout(t) {
+                        Ok(m) => Some(m),
+                        Err(mpsc::RecvTimeoutError::Timeout) => return Ok(EventWait::Idle),
+                        // 读线程已终止且通道排空：视同 EOF（幂等，见下）
+                        Err(mpsc::RecvTimeoutError::Disconnected) => Some(LineMsg::Eof),
+                    },
+                    None => match rx.recv() {
+                        Ok(m) => Some(m),
+                        Err(_) => Some(LineMsg::Eof),
+                    },
+                }
+            };
+            match msg {
+                Some(LineMsg::Line(line)) => {
+                    let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+                    if inner.raw_tail.len() >= RAW_TAIL_LINES {
+                        inner.raw_tail.pop_front();
+                    }
+                    inner.raw_tail.push_back(line.clone());
+                    let events = inner.parser.parse_line(&line);
+                    inner.pending.extend(events);
+                }
+                Some(LineMsg::Fail(text)) => return Err(DelegateError::Parse(text)),
+                Some(LineMsg::Eof) => {
+                    // EOF：收割（孙进程持管道场景由 reap_after_eof 兜底强杀）。
+                    // 幂等：Disconnected 也映射到 Eof，已收割时 exited 已置位直接跳过
+                    let already = {
+                        let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+                        inner.exit_emitted
+                    };
+                    if !already {
+                        let rec = self.proc.reap_after_eof()?;
+                        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+                        // 末班 stderr 尽力排空（读线程可能仍在投递）
+                        Self::drain_stderr(&self.err_lines, &mut inner);
+                        inner.exited = Some(rec);
+                        inner.exit_emitted = true;
+                        inner.pending.push_back(NormalizedEvent::Exit {
+                            exit_code: rec.exit_code,
+                            signal: rec.signal,
+                        });
+                    }
+                }
+                None => unreachable!("msg 构造必为 Some"),
             }
-            let line = buf.trim_end_matches(['\r', '\n']).to_string();
-            if line.len() > MAX_LINE_BYTES {
-                return Err(DelegateError::Parse(format!(
-                    "事件行超长（{} 字节 > 上限 {}）",
-                    line.len(),
-                    MAX_LINE_BYTES
-                )));
-            }
-            if inner.raw_tail.len() >= RAW_TAIL_LINES {
-                inner.raw_tail.pop_front();
-            }
-            inner.raw_tail.push_back(line.clone());
-            let events = inner.parser.parse_line(&line);
-            inner.pending.extend(events);
         }
+    }
+
+    /// stderr 通道非阻塞排空 → 缓冲（环形丢弃最旧；单行截断）
+    fn drain_stderr(err_lines: &Mutex<Option<Receiver<LineMsg>>>, inner: &mut SessionInner) {
+        let mut guard = err_lines.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rx) = guard.as_mut() else { return };
+        while let Ok(m) = rx.try_recv() {
+            let line = match m {
+                LineMsg::Line(l) => l,
+                LineMsg::Fail(e) => format!("[stderr 读失败] {e}"),
+                LineMsg::Eof => {
+                    *guard = None;
+                    break;
+                }
+            };
+            let line = truncate_chars(&line, STDERR_LINE_MAX_CHARS);
+            inner.stderr_buf.push_back(line);
+            if inner.stderr_buf.len() > STDERR_BUF_LINES {
+                inner.stderr_buf.pop_front();
+            }
+        }
+    }
+
+    /// stderr 缓冲限频聚合为 Warning 事件（≥[`STDERR_MIN_INTERVAL`] 一次，至多
+    /// [`STDERR_EVT_LINES`] 行；未到期的行留待下轮）
+    fn flush_stderr_warning(inner: &mut SessionInner) {
+        if inner.stderr_buf.is_empty() {
+            return;
+        }
+        let due = inner
+            .last_stderr_evt
+            .map_or(true, |t| t.elapsed() >= STDERR_MIN_INTERVAL);
+        if !due {
+            return;
+        }
+        let take = inner.stderr_buf.len().min(STDERR_EVT_LINES);
+        let joined = inner
+            .stderr_buf
+            .drain(..take)
+            .collect::<Vec<_>>()
+            .join("\n");
+        inner.last_stderr_evt = Some(Instant::now());
+        inner
+            .pending
+            .push_back(NormalizedEvent::Warning { text: format!("[stderr] {joined}") });
     }
 
     /// 事件副作用入账：summary 累积 / session_ref 捕获 / changed_files 提取
@@ -652,6 +826,75 @@ mod tests {
         // 取消后收割完成，可 finalize
         let report = backend.finalize(&session).unwrap();
         assert!(!report.exit.ok());
+    }
+
+    /// next_wait 三态：子进程静默期 Idle（超时返回）→ Ready（行事件）→
+    /// Ready(Exit)（EOF 收割）→ Ended（流终止）
+    #[test]
+    fn next_wait_idle_then_events_then_ended() {
+        let dir = testing::temp_dir("idlew");
+        let stub = testing::write_script(&dir, "slow.sh", "#!/bin/sh\nsleep 1\necho hi\n");
+        let backend = GenericCliBackend::new(stub.to_string_lossy().into_owned());
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let brief = crate::testing::testing_brief(&ws);
+        let opts = LaunchOpts::new("d-1", "s-1", PermissionMode::AutoEdit, &ws);
+        let session = backend.launch(&brief, &opts).unwrap();
+        // 1s 静默期内 50ms 超时 → Idle（不阻塞不报错）
+        assert!(matches!(
+            session.next_event_wait(Some(Duration::from_millis(50))).unwrap(),
+            EventWait::Idle
+        ));
+        // 阻塞取行 → Ready（generic 无前缀行 → 文本 Delta）
+        match session.next_event_wait(None).unwrap() {
+            EventWait::Ready(NormalizedEvent::Delta { text, .. }) => assert_eq!(text, "hi"),
+            other => panic!("应为 Delta 事件: {other:?}"),
+        }
+        // EOF → Exit；再取 → Ended
+        match session.next_event_wait(None).unwrap() {
+            EventWait::Ready(NormalizedEvent::Exit { .. }) => {}
+            other => panic!("应为 Exit 事件: {other:?}"),
+        }
+        assert!(matches!(session.next_event_wait(None).unwrap(), EventWait::Ended));
+    }
+
+    /// stderr 捕获：stderr 行聚合为 [stderr] Warning 事件（限频——短窗内多条只出一条）
+    #[test]
+    fn stderr_lines_become_rate_limited_warnings() {
+        let dir = testing::temp_dir("stderr");
+        let stub = testing::write_script(
+            &dir,
+            "noisy.sh",
+            "#!/bin/sh\necho boom-1 1>&2\necho boom-2 1>&2\necho ok\n",
+        );
+        let backend = GenericCliBackend::new(stub.to_string_lossy().into_owned());
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let brief = crate::testing::testing_brief(&ws);
+        let opts = LaunchOpts::new("d-2", "s-2", PermissionMode::AutoEdit, &ws);
+        let session = backend.launch(&brief, &opts).unwrap();
+        let mut stderr_warns = 0usize;
+        let mut saw_ok_delta = false;
+        loop {
+            match session.next_event_wait(Some(Duration::from_secs(5))).unwrap() {
+                EventWait::Ready(NormalizedEvent::Delta { text, .. }) => {
+                    if text == "ok" {
+                        saw_ok_delta = true;
+                    }
+                }
+                EventWait::Ready(NormalizedEvent::Warning { text }) => {
+                    if text.starts_with("[stderr]") {
+                        assert!(text.contains("boom"), "{text}");
+                        stderr_warns += 1;
+                    }
+                }
+                EventWait::Ready(_) => {}
+                EventWait::Idle => {}
+                EventWait::Ended => break,
+            }
+        }
+        assert!(saw_ok_delta, "stdout 行应照常产出 Delta");
+        assert_eq!(stderr_warns, 1, "限频下多条 stderr 只聚合一条 Warning");
     }
 
     #[test]
