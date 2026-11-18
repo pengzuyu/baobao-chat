@@ -43,6 +43,10 @@ pub(crate) const DELEGATE_POLL_TICK: Duration = Duration::from_millis(500);
 /// 时长上限不动——本提示只补可见性，不做任何自动终止）
 pub(crate) const DELEGATE_IDLE_HINT: Duration = Duration::from_secs(90);
 
+/// run_command 同步等待阈值（hybrid：到点未完不杀，自动转后台返回任务 id
+/// 保住执行进度——对齐 Claude Code「超时转后台」；用户拍板 300s 保持现状口径）
+pub(crate) const BG_SWITCH_AFTER_SECS: u64 = 300;
+
 /// ETA 静态初值表毫秒（D16 §5/P1-6：滚动统计无样本时的兜底）
 pub(crate) fn static_eta_ms(kind: &str) -> i64 {
     match kind {
@@ -1140,6 +1144,40 @@ impl SessionRunner {
         report
     }
 
+    /// 工具执行统一入口（hybrid）：run_command 走 execute_or_handoff——
+    /// 完成即同步结果；到 BG_SWITCH_AFTER_SECS 未完自动转后台（不杀），
+    /// 「快完成的构建被杀重跑」从 run_command 上退役。其余工具=同步 execute。
+    fn execute_maybe_handoff(&mut self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
+        if call.name == "run_command" {
+            let started = std::time::Instant::now();
+            return match deps
+                .tools
+                .execute_or_handoff(self.mode, call, BG_SWITCH_AFTER_SECS)
+            {
+                crate::executor::CommandHandoff::Done(out) => out,
+                crate::executor::CommandHandoff::StillRunning(det) => {
+                    let task_id = deps
+                        .wal
+                        .next_task_id("terminal")
+                        .unwrap_or_else(|| format!("term-{}", call.call_id));
+                    deps.wal.run_start(&RunStart {
+                        run_id: task_id.clone(),
+                        session_id: self.session_id.clone(),
+                        root_session_id: self.session_id.clone(),
+                        parent_run_id: String::new(),
+                        parent_call_id: call.call_id.clone(),
+                        kind: "terminal",
+                        def_ref: "shell".into(),
+                        eta_hint_ms: 0,
+                        actor: String::new(),
+                    });
+                    self.adopt_background_command(deps, det, &task_id, started, false)
+                }
+            };
+        }
+        deps.tools.execute(self.mode, call)
+    }
+
     /// run_command 后台执行（统一后台任务体系 2026-11-18）：gate 放行后、
     /// execute 之前拦截 background=true——spawn 进程组立即返回 terminal- 任务 id，
     /// 专用线程收割落终态；无时长上限仅取消（对齐委派口径 D16 决策④）；
@@ -1178,6 +1216,24 @@ impl SessionRunner {
                 return ToolOutcome::Blocked { code: 8020, summary: e };
             }
         };
+        self.adopt_background_command(deps, det, &task_id, started, true)
+    }
+
+    /// 接管一个在跑的后台命令（显式 background 与同步超时自动转后台共用）：
+    /// hub 注册取消路由 + 专用收割线程（终态+摘要截 2000 落 agent_run）。
+    /// 返回「后台执行中」工具结果。
+    #[allow(clippy::too_many_arguments)]
+    fn adopt_background_command(
+        &mut self,
+        deps: &LoopDeps,
+        det: bbrt_sec::sandbox::DetachedCommand,
+        task_id: &str,
+        started: std::time::Instant,
+        explicit: bool,
+    ) -> ToolOutcome {
+        const SIGINT: i32 = 2;
+        const SIGKILL: i32 = 9;
+        let task_id = task_id.to_string();
         // hub 注册（取消路由；未装配=退化，仅不可中途取消）
         let rx = match self.delegate_hub.as_ref() {
             Some(hub) => {
@@ -1261,8 +1317,16 @@ impl SessionRunner {
                     hub.unregister(&tid);
                 }
             });
+        let waited = started.elapsed().as_secs();
+        let summary = if explicit {
+            format!("[后台执行中] {task_id}——用 task.wait 等待结果")
+        } else {
+            format!(
+                "[已运行 {waited}s，自动转后台（命令继续执行不受影响）] {task_id}——用 task.wait 等待结果"
+            )
+        };
         ToolOutcome::Ok {
-            summary: format!("[后台执行中] {task_id}——用 task.wait 等待结果"),
+            summary,
             truncated: false,
             exit_code: None,
             duration_ms: started.elapsed().as_millis() as u64,
@@ -1713,7 +1777,7 @@ impl SessionRunner {
         match deps.tools.check(self.mode, call) {
             CheckOutcome::Allow { source } => {
                 let _ = source;
-                deps.tools.execute(self.mode, call)
+                self.execute_maybe_handoff(deps, call)
             }
             CheckOutcome::Deny { code, message } => ToolOutcome::Blocked {
                 code,
@@ -1818,7 +1882,7 @@ impl SessionRunner {
                     Err(RecvTimeoutError::Disconnected) => None,
                 };
                 match decision {
-                    Some(exec_call) => deps.tools.execute(self.mode, &exec_call),
+                    Some(exec_call) => self.execute_maybe_handoff(deps, &exec_call),
                     None => ToolOutcome::Blocked {
                         code: 8002,
                         summary: "用户拒绝或审批超时".into(),

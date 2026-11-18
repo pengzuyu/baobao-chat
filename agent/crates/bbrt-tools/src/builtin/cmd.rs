@@ -150,6 +150,17 @@ pub(crate) fn run_with_launcher(
             format!("进程资源超限被终止（8022）：{}ms", r.duration_ms),
         ));
     }
+    Ok(ExecOutput {
+        summary: exit_summary(&r),
+        truncated: r.truncated,
+        exit_code: r.exit_code,
+        duration_ms: r.duration_ms as u64,
+    })
+}
+
+/// ExitResult → 结果摘要文本（同步/后台/超时转后台三路共用组装口径；
+/// loop_runner 后台线程有一份对齐的字符串版——改这里时同步那边）
+pub(crate) fn exit_summary(r: &ExitResult) -> String {
     let mut parts: Vec<String> = Vec::new();
     if !r.stdout.trim().is_empty() {
         parts.push(r.stdout.trim_end().to_string());
@@ -171,12 +182,7 @@ pub(crate) fn run_with_launcher(
             r.total_output_bytes
         ));
     }
-    Ok(ExecOutput {
-        summary: parts.join("\n"),
-        truncated: r.truncated,
-        exit_code: r.exit_code,
-        duration_ms: r.duration_ms as u64,
-    })
+    parts.join("\n")
 }
 
 /// 命令文本提取：`command`（gate 分类同名字段）优先，`cmd` 别名（字符串或数组）兜底
@@ -378,10 +384,10 @@ fn path_error_code(e: &PathError) -> u32 {
 pub fn run_command_def() -> ToolDef {
     ToolDef {
         name: "run_command".into(),
-        description: "在沙箱中执行 shell 命令（工作区可写、默认断网、同步超时 300s、输出 1MB 截断）。\
+        description: "在沙箱中执行 shell 命令（工作区可写、默认断网、输出 1MB 截断）。\
                       command 传命令文本（兼容 cmd 字符串/数组形态）；cwd 默认工作区。\
-                      长时间任务（构建/测试/安装）设 background=true：立即返回任务 id\
-                      不阻塞当前轮，稍后用 task.wait 取结果"
+                      默认同步执行：超过 300s 未完成会自动转后台（不中断），返回任务 id\
+                      由 task.wait 取结果——无需预判时长，正常直接调用即可"
             .into(),
         input_schema: json!({
             "type": "object",
@@ -390,7 +396,7 @@ pub fn run_command_def() -> ToolDef {
                 "cmd": {"type": ["string", "array"],
                         "description": "命令别名：字符串或 [program, args...] 数组"},
                 "cwd": {"type": "string", "description": "工作目录（须在工作区内，默认工作区根）"},
-                "background": {"type": "boolean", "description": "后台执行（长任务用：立即返回任务 id，用 task.wait 取结果；后台无时长上限仅可取消）"}
+                "background": {"type": "boolean", "description": "低优先级选项：仅当明确预知任务远超 300s 且不想占用当前轮等待时才设 true（立即返回任务 id）；一般不用设——超时会自动转后台"}
             },
             "required": ["command"]
         }),

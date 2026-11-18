@@ -1950,6 +1950,18 @@ impl ToolExecutor for BgShellTools {
         };
         bbrt_sec::sandbox::DetachedCommand::spawn(&spec, &bbrt_sec::sandbox::RunOpts::default())
     }
+    /// hybrid：直接 StillRunning（模拟同步等待到阈值未完——转后台路径）
+    fn execute_or_handoff(
+        &self,
+        mode: PermissionMode,
+        call: &ToolInvocation,
+        _wait_secs: u64,
+    ) -> bbrt_session::CommandHandoff {
+        match self.spawn_background(call) {
+            Ok(det) => bbrt_session::CommandHandoff::StillRunning(det),
+            Err(_) => bbrt_session::CommandHandoff::Done(self.execute(mode, call)),
+        }
+    }
 }
 
 /// background=true：立即返回任务 id（turn 不等命令）+ 后台线程落终态（含输出）
@@ -2071,6 +2083,109 @@ fn run_command_background_returns_task_id_and_finishes() {
     let snap = final_snap.expect("后台线程应在 3s 内落终态");
     assert_eq!(snap.status, "done");
     assert!(snap.summary.contains("bg-hello-world"), "摘要应含输出: {}", snap.summary);
+}
+
+/// hybrid：同步 run_command（无 background）到阈值自动转后台——返回任务 id
+/// 「自动转后台」文案 + 后台线程落终态
+#[test]
+fn run_command_sync_times_out_into_background() {
+    let sink = Arc::new(CollectSink::default());
+    struct SyncBgModel {
+        calls: AtomicUsize,
+    }
+    impl ChatClient for SyncBgModel {
+        fn chat(
+            &self,
+            _req: &ChatRequest,
+        ) -> Result<
+            Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+            bbrt_aigw::AigwError,
+        > {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if n == 0 {
+                vec![
+                    Ok(StreamEvent::ToolCallBegin {
+                        index: 0,
+                        id: "call-sbg1".into(),
+                        name: "run_command".into(),
+                    }),
+                    Ok(StreamEvent::ToolCallDelta {
+                        index: 0,
+                        args_delta: r#"{"command":"cargo build --release"}"#.into(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish: FinishReason::ToolCalls,
+                        usage: Usage {
+                            prompt_tokens: 10,
+                            completion_tokens: 4,
+                        },
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(StreamEvent::TextDelta { text: "转后台了".into() }),
+                    Ok(StreamEvent::Done {
+                        finish: FinishReason::Stop,
+                        usage: Usage {
+                            prompt_tokens: 10,
+                            completion_tokens: 4,
+                        },
+                    }),
+                ]
+            };
+            Ok(Box::new(events.into_iter()))
+        }
+    }
+    let model = Arc::new(SyncBgModel {
+        calls: AtomicUsize::new(0),
+    });
+    let wal = Arc::new(BgStoreLog {
+        rows: Mutex::new(std::collections::HashMap::new()),
+        seq: AtomicUsize::new(0),
+    });
+    let d = LoopDeps {
+        model,
+        delegator: None,
+        tools: Arc::new(BgShellTools),
+        memory: None,
+        wal: wal.clone(),
+        sink: sink.clone(),
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let mut runner = SessionRunner::new(
+        "s-sbg1".into(),
+        "/tmp/ws".into(),
+        PermissionMode::FullAuto,
+        ModelTier::Strong,
+        None,
+    );
+    let report = runner.run_turn("跑个构建", &d, None);
+    assert_eq!(report.tool_calls, 1);
+    let evs = events_of(sink.as_ref());
+    assert!(
+        evs.iter().any(|e| matches!(
+            e,
+            SessionEvent::ToolResult { summary, .. }
+                if summary.contains("自动转后台") && summary.contains("terminal-") && summary.contains("task.wait")
+        )),
+        "同步超时应转后台返回任务 id"
+    );
+    // 后台线程落终态（echo 秒完）
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut done = false;
+    while std::time::Instant::now() < deadline {
+        let rows = wal.rows.lock().unwrap();
+        if rows.values().any(|s| s.status == "done" && s.summary.contains("bg-hello-world")) {
+            done = true;
+            break;
+        }
+        drop(rows);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(done, "后台线程应落 done 终态含输出");
 }
 
 /// task.wait 对 terminal 任务：已完成立即返回 [命令完成·done] + 输出

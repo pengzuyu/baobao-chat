@@ -57,6 +57,12 @@ pub enum ToolOutcome {
 }
 
 /// 工具执行器：bbrt-tools 的 ToolRegistry 实现本 trait
+/// execute_or_handoff 结果：完成 / 仍在运行（句柄移交转后台）
+pub enum CommandHandoff {
+    Done(ToolOutcome),
+    StillRunning(bbrt_sec::sandbox::DetachedCommand),
+}
+
 pub trait ToolExecutor: Send + Sync {
     /// 门控判定（不执行、不发审批；mode 来自会话当前档位）
     fn check(&self, mode: PermissionMode, call: &ToolInvocation) -> CheckOutcome;
@@ -70,6 +76,18 @@ pub trait ToolExecutor: Send + Sync {
         _call: &ToolInvocation,
     ) -> Result<bbrt_sec::sandbox::DetachedCommand, String> {
         Err("执行器不支持后台命令".into())
+    }
+    /// hybrid 执行（同步超时自动转后台，2026-11-18 对齐 Claude Code）：
+    /// 同步等待至多 wait_secs——完成返回 Done（结果）；未完**不杀**返回
+    /// StillRunning（进程句柄移交调用方转后台收割）。default=同步 execute
+    /// 回落（不支持转后台的执行器维持旧语义）。
+    fn execute_or_handoff(
+        &self,
+        mode: PermissionMode,
+        call: &ToolInvocation,
+        _wait_secs: u64,
+    ) -> CommandHandoff {
+        CommandHandoff::Done(self.execute(mode, call))
     }
     /// 审批通过后落记忆（once/session/permanent）
     fn record_grant(

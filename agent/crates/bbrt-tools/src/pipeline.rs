@@ -243,6 +243,60 @@ impl ToolExecutor for PipelineExecutor {
             .map_err(|e| format!("后台 spawn 失败: {e}"))
     }
 
+    /// hybrid 执行（run_command 专用）：DetachedCommand 统一底座——同步等待
+    /// 至多 wait_secs，完成返回 Done（组装口径与同步 launcher 一致）；未完
+    /// **不杀**返回 StillRunning（句柄移交 session 侧转后台，保住执行进度，
+    /// 对齐 Claude Code「超时转后台」）。非 run_command 工具回落同步 execute。
+    fn execute_or_handoff(
+        &self,
+        mode: bbrt_sec::gate::PermissionMode,
+        call: &ToolInvocation,
+        wait_secs: u64,
+    ) -> bbrt_session::CommandHandoff {
+        if call.name != "run_command" {
+            return bbrt_session::CommandHandoff::Done(self.execute(mode, call));
+        }
+        let det = match self.spawn_background(call) {
+            Ok(d) => d,
+            // spawn 失败（校验拒绝/spawn 错误）→ 走同步 execute 复现同款 Blocked 语义
+            Err(_e) => {
+                return bbrt_session::CommandHandoff::Done(self.execute(mode, call));
+            }
+        };
+        let mut det = det;
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(wait_secs.max(1));
+        loop {
+            match det.try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                return bbrt_session::CommandHandoff::StillRunning(det);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let r = det.finish();
+        let summary = builtin::cmd::exit_summary(&r);
+        let outcome = if r.resource_killed {
+            ToolOutcome::Blocked {
+                code: 8022,
+                summary: mask(&format!(
+                    "进程资源超限被终止（8022）：{}ms",
+                    r.duration_ms
+                )),
+            }
+        } else {
+            ToolOutcome::Ok {
+                summary: mask(&summary),
+                truncated: r.truncated,
+                exit_code: r.exit_code,
+                duration_ms: r.duration_ms as u64,
+            }
+        };
+        bbrt_session::CommandHandoff::Done(outcome)
+    }
+
     /// 门控判定（§6 步骤 1-4 浓缩；不执行、不发审批）
     fn check(&self, mode: bbrt_sec::gate::PermissionMode, call: &ToolInvocation) -> CheckOutcome {
         // ① ToolDef 查询（§6 步骤 1：未注册 → 8002）

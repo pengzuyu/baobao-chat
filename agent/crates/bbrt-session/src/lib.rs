@@ -35,7 +35,7 @@ pub use delegation::{
     DelegateStream,
 };
 pub use events::{ModelTier, NullSink, SessionEvent, SessionSink, StreamChannel};
-pub use executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview};
+pub use executor::{CheckOutcome, CommandHandoff, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview};
 pub use expert::{
     apply_override, assemble, parse_manifest, AssemblePolicy, AssembledExpert, Dropped,
     ExpertConstraints, ExpertCtx, ExpertError, ExpertManifest, ExpertResult, ManifestTools,
