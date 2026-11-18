@@ -1,10 +1,10 @@
 /**
  * 组织用户（通讯录合并页，2026-11-12 用户裁决：原「用户」+「组织」两页合一）：
- * - 左：组织树=通讯录骨架——根「全公司」+ 部门节点（节点 hover 快捷 ＋用户/＋子部门），
- *   Card 头部「新建用户 / 新建组织」两按钮（2026-11-18 从右栏标题右上角迁入，与原按钮
- *   同款 icon+文字形态；两者均弹窗——原内联建部门输入退役）；左栏容器定高撑满（树区
- *   内滚不撑高），可拖宽 240~480，右边缘垂直中央圆把手折叠/展开（拖过最小继续左拖=
- *   折叠，展开回折叠前宽度）
+ * - 左：组织树=通讯录骨架——裸容器与左侧管理菜单栏同款观感（无 Card 卡片：背景+
+ *   右边框+定高内滚，可拖宽 220~480）；根「全公司」+ 部门节点，节点行右侧快捷
+ *   ＋用户/＋组织（根节点亦有 FolderPlus=新建根组织）；分界缝上窄竖条把手（箭头+
+ *   竖排文字「收起/展开组织树」）点击折叠/拖动调宽（拖过最小继续左拖=折叠，展开回
+ *   折叠前宽度）
  * - 右：选中「全公司」=全量用户表（搜索/状态过滤/禁用/启用）；
  *       选中部门=该部门成员表（工号/姓名/邮箱/主部门/状态/操作——挂靠已有用户/移出）
  * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/
@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button as AntdButton, Card, Checkbox, Drawer, Flex, Input, Modal, Segmented, Select, Space, Table, Tag, Tree, Typography } from 'antd';
+import { Alert, Button as AntdButton, Checkbox, Drawer, Flex, Input, Modal, Segmented, Select, Space, Table, Tag, Tree, Typography, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
 import {
@@ -35,7 +35,7 @@ import { ApiError, getErrorText, errText } from '../../../shared/api/http';
 import { MAIL_DOMAIN } from '../../../shared/brand';
 import { Button } from '../../../shared/ui/Button';
 import { ImportUsersModal, flattenTree } from '../components/ImportUsersModal';
-import { SplitEdgeHandle, SplitHandle, useCollapsibleSplit } from '../../../shared/ui/Splitter';
+import { SplitCollapseTab, useCollapsibleSplit } from '../../../shared/ui/Splitter';
 import {
   attachDeptMember,
   createUser,
@@ -400,12 +400,13 @@ function RolePermDrawer({ role, onClose }: { role: { id: string; name: string } 
 /* ── 主页面 ── */
 
 export function OrgDirectoryPage() {
+  const { token } = theme.useToken();
   // 左栏树
   const [tree, setTree] = useState<DeptNode[] | null>(null);
   const [treeError, setTreeError] = useState('');
   const [selected, setSelected] = useState<string | null>(null); // null=全公司
-  // 左栏可拖宽 + 拖过头折叠（240~480；min 取 240 保 Card 头部两按钮不挤换行）
-  const split = useCollapsibleSplit('org-tree', 300, 240, 480);
+  // 左栏可拖宽 + 拖过头折叠（220~480；裸容器无头部按钮约束）
+  const split = useCollapsibleSplit('org-tree', 300, 220, 480);
   // 树内联编辑态：renaming=节点 id（双击改名）
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameName, setRenameName] = useState('');
@@ -591,11 +592,21 @@ export function OrgDirectoryPage() {
           <AntdButton
             type="text"
             size="small"
-            title="新增用户（不挂部门）"
+            title="新建用户（不挂部门）"
             icon={<UserPlus size={12} />}
             onClick={(e) => {
               e.stopPropagation();
               openCreate('');
+            }}
+          />
+          <AntdButton
+            type="text"
+            size="small"
+            title="新建根组织"
+            icon={<FolderPlus size={12} />}
+            onClick={(e) => {
+              e.stopPropagation();
+              openDeptModal('');
             }}
           />
         </Space>
@@ -785,49 +796,40 @@ export function OrgDirectoryPage() {
   ];
 
   return (
-    <Flex gap={16} align="stretch" style={{ height: '100%' }} data-testid="admin-directory">
-      {/* 左栏：组织树（通讯录骨架）——定高撑满（树区内滚）；右边缘中央把手折叠/展开 */}
-      <div style={{ position: 'relative', flex: 'none', width: split.collapsed ? 0 : split.width, height: '100%' }}>
-        {!split.collapsed && (
-          <Card
-            size="small"
-            title="组织树"
-            style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}
-            styles={{ body: { flex: 1, minHeight: 0, overflowY: 'auto' } }}
-            extra={
-              /* 新建入口（2026-11-18 二改：从树底按钮行迁入 Card 头部，与原右栏按钮同款形态） */
-              <Space size={4}>
-                <Button size="small" onClick={() => openCreate(selected ?? '')} data-testid="dir-create-user">
-                  <UserPlus size={13} /> 新建用户
-                </Button>
-                <Button size="small" variant="secondary" onClick={() => openDeptModal(selected ?? '')} data-testid="dir-create-dept">
-                  <FolderPlus size={13} /> 新建组织
-                </Button>
-              </Space>
-            }
-          >
-            {treeError ? <Alert type="error" showIcon message={treeError} style={{ marginBottom: 8 }} /> : null}
-            {tree === null ? (
-              <Typography.Text type="secondary">加载中…</Typography.Text>
-            ) : (
-              <Tree
-                blockNode
-                defaultExpandAll
-                treeData={treeData}
-                titleRender={titleRender}
-                selectedKeys={[selected ?? 'all']}
-                onSelect={(keys) => setSelected(keys[0] && keys[0] !== 'all' ? String(keys[0]) : null)}
-              />
-            )}
-          </Card>
-        )}
-        <SplitEdgeHandle
-          collapsed={split.collapsed}
-          onToggle={split.collapsed ? split.expand : split.collapse}
-          label="组织树"
-        />
-      </div>
-      {!split.collapsed ? <SplitHandle bind={split.bind} /> : null}
+    <Flex gap={8} align="stretch" style={{ height: '100%' }} data-testid="admin-directory">
+      {/* 左栏：组织树——裸容器与左侧管理菜单栏同款观感（背景+右边框+定高内滚；可拖宽 220~480） */}
+      {!split.collapsed && (
+        <div
+          style={{
+            width: split.width,
+            flexShrink: 0,
+            height: '100%',
+            overflowY: 'auto',
+            background: token.colorBgContainer,
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            padding: '8px 0',
+          }}
+          data-testid="org-tree-pane"
+        >
+          {treeError ? <Alert type="error" showIcon message={treeError} style={{ margin: '0 8px 8px' }} /> : null}
+          {tree === null ? (
+            <Typography.Text type="secondary" style={{ paddingInline: 8 }}>
+              加载中…
+            </Typography.Text>
+          ) : (
+            <Tree
+              blockNode
+              defaultExpandAll
+              treeData={treeData}
+              titleRender={titleRender}
+              selectedKeys={[selected ?? 'all']}
+              onSelect={(keys) => setSelected(keys[0] && keys[0] !== 'all' ? String(keys[0]) : null)}
+            />
+          )}
+        </div>
+      )}
+      {/* 分界缝把手（三改图例口径）：窄竖条=主色箭头+竖排文字；点击折叠/展开、拖动调宽 */}
+      <SplitCollapseTab collapsed={split.collapsed} label="组织树" bind={split.bind} onToggle={split.collapsed ? split.expand : split.collapse} />
 
       {/* 右栏：通讯录内容（定高内滚——不与左栏比高） */}
       <div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto' }}>

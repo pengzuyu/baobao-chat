@@ -6,7 +6,8 @@
  *   拖拽期间 body 加 bbc-col-resizing（全局 col-resize 光标 + 禁文本选中）
  * - useCollapsibleSplit(key, initial, min, max)：可折叠变体（2026-11-18 组织树口径：
  *   拖过 min 再继续左拖松手=整栏折叠；宽度持久化同上，折叠态独立 key :c）；
- *   SplitEdgeHandle=容器右边缘垂直中央的折叠/展开把手（圆钮双向态，随 collapsed 换箭头方向）
+ *   SplitCollapseTab=分界缝上的窄竖条把手（浅灰缝底+主色箭头+竖排文字，点击折叠/展开、
+ *   拖动调宽——bind 接 useCollapsibleSplit；位移 <4px 的松手才算点击不误触拖拽）
  * D26-O6：bbc-split 类退役——视觉内联（token 主色 2px 线），拖拽交互逻辑不动。
  * 用法：const split = useSplitWidth('im', 264, 200, 420);
  *       <aside style={{ width: split.width }}>…</aside><SplitHandle {...split.bind} />
@@ -198,43 +199,65 @@ export function useCollapsibleSplit(storageKey: string, initialWidth: number, mi
   return { width, collapsed, dragging, expand, collapse, bind: { onPointerDown } satisfies SplitBind };
 }
 
-/** 容器右边缘垂直中央的折叠/展开把手（圆钮骑边；折叠态 ChevronsRight 展开、展开态 ChevronsLeft 收起）。
- * 定位依赖使用方：父容器需 position:relative 且自身高度确定（把手 absolute top:50% 挂右缘）。 */
-export function SplitEdgeHandle({ collapsed, onToggle, label }: { collapsed: boolean; onToggle: () => void; label?: string }) {
+/**
+ * 分界缝上的窄竖条把手（图例口径：浅灰缝底 + 主色箭头 + 竖排文字，垂直居中于左右栏之间）。
+ * 点击=折叠/展开（文案随态：收起×/展开×）；拖动=调宽（bind 接 useCollapsibleSplit——
+ * 位移 <4px 的松手才算点击，拖拽后不误触折叠）。
+ */
+export function SplitCollapseTab({
+  collapsed,
+  label,
+  bind,
+  onToggle,
+}: {
+  collapsed: boolean;
+  /** 竖排文案主体（如「组织树」→ 展开态「收起组织树」/折叠态「展开组织树」） */
+  label: string;
+  bind: SplitBind;
+  onToggle: () => void;
+}) {
   const { token } = theme.useToken();
   const [hover, setHover] = useState(false);
+  const startX = useRef<number | null>(null);
+  const text = `${collapsed ? '展开' : '收起'}${label}`;
   const Icon = collapsed ? ChevronsRight : ChevronsLeft;
-  const text = `${collapsed ? '展开' : '折叠'}${label ?? '侧栏'}`;
+  const fg = hover ? token.colorPrimaryHover : token.colorPrimary;
   return (
-    <button
-      type="button"
-      onClick={onToggle}
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={text}
+      title={text}
+      data-testid="split-collapse-tab"
+      onPointerDown={(e) => {
+        startX.current = e.clientX;
+        bind.onPointerDown(e);
+      }}
+      onClick={(e) => {
+        if (startX.current !== null && Math.abs(e.clientX - startX.current) < 4) onToggle();
+        startX.current = null;
+      }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={text}
-      aria-label={text}
-      data-testid="split-edge-handle"
       style={{
-        position: 'absolute',
-        top: '50%',
-        right: -11,
-        transform: 'translateY(-50%)',
-        zIndex: 13,
-        width: 22,
-        height: 22,
-        borderRadius: '50%',
+        flex: 'none',
+        width: 24,
+        height: 128,
+        alignSelf: 'center',
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        border: `1px solid ${hover ? token.colorPrimary : token.colorBorderSecondary}`,
-        background: hover ? token.colorPrimaryBg : token.colorBgContainer,
-        color: hover ? token.colorPrimary : token.colorTextSecondary,
-        boxShadow: token.boxShadowTertiary,
-        cursor: 'pointer',
-        padding: 0,
+        gap: 6,
+        background: hover ? token.colorFillTertiary : token.colorFillQuaternary,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: token.borderRadius,
+        cursor: 'col-resize',
+        userSelect: 'none',
       }}
     >
-      <Icon size={13} />
-    </button>
+      <Icon size={13} color={fg} />
+      <span style={{ writingMode: 'vertical-rl', fontSize: 12, lineHeight: '16px', letterSpacing: 2, color: fg }}>{text}</span>
+    </div>
   );
 }
