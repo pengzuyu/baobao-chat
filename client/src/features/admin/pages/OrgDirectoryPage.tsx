@@ -884,56 +884,57 @@ export function OrgDirectoryPage() {
 
   return (
     <Flex gap={8} align="stretch" style={{ height: '100%', position: 'relative' }} data-testid="admin-directory">
-      {/* 左栏：组织树——裸容器与左侧管理菜单栏同款观感（背景+右边框+定高内滚；宽度 220~480） */}
-      {!split.collapsed && (
+      {/* 左栏 wrapper：宽度受控（paneRef 拖动直写；把手挂其内随右缘自动跟随，拖动零重渲也同步移动） */}
+      <div ref={split.paneRef} style={{ position: 'relative', width: split.collapsed ? 0 : split.width, flex: 'none', height: '100%' }}>
+        {!split.collapsed && (
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              overflowY: 'auto',
+              background: token.colorBgContainer,
+              borderRight: `1px solid ${token.colorBorderSecondary}`,
+              padding: '8px 0',
+            }}
+            data-testid="org-tree-pane"
+          >
+            {treeError ? <Alert type="error" showIcon message={treeError} style={{ margin: '0 8px 8px' }} /> : null}
+            {tree === null ? (
+              <Typography.Text type="secondary" style={{ paddingInline: 8 }}>
+                加载中…
+              </Typography.Text>
+            ) : (
+              <Tree
+                blockNode
+                defaultExpandAll
+                treeData={treeData}
+                titleRender={titleRender}
+                selectedKeys={[selected ?? 'all']}
+                onSelect={(keys) => {
+                  const k = keys[0] ? String(keys[0]) : null;
+                  if (k?.startsWith('u-')) return; // 用户叶子仅浏览（管理操作在右栏表），不切换选中
+                  setSelected(k && k !== 'all' ? k : null);
+                }}
+              />
+            )}
+          </div>
+        )}
+        {/* 把手（三改图例口径）在边界线右侧垂直中央：left=calc(100%+1px) 随 wrapper 宽度
+            由布局自动跟随（直写宽度无重渲也移动）；折叠态 wrapper 宽 0=贴页面左缘 */}
         <div
-          ref={split.paneRef}
           style={{
-            width: split.width,
-            flexShrink: 0,
-            height: '100%',
-            overflowY: 'auto',
-            background: token.colorBgContainer,
-            borderRight: `1px solid ${token.colorBorderSecondary}`,
-            padding: '8px 0',
+            position: 'absolute',
+            left: split.collapsed ? 0 : 'calc(100% + 1px)',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 13,
           }}
-          data-testid="org-tree-pane"
         >
-          {treeError ? <Alert type="error" showIcon message={treeError} style={{ margin: '0 8px 8px' }} /> : null}
-          {tree === null ? (
-            <Typography.Text type="secondary" style={{ paddingInline: 8 }}>
-              加载中…
-            </Typography.Text>
-          ) : (
-            <Tree
-              blockNode
-              defaultExpandAll
-              treeData={treeData}
-              titleRender={titleRender}
-              selectedKeys={[selected ?? 'all']}
-              onSelect={(keys) => {
-                const k = keys[0] ? String(keys[0]) : null;
-                if (k?.startsWith('u-')) return; // 用户叶子仅浏览（管理操作在右栏表），不切换选中
-                setSelected(k && k !== 'all' ? k : null);
-              }}
-            />
-          )}
+          <SplitCollapseTab collapsed={split.collapsed} label="组织树" bind={split.bind} onToggle={split.collapsed ? split.expand : split.collapse} />
         </div>
-      )}
-      {/* 分界线（全高拖拽热区——与左侧管理菜单栏分界同款；叠左栏右边框） */}
-      {!split.collapsed ? <SplitHandle bind={split.bind} /> : null}
-      {/* 分界缝把手（三改图例口径）位于边界线右侧、垂直中央：窄竖条=主色箭头+竖排文字；点击折叠/展开、拖动亦可调宽 */}
-      <div
-        style={{
-          position: 'absolute',
-          left: split.collapsed ? 0 : split.width + 1,
-          top: '50%',
-          transform: 'translateY(-50%)',
-          zIndex: 13,
-        }}
-      >
-        <SplitCollapseTab collapsed={split.collapsed} label="组织树" bind={split.bind} onToggle={split.collapsed ? split.expand : split.collapse} />
       </div>
+      {/* 分界线（全高拖拽热区）：marginLeft -13 = 抵根 gap 8 + 自身叠边框 5——hover 线与容器边界线重合为一条 */}
+      {!split.collapsed ? <SplitHandle bind={split.bind} style={{ marginLeft: -13 }} /> : null}
 
       {/* 右栏：通讯录内容（定高内滚——不与左栏比高） */}
       <div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto' }}>
