@@ -1,7 +1,7 @@
 /**
  * 组织用户（通讯录合并页，2026-11-12 用户裁决：原「用户」+「组织」两页合一）：
  * - 左：组织树=通讯录骨架——根「全公司」+ 部门节点，节点上直接「＋子部门」「＋用户」
- * - 右：选中「全公司」=全量用户表（原 UsersPage 能力：搜索/状态过滤/禁用/启用/离职交接）；
+ * - 右：选中「全公司」=全量用户表（原 UsersPage 能力：搜索/状态过滤/禁用/启用）；
  *       选中部门=该部门成员表（工号/姓名/邮箱/主部门/状态/操作——挂靠已有用户/移出）
  * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/邮箱/
  *   所属组织（默认=触发节点）/角色（默认不授权）——初始口令=工号+!BBC 首登强制改密
@@ -31,7 +31,6 @@ import {
   fetchDeptMembers,
   fetchDeptTree,
   fetchRoles,
-  offboardUser,
   renameDept,
   createDept,
   detachDeptMember,
@@ -330,28 +329,6 @@ export function OrgDirectoryPage() {
     );
   };
 
-  const offboard = (userId: string, uname: string) => {
-    Modal.confirm({
-      title: `离职交接 ${uname}？`,
-      content: '将执行：禁用账号 + 全端下线 + 令牌吊销（已记审计）。',
-      okText: '离职交接',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: async () => {
-        setActionError('');
-        setActionOk('');
-        try {
-          await offboardUser(userId);
-          setActionOk(`已离职交接 ${uname}：账号禁用并全端下线`);
-          void query.refetch();
-          if (selected) void reloadMembers(selected);
-        } catch (e) {
-          setActionError(errText(e, '操作失败，请稍后重试'));
-        }
-      },
-    });
-  };
-
   const attach = async () => {
     const uid = attachUid.trim();
     if (!uid || !selected) return;
@@ -545,19 +522,14 @@ export function OrgDirectoryPage() {
       width: 220,
       render: (_, u) =>
         u.status === 1 ? (
-          <Space size={4}>
-            <Button
-              variant="danger"
-              size="small"
-              loading={statusMutation.isPending && statusMutation.variables?.userId === u.id}
-              onClick={() => toggle(u.id, u.display_name, u.status)}
-            >
-              禁用
-            </Button>
-            <Button variant="danger" size="small" disabled={statusMutation.isPending} onClick={() => offboard(u.id, u.display_name)}>
-              离职交接
-            </Button>
-          </Space>
+          <Button
+            variant="danger"
+            size="small"
+            loading={statusMutation.isPending && statusMutation.variables?.userId === u.id}
+            onClick={() => toggle(u.id, u.display_name, u.status)}
+          >
+            禁用
+          </Button>
         ) : (
           <Button
             variant="secondary"
@@ -607,9 +579,6 @@ export function OrgDirectoryPage() {
               禁用
             </Button>
           )}
-          <Button variant="danger" size="small" onClick={() => offboard(m.user_id, m.name)}>
-            离职
-          </Button>
           <Button variant="secondary" size="small" onClick={() => detach(m.user_id, m.name)}>
             移出
           </Button>

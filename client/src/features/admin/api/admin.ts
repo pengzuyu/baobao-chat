@@ -569,13 +569,6 @@ export async function suggestEmpno(name: string): Promise<string> {
   return data.empno;
 }
 
-/* ── 离职交接（PAD-07） ── */
-
-export async function offboardUser(userId: string): Promise<void> {
-  if (USE_MOCK) throw new ApiError(9001, 'mock 模式不支持离职交接');
-  await http.post(`/admin/users/${encodeURIComponent(userId)}/offboard`);
-}
-
 /* ── AI 供应商治理（0023 多供应商；19 篇 §6.5 v0.1 子集） ── */
 
 /** 公司级供应商列表（含停用；scope=shared 为启用中只读） */

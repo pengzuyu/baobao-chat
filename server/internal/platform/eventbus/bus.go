@@ -28,7 +28,6 @@ const (
 	TopicAppRevoked      = "app.revoked"
 	TopicAuditEvent      = "audit.event"           // 全部 → audit（落库失败必须死信告警，15 篇）
 	TopicPolicyUpdated   = "policy.updated"        // admin → gateway
-	TopicUserOffboarded  = "user.offboarded"       // admin → org/doc/kb/eco/mail
 	TopicUserUpdated     = "user.updated"          // org → gateway/message
 	TopicUserDeptChanged = "user.dept_changed"     // org → gateway/message
 	TopicTenantStatus    = "tenant.status.changed" // admin → gateway/各域

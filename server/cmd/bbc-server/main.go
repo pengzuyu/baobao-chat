@@ -981,8 +981,6 @@ func main() {
 	// 嵌入设置与向量重建（D24 §5.3：epoch/模型/维度/进度；跨维度重建=清空+ALTER 确认）
 	mux.Handle("GET /api/v1/admin/kb/embedding", requirePerm("admin:kb:govern")(handleKBEmbeddingGet(kbSvc)))
 	mux.Handle("POST /api/v1/admin/kb/embedding/rebuild", requirePerm("admin:kb:govern")(handleKBEmbeddingRebuild(kbSvc)))
-	// 离职交接（PAD-07）
-	mux.Handle("POST /api/v1/admin/users/{id}/offboard", requirePerm("admin:user:offboard")(handleAdminOffboard(adminSvc)))
 
 	// WS 接入（14 篇 §2.1：token/did 走查询参数）
 	mux.Handle("/ws/connect", http.HandlerFunc(gw.ServeWS))
@@ -1072,7 +1070,7 @@ func main() {
 
 	// ── 邮件域（22 篇阶段一务实版）：内域收发 + 治理 REST ──
 	// 邮件栈=进程内直投（docker-mailserver/auth-bridge/路径②随阶段二）；
-	// 懒开户="登录即有邮箱"（user.offboarded 联动随 D02 消费方阶段二）；
+	// 懒开户="登录即有邮箱"（user.offboarded 联动已随离职交接下线裁撤 2026-11-18）；
 	// 跨域全闭包（D02 §4：不引 org/admin/auth 包）
 	var mailRepoInst mailrepo.Repo
 	if pgPool != nil {
@@ -3209,9 +3207,9 @@ func seedBuiltinRoles(store adminrepo.RoleRepo) {
 	// 偏差登记延后；"管理员"补齐 admin:* 全集——裸码 "admin" 保留兼容已部署旧种子行）。
 	builtin := []adminrepo.Role{
 		{Name: "管理员", Description: "租户管理域全集（内置；不含 platform:*）", IsBuiltin: true,
-			Permissions: []string{"admin",
-				"admin:org:manage", "admin:user:manage", "admin:user:offboard",
-				"admin:role:manage", "admin:role:assign", "admin:app:publish",
+		Permissions: []string{"admin",
+			"admin:org:manage", "admin:user:manage",
+			"admin:role:manage", "admin:role:assign", "admin:app:publish",
 				"admin:policy:manage", "admin:audit:read", "admin:audit:export",
 				"admin:usage:read", "admin:kb:govern", "admin:agent:revoke",
 				"admin:notice:publish", "admin:mail:govern"}},
@@ -3729,27 +3727,6 @@ func handleAdminKBSpaces(svc adminapi.AdminService) http.HandlerFunc {
 			return
 		}
 		httpx.OK(w, r, map[string]any{"items": items})
-	}
-}
-
-// handleAdminOffboard 离职交接（PAD-07；禁用全链，后续事项端侧引导）
-func handleAdminOffboard(svc adminapi.AdminService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		op, err := adminActor(r)
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		uid, err := pathID(r, "id")
-		if err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		if err := svc.OffboardUser(r.Context(), httpx.TenantID(r.Context()), op, uid); err != nil {
-			httpx.Fail(w, r, err)
-			return
-		}
-		httpx.OK(w, r, nil)
 	}
 }
 

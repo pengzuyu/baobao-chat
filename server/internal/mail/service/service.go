@@ -5,7 +5,7 @@
 //	· 邮件栈=进程内直投（MailStack 内存语义内联；docker-mailserver/admin API
 //	  对接、IMAP 同步引擎、auth-bridge 路径②接入随阶段二）
 //	· 懒开户替代 org 生命周期事件（首次访问即开户——"登录即有邮箱"最小实现；
-//	  user.offboarded 停用联动随 D02 消费方阶段二；收件方未开户=投递失败 9021）
+//	  user.offboarded 停用联动已随离职交接功能下线裁撤 2026-11-18；收件方未开户=投递失败 9021）
 //	· 共享邮箱/代发随 resource_acl（表未建）；定时发送/草稿/DSN/iCal/
 //	  forward-im mail_card 随阶段二；搜索 ILIKE 降级（zhparser 随真实栈）
 //	· mail.new 推送 kind=new（客户端角标数据源）；IM 横幅提醒（reminder）

@@ -1,6 +1,7 @@
 // perms.go —— 权限点字典（RBAC 阶段二）。
 // 权威清单：D12 §2.4 + 12 篇 §6.3 admin:notice:publish + 22 篇 mail 域 2 项；
-// rtc/meeting 域 5 项与 file:share:create 随 2026-11 产品瘦身二阶段移除。
+// rtc/meeting 域 5 项与 file:share:create 随 2026-11 产品瘦身二阶段移除；
+// admin:user:offboard 随离职交接功能下线移除（2026-11-18，v3）。
 // 服务端内嵌（D02 §10），经 GET /api/v1/admin/perm-points 下发；前端不硬编码（D10 PAD-08）。
 // 新增权限点必须先在 D12 §2.4 与 03 篇 §4.1 登记（14 篇同款规则）。
 package adminapi
@@ -64,7 +65,6 @@ var permDictionary = []PermGroup{
 	{"admin", "租户管理", []PermPoint{
 		{"admin:org:manage", "admin", "组织树维护"},
 		{"admin:user:manage", "admin", "用户生命周期（新建/禁用/导入）"},
-		{"admin:user:offboard", "admin", "离职交接执行"},
 		{"admin:role:manage", "admin", "角色 CRUD/编辑器"},
 		{"admin:role:assign", "admin", "成员授权/收回"},
 		{"admin:app:publish", "admin", "应用发布/下架"},
@@ -100,9 +100,10 @@ func init() {
 	}
 }
 
-// PermPoints 字典文档（只读快照；version 随字典内容演进手动 +1）
+// PermPoints 字典文档（只读快照；version 随字典内容演进手动 +1；
+// v3=2026-11-18 删 admin:user:offboard——离职交接功能整域下线）
 func PermPoints() PermPointsDoc {
-	return PermPointsDoc{Version: 2, Total: permDocTotal, Groups: permDictionary}
+	return PermPointsDoc{Version: 3, Total: permDocTotal, Groups: permDictionary}
 }
 
 // KnownPermPoint 权限点是否在权威字典内（角色保存校验用）

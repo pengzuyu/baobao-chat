@@ -452,24 +452,6 @@ func TestAgentGovernance(t *testing.T) {
 	}
 }
 
-func TestOffboardUser(t *testing.T) {
-	svc, orgRepo, _, _ := newFixture([]string{"alice"})
-	ctx := context.Background()
-	alice, _ := orgRepo.GetUserByLogin(ctx, 1, "alice")
-	// 不可交接自己
-	if err := svc.OffboardUser(ctx, 1, alice.ID, alice.ID); err == nil {
-		t.Fatal("交接自己应拒")
-	}
-	// bob 离职：禁用生效
-	if err := svc.OffboardUser(ctx, 1, alice.ID, 10002); err != nil {
-		t.Fatalf("offboard: %v", err)
-	}
-	bob, _ := orgRepo.GetUserByLogin(ctx, 1, "bob")
-	if bob == nil || bob.Status != orgapi.UserStatusDisabled {
-		t.Fatalf("bob 应被禁用: %+v", bob)
-	}
-}
-
 // TestRBACPermAggregation RBAC 阶段二：角色授权→权限聚合→IsAdmin/HasPerm/推送（03 篇 §4）
 func TestRBACPermAggregation(t *testing.T) {
 	svc, orgRepo, _, fx := newFixture(nil)

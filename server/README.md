@@ -74,7 +74,7 @@ wscat "ws://localhost:8080/ws/connect?token=<access>&did=dev-1"
 |---|---|
 | D02 §3 模块内分层 | `internal/<mod>/{api,service,repo}` + `module.go` 构造注入 |
 | D02 §4 依赖规则 | 各模块仅暴露 `api` 接口；gateway → messageapi；auth → orgapi |
-| D02 §5 事件总线 | `platform/eventbus`（topic 注册表含 msg.created/policy.updated/user.offboarded…） |
+| D02 §5 事件总线 | `platform/eventbus`（topic 注册表含 msg.created/policy.updated/user.updated…） |
 | D02 §6 中间件链 | `httpx.Chain(mux, Trace, Recovery, AccessLog, RateLimit, …)` + 路由级 `Auth→Tenant` |
 | 14 篇 §2.2 信封 | `gateway/envelope.go`（v/id/ack/type/ts/code/payload；ping→pong、req→req.ack） |
 | 14 篇 §5.2 响应包 | `httpx`（成功 {code,data,trace_id}；失败 +message/details） |
