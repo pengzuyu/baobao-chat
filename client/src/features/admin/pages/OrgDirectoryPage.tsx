@@ -1,10 +1,11 @@
 /**
  * 组织用户（通讯录合并页，2026-11-12 用户裁决：原「用户」+「组织」两页合一）：
  * - 左：组织树=通讯录骨架——裸容器与左侧管理菜单栏同款观感（无 Card 卡片：背景+
- *   右边框+定高内滚，可拖宽 220~480）；根「全公司」+ 部门节点，节点行右侧快捷
- *   ＋用户/＋组织（根节点亦有 FolderPlus=新建根组织）；分界缝上窄竖条把手（箭头+
- *   竖排文字「收起/展开组织树」）点击折叠/拖动调宽（拖过最小继续左拖=折叠，展开回
- *   折叠前宽度）
+ *   右边框+定高内滚，可拖宽 220~480）；树与通讯录同构：部门节点（行尾快捷 ＋用户/
+ *   ＋组织+人数计数；根节点亦有 FolderPlus=新建根组织）+ 部门下用户叶子（数据源
+ *   共用通讯录 ['org','users','all'] 缓存，未挂主部门用户挂「全公司」根下）；
+ *   分界线全高可拖（SplitHandle），其上叠窄竖条把手（箭头+竖排文字「收起/展开
+ *   组织树」）点击折叠/拖动调宽（拖过最小继续左拖=折叠，展开回折叠前宽度）
  * - 右：选中「全公司」=全量用户表（搜索/状态过滤/禁用/启用）；
  *       选中部门=该部门成员表（工号/姓名/邮箱/主部门/状态/操作——挂靠已有用户/移出）
  * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/
@@ -19,6 +20,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button as AntdButton, Checkbox, Drawer, Flex, Input, Modal, Segmented, Select, Space, Table, Tag, Tree, Typography, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
@@ -30,12 +32,14 @@ import {
   RefreshCw,
   Trash2,
   UserPlus,
+  UserRound,
 } from 'lucide-react';
 import { ApiError, getErrorText, errText } from '../../../shared/api/http';
 import { MAIL_DOMAIN } from '../../../shared/brand';
 import { Button } from '../../../shared/ui/Button';
 import { ImportUsersModal, flattenTree } from '../components/ImportUsersModal';
-import { SplitCollapseTab, useCollapsibleSplit } from '../../../shared/ui/Splitter';
+import { SplitCollapseTab, SplitHandle, useCollapsibleSplit } from '../../../shared/ui/Splitter';
+import { fetchAllDirectoryUsers, type DirectoryUser } from '../../contacts/api/contacts';
 import {
   attachDeptMember,
   createUser,
@@ -57,12 +61,18 @@ import {
 import type { AdminUser } from '../model/types';
 import { useUsers, useUserStatus } from '../api/hooks';
 
-/** 部门树 → antd Tree 节点（key=部门 id；title 由 titleRender 接管） */
-function toTreeData(nodes: DeptNode[]): DataNode[] {
+/** 用户叶子节点 key（`u-` 前缀与部门 id 区隔；onSelect/titleRender 按前缀分派） */
+const userNodeKey = (uid: string) => `u-${uid}`;
+
+/** 部门树 → antd Tree 节点（部门+部门下用户叶子——通讯录同构；key=部门 id，title 由 titleRender 接管） */
+function toTreeData(nodes: DeptNode[], deptUsers: Map<string, DirectoryUser[]>): DataNode[] {
   return nodes.map((n) => ({
     key: n.id,
     title: n.name,
-    children: n.children?.length ? toTreeData(n.children) : undefined,
+    children: [
+      ...(n.children?.length ? toTreeData(n.children, deptUsers) : []),
+      ...(deptUsers.get(n.id) ?? []).map((u) => ({ key: userNodeKey(u.uid), title: u.display_name, isLeaf: true })),
+    ],
   }));
 }
 
@@ -401,6 +411,7 @@ function RolePermDrawer({ role, onClose }: { role: { id: string; name: string } 
 
 export function OrgDirectoryPage() {
   const { token } = theme.useToken();
+  const queryClient = useQueryClient();
   // 左栏树
   const [tree, setTree] = useState<DeptNode[] | null>(null);
   const [treeError, setTreeError] = useState('');
@@ -434,6 +445,52 @@ export function OrgDirectoryPage() {
   const statusMutation = useUserStatus();
   const items: AdminUser[] = query.data?.pages.flatMap((p) => p.items) ?? [];
   const lastPage = query.data?.pages[query.data.pages.length - 1];
+
+  /** 树内用户叶子数据源：共用通讯录 ['org','users','all'] 缓存（通讯录已拉过则挂载零请求）；
+   * 用户/挂靠变更后 invalidate 同键两页同步 */
+  const usersQuery = useQuery({ queryKey: ['org', 'users', 'all'], queryFn: fetchAllDirectoryUsers });
+  const users = usersQuery.data;
+  const refreshDirectory = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['org', 'users', 'all'] });
+  }, [queryClient]);
+  /** deptId → 直接挂靠用户 + uid → 用户；未挂主部门（或指向已删部门——数据漂移防御）→ ungrouped 挂根下（通讯录同款口径） */
+  const { deptUsers, ungrouped, userById } = useMemo(() => {
+    const deptUsers = new Map<string, DirectoryUser[]>();
+    const ungrouped: DirectoryUser[] = [];
+    const userById = new Map<string, DirectoryUser>();
+    const deptIds = new Set(flattenTree(tree ?? []).map((d) => d.id));
+    for (const u of users ?? []) {
+      userById.set(u.uid, u);
+      if (u.dept_id && deptIds.has(u.dept_id)) {
+        const list = deptUsers.get(u.dept_id);
+        if (list) list.push(u);
+        else deptUsers.set(u.dept_id, [u]);
+      } else {
+        ungrouped.push(u);
+      }
+    }
+    return { deptUsers, ungrouped, userById };
+  }, [users, tree]);
+  /** deptId → 子树用户总数（含递归子部门；部门行尾计数，通讯录 calc 同款） */
+  const countOf = useMemo(() => {
+    const childOf = new Map<string, string[]>();
+    const walk = (nodes: DeptNode[], parent?: string) => {
+      for (const n of nodes) {
+        if (parent) childOf.set(parent, [...(childOf.get(parent) ?? []), n.id]);
+        walk(n.children ?? [], n.id);
+      }
+    };
+    walk(tree ?? []);
+    const cache = new Map<string, number>();
+    const calc = (id: string): number => {
+      const hit = cache.get(id);
+      if (hit !== undefined) return hit;
+      const n = (deptUsers.get(id)?.length ?? 0) + (childOf.get(id) ?? []).reduce((sum, cid) => sum + calc(cid), 0);
+      cache.set(id, n);
+      return n;
+    };
+    return calc;
+  }, [tree, deptUsers]);
 
   const reloadTree = useCallback(async () => {
     try {
@@ -513,6 +570,7 @@ export function OrgDirectoryPage() {
     setModalOpen(false);
     setActionOk(`已创建 ${u.display_name}（${u.employee_no}）——初始口令=工号+“!BBC”，首登强制改密`);
     void query.refetch();
+    refreshDirectory(); // 树内用户叶子同步
     if (selected) void reloadMembers(selected);
   };
 
@@ -520,6 +578,7 @@ export function OrgDirectoryPage() {
   const onImported = (r: ImportResult) => {
     setActionOk(`批量导入完成：成功 ${r.created} · 失败 ${r.failed}——工号与邮箱已按规范生成，初始口令=工号+“!BBC”`);
     void query.refetch();
+    refreshDirectory();
     if (selected) void reloadMembers(selected);
   };
 
@@ -545,6 +604,7 @@ export function OrgDirectoryPage() {
     try {
       await attachDeptMember(selected, uid, false);
       setAttachUid('');
+      refreshDirectory(); // 主部门可能随挂靠变化（首挂标主部门）
       await reloadMembers(selected);
     } catch (e) {
       setActionError(errText(e, '挂靠失败（用户不存在？）'));
@@ -561,6 +621,7 @@ export function OrgDirectoryPage() {
       onOk: async () => {
         try {
           await detachDeptMember(selected, uid);
+          refreshDirectory(); // 移出后主部门变化（回未分组或次部门递补）
           await reloadMembers(selected);
         } catch {
           setActionError('移出失败');
@@ -576,19 +637,42 @@ export function OrgDirectoryPage() {
   }, [selected, tree]);
 
   const treeData: DataNode[] = useMemo(
-    () => [{ key: 'all', title: '全公司', children: tree ? toTreeData(tree) : [] }],
-    [tree],
+    () => [
+      {
+        key: 'all',
+        title: '全公司',
+        children: [
+          ...(tree ? toTreeData(tree, deptUsers) : []),
+          // 未挂主部门用户直接挂「全公司」根下（叶子）
+          ...ungrouped.map((u) => ({ key: userNodeKey(u.uid), title: u.display_name, isLeaf: true })),
+        ],
+      },
+    ],
+    [tree, deptUsers, ungrouped],
   );
 
-  /** titleRender：根=全公司+加人；部门=名称（双击改名）+ 加人/加子部门/删；renaming 态换内联输入 */
+  /** titleRender：用户叶子=纯浏览（管理操作在右栏表）；根=全公司+加人/加组织+总人数；
+   * 部门=名称（双击改名）+子树人数+ 加人/加子部门/删；renaming 态换内联输入 */
   const titleRender = (node: DataNode) => {
     const key = String(node.key);
     const name = node.title as string;
+    if (key.startsWith('u-')) {
+      const u = userById.get(key.slice(2));
+      return (
+        <Space size={4} data-testid="dir-node-user" title={u ? `${u.display_name}（${u.employee_no}）` : undefined}>
+          <UserRound size={13} />
+          <span>{u?.display_name ?? name}</span>
+        </Space>
+      );
+    }
     if (key === 'all') {
       return (
         <Space size={4} data-testid="dir-node-all">
           <Building2 size={14} />
           <span>{name}</span>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {users ? users.length : '…'}
+          </Typography.Text>
           <AntdButton
             type="text"
             size="small"
@@ -655,6 +739,9 @@ export function OrgDirectoryPage() {
         >
           {name}
         </span>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {countOf(key)}
+        </Typography.Text>
         <AntdButton
           type="text"
           size="small"
@@ -796,8 +883,8 @@ export function OrgDirectoryPage() {
   ];
 
   return (
-    <Flex gap={8} align="stretch" style={{ height: '100%' }} data-testid="admin-directory">
-      {/* 左栏：组织树——裸容器与左侧管理菜单栏同款观感（背景+右边框+定高内滚；可拖宽 220~480） */}
+    <Flex gap={8} align="stretch" style={{ height: '100%', position: 'relative' }} data-testid="admin-directory">
+      {/* 左栏：组织树——裸容器与左侧管理菜单栏同款观感（背景+右边框+定高内滚；宽度 220~480） */}
       {!split.collapsed && (
         <div
           style={{
@@ -823,13 +910,29 @@ export function OrgDirectoryPage() {
               treeData={treeData}
               titleRender={titleRender}
               selectedKeys={[selected ?? 'all']}
-              onSelect={(keys) => setSelected(keys[0] && keys[0] !== 'all' ? String(keys[0]) : null)}
+              onSelect={(keys) => {
+                const k = keys[0] ? String(keys[0]) : null;
+                if (k?.startsWith('u-')) return; // 用户叶子仅浏览（管理操作在右栏表），不切换选中
+                setSelected(k && k !== 'all' ? k : null);
+              }}
             />
           )}
         </div>
       )}
-      {/* 分界缝把手（三改图例口径）：窄竖条=主色箭头+竖排文字；点击折叠/展开、拖动调宽 */}
-      <SplitCollapseTab collapsed={split.collapsed} label="组织树" bind={split.bind} onToggle={split.collapsed ? split.expand : split.collapse} />
+      {/* 分界线（全高拖拽热区——与左侧管理菜单栏分界同款；叠左栏右边框） */}
+      {!split.collapsed ? <SplitHandle bind={split.bind} /> : null}
+      {/* 分界缝把手（三改图例口径）叠分界线垂直中央：窄竖条=主色箭头+竖排文字；点击折叠/展开、拖动亦可调宽 */}
+      <div
+        style={{
+          position: 'absolute',
+          left: split.collapsed ? -13 : split.width - 13,
+          top: '50%',
+          transform: 'translateY(-50%)',
+          zIndex: 13,
+        }}
+      >
+        <SplitCollapseTab collapsed={split.collapsed} label="组织树" bind={split.bind} onToggle={split.collapsed ? split.expand : split.collapse} />
+      </div>
 
       {/* 右栏：通讯录内容（定高内滚——不与左栏比高） */}
       <div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto' }}>
