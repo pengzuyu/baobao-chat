@@ -6,7 +6,7 @@
  *   拖拽期间 body 加 bbc-col-resizing（全局 col-resize 光标 + 禁文本选中）
  * - useCollapsibleSplit(key, initial, min, max)：可折叠变体（2026-11-18 组织树口径：
  *   拖过 min 再继续左拖松手=整栏折叠；宽度持久化同上，折叠态独立 key :c）；
- *   SplitExpandBar=折叠态贴边竖条展开钮（ChevronsRight，点开回折叠前宽度）
+ *   SplitEdgeHandle=容器右边缘垂直中央的折叠/展开把手（圆钮双向态，随 collapsed 换箭头方向）
  * D26-O6：bbc-split 类退役——视觉内联（token 主色 2px 线），拖拽交互逻辑不动。
  * 用法：const split = useSplitWidth('im', 264, 200, 420);
  *       <aside style={{ width: split.width }}>…</aside><SplitHandle {...split.bind} />
@@ -14,7 +14,7 @@
 
 import { useCallback, useRef, useState, type CSSProperties } from 'react';
 import { theme } from 'antd';
-import { ChevronsRight } from 'lucide-react';
+import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 
 const STORAGE_PREFIX = 'bbc:split:';
 
@@ -198,37 +198,43 @@ export function useCollapsibleSplit(storageKey: string, initialWidth: number, mi
   return { width, collapsed, dragging, expand, collapse, bind: { onPointerDown } satisfies SplitBind };
 }
 
-/** 折叠态贴边竖条展开钮（与右栏顶部对齐感：垂直居中；ChevronsRight 示意向右展开） */
-export function SplitExpandBar({ onClick, label }: { onClick: () => void; label?: string }) {
+/** 容器右边缘垂直中央的折叠/展开把手（圆钮骑边；折叠态 ChevronsRight 展开、展开态 ChevronsLeft 收起）。
+ * 定位依赖使用方：父容器需 position:relative 且自身高度确定（把手 absolute top:50% 挂右缘）。 */
+export function SplitEdgeHandle({ collapsed, onToggle, label }: { collapsed: boolean; onToggle: () => void; label?: string }) {
   const { token } = theme.useToken();
   const [hover, setHover] = useState(false);
+  const Icon = collapsed ? ChevronsRight : ChevronsLeft;
+  const text = `${collapsed ? '展开' : '折叠'}${label ?? '侧栏'}`;
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={onToggle}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={label ?? '展开侧栏'}
-      aria-label={label ?? '展开侧栏'}
-      data-testid="split-expand-bar"
+      title={text}
+      aria-label={text}
+      data-testid="split-edge-handle"
       style={{
-        flex: 'none',
+        position: 'absolute',
+        top: '50%',
+        right: -11,
+        transform: 'translateY(-50%)',
+        zIndex: 13,
         width: 22,
-        height: 56,
-        alignSelf: 'center',
+        height: 22,
+        borderRadius: '50%',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         border: `1px solid ${hover ? token.colorPrimary : token.colorBorderSecondary}`,
-        borderLeft: 'none',
-        borderRadius: `0 ${token.borderRadiusLG}px ${token.borderRadiusLG}px 0`,
-        background: hover ? token.colorPrimaryBg : token.colorFillQuaternary,
+        background: hover ? token.colorPrimaryBg : token.colorBgContainer,
         color: hover ? token.colorPrimary : token.colorTextSecondary,
+        boxShadow: token.boxShadowTertiary,
         cursor: 'pointer',
         padding: 0,
       }}
     >
-      <ChevronsRight size={14} />
+      <Icon size={13} />
     </button>
   );
 }
