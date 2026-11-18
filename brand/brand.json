@@ -4,6 +4,7 @@
   "tagline": "让协作更简单 · 企业协作工作台",
   "copyright": "© 2026 BaobaoChat",
   "device_name": "BaobaoChat Desktop",
+  "mail_domain": "bbc.io",
   "identity": {
     "identifier": "com.baobaochat.client",
     "deep_link_scheme": "bbc"

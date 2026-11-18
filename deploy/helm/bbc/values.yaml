@@ -52,6 +52,7 @@ config:
   updateChannel: stable                # compose: BBC_UPDATE_CHANNEL
   seedDemo: "0"                        # compose: BBC_SEED_DEMO（alice/bob 演示种子；部署保持 0，联调置 1 免 admin bootstrap）
   otelEndpoint: http://otel-collector.observability.svc.cluster.local:4318   # compose: BBC_OTEL_EXPORTER_OTLP_ENDPOINT
+  mailDomain: bbc.io                   # compose: BBC_MAIL_DOMAIN（邮箱统一后缀：首超管+批量导入+mail 懒开户；与 brand/brand.json mail_domain 同值）
 
 # ---------------------------------------------------------------------------
 # 外部组件（§3.2：PG=CNPG Operator/StatefulSet，Redis=哨兵 StatefulSet，

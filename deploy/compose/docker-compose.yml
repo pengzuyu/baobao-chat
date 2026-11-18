@@ -61,6 +61,10 @@ x-bbc-env: &bbc-env
   BBC_UPDATE_CHANNEL: ${BBC_UPDATE_CHANNEL:-stable}
   BBC_AI_UPSTREAM_BASE_URL: ${BBC_AI_UPSTREAM_BASE_URL:-}
   BBC_AI_UPSTREAM_API_KEY: ${BBC_AI_UPSTREAM_API_KEY:-}
+  # 品牌白标（D31；2026-11-18 补透传——.env.tpl 同名键此前未进容器走服务端默认值的缺口）
+  BBC_BRAND_NAME: ${BBC_BRAND_NAME:-BaobaoChat}
+  BBC_DEEP_LINK_SCHEME: ${BBC_DEEP_LINK_SCHEME:-bbc}
+  BBC_MAIL_DOMAIN: ${BBC_MAIL_DOMAIN:-bbc.io}   # 邮箱统一后缀（首超管+批量导入+mail 懒开户；与 brand.json mail_domain 同值）
 
 services:
   # ===========================================================================

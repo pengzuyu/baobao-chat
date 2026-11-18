@@ -4,7 +4,7 @@
 
 ```
 brand/
-  brand.json       品牌配置（名字/标语/版权行/设备名 + identity 身份区）
+  brand.json       品牌配置（名字/标语/版权行/设备名/邮箱后缀 + identity 身份区）
   assets/
     logo.svg       UI 内 logo（登录页/侧栏/关于页 + favicon 源）
     icon.png       1024×1024 OS 图标源图（安装包/dock/任务栏图标由此生成）
@@ -12,7 +12,7 @@ brand/
 
 ## 五步换牌
 
-1. 改 `brand.json` 的品牌字段（`name`/`page_title`/`tagline`/`copyright`/`device_name`）；
+1. 改 `brand.json` 的品牌字段（`name`/`page_title`/`tagline`/`copyright`/`device_name`/`mail_domain`）；
 2. 替换 `assets/logo.svg`（UI 内 logo）与 `assets/icon.png`（1024×1024 应用图标源图）；
 3. 跑 `make brand`（= 生成产物 + `tauri icon` 重生成全套 OS 图标）；
 4. 启用应用内自动更新才需：`npm run tauri signer generate` 自备密钥，公钥填 `brand.json` 的 `updater_pubkey`，出包时带 `TAURI_SIGNING_PRIVATE_KEY` 环境变量；
@@ -30,6 +30,13 @@ brand/
 | `deep_link_scheme` | 服务端 `BBC_DEEP_LINK_SCHEME` 必须同步改（deploy/compose/.env），否则 OIDC 深链确认登录**静默失效** |
 
 确实需要改（如双品牌共存一台机器）时，生成器会打红字警告，请同时评估上表两行。
+
+## ✉ mail_domain 邮箱统一后缀（2026-11-18；定死型配置）
+
+企业邮箱的统一后缀域（新建用户表单默认 `工号@mail_domain`，可改前缀）。**产品面无修改入口，构建期定死**：
+只随换牌改一次，改后历史用户邮箱地址不变（新旧后缀并存）。改动时生成器打红字警告，且必须同步服务端
+`BBC_MAIL_DOMAIN`（deploy/compose/.env → app 服务 / helm `config.mailDomain`）——初始管理员邮箱与
+mail 模块懒开户（`工号@域`）均以该 env 为源，与 `brand.json` 保持同值。
 
 ## 产物去向（全部 committed，勿手改）
 

@@ -14,6 +14,7 @@ data:
   BBC_SEED_DEMO: {{ .Values.config.seedDemo | default "0" | quote }}
   BBC_UPDATE_CHANNEL: {{ .Values.config.updateChannel | quote }}
   BBC_OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelEndpoint | quote }}
+  BBC_MAIL_DOMAIN: {{ .Values.config.mailDomain | default "bbc.io" | quote }}
   BBC_REDIS_ADDR: {{ .Values.externalServices.redis.address | quote }}
   BBC_S3_ENDPOINT: {{ .Values.externalServices.s3.endpoint | quote }}
   BBC_S3_PUBLIC_ENDPOINT: {{ .Values.externalServices.s3.publicEndpoint | default "" | quote }}

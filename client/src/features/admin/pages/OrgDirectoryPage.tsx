@@ -5,7 +5,8 @@
  *   原内联建部门输入退役）；左栏可拖宽 220~480（拖过最小继续左拖=折叠，箭头竖条展开回原宽）
  * - 右：选中「全公司」=全量用户表（搜索/状态过滤/禁用/启用）；
  *       选中部门=该部门成员表（工号/姓名/邮箱/主部门/状态/操作——挂靠已有用户/移出）
- * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/邮箱/
+ * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/
+ *   邮箱=前缀@统一后缀 MAIL_DOMAIN（前缀默认跟工号可改；2026-11-18 品牌单源）/
  *   所属组织（默认=触发节点）/角色（默认不授权）——初始口令=工号+!BBC 首登强制改密
  * - 用户表角色列（2026-11-18）：服务端 ListUsers 聚合 roles 引用，点击角色 Tag 开
  *   右抽屉只读展示全量权限字典（勾上该角色已授权项；编辑仍走角色管理页）
@@ -27,6 +28,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { ApiError, getErrorText, errText } from '../../../shared/api/http';
+import { MAIL_DOMAIN } from '../../../shared/brand';
 import { Button } from '../../../shared/ui/Button';
 import { SplitExpandBar, SplitHandle, useCollapsibleSplit } from '../../../shared/ui/Splitter';
 import {
@@ -85,7 +87,9 @@ function CreateUserModal({
   const [name, setName] = useState('');
   const [empno, setEmpno] = useState('');
   const [empnoDirty, setEmpnoDirty] = useState(false);
-  const [email, setEmail] = useState('');
+  // 邮箱前缀（2026-11-18 统一后缀制：前缀@MAIL_DOMAIN；未手改时前缀跟随工号）
+  const [emailPrefix, setEmailPrefix] = useState('');
+  const [emailDirty, setEmailDirty] = useState(false);
   const [dept, setDept] = useState(deptId);
   const [roleId, setRoleId] = useState('0');
   const [roles, setRoles] = useState<AdminRole[]>([]);
@@ -117,6 +121,11 @@ function CreateUserModal({
     };
   }, [open, name, empnoDirty]);
 
+  // 邮箱前缀默认跟随工号（工号建议刷新/重新生成/手改均联动；手改过前缀则不再跟随）
+  useEffect(() => {
+    if (!emailDirty) setEmailPrefix(empno);
+  }, [empno, emailDirty]);
+
   const regenerate = () => {
     setEmpnoDirty(false);
     const trimmed = name.trim();
@@ -127,10 +136,11 @@ function CreateUserModal({
     setErr('');
     setSubmitting(true);
     try {
+      const prefix = emailPrefix.trim();
       const u = await createUser({
         employee_no: empno.trim() || undefined,
         display_name: name.trim(),
-        email: email.trim() || undefined,
+        email: prefix ? `${prefix}@${MAIL_DOMAIN}` : undefined,
         dept_id: dept ? Number(dept) : undefined,
         role_id: roleId !== '0' ? Number(roleId) : undefined,
       });
@@ -139,7 +149,8 @@ function CreateUserModal({
       setName('');
       setEmpno('');
       setEmpnoDirty(false);
-      setEmail('');
+      setEmailPrefix('');
+      setEmailDirty(false);
       setRoleId('0');
     } catch (e) {
       setErr(errText(e, '创建失败，请稍后重试'));
@@ -183,8 +194,17 @@ function CreateUserModal({
           data-testid="create-user-empno"
         />
         <Typography.Text type="secondary">建议值=姓名全拼，重名自动补零递增（zhangsan02）；多音字/生僻字可手改</Typography.Text>
-        <Typography.Text>邮箱</Typography.Text>
-        <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="选填" />
+        <Typography.Text>邮箱（前缀@统一后缀）</Typography.Text>
+        <Input
+          value={emailPrefix}
+          onChange={(e) => {
+            setEmailPrefix(e.target.value);
+            setEmailDirty(true);
+          }}
+          addonAfter={`@${MAIL_DOMAIN}`}
+          placeholder="默认=工号，留空=不设邮箱"
+          data-testid="create-user-email"
+        />
         <Typography.Text>所属组织</Typography.Text>
         <Select
           value={dept}

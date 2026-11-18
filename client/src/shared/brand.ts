@@ -6,3 +6,4 @@ export const PAGE_TITLE = "BaobaoChat · 企业协作工作台";
 export const TAGLINE = "让协作更简单 · 企业协作工作台";
 export const COPYRIGHT = "© 2026 BaobaoChat";
 export const DEVICE_NAME = "BaobaoChat Desktop";
+export const MAIL_DOMAIN = "bbc.io";
