@@ -408,10 +408,11 @@ export function AgentWorkbenchPage() {
 
   // ---- 会话流渲染（D33 平铺流：AgentStreamView 分组分发；active=末回合运行中）----
   const turnActive = status !== undefined && TURN_ACTIVE_STATUSES.has(status);
-  // 回到底部浮标（聊天页同款三态）：离底即常显；离底期间新增计数 Badge / 回合
-  // 运行中红点 / 点击回底并恢复贴底跟随
+  // 回到底部浮标：离底即常显；三态=离底新增计数 Badge/回合运行中红点/回底。
+  // 样式=水平居中吸输入框上缘 + 扁平方形（用户口径 2026-11-18，非聊天页右下圆钮）
   const scrollFab = !atBottom ? (
     <FloatButton
+      shape="square"
       icon={<ArrowDown size={14} aria-hidden />}
       tooltip={
         awayCount > 0
@@ -434,7 +435,7 @@ export function AgentWorkbenchPage() {
         setAwayCount(0);
         if (el) el.scrollTop = el.scrollHeight;
       }}
-      style={{ position: 'absolute', right: 24, bottom: 12, zIndex: 10 }}
+      style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 12, zIndex: 10 }}
     />
   ) : null;
   const streamNode = (
