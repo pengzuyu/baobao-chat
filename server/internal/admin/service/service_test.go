@@ -508,6 +508,27 @@ func TestRBACPermAggregation(t *testing.T) {
 		t.Fatalf("聚合应含行内+角色: %v", perms)
 	}
 
+	// ListUsers 行内角色引用（2026-11-18 角色列）：bob 带「HR 专员」，无角色行兜空切片非 null
+	page, err := svc.ListUsers(ctx, 1, "", 0, 0, 50)
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	var bobRoles []string
+	for _, u := range page.Items {
+		if u.ID == strconv.FormatInt(fx.bobID, 10) {
+			bobRoles = make([]string, 0, len(u.Roles))
+			for _, r := range u.Roles {
+				bobRoles = append(bobRoles, r.RoleName)
+			}
+		}
+		if u.Roles == nil {
+			t.Fatalf("roles 应兜非 nil 空切片: %s", u.ID)
+		}
+	}
+	if len(bobRoles) != 1 || bobRoles[0] != "HR 专员" {
+		t.Fatalf("bob 行应含 HR 专员角色: %v", bobRoles)
+	}
+
 	// 收回 → 即时失效 + 推送
 	grants, _ := svc.ListUserGrants(ctx, 1, fx.bobID)
 	if len(grants) != 1 {

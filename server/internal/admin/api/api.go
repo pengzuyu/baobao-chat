@@ -43,12 +43,19 @@ type Dashboard struct {
 
 // AdminUser 管理端用户行（ID 字符串化透出，14 篇 §5 契约）
 type AdminUser struct {
-	ID          string   `json:"id"`
-	EmployeeNo  string   `json:"employee_no"`
-	DisplayName string   `json:"display_name"`
-	Email       string   `json:"email,omitempty"`
-	Status      int      `json:"status"` // 1 启用 2 禁用
-	Scopes      []string `json:"scopes"`
+	ID          string        `json:"id"`
+	EmployeeNo  string        `json:"employee_no"`
+	DisplayName string        `json:"display_name"`
+	Email       string        `json:"email,omitempty"`
+	Status      int           `json:"status"` // 1 启用 2 禁用
+	Scopes      []string      `json:"scopes"`
+	Roles       []UserRoleRef `json:"roles"` // 角色引用聚合（ListUsers 行内展示；恒非 nil）
+}
+
+// UserRoleRef 用户行内角色引用（点击开角色权限抽屉用；2026-11-18 组织用户管理页）
+type UserRoleRef struct {
+	RoleID   string `json:"role_id"`
+	RoleName string `json:"role_name"`
 }
 
 // UserPage 用户列表分页（cursor=末条 id；空 next_cursor=到底）

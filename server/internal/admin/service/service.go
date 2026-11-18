@@ -270,6 +270,7 @@ func (s *Service) ListUsers(ctx context.Context, tenantID int64, keyword string,
 	for _, u := range users {
 		au := toAdminUser(u)
 		au.Scopes = s.effectiveScopesOf(ctx, &u) // RBAC 聚合口径（管理端不再恒空）
+		au.Roles = s.rolesOfUser(ctx, tenantID, u.ID) // 角色列展示（2026-11-18）
 		page.Items = append(page.Items, au)
 		if page.NextCursor == "" || u.ID > 0 {
 			page.NextCursor = strconv.FormatInt(u.ID, 10)
@@ -707,6 +708,23 @@ func nonNilScopes(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// rolesOfUser 用户角色引用聚合（ListUsers 行内角色列）；roles 未装配/查询失败/无角色
+// 退空切片——AdminUser.Roles 无 omitempty，null 会炸前端 roles.filter（scopes 白屏同口径）。
+func (s *Service) rolesOfUser(ctx context.Context, tenantID, userID int64) []adminapi.UserRoleRef {
+	if s.roles == nil {
+		return []adminapi.UserRoleRef{}
+	}
+	grants, err := s.roles.ListUserRoles(ctx, tenantID, userID)
+	if err != nil {
+		return []adminapi.UserRoleRef{}
+	}
+	out := make([]adminapi.UserRoleRef, 0, len(grants))
+	for _, g := range grants {
+		out = append(out, adminapi.UserRoleRef{RoleID: strconv.FormatInt(g.RoleID, 10), RoleName: g.RoleName})
+	}
+	return out
 }
 
 /* ── 角色与授权（PAD-08；权限点字典 v0.1 前端静态维护，服务端只校验格式） ── */

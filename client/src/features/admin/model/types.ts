@@ -19,6 +19,12 @@ export interface AdminDashboard {
 /** 用户状态（org 域口径：1 启用 2 禁用） */
 export type AdminUserStatus = 1 | 2;
 
+/** 用户行内角色引用（ListUsers 聚合；点击开角色权限只读抽屉） */
+export interface AdminUserRoleRef {
+  role_id: string;
+  role_name: string;
+}
+
 /** 管理端用户行 */
 export interface AdminUser {
   id: string;
@@ -27,6 +33,8 @@ export interface AdminUser {
   email?: string;
   status: AdminUserStatus;
   scopes: string[];
+  /** 角色引用（服务端恒非 null 空数组；mock/旧响应兜 ?? []） */
+  roles?: AdminUserRoleRef[];
 }
 
 /** 分页壳（cursor 翻页；next_cursor 空=到底） */

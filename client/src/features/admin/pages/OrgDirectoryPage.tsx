@@ -1,35 +1,41 @@
 /**
  * 组织用户（通讯录合并页，2026-11-12 用户裁决：原「用户」+「组织」两页合一）：
- * - 左：组织树=通讯录骨架——根「全公司」+ 部门节点，节点上直接「＋子部门」「＋用户」
- * - 右：选中「全公司」=全量用户表（原 UsersPage 能力：搜索/状态过滤/禁用/启用）；
+ * - 左：组织树=通讯录骨架——根「全公司」+ 部门节点（节点 hover 快捷 ＋用户/＋子部门），
+ *   树底部「新建用户 / 新建组织」两按钮（2026-11-18 从右栏标题右上角下沉；两者均弹窗——
+ *   原内联建部门输入退役）；左栏可拖宽 220~480（拖过最小继续左拖=折叠，箭头竖条展开回原宽）
+ * - 右：选中「全公司」=全量用户表（搜索/状态过滤/禁用/启用）；
  *       选中部门=该部门成员表（工号/姓名/邮箱/主部门/状态/操作——挂靠已有用户/移出）
  * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/邮箱/
  *   所属组织（默认=触发节点）/角色（默认不授权）——初始口令=工号+!BBC 首登强制改密
+ * - 用户表角色列（2026-11-18）：服务端 ListUsers 聚合 roles 引用，点击角色 Tag 开
+ *   右抽屉只读展示全量权限字典（勾上该角色已授权项；编辑仍走角色管理页）
  * D26-O2：Table/Modal/Select/Input/Segmented/Alert/Tag 化；补充轮：组织树→antd Tree
- * titleRender（内联建子部门/双击改名/行内 ops，样板对齐 kb ArticleTree——org-node 自研样式退役）。
+ * titleRender（双击改名/行内 ops，样板对齐 kb ArticleTree——org-node 自研样式退役）。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button as AntdButton, Card, Flex, Input, Modal, Segmented, Select, Space, Table, Tag, Tree, Typography } from 'antd';
+import { Alert, Button as AntdButton, Card, Checkbox, Drawer, Flex, Input, Modal, Segmented, Select, Space, Table, Tag, Tree, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
 import {
   Building2,
   FolderPlus,
   FolderTree,
-  Plus,
+  PanelLeftClose,
   RefreshCw,
   Trash2,
   UserPlus,
 } from 'lucide-react';
 import { ApiError, getErrorText, errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
+import { SplitExpandBar, SplitHandle, useCollapsibleSplit } from '../../../shared/ui/Splitter';
 import {
   attachDeptMember,
   createUser,
   deleteDept,
   fetchDeptMembers,
   fetchDeptTree,
+  fetchPermPoints,
   fetchRoles,
   renameDept,
   createDept,
@@ -38,6 +44,7 @@ import {
   type AdminRole,
   type DeptMemberRow,
   type DeptNode,
+  type PermPointsDoc,
 } from '../api/admin';
 import type { AdminUser } from '../model/types';
 import { useUsers, useUserStatus } from '../api/hooks';
@@ -205,6 +212,173 @@ function CreateUserModal({
   );
 }
 
+/* ── 新建组织弹窗（2026-11-18：原树内内联输入退役，统一弹窗） ── */
+
+function CreateDeptModal({
+  open,
+  parentId,
+  tree,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  /** 触发节点（'' = 作为根部门） */
+  parentId: string;
+  tree: DeptNode[];
+  onClose: () => void;
+  onCreated: (node: DeptNode) => void;
+}) {
+  const [name, setName] = useState('');
+  const [parent, setParent] = useState(parentId);
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState('');
+
+  const flat = useMemo(() => flattenTree(tree), [tree]);
+
+  useEffect(() => {
+    if (!open) return;
+    setParent(parentId);
+    setName('');
+    setErr('');
+  }, [open, parentId]);
+
+  const submit = async () => {
+    setErr('');
+    setSubmitting(true);
+    try {
+      const node = await createDept(parent, name.trim());
+      onCreated(node);
+      setName('');
+    } catch (e) {
+      setErr(errText(e, '创建失败，请稍后重试'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title="新建组织"
+      onCancel={onClose}
+      destroyOnClose
+      data-testid="create-dept-modal"
+      footer={[
+        <Button key="cancel" variant="secondary" onClick={onClose}>
+          取消
+        </Button>,
+        <Button key="ok" loading={submitting} disabled={!name.trim()} onClick={() => void submit()} data-testid="create-dept-submit">
+          创建
+        </Button>,
+      ]}
+    >
+      <Space direction="vertical" size={4} style={{ width: '100%', marginTop: 8 }}>
+        <Typography.Text>组织名称 *</Typography.Text>
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="部门名（≤50 字）"
+          onPressEnter={() => name.trim() && void submit()}
+          data-testid="create-dept-name"
+        />
+        <Typography.Text>上级组织</Typography.Text>
+        <Select
+          value={parent}
+          onChange={setParent}
+          data-testid="create-dept-parent"
+          options={[
+            { value: '', label: '作为根部门（不挂上级）' },
+            ...flat.map((d) => ({ value: d.id, label: `${'　'.repeat(d.depth)}${d.name}` })),
+          ]}
+        />
+        <Typography.Text type="secondary">有子部门或挂人时不可删除；名称支持双击树节点改名</Typography.Text>
+        {err ? <Alert type="error" showIcon message={err} /> : null}
+      </Space>
+    </Modal>
+  );
+}
+
+/* ── 角色权限只读抽屉（用户表角色 Tag 点击；全量字典勾选态只读，编辑走角色管理页） ── */
+
+function RolePermDrawer({ role, onClose }: { role: { id: string; name: string } | null; onClose: () => void }) {
+  const [detail, setDetail] = useState<AdminRole | null>(null);
+  const [permDoc, setPermDoc] = useState<PermPointsDoc | null>(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (!role) return;
+    setDetail(null);
+    setPermDoc(null);
+    setErr('');
+    let alive = true;
+    void Promise.all([
+      fetchRoles()
+        .then((rs) => rs.find((r) => r.id === role.id) ?? null)
+        .catch(() => null),
+      fetchPermPoints().catch(() => null),
+    ]).then(([d, doc]) => {
+      if (!alive) return;
+      if (!d) setErr('角色信息加载失败——请稍后重试');
+      if (!doc) setErr('权限点字典加载失败——请稍后重试');
+      setDetail(d);
+      setPermDoc(doc);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [role]);
+
+  const owned = useMemo(() => new Set(detail?.permissions ?? []), [detail]);
+
+  return (
+    <Drawer
+      open={!!role}
+      title={role ? `${role.name} · 权限（只读）` : ''}
+      placement="right"
+      width={480}
+      onClose={onClose}
+      destroyOnClose
+      data-testid="role-perm-drawer"
+      footer={
+        <Button variant="secondary" onClick={onClose} style={{ width: '100%' }}>
+          关闭
+        </Button>
+      }
+    >
+      {detail ? (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Typography.Text type="secondary">
+            {detail.description || '（无描述）'}
+            {detail.is_builtin ? ' · 内置角色' : ''}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            已授权 {owned.size} / {permDoc?.total ?? '…'} 项权限点——只读视图，调整请前往「角色权限」页编辑
+          </Typography.Text>
+          {permDoc?.groups.map((g) => (
+            <div key={g.domain}>
+              <Typography.Text type="secondary">
+                {g.label}（{g.points.length} 项）
+              </Typography.Text>
+              <div>
+                {g.points.map((p) => (
+                  <Checkbox key={p.code} checked={owned.has(p.code)} disabled>
+                    <Typography.Text code>{p.code}</Typography.Text>{' '}
+                    <Typography.Text type="secondary">{p.desc}</Typography.Text>
+                  </Checkbox>
+                ))}
+              </div>
+            </div>
+          ))}
+        </Space>
+      ) : err ? (
+        <Alert type="error" showIcon message={err} />
+      ) : (
+        <Typography.Text type="secondary">加载中…</Typography.Text>
+      )}
+    </Drawer>
+  );
+}
+
 /* ── 主页面 ── */
 
 export function OrgDirectoryPage() {
@@ -212,14 +386,18 @@ export function OrgDirectoryPage() {
   const [tree, setTree] = useState<DeptNode[] | null>(null);
   const [treeError, setTreeError] = useState('');
   const [selected, setSelected] = useState<string | null>(null); // null=全公司
-  // 树内联编辑态：adding=节点 id（'root'=根层）；renaming=节点 id
-  const [adding, setAdding] = useState<string | null>(null);
-  const [addingName, setAddingName] = useState('');
+  // 左栏可拖宽 + 拖过头折叠（220~480；对齐 contacts-tree 上限口径）
+  const split = useCollapsibleSplit('org-tree', 300, 220, 480);
+  // 树内联编辑态：renaming=节点 id（双击改名）
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameName, setRenameName] = useState('');
-  // 弹窗
+  // 弹窗：新建用户 / 新建组织
   const [modalOpen, setModalOpen] = useState(false);
   const [modalDept, setModalDept] = useState('');
+  const [deptModalOpen, setDeptModalOpen] = useState(false);
+  const [deptModalParent, setDeptModalParent] = useState('');
+  // 角色权限只读抽屉（用户表角色 Tag 点击打开）
+  const [permRole, setPermRole] = useState<{ id: string; name: string } | null>(null);
   // 右栏（全公司=用户列表原 UsersPage 能力）
   const [keywordInput, setKeywordInput] = useState('');
   const [keyword, setKeyword] = useState('');
@@ -264,15 +442,6 @@ export function OrgDirectoryPage() {
     else setMembers(null);
   }, [selected, reloadMembers]);
 
-  const addDept = async (parentId: string, deptName: string) => {
-    try {
-      await createDept(parentId, deptName);
-      await reloadTree();
-    } catch (e) {
-      setActionError(errText(e, '部门创建失败'));
-    }
-  };
-
   const renameNode = async (id: string, newName: string) => {
     try {
       await renameDept(id, newName);
@@ -304,6 +473,18 @@ export function OrgDirectoryPage() {
   const openCreate = (deptId: string) => {
     setModalDept(deptId);
     setModalOpen(true);
+  };
+
+  const openDeptModal = (parentId: string) => {
+    setDeptModalParent(parentId);
+    setDeptModalOpen(true);
+  };
+
+  const onDeptCreated = (node: DeptNode) => {
+    setDeptModalOpen(false);
+    setActionOk(`已创建组织「${node.name}」`);
+    setSelected(node.id);
+    void reloadTree();
   };
 
   const onCreated = (u: AdminUser) => {
@@ -370,12 +551,11 @@ export function OrgDirectoryPage() {
     [tree],
   );
 
-  /** titleRender：根=全公司+加人；部门=名称（双击改名）+ 加人/加子部门/删；adding/renaming 态换内联输入 */
+  /** titleRender：根=全公司+加人；部门=名称（双击改名）+ 加人/加子部门/删；renaming 态换内联输入 */
   const titleRender = (node: DataNode) => {
     const key = String(node.key);
     const name = node.title as string;
     if (key === 'all') {
-      if (adding === 'root') return inlineAdd('root');
       return (
         <Space size={4} data-testid="dir-node-all">
           <Building2 size={14} />
@@ -424,7 +604,6 @@ export function OrgDirectoryPage() {
         </Space>
       );
     }
-    if (adding === key) return inlineAdd(key);
     return (
       <Space size={4}>
         <FolderTree size={13} />
@@ -450,12 +629,11 @@ export function OrgDirectoryPage() {
         <AntdButton
           type="text"
           size="small"
-          title="新增子部门"
+          title="新增子部门（弹窗）"
           icon={<FolderPlus size={12} />}
           onClick={(e) => {
             e.stopPropagation();
-            setAdding(key);
-            setAddingName('');
+            openDeptModal(key);
           }}
         />
         <AntdButton
@@ -473,43 +651,34 @@ export function OrgDirectoryPage() {
     );
   };
 
-  /** 内联建子部门输入（adding 目标处渲染；Enter/「建」提交，Esc 取消） */
-  const inlineAdd = (parentId: string) => (
-    <Space size={4} onClick={(e) => e.stopPropagation()}>
-      <Input
-        size="small"
-        style={{ width: 130 }}
-        placeholder="部门名（≤50 字）"
-        value={addingName}
-        autoFocus
-        onChange={(e) => setAddingName(e.target.value)}
-        onPressEnter={() => {
-          if (addingName.trim()) {
-            void addDept(parentId === 'root' ? '' : parentId, addingName.trim());
-            setAdding(null);
-          }
-        }}
-        onKeyDown={(e) => e.key === 'Escape' && setAdding(null)}
-      />
-      <AntdButton
-        size="small"
-        type="primary"
-        disabled={!addingName.trim()}
-        onClick={() => {
-          void addDept(parentId === 'root' ? '' : parentId, addingName.trim());
-          setAdding(null);
-        }}
-      >
-        建
-      </AntdButton>
-    </Space>
-  );
-
   const userColumns: ColumnsType<AdminUser> = [
     { title: '工号', dataIndex: 'employee_no', width: 110, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
     { title: '姓名', dataIndex: 'display_name', width: 110 },
     { title: '邮箱', dataIndex: 'email', render: (v: string) => (v ? <Typography.Text code>{v}</Typography.Text> : '—') },
-    { title: '权限', key: 'scopes', render: (_, u) => scopesText(u.scopes) },
+    {
+      // 角色列（2026-11-18：权限点直显改角色 Tag；点击开右抽屉只读看该角色权限集）
+      title: '角色',
+      key: 'roles',
+      render: (_, u) => {
+        const roles = u.roles ?? [];
+        if (roles.length === 0) return '—';
+        return (
+          <Space size={4} wrap>
+            {roles.map((r) => (
+              <Tag
+                key={r.role_id}
+                color="geekblue"
+                style={{ cursor: 'pointer', marginInlineEnd: 0 }}
+                onClick={() => setPermRole({ id: r.role_id, name: r.role_name })}
+                data-testid="user-role-tag"
+              >
+                {r.role_name}
+              </Tag>
+            ))}
+          </Space>
+        );
+      },
+    },
     {
       title: '状态',
       dataIndex: 'status',
@@ -589,38 +758,51 @@ export function OrgDirectoryPage() {
 
   return (
     <Flex gap={16} align="flex-start" data-testid="admin-directory">
-      {/* 左栏：组织树（通讯录骨架） */}
-      <Card
-        size="small"
-        title="组织树"
-        style={{ width: 300, flexShrink: 0 }}
-        extra={
-          <AntdButton
-            type="text"
+      {/* 左栏：组织树（通讯录骨架）——可拖宽；拖过最小宽度折叠为箭头竖条 */}
+      {split.collapsed ? (
+        <SplitExpandBar onClick={split.expand} label="展开组织树" />
+      ) : (
+        <>
+          <Card
             size="small"
-            title="新增根部门"
-            icon={<Plus size={12} />}
-            onClick={() => {
-              setAdding(adding === 'root' ? null : 'root');
-              setAddingName('');
-            }}
-          />
-        }
-      >
-        {treeError ? <Alert type="error" showIcon message={treeError} style={{ marginBottom: 8 }} /> : null}
-        {tree === null ? (
-          <Typography.Text type="secondary">加载中…</Typography.Text>
-        ) : (
-          <Tree
-            blockNode
-            defaultExpandAll
-            treeData={treeData}
-            titleRender={titleRender}
-            selectedKeys={[selected ?? 'all']}
-            onSelect={(keys) => setSelected(keys[0] && keys[0] !== 'all' ? String(keys[0]) : null)}
-          />
-        )}
-      </Card>
+            title="组织树"
+            style={{ width: split.width, flexShrink: 0 }}
+            extra={
+              <AntdButton
+                type="text"
+                size="small"
+                title="折叠组织树（拖分界线到最小宽度左侧亦可折叠）"
+                icon={<PanelLeftClose size={12} />}
+                onClick={split.collapse}
+              />
+            }
+          >
+            {treeError ? <Alert type="error" showIcon message={treeError} style={{ marginBottom: 8 }} /> : null}
+            {tree === null ? (
+              <Typography.Text type="secondary">加载中…</Typography.Text>
+            ) : (
+              <Tree
+                blockNode
+                defaultExpandAll
+                treeData={treeData}
+                titleRender={titleRender}
+                selectedKeys={[selected ?? 'all']}
+                onSelect={(keys) => setSelected(keys[0] && keys[0] !== 'all' ? String(keys[0]) : null)}
+              />
+            )}
+            {/* 新建入口下沉树底（2026-11-18：从右栏标题右上角迁移；默认挂当前选中节点） */}
+            <Flex gap={8} style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--bbc-gray-3)' }}>
+              <Button style={{ flex: 1 }} onClick={() => openCreate(selected ?? '')} data-testid="dir-create-user">
+                <UserPlus size={14} /> 新建用户
+              </Button>
+              <Button variant="secondary" style={{ flex: 1 }} onClick={() => openDeptModal(selected ?? '')} data-testid="dir-create-dept">
+                <FolderPlus size={14} /> 新建组织
+              </Button>
+            </Flex>
+          </Card>
+          <SplitHandle bind={split.bind} />
+        </>
+      )}
 
       {/* 右栏：通讯录内容 */}
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -629,12 +811,8 @@ export function OrgDirectoryPage() {
             {selectedName ?? '全公司'}
           </Typography.Title>
           <Typography.Text type="secondary">
-            {selected ? '组织成员（含主部门标记）——可在节点上新增用户/子部门' : '全量用户（跨部门检索）——点左侧部门查看该组织通讯录'}
+            {selected ? '组织成员（含主部门标记）——新建入口在左侧组织树底部或节点上' : '全量用户（跨部门检索）——点左侧部门查看该组织通讯录'}
           </Typography.Text>
-          <span style={{ flex: 1 }} />
-          <Button onClick={() => openCreate(selected ?? '')} data-testid="dir-create-user">
-            <UserPlus size={14} /> 新增用户
-          </Button>
         </Flex>
 
         {actionError ? <Alert type="error" showIcon message={actionError} style={{ marginBottom: 8 }} /> : null}
@@ -718,15 +896,8 @@ export function OrgDirectoryPage() {
       </div>
 
       <CreateUserModal open={modalOpen} deptId={modalDept} tree={tree ?? []} onClose={() => setModalOpen(false)} onCreated={onCreated} />
+      <CreateDeptModal open={deptModalOpen} parentId={deptModalParent} tree={tree ?? []} onClose={() => setDeptModalOpen(false)} onCreated={onDeptCreated} />
+      <RolePermDrawer role={permRole} onClose={() => setPermRole(null)} />
     </Flex>
   );
-}
-
-/** 权限列：优先展示 admin:*，否则取前两项普通权限点（?? [] 兜底——历史 scopes:null 白屏教训） */
-function scopesText(scopes: string[] | null | undefined): string {
-  const list = scopes ?? [];
-  if (list.length === 0) return '—';
-  const adminScopes = list.filter((s) => s === 'admin' || s.startsWith('admin:'));
-  if (adminScopes.length > 0) return adminScopes.join(', ');
-  return list.slice(0, 2).join(', ');
 }

@@ -53,8 +53,8 @@ export async function fetchUsers(params: { keyword?: string; status?: number; cu
     await delay(300);
     const items: AdminUser[] = (
       [
-        { id: '10001', employee_no: 'alice', display_name: 'Alice', email: 'alice@bbc.io', status: 1, scopes: ['admin', 'im:message:send'] },
-        { id: '10002', employee_no: 'bob', display_name: 'Bob', email: 'bob@bbc.io', status: 1, scopes: ['im:message:send'] },
+        { id: '10001', employee_no: 'alice', display_name: 'Alice', email: 'alice@bbc.io', status: 1, scopes: ['admin', 'im:message:send'], roles: [{ role_id: '1', role_name: '管理员' }] },
+        { id: '10002', employee_no: 'bob', display_name: 'Bob', email: 'bob@bbc.io', status: 1, scopes: ['im:message:send'], roles: [] },
       ] as AdminUser[]
     ).filter((u) => (!params.status || u.status === params.status) && (!params.keyword || u.employee_no.includes(params.keyword) || u.display_name.toLowerCase().includes(params.keyword.toLowerCase())));
     return { items, has_more: false, next_cursor: '' };

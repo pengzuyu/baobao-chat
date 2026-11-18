@@ -4,6 +4,9 @@
  *   按页记忆；夹取 min~max）+ pointer 拖拽（pointermove 免独立 capture 分支）
  * - SplitHandle：5px 竖分界条（hover 态 2px 主色线，col-resize；默认隐形只留光标），
  *   拖拽期间 body 加 bbc-col-resizing（全局 col-resize 光标 + 禁文本选中）
+ * - useCollapsibleSplit(key, initial, min, max)：可折叠变体（2026-11-18 组织树口径：
+ *   拖过 min 再继续左拖松手=整栏折叠；宽度持久化同上，折叠态独立 key :c）；
+ *   SplitExpandBar=折叠态贴边竖条展开钮（ChevronsRight，点开回折叠前宽度）
  * D26-O6：bbc-split 类退役——视觉内联（token 主色 2px 线），拖拽交互逻辑不动。
  * 用法：const split = useSplitWidth('im', 264, 200, 420);
  *       <aside style={{ width: split.width }}>…</aside><SplitHandle {...split.bind} />
@@ -11,6 +14,7 @@
 
 import { useCallback, useRef, useState, type CSSProperties } from 'react';
 import { theme } from 'antd';
+import { ChevronsRight } from 'lucide-react';
 
 const STORAGE_PREFIX = 'bbc:split:';
 
@@ -100,5 +104,131 @@ export function SplitHandle({ bind, style }: { bind: SplitBind; style?: CSSPrope
         }}
       />
     </div>
+  );
+}
+
+/* ── 可折叠变体（2026-11-18 组织用户管理页）── */
+
+/** 拖过 min 后继续左拖的松手折叠阈值（px）——拖动中显示仍 clamp 到 min，松手判折叠 */
+const OVERSHRINK = 24;
+
+const clampW = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+/**
+ * useCollapsibleSplit：useSplitWidth 的可折叠增强（现有 6 处使用零影响，独立实现）。
+ * - 宽度持久化复用 bbc:split:{key}（纯数字，与 useSplitWidth 同格式可互换）；
+ *   折叠态独立 key bbc:split:{key}:c（'1'/'0'）——不破坏既有纯数字解析
+ * - 折叠：拖动 raw < min - OVERSHRINK 松手，或主动 collapse()；展开 expand() 恢复
+ *   折叠前宽度（clamp min~max，width state 折叠期间不动=天然记忆）
+ */
+export function useCollapsibleSplit(storageKey: string, initialWidth: number, min: number, max: number) {
+  const [width, setWidth] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_PREFIX + storageKey);
+      const n = raw === null ? NaN : Number(raw);
+      if (Number.isFinite(n)) return clampW(n, min, max);
+    } catch {
+      /* localStorage 不可用走缺省 */
+    }
+    return initialWidth;
+  });
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(`${STORAGE_PREFIX}${storageKey}:c`) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [dragging, setDragging] = useState(false);
+  const widthRef = useRef(width); // pointerup 取最新值（闭包快照滞后）
+
+  const persist = useCallback(
+    (key: string, val: string) => {
+      try {
+        localStorage.setItem(key, val);
+      } catch {
+        /* 持久化失败静默——仅本次会话生效 */
+      }
+    },
+    [],
+  );
+
+  const collapse = useCallback(() => {
+    setCollapsed(true);
+    persist(`${STORAGE_PREFIX}${storageKey}:c`, '1');
+  }, [storageKey, persist]);
+
+  const expand = useCallback(() => {
+    setWidth(clampW(widthRef.current, min, max)); // 折叠前宽度（折叠期间 width state 未动）
+    setCollapsed(false);
+    persist(`${STORAGE_PREFIX}${storageKey}:c`, '0');
+  }, [min, max, storageKey, persist]);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = widthRef.current;
+      let raw = startW; // 原始指针宽度（不 clamp）：松手判拖过头折叠
+      setDragging(true);
+      document.body.classList.add('bbc-col-resizing');
+      const onMove = (ev: PointerEvent) => {
+        raw = startW + (ev.clientX - startX);
+        const w = clampW(raw, min, max);
+        widthRef.current = w;
+        setWidth(w);
+      };
+      const onUp = () => {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.body.classList.remove('bbc-col-resizing');
+        setDragging(false);
+        if (raw < min - OVERSHRINK) {
+          collapse(); // 拖过最小宽度再继续左拖：整栏折叠（宽度值保留=展开回折叠前）
+        } else {
+          persist(`${STORAGE_PREFIX}${storageKey}`, String(Math.round(widthRef.current)));
+        }
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    },
+    [storageKey, min, max, collapse, persist],
+  );
+
+  return { width, collapsed, dragging, expand, collapse, bind: { onPointerDown } satisfies SplitBind };
+}
+
+/** 折叠态贴边竖条展开钮（与右栏顶部对齐感：垂直居中；ChevronsRight 示意向右展开） */
+export function SplitExpandBar({ onClick, label }: { onClick: () => void; label?: string }) {
+  const { token } = theme.useToken();
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={label ?? '展开侧栏'}
+      aria-label={label ?? '展开侧栏'}
+      data-testid="split-expand-bar"
+      style={{
+        flex: 'none',
+        width: 22,
+        height: 56,
+        alignSelf: 'center',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        border: `1px solid ${hover ? token.colorPrimary : token.colorBorderSecondary}`,
+        borderLeft: 'none',
+        borderRadius: `0 ${token.borderRadiusLG}px ${token.borderRadiusLG}px 0`,
+        background: hover ? token.colorPrimaryBg : token.colorFillQuaternary,
+        color: hover ? token.colorPrimary : token.colorTextSecondary,
+        cursor: 'pointer',
+        padding: 0,
+      }}
+    >
+      <ChevronsRight size={14} />
+    </button>
   );
 }
