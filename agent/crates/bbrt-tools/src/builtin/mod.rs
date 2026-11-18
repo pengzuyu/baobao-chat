@@ -165,8 +165,8 @@ pub(crate) fn register_all(registry: &mut ToolRegistry) {
     registry.register(memory::coding_delegate_def());
     registry.register(memory::subagent_adjust_def());
     registry.register(memory::subagent_cancel_def());
-    // B 批：等待子任务/委派结果（loop_runner 拦截，仅注册可发现性）
-    registry.register(memory::subagent_wait_def());
+    // 统一后台任务体系：等待任意后台任务结果（loop_runner 拦截，仅注册可发现性）
+    registry.register(memory::task_wait_def());
     // D20：提问卡（loop_runner 拦截，仅注册可发现性）
     registry.register(ask_user::ask_user_def());
     // D33：技能显式加载（执行体在 pipeline dispatch——SkillIndex 经 ToolsConfig 注入）

@@ -139,8 +139,9 @@ pub struct RunEnd<'a> {
 pub trait EventLog: Send + Sync {
     fn append(&self, session_id: &str, type_: &str, payload: &str);
 
-    /// 持久 run 发号（r-{seq} 跨重启唯一；None=未接 Store，调用方退回进程内临时 id）
-    fn next_run_id(&self) -> Option<String> {
+    /// 持久任务发号（统一后台任务体系：kind 分前缀 agent-/worker-/terminal-
+    /// + 32 hex；None=未接 Store，调用方退回进程内临时 id）
+    fn next_task_id(&self, _kind: &str) -> Option<String> {
         None
     }
     /// ETA 滚动统计（P1-6：按 def_ref 最近 8 次均值；None=无样本回落静态表）
@@ -187,8 +188,8 @@ impl EventLog for std::sync::Mutex<Store> {
             }
         }
     }
-    fn next_run_id(&self) -> Option<String> {
-        self.lock().ok().and_then(|s| s.next_run_id().ok())
+    fn next_task_id(&self, kind: &str) -> Option<String> {
+        self.lock().ok().and_then(|s| s.next_task_id(kind).ok())
     }
     fn eta_hint(&self, def_ref: &str) -> Option<i64> {
         self.lock()
@@ -1139,6 +1140,135 @@ impl SessionRunner {
         report
     }
 
+    /// run_command 后台执行（统一后台任务体系 2026-11-18）：gate 放行后、
+    /// execute 之前拦截 background=true——spawn 进程组立即返回 terminal- 任务 id，
+    /// 专用线程收割落终态；无时长上限仅取消（对齐委派口径 D16 决策④）；
+    /// 结果摘要（exit+输出尾部）存 agent_run.summary，task.wait 统一取回。
+    fn run_command_background(&mut self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
+        const SIGINT: i32 = 2;
+        const SIGKILL: i32 = 9;
+        let task_id = deps
+            .wal
+            .next_task_id("terminal")
+            .unwrap_or_else(|| format!("term-{}", call.call_id));
+        deps.wal.run_start(&RunStart {
+            run_id: task_id.clone(),
+            session_id: self.session_id.clone(),
+            root_session_id: self.session_id.clone(),
+            parent_run_id: String::new(),
+            parent_call_id: call.call_id.clone(),
+            kind: "terminal",
+            def_ref: "shell".into(),
+            eta_hint_ms: 0,
+            actor: String::new(),
+        });
+        let started = std::time::Instant::now();
+        let det = match deps.tools.spawn_background(call) {
+            Ok(d) => d,
+            Err(e) => {
+                deps.wal.run_end(
+                    &task_id,
+                    &RunEnd {
+                        status: "failed",
+                        eta_actual_ms: started.elapsed().as_millis() as i64,
+                        summary: &e,
+                        child_session_ref: "",
+                    },
+                );
+                return ToolOutcome::Blocked { code: 8020, summary: e };
+            }
+        };
+        // hub 注册（取消路由；未装配=退化，仅不可中途取消）
+        let rx = match self.delegate_hub.as_ref() {
+            Some(hub) => {
+                let (tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
+                hub.register(&task_id, &self.session_id, tx);
+                rx
+            }
+            None => {
+                let (_tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
+                rx
+            }
+        };
+        let wal = deps.wal.clone();
+        let sid = self.session_id.clone();
+        let tid = task_id.clone();
+        let hub_for_cleanup = self.delegate_hub.clone();
+        let _ = std::thread::Builder::new()
+            .name(format!("bbc-shell-{tid}"))
+            .spawn(move || {
+                let mut det = det;
+                let mut cancelled = false;
+                loop {
+                    // 宿主指令 drain（取消：graceful=SIGINT→3s→SIGKILL；强制=直接杀）
+                    while let Ok(msg) = rx.try_recv() {
+                        if let DelegateHostMsg::Cancel { graceful } = msg {
+                            cancelled = true;
+                            wal.append_run(
+                                &sid,
+                                &tid,
+                                "terminal.cancel",
+                                &format!("{{\"run_id\":\"{tid}\",\"graceful\":{graceful}}}"),
+                            );
+                            det.signal_group(if graceful { SIGINT } else { SIGKILL });
+                        }
+                    }
+                    match det.try_wait() {
+                        Ok(Some(_)) | Err(_) => break,
+                        Ok(None) => {}
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                let r = det.finish();
+                // 摘要组装（对齐 cmd::run_with_launcher 口径，截 2000 存库）
+                let mut summary = r.stdout.clone();
+                if !r.stderr.trim().is_empty() {
+                    summary.push_str(&format!("\n[stderr]\n{}", r.stderr));
+                }
+                if r.exit_code != Some(0) {
+                    summary.push_str(&format!(
+                        "\n[{}]",
+                        match r.exit_code {
+                            Some(c) => format!("exit_code={c}"),
+                            None => "signal".to_string(),
+                        }
+                    ));
+                }
+                if r.truncated {
+                    summary.push_str(&format!(
+                        "\n[输出超限截断，total={} bytes]",
+                        r.total_output_bytes
+                    ));
+                }
+                let summary = crate::subagent::truncate_chars(&summary, 2000);
+                let status = if cancelled {
+                    "cancelled"
+                } else if r.exit_code == Some(0) {
+                    "done"
+                } else {
+                    "failed"
+                };
+                wal.run_end(
+                    &tid,
+                    &RunEnd {
+                        status,
+                        eta_actual_ms: r.duration_ms as i64,
+                        summary: &summary,
+                        child_session_ref: "",
+                    },
+                );
+                if let Some(hub) = hub_for_cleanup {
+                    hub.unregister(&tid);
+                }
+            });
+        ToolOutcome::Ok {
+            summary: format!("[后台执行中] {task_id}——用 task.wait 等待结果"),
+            truncated: false,
+            exit_code: None,
+            duration_ms: started.elapsed().as_millis() as u64,
+        }
+    }
+
     /// 等待子 Agent/委派 run 终态并取回结果（B 批 2026-11-18）：异步委派/
     /// 后台子任务发起后，模型需要其输出才能继续时主动等待——已完成立即
     /// 返回结果摘要；超时返回「仍在运行」（非错误，可再次调用或先做别的）。
@@ -1196,6 +1326,7 @@ impl SessionRunner {
                             format!("；可续接句柄 {}（下次委派续上下文）", snap.child_session_ref)
                         }
                     ),
+                    "terminal" => format!("[命令完成·{}] {}", snap.status, snap.summary),
                     _ => format!("[子任务完成·{}] {}", snap.status, snap.summary),
                 };
                 return ToolOutcome::Ok {
@@ -1324,7 +1455,7 @@ impl SessionRunner {
         // 未接 Store 时退回进程内临时 id，兼容旧格式 dt-{call_id}）
         let run_id = deps
             .wal
-            .next_run_id()
+            .next_task_id("delegate")
             .unwrap_or_else(|| format!("dt-{}", call.call_id));
         let backends = delegator.backends();
         let suggestion = backends.first().cloned().unwrap_or_default();
@@ -1560,7 +1691,7 @@ impl SessionRunner {
             return self.run_subagent_adjust(deps, call);
         }
         // 等待子 Agent/委派结果（B 批 2026-11-18）：异步发起后主动等待/取回
-        if call.name == "subagent.wait" {
+        if call.name == "task.wait" || call.name == "subagent.wait" {
             return self.run_subagent_wait(deps, call);
         }
         // D20 ask_user：向用户提问——专用路径（不走 pipeline 门控/执行）：
@@ -1568,6 +1699,16 @@ impl SessionRunner {
         // 中断旗标，用户「停止」= cancelled 收口）；回答以工具结果回给模型
         if call.name == "ask_user" {
             return self.run_ask_user(deps, call);
+        }
+        // run_command 后台执行拦截（统一后台任务体系）：gate 放行后、execute 前
+        // ——审批流（NeedConfirm→Allow）天然汇入此处（exec_call 同参数）
+        if call.name == "run_command"
+            && serde_json::from_str::<serde_json::Value>(&call.args_json)
+                .ok()
+                .and_then(|v| v.get("background").and_then(|b| b.as_bool()))
+                .unwrap_or(false)
+        {
+            return self.run_command_background(deps, call);
         }
         match deps.tools.check(self.mode, call) {
             CheckOutcome::Allow { source } => {

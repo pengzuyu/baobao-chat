@@ -86,7 +86,7 @@ export interface RunInfo {
   rootSessionId: string;
   parentRunId: string;
   parentCallId: string;
-  kind: 'probe' | 'expert' | 'team' | 'delegate';
+  kind: 'probe' | 'expert' | 'team' | 'delegate' | 'terminal';
   defRef: string;
   status: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
   etaHintMs: number;
@@ -205,7 +205,7 @@ export type AgentEvent =
   | { type: 'sessionEnded'; sessionId: string; summary: string }
   | { type: 'modelSwitched'; sessionId: string; from: 'fast' | 'strong' | 'auto'; to: 'fast' | 'strong' | 'auto'; modelOverride?: string; reason: string }
   /**
-   * 子 Agent（D16 类型 1：探查/通用子 agent）。sub_id 即持久 run_id（r-{随机 8 hex}）；
+   * 子 Agent（D16 类型 1：探查/通用子 agent）。sub_id 即持久任务 id（agent- 前缀+32hex）；
    * spawn 携 session 归属，event 按 runId 定位会话流内卡片
    */
   | { type: 'subagentSpawn'; sessionId: string; runId: string; taskDigest: string; toolSubset: string[] }

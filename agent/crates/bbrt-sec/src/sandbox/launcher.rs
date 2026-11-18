@@ -22,7 +22,7 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -388,6 +388,110 @@ fn clamp_timeout(secs: u64) -> u64 {
     secs.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS)
 }
 
+// ---------------------------------------------------------------------------
+// DetachedCommand：后台执行原语（统一后台任务体系 2026-11-18）
+// ---------------------------------------------------------------------------
+
+/// 后台命令句柄：spawn 立即返回，调用方轮询 [`DetachedCommand::try_wait`]、
+/// 可 [`DetachedCommand::signal_group`] 取消，收割后 [`DetachedCommand::finish`]
+/// 拿同款 [`ExitResult`]（输出捕获/截断口径与同步 [`SandboxLauncher::run`] 一致）。
+/// 无内建超时——后台任务对齐委派口径（长任务不设时长上限，仅调用方取消）。
+pub struct DetachedCommand {
+    child: Child,
+    /// 进程组 id（== 主进程 pid）
+    pub pgid: i32,
+    started: Instant,
+    temp_dir: PathBuf,
+    stdout_file: PathBuf,
+    stderr_file: PathBuf,
+}
+
+impl DetachedCommand {
+    /// 后台 spawn（进程组 + BBC_SANDBOX=1 + 输出重定向临时文件 + limits.apply）
+    pub fn spawn(spec: &RunSpec, opts: &RunOpts) -> Result<DetachedCommand, String> {
+        let temp_dir = match &opts.temp_dir {
+            Some(p) => p.clone(),
+            None => unique_temp_dir(),
+        };
+        fs::create_dir_all(&temp_dir).map_err(|e| format!("临时目录创建失败: {e}"))?;
+
+        let stdout_file = temp_dir.join("stdout.bin");
+        let stderr_file = temp_dir.join("stderr.bin");
+        let out_f = fs::File::create(&stdout_file).map_err(|e| format!("stdout 文件创建失败: {e}"))?;
+        let err_f = fs::File::create(&stderr_file).map_err(|e| format!("stderr 文件创建失败: {e}"))?;
+
+        let mut cmd = Command::new(&spec.program);
+        cmd.args(&spec.args)
+            .stdout(Stdio::from(out_f))
+            .stderr(Stdio::from(err_f))
+            .env("BBC_SANDBOX", "1")
+            .env("TMPDIR", &temp_dir)
+            .env("TMP", &temp_dir);
+        if let Some(cwd) = &spec.cwd {
+            cmd.current_dir(cwd);
+        }
+        for (k, v) in &spec.env {
+            cmd.env(k, v);
+        }
+        opts.limits.apply(&mut cmd);
+        // SAFETY: pre_exec 回调内仅调用 async-signal-safe 的 setpgid(2)（同 run()）
+        unsafe {
+            cmd.pre_exec(|| {
+                let _ = setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let child = cmd.spawn().map_err(|e| format!("spawn 失败: {e}"))?;
+        let pgid = child.id() as i32;
+        Ok(DetachedCommand {
+            child,
+            pgid,
+            started: Instant::now(),
+            temp_dir,
+            stdout_file,
+            stderr_file,
+        })
+    }
+
+    /// 非收割探测（None=仍在运行）
+    pub fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        self.child.try_wait()
+    }
+
+    /// 对整进程组发信号（取消路径：调用方先 SIGINT 后 SIGKILL）
+    pub fn signal_group(&self, sig: i32) {
+        kill_group(self.pgid, sig);
+    }
+
+    /// 收割并产出结果（退出后调用；含防御性补杀与输出读回截断）
+    pub fn finish(mut self) -> ExitResult {
+        let status = self.child.wait();
+        // 防御性补杀组内残留（nohup/& 场景，同 run() 收尾口径）
+        kill_group(self.pgid, SIGKILL);
+        std::thread::sleep(Duration::from_millis(100));
+        let (exit_code, signal) = match status {
+            Ok(s) => exit_and_signal(&s),
+            Err(_) => (None, None),
+        };
+        let (stdout, stdout_trunc, stdout_total) = read_captured(&self.stdout_file);
+        let (stderr, stderr_trunc, stderr_total) = read_captured(&self.stderr_file);
+        ExitResult {
+            exit_code,
+            signal,
+            ok: exit_code == Some(0),
+            duration_ms: self.started.elapsed().as_millis(),
+            stdout,
+            stderr,
+            truncated: stdout_trunc || stderr_trunc,
+            total_output_bytes: stdout_total + stderr_total,
+            timeout_killed: false,
+            resource_killed: signal.is_some() && exit_code.is_none(),
+            pgid: self.pgid,
+            temp_dir: self.temp_dir.clone(),
+        }
+    }
+}
+
 /// 组装唯一临时目录（$TMPDIR/bbc-sec-run-<pid>-<nanos>）
 fn unique_temp_dir() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -610,6 +714,55 @@ impl ExitResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DetachedCommand：spawn 立即返回 → 轮询 try_wait 至退出 → finish 拿输出
+    #[test]
+    fn detached_command_poll_and_finish_captures_output() {
+        let dir = TempDir::new("detach");
+        let spec = RunSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "echo bg-out; echo bg-err 1>&2".into()],
+            cwd: None,
+            env: vec![],
+        };
+        let opts = RunOpts {
+            temp_dir: Some(dir.path().clone()),
+            ..RunOpts::default()
+        };
+        let mut det = DetachedCommand::spawn(&spec, &opts).expect("spawn");
+        // 短命令轮询至退出（上限 5s 防挂）
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while det.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "后台命令未在 5s 内退出");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let r = det.finish();
+        assert_eq!(r.exit_code, Some(0));
+        assert!(r.stdout.contains("bg-out"));
+        assert!(r.stderr.contains("bg-err"));
+    }
+
+    /// DetachedCommand：signal_group 取消长眠命令（SIGKILL 直杀）
+    #[test]
+    fn detached_command_cancel_kills_group() {
+        let dir = TempDir::new("detach-kill");
+        let spec = RunSpec {
+            program: "/bin/sleep".into(),
+            args: vec!["60".into()],
+            cwd: None,
+            env: vec![],
+        };
+        let opts = RunOpts {
+            temp_dir: Some(dir.path().clone()),
+            ..RunOpts::default()
+        };
+        let det = DetachedCommand::spawn(&spec, &opts).expect("spawn");
+        std::thread::sleep(Duration::from_millis(100)); // 让 exec 稳定
+        det.signal_group(SIGKILL);
+        let r = det.finish();
+        assert_ne!(r.exit_code, Some(0), "被杀命令不应成功退出");
+        assert!(r.signal.is_some() || r.exit_code.is_none());
+    }
 
     /// 临时目录守卫（panic 也保证清理）
     struct TempDir(PathBuf);

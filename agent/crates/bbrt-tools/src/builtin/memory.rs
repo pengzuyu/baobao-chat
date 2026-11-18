@@ -327,7 +327,7 @@ pub fn subagent_adjust_def() -> ToolDef {
         input_schema: json!({
             "type": "object",
             "properties": {
-                "run_id": {"type": "string", "description": "目标 run（r- 前缀）"},
+                "run_id": {"type": "string", "description": "目标任务 id（agent-/worker-/terminal- 前缀）"},
                 "instruction": {"type": "string", "description": "补充/调整指令（一句话）"}
             },
             "required": ["run_id", "instruction"]
@@ -337,17 +337,22 @@ pub fn subagent_adjust_def() -> ToolDef {
     }
 }
 
-/// subagent.wait 薄门面（B 批 2026-11-18：等待子任务/委派 run 终态并取回结果；
+/// task.wait 薄门面（统一后台任务体系 2026-11-18：等待任意后台任务终态并取回
+/// 结果——子 agent（agent-）/委派（worker-）/terminal 后台命令（terminal-）；
 /// 执行由 session 循环专用路径承接，execute 不会收到）
-pub fn subagent_wait_def() -> ToolDef {
+pub fn task_wait_def() -> ToolDef {
     ToolDef {
-        name: "subagent.wait".into(),
-        description: "等待指定的子任务/委派（run_id）完成并返回其结果摘要。                      异步发起委派或后台子任务后，需要其输出才能继续下一步时调用；                      已完成的 run 立即返回结果；超时则返回「仍在运行」                      （可再次调用继续等待，或先处理其他事务）"
+        name: "task.wait".into(),
+        description: "等待指定的后台任务完成并返回其结果摘要——适用于子 agent\
+                      （agent- 前缀 id）、委派（worker-）、后台命令（terminal-）。\
+                      异步发起任何后台任务后，需要其输出才能继续下一步时调用；\
+                      已完成的任务立即返回结果；超时则返回「仍在运行」\
+                      （可再次调用继续等待，或先处理其他事务）"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "run_id": {"type": "string", "description": "目标 run（r- 前缀）"},
+                "run_id": {"type": "string", "description": "目标任务 id（agent-/worker-/terminal- 前缀）"},
                 "timeout_secs": {"type": "integer", "description": "最长等待秒数（默认 120，上限 3600）"}
             },
             "required": ["run_id"]
@@ -357,17 +362,17 @@ pub fn subagent_wait_def() -> ToolDef {
     }
 }
 
-/// subagent.cancel 薄门面（运行中子任务取消；同上专用路径承接）
+/// subagent.cancel 薄门面（后台任务取消；同上专用路径承接）
 pub fn subagent_cancel_def() -> ToolDef {
     ToolDef {
         name: "subagent.cancel".into(),
-        description: "取消正在运行的子任务（探查/专家/委派通用；优雅取消，\
-                      已产出部分结果会保留。）"
+        description: "取消正在运行的后台任务（子 agent/委派/后台命令通用；\
+                      优雅取消，已产出部分结果会保留。）"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "run_id": {"type": "string", "description": "目标 run（r- 前缀）"}
+                "run_id": {"type": "string", "description": "目标任务 id（agent-/worker-/terminal- 前缀）"}
             },
             "required": ["run_id"]
         }),

@@ -420,7 +420,7 @@ pub fn fanout_probes(
     let total = subs.len();
     let run_ids: Vec<String> = (0..total)
         .map(|i| {
-            wal.next_run_id()
+            wal.next_task_id("probe")
                 .unwrap_or_else(|| format!("sub-{now_ms}-{i}"))
         })
         .collect();

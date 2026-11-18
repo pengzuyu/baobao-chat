@@ -223,6 +223,26 @@ impl PipelineExecutor {
 // ---------------------------------------------------------------------------
 
 impl ToolExecutor for PipelineExecutor {
+    /// 后台 spawn run_command（统一后台任务体系）：校验/spec 组装复用同步路径
+    /// （cwd 白名单/词法预检），DetachedCommand 无内建超时——长任务不设上限
+    /// 仅取消（对齐委派口径）；输出捕获/截断与同步口径一致
+    fn spawn_background(
+        &self,
+        call: &ToolInvocation,
+    ) -> Result<bbrt_sec::sandbox::DetachedCommand, String> {
+        if call.name != "run_command" {
+            return Err(format!("{} 不支持后台执行（仅 run_command）", call.name));
+        }
+        let args = Self::parse_args(call).map_err(|b| format!("{}（{}）", b.message, b.code))?;
+        let cmd_text = builtin::cmd::command_text(&args)
+            .ok_or_else(|| "run_command 缺少 command/cmd 参数（8101）".to_string())?;
+        let env = self.session_env(&call.session_id);
+        let spec = builtin::cmd::prepare_run_spec(&env, &args, &cmd_text)
+            .map_err(|b| format!("{}（{}）", b.message, b.code))?;
+        bbrt_sec::sandbox::DetachedCommand::spawn(&spec, &bbrt_sec::sandbox::RunOpts::default())
+            .map_err(|e| format!("后台 spawn 失败: {e}"))
+    }
+
     /// 门控判定（§6 步骤 1-4 浓缩；不执行、不发审批）
     fn check(&self, mode: bbrt_sec::gate::PermissionMode, call: &ToolInvocation) -> CheckOutcome {
         // ① ToolDef 查询（§6 步骤 1：未注册 → 8002）

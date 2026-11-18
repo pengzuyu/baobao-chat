@@ -62,6 +62,15 @@ pub trait ToolExecutor: Send + Sync {
     fn check(&self, mode: PermissionMode, call: &ToolInvocation) -> CheckOutcome;
     /// 执行（调用方已保证权限路径走通）
     fn execute(&self, mode: PermissionMode, call: &ToolInvocation) -> ToolOutcome;
+    /// 后台 spawn run_command（统一后台任务体系 2026-11-18）：校验/spec 组装
+    /// 与同步路径同口径（cwd 白名单/词法预检），spawn 后立即返回句柄——
+    /// 收割/取消/落库由 session 侧管理。default=执行器不支持后台命令。
+    fn spawn_background(
+        &self,
+        _call: &ToolInvocation,
+    ) -> Result<bbrt_sec::sandbox::DetachedCommand, String> {
+        Err("执行器不支持后台命令".into())
+    }
     /// 审批通过后落记忆（once/session/permanent）
     fn record_grant(
         &self,

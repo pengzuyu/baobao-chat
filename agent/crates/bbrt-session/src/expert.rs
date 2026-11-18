@@ -540,7 +540,7 @@ pub fn run_expert(
         .unwrap_or(0);
     let started = std::time::Instant::now();
     let run_id = wal
-        .next_run_id()
+        .next_task_id("expert")
         .unwrap_or_else(|| format!("act-{now_ms}-{}", ACT_SEQ.fetch_add(1, Ordering::Relaxed)));
     // 补充指令通道（D16 决策⑧）：注册先于执行循环（同探查口径）
     let (input_tx, input_rx) = std::sync::mpsc::channel::<crate::loop_runner::DelegateHostMsg>();

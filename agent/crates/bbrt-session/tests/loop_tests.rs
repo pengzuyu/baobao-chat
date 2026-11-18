@@ -1864,3 +1864,255 @@ fn subagent_wait_unknown_run_rejected() {
         "未知 run 应 8002 拒绝: {evs:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 统一后台任务体系：run_command background + task.wait 对 terminal
+// ---------------------------------------------------------------------------
+
+/// 真存 run 状态的假 WAL（run_start/run_end/run_snapshot 落 HashMap——
+/// 后台线程与断言侧共享所见）
+struct BgStoreLog {
+    rows: Mutex<std::collections::HashMap<String, bbrt_session::loop_runner::EventRunSnapshot>>,
+    seq: AtomicUsize,
+}
+impl EventLog for BgStoreLog {
+    fn append(&self, _session_id: &str, _t: &str, _p: &str) {}
+    fn next_task_id(&self, kind: &str) -> Option<String> {
+        let n = self.seq.fetch_add(1, Ordering::Relaxed);
+        Some(format!("{kind}-test{:04}", n))
+    }
+    fn run_start(&self, run: &bbrt_session::loop_runner::RunStart) {
+        self.rows.lock().unwrap().insert(
+            run.run_id.clone(),
+            bbrt_session::loop_runner::EventRunSnapshot {
+                status: "running".into(),
+                kind: run.kind.to_string(),
+                summary: String::new(),
+                child_session_ref: String::new(),
+            },
+        );
+    }
+    fn run_end(
+        &self,
+        run_id: &str,
+        end: &bbrt_session::loop_runner::RunEnd<'_>,
+    ) {
+        let mut rows = self.rows.lock().unwrap();
+        if let Some(snap) = rows.get_mut(run_id) {
+            snap.status = end.status.to_string();
+            snap.summary = end.summary.to_string();
+        }
+    }
+    fn run_snapshot(
+        &self,
+        run_id: &str,
+    ) -> Option<bbrt_session::loop_runner::EventRunSnapshot> {
+        self.rows.lock().unwrap().get(run_id).cloned()
+    }
+}
+
+/// spawn_background 真起 /bin/sh 的假执行器（其余同 FakeTools 语义）
+struct BgShellTools;
+impl ToolExecutor for BgShellTools {
+    fn check(&self, _mode: PermissionMode, _call: &ToolInvocation) -> CheckOutcome {
+        CheckOutcome::Allow {
+            source: "matrix".into(),
+        }
+    }
+    fn execute(&self, _mode: PermissionMode, _call: &ToolInvocation) -> ToolOutcome {
+        ToolOutcome::Ok {
+            summary: "不应走到同步执行".into(),
+            truncated: false,
+            exit_code: Some(0),
+            duration_ms: 0,
+        }
+    }
+    fn record_grant(
+        &self,
+        _m: PermissionMode,
+        _c: &ToolInvocation,
+        _s: GrantScope,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn tool_specs(&self) -> Vec<ToolSpec> {
+        vec![]
+    }
+    fn spawn_background(
+        &self,
+        _call: &ToolInvocation,
+    ) -> Result<bbrt_sec::sandbox::DetachedCommand, String> {
+        let spec = bbrt_sec::sandbox::RunSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "echo bg-hello-world".into()],
+            cwd: None,
+            env: vec![],
+        };
+        bbrt_sec::sandbox::DetachedCommand::spawn(&spec, &bbrt_sec::sandbox::RunOpts::default())
+    }
+}
+
+/// background=true：立即返回任务 id（turn 不等命令）+ 后台线程落终态（含输出）
+#[test]
+fn run_command_background_returns_task_id_and_finishes() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeModel {
+        calls: AtomicUsize::new(0),
+        tool_name: Some("run_command".into()),
+    });
+    // FakeModel 的 args 是 {"path":"foo.txt"}——需要 background:true，换脚本化模型
+    struct BgModel {
+        calls: AtomicUsize,
+    }
+    impl ChatClient for BgModel {
+        fn chat(
+            &self,
+            _req: &ChatRequest,
+        ) -> Result<
+            Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+            bbrt_aigw::AigwError,
+        > {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if n == 0 {
+                vec![
+                    Ok(StreamEvent::ToolCallBegin {
+                        index: 0,
+                        id: "call-bg1".into(),
+                        name: "run_command".into(),
+                    }),
+                    Ok(StreamEvent::ToolCallDelta {
+                        index: 0,
+                        args_delta: r#"{"command":"echo bg-hello-world","background":true}"#.into(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish: FinishReason::ToolCalls,
+                        usage: Usage {
+                            prompt_tokens: 10,
+                            completion_tokens: 4,
+                        },
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(StreamEvent::TextDelta { text: "已转后台".into() }),
+                    Ok(StreamEvent::Done {
+                        finish: FinishReason::Stop,
+                        usage: Usage {
+                            prompt_tokens: 10,
+                            completion_tokens: 4,
+                        },
+                    }),
+                ]
+            };
+            Ok(Box::new(events.into_iter()))
+        }
+    }
+    let model = Arc::new(BgModel {
+        calls: AtomicUsize::new(0),
+    });
+    let wal = Arc::new(BgStoreLog {
+        rows: Mutex::new(std::collections::HashMap::new()),
+        seq: AtomicUsize::new(0),
+    });
+    let d = LoopDeps {
+        model,
+        delegator: None,
+        tools: Arc::new(BgShellTools),
+        memory: None,
+        wal: wal.clone(),
+        sink: sink.clone(),
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let started = std::time::Instant::now();
+    let mut runner = SessionRunner::new(
+        "s-bg1".into(),
+        "/tmp/ws".into(),
+        PermissionMode::FullAuto,
+        ModelTier::Strong,
+        None,
+    );
+    let report = runner.run_turn("后台跑个构建", &d, None);
+    // turn 立即收口（不等命令：echo 秒完，此处断言主要防回归成同步长等）
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(report.tool_calls, 1);
+    let evs = events_of(sink.as_ref());
+    assert!(
+        evs.iter().any(|e| matches!(
+            e,
+            SessionEvent::ToolResult { summary, .. }
+                if summary.contains("[后台执行中]") && summary.contains("terminal-") && summary.contains("task.wait")
+        )),
+        "应立即返回 terminal- 任务 id: 见事件流"
+    );
+    // 后台线程落终态：轮询至多 3s
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut final_snap = None;
+    while std::time::Instant::now() < deadline {
+        let task_id = wal
+            .rows
+            .lock()
+            .unwrap()
+            .keys()
+            .find(|k| k.starts_with("terminal-"))
+            .cloned()
+            .unwrap_or_default();
+        let snap = wal.run_snapshot(&task_id);
+        if let Some(s) = snap {
+            if s.status != "running" {
+                final_snap = Some(s);
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let snap = final_snap.expect("后台线程应在 3s 内落终态");
+    assert_eq!(snap.status, "done");
+    assert!(snap.summary.contains("bg-hello-world"), "摘要应含输出: {}", snap.summary);
+}
+
+/// task.wait 对 terminal 任务：已完成立即返回 [命令完成·done] + 输出
+#[test]
+fn task_wait_terminal_task_returns_output() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeWaitModel {
+        calls: AtomicUsize::new(0),
+        args: r#"{"run_id":"terminal-ab01"}"#.into(),
+    });
+    let wal = Arc::new(SnapLog {
+        rows: Mutex::new(
+            [(
+                "terminal-ab01".to_string(),
+                bbrt_session::loop_runner::EventRunSnapshot {
+                    status: "done".into(),
+                    kind: "terminal".into(),
+                    summary: "bg-hello-world\n[exit_code=0]".into(),
+                    child_session_ref: String::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ),
+    });
+    let d = wait_deps(model, wal, sink.clone());
+    let mut runner = SessionRunner::new(
+        "s-tw1".into(),
+        "/tmp/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    let report = runner.run_turn("等命令结果", &d, None);
+    assert_eq!(report.tool_calls, 1);
+    let evs = events_of(sink.as_ref());
+    assert!(
+        evs.iter().any(|e| matches!(
+            e,
+            SessionEvent::ToolResult { summary, .. }
+                if summary.contains("[命令完成·done]") && summary.contains("bg-hello-world")
+        )),
+        "task.wait 应返回命令输出: {evs:?}"
+    );
+}

@@ -49,10 +49,10 @@ fn eventlog_impl_records_run_lifecycle_into_sqlite() {
     seed_session(&store, "sess-1");
     let wal: &dyn EventLog = &Mutex::new(store);
 
-    let run_id = wal.next_run_id().expect("发号失败");
+    let run_id = wal.next_task_id("delegate").expect("发号失败");
     assert!(
-        run_id.starts_with("r-") && run_id.len() == 10,
-        "随机制 r-XXXXXXXX: {run_id}"
+        run_id.starts_with("worker-") && run_id.len() == "worker-".len() + 32,
+        "worker-+32hex: {run_id}"
     );
 
     wal.run_start(&RunStart {
@@ -114,7 +114,7 @@ fn recovery_marks_running_runs_interrupted() {
     seed_session(&store, "sess-2");
     {
         let wal: &dyn EventLog = &Mutex::new(store);
-        let id = wal.next_run_id().unwrap();
+        let id = wal.next_task_id("delegate").unwrap();
         wal.run_start(&RunStart {
             run_id: id,
             session_id: "sess-2".into(),

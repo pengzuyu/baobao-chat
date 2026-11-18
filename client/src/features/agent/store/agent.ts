@@ -62,7 +62,7 @@ export type StreamItem =
       /** null=等待回答；对象=已回答/中断（answers=所选 label 串） */
       answer: null | { decision: 'answered' | 'cancelled'; answers: string; at: number };
     }
-  /** 子 Agent 卡（D16 类型 1；runId=持久 r-{随机 8 hex}，状态由 subagent.event 驱动） */
+  /** 子 Agent 卡（D16 类型 1；runId=任务 id（agent-/worker-/terminal- 前缀+32hex），状态由 subagent.event 驱动） */
   | {
       kind: 'subagent';
       key: string;

@@ -28,12 +28,13 @@ import { Button } from '../../../shared/ui/Button';
 import { formatListTime } from '../../../shared/utils/time';
 import { embeddedSessionIds } from '../../im/agent/embedded';
 
-/** run 类型徽标（D16 四类：探查/专家会诊/并行会诊/委派） */
+/** run 类型徽标（D16 四类 + 统一后台任务体系的 terminal） */
 const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = {
   probe: '探查',
   expert: '专家',
   team: '会诊',
   delegate: '委派',
+  terminal: '终端',
 };
 
 /** run 类型徽标色（原 agent-task-item__kind--* 口径：委派=主色、专家/会诊=紫） */

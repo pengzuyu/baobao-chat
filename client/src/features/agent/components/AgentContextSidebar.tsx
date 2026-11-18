@@ -22,6 +22,7 @@ const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = {
   expert: '专家',
   team: '团队',
   delegate: '委派',
+  terminal: '终端',
 };
 
 const RUN_STATUS_LABELS: Record<RunInfo['status'], string> = {
@@ -34,7 +35,8 @@ const RUN_STATUS_LABELS: Record<RunInfo['status'], string> = {
 
 /** run 类型徽标色（原 agent-run-item__kind--delegate 主色口径） */
 function runKindColor(kind: RunInfo['kind']): string | undefined {
-  return kind === 'delegate' ? 'blue' : undefined;
+  if (kind === 'delegate') return 'blue';
+  return kind === 'terminal' ? 'green' : undefined;
 }
 
 function formatDuration(ms: number): string {

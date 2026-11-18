@@ -18,6 +18,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/001_init.sql"),
     include_str!("migrations/002_model_override.sql"),
     include_str!("migrations/003_subagent_run.sql"),
+    include_str!("migrations/004_terminal_run.sql"),
 ];
 
 /// 执行所有未应用的迁移。

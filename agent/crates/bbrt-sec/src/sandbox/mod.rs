@@ -13,8 +13,8 @@ pub mod path;
 pub mod resource;
 
 pub use launcher::{
-    ExitResult, JsonlViolationSink, MemoryViolationSink, RunOpts, RunSpec, SandboxLauncher,
-    Violation, ViolationKind, ViolationSink,
+    DetachedCommand, ExitResult, JsonlViolationSink, MemoryViolationSink, RunOpts, RunSpec,
+    SandboxLauncher, Violation, ViolationKind, ViolationSink,
 };
 pub use network::{Cidr, NetPolicy, NetworkError};
 pub use path::{PathError, PathIntent, PathPolicy};

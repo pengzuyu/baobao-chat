@@ -46,52 +46,62 @@ pub(crate) fn run(env: &ExecEnv, args: &Value) -> Result<ExecOutput, ToolBlock> 
     let cmd_text = command_text(args)
         .ok_or_else(|| deny(CODE_TOOL_ARGS, "run_command 缺少 command/cmd 参数"))?;
     let (result, _ms) = timed(|| -> Result<ExecOutput, ToolBlock> {
-        // cwd：默认工作区；显式给出则须在工作区白名单内（相对路径以工作区根为基准；8020）
-        let cwd = match str_arg(args, "cwd") {
-            Some(c) => {
-                let cwd_buf = super::resolve_against(&env.workspace, &c);
-                match env.path_policy.validate(&cwd_buf, PathIntent::Write) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let code = path_error_code(&e);
-                        env.record_violation(
-                            bbrt_sec::sandbox::launcher::ViolationKind::Path,
-                            code,
-                            format!("run_command cwd 越界: {e}"),
-                        );
-                        return Err(deny(code, format!("cwd {c} 不在工作区白名单内（{code}）")));
-                    }
-                }
-            }
-            None => env.workspace.clone(),
-        };
-
-        // L2 词法写意图预检（越界 → violation + blocked 8020/8024）
-        precheck_write_targets(env, &cmd_text, &cwd)?;
-
-        // 执行形态：cmd 数组 → 直接 exec（program+args）；
-        // 命令字符串 → /bin/sh -c（重定向/管道等 shell 语义由 sh 解释，预检已扫过写目标）
-        let spec = match cmd_array(args) {
-            Some(parts) if !parts.is_empty() => {
-                let (program, rest) = parts.split_first().expect("非空已确认");
-                RunSpec {
-                    program: resolve_program(program),
-                    args: rest.to_vec(),
-                    cwd: Some(cwd),
-                    env: Vec::new(),
-                }
-            }
-            _ => RunSpec {
-                program: resolve_program("sh"),
-                args: vec!["-c".to_string(), cmd_text.clone()],
-                cwd: Some(cwd),
-                env: Vec::new(),
-            },
-        };
+        let spec = prepare_run_spec(env, args, &cmd_text)?;
         let opts = base_run_opts(env);
         run_with_launcher(env, spec, opts)
     });
     result
+}
+
+/// 校验 + RunSpec 组装（cwd 白名单/词法预检/执行形态——同步 run 与
+/// 后台 spawn_background 共用，统一后台任务体系 2026-11-18）
+pub(crate) fn prepare_run_spec(
+    env: &ExecEnv,
+    args: &Value,
+    cmd_text: &str,
+) -> Result<RunSpec, ToolBlock> {
+    // cwd：默认工作区；显式给出则须在工作区白名单内（相对路径以工作区根为基准；8020）
+    let cwd = match str_arg(args, "cwd") {
+        Some(c) => {
+            let cwd_buf = super::resolve_against(&env.workspace, &c);
+            match env.path_policy.validate(&cwd_buf, PathIntent::Write) {
+                Ok(p) => p,
+                Err(e) => {
+                    let code = path_error_code(&e);
+                    env.record_violation(
+                        bbrt_sec::sandbox::launcher::ViolationKind::Path,
+                        code,
+                        format!("run_command cwd 越界: {e}"),
+                    );
+                    return Err(deny(code, format!("cwd {c} 不在工作区白名单内（{code}）")));
+                }
+            }
+        }
+        None => env.workspace.clone(),
+    };
+
+    // L2 词法写意图预检（越界 → violation + blocked 8020/8024）
+    precheck_write_targets(env, cmd_text, &cwd)?;
+
+    // 执行形态：cmd 数组 → 直接 exec（program+args）；
+    // 命令字符串 → /bin/sh -c（重定向/管道等 shell 语义由 sh 解释，预检已扫过写目标）
+    Ok(match cmd_array(args) {
+        Some(parts) if !parts.is_empty() => {
+            let (program, rest) = parts.split_first().expect("非空已确认");
+            RunSpec {
+                program: resolve_program(program),
+                args: rest.to_vec(),
+                cwd: Some(cwd),
+                env: Vec::new(),
+            }
+        }
+        _ => RunSpec {
+            program: resolve_program("sh"),
+            args: vec!["-c".to_string(), cmd_text.to_string()],
+            cwd: Some(cwd),
+            env: Vec::new(),
+        },
+    })
 }
 
 /// cmd 数组形态提取（[program, args...]；非数组返回 None）
@@ -368,8 +378,10 @@ fn path_error_code(e: &PathError) -> u32 {
 pub fn run_command_def() -> ToolDef {
     ToolDef {
         name: "run_command".into(),
-        description: "在沙箱中执行 shell 命令（工作区可写、默认断网、超时 300s、输出 1MB 截断）。\
-                      command 传命令文本（兼容 cmd 字符串/数组形态）；cwd 默认工作区"
+        description: "在沙箱中执行 shell 命令（工作区可写、默认断网、同步超时 300s、输出 1MB 截断）。\
+                      command 传命令文本（兼容 cmd 字符串/数组形态）；cwd 默认工作区。\
+                      长时间任务（构建/测试/安装）设 background=true：立即返回任务 id\
+                      不阻塞当前轮，稍后用 task.wait 取结果"
             .into(),
         input_schema: json!({
             "type": "object",
@@ -377,7 +389,8 @@ pub fn run_command_def() -> ToolDef {
                 "command": {"type": "string", "description": "命令文本（首选字段）"},
                 "cmd": {"type": ["string", "array"],
                         "description": "命令别名：字符串或 [program, args...] 数组"},
-                "cwd": {"type": "string", "description": "工作目录（须在工作区内，默认工作区根）"}
+                "cwd": {"type": "string", "description": "工作目录（须在工作区内，默认工作区根）"},
+                "background": {"type": "boolean", "description": "后台执行（长任务用：立即返回任务 id，用 task.wait 取结果；后台无时长上限仅可取消）"}
             },
             "required": ["command"]
         }),

@@ -73,13 +73,19 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<RunRow> {
 }
 
 impl Store {
-    /// 持久发号：r-{uuid 前 8 hex}（如 r-a1b2c3d4）——随机不暴露计数
-    /// （用户拍板 UUID 形式；弃序号制）。碰撞概率 16^8 分之一，命中查重重试
-    /// 兜底。存量 id（r-1/r-000003）不迁移；排序按 created_at 不受影响；
-    /// subagent.cancel 等消费方只认 r- 前缀不变。
-    pub fn next_run_id(&self) -> Result<String, StoreError> {
+    /// 持久发号（统一后台任务体系 2026-11-18）：按 kind 分前缀 + uuid 全长
+    /// 32 位 hex——子 agent（probe/expert/team）=`agent-`、委派（delegate）=
+    /// `worker-`、terminal 后台命令=`terminal-`（用户拍板口径；id 即类型可读，
+    /// task.wait/task id 跨类型通用）。碰撞查重重试 ≤5 兜底；存量 id
+    /// （r-*/dt-*/sub-* 等）不迁移——所有消费方按精确字符串匹配天然兼容。
+    pub fn next_task_id(&self, kind: &str) -> Result<String, StoreError> {
+        let prefix = match kind {
+            "delegate" => "worker-",
+            "terminal" => "terminal-",
+            _ => "agent-",
+        };
         for _ in 0..5 {
-            let id = format!("r-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+            let id = format!("{prefix}{}", uuid::Uuid::new_v4().simple());
             let hit: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM agent_run WHERE id = ?1)",
                 [&id],
@@ -89,7 +95,7 @@ impl Store {
                 return Ok(id);
             }
         }
-        Err(StoreError::Sqlite("run id 随机发号连续碰撞（5 次重试）".into()))
+        Err(StoreError::Sqlite("任务 id 随机发号连续碰撞（5 次重试）".into()))
     }
 
     /// 按 id 单查（subagent.wait 终态轮询/结果取回）
@@ -229,20 +235,30 @@ mod tests {
         }
     }
 
-    /// 发号（2026-11-18 起随机制）：r-{8 hex} 格式、连发不重、不暴露计数、
-    /// 跨 Store 重开不撞存量
+    /// 发号（统一后台任务体系）：按 kind 分前缀（agent-/worker-/terminal-）+
+    /// 32 位 hex、连发不重、跨 Store 重开不撞存量
     #[test]
-    fn next_run_id_random_unique_across_reopen() {
+    fn next_task_id_prefix_by_kind_unique_across_reopen() {
         let (dir, store) = testutil::open_store();
         testutil::seed_session(&store, "sess-1");
+        let cases = [
+            ("probe", "agent-"),
+            ("expert", "agent-"),
+            ("team", "agent-"),
+            ("delegate", "worker-"),
+            ("terminal", "terminal-"),
+        ];
         let mut seen = std::collections::HashSet::new();
-        for _ in 0..32 {
-            let id = store.next_run_id().unwrap();
-            assert!(
-                id.starts_with("r-") && id.len() == 10 && id[2..].chars().all(|c| c.is_ascii_hexdigit()),
-                "格式应为 r-XXXXXXXX: {id}"
-            );
-            assert!(seen.insert(id.clone()), "连发不应重复: {id}");
+        for (kind, prefix) in cases {
+            for _ in 0..4 {
+                let id = store.next_task_id(kind).unwrap();
+                assert!(
+                    id.starts_with(prefix) && id.len() == prefix.len() + 32
+                        && id[prefix.len()..].chars().all(|c| c.is_ascii_hexdigit()),
+                    "格式应为 {prefix}+32hex: {id}"
+                );
+                assert!(seen.insert(id.clone()), "连发不应重复: {id}");
+            }
         }
         // 落库后重开：新号不撞存量
         for id in seen.iter().take(4) {
@@ -251,9 +267,36 @@ mod tests {
         drop(store);
         let store2 = crate::Store::open(&dir.path().join("agent").join("runtime.sqlite3")).unwrap();
         for _ in 0..8 {
-            let id = store2.next_run_id().unwrap();
+            let id = store2.next_task_id("terminal").unwrap();
             assert!(!seen.contains(&id), "重开后不应撞存量: {id}");
         }
+    }
+
+    /// 004 迁移：老库（版本拨回 3）重 open 走表重建——存量数据无损 +
+    /// terminal kind 可插可查
+    #[test]
+    fn migration_004_preserves_data_and_accepts_terminal() {
+        let (dir, store) = testutil::open_store();
+        testutil::seed_session(&store, "sess-1");
+        store.insert_run(&start_row("r-1", "sess-1", "probe")).unwrap();
+        store
+            .finish_run("r-1", "done", 123, "旧数据", "")
+            .unwrap();
+        drop(store);
+        // 版本拨回 3 模拟 004 前老库（003 结构），重 open 触发 004 重建
+        let db = dir.path().join("agent").join("runtime.sqlite3");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.pragma_update(None, "user_version", 3).unwrap();
+        }
+        let store2 = crate::Store::open(&db).unwrap();
+        let old = store2.run_by_id("r-1").unwrap().expect("存量 run 应保留");
+        assert_eq!((old.kind.as_str(), old.status.as_str(), old.summary.as_str()), ("probe", "done", "旧数据"));
+        // 新 kind：terminal 可插可查（新 CHECK 生效）
+        let tid = store2.next_task_id("terminal").unwrap();
+        assert!(tid.starts_with("terminal-"));
+        store2.insert_run(&start_row(&tid, "sess-1", "terminal")).unwrap();
+        assert_eq!(store2.run_by_id(&tid).unwrap().unwrap().kind, "terminal");
     }
 
     /// 按 id 单查：run_by_id 命中/未命中
@@ -261,7 +304,7 @@ mod tests {
     fn run_by_id_hit_and_miss() {
         let (_dir, store) = testutil::open_store();
         testutil::seed_session(&store, "sess-1");
-        let id = store.next_run_id().unwrap();
+        let id = store.next_task_id("delegate").unwrap();
         store.insert_run(&start_row(&id, "sess-1", "delegate")).unwrap();
         let row = store.run_by_id(&id).unwrap().expect("应命中");
         assert_eq!(row.kind, "delegate");

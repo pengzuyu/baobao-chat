@@ -168,7 +168,7 @@ pub fn run_team(
         .unwrap_or(0);
     let started = std::time::Instant::now();
     let run_id = wal
-        .next_run_id()
+        .next_task_id("team")
         .unwrap_or_else(|| format!("team-{now_ms}-{}", TEAM_SEQ.fetch_add(1, Ordering::Relaxed)));
     let def_ref = format!("team:{}", topology_name(graph.topology));
     let eta_hint = wal
