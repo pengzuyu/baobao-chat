@@ -2,7 +2,7 @@
 
 > **⚠ 2026-11 瘦身二阶段注记**：音视频通话（rtc/LiveKit）、会议（meeting）域与文件分享外链（/s/{code}）已移除——本文涉及 rtc.*/meeting.*/call_card/通话卡片/会议/分享外链的章节已作废，错误码 4010-4012 与 5xxx 段废弃不复用。删除前快照：git 分支 `backup/full-suite-20261109`。
 
-对应概要设计（`docs/` 00–17 篇）的**详细设计阶段**：页面（区块级线框）、交互（事件级）、接口（字段级）、模型（DDL 级）、响应（四档断点 + 六态 + 性能反馈）、模块划分（文件级目录树）。
+对应概要设计（`docs/` 00–22 篇；17 篇已随委派域退役删除，2026-11-19）的**详细设计阶段**：页面（区块级线框）、交互（事件级）、接口（字段级）、模型（DDL 级）、响应（四档断点 + 六态 + 性能反馈）、模块划分（文件级目录树）。
 
 ## 公共规范（所有模块篇必须遵守）
 
@@ -19,15 +19,15 @@
 | D03 | IM 模块详细设计 | 04 | 会话列表/消息流/群管理/搜索/通知中心 |
 | D06 | 文件与图片模块详细设计 | 07 | 传输管理器/查看器/发送预览/我的文件/外链 |
 | D07 | 知识库模块详细设计 | 11 | 三级空间/检索/摄入/授权/敏感治理 |
-| D08 | Agent 工作台模块详细设计 | 08/09/17 | 会话视图/审批卡/委派卡/检查点/后端管理 |
+| D08 | Agent 工作台模块详细设计 | 08/09 | 会话视图/审批卡/检查点/运行详情（委派卡与后端管理已退役） |
 | D09 | 生态应用与技能模块详细设计 | 10 | 发布向导/灰度/技能市场/安装管理 |
 | D10 | 管理后台模块详细设计 | 12 | 仪表盘/组织/用户/角色/策略/审计/用量 |
-| D11 | Agent Runtime 内部详细设计 | 08/09/17 | crate 划分/状态机/stdio 协议/上下文引擎/沙箱管线 |
+| D11 | Agent Runtime 内部详细设计 | 08/09 | crate 划分/状态机/stdio 协议/上下文引擎/沙箱管线（bbrt-delegate 已退役） |
 | D12 | 身份与组织域详细设计 | 03/12 | **多租户隔离与生命周期/权限判定引擎/权限点全字典/认证页面族/通讯录/账号安全/设备管理**；管理端组织·用户·角色页面外壳见 D10，领域机制与 API/模型在本篇 |
-| D13 | 变更控制模式与沙箱执行详细设计 | 09/17/D11 | **A**：三档模式（变更前确认/自主/完全控制）能力矩阵·配置层级·升降级交互；**B**：无 Docker 沙箱（bwrap/Seatbelt/JobObject 分层防御·降级矩阵·逃逸测试） |
-| D14 | 专家 Agent 与多智能体协作设计 | 08/10/17/D11 | **Team Graph**：专家 Persona 定义（工具/技能/MCP 绑定）·公司库+个人库两级分发·三种协作拓扑·黑板通信·MCP 客户端/服务端两期方案·对 dsh 的采纳决策记录 |
+| D13 | 变更控制模式与沙箱执行详细设计 | 09/D11 | **A**：三档模式（变更前确认/自主/完全控制）能力矩阵·配置层级·升降级交互；**B**：无 Docker 沙箱（bwrap/Seatbelt/JobObject 分层防御·降级矩阵·逃逸测试） |
+| D14 | 专家 Agent 与多智能体协作设计 | 08/10/D11 | **Team Graph**：专家 Persona 定义（工具/技能/MCP 绑定）·公司库+个人库两级分发·三种协作拓扑·黑板通信·MCP 客户端/服务端两期方案·对 dsh 的采纳决策记录 |
 | D15 | Agent 记忆双轨与日报详细设计 | 08/09/D11/D08 | **主动轨**：知识记忆（ZCode 式 memory/*.md+MEMORY.md，工具/规则/会话提炼三写入路径，召回注入）；**被动轨**：活动日志→确定性日报（journal JSONL→reports/YYYY-MM-DD，幂等+回补）；与 09 篇权限三级记忆正交 |
-| D16 | [子 Agent 三形态与 Run 记录模型设计](D16-子Agent三形态与Run记录模型设计.md) | 08/17/D11/D14 | **最终口径**：通用子 agent（同主 prompt 全工具）/专家（建议配置+本地覆写）/本机 CLI 委派（零凭证）；**run 记录**：agent_run 统一审计行+调用链字段+事件挂 run_id；同步等待窗 120s+委派直接后台+无时长上限；对上游文档的修订清单 |
+| D16 | [子 Agent 三形态与 Run 记录模型设计](D16-子Agent三形态与Run记录模型设计.md) | 08/D11/D14 | **最终口径**：通用子 agent（同主 prompt 全工具）/专家（建议配置+本地覆写）+terminal 后台命令；**run 记录**：agent_run 统一审计行+调用链字段+事件挂 run_id；同步等待窗 120s+超窗转后台+无时长上限（原「本机 CLI 委派」形态已退役，2026-11-19） |
 | D18 | [IM 内嵌 Agent 卡详细设计](D18-IM内嵌Agent卡详细设计.md) | 08/D03/D08/09 | **(用户,会话) 一会话**·完整过程透明卡（思考/工具/结论，推翻 D08 轻量口径）·审批弹框聊天页（推翻 OQ-B08 白名单）·分阶段更新落流（agent_card+PATCH 通道）·升级=文本注入；安全五层纵深登记阶段二（v0.1 复用 agent 既有能力）；bbrt/协议零改动 |
 | D19 | [Agent 项目/日常双区与记忆分级详细设计](D19-Agent项目与日常对话及记忆分级详细设计.md) | 08/D08/D09/D11/D13/D15/D18 | **双区模型**：session.start workspace 空串=日常/非空=项目（realpath 归一+agent_workspace 接线+workspace_id 回填）·**沙箱按会话路由**（修全局 "." 占位缺口：项目会话各自沙箱根、日常 workspace 类工具 8020 拒绝）·**记忆分级**（memory/projects/<目录名-哈希> 分区+类型驱动路由+两段召回）·session.list 持久恢复+workspace 三 REQ·工作台过程显示对齐 change-my-life（思考卡流式展开/工具组汇总条/自动折叠） |
 | D20 | [ask-user 提问卡详细设计](D20-ask-user提问卡详细设计.md) | 08/D08/D11/D18/09 | **ZCode 式澄清机制**：ask_user 工具（loop_runner 拦截不走 pipeline）·clarify.request/response 协议对（camelCase 键，**无超时**——等用户或「停止」中断收口 cancelled）·WaitingClarify 状态（#6b/#7b）·三端提问卡（工作台 ClarifyCard/聊天页 Modal/落流卡内嵌条，ClarifyForm 共用）·答案进工具结果（结构化回给模型）·完全镜像 permission 阻塞机制 |
@@ -42,10 +42,10 @@
 | D27 | [主题机制与色彩规范](D27-主题机制与色彩规范.md) | D26/D01 | **黑白反色主题+取色单源机制**（用户拍板「主题色黑」+去毛坯修正）：themeConstants 唯一色源（antdThemeFrom→ConfigProvider / cssVarsFrom→注入 --bbc-* 双轨同源）·分层黑（布局 #0a0a0a/容器 #141414/浮层 #1c1c1c）·灰阶 10 阶中性化·语义色按底调亮度·默认暗色+防闪烁三处同步·开发守则（禁止硬编码色值/新增颜色四步流程/白名单）·验收清单 |
 | D28 | [OIDC 统一认证与生态接入面设计](D28-OIDC统一认证与生态接入面设计.md) | 03/14/D22 | **bbc auth 对外做标准 OP**：嵌 zitadel/oidc v3·一期只生态面·ES256+jwks·授权码+PKCE·web 兜底=IdP 浏览器会话 7 天滑动·6 位确认码深链点头像（bbc://）·per-app access=JWT refresh=opaque 轮换重放拒·授权管理/撤销面·MCP 三类信任域 |
 | D29 | [对象存储后端切换 RustFS 设计](D29-对象存储后端切换RustFS设计.md) | D25/01/16 | **MinIO 移除换 RustFS**（AGPL 禁入风险+开源版 2026-02 归档无补丁双触发）：Apache-2.0·Ceph s3tests 兼容矩阵背书·SeaweedFS 因桶版本化不完整落选·Go/前端零协议改动（D25 aws-sdk-go-v2 红利）·mc→aws-cli init 全标准 S3 API·BBC_TEST_S3_ADDR 门控集成测试落地（清偿 D25 §10 遗留） |
-| D30 | [外部智能体接入面设计](D30-外部智能体接入面设计.md) | D14/17/09/18(G12) | **打开中的桌面壳长出本机回环 A2A server 面**（兑现 G12 二期预留）：127.0.0.1:8791 单监听器两张脸——A2A 正身（agent card+message/send+tasks/get，task.id=sessionId 续聊天然）+MCP 方言脸 /mcp（bbc_agent_chat）；bbc ask CLI 第三客户端；宿主=打开中的 App（D14 不破·身份/知识库按同事本人）·本机 token 鉴权（授权卡发放/撤销）·防环=外部会话禁 delegate（命令层拦）·审批卡照弹 App 内人工点 |
+| D30 | [外部智能体接入面设计](D30-外部智能体接入面设计.md) | D14/09/18(G12) | **打开中的桌面壳长出本机回环 A2A server 面**（兑现 G12 二期预留）：127.0.0.1:8791 单监听器两张脸——A2A 正身（agent card+message/send+tasks/get，task.id=sessionId 续聊天然）+MCP 方言脸 /mcp（bbc_agent_chat）；bbc ask CLI 第三客户端；宿主=打开中的 App（D14 不破·身份/知识库按同事本人）·本机 token 鉴权（授权卡发放/撤销）·防环=外部会话禁 delegate（命令层拦）·审批卡照弹 App 内人工点 |
 | D31 | [品牌白标与构建期注入设计](D31-品牌白标与构建期注入设计.md) | 00/16/D21/D28 | **换名换标单源化**（开源适配：内网自部署方改 `brand/` 一处即出自己的包）：brand.json+logo.svg/icon.png 固定目录·gen.mjs 生成 tauri.conf 域/前端 brand.ts/壳 brand.rs/图标全套·深链 scheme 四处定义收敛单源·服务端三 env（BBC_BRAND_NAME/BBC_DEEP_LINK_SCHEME/BBC_MAIL_DOMAIN——2026-11-18 由 BOOTSTRAP 改名通用化）·前端 11 触点收敛·拍板=品牌可变身份不变（identifier/scheme/keyring/存储前缀锁定）·运行时下发不做·LICENSE 挂账另拍 |
-| D32 | [Agent 安全模式重构设计](D32-Agent安全模式重构设计.md) | 09/17/D11/D13/D19 | **权限矩阵放宽对齐 ZCode+Seatbelt 退场**（前提=bbrt 跑每人本机）：任意命令 full-auto✅·网络出站/git push/委派 auto-edit+✅·高危三档双确认保留·**CorpWrite 唯一保留三档🔶+Session 记忆**（效果落他人不可撤）；删 sandbox A 层（SandboxLevel/detect/DegradedInfo）留 B 进程生命周期+C 词法（launcher unix-only 编不过 Windows 是删的直接动因）；白名单语义收紧=构建工具直调专属（执行文件形态/shell 包装形态落任意命令）；**暗墙三件（敏感拒读/内容脱敏/env strip）用户否决缓议**（agent 需拿 token 办事），已知情风险+存档方案在 §6/§9；推翻 D13-A2「永不全自动清单」部分（网络/push/委派移出） |
-| D33 | [工作台 Agent 消息流渲染设计](D33-工作台Agent消息流渲染设计.md) | D08/D18/D19/D16/D22/D26 | **zcode 式平铺流**：弃回合卡片·类型化块（思考/工具族细分：读/写/编辑红绿diff/终端/搜索/git/MCP 徽标/记忆/内部/兜底·内置+委派后端双命名映射）·用户消息也平铺·收口过程折叠一行统计（总耗时）·skill 显式工具（Claude Code 同款，结果=正文注入，隐式触发词退役）·subagent.trace 过程事件+run.history 回放（子 agent 侧栏=右栏 Tabs 运行详情，AgentStreamView 与中栏共用）·WAL tool.call 补 args_masked（重启保真）·args 字符串归一化修真机终端卡存量坑·IM 卡不动（修订「两处同一实现」拍板） |
+| D32 | [Agent 安全模式重构设计](D32-Agent安全模式重构设计.md) | 09/17/D11/D13/D19 | **权限矩阵放宽对齐 ZCode+Seatbelt 退场**（前提=bbrt 跑每人本机）：任意命令 full-auto✅·网络出站/git push auto-edit+✅·高危三档双确认保留（委派档已随委派域退役）·**CorpWrite 唯一保留三档🔶+Session 记忆**（效果落他人不可撤）；删 sandbox A 层（SandboxLevel/detect/DegradedInfo）留 B 进程生命周期+C 词法（launcher unix-only 编不过 Windows 是删的直接动因）；白名单语义收紧=构建工具直调专属（执行文件形态/shell 包装形态落任意命令）；**暗墙三件（敏感拒读/内容脱敏/env strip）用户否决缓议**（agent 需拿 token 办事），已知情风险+存档方案在 §6/§9；推翻 D13-A2「永不全自动清单」部分（网络/push/委派移出） |
+| D33 | [工作台 Agent 消息流渲染设计](D33-工作台Agent消息流渲染设计.md) | D08/D18/D19/D16/D22/D26 | **zcode 式平铺流**：弃回合卡片·类型化块（思考/工具族细分：读/写/编辑红绿diff/终端/搜索/git/MCP 徽标/记忆/内部/兜底）·用户消息也平铺·收口过程折叠一行统计（总耗时）·skill 显式工具（Claude Code 同款，结果=正文注入，隐式触发词退役）·subagent.trace 过程事件+run.history 回放（子 agent 侧栏=右栏 Tabs 运行详情，AgentStreamView 与中栏共用）·WAL tool.call 补 args_masked（重启保真）·args 字符串归一化修真机终端卡存量坑·IM 卡不动（修订「两处同一实现」拍板） |
 
 ## 模板（D01 §13）
 

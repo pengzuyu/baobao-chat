@@ -20,7 +20,7 @@ Agent 是 BaobaoChat 的一等公民（00 篇 §2.2）：一个运行在员工�
 - 打开本地项目工作区，读写代码、执行脚本/命令、使用本人系统权限；
 - 访问公司内部内容（文档/知识库/生态应用）**一律以用户身份**（OBO，03 篇 §6）鉴权，Agent 永远没有独立账号；
 - Agent Runtime 为 Rust sidecar 独立进程（01 篇 §4），**自研循环，不引入 LangChain/LlamaIndex 等框架**；
-- **编排与执行分离（17 篇）**：Runtime 的定位是"**编排者**"——需求澄清、公司上下文收集（KB/文档/生态应用，OBO）、任务拆分、审查与汇总；**编码执行优先委派给用户本机的成熟编码智能体**（zcode / Claude Code 等，headless 适配器，17 篇），本篇 §4.1 的自研编码循环保留为**内置兜底后端**。
+- **编排与执行一体**：Runtime 既是**编排者**（需求澄清、公司上下文收集（KB/文档/生态应用，OBO）、任务拆分、审查与汇总）也是执行者——编码由本篇 §4.1 的自研循环 + 子 Agent/专家会诊 + terminal 后台任务完成。（原「编码执行优先委派给用户本机的成熟编码智能体（zcode / Claude Code 等 headless 适配器），自研循环作内置兜底」的 17 篇口径已随委派域整域退役 2026-11-19；反向的「被外部智能体调用」见 [detail/D30](detail/D30-外部智能体接入面设计.md)。）
 
 ### 1.2 设计原则（逐条对齐 00 篇 §5 P0）
 
@@ -39,7 +39,7 @@ Agent 是 BaobaoChat 的一等公民（00 篇 §2.2）：一个运行在员工�
 | 做 | 不做 |
 |---|---|
 | 本地项目开发（读/写/改/跑测试/构建） | 不执行用户未确认的高危命令（09 篇门控） |
-| 编码任务委派本地编码智能体（zcode/Claude Code/内置兜底，17 篇） | 不向子智能体下发任何公司凭证（OBO/模型 Key 只在编排层，17 篇 §5.1） |
+| 编码任务（自研循环 + 子 Agent/专家会诊 + terminal 后台任务） | 不向子智能体下发任何公司凭证（OBO/模型 Key 只在编排层） |
 | 脚本执行、git 检查点与恢复 | 不跨租户访问（P0-5） |
 | 知识库/文档检索与摘要（OBO） | 不代替用户做最终业务审批决策（只准备材料、提交草稿） |
 | 生态应用工具调用（OBO，10 篇） | 不常驻后台自动唤醒任务（阶段四评估定时任务） |
@@ -271,7 +271,7 @@ compacting: 快模型将"最旧一半轮次"摘要为归档段(bullet)
 
 分解时机：快模型判定任务 complex（涉及多目录/多文件/多信息源）→ 生成探查子任务清单 → fan-out 并行 → join 汇总 → 主 Agent 基于摘要继续规划修改。子 Agent 事件以 `subagent.event` 上报 UI（中栏折叠显示）。
 
-> 区分三种"派生执行体"：本节**子 Agent** 是 Runtime 进程内的轻量上下文（复用本篇工具集与 09 篇权限模型）；**专家 Agent**（[detail/D14](detail/D14-专家Agent与多智能体协作设计.md)）是带独立工具集/技能/MCP 绑定的受限子会话（公司库+个人库两级，可按协作图组队）；**委派外部编码后端**（17 篇）是独立子进程（zcode/Claude Code），有各自的工具体系，经 CodingBackend 适配器受控运行、事件归一化回流。三者可组合：探查子 Agent 收集上下文 → 专家团队（协作图）分析/评审 → 委派外部后端实现 → 主 Agent 审查 diff。
+> 区分三种"派生执行体"：本节**子 Agent** 是 Runtime 进程内的轻量上下文（复用本篇工具集与 09 篇权限模型）；**专家 Agent**（[detail/D14](detail/D14-专家Agent与多智能体协作设计.md)）是带独立工具集/技能/MCP 绑定的受限子会话（公司库+个人库两级，可按协作图组队）；**terminal 后台命令**（统一后台任务体系，[detail/D16](detail/D16-子Agent三形态与Run记录模型设计.md)）是脱离当前轮的进程组，经 DetachedCommand 收割、`task.wait` 取回。三者可组合：探查子 Agent 收集上下文 → 专家团队（协作图）分析/评审 → terminal 跑构建等长任务 → 主 Agent 汇总。（原「委派外部编码后端（zcode/Claude Code 独立子进程，CodingBackend 适配器）」形态已随委派域退役 2026-11-19。）
 
 ### 4.6 模型路由
 
@@ -291,7 +291,7 @@ compacting: 快模型将"最旧一半轮次"摘要为归档段(bullet)
 
 ### 4.7 会话生命周期状态机
 
-> **状态枚举权威出处**：细化为 starting + 9 态（含 waiting_review / subagent_fanout / delegating / error，原 active/thinking/tool_running 收敛为 running），完整迁移表见 [detail/D11 §会话状态机](../detail/D11-AgentRuntime内部详细设计.md)。
+> **状态枚举权威出处**：细化为 starting + 7 态（含 subagent_fanout / error，原 active/thinking/tool_running 收敛为 running；委派审查两态 waiting_review / delegating 已随委派域退役 2026-11-19），完整迁移表见 [detail/D11 §会话状态机](../detail/D11-AgentRuntime内部详细设计.md)。
 
 ```
                  ┌──────────── crash(09篇§4.6) ─────────────┐
@@ -350,7 +350,7 @@ new → starting → active ⇄ thinking ⇄ tool_running            │
 
 ### 6.1 stdio JSONL 消息协议（宿主 ↔ Runtime，14 篇 §1 表列"08 篇附录"）
 
-> **命名权威出处**：消息全表（37 条，含 runtime.ready / session.ready / checkpoint.create / subagent.spawn / delegate.brief 等）以 [detail/D11 §stdio 全消息表](../detail/D11-AgentRuntime内部详细设计.md) 为准；本节为概要示例，命名风格统一为 `域.动作`（如 tool.call → 以 D11 表为准）。
+> **命名权威出处**：消息全表（含 runtime.ready / session.ready / checkpoint.create / subagent.spawn / run.cancel 等）以 [detail/D11 §stdio 全消息表](../detail/D11-AgentRuntime内部详细设计.md) 为准；本节为概要示例，命名风格统一为 `域.动作`（如 tool.call → 以 D11 表为准）。
 
 信封（对齐 14 篇风格，UTF-8 每行一条 JSON）：`{"v":1,"id":"h-123|r-456","reply_to":"...?","type":"...","ts":...,"payload":{...}}`；`id` 前缀 h-（宿主）/ r-（Runtime），请求-响应用 `reply_to` 配对。宿主每 20 s 发 `ping`，5 s 未回 `pong` 判定不健康 → 重启 Runtime（09 篇 §4.6）。
 

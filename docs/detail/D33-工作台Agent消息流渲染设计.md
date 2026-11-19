@@ -13,14 +13,14 @@
 | 3 | **子 agent 侧栏 = 复用右栏 aside，tab 管理** | AgentContextSidebar 改 antd Tabs（会话信息/运行记录/检查点/记忆+新「运行详情」）；运行详情视图内用与中栏同一 `AgentStreamView` 渲染该 run 完整过程（「与主 agent 一样，但不在一个窗口」的落点）；该 tab 激活时 aside 加宽至 ~480px |
 | 4 | **IM 内嵌卡不动，工作台新写**（修订 2026-11-11「两处同一实现」拍板） | AgentProcessCard 归 IM 落流卡/发起者卡专用（服务端 stages 协议不动）；工作台新写 `features/agent/components/stream/` 组件族；MarkdownText 等原子件继续共用；stagesFromStream 投影归 IM 卡专用 |
 | 5 | **Rust 协议三件套纳入本批** | ① skill 工具（见 #2）；② `subagent.trace` 过程事件（probe 每步文本/工具外发+WAL）+ `run.history` 回放 REQ；③ WAL `tool.call` 行补 args_masked + `HistoryItem::Tool` 加 args（重启回放保真） |
-| 6 | MCP 无独立事件 | MCP 工具走 toolCall 统一通道，名 `mcp.{server}.{tool}`（内部）/ `mcp__server__tool`（委派后端）——UI 按前缀拆解渲染（server 徽标），协议零改动 |
+| 6 | MCP 无独立事件 | MCP 工具走 toolCall 统一通道，名 `mcp.{server}.{tool}`——UI 按前缀拆解渲染（server 徽标），协议零改动 |
 | 7 | 历史回放保真度口径 | WAL 仍是摘要级：reasoning/审批/澄清/系统行不入历史（既定口径延续）；工具卡因 args_masked 补记而保真（命令/路径/diff 重启可见）；旧行无 args → None 降级 |
 
 ## 2. 现状锚点（2026-11-17 逐行核对）
 
 **渲染层**：`client/src/features/agent/components/TurnBubble.tsx`（回合气泡：`groupTurns` L155 分组 / `renderProcessItems` L85 过程条目 / memo 逐条引用比较 L250）；过程卡= `shared/components/AgentProcessCard.tsx`（IM+工作台共用；`agentStatsText` L205 统计口径「用时·N次LLM调用·N次工具·N个子agent」；ThinkingCollapse L72 流式展开收尾折叠；ToolRow L119 终端行）；工具卡 `components/ToolCard.tsx`（单一泛型卡：图标按名前缀 L19、run_command 特判「终端」）；工作台三栏 `pages/AgentWorkbenchPage.tsx`（右栏 aside 304px 挂 AgentContextSidebar L548-570）；`store/agent.ts`（StreamItem 联合 L26-84 / handleEvent L684 / stampTurnDone L361=收口打点 turnDoneAt−ts / historyToStreamItem L282 args 合成空）。
 
-**协议层**：wire 权威 `bbrt-protocol/src/envelope.rs`（RuntimeToHost L779-：stream.delta(channel text/reasoning)、tool.call(args_masked=JSON字符串/risk/parallel/source self|backend)、tool.result(ok/summary/truncated/exit_code/blocked/duration_ms)、permission/clarify、subagent.spawn/event/join、delegate.*；HistoryItem L390-三态）；**skill 零事件**（`bbrt-session/src/skills.rs`：match_for 命中→render 拼正文→loop_runner.rs:732 注入 system 组装，全程静默）；**子 agent 过程不外发**（`subagent.rs` run_probe：drain L559 整段收集、工具执行只写进程内 history；WAL 仅 subagent.spawn/input/cancel/event 摘要行；child_session_ref 仅委派非空）；WAL `agent_event` 表（run_id 列已建，003 迁移）；`tool.call` WAL 行只记 `{call_id,tool}`（loop_runner.rs:949）——args 不落库；**真机 self 工具 args 是 JSON 字符串**（bridge.rs:188 包 Value::String）而前端类型声明是对象——终端卡头部命令在真机实际显示不出（存量坑，批2 归一化修复）；壳事件泵（`agent_bridge.rs` L492+）对非 delta 事件类型无关透传（normalize_event 通用键名转换），新 wire 类型无需改泵。
+**协议层**：wire 权威 `bbrt-protocol/src/envelope.rs`（RuntimeToHost L779-：stream.delta(channel text/reasoning)、tool.call(args_masked=JSON字符串/risk/parallel/source self)、tool.result(ok/summary/truncated/exit_code/blocked/duration_ms)、permission/clarify、subagent.spawn/event/join、delegate.*；HistoryItem L390-三态）；**skill 零事件**（`bbrt-session/src/skills.rs`：match_for 命中→render 拼正文→loop_runner.rs:732 注入 system 组装，全程静默）；**子 agent 过程不外发**（`subagent.rs` run_probe：drain L559 整段收集、工具执行只写进程内 history；WAL 仅 subagent.spawn/input/cancel/event 摘要行；child_session_ref 仅委派非空）；WAL `agent_event` 表（run_id 列已建，003 迁移）；`tool.call` WAL 行只记 `{call_id,tool}`（loop_runner.rs:949）——args 不落库；**真机 self 工具 args 是 JSON 字符串**（bridge.rs:188 包 Value::String）而前端类型声明是对象——终端卡头部命令在真机实际显示不出（存量坑，批2 归一化修复）；壳事件泵（`agent_bridge.rs` L492+）对非 delta 事件类型无关透传（normalize_event 通用键名转换），新 wire 类型无需改泵。
 
 ## 3. 机制设计
 
@@ -42,7 +42,7 @@
 - 发射点（run_probe 循环）：drain 后 text 非空 → trace(text)；每个 tc 执行前 → trace(tool_call)；execute 返回 → trace(tool_result)。
 - 持久化：每个 trace 同步 `wal.append_run(session_id, run_id, "subagent.trace", payload)`（agent_event.run_id 列既有）。
 - bridge.rs 映射：risk `medium→mid` 与 tool.call 同口径；events.rs 加 SessionEvent::SubagentTrace。
-- 范围：v0.1 仅 probe（探查是 fan-out 主力）；expert/team 登记阶段二（team.rs 循环同构可后续套用）；delegate 不做（已有归一化 tool.call source=backend 直进主流）。
+- 范围：v0.1 仅 probe（探查是 fan-out 主力）；expert/team 登记阶段二（team.rs 循环同构可后续套用）。
 - 前端路由：trace 按 runId 进 `sideStreams`，**不进主时间线**（主流仍只有 spawn 卡+done 摘要，防噪音）。
 
 ### 3.3 run.history 回放 REQ
@@ -50,7 +50,7 @@
 - `HostToRuntime::RunHistory { run_id }` → `RuntimeToHost::RunHistoryResult { run_id, items: Vec<HistoryItem> }`（照 session.history 模式：main.rs 分发 + store `events_by_run(run_id)` 查询 + 投影）。
 - 投影 `wal_run_history(events)`：`subagent.spawn` 行 → `User{task}`（payload 已含 task 截断 60 字）；`subagent.trace` text → `Assistant{text}`；tool_call/tool_result 按 call_id 配对 → `Tool{call_id, tool, ok, summary, args}`；其余行忽略。
 - 透传链：Tauri command `run_history`（agent_commands.rs 照 session_history）→ bridge `runHistory(runId)` → store `loadRunHistory`。
-- delegate 的运行详情：优先 `delegateEnd.childSessionRef` 走既有 session.history（子会话）；无 ref 或 probe/expert/team 走 run.history。
+- 运行详情：probe/expert/team/terminal 统一走 run.history 回放（原 delegate 的 childSessionRef 子会话历史随委派域退役 2026-11-19）。
 
 ### 3.4 WAL args 保真（历史回放）
 
@@ -73,13 +73,12 @@
 | tool | `ToolBlock`（家族分流） | 见下表 |
 | skill | `SkillCard` | tool='skill' 专属：🧩 技能名 + 已加载正文摘要（展开看全文） |
 | subagent | `SubagentCard`（改造） | 折叠头行 + 状态/耗时 + **「查看过程」入口**→右栏运行详情 tab；运行中补充指令/取消保留 |
-| delegate | `DelegateCard`（沿用） | 四相位不变 + 查看过程入口 |
 | permission/clarify | `PermissionCard/ClarifyCard`（平铺化） | 交互不变，容器去卡套 |
 | system/error | `SystemRow/ErrorRow`（迁移） | 居中灰条 / 红字行，不变 |
 
-工具家族（`toolFamilies.ts` 的 `classifyTool(tool, source)`，内置 snake_case 与委派后端 PascalCase 双命名映射；无 delete_file 工具——本产品无删除面，委派后端若有按 generic 兜底如实显示）：
+工具家族（`toolFamilies.ts` 的 `classifyTool(tool)`，内置 snake_case 工具名映射；无 delete_file 工具——本产品无删除面，未知名按 generic 兜底如实显示）：
 
-| family | 内置名 | 委派后端名 | 头部 | 展开体 |
+| family | 内置名 | 头部 | 展开体 |
 |---|---|---|---|---|
 | fileRead | read_file / list_dir | Read / LS | 「读取/列目录」+路径(+行区间) | 参数+结果摘要（行数等） |
 | fileWrite | write_file | Write | 「写入」+路径 · N行/N字节（args.content 计算） | 内容预览 |
@@ -90,7 +89,7 @@
 | web | http_fetch | WebFetch/WebSearch | 「网络」+URL/查询 | 参数+结果摘要 |
 | memory | memory_* | — | 「记忆」+动作词 | 参数+结果 |
 | mcp | mcp.{server}.{tool} | mcp__s__t | server 徽标「MCP · {server}」+工具名 | 参数+结果 |
-| internal | subagent.adjust/cancel、coding.delegate | — | 「内部」+工具名 | 参数+结果 |
+| internal | subagent.adjust/cancel、task.wait | 「内部」+工具名 | 参数+结果 |
 | generic | 兜底 | 兜底 | 图标+工具名+关键参数（现 ToolCard 形态） | 参数 JSON+结果 |
 
 头行统一：图标+动作词+关键参数（单行截断）+ 状态（运行中 Spin/ok·耗时/失败·exit/blocked 红条带）；**运行中自动展开、落定折叠**（D19 口径延续）；blocked 8020-8026 文案映射沿用 ToolCard 现表。
@@ -100,8 +99,8 @@
 ### 3.6 右栏 aside tab 化 + 运行详情
 
 - `AgentContextSidebar` 改 antd Tabs：会话信息 / 运行记录 / 检查点 / 记忆 / **运行详情**（新）；默认会话信息。
-- 打开入口：SubagentCard/DelegateCard「查看过程」、运行记录行点击 → `setActiveRunView(runId)` 切运行详情 tab。
-- 数据：直播 sideStreams[runId]（subagentSpawn 合成 user 条目=taskDigest；subagentTrace 投影：text→agentText、tool_call/result→tool 条目按 callId 配对——与主流 handleEvent 逻辑抽公共函数）；打开时若空 → loadRunHistory(runId) 回放（delegate 优先 childSessionRef 的 session.history）。
+- 打开入口：SubagentCard「查看过程」、运行记录行点击 → `setActiveRunView(runId)` 切运行详情 tab。
+- 数据：直播 sideStreams[runId]（subagentSpawn 合成 user 条目=taskDigest；subagentTrace 投影：text→agentText、tool_call/result→tool 条目按 callId 配对——与主流 handleEvent 逻辑抽公共函数）；打开时若空 → loadRunHistory(runId) 回放（原 delegate 的 childSessionRef 优先口径随委派域退役移除 2026-11-19）。
 - 布局：运行详情 tab 激活时 aside 宽 304→480px（其余 tab 原宽）；aside 折叠机制不变。
 
 ## 4. 批次划分（每批一提交一推送）
@@ -111,8 +110,8 @@
 | 0 | 文档 | 本篇 + README 索引 + D08 文首修订注记 | 小 |
 | 1 | Rust | skill 工具（builtin+pipeline+索引区改版+隐式注入退役）/ subagent.trace（envelope+events+bridge+subagent 发射+WAL）/ run.history REQ / WAL args 补记 + HistoryItem.args / 测试（roundtrip+wal_history+trace+skill） | 大 |
 | 2 | 前端桥/store | normalizeEvent：subagent.trace case + **toolCall.args 字符串归一化（存量坑修复）**；AgentEvent/HistoryItem 类型；runHistory 链路（command+bridge）；sideStreams+activeRunView+subagentTrace 投影+loadRunHistory；mock 剧本补 skill/trace | 中 |
-| 3 | 前端渲染 | stream/ 组件族（AgentStreamView/TurnBlock/UserBlock/ReasoningBlock/MidText/SkillCard/ToolBlock+toolFamilies/SystemRow/ErrorRow）+ Permission/Clarify/Subagent/Delegate 平铺化 + AgentWorkbenchPage 中栏切换 | 大 |
-| 4 | 前端右栏 | AgentContextSidebar Tabs 化 + 运行详情视图 + SubagentCard/DelegateCard 入口 + aside 动态宽 | 中 |
+| 3 | 前端渲染 | stream/ 组件族（AgentStreamView/TurnBlock/UserBlock/ReasoningBlock/MidText/SkillCard/ToolBlock+toolFamilies/SystemRow/ErrorRow）+ Permission/Clarify/Subagent 平铺化 + AgentWorkbenchPage 中栏切换 | 大 |
+| 4 | 前端右栏 | AgentContextSidebar Tabs 化 + 运行详情视图 + SubagentCard 入口 + aside 动态宽 | 中 |
 | 5 | 验证 | cargo test / tsc / vite build（不做浏览器 UI 测试——既定口径）+ 本篇 §5 验收清单追记 | 小 |
 
 **落地记录（2026-11-17）**：批0 dcf559e / 批1 9d3f2bb（cargo test 全绿：roundtrip 计数 23/38 + D33 golden×5 + wal_history args + wal_run_history + skill 三态 + skills_loop 新口径两用例）/ 批2 9a7d29b / 批3 0c91768（退役删除 TurnBubble/ToolCard/ToolGroup/StreamMessage 四组件）/ 批4 387d7c7；批5 验证：agent workspace `cargo test` 全绿、`tsc -b` 0 错、`vite build` 成功（7.2s）、壳 `cargo check` 通过（唯一 warning 为既有 TEMP 排错宏非本次引入）。
@@ -136,14 +135,14 @@
 - **args 双形态坑（存量）**：self 工具 args=JSON 字符串 / backend=对象——批2 normalizeEvent 统一 parse（parseToolArgs，失败回落 {}）；mock 桥已发对象不受影响。
 - **ToolCard/ToolRow 的 toolCallCommand 在真机 self 形态下取不到 command**——随归一化修复自然痊愈。
 - **mem 中 streams/sideStreams 均内存态**：刷新即失、重开走历史回放（摘要级口径见拍板 #7）。
-- 委派后端外部工具名映射表（Read/Edit/Bash…）按 normalize.rs 已知名+常见 Claude Code 名枚举，未知名落 generic。
+- ~~委派后端外部工具名映射表（Read/Edit/Bash…）~~：随委派域退役删除（2026-11-19）。
 - **【发现项·D16 遗留缺口，本篇不修】probe 子 agent 工具执行绕审批门**：`run_probe`（subagent.rs）对每步工具直接 `ctx.tools.execute()`，不经 `check()` 门控——与模块注释「写操作走同一审批/沙箱」不符（沙箱词法层仍拦 8020-8026，但矩阵/审批/记忆层缺位）。主循环路径正常。修复需 probe 循环接入 check→NeedConfirm 等待链（审批卡挂到侧栏运行详情），建议另立项或并入 D16 遗留清理。
 - **subagent.trace WAL 行 payload 为 camelCase**（SubagentTraceItem 序列化原样），与主循环 WAL 行（snake_case 手拼）风格不一致——wal_run_history 投影按 camelCase 取键，读侧已对齐；登记备将来 WAL 键名统一时收敛。
 
 ## 7. 登记不做（阶段二）
 
 - 子 agent 逐 token 流式 trace（现整段，IPC 省）；probe reasoning 不外发（现状丢弃）。
-- expert/team 的 trace（team.rs 循环同构，后续套用）；delegate 运行详情的富化（已有归一化流+审查卡）。
+- expert/team 的 trace（team.rs 循环同构，后续套用）。
 - 隐式触发词注入的「自动加载」提示行（机制整体移除，见拍板 #2）。
 - 思考/审批/澄清入历史回放（WAL 摘要级既定口径）。
 

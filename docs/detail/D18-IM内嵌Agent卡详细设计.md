@@ -88,7 +88,7 @@ bob   在「行政群」 → bob   的 embedded 会话 C（跑在 bob 本机）
 **② 工具组（ToolCallGroup 模式）**
 - 灰底汇总条：「正在执行 (N 个工具)」（进行中图标 pulse）/「活动： N 个工具调用」（完成）；**进行中默认展开、完成后折叠**
 - 每工具一行 code 样式：`name — 参数摘要`（优先 path/command/query 等代表性字段，截断 ~60 字；BaobaoChat 加结果摘要列——落流 stages 已有 summary）
-- 子任务卡（SubagentCard/DelegateCard）**插在其发生时的父 phase 之后**，按执行顺序而非全部堆尾
+- 子任务卡（SubagentCard）**插在其发生时的父 phase 之后**，按执行顺序而非全部堆尾
 
 **③ 运行中 vs 完成态（核心视觉规则）**
 - 运行中：思考卡+工具组实时展开 + 最终答案流式 markdown + 瞬态状态行（spinner +「正在思考...」+ **实时已用时计时**，300ms tick）
@@ -100,7 +100,7 @@ bob   在「行政群」 → bob   的 embedded 会话 C（跑在 bob 本机）
 - 终态回显：✅ 已允许，继续执行… / ⛔ 已拒绝；**刷新后挂起的确认照常恢复并可操作**；有未决确认时锁定输入框
 
 **⑤ 补充指令标签（steer 模式）**
-- 运行中发出的补充指令在消息流里带「补充」角标（对应 delegate.input 补充通道的可见化）
+- 运行中发出的补充指令在消息流里带「补充」角标（对应 subagent.adjust 补充通道的可见化）
 
 **⑥ 刷新恢复语义**
 - 发起者刷新页面：活动卡状态从**消息流内已落流的 agent_card（分阶段快照）**恢复——进行中则重接 agent://event 流继续实时渲染（conv→session 映射在 IndexedDB 不丢）；已结束则渲染为完成态折叠摘要条

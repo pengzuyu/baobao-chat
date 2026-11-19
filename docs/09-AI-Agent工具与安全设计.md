@@ -63,7 +63,7 @@
 | doc_write | 创建/修改在线文档 | 高 | 全模式确认（永不全自动，§7.3） | OBO `doc:file:edit` |
 | im_send | 发送消息/Agent 卡片到会话 | 高 | 全模式确认（永不全自动） | OBO `im:message:send` |
 | file_upload | 上传文件到云盘/会话（中转 OBO） | 中 | ask 确认；auto-edit+ 确认 | OBO `file:upload` |
-| coding.delegate / coding.resume / coding.cancel | 委派编码任务给本地编码智能体（zcode/Claude Code 等）/续接会话/取消（17 篇） | 高 | 全模式确认（确认卡显示：后端、工作区、任务简报、能力档位）；须具备 `agent:delegate:use` | —（子智能体零凭证，公司上下文由编排层以文本注入简报） |
+| ~~coding.delegate / coding.resume / coding.cancel~~ | ~~委派编码任务给本地编码智能体（zcode/Claude Code 等）/续接/取消~~ | — | **已退役**：2026-11-19 委派域整域移除；后台任务取消由 `run.cancel`（内部 run 定向）承载 | —（子智能体零凭证，公司上下文由编排层以文本注入） |
 | a2a.call（二期预留） | 外呼外部 A2A Agent（跨系统/跨组织互操作；子 Agent 本地运行不依赖此工具，见 D14 决策记录） | 按目标 Agent Card 声明（默认高） | 默认隐藏，租户开关启用后按声明门控 | 调用者身份透传 |
 | app.* | 生态应用工具，动态注册 | 按清单（低/中/高） | 按清单风险级套用上述规则 | 按清单 OBO scope（10 篇） |
 
@@ -302,7 +302,7 @@
 
 ### 6.4 错误码与权限点对齐
 
-**8xxx 扩充（不与 14 篇 §7 已列 8001-8006 冲突；08 篇占用 8010-8011，本篇占用 8012 与 8020-8028，17 篇占用 8030-8035）**：
+**8xxx 扩充（不与 14 篇 §7 已列 8001-8006 冲突；08 篇占用 8010-8011，本篇占用 8012 与 8020-8028；原 17 篇委派段 8030-8035 已随委派域退役 2026-11-19）**：
 
 | code | 含义 |
 |---|---|
@@ -325,7 +325,6 @@
 | agent:tool:run_command | 解锁 run_command 工具（无则工具隐藏） |
 | agent:mode:full_auto | 允许切换 full-auto 档 |
 | agent:app:install | 用户自装可选生态应用/技能（10 篇） |
-| agent:delegate:use | 委派本地编码智能体执行编码任务（17 篇，普通成员默认含） |
 
 ## 7. 边界 / 异常 / 安全
 

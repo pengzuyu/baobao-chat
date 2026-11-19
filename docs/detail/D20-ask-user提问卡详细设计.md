@@ -18,7 +18,7 @@ Agent 在**关键决策点**向用户发起结构化提问（ZCode AskUserQuesti
 
 ```
 模型 emit ask_user 工具调用
-  └ loop_runner::run_tool 按名拦截（同 coding.delegate 先例，不走 pipeline 门控/执行）
+  └ loop_runner::run_tool 按名拦截（门控内嵌口径，不走 pipeline 门控/执行）
      ├ 状态机 running→waiting_clarify（#6b）
      ├ SessionEvent::ClarifyRequest → bin bridge 映射 protocol ClarifyRequest（UNT）
      │   + BrtSink 路由表登记 question_id→session_id

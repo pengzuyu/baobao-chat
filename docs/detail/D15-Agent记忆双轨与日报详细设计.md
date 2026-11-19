@@ -90,7 +90,7 @@ tool.executed   {session, tool, ok, duration_ms, risk}
 tool.blocked    {session, tool, code}            # 8020-8026 沙箱/门控拦截
 file.changed    {session, path, kind:edit|create|delete}
 checkpoint.created {session, reason}
-delegate.launched / delegate.ended {session, backend, exit_code}
+subagent.spawn / subagent.join {session, run_id, kind, status}
 memory.saved    {session, title, type}
 ```
 
@@ -110,7 +110,7 @@ memory.saved    {session, title, type}
 - 会话 3 个（累计 2h14m）；工作区 baobao-chat、docs-site
 - 工具调用 47 次：read_file×21 edit_file×9 run_command×8 …；被拦截 2 次（8021 危险命令 / 8024 链接逃逸）
 - 文件变更 12：edit×9 create×3；检查点 4（pre-edit×3 manual×1）
-- 委派 1 次（claude，exit 0）；失败教训 1 条
+- 子任务 1 次（probe，done）；失败教训 1 条
 - 今日记忆 +3：「端口 8090 约定」「用户偏好先方案后落笔」「Gitee 远端」
 ## 会话明细
 | 会话 | 工作区 | 时长 | 工具 | 结果 |

@@ -3,7 +3,7 @@
 - 日期：2026-11-17 ｜ 状态：**设计定稿待编码（批次 X）**
 - 前置：[D13](D13-变更控制模式与沙箱执行详细设计.md)（A 模式矩阵 / B 沙箱分层）、[09 篇](../09-AI-Agent工具与安全设计.md)（§4.1 门控管线 / §4.4 处置表）、[D19](D19-Agent项目与日常对话及记忆分级详细设计.md)（沙箱按会话路由）、[D11](D11-AgentRuntime内部详细设计.md)（crate 结构）
 - 动机（三件事叠加）：
-  1. **确认疲劳**：「永不全自动清单」（网络出站/任意命令/git push/委派）三档永不确定，full-auto 用户仍被频繁打断——与 ZCode 实战形态（edit 档文件自动、guarded 档全自动+危险名单拦）差距集中在 matrix() 两处；
+  1. **确认疲劳**：「永不全自动清单」（网络出站/任意命令/git push）三档永不确定，full-auto 用户仍被频繁打断——与 ZCode 实战形态（edit 档文件自动、guarded 档全自动+危险名单拦）差距集中在 matrix() 两处；
   2. **平台一致性与移植**：Seatbelt 仅 macOS；launcher.rs 全文件 unix-only（`std::os::unix`、无 cfg 门控）→ **bbrt sidecar 现编不过 Windows**，而 Windows 桌面在发布面（build-desktop.ps1）；
   3. **ZCode 对照实测**（2026-11-17 本机探针）：ZCode 当前会话 shell 无 OS 沙箱（写 HOME//tmp/工作区外全通+网络 200+无 sandbox-exec 包装）——实战纯靠权限层。宽松的权限站在沙箱/词法/checkpoint 底座上；本篇同向收敛。
 
@@ -11,20 +11,20 @@
 
 | # | 决策 | 内容 |
 |---|------|------|
-| 1 | **矩阵放宽对齐 ZCode** | 网络出站/git push（普通）/委派 → auto-edit+ 自动；任意命令 → full-auto 自动；白名单命令 full-auto 自动（不变）；高危命令三档双确认保留；**CorpWrite 唯一保留三档确认**（效果落他人/共享面，不可撤回）+ Session 级记忆 |
+| 1 | **矩阵放宽对齐 ZCode** | 网络出站/git push（普通）→ auto-edit+ 自动；任意命令 → full-auto 自动；白名单命令 full-auto 自动（不变）；高危命令三档双确认保留；**CorpWrite 唯一保留三档确认**（效果落他人/共享面，不可撤回）+ Session 级记忆 |
 | 2 | **删 Seatbelt（sandbox A 层）** | SandboxLevel/detect()/DegradedInfo/sandbox-exec profile 全退场；launcher 收缩为纯进程管理器（B 层生命周期全保留）；**词法层 C（path.rs/network.rs）保留**=矩阵底座 |
-| 3 | **`BBC_SANDBOX=1` 标记保留** | procmgr 孤儿扫描依赖（bbrt-delegate/procmgr.rs:30 ENV_SANDBOX_MARK），与 Seatbelt 解耦；名字不改避免无谓 churn |
+| 3 | **`BBC_SANDBOX=1` 标记保留** | 环境标记与 Seatbelt 解耦、名字不改避免无谓 churn；现由 DetachedCommand 后台命令与外部孤儿扫描沿用（原唯一消费方 bbrt-delegate/procmgr.rs 已随委派域退役 2026-11-19） |
 | 4 | **白名单语义收紧** | 白名单=「系统构建工具直调」专属；「执行一个文件」形态（解释器+文件参数/npm run/make 等任务运行器）与复合控制运算符形态一律不匹配 → 落 ArbitraryCommand（详见 §5） |
 | 5 | **暗墙否决缓议** | 敏感路径拒读清单/内容脱敏探针/env strip 三件**不做**（理由=agent 有拿 token 去办事的正当场景；`${BBC_USER_TOKEN}` 按需注入不受影响）；已知情接受风险见 §6；方案存档 §9 备复活 |
 | 6 | unknown 工具维持现状 | classify_action 未注册工具已按 ArbitraryCommand 最严档（gate.rs:199），MCP manifest 自报类别**不做**（自报不可信，unknown 统一走任意命令首次确认+记忆） |
-| 7 | D13-A2 部分推翻 | 「永不全自动清单」四类中网络/git push/委派移出（CorpWrite 保留）——D13 篇与 09 篇 §4.1/§4.4 追记注记 |
+| 7 | D13-A2 部分推翻 | 「永不全自动清单」四类中网络/git push 移出（CorpWrite 保留；委派档后随委派域退役）——D13 篇与 09 篇 §4.1/§4.4 追记注记 |
 
 ## 2. 现状锚点（2026-11-17 逐行核对）
 
-- `agent/crates/bbrt-sec/src/gate.rs`：`:25` PermissionMode（ask/auto-edit/full-auto）；`:37` ActionCategory 十类；`:146` static_category（工具名静态映射）；`:177` classify_action（run_command 三段：危险规则→白名单前缀→任意）；`:216` matrix()；`:239` confirm_scopes()；`:253` memory_allowed()（排除 DangerousCommand/CorpWrite/GitPush/Delegate）；`:264` permission_gate 六步（①租户策略→②权限点→③分类+危险拒绝→⑤untrusted→③矩阵→④三级记忆）
+- `agent/crates/bbrt-sec/src/gate.rs`：`:25` PermissionMode（ask/auto-edit/full-auto）；`:37` ActionCategory（委派类已随委派域退役删除）；`:146` static_category（工具名静态映射）；`:177` classify_action（run_command 三段：危险规则→白名单前缀→任意）；`:216` matrix()；`:239` confirm_scopes()；`:253` memory_allowed()（排除 DangerousCommand/CorpWrite/GitPush/Delegate）；`:264` permission_gate 六步（①租户策略→②权限点→③分类+危险拒绝→⑤untrusted→③矩阵→④三级记忆）
 - `agent/crates/bbrt-sec/src/sandbox/launcher.rs`：`:23` SANDBOX_EXEC；Seatbelt（全盘只读+工作区可写+断网 profile）与 Baseline 双路径 + detect() 探测降级（DegradedInfo：命令逐次确认/网络类拒绝/模式压 auto-edit）；**B 层生命周期**=新进程组 setpgid→300s 墙钟超时→SIGINT→3s 宽限→SIGKILL 杀整组+残留补杀→输出 1MB 截断→RSS 看门狗（200ms 轮询）
 - 生产接线：`bbrt-tools/src/config.rs:16/33-48`（ToolsConfig.launcher/violation_sink 可注入+StoreViolationSink）；cmd builtin 执行路径；`bbrt/src/main.rs:159`（launcher: None=构造期 detect）
-- `bbrt-delegate/src/procmgr.rs:30`：ENV_SANDBOX_MARK=`BBC_SANDBOX`（孤儿扫描标记）
+- ~~`bbrt-delegate/src/procmgr.rs:30`：ENV_SANDBOX_MARK=`BBC_SANDBOX`~~（随委派域退役删除；标记语义由 DetachedCommand 沿用）
 - `danger_rules.rs`：迷你 token 匹配语言 + 13 类内置规则——**RemoteScriptExec（curl|sh）/CredentialAccess/ForcePushProtected 已在库**，§5 只需守卫白名单匹配，不动规则库
 - 其余 bbrt-sec：masking.rs（输出脱敏既有）、memory.rs（GrantStore 三级记忆）、path.rs/network.rs（词法，不动）
 
@@ -40,14 +40,14 @@
 | **任意命令（含执行文件形态）** | 🔶 | 🔶 | ✅ | **三档🔶→full-auto ✅** |
 | **网络出站** | 🔶 | ✅ | ✅ | **三档🔶→auto-edit+ ✅**（NetPolicy 兜底目的地） |
 | **git push（普通）** | 🔶 | ✅ | ✅ | **三档🔶→auto-edit+ ✅**（force push 归危险规则） |
-| **委派** | 🔶 | ✅ | ✅ | **三档🔶→auto-edit+ ✅**（子 agent 独立 checkpoint） |
+
 | 高危命令 | 🔶双 | 🔶双 | 🔶双 | 不变 |
 | unknown 工具 | 🔶 | 🔶 | 🔶 | 不变（=任意命令语义，可记忆） |
 | **CorpWrite** | 🔶 | 🔶 | 🔶+Session | **永不确定→仍三档🔶**，唯一保留硬闸 |
 
 ### 3.2 函数级改动
 
-- `matrix()`（gate.rs:216）：`ArbitraryCommand => mode == FullAuto`；`NetworkEgress | GitPush | Delegate => mode != Ask`；`DangerousCommand | CorpWrite => false`（其余不变）
+- `matrix()`（gate.rs:216）：`ArbitraryCommand => mode == FullAuto`；`NetworkEgress | GitPush => mode != Ask`；`DangerousCommand | CorpWrite => false`（其余不变；原 Delegate 分支已随委派域退役）
 - `confirm_scopes()`：CorpWrite 走 default 分支 `[Once, Session]` 已满足拍板（**Permanent 不提供**）；NetworkEgress 保持 `[Once, Session, Permanent]`；其余不变
 - `memory_allowed()`：CorpWrite 从排除表移出**但仅允许 Session 粒度**——实现期核对 GrantStore.match_call 命中路径：命中 grant 为 Permanent 且 category==CorpWrite 时不豁免（防永久记忆泄漏给触人动作）；DangerousCommand/GitPush/Delegate 维持排除（GitPush/Delegate 在 auto-edit+ 走矩阵直接放行，不经过记忆；ask 档逐次确认照旧）
 - `classify_action()`：白名单分支加 §5 守卫
@@ -102,6 +102,6 @@
 
 | 文档 | 修订 |
 |---|---|
-| D13 | 篇头追记：Part A 矩阵 A2「永不全自动清单」四类中三类移出（网络/git push/委派），CorpWrite 保留；Part B Seatbelt 全层退场（Baseline 概念随 SandboxLevel 消失，进程生命周期保留） |
+| D13 | 篇头追记：Part A 矩阵 A2「永不全自动清单」四类中两类移出（网络/git push），CorpWrite 保留；Part B Seatbelt 全层退场（Baseline 概念随 SandboxLevel 消失，进程生命周期保留） |
 | 09 篇 | §4.1 管线第 5 步「沙箱校验」描述改「进程生命周期管理（超时/杀组/截断）」；§4.4 处置表对应行追记 |
 | D11 | §2.5 sandbox/ 模块描述同步（若含 Seatbelt 措辞） |

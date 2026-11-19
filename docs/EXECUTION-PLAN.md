@@ -7,7 +7,8 @@
 > 涉及服务端存储的加跑 `make verify-server-pg`；完成打 `[x]` 并注日期。
 >
 > **⚠ 2026-11-10 瘦身二阶段（产品范围收口）**：音视频通话（rtc/LiveKit）、会议（meeting）
-> 域与文件分享外链整体移除；主打收口「Agent + Agent 插件 + 本地 claude code/zcode 委派 + 日常聊天」。
+> 域与文件分享外链整体移除；主打收口「Agent + Agent 插件 + 日常聊天 + A2A/MCP 被调用面」
+> （原「本地 claude code/zcode 委派」已随委派域退役，2026-11-19）。
 > 随之关闭：B1-B4 全部（LiveKit 镜入 Harbor/nginx /rtc/ 真机/getDisplayMedia/frp 回归——对象已不存在；
 > frp 随移动端+外网接入正式关闭）、E3 双人审批、E8 提示注入闸门实测、E9 会议纪要、E10 20k 压测。
 > 孤儿表清理见迁移 0035；删除前快照 `backup/full-suite-20261109`。
@@ -202,7 +203,7 @@
 |---|---|---|---|---|
 | G1 | 协议增量 | workspace.register/list/forget + session.list 四对 REQ/RES + memory scope 字段 + golden 契约 | wire 契约锁定（golden_d19_*）；旧宿主兼容（scope 缺省=user） | [x] 2026-11-10（envelope.rs+lib 导出；cargo test bbrt-protocol 绿） |
 | G2 | agent_workspace 接线 | manager.start realpath 归一+upsert+workspace_id 回填；store list/remove/list_with_workspace | session.start 带目录后 agent_session.workspace_id 有值；同目录重开不换身份 | [x] 2026-11-10（bbrt-store 33 例绿） |
-| G3 | 沙箱按会话路由 | SessionWorkspaces 共享表；session_env 克隆覆写+policy 缓存；日常 8020 拒绝；coding.delegate 日常拒；兜底根置空 | A 项目会话写 B 目录=预检 8020+Seatbelt 双拦；日常文件/命令/git/search/委派全拒 | [x] 2026-11-10（tools_suite d19_* 四专项 42 例绿） |
+| G3 | 沙箱按会话路由 | SessionWorkspaces 共享表；session_env 克隆覆写+policy 缓存；日常 8020 拒绝；兜底根置空 | A 项目会话写 B 目录=预检 8020+Seatbelt 双拦；日常文件/命令/git/search 全拒（原「委派日常拒」项随委派域退役删除） | [x] 2026-11-10（tools_suite d19_* 四专项 42 例绿） |
 | G4 | 记忆分级 | memory/projects 分区+scope_key；save/list/delete/recall/get scoped；类型驱动路由（user→用户级，其余随会话目录）；召回两段 | 项目会话召回含[用户记忆]+[项目记忆]两段；分区互不串；日常仅用户段 | [x] 2026-11-10（bbrt-memory 全绿：隔离/别名归一/两段召回/LRU 继承） |
 | G5 | 会话列表持久恢复 | 壳 session_list=bbrt session.list（camel→snake）+宿主缓存叠加；RT 不可用回落缓存 | 宿主重启后工作台会话列表恢复（含项目归组）；活跃状态实时 | [x] 2026-11-10（agent_bridge.rs list_sessions 换源；cargo check 绿；真机验收待做） |
 | G6 | 工作台双区 UI | 左栏两分区（项目可折叠内嵌会话+日常平铺）；「+ 日常对话」「打开项目」（plugin-dialog）；header 副标题口径；记忆页作用域页签+项目下拉 | 新建日常=无目录会话；打开项目=登记+项目会话；记忆页可切两域 | [x] 2026-11-10（AgentSessionList 重写+WorkbenchPage 双入口+MemoryPage 页签；tsc/vite build 绿） |
@@ -220,7 +221,7 @@
 | # | 事项 | 改动点 | 验收 | 状态 |
 |---|---|---|---|---|
 | H1 | 协议对 | clarify.request UNT（questionId/question/header?/options/multiSelect）+ clarify.response REQ（camelCase）+ WaitingClarify 状态 + golden 双契约 | wire 锁定；状态名表含 waiting_clarify | [x] 2026-11-11（bbrt-protocol 29 例绿） |
-| H2 | 会话机制 | run_tool 拦截 ask_user（同 coding.delegate 先例不走 pipeline）；clarify_tx/rx+1s 轮询可中断等待；#6b/#7b 迁移；WAL 两侧+恢复作废；SYSTEM_PROMPT 提问规范 | 回答注入工具结果；停止=cancelled 收口 interrupted；坏参数 9001 不发卡 | [x] 2026-11-11（loop_tests clarify 三件套+state_machine 36 例绿） |
+| H2 | 会话机制 | run_tool 拦截 ask_user（门控内嵌口径不走 pipeline）；clarify_tx/rx+1s 轮询可中断等待；#6b/#7b 迁移；WAL 两侧+恢复作废；SYSTEM_PROMPT 提问规范 | 回答注入工具结果；停止=cancelled 收口 interrupted；坏参数 9001 不发卡 | [x] 2026-11-11（loop_tests clarify 三件套+state_machine 36 例绿） |
 | H3 | 工具+路由 | ask_user_def（Low/ReadOnly/不进工作区墙=日常可问）+注册；manager.respond_clarify；bin bridge 路由登记+映射+main dispatch arm | specs 可见；question_id→session 路由投递 | [x] 2026-11-11（tools_suite 42 例绿；全 workspace 52 套绿） |
 | H4 | 壳+前端 | agent_clarify_respond 命令；clarify 事件 normalize+StreamItem+respondClarify 全流扫描+系统通知（无超时 timer）；三端 UI（ClarifyCard/聊天页 Modal/落流卡内嵌条 ClarifyForm 共用）+mock 第 3 轮剧本+样式 | tsc/vite build 绿；composer waiting_clarify 禁用；未决提问卡强制展开 | [x] 2026-11-11 |
 | H5 | 文档 | D20 新篇+detail 索引+本批次 | 口径可追溯 | [x] 2026-11-11 |
@@ -255,7 +256,7 @@
 | # | 事项 | 改动点 | 验收 | 状态 |
 |---|---|---|---|---|
 | J1 | 协议补 session_id | envelope PermissionRequest/ClarifyRequest 加 `session_id`（serde default+空不序列化=旧宿主兼容）；bridge.rs map_event 两处透传（原「不带会话字段 D11 原样」废除）；roundtrip 构造+golden 双契约补断言 | wire 含 sessionId；壳 snake_keys 归一自动带过、前端/壳零改动 | [x] 2026-11-12（bbrt-protocol 30 例绿含 golden 新断言） |
-| J2 | 日常默认用户工作区 | bbrt-sec `sandbox::default_user_workspace()`（env BBC_RT_DEFAULT_WORKSPACE>~/.baobaochat/workspace）；ToolsConfig.default_workspace 可注入（测试 tmp 免写真实 HOME）；pipeline session_env 日常分支=项目同款沙箱覆写（首用 create_dir_all；签名收口不再 Result）；coding.delegate 日常放开（cwd=exec_ws）；loop_runner exec_ws()（委派简报/checkpoint 同口径；记忆路由 ws_path 不动）；project_line/子代理项目行文案改「用户工作空间」；SYSTEM_PROMPT 记忆段不变 | 日常会话工具可用且只困在默认工作区；越界 8020+violation；A 写 B 仍拒 | [x] 2026-11-12（tools_suite 42 绿——日常专项改「区内可用+越界仍拒」；session 12 套绿） |
+| J2 | 日常默认用户工作区 | bbrt-sec `sandbox::default_user_workspace()`（env BBC_RT_DEFAULT_WORKSPACE>~/.baobaochat/workspace）；ToolsConfig.default_workspace 可注入（测试 tmp 免写真实 HOME）；pipeline session_env 日常分支=项目同款沙箱覆写（首用 create_dir_all；签名收口不再 Result）；loop_runner exec_ws()（checkpoint 口径；记忆路由 ws_path 不动）；project_line/子代理项目行文案改「用户工作空间」；SYSTEM_PROMPT 记忆段不变 | 日常会话工具可用且只困在默认工作区；越界 8020+violation；A 写 B 仍拒 | [x] 2026-11-12（tools_suite 42 绿——日常专项改「区内可用+越界仍拒」；session 12 套绿） |
 | J3 | embedded 恒日常 | ChatPage ensureEmbeddedSession 删「跟随最近项目」恒 workspace=''（sessions 未加载竞态同除） | IM 发起 agent 一律日常=用户工作空间；操作项目=工作台项目会话 | [x] 2026-11-12 |
 | J4 | 文档 | D19 顶部落地注记+§2 联动口径修订+本批次 | 口径可追溯 | [x] 2026-11-12 |
 | J5 | 真机验收 | ①聊天页让 agent 跑命令→审批框 120s 内弹出（allow 后执行成功）②提问卡弹出可作答③日常会话写 ~/.baobaochat/workspace 内文件成功/写区外被拒④embedded 不再出现「跟随最近项目」目录 | 用户真机走查 | [ ] 待验收 |
@@ -433,7 +434,8 @@
 ## 批次 X：Agent 安全模式重构（D32，2026-11-17 设计定稿待编码）
 
 > 拍板（2026-11-17）：矩阵放宽对齐 ZCode 实战形态（本机实测其 shell 无 OS 沙箱纯权限层）——
-> 任意命令 full-auto 自动/网络出站·git push·委派 auto-edit+ 自动/CorpWrite 唯一保留三档确认+Session 记忆；
+> 任意命令 full-auto 自动/网络出站·git push auto-edit+ 自动/CorpWrite 唯一保留三档确认+Session 记忆；
+> （原「委派 auto-edit+」档随委派域退役删除，2026-11-19）
 > 删 Seatbelt（sandbox A 层）留进程生命周期（B）+词法（C），`BBC_SANDBOX=1` 标记保留给 procmgr 孤儿扫描；
 > 白名单语义收紧（执行文件/控制运算符形态不匹配）；暗墙三件否决缓议（agent 需拿 token 办事）。
 > 设计：[D32](detail/D32-Agent安全模式重构设计.md)。

@@ -5,7 +5,7 @@
 - 关联：08（Agent 总体）/ D08（工作台）/ D09（工具与安全）/ D11（Runtime 内部）/ D13（沙箱）/ D15（记忆双轨）/ D18（IM 内嵌卡）
 - 范围：bbrt 协议+store+memory+session+tools、Tauri 壳、客户端 agent 工作台；**服务端零改动**（D15 口径：记忆本地文件唯一权威）
 
-> **落地注记（2026-11-12 · 日常=默认用户工作区，ZCode 式口径修订）**：原「日常对话=无目录，workspace 类工具整体 8020 拒绝」废除——真机实测 IM embedded 会话全部落日常、agent 什么工具都用不了（用户在私聊/群聊让 agent 干活是主场景）。新口径：**不绑项目的会话（日常/任务/embedded）共用同一用户级默认工作空间 `~/.baobaochat/workspace`**（env `BBC_RT_DEFAULT_WORKSPACE` 可覆盖；bbrt-sec `sandbox::default_user_workspace()`），pipeline `session_env` 日常分支走项目会话同款沙箱覆写（沙箱根=该目录，越界仍 8020 词法+内核双拦）、`coding.delegate` 日常放开（cwd=默认工作区）。**数据模型与记忆分级不动**：`workspace_id` 空=日常判定、工作台双区 UI、记忆路由（日常仍用户级，`ws_path()` 语义保留）原样。前端 ChatPage embedded 建会话废除「跟随最近项目」恒日常。子代理（SessionWorkspaces 未登记）沙箱仍兜底全局根，按主会话路由登记阶段二。
+> **落地注记（2026-11-12 · 日常=默认用户工作区，ZCode 式口径修订）**：原「日常对话=无目录，workspace 类工具整体 8020 拒绝」废除——真机实测 IM embedded 会话全部落日常、agent 什么工具都用不了（用户在私聊/群聊让 agent 干活是主场景）。新口径：**不绑项目的会话（日常/任务/embedded）共用同一用户级默认工作空间 `~/.baobaochat/workspace`**（env `BBC_RT_DEFAULT_WORKSPACE` 可覆盖；bbrt-sec `sandbox::default_user_workspace()`），pipeline `session_env` 日常分支走项目会话同款沙箱覆写（沙箱根=该目录，越界仍 8020 词法+内核双拦）（原「`coding.delegate` 日常放开（cwd=默认工作区）」已随委派域退役删除，2026-11-19）。**数据模型与记忆分级不动**：`workspace_id` 空=日常判定、工作台双区 UI、记忆路由（日常仍用户级，`ws_path()` 语义保留）原样。前端 ChatPage embedded 建会话废除「跟随最近项目」恒日常。子代理（SessionWorkspaces 未登记）沙箱仍兜底全局根，按主会话路由登记阶段二。
 
 > **落地注记（2026-11-11 · 会话历史加载）**：工作台打开会话此前只显本进程直播流（重启/切列表即空白）。新增协议 `session.history` REQ→`session.history.result`（HistoryItem：user/assistant 原文+tool 名与结果摘要；golden 契约已锁），RT 直读 `agent_event` WAL（会话不须在运行态，历史/结束会话同样可查，与 rename 直落库同口径）；WAL 写入点随之增补——`assistant.done` 加 `text` 回复原文、`tool.result` 加 `ok`/`summary`（旧 WAL 行缺字段渐进降级：assistant 旧轮跳过、tool name-only；recovery 仍只读旧字段不受影响，recovery 借 text 重建上下文留阶段二）。前端 store `selectSession` 即拉 `loadHistoryIfEmpty`（本进程无流时回填，直播中/乐观上屏不覆盖）。IM embedded 会话（D18 与私聊/群聊同一会话身份）在工作台打开即见全程聊天记录——跨端同会话历史互通。mock 桥剧本为内存态不落 WAL，历史返回空（真实链路专用）。
 
@@ -45,8 +45,8 @@
 
 - 共享 `SessionWorkspaces` 表（bbrt-session 定义，`session_id → Some(项目目录)/None(日常)`；manager start/end 维护，bin 装配注入 tools 管线）。
 - `PipelineExecutor` 执行时按 `call.session_id` 解析执行环境：项目会话→克隆 ExecEnv 覆写 `workspace`+`path_policy`（PathPolicy 按项目根缓存）；日常→**workspace 类工具整体 8020 拒绝**（专用文案「日常对话未绑定工作目录」+ violation 记录）；未登记会话→兜底全局根（单测/嵌入式旧行为；生产兜底根置空=全拒）。
-- 效果：A 项目会话的命令**物理上只能写 A 目录**（预检 8020 + Seatbelt 内核双拦），不同项目并发会话（≤3）各自独立沙箱根；日常会话文件/命令/git/search/coding.delegate 全不可用。
-- 委派（coding.delegate）在 loop_runner 侧同口径拒绝（8030 域外用 8020 文案）。
+- 效果：A 项目会话的命令**物理上只能写 A 目录**（预检 8020 词法层单拦），不同项目并发会话（≤3）各自独立沙箱根；日常会话文件/命令/git/search 全不可用。
+
 
 **明确边界（登记不做）**：读不设项目墙（09 篇 B10 既定口径：全盘可读+敏感清单 8026 拒读）；Seatbelt 仅 macOS，Linux/Windows 桌面退 Baseline（预检+逐次审批兜底）。
 
@@ -87,7 +87,7 @@
 - **ToolGroup（新）**（=ToolCallGroup）：连续 tool 条目归组，灰底汇总条「正在执行 (N 个工具)」（图标 pulse）/「N 个工具调用 · 全部完成」；任一运行中=展开、全部落定=自动折叠；单条工具不套组条（直接 ToolCard，避免一次点击变两次）。
 - **ToolCard**：运行中自动展开（看实时参数）、结果落定自动收回头部行；blocked 红条带常显保留。
 - **TypingState**：加 300ms tick 已用时（对齐 Elapsed；`12.3s`/`1分05秒`）。
-- PermissionCard/SubagentCard/DelegateCard 不动（审批卡必须常显）。
+- PermissionCard/SubagentCard 不动（审批卡必须常显）。
 
 ## 8. 验收记录（2026-11-10）
 
@@ -96,7 +96,7 @@
 | 协议 | envelope 4 新消息+memory scope 字段+golden 契约测试（golden_d19_*） | [x] cargo test bbrt-protocol 26 例绿 |
 | store | list_workspaces/remove_workspace/list_sessions_with_workspace/set_session_workspace+测试 | [x] 33 例绿 |
 | memory | 项目分区+scope_key+save/list/delete/recall/get scoped+测试（隔离/别名归一/两段召回） | [x] 全绿 |
-| session | manager 接线（realpath 归一+upsert+workspace_id 回填+SessionWorkspaces）、召回分级、SYSTEM_PROMPT、日常拒绝 coding.delegate、W2②/W3 scoped | [x] 全绿 |
+| session | manager 接线（realpath 归一+upsert+workspace_id 回填+SessionWorkspaces）、召回分级、SYSTEM_PROMPT、W2②/W3 scoped | [x] 全绿 |
 | tools | 按会话路由沙箱（session_env/policy_for 缓存/WORKSPACE_BOUND_TOOLS 日常拒绝/memory_save 类型路由）+4 专项测试（A 写 B 拒/日常拒绝/记忆分级/cwd 越界） | [x] tools_suite 42 例绿 |
 | bin | 新 REQ 分发+ws_item 投影+兜底根置空 | [x] workspace 52 套件全绿 |
 | 壳 | session_list 换源+三命令+memory scope 透传 | [x] cargo check/fmt 绿 |

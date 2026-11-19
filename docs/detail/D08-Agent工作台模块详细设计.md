@@ -10,7 +10,7 @@
 | 项 | 内容 |
 |---|---|
 | 文档版本 | v0.1（详细设计阶段） |
-| 上游 | [D01-客户端总体](D01-客户端总体详细设计.md) · [08-Agent总体](../08-AI-Agent总体设计.md) · [09-工具与安全](../09-AI-Agent工具与安全设计.md) · [17-编码智能体协作](../17-本地编码智能体协作设计.md) · [14-协议](../14-通信协议设计.md) |
+| 上游 | [D01-客户端总体](D01-客户端总体详细设计.md) · [08-Agent总体](../08-AI-Agent总体设计.md) · [09-工具与安全](../09-AI-Agent工具与安全设计.md) · [14-协议](../14-通信协议设计.md) |
 | 下游 | [D11-AgentRuntime内部](D11-AgentRuntime内部详细设计.md)（本文 UI 命令/事件与其内部协议一一对应） |
 | 模板说明 | 按 D01 §13 篇章模板；"模型"章只含客户端本地表，Runtime 侧全量 DDL 见 D11 §11 |
 
@@ -31,17 +31,17 @@ Agent 工作台是 Agent 能力的唯一 UI 载体，覆盖两种会话形态（
 
 | 做 | 不做 |
 |---|---|
-| 会话/审批/委派/检查点/记忆/后端管理的全部页面与交互 | Runtime 内部实现（状态机细节、上下文引擎、沙箱管线 → D11） |
+| 会话/审批/检查点/记忆的全部页面与交互（委派卡与后端管理已随委派域退役 2026-11-19） | Runtime 内部实现（状态机细节、上下文引擎、沙箱管线 → D11） |
 | 本地 Tauri 命令与 IPC 事件的 UI 侧契约 | stdio JSONL 协议内部语义（→ D11 §4，本文只消费其镜像事件） |
-| 审批卡/委派卡等组件族的状态机（UI 级） | 权限门控判定顺序、危险命令规则库（09 篇 §4，UI 只呈现判定结果） |
+| 审批卡等组件族的状态机（UI 级） | 权限门控判定顺序、危险命令规则库（09 篇 §4，UI 只呈现判定结果） |
 | 会话分享卡片（agent_card）的发送侧与接收侧渲染 | agent_card 消息类型的 msg.send 通道细节（04 篇） |
 
 ### 1.3 关键约束（继承）
 
 - 权限模式三档 `ask / auto-edit / full-auto`（09 篇 §3.3）；内嵌形态固定 `ask`。
-- 权限点：`agent:session:use`（页面准入）、`agent:tool:run_command`（终端流能力显隐）、`agent:mode:full_auto`、`agent:delegate:use`。
+- 权限点：`agent:session:use`（页面准入）、`agent:tool:run_command`（终端流能力显隐）、`agent:mode:full_auto`。
 - Agent 流量不走 WSS（14 篇 §3.3）：UI 一切会话内状态经本地 Tauri 事件；服务端仅推 `agent.revoked` / `agent.policy.updated` / `ai.quota.warning`。
-- 错误码 8xxx（14 篇 §7）；UI 按 code 映射文案，`8010-8012/8020-8035` 全部登记映射。
+- 错误码 8xxx（14 篇 §7）；UI 按 code 映射文案，`8010-8012/8020-8028` 登记映射（原 8030-8035 委派段已随委派域退役）。
 
 ## 2. 页面与路由
 
@@ -51,11 +51,9 @@ Agent 工作台是 Agent 能力的唯一 UI 载体，覆盖两种会话形态（
 | PAG-02 | 聊天内嵌 Agent 轻量卡 | `/im/c/:convId` 消息流内 | agent:session:use | 08 §3.2 |
 | PAG-03 | 会话视图细节（中栏渲染规范） | `/agent/s/:sessionId` | 同上 | 08 §3.3 |
 | PAG-04 | 审批卡片族（命令/编辑/批量/OBO/简报） | PAG-01/03 右栏 + 中栏内联 | 同上 | 09 §3.4、17 §4 |
-| PAG-05 | 委派任务卡 | PAG-03 中栏内联 | agent:delegate:use | 17 §6.1 |
 | PAG-06 | 检查点与恢复 | PAG-01 右栏 / 弹层 | 同上 | 08 §4.4 |
 | PAG-07 | 权限模式切换器 | PAG-03 会话头部 | full-auto 需 agent:mode:full_auto | 09 §3.3 |
 | PAG-08 | 紧急停止与崩溃恢复 | 全局浮层 / PAG-03 顶横幅 | — | 09 §4.6 |
-| PAG-09 | 后端管理设置 | `/agent/settings/backends` | agent:delegate:use | 17 §6.3 |
 | PAG-10 | 会话分享到 IM 卡片 | PAG-03 分享弹窗 | — | 08 §4.8 |
 | PAG-11 | 三级记忆管理页 | `/agent/memory` | 同上 | 09 §4.2 |
 | PAG-12 | 被阻止操作查看 | `/agent/blocked` | 同上 | 09 §5.1 |
@@ -70,9 +68,9 @@ Agent 工作台是 Agent 能力的唯一 UI 载体，覆盖两种会话形态（
 ├──────────┬──────────────────────────────────────────────┬─────────────────┤
 │ 会话列表  │  PAG-03 会话视图（无选中=空态引导）             │ 待审批队列 (2)   │
 │ ●修复登录 │  ┌──────────────────────────────────────────┐ │ ┌命令卡 cargo..┐ │
-│  [内置]   │  │ 会话头部: 模式[PAG-07] 模型 工作区 ■⏸     │ │ │ y / n / a    │ │
+│           │  │ 会话头部: 模式[PAG-07] 模型 工作区 ■⏸     │ │ │ y / n / a    │ │
 │ ◐退款接口 │  ├──────────────────────────────────────────┤ │ └──────────────┘ │
-│  [zcode]  │  │  流式对话区（markdown 增量）               │ │ ┌编辑卡 ±12───┐ │
+│           │  │  流式对话区（markdown 增量）               │ │ ┌编辑卡 ±12───┐ │
 │ ○周报     │  │  工具事件流（折叠卡）                       │ │ └──────────────┘ │
 │ ○暂停中   │  │  终端输出区（流式）                         │ ├─ 检查点栈 ──────┤│
 │──────────│  │  文件改动时间线（底部）                      │ │ cp3 14:02 [恢复]│
@@ -84,7 +82,7 @@ Agent 工作台是 Agent 能力的唯一 UI 载体，覆盖两种会话形态（
 
 | 区块 | 内容与规则 |
 |---|---|
-| A 会话列表 | 每项：状态点 + 标题 + **backend 徽标**（会话发生过委派时显示 `[zcode]`/`[claude]`/`[内置]`，取 agent_session.backend）+ 相对时间；排序按 updated_at 倒序；状态点色：●运行绿 / ◐等待审批橙 / ○暂停灰 / ✕错误红 / ▪已结束灰 |
+| A 会话列表 | 每项：状态点 + 标题 + 相对时间；排序按 updated_at 倒序；状态点色：●运行绿 / ◐等待审批橙 / ○暂停灰 / ✕错误红 / ▪已结束灰 |
 | B 工作区组 | 最近打开（agent_workspace，≤5 条）+ "打开目录"（系统选择器 → 信任确认，08 §4.4） |
 | C 会话头部 | 模式指示器（PAG-07）、模型档位 `[快 v]`、工作区路径（悬停显全路径）、运行状态、暂停 ⏸ / 停止 ■（■=紧急停止语义，走 INT-AG-12） |
 | D 中栏 | PAG-03 细化；右侧由工具事件/审批卡实时流入 |
@@ -214,55 +212,11 @@ Agent 工作台是 Agent 能力的唯一 UI 载体，覆盖两种会话形态（
 ```
 规则：每 scope 独立勾选；同意=permission.response(allow, scope)；scope 清单来自 09 §3.1 工具目录；OBO 令牌本体永不过 WebView（08 §3.1），卡内不显示令牌值。
 
-**3.4.5 任务简报卡**（Task Brief，delegate.brief 事件驱动）
-
-```
-┌─ 📋 任务简报（可编辑）→ 委派给 [zcode ▾健康✓] ──────────────┐
-│ 目标(task): 在 order-svc 增加 POST /refunds 退款接口   [✎]   │
-│ 工作区: /Users/dev/repos/order-svc                          │
-│ 约束(constraints): 遵循现有分层 / Go 1.22 / 禁新框架  [✎±]   │
-│ 上下文摘录(context):                                        │
-│  ├ kb:《订单域接口规范v3》→ 错误码/鉴权要求      [来源↗]      │
-│  ├ doc:接口约定#42 → 请求响应结构                [来源↗]      │
-│  └ im:与PM确认结论 → 仅支持整单退款               [来源↗]      │
-│ 验收(acceptance): make build 通过 / 单测覆盖退款分支  [✎±]   │
-│ 禁忌(forbidden): 修改 db/migration、触碰部署脚本      [✎±]   │
-│ 将获得能力: 文件编辑（auto-edit 档）· 命令:白名单内           │
-│ [确认委派] [编辑后委派] [取消]                               │
-└──────────────────────────────────────────────────────────────┘
-```
-规则：来源可溯=每个摘录可点开来源（kb/doc/im 跳转对应模块只读视图）；首次委派必经此卡（17 §6.2 步骤 2）；[确认委派] 触发 delegate_launch 回传编辑后的 brief。
-
-### 3.5 PAG-05 委派任务卡
-
-```
-┌─ 委派任务 #dt-101 ── [zcode ✓v2.3] ── 状态: 运行中 04:32 ──┐
-│ 后端选择器: (●)zcode✓ (○)Claude Code✓ (○)内置 (○)自动       │
-│ ▸ 实时输出（折叠流，默认摘要行）: 解析简报 → Read×12 …       │
-│ ▸ 子会话事件明细: Read api.go ✓ / Edit refund.go ✓ / …      │
-│ 工具统计: Read×12 Edit×3 Grep×7   资源: CPU 12% MEM 210MB   │
-│ [⏹ 取消(SIGINT 优雅)] [➕ 追加指令…]                         │
-│ ── 完成后 → 自动进入审查 ────────────────────────────────────│
-│ ┌ 审查: 3 个文件改动 (checkpoint #cp5) ────────────────────┐ │
-│ │ api_refund.go +86/-4 [逐hunk diff][拒绝hunk]             │ │
-│ │ [全部接受] [全部拒绝→恢复到 cp5]                          │ │
-│ └──────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────┘
-```
-
-| 区块 | 规则 |
-|---|---|
-| 后端选择器 | 优先级展示：用户指定 > 项目配置(AGENTS.md preferred_backend，标 `项目` 徽标) > 用户默认设置 > 自动（17 §4）；徽标=健康状态（探测 ✓/✗/版本不符 8031/策略禁用 8032 置灰） |
-| 实时输出折叠流 | delegate.event 归一化事件流；默认收起为一行摘要（阶段+工具计数），展开=虚拟滚动明细 |
-| 子会话事件明细 | 后端 tool_use 事件（source=backend 的 tool.call/result）列表，点击复用 PAG-03 工具折叠卡展开 |
-| 取消/追加 | 取消走 delegate_cancel(graceful)：先 SIGINT，UI 提示 "已发送中断，3s 后强杀"；追加指令=内联输入框 → delegate_input |
-| 审查区 | delegate.end 后内联展开：逐文件 diff（复用 3.4.2）+ checkpoint 引用；接受=落盘归档，拒绝=一键恢复 cp（PAG-06 危险确认） |
-
 ### 3.6 PAG-06 检查点与恢复
 
 ```
 ┌─ 检查点栈（右栏）────────────────────────────┐
-│ cp5 14:32 委派#dt-101 前   3 文件  [对比][恢复]│
+│ cp5 14:32 checkpoint 前    3 文件  [对比][恢复]│
 │ cp4 14:02 修改 auth.rs 前   1 文件  [对比][恢复]│
 │ cp3 13:58 pre-command      2 文件  [对比][恢复]│
 │ [+ 手动创建]                  (可拖拽排序展示) │
@@ -300,21 +254,6 @@ Agent 工作台是 Agent 能力的唯一 UI 载体，覆盖两种会话形态（
 └─────────────────────────────────────────────────────────────┘
 ```
 规则：紧急停止三入口（全局快捷键 Cmd/Ctrl+Shift+. / 托盘 / 工作台 ■）一致语义（09 §4.6），UI 均走 agent_emergency_stop 命令；崩溃横幅由宿主 runtime.state 事件驱动；重放失败（8012）→ 横幅变红 "恢复失败，已降级只读快照" + [新建会话续接]。
-
-### 3.9 PAG-09 后端管理设置（`/agent/settings/backends`）
-
-```
-┌─ 设置 → Agent → 编码后端 ─────────────────────────────────┐
-│ ⚠ 租户策略: 允许 zcode / Claude Code / 内置（管理员配置）    │
-│ ┌ zcode        ✓已检测  /usr/local/bin/zcode  v2.3  [默认▾]┐│
-│ │  能力: 编辑✓ 命令✓ 续接✓   冒烟: ✓ 320ms  [重新探测]      ││
-│ ├ Claude Code  ✓已检测  ~/.claude/claude       v1.6  [设默认]┤│
-│ ├ Codex        ✗未安装  [查看安装引导↗]（不代装，17 §9）     ││
-│ └ 内置引擎     ✓始终可用（兜底）                     [设默认]┘│
-│ 默认后端优先级: 用户默认 > 项目配置 > 自动(健康+复杂度)       │
-└─────────────────────────────────────────────────────────────┘
-```
-六态：loading=探测中（每行 spinner）；degraded=租户策略禁用某后端（置灰+锁+8032）；其余同通用。
 
 ### 3.10 PAG-10 会话分享到 IM 卡片
 
@@ -364,10 +303,6 @@ Agent 工作台是 Agent 能力的唯一 UI 载体，覆盖两种会话形态（
 | INT-AG-02 | 工具卡折叠展开 | 点击卡头 | 展开=输入参数 JSON 树+结果摘要+耗时；收起一行 | 全文按需 agent_tool_detail；展开态记入会话 UI 偏好 |
 | INT-AG-03 | 审批快捷键 | 会话聚焦时 y/n/a | y=允许(once)、n=拒绝、a=会话内允许 | 作用于右栏**当前选中**审批卡（Tab/方向键切换选中）；命令卡聚焦时输入框优先，快捷键需先点选卡 |
 | INT-AG-04 | diff 逐 hunk 操作 | hunk 复选框/按钮 | 取消勾选=拒绝该 hunk；提交时回传 accepted_hunks | 全部 hunk 被拒=整卡拒绝；拒绝 hunk 理由回填给模型 |
-| INT-AG-05 | 委派后端选择 | 简报卡/委派卡选择器 | 顺序：用户指定>项目配置>默认>自动 | 置灰项 tooltip 显示原因（8030/8031/8032）；选"自动"显示将选结果 |
-| INT-AG-06 | 委派输出实时滚动 | delegate.event | 折叠流追加+摘要行计数刷新；展开时虚拟滚动 | 同 INT-AG-01 吸底规则；输出上限 1MB 截断提示 |
-| INT-AG-07 | 追加指令 | 委派卡 ➕ | 内联输入框 → delegate_input(text) | 运行中才可用；完成后变为 [新任务续接]（resume 语义） |
-| INT-AG-08 | 委派取消 | 委派卡 ⏹ | delegate_cancel(graceful=true) | 提示 "SIGINT 已发送，3s 未退出将强杀进程树"；取消后卡进入 cancelled 态 |
 | INT-AG-09 | 检查点恢复确认 | PAG-06 [恢复] | 危险弹窗（输入"恢复"确认）→ checkpoint_restore | 恢复前自动建当前快照；恢复期间输入框禁用+进度条 |
 | INT-AG-10 | 权限模式切换 | PAG-07 | 胶囊滑动动画 200ms；toast 说明生效范围 | 升档需二次确认+权限点校验；切换即时生效于下一工具调用，进行中未决审批不追溯改判 |
 | INT-AG-11 | OBO 续签提示 | obo.expiring 事件 | 静默续签（默认无 UI）；失败→黄条 "登录态失效，会话已暂停" | 暂停期间输入可编辑但不发送；恢复登录后自动续跑 |
@@ -397,18 +332,6 @@ waiting ──紧急停止/会话paused/崩溃──► cancelled（作废，可
 approved/rejected/timeout/cancelled：终态，卡片折叠进历史（时间线保留决策标签）
 ```
 
-**委派任务卡状态机**（delegate_task.status）：
-
-```
-preparing ──确认委派(delegate_launch ack)──► running
-running ──delegate.end(exit 0, diff 提取)──► completed ──自动──► reviewing
-running ──exit ≠0 / 8033─────────────────► failed（[重试][改用内置])
-running ──用户取消/8034───────────────────► cancelled
-running ──宿主/Runtime 崩溃───────────────► failed(8033) 并提示重放后续接
-reviewing ──[全部接受]───────────────────► accepted（落盘+归档+审计）
-reviewing ──[全部拒绝/逐hunk拒绝]─────────► rejected_restored（恢复到前置 cp）
-```
-
 ### 4.3 快捷键 / 右键 / 拖拽
 
 | 类别 | 项 |
@@ -436,10 +359,6 @@ reviewing ──[全部拒绝/逐hunk拒绝]─────────► rejec
 | agent_restore_session | session_id | { ok, replayed_events: number } | 崩溃后从检查点+事件镜像重放（8012 时返回错误） |
 | checkpoint_create | session_id, reason: 'manual' | { checkpoint_id } | 手动检查点 |
 | checkpoint_restore | checkpoint_id | { ok, new_snapshot_id } | 恢复（自动先快照） |
-| delegate_launch | session_id, backend?: 'zcode'\|'claude'\|'generic'\|'builtin', task_brief: TaskBrief(见 §6.3) | { delegate_task_id } | 8030/8031/8032/8035；工作区互斥锁 |
-| delegate_input | delegate_task_id, text | { ok } | 追加指令（send_input） |
-| delegate_cancel | delegate_task_id, graceful: boolean | { ok } | false=立即 SIGKILL 树 |
-| delegate_review | delegate_task_id, decision: 'accept'\|'reject', rejected_hunks?: number[] | { ok, restored_checkpoint_id? } | 审查结论；reject 自动恢复 cp |
 | backend_detect | types?: string[] | { results: BackendProbe[] } | 探测+版本+最小 headless 冒烟 |
 | backend_set_default | backend_id | { ok } | 用户默认后端 |
 | memory_list | scope?: 'permanent'\|'session' | { grants: ToolGrant[] } | allow.json + 内存记忆 |
@@ -464,18 +383,6 @@ reviewing ──[全部拒绝/逐hunk拒绝]─────────► rejec
 // →
 { "ok": true }
 
-// invoke('delegate_launch', {...})
-{ "session_id": "sess-01J...", "backend": "zcode",
-  "task_brief": {
-    "task": "在 order-svc 增加 POST /refunds 退款接口",
-    "workspace": "/Users/dev/repos/order-svc",
-    "constraints": ["遵循现有分层", "Go 1.22"],
-    "context": [ { "source": "kb:公司空间/订单域接口规范v3", "excerpt": "错误码/鉴权要求…" } ],
-    "acceptance": ["make build 通过"],
-    "forbidden": ["修改 db/migration"]
-  } }
-// →
-{ "delegate_task_id": "dt-01J..." }
 ```
 
 ### 5.2 UI 订阅的 IPC 事件表（宿主→WebView，事件名 `agent::<type>`，payload=stdio 协议镜像 + 宿主补充，协议字段定义见 08 §6.1 与 D11 §4）
@@ -493,9 +400,6 @@ reviewing ──[全部拒绝/逐hunk拒绝]─────────► rejec
 | agent::model.switched | 档位切换 | from, to, reason | 头部档位徽标动画+tooltip |
 | agent::session.state | 状态迁移 | session_id, state(D11 §3 枚举) | 会话列表状态点/头部 |
 | agent::subagent.spawn / subagent.event / subagent.join | 子 Agent 生命周期 | sub_id, phase(spawn/delta/done/fail), summary, parent_id | 子任务折叠行（PAG-03） |
-| agent::delegate.brief | 简报生成 | brief(TaskBrief), backend_suggestion | 任务简报卡（PAG-04.5） |
-| agent::delegate.event | 委派归一化事件 | delegate_task_id, kind(output/tool_use/tool_result/warning/meta), payload | 委派卡折叠流+计数 |
-| agent::delegate.end | 子进程退出 | delegate_task_id, exit_code, changed_files[], checkpoint_id, summary | 卡→reviewing+审查区 |
 | agent::error | 协议级错误 | code(8xxx), message, fatal, session_id? | toast/横幅；fatal→PAG-08 |
 | agent::runtime.state（宿主生成） | 心跳/崩溃/重启进度 | state(healthy/restarting/crashed), attempt, replay{done,total} | PAG-01 状态条/PAG-08 横幅 |
 | agent::obo.expiring（宿主生成） | 到期前 2min | session_ids[], renewing: boolean | 静默；失败黄条（INT-AG-11） |
@@ -517,7 +421,6 @@ CREATE TABLE agent_session (            -- 与 D11 §11 同源
   title         TEXT NOT NULL DEFAULT '新会话',
   form          TEXT NOT NULL DEFAULT 'workbench' CHECK(form IN ('embedded','workbench')),
   mode          TEXT NOT NULL DEFAULT 'ask' CHECK(mode IN ('ask','auto-edit','full-auto')),
-  backend       TEXT,                   -- 委派后端 zcode|claude|generic|builtin（17 篇增列；NULL=未委派）
   model_policy  TEXT NOT NULL DEFAULT 'auto',
   status        TEXT NOT NULL DEFAULT 'idle',   -- D11 §3 状态机枚举
   created_at    INTEGER NOT NULL, updated_at INTEGER NOT NULL,
@@ -525,19 +428,6 @@ CREATE TABLE agent_session (            -- 与 D11 §11 同源
 );
 CREATE INDEX idx_agent_session_updated ON agent_session(updated_at DESC);
 
-CREATE TABLE delegate_task (            -- 与 D11 §11 同源
-  id                TEXT PRIMARY KEY,   -- dt-<ulid>
-  parent_session_id TEXT NOT NULL REFERENCES agent_session(id),
-  backend_type      TEXT NOT NULL,
-  task_brief        TEXT NOT NULL,      -- JSON TaskBrief
-  status            TEXT NOT NULL DEFAULT 'preparing'
-    CHECK(status IN ('preparing','running','completed','failed','cancelled',
-                     'reviewing','accepted','rejected_restored')),
-  child_session_ref TEXT,               -- 后端续接句柄（--resume 等）
-  exit_code INTEGER, result_summary TEXT,
-  created_at INTEGER NOT NULL, started_at INTEGER, ended_at INTEGER
-);
-CREATE INDEX idx_delegate_task_session ON delegate_task(parent_session_id, created_at DESC);
 
 CREATE TABLE agent_approval_cache (     -- D08 新增：右栏审批队列缓存（宿主写/UI 读）
   request_id  TEXT PRIMARY KEY,
@@ -560,26 +450,17 @@ CREATE INDEX idx_approval_waiting ON agent_approval_cache(session_id, state, cre
 
 ```ts
 export type PermissionMode = 'ask' | 'auto-edit' | 'full-auto';
-export type SessionStatus = 'starting'|'idle'|'running'|'waiting_permission'|'waiting_review'
-  |'subagent_fanout'|'delegating'|'paused'|'error'|'ended';
+export type SessionStatus = 'starting'|'idle'|'running'|'waiting_permission'|'waiting_clarify'
+  |'subagent_fanout'|'paused'|'error'|'ended';
 export type RiskLevel = 'low' | 'mid' | 'high';
 export type GrantScope = 'once' | 'session' | 'permanent';
 export type ApprovalCardState = 'waiting'|'approved'|'rejected'|'timeout'|'cancelled';
-export type DelegateStatus = 'preparing'|'running'|'completed'|'failed'|'cancelled'
-  |'reviewing'|'accepted'|'rejected_restored';
 
 export interface AgentSession {
   id: string; workspaceId?: string; title: string;
   form: 'embedded' | 'workbench'; mode: PermissionMode;
-  backend?: 'zcode'|'claude'|'generic'|'builtin';
   modelPolicy: 'fast'|'strong'|'auto'; status: SessionStatus;
   createdAt: number; updatedAt: number; endedAt?: number; summary?: string;
-}
-export interface TaskBrief {
-  task: string; workspace: string;
-  constraints: string[];
-  context: { source: string; excerpt: string }[];   // source: kb:… / doc:… / im:…
-  acceptance: string[]; forbidden: string[];
 }
 export interface PermissionRequest {
   requestId: string; tool: string; risk: RiskLevel;
@@ -599,9 +480,6 @@ export interface DelegateTask {
 }
 export interface Checkpoint { id: string; sessionId: string; reason: string;
   filesChanged: string[]; createdAt: number }
-export interface BackendProbe { type: string; installed: boolean; path?: string;
-  version?: string; capabilities: string[]; smokeMs?: number;
-  disabledByPolicy?: boolean; errorCode?: number }   // 8030/8031/8032
 export interface ToolGrant { id: string; tool: string; pattern: string;
   scope: GrantScope; grantedAt: number; sourceCard?: string }
 export interface AgentCardPayload {          // 08 §4.8
@@ -618,7 +496,6 @@ export interface AgentCardPayload {          // 08 §4.8
 | PAG-01 | 三栏全展开（右栏固定 304px） | 三栏；右栏默认浮层化可固定（**审批队列 L 档起可用**） | 左栏收窄 56px 图标条（悬停抽屉）；右栏强制浮层（审批入口=徽标按钮） | 单栏：会话列表⇄会话视图两级导航；审批队列/检查点=底部抽屉 |
 | PAG-03 | 消息流+时间线同屏；工具卡双列摘要 | 同 XL 单列 | 时间线折叠为头部下拉 | 终端输出区默认折叠 |
 | PAG-04 | 卡片全宽预览 | 同 | diff 卡横向滚动（不换行挤压） | 命令卡编辑框 100% 宽 |
-| PAG-05 | 委派卡+审查区并列 | 审查区跟帖式内联 | 输出明细默认折叠 | 后端选择器改纵向列表 |
 | PAG-06/09/11/12 | 弹层/页面双形态 | 同 | 弹层宽度上限 90% | 全屏页 |
 | PAG-02 | IM 单栏卡片自适应 | 同 | 同 | 同 |
 
@@ -641,7 +518,6 @@ src/features/agent/
 │  ├─ approvals/                # PAG-04 族
 │  │  ├─ CommandCard.tsx  DiffApprovalCard.tsx  BulkApprovalBar.tsx
 │  │  ├─ OboScopeCard.tsx  TaskBriefCard.tsx  ApprovalQueue.tsx  useApprovalHotkeys.ts
-│  ├─ delegate/                 # PAG-05
 │  │  ├─ DelegateTaskCard.tsx  BackendSelector.tsx  DelegateOutputFeed.tsx
 │  │  ├─ DelegateReviewPanel.tsx
 │  ├─ checkpoints/              # PAG-06：CheckpointStack.tsx  CheckpointDiffModal.tsx
@@ -676,10 +552,10 @@ src/features/agent/
 |---|---|
 | 审批积压（用户离开） | 单卡 120s 超时=拒绝；≥3 次超时自动 paused（09 §7.4）→ 状态点灰 + 横幅 |
 | Runtime 不可用且重启耗尽 | 工作台只读态：历史会话可浏览（本地库），新输入禁用；PAG-08 提供重试 |
-| 委派中 Runtime 崩溃 | 委派子进程由宿主接管清理（BBC_SANDBOX 标记扫描）；恢复后 delegate_task 标 failed(8033) 待续接 |
+| terminal 后台命令中 Runtime 崩溃 | 进程组由启动侧收口（BBC_SANDBOX 标记扫描）；恢复后 agent_run 的 running 行置 interrupted |
 | 会话被吊销（agent.revoked） | 会话卡片锁定 + "已被管理员吊销"；未决审批全部 cancelled |
 | 策略热变更（agent.policy.updated） | 黄条 "安全策略已更新，进行中的相关工具调用将重新确认"（09 §6.3） |
-| 同工作区并发会话 | 新会话提示 "另一会话正在使用此工作区" 冲突风险（08 §7）+ 委派互斥 8035 |
+| 同工作区并发会话 | 新会话提示 "另一会话正在使用此工作区" 冲突风险（08 §7） |
 | 离线分享 | session_share 禁用（依赖 msg.send）；分享弹窗保留草稿 |
 | 输出超限（8022/8023） | 终端区显示终止原因横幅；工具卡 blocked 标签 |
 | 哈希链告警（8027） | 全局高危横幅 "本地审计校验失败"（次数少、必须显眼），入口 PAG-12 |
@@ -687,7 +563,7 @@ src/features/agent/
 ## 10. 开放问题
 
 1. **消息命名统一**：08 §6.1 为 `tool.call/tool.result/checkpoint.event/session.started`，本篇 UI 事件表与 D11 统一采用 `tool.call / checkpoint.created / session.ready` 细化命名——需回填概要篇 08 §6.1 一次对齐（见 D11 §4 登记）。
-2. preview.kind=obo、`channel(reasoning)`、`delegate.brief` 为 D08/D11 联合新增字段/消息，需在 14 篇事件注册表补登记说明（本地协议不走 WS 注册表，但文档一致性需要）。
+2. preview.kind=obo、`channel(reasoning)` 为 D08/D11 联合新增字段/消息，需在 14 篇事件注册表补登记说明（本地协议不走 WS 注册表，但文档一致性需要）。
 3. 内嵌卡追问轮数上限（当前 20）与上下文携带量是否可配——阶段三实测。
 4. 多显示器下紧急停止遮罩只覆盖主窗口是否足够（是否需要系统级 toast 联动）。
 5. 会话内搜索（Cmd+F）是否需要索引 agent_event 全文（当前：仅工具名/文件名/文本前缀过滤）。

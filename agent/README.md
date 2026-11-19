@@ -27,7 +27,7 @@ cargo test --workspace
   │  bbrt-session ──► bbrt-context / bbrt-tools        │
   │       │             │          │                   │
   │       │             ▼          ▼                   │
-  │       │        bbrt-sec ◄── bbrt-delegate          │
+  │       │        bbrt-sec                            │
   │       ▼                                          │
   │  bbrt-aigw   bbrt-store   bbrt-hostapi   bbrt-protocol
   └────────────────────────────────────────────────────┘
@@ -56,10 +56,7 @@ HostToRuntime 17 变体（宿主→RT 15 + 双向 ping/pong）：
 | permission.response | PermissionResponse |
 | checkpoint.create | CheckpointCreate |
 | checkpoint.restore | CheckpointRestore |
-| delegate.launch | DelegateLaunch |
-| delegate.input | DelegateInput |
-| delegate.cancel | DelegateCancel |
-| delegate.review | DelegateReview |
+| run.cancel | RunCancel |
 | session.pause / session.resume | SessionPause / SessionResume |
 | session.end | SessionEnd |
 | obo.token | OboToken |
@@ -82,9 +79,6 @@ RuntimeToHost 23 变体（RT→宿主 21 + 双向 ping/pong）：
 | compaction.event | CompactionEvent |
 | model.switched | ModelSwitched |
 | subagent.spawn / subagent.event / subagent.join | SubagentSpawn / SubagentEvent / SubagentJoin |
-| delegate.brief | DelegateBrief（TaskBrief 结构化） |
-| delegate.event | DelegateEvent（kind: output/tool_use/tool_result/warning/meta） |
-| delegate.end | DelegateEnd |
 | session.state | SessionStateReport（state 为 §3 十态枚举） |
 | session.ended | SessionEnded |
 | obo.renew | OboRenew |
@@ -111,14 +105,12 @@ RuntimeToHost 23 变体（RT→宿主 21 + 双向 ping/pong）：
 | 5 | bbrt-sec | §2.5 | 门控、三级记忆、危险命令规则、沙箱、审计哈希链、脱敏 | 未开始 |
 | 6 | bbrt-context | §2.3 | 预算、compaction、关键文件 map、摘录 | 未开始 |
 | 7 | bbrt-tools | §2.4 | 注册表、执行管线、内置工具 | 未开始 |
-| 8 | bbrt-delegate | §2.6 | CodingBackend trait、claude/zcode/generic 适配器、进程组 | 未开始 |
 | 9 | bbrt-aigw | §2.7 | SSE 客户端、重试降档、计量 | 未开始 |
 | 10 | bbrt（bin） | §1.2 | 进程入口、装配 | 未开始 |
 
 ## 已知 TODO / 开放点
 
-- **REQ 回执消息未定义类型**：checkpoint.restore（回执{ok,newSnapshotId}）、delegate.launch（回执{pid}）、user.message/permission.response/tools.reload 的成对回执在 D11 §4 未命名消息类型，暂无法落成枚举变体；需 D11 回填后补。
-- **delegating→waiting_review 直连**：D11 §3 ASCII 图有直连，权威迁移表 #14 只允许 running→waiting_review；按表实现（delegating 先经 #12 回 running，再 #14），已在 state.rs 注释标注，待 D11 确认。
-- **stream.delta 增补 channel=tool**：D11 §4 原表为 text|reasoning，本实现按任务书增补 tool（委派终端流），需回填 D11。
+- **REQ 回执消息未定义类型**：checkpoint.restore（回执{ok,newSnapshotId}）、user.message/permission.response/tools.reload 的成对回执在 D11 §4 未命名消息类型，暂无法落成枚举变体；需 D11 回填后补。
+- ~~delegating→waiting_review 直连~~、~~stream.delta channel=tool~~：随委派域退役失效（2026-11-19）。
 - **骨架占位字段**：user.message.attachments[]（引用字符串）、preview.diff 字段、RiskLevel 分级口径，待 09/10 篇细化对齐。
 - bbrt-protocol 消息簇拆分（messages/runtime.rs 等 D11 §2.1 文件级结构）待消息量增长后执行，当前单文件可维护。

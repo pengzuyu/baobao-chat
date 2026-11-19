@@ -8,7 +8,7 @@
 | 项 | 内容 |
 |---|---|
 | 文档版本 | v0.1（详细设计阶段） |
-| 上游 | [08-Agent总体](../08-AI-Agent总体设计.md) · [09-工具与安全](../09-AI-Agent工具与安全设计.md) · [17-编码智能体协作](../17-本地编码智能体协作设计.md) · [14-协议](../14-通信协议设计.md) · [D02-服务端工程](D02-服务端模块划分与工程结构.md) |
+| 上游 | [08-Agent总体](../08-AI-Agent总体设计.md) · [09-工具与安全](../09-AI-Agent工具与安全设计.md) · [14-协议](../14-通信协议设计.md) · [D02-服务端工程](D02-服务端模块划分与工程结构.md)（17 篇已随委派域退役删除） |
 | 下游 | Runtime 实现仓库（bbrt-* workspace）；UI 侧消费契约见 [D08](D08-Agent工作台模块详细设计.md) |
 | 模板说明 | 按 D01 §13 适配：**无页面章**，以 crate 划分 / 内部协议（stdio 全消息表）/ 会话状态机替代；模型章为本地 SQLite 全表 DDL |
 
@@ -18,7 +18,7 @@
 
 ### 1.1 定位
 
-08 篇定义了 Runtime 的**行为规格**（循环、上下文、检查点、协议语义）；本篇给出**内部实现设计**：进程内 crate 划分（到文件级）、会话状态机全图、stdio JSONL 协议全消息表、上下文引擎与工具管线算法、子 Agent 调度器、委派适配器内部、崩溃恢复 WAL 与重放、宿主交互、本地库 DDL。
+08 篇定义了 Runtime 的**行为规格**（循环、上下文、检查点、协议语义）；本篇给出**内部实现设计**：进程内 crate 划分（到文件级）、会话状态机全图、stdio JSONL 协议全消息表、上下文引擎与工具管线算法、子 Agent 调度器与统一后台任务、崩溃恢复 WAL 与重放、宿主交互、本地库 DDL。（原「委派适配器内部（bbrt-delegate）」已随委派域退役 2026-11-19。）
 
 硬性约束（继承）：自研不引框架、核心循环 <2k 行；空闲内存 <80MB；单设备活跃会话 ≤3；一切门控在 Rust、不信任模型输出与非用户内容。
 
@@ -29,17 +29,17 @@
                     │  bbrt-session ──► bbrt-context / bbrt-tools        │
                     │       │             │          │                   │
                     │       │             ▼          ▼                   │
-                    │       │        bbrt-sec ◄── bbrt-delegate          │
+                    │       │        bbrt-sec                            │
                     │       ▼                                          │
                     │  bbrt-aigw   bbrt-store   bbrt-hostapi   bbrt-protocol
                     └────────────────────────────────────────────────────┘
 依赖方向（CI cargo-deny 强制，禁止环）：
 protocol ← 所有（仅依赖 serde/serde_json）
-store ← session/sec/tools/delegate（SQLite 唯一写入方）
-sec ← tools/delegate/session（门控与审计被复用）
+store ← session/sec/tools（SQLite 唯一写入方）
+sec ← tools/session（门控与审计被复用）
 context ← session/tools（预算与摘录）
-aigw/hostapi/delegate ← session（被循环驱动）
-tools 与 delegate 互不依赖（coding.* 工具在 tools 侧定义门控，执行转发给 delegate 的事件桥由 session 装配）
+aigw/hostapi ← session（被循环驱动）
+session ← tools（工具侧定义门控；run_command 后台化由 session 经 DetachedCommand 接管）
 ```
 
 | crate | 一句话职责 |
@@ -49,7 +49,6 @@ tools 与 delegate 互不依赖（coding.* 工具在 tools 侧定义门控，执
 | bbrt-context | token 预算、compaction、关键文件 map、read_file 摘录 |
 | bbrt-tools | 工具注册表、执行管线、内置工具实现 |
 | bbrt-sec | 权限门控、三级记忆、危险命令规则库、沙箱、审计哈希链、脱敏 |
-| bbrt-delegate | CodingBackend trait、claude/zcode/通用适配器、事件归一化、进程组管理 |
 | bbrt-aigw | ai-gateway SSE 客户端、重试降档、计量上报 |
 | bbrt-store | SQLite 封装、迁移、查询 |
 | bbrt-hostapi | 与宿主的 stdio 传输、OBO 令牌获取/续签、心跳 |
@@ -78,7 +77,6 @@ bbrt-protocol/src/
    ├─ compaction.rs  # compaction.event
    ├─ model.rs       # model.switched
    ├─ subagent.rs    # subagent.spawn / subagent.event / subagent.join
-   ├─ delegate.rs    # delegate.launch/brief/event/cancel/end/review/input
    ├─ host.rs        # user.message / obo.token / obo.renew / tools.reload / checkpoint.create(宿主侧)
    └─ common.rs      # RiskLevel/PermissionMode/GrantScope/Decision 等共享枚举
 ```
@@ -103,7 +101,7 @@ bbrt-session/src/
 └─ types.rs          # SessionConfig / SessionSnapshot / ReplayReport
 ```
 
-关键类型：`Session{id, workspace, mode, state, ctx: ContextHandle, budget, counters}`、`Transition{from, to, reason, ts}`。依赖：protocol、context、tools、sec、store、aigw、delegate、hostapi。
+关键类型：`Session{id, workspace, mode, state, ctx: ContextHandle, budget, counters}`、`Transition{from, to, reason, ts}`。依赖：protocol、context、tools、sec、store、aigw、hostapi。
 
 ### 2.3 bbrt-context
 
@@ -125,7 +123,7 @@ bbrt-context/src/
 
 ### 2.4 bbrt-tools
 
-职责：工具注册表（三来源合并：本地内置 + mcp.*（bbrt-mcp 连接期发现，含生态 app.*，D14 §6.1）+ 技能，10 篇 §4.6）、执行管线（§6）、本地内置工具实现（**仅文件/命令/git/检索类本地能力**；公司域工具 kb_query/doc_*/im_send/file_upload 不再硬编码，经 MCP 网关动态供给，09 篇 §3.1 注记）；coding.* 三工具是 delegate 的薄门面（定义 inputSchema/风险级，执行转交 session 装配的事件桥）。
+职责：工具注册表（三来源合并：本地内置 + mcp.*（bbrt-mcp 连接期发现，含生态 app.*，D14 §6.1）+ 技能，10 篇 §4.6）、执行管线（§6）、本地内置工具实现（**仅文件/命令/git/检索类本地能力**；公司域工具 kb_query/doc_*/im_send/file_upload 不再硬编码，经 MCP 网关动态供给，09 篇 §3.1 注记）；subagent.adjust / subagent.cancel / task.wait 是薄门面（定义 inputSchema/风险级，执行转交 session 专用路径）。
 
 ```
 bbrt-tools/src/
@@ -139,7 +137,6 @@ bbrt-tools/src/
    ├─ cmd.rs         # run_command（转 sec.sandbox 执行）
    ├─ git.rs         # git_status / git_diff / git_commit / git_push（钥匙串注入）
    ├─ http.rs        # http_fetch（内网白名单 GET）
-   └─ coding.rs      # coding.delegate / coding.resume / coding.cancel（→ bbrt-delegate）
 ```
 
 依赖：protocol、sec、context（摘录/截断）、store（审计元数据）、hostapi（OBO token 取用）、mcp（网关工具执行转发）。
@@ -169,27 +166,6 @@ bbrt-sec/src/
 
 依赖：protocol、store、hostapi（分类用的快模型经 session 转发 aigw）。
 
-### 2.6 bbrt-delegate
-
-职责：17 篇委派体系：CodingBackend trait 与三个适配器、事件归一化、进程组管理、健康检查、任务简报构造。
-
-```
-bbrt-delegate/src/
-├─ lib.rs
-├─ backend.rs        # trait CodingBackend（§8.1 方法表）+ BackendRegistry
-├─ claude.rs         # Claude Code 适配器（stream-json 解析、参数映射 §8.2）
-├─ zcode.rs          # zcode 适配器（对等实现，差异隔离于此）
-├─ generic.rs        # 通用 CLI（行文本→stream.delta；仅 auto-edit+ 可用）
-├─ builtin.rs        # 内置后端桥（进程内 08 篇循环，天然归一化）
-├─ normalize.rs      # 子智能体事件→本协议事件（§8.3 映射表）
-├─ procmgr.rs        # 进程组：新 pgid + BBC_SANDBOX=1 标记；取消协议（§8.4）；遗留进程扫描清理
-├─ health.rs         # detect(--version) + 最小 headless 冒烟（§8.5）；版本能力矩阵
-├─ workspace_lock.rs # 同工作区互斥文件锁（8035）
-└─ brief.rs          # TaskBrief 结构化构造与校验（forbidden 转子进程约束）
-```
-
-依赖：protocol、sec（审计/注入）、store（delegate_task/coding_backend）。
-
 ### 2.7 bbrt-aigw
 
 职责：ai-gateway 调用（HTTPS+SSE、用户 OBO token、X-BBC-Agent-Session 头）、失败重试与降档（08 §4.6）、用量计量。
@@ -214,10 +190,9 @@ bbrt-store/src/
 ├─ lib.rs            # 连接管理（agent/ 目录、busy_timeout=5s、foreign_keys=on）
 ├─ migrations/       # 001_init.sql …（向前滚移，只增不改）
 └─ queries/          # session.rs event.rs checkpoint.rs context.rs grant.rs
-                      # audit_meta.rs violation.rs backend.rs delegate.rs
 ```
 
-依赖：protocol（事件 payload 类型）。被 session/sec/tools/delegate 依赖。
+依赖：protocol（事件 payload 类型）。被 session/sec/tools 依赖。
 
 ### 2.9 bbrt-hostapi
 
@@ -276,12 +251,8 @@ bbrt-mcp/src/
       │   │        │ complex 判定→fan-out             │           │   │
       │   │        ▼                                  │           │   │
       │   │  subagent_fanout ──join 汇总完成──►running │           │   │
-      │   │        │ coding.delegate 确认后启动        │           │   │
       │   │        ▼                                  │           │   │
-      │   │    delegating ──delegate.end+diff提取──────┼──►waiting_review
       │   │        │                                  │           │   │
-      │   │        ▼ (审查卡: 接受/拒绝恢复)            │           │   │
-      │   │    waiting_review ──decision──►running / ended          │   │
       │   │                                             │         │   │
       │   │ 用户暂停/OBO 续签失败(60s)/8011/步数>50/    │         │   │
       │   │ 连续工具失败>3/休眠>10min/紧急停止          │         │   │
@@ -306,18 +277,15 @@ bbrt-mcp/src/
 | 8 | waiting_permission→paused | 累计 ≥3 次超时（09 §7.4） | — | state(paused) |
 | 9 | running→subagent_fanout | 快模型判定 complex 且任务可并行探查 | 全部子任务 ≤15 步 | subagent.spawn×n |
 | 10 | subagent_fanout→running | join 汇总（含失败子任务的失败标注） | 单子任务 >15 步自杀 | subagent.join |
-| 11 | running→delegating | coding.delegate 确认通过、子进程 spawn 成功 | 工作区锁获取失败 → 拒绝 8035 | delegate.launch ack + delegate.event |
-| 12 | delegating→running | delegate.end(exit=0)，diff 已提取并建 cp | — | delegate.end |
-| 13 | delegating→error | 子进程异常退出/委派超时 | 软超时默认 30min（可配）→8034 | error(8033/8034) |
-| 14 | running→waiting_review | 委派完成/编排层判定需用户审查 | 无自动超时（等待用户） | —（UI 审查卡） |
-| 15 | waiting_review→running | 接受/拒绝并恢复 cp 后继续 | — | delegate.review ack |
+> 原 #11-15（委派链：running→delegating / delegating→running|error / running↔waiting_review）已随委派域退役删除（2026-11-19）。
+
 | 16 | running→paused | 用户暂停 / OBO 到期 60s 续不上 / 8011 / 步数>50 / 连续失败>3 / 休眠>10min / 紧急停止 | 紧急停止=未决权限作废 | state(paused) |
 | 17 | paused→running | session.resume / 续签成功 / 网络恢复重试 | — | state(running) |
 | 18 | running→error | 不可恢复错误（压缩后仍超限 8010 等） | — | error(code) |
 | 19 | 任意→ended | session.end（正常/登出/revoked）；OBO 销毁、进程清理 | — | session.ended(summary) |
 | 20 | error→paused | 用户选择重试（可续跑错误） | — | state(paused) |
 
-不变量：transition() 是唯一出口，每次迁移同步 WAL（§9.1）与 `session.state` 消息；waiting_permission 期间其余工具调用排队（严格串行）；delegating 期间同工作区锁持有。
+不变量：transition() 是唯一出口，每次迁移同步 WAL（§9.1）与 `session.state` 消息；waiting_permission 期间其余工具调用排队（严格串行）。
 
 ## 4. stdio JSONL 全消息表（宿主 ↔ Runtime）
 
@@ -343,7 +311,8 @@ bbrt-mcp/src/
 | RT→宿主 | permission.request | 权限确认 | requestId, tool, risk, args, reason, preview{kind:command/diff/obo, …}, options[once/session/permanent?] | 门控第⑥步 | UNT（等待下行 response，120s） |
 | 宿主→RT | permission.response | 确认回执 | requestId, decision(allow/deny), scope, editedArgs?, acceptedHunks? | 用户 y/n/a | REQ |
 | 宿主→RT | checkpoint.create ★ | 手动建检查点 | sessionId, reason=manual | PAG-06 [+手动创建] | REQ→checkpoint.created |
-| RT→宿主 | checkpoint.created ★（=08 checkpoint.event 细化） | 检查点已建 | checkpointId, sessionId, filesChanged[], reason(pre-edit/pre-command/manual/delegate/pre-restore), gitRef | 修改类工具首次执行前/委派启动前/恢复前/手动 | UNT |
+| 宿主→RT | run.cancel ★ | 取消后台 run（统一入口） | sessionId, runId（terminal-/agent- 前缀 run id）, graceful | 用户取消/会话收口 | REQ |
+| RT→宿主 | checkpoint.created ★（=08 checkpoint.event 细化） | 检查点已建 | checkpointId, sessionId, filesChanged[], reason(pre-edit/pre-command/manual/pre-restore), gitRef | 修改类工具首次执行前/恢复前/手动 | UNT |
 | 宿主→RT | checkpoint.restore ★ | 恢复 | checkpointId | 用户确认恢复 | REQ→checkpoint.restored {ok, newCheckpointId}（恢复前自动建 pre-restore 保护快照；2026-11-07 落地命名） |
 | RT→宿主 | checkpoint.restored | 恢复回执 | ok, newCheckpointId, error | 同上 | REQ 成对回执 |
 | RT→宿主 | compaction.event | 压缩通知 | sessionId, phase(start/done), freedTokens, keptRounds | §5.2 | UNT |
@@ -351,13 +320,6 @@ bbrt-mcp/src/
 | RT→宿主 | subagent.spawn ★ | 子 Agent 派生 | sessionId, subId, taskDigest, toolSubset | §7 fan-out | UNT |
 | RT→宿主 | subagent.event | 子 Agent 事件 | subId, phase(spawn/delta/done/fail), summary | 子循环内 | UNT |
 | RT→宿主 | subagent.join ★ | 汇总完成 | sessionId, results[{subId, ok, summary≤2k}] | 全部 join/自杀 | UNT |
-| RT→宿主 | delegate.brief ★ | 简报待确认 | sessionId, brief{task,workspace,constraints[],context[{source,excerpt}],acceptance[],forbidden[]}, backendSuggestion | 编排层生成简报后、启动前 | UNT（等待 delegate.launch） |
-| 宿主→RT | delegate.launch | 确认委派（17 §8） | sessionId, delegateTaskId, backend, taskBrief(可被用户编辑), mode, workspace | 用户确认简报 | REQ→回执{pid} |
-| RT→宿主 | delegate.event | 委派归一化事件 | delegateTaskId, kind(output/tool_use/tool_result/warning/meta), payload | §8.3 归一化 | UNT |
-| 宿主→RT | delegate.input ★ | 追加指令（17 send_input） | delegateTaskId, text | 用户追加 | REQ |
-| 宿主→RT | delegate.cancel | 取消委派（17 §8） | delegateTaskId, graceful | 用户取消/紧急停止 | REQ |
-| RT→宿主 | delegate.end | 子进程退出 | delegateTaskId, exitCode, summary, changedFiles[], checkpointId, childSessionRef | finalize() | UNT |
-| 宿主→RT | delegate.review ★（17 §8 的确认侧） | 审查结论 | delegateTaskId, decision(accept/reject), rejectedHunks? | 用户审查 | REQ |
 | 宿主→RT | session.pause / session.resume | 暂停/恢复 | sessionId | 用户/宿主 | REQ |
 | RT→宿主 | session.state | 状态迁移 | sessionId, state(§3 枚举), reason | transition() | UNT |
 | 宿主→RT | session.end | 结束 | sessionId, reason(normal/logout/revoked) | 用户/登出/吊销 | REQ |
@@ -446,7 +408,6 @@ function execute_pipeline(session, call):
   result = dispatch_by_source(call)      # builtin.execute（本地工具，沙箱内执行）
                                          # | mcp.call(call, obo)（网关/外部 MCP 工具：OboCache 取主体
                                          #   令牌逐请求注入，连接凭证由 bbrt-mcp 持有，D14 §6.2）
-                                         # | coding.* → delegate 事件桥（§8）
                                          # 超时默认 300s（1–600s）→ 取消（本地 SIGKILL 进程组 8023 / MCP 侧取消请求）
                                          # 输出累计 1MB 截断头尾各 50%；资源超限→杀+8022（本地进程）
   # 7) 结果脱敏
@@ -479,56 +440,6 @@ function fanout(session, subtasks):        # 触发：快模型判定 complex（
 ```
 
 约束：子 Agent 复用 09 篇权限模型（只读子集天然 A 放行）；子 Agent 事件全部入 WAL 与审计；子 Agent 不产生检查点（无修改）。
-
-## 8. 委派适配器内部（bbrt-delegate）
-
-### 8.1 CodingBackend trait 方法表
-
-| 方法 | 入参 | 出参/行为 |
-|---|---|---|
-| detect() | — | BackendProbe{installed, path, version, capabilities} |
-| probe_health() | — | ok / 降级原因（版本不符 8031 / 未登录 / 冒烟失败） |
-| launch(task_brief, opts{mode, workspace, env_allow}) | 简报+权限映射 | 子进程（新进程组）+ 会话句柄 |
-| stream_events() | — | 归一化事件流（§8.3） |
-| send_input(text) | 追加指令 | —（17 模式 C 续接基础） |
-| cancel(graceful) | bool | §8.4 取消协议 |
-| finalize() | — | {summary, changed_files, session_ref}（续接句柄） |
-
-### 8.2 权限模式 → 启动参数映射（claude 适配器；启动前由编排层校验映射表声明）
-
-| 本产品模式 | claude 参数 | 效果 |
-|---|---|---|
-| ask | `--permission-mode plan` + `--disallowedTools "Edit,Write,NotebookEdit,Bash"` | 只读探查+产出方案；改代码需用户切模式 |
-| auto-edit | `--permission-mode acceptEdits` + `--allowedTools "Read,Edit,Write,Glob,Grep"`（Bash 入 disallowed） | 文件编辑放行、任意命令禁止 |
-| full-auto | `--permission-mode bypassPermissions` 受门控换算 + `--allowedTools "Bash(cargo build:*),Bash(cargo test:*),…"`（白名单命令映射） | 编辑+白名单命令（构建/测试） |
-
-固定参数：`claude -p "<简报>" --output-format stream-json --verbose`，cwd=工作区。**zcode 对等**：等价 headless CLI，参数语义同名映射（`--mode read-only|edit|full` + 工具白名单/确认开关），具体以 zcode CLI 正式文档为准（差异全部隔离在 zcode.rs，17 §11.1）。**通用 CLI**：无法表达细粒度限制 → 仅允许 auto-edit 以上委派 + 强 diff 审查（17 §5.2 原则：子智能体自主性不得超过用户授权档位）。
-
-### 8.3 事件归一化映射表
-
-| 子智能体原始事件（stream-json 等） | 归一化为 | 审批联动 |
-|---|---|---|
-| system/init 元信息 | delegate.event(kind=meta) | — |
-| assistant 流式文本 | stream.delta（source=backend） | — |
-| tool_use（编辑/命令） | tool.call（source=backend, risk 按映射） | 按权限模式：自动放行 / 升级审批卡（PAG-04） |
-| tool_result | tool.result | — |
-| 权限询问（headless 下不应出现） | delegate.event(kind=warning) | 终止+建议改参数组合（17 §3.3） |
-| 进程退出 | delegate.end{exitCode, changedFiles, childSessionRef} | 触发 diff 审查卡（waiting_review） |
-
-全部归一化事件同步写审计（kind 前缀 delegate.* / child.tool_use，字段含父会话 ID、任务 ID、后端类型与版本，17 §5.3）。
-
-### 8.4 进程组取消协议
-
-```
-cancel(graceful=true):  SIGINT(pgid) → 等 3s → 未退出则 SIGKILL 整进程树（递归 pgid/任务对象）
-cancel(graceful=false): 直接 SIGKILL 树
-启动即：setsid/posix_spawn setpgid/Job Object + env BBC_SANDBOX=1
-Runtime 启动时扫描"带标记且父进程已死"的遗留进程并清理（09 §4.6）
-```
-
-### 8.5 健康检查
-
-detect：`<bin> --version`（超时 5s）；冒烟：最小 headless 调用（如 `claude -p "ping" --output-format json`，超时 30s，测 3 次）；版本能力矩阵决定可用参数集（不兼容 → 8031，提示锁定版本或降级，17 §9）。
 
 ## 9. 崩溃恢复（bbrt-session/wal.rs + recovery.rs）
 
@@ -590,7 +501,6 @@ CREATE TABLE agent_session (
   title         TEXT NOT NULL DEFAULT '新会话',
   form          TEXT NOT NULL DEFAULT 'workbench' CHECK(form IN('embedded','workbench')),
   mode          TEXT NOT NULL DEFAULT 'ask' CHECK(mode IN('ask','auto-edit','full-auto')),
-  backend       TEXT,                          -- 委派后端 zcode|claude|generic|builtin（17 篇增列）
   model_policy  TEXT NOT NULL DEFAULT 'auto' CHECK(model_policy IN('fast','strong','auto')),
   status        TEXT NOT NULL DEFAULT 'idle',  -- §3 状态机枚举
   share_enabled INTEGER NOT NULL DEFAULT 0,
@@ -618,7 +528,7 @@ CREATE TABLE agent_checkpoint (
   git_ref        TEXT,                         -- refs/bbc-agent/{session}/cp-{n}
   untracked      TEXT,                         -- JSON: 未跟踪文件清单
   files_changed  TEXT NOT NULL,                -- JSON: [{path,add,del}]
-  reason         TEXT NOT NULL CHECK(reason IN('pre-edit','pre-command','manual','delegate','pre-restore')),
+  reason         TEXT NOT NULL CHECK(reason IN('pre-edit','pre-command','manual','pre-restore')),
   last_event_seq INTEGER NOT NULL,             -- 重放起点（§9.2）
   created_at     INTEGER NOT NULL
 );
@@ -666,33 +576,7 @@ CREATE TABLE agent_sandbox_violation (         -- 被阻止操作（09 §5.1）
 );
 CREATE INDEX idx_violation_session ON agent_sandbox_violation(session_id, ts DESC);
 
-CREATE TABLE coding_backend (                  -- 17 §7
-  id           TEXT PRIMARY KEY,               -- 类型即 id（zcode/claude/generic:bin/builtin）
-  type         TEXT NOT NULL,
-  path         TEXT,
-  version      TEXT,
-  capabilities TEXT NOT NULL,                  -- JSON: {edit,command,resume,smoke_ms}
-  enabled      INTEGER NOT NULL DEFAULT 1,     -- 租户策略禁用→0（8032）
-  is_default   INTEGER NOT NULL DEFAULT 0,
-  detected_at  INTEGER NOT NULL
-);
 
-CREATE TABLE delegate_task (                   -- 17 §7
-  id                TEXT PRIMARY KEY,          -- dt-<ulid>
-  parent_session_id TEXT NOT NULL REFERENCES agent_session(id),
-  backend_type      TEXT NOT NULL,
-  task_brief        TEXT NOT NULL,             -- JSON TaskBrief
-  status            TEXT NOT NULL DEFAULT 'preparing' CHECK(status IN
-                    ('preparing','running','completed','failed','cancelled',
-                     'reviewing','accepted','rejected_restored')),
-  child_session_ref TEXT,                      -- --resume 等续接句柄
-  exit_code         INTEGER,
-  result_summary    TEXT,
-  created_at        INTEGER NOT NULL,
-  started_at        INTEGER,
-  ended_at          INTEGER
-);
-CREATE INDEX idx_delegate_parent ON delegate_task(parent_session_id, created_at DESC);
 -- D08 的 agent_approval_cache（宿主侧 UI 缓存表）不属 Runtime 库，DDL 见 D08 §6.1
 ```
 
@@ -702,19 +586,18 @@ CREATE INDEX idx_delegate_parent ON delegate_task(parent_session_id, created_at 
 |---|---|
 | 活跃会话 >3 | manager 拒绝 session.start，回 error（提示关闭旧会话） |
 | 事件镜像磁盘写失败 | WAL 降级：暂停会话+error（审计不可丢）；恢复后补写 |
-| 委派期间用户手动改仓库 | finalize 提取 diff 基线不一致 → 重建 checkpoint 基线并提示（17 §9） |
+| 用户手动改仓库与 checkpoint 基线不一致 | 差异检测后重建基线并提示 |
 | 快模型分类不可用 | 危险命令识别保守 confirm（09 §4.4）；compaction 退化截断 |
 | OBO token 泄漏面 | 仅 Runtime 内存+宿主通道；日志/审计/子进程全链路不可见明文 |
 | 休眠/进程挂起 | 恢复后 SSE 按断流重试；>10min 未恢复 → paused |
-| 同工作区双会话 | 委派互斥文件锁（8035）；提示冲突风险 |
+| 同工作区双会话 | 提示冲突风险（08 §7） |
 | 内存预算 | 空闲 <80MB：上下文压缩态存储、事件镜像批量 flush、闲置会话 30min 无活动转 archived（可恢复） |
 | 审计哈希链断裂 | 8027 告警（UI 高危横幅），本批不上报，标记待人工核验 |
 
 ## 13. 开放问题
 
-1. **session.state 枚举差异**：08 §4.7 为 starting/active/thinking/tool_running/waiting_permission/paused/ended；D11 细化为 §3 的 9+1 态（active/thinking/tool_running 收敛为 running，新增 waiting_review/subagent_fanout/delegating/error）。建议回填 08 篇统一，UI（D08 §6.3 TS 类型）已按 D11 枚举。
-2. **消息命名回填**：`session.ready`（原 session.started）、`checkpoint.created`（原 checkpoint.event）、新增 `runtime.ready/checkpoint.create/subagent.spawn/subagent.join/delegate.brief/delegate.input/delegate.review/stream.delta.channel` 需在 08 §6.1 / 17 §8 登记对齐（D08 开放问题 1/2 同源）。
+1. **session.state 枚举差异**：08 §4.7 为 starting/active/thinking/tool_running/waiting_permission/paused/ended；D11 细化为 §3 的 7+1 态（active/thinking/tool_running 收敛为 running，新增 subagent_fanout/waiting_clarify 等；委派审查两态 waiting_review/delegating 已随委派域退役 2026-11-19）
+2. **消息命名回填**：`session.ready`（原 session.started）、`checkpoint.created`（原 checkpoint.event）、新增 `runtime.ready/checkpoint.create/subagent.spawn/subagent.join/run.cancel/stream.delta.channel` 需在 08 §6.1 登记对齐（D08 开放问题 1/2 同源）。
 3. token 估算启发式的按模型校准表来源（离线标定 vs 网关返回 usage 回填）——阶段三定。
-4. 委派软超时默认 30min 的合理性（长任务如全量测试可能超）与"无超时+仅提示"档位。
-5. cgroup 委派不可用（共享开发机）时资源限制自动降级策略的检测与提示（09 §9.5）。
+5. cgroup 不可用（共享开发机）时资源限制自动降级策略的检测与提示（09 §9.5）。
 6. WAL 双写（SQLite+JSONL）是否可合并为单写（SQLite WAL 模式性能实测后定）。
