@@ -1,7 +1,8 @@
 /**
  * 左侧栏拖拽分界线（2026-11-12 用户口径：每个页面的左侧栏都支持拖动调宽）：
- * - useSplitWidth(key, initial, min, max)：宽度状态 + localStorage 持久化（bbc:split:{key}，
- *   按页记忆；夹取 min~max）+ pointer 拖拽（pointermove 免独立 capture 分支）
+ * - useSplitWidth(key, initial, min, max, side='left')：宽度状态 + localStorage 持久化
+ *   （bbc:split:{key}，按页记忆；夹取 min~max）+ pointer 拖拽（pointermove 免独立
+ *   capture 分支）；side='right' 用于右栏（2026-11-19 工作台内容坞）：向右拖=变窄
  * - SplitHandle：5px 竖分界条（hover 态 2px 主色线，col-resize；默认隐形只留光标），
  *   拖拽期间 body 加 bbc-col-resizing（全局 col-resize 光标 + 禁文本选中）
  * - useCollapsibleSplit(key, initial, min, max)：可折叠变体（2026-11-18 组织树口径：
@@ -23,7 +24,14 @@ export interface SplitBind {
   onPointerDown: (e: React.PointerEvent) => void;
 }
 
-export function useSplitWidth(storageKey: string, initialWidth: number, min: number, max: number) {
+/** @param side 'left'=调左侧栏（默认，向右拖变宽）；'right'=调右侧栏（向右拖变窄） */
+export function useSplitWidth(
+  storageKey: string,
+  initialWidth: number,
+  min: number,
+  max: number,
+  side: 'left' | 'right' = 'left',
+) {
   const [width, setWidth] = useState<number>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_PREFIX + storageKey);
@@ -53,7 +61,8 @@ export function useSplitWidth(storageKey: string, initialWidth: number, min: num
       setDragging(true);
       document.body.classList.add('bbc-col-resizing');
       const onMove = (ev: PointerEvent) => {
-        const w = Math.min(max, Math.max(min, startW + (ev.clientX - startX)));
+        const dx = ev.clientX - startX;
+        const w = Math.min(max, Math.max(min, startW + (side === 'right' ? -dx : dx)));
         widthRef.current = w;
         if (liveElRef.current) liveElRef.current.style.width = `${w}px`; // 直写不重渲
         else setWidth(w);
@@ -73,7 +82,7 @@ export function useSplitWidth(storageKey: string, initialWidth: number, min: num
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
     },
-    [storageKey, min, max],
+    [storageKey, min, max, side],
   );
 
   return { width, dragging, paneRef, bind: { onPointerDown } satisfies SplitBind };

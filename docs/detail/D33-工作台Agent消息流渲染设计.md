@@ -1,6 +1,7 @@
 # D33 工作台 Agent 消息流渲染设计（zcode 式平铺流 + 类型化块 + 子 agent 侧栏）
 
 - 日期：2026-11-17 ｜ 状态：**批0-4 编码完成已推（dcf559e→9d3f2bb→9a7d29b→0c91768→387d7c7），程序侧验证全绿（cargo test / tsc / vite build / 壳 check），剩 §5 真机验收（归用户）**
+- **2026-11-19 修订（用户走查）**：右栏由「上下文栏（概览/运行/详情固定 tab）」改为**内容坞**——左栏不再出现 run 记录；子 agent 过程按**主会话归属/隔离**（切会话整条 tab 条切换，绝不跨会话共用）、多子 agent=多可关闭 tab、可拖宽 + 右上角收起/展开；无固定 tab，未来 browser/文件等内容同坞扩展（拍板 #3 与 §3.6 已改写）。
 - 前置：[D08](D08-Agent工作台模块详细设计.md)（PAG-03 会话视图）、[D18](D18-IM内嵌Agent卡详细设计.md)（§3.4 六条效果规则 / stages 投影）、[D19](D19-Agent项目与日常对话及记忆分级详细设计.md)（§7 过程显示对齐 change-my-life）、[D16](D16-子Agent三形态与Run记录模型设计.md)（run 模型）、[D22](D22-插件系统详细设计.md)（技能格式/装配）、[D26](D26-全站UI组件库切换AntDesign详细设计.md)（antd 换制）
 - 动机（用户 2026-11-17 需求原话归纳）：工作台 agent 显示弃「回合卡片」形态，改为 zcode 式消息流——不同类型消息（思考/工具/技能/子 agent/MCP/中间结果）**各自专属形态**；工具细分（读/写/编辑/终端）要丰富；最终正文输出时中间过程完整折叠为一行统计（总耗时）；点子 agent 卡在右侧栏以其完整过程（与主渲染器同款）查看。现状四个硬缺口见 §2。
 
@@ -10,7 +11,7 @@
 |---|------|------|
 | 1 | **工作台中栏弃卡片改平铺流** | 回合不再包 AgentProcessCard 大卡；过程条目平铺（无头像、全宽、类型化块）；收口后过程折叠为一行统计+正文常开。**用户消息：2026-11-17 二改修订——回归右对齐主色气泡**（黑白反色：主色底+基色字，token 随 D27 主题/accent 切换联动；初版「也改平铺块」作废），agent 侧保持平铺流 |
 | 2 | **skill 感知 = 显式 `skill` 内置工具**（Claude Code 同款） | 不是 shell 读文件、不做 skill_manage（装卸已有 tools.reload 通道）；工具名 `skill`、args `{name}`、**结果=SKILL.md 正文**（天然注入上下文）；走现有 toolCall/toolResult 通道——时间线天然工具卡、WAL 自动记录、risk 取 frontmatter（high 可挂审批）、协议零扩展；**移除隐式触发词注入**（match_for 自动注入路径退役）——技能加载统一显式调用，机制单一可见 |
-| 3 | **子 agent 侧栏 = 复用右栏 aside，tab 管理** | AgentContextSidebar 改 antd Tabs（会话信息/运行记录/检查点/记忆+新「运行详情」）；运行详情视图内用与中栏同一 `AgentStreamView` 渲染该 run 完整过程（「与主 agent 一样，但不在一个窗口」的落点）；该 tab 激活时 aside 加宽至 ~480px |
+| 3 | **子 agent 侧栏 = 右栏内容坞，动态 tab 管理**（2026-11-19 修订，取代旧「AgentContextSidebar 固定四 tab + 运行详情加宽 480」） | 右栏=**通用内容坞**：无固定 tab；每个子 agent run=一个可关闭 tab（中栏子任务卡「查看过程」或头部「历史子任务」下拉才创建——点击才开，不自动建）；**DockTab 带 sessionId=归属主会话，只渲染当前会话的 tab**（切会话整条 tab 条切换、不共用，保证子 agent 可追溯到调用它的会话）；tab 内容复用 `AgentStreamView`（与中栏同款）；宽度可拖（默认 400，280~760，右向拖拽反向）、右上角完全收起/展开；未来 browser/文件等同坞按 `DockTab.type` 扩展 |
 | 4 | **IM 内嵌卡不动，工作台新写**（修订 2026-11-11「两处同一实现」拍板） | AgentProcessCard 归 IM 落流卡/发起者卡专用（服务端 stages 协议不动）；工作台新写 `features/agent/components/stream/` 组件族；MarkdownText 等原子件继续共用；stagesFromStream 投影归 IM 卡专用 |
 | 5 | **Rust 协议三件套纳入本批** | ① skill 工具（见 #2）；② `subagent.trace` 过程事件（probe 每步文本/工具外发+WAL）+ `run.history` 回放 REQ；③ WAL `tool.call` 行补 args_masked + `HistoryItem::Tool` 加 args（重启回放保真） |
 | 6 | MCP 无独立事件 | MCP 工具走 toolCall 统一通道，名 `mcp.{server}.{tool}`——UI 按前缀拆解渲染（server 徽标），协议零改动 |
@@ -94,14 +95,17 @@
 
 头行统一：图标+动作词+关键参数（单行截断）+ 状态（运行中 Spin/ok·耗时/失败·exit/blocked 红条带）；**运行中自动展开、落定折叠**（D19 口径延续）；blocked 8020-8026 文案映射沿用 ToolCard 现表。
 
-`AgentStreamView`：条目→块的分发器，**中栏与右栏运行详情共用**；memo 逐条引用比较（对齐 TurnBubble 口径，appendDelta 保旧条目引用稳定是前提，不破坏）。
+`AgentStreamView`：条目→块的分发器，**中栏与右栏内容坞（子 agent 过程 tab）共用**；memo 逐条引用比较（对齐 TurnBubble 口径，appendDelta 保旧条目引用稳定是前提，不破坏）。
 
-### 3.6 右栏 aside tab 化 + 运行详情
+### 3.6 右栏内容坞（2026-11-19 修订，取代原「aside tab 化 + 运行详情」）
 
-- `AgentContextSidebar` 改 antd Tabs：会话信息 / 运行记录 / 检查点 / 记忆 / **运行详情**（新）；默认会话信息。
-- 打开入口：SubagentCard「查看过程」、运行记录行点击 → `setActiveRunView(runId)` 切运行详情 tab。
-- 数据：直播 sideStreams[runId]（subagentSpawn 合成 user 条目=taskDigest；subagentTrace 投影：text→agentText、tool_call/result→tool 条目按 callId 配对——与主流 handleEvent 逻辑抽公共函数）；打开时若空 → loadRunHistory(runId) 回放（原 delegate 的 childSessionRef 优先口径随委派域退役移除 2026-11-19）。
-- 布局：运行详情 tab 激活时 aside 宽 304→480px（其余 tab 原宽）；aside 折叠机制不变。
+- **形态**：右栏=通用内容坞 `AgentRightDock`（原 `AgentContextSidebar` 删除）；**无固定 tab**——内容全部按需打开，无 tab 时整坞不渲染（不占宽）。
+- **会话归属/隔离（硬口径）**：每个 `DockTab` 带 `sessionId`（调用子 agent 的主会话）+ `key=subagent:<runId>`；内容坞**只渲染 `sessionId === 当前会话` 的 tab**——切会话=整条 tab 条与激活 tab 一起换（`dockActiveBySession` 按会话记忆），A 会话的 tab 绝不出现在 B 会话下（含 IM 内嵌/定时任务等后台会话），子 agent 过程始终可追溯到发起它的会话；tab tooltip 另带「所属会话标题」双保险。
+- **入口（点击才开）**：① 中栏子任务卡「查看过程」→ `openRunTab(sessionId, runId, taskDigest)`；② 中栏头部「历史子任务」下拉（仅当前会话有 run 记录时出现，最近 20 条）——覆盖重启后子任务卡不在会话流里的历史 run 回看（`subagent.spawn` 不入 session.history 投影）。
+- **tab 形态**：antd `Tabs type="editable-card"`（可关闭、无 + 号）；label=类型标签（探查/专家/终端，按 `runsBySession` 反查）+ 摘要截断 + 运行中圆点；关闭激活 tab 回落同会话最后一个，全关即坞隐藏。
+- **数据**：直播 `sideStreams[runId]`（`subagentSpawn` 播种 user 条目=taskDigest；`subagentTrace` 投影：text→agentText、tool_call/result→tool 条目按 callId 配对）；打开时若空 → `loadRunHistory(runId)` 回放（run.history REQ，D33 §3.3 不变）。
+- **布局**：`useSplitWidth('agent-dock', 400, 280, 760, 'right')` + `SplitHandle`（中栏与坞之间；右侧栏向右拖=变窄）+ `paneRef` 拖动直写；**收起/展开**：展开态按钮在坞 tab 条最右（右上角），收起态按钮在中栏 header 最右（运行中 tab 带圆点）。原「运行详情激活即 304→480」动态加宽退役。
+- **扩展点**：`DockTab.type` 当前仅 `'subagent'`；未来 browser/文件打开等内容增 type 后同坞渲染（内容区通用化，对齐 zcode 右栏定位）。
 
 ## 4. 批次划分（每批一提交一推送）
 
@@ -116,6 +120,8 @@
 
 **落地记录（2026-11-17）**：批0 dcf559e / 批1 9d3f2bb（cargo test 全绿：roundtrip 计数 23/38 + D33 golden×5 + wal_history args + wal_run_history + skill 三态 + skills_loop 新口径两用例）/ 批2 9a7d29b / 批3 0c91768（退役删除 TurnBubble/ToolCard/ToolGroup/StreamMessage 四组件）/ 批4 387d7c7；批5 验证：agent workspace `cargo test` 全绿、`tsc -b` 0 错、`vite build` 成功（7.2s）、壳 `cargo check` 通过（唯一 warning 为既有 TEMP 排错宏非本次引入）。
 
+**落地记录（2026-11-19 右栏内容坞修订）**：左栏任务区移除 run 记录（`AgentSessionList` 去 `runs`）；`AgentContextSidebar` 删除 → 新增 `AgentRightDock`（动态 tab/会话隔离/可关闭/右上角收起）；store 以 `dockTabs + dockActiveBySession + dockCollapsed` 承载（`taskRuns`/`activeRunView` 退役，`taskRuns` 全量拉取链路删除）；`useSplitWidth` 增 `side='right'`；中栏头部新增「历史子任务」下拉（当前会话 run 回看）。验证：`tsc --noEmit` 0 错 + `vite build` 成功（7.7s）。
+
 ## 5. 真机验收清单（归用户；批5 追记证据）
 
 | # | 项 | 口径 |
@@ -124,7 +130,7 @@
 | 2 | 工具族形态 | 读（路径+行区间）/写（路径+行数字节）/编辑（红绿 diff）/终端（$ 命令+输出+exit）/git/搜索/MCP 徽标；运行中展开落定折叠 |
 | 3 | 技能 | 消息提及技能场景 → 模型调 skill 工具 → 时间线 SkillCard；索引区文案为新口径 |
 | 4 | 收口折叠 | 完成后过程折叠一行（用时/LLM/工具/子agent 统计），只留正文；点击展开 |
-| 5 | 子 agent 侧栏 | 点子任务卡「查看过程」→ 右栏运行详情 tab 加宽，平铺流显示该 run 全过程（文本+工具卡同款）；运行中/完成后均可看 |
+| 5 | 子 agent 内容坞 | 点子任务卡「查看过程」→ 右栏打开该 run 过程 tab（与中栏同款平铺流，运行中/完成后均可看）；并行多子任务=多 tab 可切换/逐个关闭；切会话后右栏只显示该会话的 tab（不串台），切回恢复原激活 tab；拖分界条调宽（刷新保持）、右上角收起/展开（收起态中栏 header 展开钮带运行中圆点）；重启 App 后经「历史子任务」下拉回看旧 run |
 | 6 | 重启保真 | 重启 App 打开历史会话：工具卡仍有命令/路径/diff（args 保真）；旧会话（升级前数据）降级不报错 |
 | 7 | IM 零变化 | 聊天内嵌 agent 卡/落流卡形态与改前一致 |
 | 8 | 用户消息 | 平铺块形态，发送/流式收口正常 |

@@ -312,3 +312,15 @@ export const RISK_LABELS: Record<RiskLevel, string> = { low: '低危', mid: '中
 
 /** 模型档位显示（model_policy / model.switched） */
 export const MODEL_TIER_LABELS: Record<'fast' | 'strong' | 'auto', string> = { fast: '快', strong: '强', auto: '自动' };
+
+/** run 类型中文（右栏内容坞 tab/历史子任务下拉共用） */
+export const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = { probe: '探查', expert: '专家', terminal: '终端' };
+
+/** run 状态中文（同上） */
+export const RUN_STATUS_LABELS: Record<RunInfo['status'], string> = {
+  running: '运行中',
+  done: '完成',
+  failed: '失败',
+  cancelled: '已取消',
+  interrupted: '已中断',
+};

@@ -4,8 +4,9 @@
  *   可折叠内嵌该项目会话；行内动作=新会话/移除登记
  * - 日常对话区：workspace='' 且 IM 来源（embeddedIds 命中，💬 徽标，标题=「与xxx的对话」/
  *   「xxx · 群聊」）的会话平铺；2026-11-17 收窄——工作台建的空目录会话改落任务区
- * - 任务区：任务会话（workspace='' 非 IM 来源——含任务区「+」新建与历史数据）平铺在前，
- *   runs.list 跨会话全量（子代理探查/专家/终端后台命令）随其后，运行中置顶，点击跳所属会话
+ * - 任务区：任务会话（workspace='' 非 IM 来源——含任务区「+」新建与历史数据）平铺
+ *   （2026-11-19：**run 记录整块移出左栏**——子 agent 过程归右栏内容坞，按主会话
+ *   归属/隔离；左栏只留会话本身）
  * - 顶部双入口：[+ 新建任务会话（任务区头）] [打开项目目录（项目区头，plugin-dialog 目录选择）]
  * - 会话项：状态点（●运行/◐等待/○暂停/✕错误/▪结束）+ 标题 + 相对时间 + 状态 chip
  * - 六态由父层推导后传入（loading/empty/error/offline 走 StateView）
@@ -22,32 +23,11 @@ import { useNavigate } from 'react-router-dom';
 import { Alert, Badge, Flex, Menu, Tag, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import { Bot, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Plus, Trash2 } from 'lucide-react';
-import type { AgentSessionMeta, AgentWorkspaceInfo, RunInfo } from '../bridge/types';
+import type { AgentSessionMeta, AgentWorkspaceInfo } from '../bridge/types';
 import { SESSION_STATUS_LABELS } from '../bridge/types';
 import { Button } from '../../../shared/ui/Button';
 import { formatListTime } from '../../../shared/utils/time';
 import { embeddedSessionIds } from '../../im/agent/embedded';
-
-/** run 类型徽标（D16 两形态 + 统一后台任务体系的 terminal） */
-const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = {
-  probe: '探查',
-  expert: '专家',
-  terminal: '终端',
-};
-
-/** run 类型徽标色（专家=紫） */
-function runKindColor(kind: RunInfo['kind']): string | undefined {
-  if (kind === 'expert') return 'purple';
-  return undefined;
-}
-
-const RUN_STATUS_LABELS: Record<RunInfo['status'], string> = {
-  running: '运行中',
-  done: '完成',
-  failed: '失败',
-  cancelled: '已取消',
-  interrupted: '已中断',
-};
 
 /** 状态点形态（D08 §3.1：●运行 / ◐等待审批 / ○暂停 / ✕错误 / ▪已结束）→ antd Badge 状态 */
 function statusBadge(status: AgentSessionMeta['status']): 'success' | 'processing' | 'error' | 'warning' | 'default' {
@@ -100,8 +80,6 @@ interface ProjectGroup {
 interface AgentSessionListProps {
   sessions: AgentSessionMeta[];
   workspaces: AgentWorkspaceInfo[];
-  /** 跨会话全量 run（任务分区数据源；父层 loadTaskRuns 维护） */
-  runs: RunInfo[];
   activeId: string | null;
   bridgeKind: 'mock' | 'tauri';
   /** 新建会话失败提示（bbrt 缺失/超时/超限；成功后清除） */
@@ -124,7 +102,6 @@ interface AgentSessionListProps {
 export const AgentSessionList = memo(function AgentSessionList({
   sessions,
   workspaces,
-  runs,
   activeId,
   bridgeKind,
   createError,
@@ -149,13 +126,6 @@ export const AgentSessionList = memo(function AgentSessionList({
       cancelled = true;
     };
   }, []);
-
-  // 任务分区：运行中置顶，其余按创建时间倒序（最多 30 条防长列表拖垮滚动）
-  const taskRuns = useMemo(() => {
-    const sorted = [...runs].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
-    return [...sorted.filter((r) => r.status === 'running'), ...sorted.filter((r) => r.status !== 'running')].slice(0, 30);
-  }, [runs]);
-  const runningCount = useMemo(() => runs.filter((r) => r.status === 'running').length, [runs]);
 
   // 项目分组：登记表 ∪ 会话出现的路径（登记表顺序优先=最近打开在前）
   const { projectGroups, dailySessions } = useMemo(() => {
@@ -184,7 +154,7 @@ export const AgentSessionList = memo(function AgentSessionList({
   // 空 workspace 会话二分（2026-11-17 用户报修：任务区「+」新建的会话发送消息后落进
   // 了日常区——2026-11-12 曾把全部 workspace='' 平铺进日常区兜底「新建不落左栏」，
   // 副作用即本Bug）。现按来源分区：embeddedIds 命中=IM 来源（💬）→「日常对话」；
-  // 其余（工作台建的空目录会话，含历史未标记数据）→「任务」区与子任务 run 同区。
+  // 其余（工作台建的空目录会话，含历史未标记数据）→「任务」区。
   // embedded 映射（IndexedDB）由 IM 侧在 ensureEmbeddedSession 建会话时恒写入，
   // 未命中即工作台来源——口径对历史数据同样成立
   const { chatSessions, taskSessions } = useMemo(() => {
@@ -198,8 +168,6 @@ export const AgentSessionList = memo(function AgentSessionList({
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const activeIn = (g: ProjectGroup) => g.sessions.some((s) => s.id === activeId);
   const isOpen = (g: ProjectGroup) => (collapsed[g.path] === undefined ? true : !collapsed[g.path]);
-
-  const sessionTitleOf = (sid: string): string => sessions.find((s) => s.id === sid)?.title ?? '';
 
   /** 分区头（Menu group 标签）：图标 + 标题 + 尾部动作（inline-flex 自管行高——
    *  24px 动作钮须脱离 group 标题 22px 行高，见文件头「行高」注） */
@@ -258,28 +226,6 @@ export const AgentSessionList = memo(function AgentSessionList({
     </span>
   );
 
-  /** 任务行 label（类型徽标 + 摘要/会话两行 + 状态；inline-flex 自管行高见文件头注） */
-  const taskLabel = (r: RunInfo) => {
-    const statusColor = r.status === 'running' ? token.colorSuccess : r.status === 'failed' ? token.colorError : token.colorTextTertiary;
-    return (
-      <span
-        style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 6, minWidth: 0, width: '100%', lineHeight: 1.4 }}
-        title={`${RUN_KIND_LABELS[r.kind]} · ${sessionTitleOf(r.sessionId) || r.sessionId} · ${RUN_STATUS_LABELS[r.status]}`}
-      >
-        <Tag color={runKindColor(r.kind)} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 4, flexShrink: 0 }}>
-          {RUN_KIND_LABELS[r.kind]}
-        </Tag>
-        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <span style={{ fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.summary || r.defRef || r.id}</span>
-          <Typography.Text type="secondary" style={{ fontSize: 10 }} ellipsis>
-            {sessionTitleOf(r.sessionId) || '未知会话'} · {formatListTime(r.createdAt)}
-          </Typography.Text>
-        </span>
-        <span style={{ flexShrink: 0, fontSize: 10, color: statusColor }}>{RUN_STATUS_LABELS[r.status]}</span>
-      </span>
-    );
-  };
-
   /** 分区空态提示行（disabled 项承载次要文字） */
   const hintItem = (key: string, text: string): NonNullable<MenuProps['items']>[number] => ({
     key,
@@ -293,7 +239,6 @@ export const AgentSessionList = memo(function AgentSessionList({
 
   const projKey = (path: string) => `proj:${path}`;
   const sessionKey = (id: string) => `session:${id}`;
-  const runKey = (id: string) => `run:${id}`;
 
   const items: MenuProps['items'] = [
     {
@@ -373,25 +318,12 @@ export const AgentSessionList = memo(function AgentSessionList({
     {
       key: 'grp:tasks',
       type: 'group',
-      label: sectionHead(
-        <ListTodo size={12} aria-hidden />,
-        '任务',
-        headAct('新建任务会话', onNewTask),
-        runningCount > 0 ? (
-          <Tag color="success" style={{ marginInlineEnd: 0, fontSize: 9, lineHeight: '14px', paddingInline: 3, minWidth: 14, textAlign: 'center' }}>
-            {runningCount}
-          </Tag>
-        ) : undefined,
-      ),
-      // 任务会话在前（+ 新建即落此区），子任务 run 随后；两组同现时以小节头分隔
+      label: sectionHead(<ListTodo size={12} aria-hidden />, '任务', headAct('新建任务会话', onNewTask)),
+      // 任务会话（+ 新建即落此区）；子 agent run 记录不在左栏（右栏内容坞按会话归属展示）
       children:
-        taskSessions.length === 0 && taskRuns.length === 0
-          ? [hintItem('hint:no-task', '点右上 + 新建任务会话；探查/专家/后台命令的子任务也在此汇总')]
-          : [
-              ...taskSessions.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s, '任务会话 · 无工作目录') })),
-              ...(taskSessions.length > 0 && taskRuns.length > 0 ? [hintItem('subhead:task-runs', '子任务运行')] : []),
-              ...taskRuns.map((r) => ({ key: runKey(r.id), label: taskLabel(r) })),
-            ],
+        taskSessions.length === 0
+          ? [hintItem('hint:no-task', '点右上 + 新建任务会话；子任务过程点子任务卡「查看过程」在右栏查看')]
+          : taskSessions.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s, '任务会话 · 无工作目录') })),
     },
   ];
 
@@ -403,11 +335,6 @@ export const AgentSessionList = memo(function AgentSessionList({
   };
 
   const onMenuClick: MenuProps['onClick'] = ({ key }) => {
-    if (key.startsWith('run:')) {
-      const r = taskRuns.find((x) => runKey(x.id) === key);
-      if (r) navigate(`/agent/s/${r.sessionId}`);
-      return;
-    }
     if (key.startsWith('session:')) {
       onSelect(key.slice('session:'.length));
       return;

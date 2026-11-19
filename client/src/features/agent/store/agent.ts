@@ -61,10 +61,12 @@ export type StreamItem =
       /** null=等待回答；对象=已回答/中断（answers=所选 label 串） */
       answer: null | { decision: 'answered' | 'cancelled'; answers: string; at: number };
     }
-  /** 子 Agent 卡（D16 类型 1；runId=任务 id（agent-/terminal- 前缀+32hex），状态由 subagent.event 驱动） */
+  /** 子 Agent 卡（D16 类型 1；runId=任务 id（agent-/terminal- 前缀+32hex），状态由 subagent.event 驱动）。
+   *  sessionId=发起它的主会话（2026-11-19：右栏内容坞按此归属/隔离） */
   | {
       kind: 'subagent';
       key: string;
+      sessionId: string;
       runId: string;
       taskDigest: string;
       status: 'running' | 'done' | 'failed';
@@ -74,6 +76,23 @@ export type StreamItem =
   /** 错误卡（error NTF 投影：8011 模型不可用/流中断、8010 超限等；不进 WAL——
    *  刷新/重开后消失，仅当轮提示重发/换模型可重试） */
   | { kind: 'error'; key: string; code: number; message: string; fatal: boolean };
+
+/**
+ * 右栏内容坞 tab（D33 2026-11-19 修订：右栏通用化为可扩展内容区）：
+ * 当前仅 type='subagent'（子 agent 过程）；未来 browser/文件等内容增 type 扩展点。
+ * **sessionId=归属主会话**——内容坞按会话隔离：只渲染当前会话的 tab，切会话即整条
+ * tab 条切换（子 agent 必须能追溯到调用它的会话，绝不跨会话共用）。
+ */
+export type DockTab = {
+  type: 'subagent';
+  /** 跨类型唯一 key（subagent:<runId>） */
+  key: string;
+  /** 归属主会话 */
+  sessionId: string;
+  runId: string;
+  /** tab 文案（子任务 digest；tooltip 另带所属会话标题） */
+  title: string;
+};
 
 interface AgentState {
   /** 桥类型（mock=本地剧本 / tauri=真实宿主） */
@@ -96,14 +115,16 @@ interface AgentState {
   usageBySession: Record<string, { in: number; out: number }>;
   /** sessionId → run 记录（D16 §3.1 runs.list；子任务生命周期事件触发刷新） */
   runsBySession: Record<string, RunInfo[]>;
-  /** 全量 run 清单（2026-11-11 左栏任务分区：runs.list 无 sessionId=跨会话全量） */
-  taskRuns: RunInfo[];
   /** D33 §3.2/§3.3：runId → 子 agent 过程流（subagentSpawn 播种 user 条目 +
-   *  subagentTrace 直播投影 + run.history 回放回填；右栏运行详情数据源。
-   *  不进主时间线——probe 过程只在侧栏可见） */
+   *  subagentTrace 直播投影 + run.history 回放回填；右栏内容坞数据源。
+   *  不进主时间线——probe 过程只在内容坞可见） */
   sideStreams: Record<string, StreamItem[]>;
-  /** D33：右栏运行详情当前展示的 runId（null=未打开/回落默认 tab） */
-  activeRunView: string | null;
+  /** 右栏内容坞 tab（全局登记；渲染按当前会话过滤——会话归属/隔离） */
+  dockTabs: DockTab[];
+  /** sessionId → 当前激活 tab key（每会话独立记忆；null=无） */
+  dockActiveBySession: Record<string, string | null>;
+  /** 右栏收起态（localStorage 持久化；无 tab 时坞整体不显示） */
+  dockCollapsed: boolean;
 
   /** 思考强度档位（2026-11-11 zcode 同款三档；全局用户选择，随每条消息下发） */
   thinkLevel: 'low' | 'medium' | 'high';
@@ -148,14 +169,16 @@ interface AgentState {
   registerProject: (path: string, name?: string) => Promise<AgentWorkspaceInfo>;
   /** D19 移除项目登记（只删登记，不动会话/记忆分区） */
   forgetProject: (id: string) => Promise<void>;
-  /** 拉取会话 run 记录（D16 §3.1 run 面板） */
+  /** 拉取会话 run 记录（D16 §3.1：子 agent 生命周期刷新 + 右栏历史子任务入口） */
   loadRuns: (sessionId: string) => void;
-  /** 拉全量 run（左栏任务分区；sessionId 缺省=跨会话全量） */
-  loadTaskRuns: () => void;
-  /** D33：打开运行详情（右栏切该 run 的过程流；本进程无流时拉 run.history 回放） */
-  openRunView: (runId: string) => void;
-  /** D33：关闭运行详情（回落默认 tab；sideStreams 保留——重开不重拉） */
-  closeRunView: () => void;
+  /** 打开子 agent 过程 tab（点击才开：登记+激活+展开坞+按需回放 run.history） */
+  openRunTab: (sessionId: string, runId: string, title: string) => void;
+  /** 关闭内容坞 tab（激活项回落同会话最后一个；同会话无 tab 则 null） */
+  closeDockTab: (key: string) => void;
+  /** 切当前会话的激活 tab */
+  setDockActive: (sessionId: string, key: string) => void;
+  /** 右栏完全收起/展开（localStorage 持久化） */
+  setDockCollapsed: (collapsed: boolean) => void;
   /** D33：run 历史回放（subagentTrace 未直播到的场景：重启/切回后打开） */
   loadRunHistory: (runId: string) => Promise<void>;
   /** 事件唯一入口（reducer 式分发；包一层便于桥接入） */
@@ -186,6 +209,25 @@ export function ensureAgentEventSubscribed(): void {
 
 /** requestId → 审批倒计时（到点置 timeout=拒绝语义；窗口随事件 expiresAt，D35） */
 const permTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** 右栏内容坞收起态持久化 key（无 tab 时坞整体不渲染，收起态只记用户偏好） */
+const DOCK_COLLAPSED_KEY = 'bbc:agent-dock:collapsed';
+
+function readDockCollapsed(): boolean {
+  try {
+    return localStorage.getItem(DOCK_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function persistDockCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(DOCK_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    /* localStorage 不可用静默——仅本次会话生效 */
+  }
+}
 
 let itemSeq = 0;
 
@@ -343,9 +385,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   usageBySession: {},
   runsBySession: {},
   thinkLevel: 'medium',
-  taskRuns: [],
   sideStreams: {},
-  activeRunView: null,
+  dockTabs: [],
+  dockActiveBySession: {},
+  dockCollapsed: readDockCollapsed(),
 
   workspaces: [],
   workspacesLoading: false,
@@ -557,21 +600,48 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       .catch(() => undefined);
   },
 
-  loadTaskRuns: () => {
-    void bridge
-      .listRuns()
-      .then((runs) => set({ taskRuns: runs }))
-      .catch(() => undefined);
-  },
+  // ---- D33：右栏内容坞（子 agent 过程等内容的容器；按主会话归属/隔离）----
 
-  // ---- D33：运行详情（右栏子 agent 过程流）----
-
-  openRunView: (runId) => {
-    set({ activeRunView: runId });
+  openRunTab: (sessionId, runId, title) => {
+    const key = `subagent:${runId}`;
+    set((s) => ({
+      // 去重登记（同 run 重复点击=聚焦既有 tab）；sessionId 固定落登记时刻的归属会话
+      dockTabs: s.dockTabs.some((t) => t.key === key)
+        ? s.dockTabs
+        : [...s.dockTabs, { type: 'subagent', key, sessionId, runId, title }],
+      dockActiveBySession: { ...s.dockActiveBySession, [sessionId]: key },
+      dockCollapsed: false, // 点击打开=显式意图，收起态随之展开
+    }));
+    persistDockCollapsed(false);
     void get().loadRunHistory(runId);
   },
 
-  closeRunView: () => set({ activeRunView: null }),
+  closeDockTab: (key) => {
+    set((s) => {
+      const tab = s.dockTabs.find((t) => t.key === key);
+      if (!tab) return s;
+      const rest = s.dockTabs.filter((t) => t.key !== key);
+      const siblings = rest.filter((t) => t.sessionId === tab.sessionId);
+      const active = s.dockActiveBySession[tab.sessionId] ?? null;
+      return {
+        dockTabs: rest,
+        dockActiveBySession: {
+          ...s.dockActiveBySession,
+          // 关的是激活项 → 回落同会话最后一个 tab（无则 null）
+          [tab.sessionId]: active === key ? (siblings[siblings.length - 1]?.key ?? null) : active,
+        },
+      };
+    });
+  },
+
+  setDockActive: (sessionId, key) => {
+    set((s) => ({ dockActiveBySession: { ...s.dockActiveBySession, [sessionId]: key } }));
+  },
+
+  setDockCollapsed: (collapsed) => {
+    persistDockCollapsed(collapsed);
+    set({ dockCollapsed: collapsed });
+  },
 
   loadRunHistory: async (runId) => {
     // 本进程已有直播流（或已回放过）不重拉；拉取期间来了直播也不覆盖
@@ -758,6 +828,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           const item: StreamItem = {
             kind: 'subagent',
             key: `sa-${event.runId}`,
+            sessionId: event.sessionId, // 归属主会话（右栏内容坞按此隔离）
             runId: event.runId,
             taskDigest: event.taskDigest,
             status: 'running',
@@ -931,8 +1002,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       event.sessionId
     ) {
       useAgentStore.getState().loadRuns(event.sessionId);
-      // 任务分区（全量）随 run 生命周期同步刷新（2026-11-11）
-      useAgentStore.getState().loadTaskRuns();
     }
   },
 }));
@@ -942,11 +1011,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 /** 当前激活会话（工作台中栏数据源） */
 export function selectActiveSession(s: AgentState): AgentSessionMeta | null {
   return s.sessions.find((x) => x.id === s.activeSessionId) ?? null;
-}
-
-/** 指定会话的未决审批（右栏队列/倒计时徽标） */
-export function selectPendingPermissions(items: StreamItem[]): Array<Extract<StreamItem, { kind: 'permission' }>> {
-  return items.filter((it): it is Extract<StreamItem, { kind: 'permission' }> => it.kind === 'permission' && it.outcome === null);
 }
 
 /** 指定会话的未决提问（D20；同审批口径，供三端提问卡） */

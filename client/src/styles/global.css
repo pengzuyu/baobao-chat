@@ -1067,3 +1067,31 @@ body.bbc-col-resizing {
 /* D26-O6b：原「目录行 hover『+』（新建子目录）：hover 前隐藏，随 antd 树行 hover 联动」段已随 antd 全量收口退役（2026-11-14） */
 /* D26-O6b：原「树内内联建目录表单（antd Input+Button，flex 布局）」段已随 antd 全量收口退役（2026-11-14） */
 /* D26-O6b：原「文章叶子：lucide 图标与文字对齐」段已随 antd 全量收口退役（2026-11-14） */
+
+/* ─── D33 2026-11-19：右栏内容坞（工作台子 agent 过程 tab）───
+   antd Tabs editable-card 撑满侧栏高度：tab 条固定在上、pane 内部自滚动
+   （外层 aside overflow:hidden；AgentStreamView 的长过程只在内容区滚） */
+.agent-dock-tabs {
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.agent-dock-tabs > .ant-tabs-nav {
+  margin: 0;
+  padding: 6px 8px 0;
+  flex-shrink: 0;
+}
+.agent-dock-tabs > .ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.agent-dock-tabs > .ant-tabs-content-holder > .ant-tabs-content {
+  flex: 1;
+  min-height: 0;
+}
+.agent-dock-tabs .ant-tabs-tabpane {
+  height: 100%;
+  padding: 10px 12px 12px;
+}

@@ -1,8 +1,10 @@
 /**
  * PAG-01/02/03 Agent 工作台（/agent[/s/:sessionId]，D08 §3.1/§3.3）：
- * - 左：会话列表（窄栏 + 新建 + 二级导航入口）
+ * - 左：会话列表（窄栏 + 新建 + 二级导航入口；2026-11-19 起 run 记录不再进左栏）
  * - 中：会话视图（头部状态徽标 + 会话流 + 输入区；停止唯一入口=发送旁）
- * - 右：上下文栏（会话信息/运行详情，可折叠）
+ * - 右：**内容坞**（D33 2026-11-19 修订）：无固定 tab，按需打开子 agent 过程
+ *   （多子 agent=多 tab，按主会话归属/隔离）；可拖宽、右上角完全收起/展开；
+ *   未来 browser/文件等内容同坞扩展
  * - 会话流渲染（2026-11-17 D33 平铺流）：无气泡全宽消息流——用户消息平铺块 +
  *   类型化过程块（思考/工具族/技能/审批/子任务/中间正文），收口折叠一行统计，
  *   最终回答常开（AgentStreamView/TurnBlock；回合气泡/AgentProcessCard 归 IM 专用）
@@ -12,8 +14,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Dropdown, Flex, FloatButton, Modal, Tag, Typography, theme, type MenuProps } from 'antd';
-import { ArrowDown, MessageCircle, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, ShieldCheck, Square } from 'lucide-react';
+import { Badge, Dropdown, Flex, FloatButton, Modal, Tag, Typography, theme, type MenuProps } from 'antd';
+import { ArrowDown, History, MessageCircle, PanelLeftOpen, PanelRightOpen, Plus, ShieldCheck, Square } from 'lucide-react';
 import { open as openDirectory } from '@tauri-apps/plugin-dialog';
 import { Button } from '../../../shared/ui/Button';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
@@ -21,14 +23,14 @@ import { SkeletonList, SkeletonStream } from '../../../shared/ui/Skeleton';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { useConnectionStore } from '../../../shared/store/connection';
-import { useAgentStore, selectActiveSession, selectPendingPermissions, composerDisabledFor, type StreamItem } from '../store/agent';
-import { AGENT_MODE_OPTIONS, SESSION_STATUS_LABELS } from '../bridge/types';
-import type { PermissionMode } from '../bridge/types';
+import { useAgentStore, selectActiveSession, composerDisabledFor, type StreamItem } from '../store/agent';
+import { AGENT_MODE_OPTIONS, RUN_KIND_LABELS, RUN_STATUS_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
+import type { PermissionMode, RunInfo } from '../bridge/types';
 import { fetchMeSettings, fetchMyProviders, fetchSharedProviders, type AIDefaultSetting } from '../../settings/api/ai';
 import type { AIProvider } from '../../admin/model/types';
 import { AgentSubNav } from '../components/AgentSubNav';
 import { AgentSessionList } from '../components/AgentSessionList';
-import { AgentContextSidebar } from '../components/AgentContextSidebar';
+import { AgentRightDock } from '../components/AgentRightDock';
 import { AgentStreamView } from '../components/stream/AgentStreamView';
 import type { PermissionDecision } from '../components/PermissionCard';
 import { ModelThinkPicker } from '../components/ModelThinkPicker';
@@ -53,6 +55,8 @@ const TURN_ACTIVE_STATUSES = new Set<string>(['running', 'waiting_permission', '
 
 /** 空流常量（selector 稳定返回：无会话/无条目时不随渲染新建引用） */
 const EMPTY_ITEMS: StreamItem[] = [];
+/** 空 run 常量（同上：稳定引用让 useMemo/子组件免无谓重算） */
+const EMPTY_RUNS: RunInfo[] = [];
 
 /** 会话状态徽标色（原 agent-status-badge--* 口径：运行=绿/等待=橙/错误=红/其余灰） */
 function statusTagColor(status: string): string | undefined {
@@ -66,8 +70,6 @@ export function AgentWorkbenchPage() {
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const { token } = theme.useToken();
-  /** 右栏上下文栏折叠态（PAG-01 E 区；L 档起可固定，M/S 浮层化的骨架阶段先做显隐） */
-  const [sideOpen, setSideOpen] = useState(true);
   // 插件斜杠命令表（D22/L5：/ 渲染；失败降级空=功能关闭）
   const [pluginCommands, setPluginCommands] = useState<PluginCommand[]>([]);
   useEffect(() => {
@@ -77,6 +79,8 @@ export function AgentWorkbenchPage() {
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   // 左栏拖拽调宽（未折叠且 L/XL 生效——M 档媒体查询收窄 56px 图标条，内联宽度会击穿须让位）
   const sessionsSplit = useSplitWidth('agent-sessions', 232, 180, 360);
+  // 右栏内容坞拖拽调宽（2026-11-19：side='right' 向右拖=变窄；收起态由 store 持久化）
+  const dockSplit = useSplitWidth('agent-dock', 400, 280, 760, 'right');
   const bp = useBreakpoint();
   const sessionsResizable = !sessionsCollapsed && (bp === 'L' || bp === 'XL');
   /** embedded 会话来源聊天（2026-11-11「回到聊天」：IndexedDB 映射反查 convId） */
@@ -105,11 +109,12 @@ export function AgentWorkbenchPage() {
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
   const selectSession = useAgentStore((s) => s.selectSession);
   const modelBySession = useAgentStore((s) => s.modelBySession);
-  const usageBySession = useAgentStore((s) => s.usageBySession);
   const runsBySession = useAgentStore((s) => s.runsBySession);
   const loadRuns = useAgentStore((s) => s.loadRuns);
-  const taskRuns = useAgentStore((s) => s.taskRuns);
-  const loadTaskRuns = useAgentStore((s) => s.loadTaskRuns);
+  const dockTabsAll = useAgentStore((s) => s.dockTabs);
+  const dockCollapsed = useAgentStore((s) => s.dockCollapsed);
+  const setDockCollapsed = useAgentStore((s) => s.setDockCollapsed);
+  const openRunTab = useAgentStore((s) => s.openRunTab);
   const startSession = useAgentStore((s) => s.startSession);
   const createSession = useAgentStore((s) => s.createSession);
   const workspaces = useAgentStore((s) => s.workspaces);
@@ -136,8 +141,7 @@ export function AgentWorkbenchPage() {
 
   useEffect(() => {
     void init();
-    loadTaskRuns(); // 任务分区全量（后续随 run 生命周期事件增量刷新）
-  }, [init, loadTaskRuns]);
+  }, [init]);
 
   // 路由 → store（/agent/s/:id 与列表点击双向同步）
   useEffect(() => {
@@ -150,15 +154,18 @@ export function AgentWorkbenchPage() {
   // 任何会话（含后台 embedded）每个 delta 都整页重渲；selector 现仅取本会话数组
   // 引用（O(1)），其它会话的更新不再波及本页
   const items = useAgentStore((s) => (s.activeSessionId ? s.streams[s.activeSessionId] : undefined)) ?? EMPTY_ITEMS;
-  // D33：运行详情（右栏 aside 宽度随其激活加宽；侧栏自身订阅过程流数据）
-  const activeRunView = useAgentStore((s) => s.activeRunView);
-  const runs = activeSessionId ? (runsBySession[activeSessionId] ?? []) : [];
+  // D33：右栏内容坞——只取当前会话的 tab（按主会话归属/隔离；切会话整条换）
+  const dockTabs = useMemo(
+    () => (activeSessionId ? dockTabsAll.filter((t) => t.sessionId === activeSessionId) : []),
+    [dockTabsAll, activeSessionId],
+  );
+  const runs = activeSessionId ? (runsBySession[activeSessionId] ?? EMPTY_RUNS) : EMPTY_RUNS;
 
-  // run 面板数据（D16 §3.1）：会话切换时拉取；生命周期事件触发的刷新在 store 内
+  // run 记录（D16 §3.1）：会话切换时拉取；生命周期事件触发的刷新在 store 内
+  // （右栏 tab 的 kind/状态 + 历史子任务下拉数据源）
   useEffect(() => {
     if (activeSessionId) loadRuns(activeSessionId);
   }, [activeSessionId, loadRuns]);
-  const pendingPerms = useMemo(() => selectPendingPermissions(items), [items]);
   const composerState = composerDisabledFor(activeSession?.status);
 
   // ---- 六态推导（列表栏）----
@@ -375,6 +382,35 @@ export function AgentWorkbenchPage() {
   };
   const modelTier = modelChoice.policy;
 
+  // ---- 右栏内容坞（D33 2026-11-19）：只按当前会话归属/隔离；无 tab 不渲染 ----
+  const dockVisible = !!activeSession && dockTabs.length > 0;
+  const showDock = dockVisible && !dockCollapsed;
+  const dockRunning = dockTabs.some((t) => runs.some((r) => r.id === t.runId && r.status === 'running'));
+  /** 历史子任务下拉（当前会话 run，最近 20；重启后子任务卡不在流里时的回看入口） */
+  const historyRuns = useMemo(() => [...runs].sort((a, b) => b.createdAt - a.createdAt).slice(0, 20), [runs]);
+  const runStatusColor = (s: RunInfo['status']): string =>
+    s === 'running' ? token.colorSuccess : s === 'failed' || s === 'interrupted' ? token.colorError : token.colorTextTertiary;
+  const historyMenu: MenuProps = {
+    items: historyRuns.map((r) => ({
+      key: r.id,
+      label: (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: 360 }} title={`${RUN_KIND_LABELS[r.kind]} · ${RUN_STATUS_LABELS[r.status]}${r.summary ? ` · ${r.summary}` : ''}`}>
+          <Tag color={r.kind === 'expert' ? 'purple' : r.kind === 'terminal' ? 'green' : undefined} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 4, flexShrink: 0 }}>
+            {RUN_KIND_LABELS[r.kind]}
+          </Tag>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
+            {r.summary || r.defRef.replace('builtin.', '') || r.id}
+          </span>
+          <span style={{ flexShrink: 0, fontSize: 11, color: runStatusColor(r.status) }}>{RUN_STATUS_LABELS[r.status]}</span>
+        </div>
+      ),
+    })),
+    onClick: ({ key }) => {
+      const r = runs.find((x) => x.id === key);
+      if (r && activeSession) openRunTab(activeSession.id, r.id, r.summary || r.defRef.replace('builtin.', '') || r.id);
+    },
+  };
+
   // ---- 模型选择（0023）：档位 + 公司供应商模型 + 我的供应商模型（ModelThinkPicker
   //      面板承载，与思考强度合体；key 口径沿用旧下拉菜单）----
   const onSelectModel = useCallback(
@@ -393,7 +429,6 @@ export function AgentWorkbenchPage() {
     <AgentSessionList
       sessions={sessions}
       workspaces={workspaces}
-      runs={taskRuns}
       activeId={activeSessionId}
       bridgeKind={bridgeKind}
       createError={createError}
@@ -544,15 +579,30 @@ export function AgentWorkbenchPage() {
                       回到聊天
                     </Button>
                   ) : null}
+                  {/* 历史子任务（当前会话 run）：重启后子任务卡不在流里时的回看入口——
+                      点行在右栏内容坞打开该 run 过程 tab（不进左栏、不占固定 tab） */}
+                  {runs.length > 0 ? (
+                    <Dropdown menu={{ ...historyMenu, style: { maxHeight: 420, overflowY: 'auto' } }} trigger={['click']} placement="bottomRight">
+                      <Button variant="text" size="small" icon={<History size={14} aria-hidden />} title="历史子任务（本会话）">
+                        历史子任务
+                      </Button>
+                    </Dropdown>
+                  ) : null}
+                  {/* 右栏内容坞收起态 → 展开入口（右上角）；运行中圆点提示。
+                      展开态时收起按钮在内容坞 tab 条最右（AgentRightDock） */}
+                  {dockVisible && dockCollapsed ? (
+                    <Badge dot={dockRunning} offset={[-2, 2]}>
+                      <Button
+                        variant="text"
+                        size="small"
+                        onClick={() => setDockCollapsed(false)}
+                        title={dockRunning ? '展开右栏（有子任务运行中）' : '展开右栏'}
+                        icon={<PanelRightOpen size={16} aria-hidden />}
+                      />
+                    </Badge>
+                  ) : null}
                   {/* 「结束」已移除（2026-11-11 会话不死裁决）；「停止」唯一入口在
                       发送旁（2026-11-18 走查：头部与 Composer 重复展示退役） */}
-                  <Button
-                    variant="text"
-                    size="small"
-                    onClick={() => setSideOpen((v) => !v)}
-                    title={sideOpen ? '收起上下文栏' : '展开上下文栏'}
-                    icon={sideOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-                  />
                 </Flex>
               </header>
 
@@ -603,25 +653,24 @@ export function AgentWorkbenchPage() {
           )}
         </section>
 
-        {/* 右：上下文栏（可折叠；D33 运行详情激活时加宽至 480 承载过程流） */}
-        {activeSession && sideOpen ? (
+        {/* 右：内容坞（D33 2026-11-19：无固定 tab、按当前会话归属/隔离；
+            可拖宽 + 右上角收起；无 tab 时整坞不渲染） */}
+        {showDock && activeSession ? <SplitHandle bind={dockSplit.bind} /> : null}
+        {showDock && activeSession ? (
           <aside
+            ref={dockSplit.paneRef}
             style={{
-              width: activeRunView ? 480 : 304,
+              width: dockSplit.width,
               flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
               borderLeft: `1px solid ${token.colorBorderSecondary}`,
               background: token.colorBgContainer,
-              overflowY: 'auto',
+              overflow: 'hidden',
               minHeight: 0,
             }}
           >
-            <AgentContextSidebar
-              session={activeSession}
-              model={modelTier}
-              usage={activeSessionId ? usageBySession[activeSessionId] : undefined}
-              pendingCount={pendingPerms.length}
-              runs={runs}
-            />
+            <AgentRightDock session={activeSession} runs={runs} />
           </aside>
         ) : null}
       </div>

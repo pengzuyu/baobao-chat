@@ -33,7 +33,7 @@ export const SubagentCard = memo(function SubagentCard({ item }: { item: Subagen
   const { token } = theme.useToken();
   const [open, setOpen] = useState(false);
   const cancelRun = useAgentStore((st) => st.cancelRun);
-  const openRunView = useAgentStore((st) => st.openRunView);
+  const openRunTab = useAgentStore((st) => st.openRunTab);
 
   const statusNode =
     item.status === 'running' ? (
@@ -79,12 +79,12 @@ export const SubagentCard = memo(function SubagentCard({ item }: { item: Subagen
           </Typography.Text>
           <span style={{ marginLeft: 'auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>{statusNode}</span>
         </button>
-        {/* D33：查看过程 → 右栏运行详情（与主渲染器同款过程流） */}
+        {/* D33：查看过程 → 右栏内容坞（会话归属=本卡所在主会话；点击才建 tab） */}
         <Typography.Link
           style={{ fontSize: 12, padding: '0 12px', flexShrink: 0 }}
           onClick={(e) => {
             e.stopPropagation();
-            openRunView(item.runId);
+            openRunTab(item.sessionId, item.runId, item.taskDigest);
           }}
         >
           查看过程
