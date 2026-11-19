@@ -3,9 +3,7 @@
 //! 行结构体在各域文件定义并在此统一 re-export 到 crate 根；
 //! Store 的分域方法（`impl Store`）也挂在各域文件，本模块只做聚合。
 
-mod backend;
 mod context;
-mod delegate;
 mod event;
 mod grant;
 mod run;
@@ -13,9 +11,7 @@ mod session;
 mod violation;
 mod workspace;
 
-pub use backend::BackendRow;
 pub use context::ContextRow;
-pub use delegate::DelegateTaskRow;
 pub use event::EventRow;
 pub use grant::GrantRow;
 pub use run::RunRow;

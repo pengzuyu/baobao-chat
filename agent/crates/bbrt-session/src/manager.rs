@@ -95,11 +95,9 @@ pub struct SessionManager {
     permission_tx: Mutex<HashMap<String, Sender<PermissionResponse>>>,
     /// 澄清回执路由表（D20 ask_user）
     clarify_tx: Mutex<HashMap<String, Sender<crate::loop_runner::ClarifyAnswer>>>,
-    /// 委派指令路由（简报阶段：session_id → runner channel sender；
-    /// 后台 run 阶段由 hub 按 run_id 定向）
-    delegate_tx: Mutex<HashMap<String, Sender<crate::loop_runner::DelegateHostMsg>>>,
-    /// 后台委派中枢（D16 §5：委派直接后台；start 时注入 runner 共享）
-    hub: Arc<crate::delegate_bg::DelegateHub>,
+    /// 后台任务中枢（D16 §5：探查/专家/会诊超窗与终端后台命令的取消
+    /// 路由 + join parking；start 时注入 runner 共享）
+    hub: Arc<crate::bg_hub::BgHub>,
     /// D19 会话工作区表（bin 装配时与 tools 管线共享同一实例；start/end 维护）
     pub workspaces: SessionWorkspaces,
 }
@@ -112,8 +110,7 @@ impl SessionManager {
             sessions: Mutex::new(HashMap::new()),
             permission_tx: Mutex::new(HashMap::new()),
             clarify_tx: Mutex::new(HashMap::new()),
-            delegate_tx: Mutex::new(HashMap::new()),
-            hub: Arc::new(crate::delegate_bg::DelegateHub::new()),
+            hub: Arc::new(crate::bg_hub::BgHub::new()),
             workspaces: SessionWorkspaces::new(),
         }
     }
@@ -179,7 +176,6 @@ impl SessionManager {
                     bbrt_sec::gate::PermissionMode::FullAuto => "full-auto",
                 }
                 .to_string(),
-                backend: None,
                 model_policy: format!("{:?}", p.model_policy).to_lowercase(),
                 model_override: p.model_override.clone(),
                 status: "idle".into(),
@@ -207,9 +203,9 @@ impl SessionManager {
             p.model_policy,
             p.model_override.clone(),
         );
-        // 后台委派中枢注入（D16 §5：经 manager 的会话恒后台路径；
-        // raw runner（测试/嵌入式）保持 None=同步退化）
-        runner.delegate_hub = Some(self.hub.clone());
+        // 后台任务中枢注入（D16 §5：经 manager 的会话恒可后台；
+        // raw runner（测试/嵌入式）保持 None=退化）
+        runner.bg_hub = Some(self.hub.clone());
         self.permission_tx
             .lock()
             .unwrap()
@@ -218,10 +214,6 @@ impl SessionManager {
             .lock()
             .unwrap()
             .insert(session_id.clone(), runner.clarify_sender());
-        self.delegate_tx
-            .lock()
-            .unwrap()
-            .insert(session_id.clone(), runner.delegate_sender());
         self.deps.wal.append(
             &session_id,
             "session.start",
@@ -284,10 +276,10 @@ impl SessionManager {
             .unwrap()
             .take()
             .ok_or_else(|| ManagerError::Busy(session_id.into()))?;
-        // 后台委派产物注入（D16 §5：上一轮审查通过的摘要在此回填主上下文，
-        // 以 delegate.join 轮次参与本轮组装）
+        // 后台产物注入（D16 §5：超窗探查/会诊的摘要在此回填主上下文，
+        // 以 subagent.join/team.join 轮次参与本轮组装）
         for join in self.hub.drain_joins(session_id) {
-            runner.inject_delegate_join(&join.run_id, &join.name, &join.summary);
+            runner.inject_bg_join(&join.run_id, &join.name, &join.summary);
         }
         let report = runner.run_turn(text, &self.deps, thinking);
         *entry.state.lock().unwrap() = runner.state();
@@ -329,31 +321,18 @@ impl SessionManager {
             .map_err(|_| ManagerError::NotFound(session_id.into()))
     }
 
-    /// 委派指令定向路由（P0-2② 修复：此前广播全部活跃会话——多会话并存时
-    /// 误投他会的 delegate_rx 被静默吞掉）。顺序：后台 run 注册表（run_id
-    /// 精确命中）→ 简报阶段回落 session 通道（session_hint，仅 launch 携带）
-    /// → 均未命中报 NotFound（run 已结束/未知 id，不静默）。
-    pub fn respond_delegate(
+    /// 后台 run 指令定向路由（P0-2②：run_id 精确命中注册表；未命中报
+    /// NotFound——run 已结束/未知 id，不静默）。宿主 run.cancel 与模型侧
+    /// subagent.adjust（经 loop_runner 内 hub 直连）互补。
+    pub fn respond_run_cancel(
         &self,
         run_id: &str,
-        session_hint: &str,
-        msg: crate::loop_runner::DelegateHostMsg,
+        msg: crate::loop_runner::BgHostMsg,
     ) -> Result<(), ManagerError> {
         if self.hub.route(run_id, &msg) {
             return Ok(());
         }
-        if session_hint.is_empty() {
-            return Err(ManagerError::NotFound(format!("委派 run {run_id}")));
-        }
-        let tx = self
-            .delegate_tx
-            .lock()
-            .unwrap()
-            .get(session_hint)
-            .cloned()
-            .ok_or_else(|| ManagerError::NotFound(session_hint.into()))?;
-        tx.send(msg)
-            .map_err(|_| ManagerError::NotFound(session_hint.into()))
+        Err(ManagerError::NotFound(format!("后台 run {run_id}")))
     }
 
     /// model.switch（D11 §4 ModelSwitched 产生方）：空闲会话档位切换 →
@@ -464,10 +443,9 @@ impl SessionManager {
         }
         self.sessions.lock().unwrap().remove(session_id);
         self.permission_tx.lock().unwrap().remove(session_id);
-        self.delegate_tx.lock().unwrap().remove(session_id);
         // D19：会话工作区表同步移除（工具管线不再路由到该会话）
         self.workspaces.remove(session_id);
-        // 后台委派收口（D16 §5：会话结束=本会话全部后台 run 优雅取消；
+        // 后台任务收口（会话结束=本会话全部后台 run 优雅取消；
         // 线程自注销不阻塞收口）
         self.hub.cancel_session(session_id);
         Ok(())

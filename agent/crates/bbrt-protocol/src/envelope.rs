@@ -75,14 +75,6 @@ pub struct ClarifyOption {
     pub description: Option<String>,
 }
 
-/// 委派审查结论（delegate.review）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ReviewDecision {
-    Accept,
-    Reject,
-}
-
 /// 会话结束原因（session.end）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -182,17 +174,6 @@ pub enum SubagentTraceItem {
     },
 }
 
-/// 委派归一化事件类别（delegate.event，D11 §8.3 映射表）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DelegateEventKind {
-    Output,
-    ToolUse,
-    ToolResult,
-    Warning,
-    Meta,
-}
-
 /// 模型切档原因（model.switched：auto/user/降档）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -202,22 +183,20 @@ pub enum ModelSwitchReason {
     Downgrade,
 }
 
-/// 流式增量通道：D11 §4 原表为 text|reasoning，本实现按任务书增补 tool（委派终端流）
+/// 流式增量通道（D11 §4：text|reasoning）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StreamChannel {
     Text,
     Reasoning,
-    Tool,
 }
 
-/// tool.call 事件来源：self=本产品工具管线；backend=委派后端归一化（D11 §8.3）
+/// tool.call 事件来源：self=本产品工具管线
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolSource {
     #[serde(rename = "self")]
     Local,
-    Backend,
 }
 
 // ---------------------------------------------------------------------------
@@ -241,28 +220,6 @@ pub struct SubagentResult {
     pub sub_id: String,
     pub ok: bool,
     pub summary: String,
-}
-
-/// 简报上下文条目（delegate.brief.brief.context[]）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BriefContextItem {
-    pub source: String,
-    pub excerpt: String,
-}
-
-/// 结构化任务简报（17 篇；forbidden 会转成子进程约束，D11 §2.6 brief.rs）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskBrief {
-    pub task: String,
-    pub workspace: String,
-    #[serde(default)]
-    pub constraints: Vec<String>,
-    #[serde(default)]
-    pub context: Vec<BriefContextItem>,
-    #[serde(default)]
-    pub acceptance: Vec<String>,
-    #[serde(default)]
-    pub forbidden: Vec<String>,
 }
 
 /// 工具被阻断信息（tool.result.blocked{rule,kind}；kind 见 §11 agent_sandbox_violation）
@@ -420,9 +377,7 @@ pub enum SessionState {
     Running,
     WaitingPermission,
     WaitingClarify,
-    WaitingReview,
     SubagentFanout,
-    Delegating,
     Paused,
     Error,
     Ended,
@@ -437,9 +392,7 @@ impl SessionState {
             SessionState::Running => "running",
             SessionState::WaitingPermission => "waiting_permission",
             SessionState::WaitingClarify => "waiting_clarify",
-            SessionState::WaitingReview => "waiting_review",
             SessionState::SubagentFanout => "subagent_fanout",
-            SessionState::Delegating => "delegating",
             SessionState::Paused => "paused",
             SessionState::Error => "error",
             SessionState::Ended => "ended",
@@ -454,9 +407,7 @@ impl SessionState {
             "running" => Some(SessionState::Running),
             "waiting_permission" => Some(SessionState::WaitingPermission),
             "waiting_clarify" => Some(SessionState::WaitingClarify),
-            "waiting_review" => Some(SessionState::WaitingReview),
             "subagent_fanout" => Some(SessionState::SubagentFanout),
-            "delegating" => Some(SessionState::Delegating),
             "paused" => Some(SessionState::Paused),
             "error" => Some(SessionState::Error),
             "ended" => Some(SessionState::Ended),
@@ -523,8 +474,6 @@ pub enum HostToRuntime {
         /// 恢复指针：崩溃恢复时指向本地事件镜像
         #[serde(default, skip_serializing_if = "Option::is_none")]
         history_ref: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        backend_hint: Option<String>,
         /// 初始标题（2026-11-11：IM embedded 会话创建即带来源名「与xxx的对话」；
         /// 缺省=库内默认「新会话」，由宿主在首条用户消息后经 session.rename 派生）
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -572,25 +521,12 @@ pub enum HostToRuntime {
         free_text: Option<String>,
     },
 
-    /// 确认委派启动（REQ→回执{pid}；同上）
-    #[serde(rename = "delegate.launch", rename_all = "camelCase")]
-    DelegateLaunch {
+    /// 取消后台 run（terminal 后台命令/探查/专家在跑任务统一入口；
+    /// graceful=true 优雅取消——SIGINT→宽限→强杀由各执行体解释）
+    #[serde(rename = "run.cancel", rename_all = "camelCase")]
+    RunCancel {
         session_id: String,
-        delegate_task_id: String,
-        backend: String,
-        /// 用户编辑后的简报；None=沿用模型产出原稿（D16 客户端接线：
-        /// 确认不改稿是主路径，编辑稿随 P1 简报编辑器）
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        task_brief: Option<TaskBrief>,
-        mode: PermissionMode,
-        workspace: String,
-    },
-
-
-    /// 取消委派（graceful=true: SIGINT→3s→SIGKILL 进程组）
-    #[serde(rename = "delegate.cancel", rename_all = "camelCase")]
-    DelegateCancel {
-        delegate_task_id: String,
+        run_id: String,
         graceful: bool,
     },
 
@@ -608,15 +544,6 @@ pub enum HostToRuntime {
         model: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
-    },
-
-    /// 委派审查结论（17 §8 确认侧）
-    #[serde(rename = "delegate.review", rename_all = "camelCase")]
-    DelegateReview {
-        delegate_task_id: String,
-        decision: ReviewDecision,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        rejected_hunks: Option<Vec<String>>,
     },
 
     /// run 清单查询（D16 §3.1：REQ→runs.list.result；session_id 缺省=全部会话）
@@ -908,8 +835,7 @@ pub enum RuntimeToHost {
         tool_subset: Vec<String>,
     },
 
-    /// 子 Agent 事件（UNT；session_id 由 bin bridge 补挂——变体本身可选，
-    /// 兼容 bbrt-delegate 侧无会话上下文的构造）
+    /// 子 Agent 事件（UNT；session_id 由 bin bridge 补挂——变体本身可选）
     #[serde(rename = "subagent.event", rename_all = "camelCase")]
     SubagentEvent {
         #[serde(default)]
@@ -936,38 +862,6 @@ pub enum RuntimeToHost {
         session_id: String,
         sub_id: String,
         item: SubagentTraceItem,
-    },
-
-    /// 简报待确认（UNT；等待 delegate.launch）
-    #[serde(rename = "delegate.brief", rename_all = "camelCase")]
-    DelegateBrief {
-        session_id: String,
-        brief: TaskBrief,
-        backend_suggestion: String,
-    },
-
-    /// 委派归一化事件（UNT；§8.3 映射表产物；session_id 由 bin bridge 补挂）
-    #[serde(rename = "delegate.event", rename_all = "camelCase")]
-    DelegateEvent {
-        #[serde(default)]
-        session_id: String,
-        delegate_task_id: String,
-        kind: DelegateEventKind,
-        payload: Value,
-    },
-
-    /// 委派子进程退出（UNT；触发 diff 审查卡）
-    #[serde(rename = "delegate.end", rename_all = "camelCase")]
-    DelegateEnd {
-        #[serde(default)]
-        session_id: String,
-        delegate_task_id: String,
-        exit_code: i32,
-        summary: String,
-        #[serde(default)]
-        changed_files: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        child_session_ref: Option<String>,
     },
 
     /// 状态迁移（UNT；state 为 D11 §3 枚举）

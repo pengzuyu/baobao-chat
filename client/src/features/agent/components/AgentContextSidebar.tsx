@@ -4,7 +4,7 @@
  * - 运行=run 记录（D16 §3.1；**点行打开运行详情**）
  * - 详情=运行详情（D33 新）：子 agent 过程流——AgentStreamView 与中栏同款渲染
  *   （「与主 agent 一样，但不在一个窗口」）；sideStreams 直播 / run.history 回放；
- *   delegate 优先 childSessionRef 的会话历史。activeRunView 置位时自动切到本 tab
+ *   activeRunView 置位时自动切到本 tab
  * 记忆侧写/检查点时间线 tab 已退役（检查点机制整域删除，恢复能力留待完整重设计）。
  * D26-O4：分区→Card、KV→Descriptions、清单→List、chip→Tag；
  * D33 aside 宽度：运行详情激活时页面侧加宽至 480（本组件不管宽，页面定）。
@@ -21,7 +21,6 @@ const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = {
   probe: '子任务',
   expert: '专家',
   team: '团队',
-  delegate: '委派',
   terminal: '终端',
 };
 
@@ -33,9 +32,8 @@ const RUN_STATUS_LABELS: Record<RunInfo['status'], string> = {
   interrupted: '已中断',
 };
 
-/** run 类型徽标色（原 agent-run-item__kind--delegate 主色口径） */
+/** run 类型徽标色 */
 function runKindColor(kind: RunInfo['kind']): string | undefined {
-  if (kind === 'delegate') return 'blue';
   return kind === 'terminal' ? 'green' : undefined;
 }
 
@@ -61,21 +59,13 @@ function RunDetailView({ runs }: { runs: RunInfo[] }) {
   const sideItems = useAgentStore((s) => (s.activeRunView ? s.sideStreams[s.activeRunView] : undefined));
   const taskRuns = useAgentStore((s) => s.taskRuns);
   const closeRunView = useAgentStore((s) => s.closeRunView);
-  const loadHistoryIfEmpty = useAgentStore((s) => s.loadHistoryIfEmpty);
 
   const run = useMemo(
     () => runs.find((r) => r.id === activeRunView) ?? taskRuns.find((r) => r.id === activeRunView) ?? null,
     [runs, taskRuns, activeRunView],
   );
-  // delegate 优先子进程会话历史（--resume 句柄，D16）；probe/expert/team 走 run 流
-  const childRef = run?.kind === 'delegate' && run.childSessionRef ? run.childSessionRef : '';
-  const childItems = useAgentStore((s) => (childRef ? s.streams[childRef] : undefined));
-  useEffect(() => {
-    if (childRef) void loadHistoryIfEmpty(childRef);
-  }, [childRef, loadHistoryIfEmpty]);
-
   if (!activeRunView) return null;
-  const items = run?.kind === 'delegate' && (childItems?.length ?? 0) > 0 ? childItems! : (sideItems ?? []);
+  const items = sideItems ?? [];
   const taskText = items[0]?.kind === 'user' ? items[0].text : (run?.summary ?? '');
   const running = run?.status === 'running';
 
@@ -118,7 +108,7 @@ export function AgentContextSidebar({ session, model, usage, pendingCount, runs 
   const keyRef = useRef(activeKey);
   keyRef.current = activeKey;
 
-  // 子任务卡/委派卡「查看过程」置位 → 自动切运行详情 tab；关闭 → 回概览
+  // 子任务卡「查看过程」置位 → 自动切运行详情 tab；关闭 → 回概览
   useEffect(() => {
     if (activeRunView) setActiveKey('runDetail');
     else if (keyRef.current === 'runDetail') setActiveKey('overview');
@@ -178,7 +168,7 @@ export function AgentContextSidebar({ session, model, usage, pendingCount, runs 
           children:
             runs.length === 0 ? (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                暂无子任务（探查/专家/委派启动后在此可见）
+                暂无子任务（探查/专家/后台命令启动后在此可见）
               </Typography.Text>
             ) : (
               <List
@@ -196,7 +186,7 @@ export function AgentContextSidebar({ session, model, usage, pendingCount, runs 
                           {RUN_KIND_LABELS[r.kind]}
                         </Tag>
                         <Typography.Text ellipsis style={{ fontSize: 12 }}>
-                          {r.defRef.replace('backend:', '').replace('builtin.', '')}
+                          {r.defRef.replace('builtin.', '')}
                         </Typography.Text>
                       </Space>
                       <span style={{ flexShrink: 0, fontSize: 12, ...runStatusStyle(r.status) }}>

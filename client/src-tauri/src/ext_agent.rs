@@ -13,7 +13,7 @@
 //!
 //! 鉴权（D30 §5）：除 agent card 外全端点要求 Authorization: Bearer 本机
 //! token（0600 落 {dataDir}/external-agent-token；撤销=regenerate）。
-//! 防环（拍板4）：外部会话集合见 ExtHub，agent_delegate_launch 命令层拦截。
+//! 外部会话集合见 ExtHub（历史防环拦截已随委派域退役 2026-11-18）。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,7 +45,7 @@ struct ExtTask {
 }
 
 /// 外部接入共享态：任务表 + 本机 token（授权卡 regenerate 即时生效）。
-/// 事件泵 emit fan-out 喂 dispatch()；agent_delegate_launch 查 is_external 防环。
+/// 事件泵 emit fan-out 喂 dispatch()。
 pub struct ExtHub {
     tasks: Mutex<HashMap<String, ExtTask>>,
     token: Mutex<String>,
@@ -126,19 +126,6 @@ impl ExtHub {
         }
     }
 
-    /// 防环（拍板4）：该会话是否外部接入创建（任务表命中即外部；
-    /// 壳重启后历史外部会话靠标题前缀兜底识别）
-    pub fn is_external(&self, host: &AgentHost, session_id: &str) -> bool {
-        if self.tasks.lock().unwrap().contains_key(session_id) {
-            return true;
-        }
-        host.list_sessions().iter().any(|s| {
-            s["id"].as_str() == Some(session_id)
-                && s["title"]
-                    .as_str()
-                    .is_some_and(|t| t.starts_with(EXTERNAL_TITLE_PREFIX))
-        })
-    }
 
     fn upsert_sent(&self, sid: &str) {
         self.tasks.lock().unwrap().insert(

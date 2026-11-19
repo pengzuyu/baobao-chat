@@ -1,7 +1,7 @@
 //! ask_user 工具定义（D20：ZCode 式提问卡）。
 //!
 //! **无执行体**：本工具在 bbrt-session loop_runner::run_tool 按名拦截（同
-//! coding.delegate 先例）——触发 clarify.request 事件并阻塞等待宿主
+//! 门控内嵌口径）——触发 clarify.request 事件并阻塞等待宿主
 //! clarify.response，回答直接作为工具结果回给模型，不走 pipeline 门控/执行。
 //! 此处只提供 ToolDef（模型可发现性 + specs 导出）。
 //! 低风险 ReadOnly（提问本身无副作用）；不进 WORKSPACE_BOUND_TOOLS——

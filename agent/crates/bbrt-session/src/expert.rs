@@ -504,7 +504,7 @@ pub struct ExpertCtx {
     pub tools: Arc<dyn ToolExecutor>,
     pub mode: PermissionMode,
     /// 运行中枢（D16 决策⑧：Activation 注册补充指令/取消通道；None=仅本地跑）
-    pub hub: Option<Arc<crate::delegate_bg::DelegateHub>>,
+    pub hub: Option<Arc<crate::bg_hub::BgHub>>,
 }
 
 /// 单次 Activation 产物（编排层黑板/汇总用）
@@ -543,7 +543,7 @@ pub fn run_expert(
         .next_task_id("expert")
         .unwrap_or_else(|| format!("act-{now_ms}-{}", ACT_SEQ.fetch_add(1, Ordering::Relaxed)));
     // 补充指令通道（D16 决策⑧）：注册先于执行循环（同探查口径）
-    let (input_tx, input_rx) = std::sync::mpsc::channel::<crate::loop_runner::DelegateHostMsg>();
+    let (input_tx, input_rx) = std::sync::mpsc::channel::<crate::loop_runner::BgHostMsg>();
     if let Some(hub) = ctx.hub.as_ref() {
         hub.register(&run_id, session_id, input_tx.clone());
     }
@@ -589,7 +589,7 @@ pub fn run_expert(
         // 补充指令 drain（每步轮询；注入为 user 轮——下一模型轮即见）
         while let Ok(msg) = input_rx.try_recv() {
             match msg {
-                crate::loop_runner::DelegateHostMsg::Input { text } => {
+                crate::loop_runner::BgHostMsg::Input { text } => {
                     wal.append_run(
                         session_id,
                         &run_id,
@@ -606,7 +606,7 @@ pub fn run_expert(
                         summary: Some(format!("收到补充指令：{}", truncate_chars(&text, 40))),
                     });
                 }
-                crate::loop_runner::DelegateHostMsg::Cancel { .. } => {
+                crate::loop_runner::BgHostMsg::Cancel { .. } => {
                     wal.append_run(
                         session_id,
                         &run_id,
@@ -615,7 +615,6 @@ pub fn run_expert(
                     );
                     cancelled = true;
                 }
-                _ => {}
             }
         }
         if cancelled {
@@ -739,7 +738,6 @@ pub fn run_expert(
             },
             eta_actual_ms: started.elapsed().as_millis() as i64,
             summary: &truncate_chars(&result.summary, 400),
-            child_session_ref: "",
         },
     );
     if let Some(hub) = ctx.hub.as_ref() {

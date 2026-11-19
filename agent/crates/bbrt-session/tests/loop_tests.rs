@@ -153,7 +153,6 @@ fn deps<M: bbrt_aigw::ChatClient + 'static>(
 ) -> LoopDeps {
     LoopDeps {
         model,
-        delegator: None,
         tools,
         memory,
         wal: Arc::new(NoopEventLog),
@@ -636,7 +635,6 @@ fn wal_records_monotonic_events() {
     let d = LoopDeps {
         model,
         tools,
-        delegator: None,
         memory: None,
         wal: log.clone(),
         sink,
@@ -734,7 +732,6 @@ fn compaction_triggers_on_long_history() {
     let d = LoopDeps {
         model,
         tools,
-        delegator: None,
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
@@ -846,278 +843,6 @@ impl ChatClient for AlwaysToolOk {
         ];
         Ok(Box::new(events.into_iter()))
     }
-}
-
-// ---- 委派编排（D11 §3 #11-13）：假启动器走全流程 ----
-
-use bbrt_session::delegation::{
-    DelegateChannel, DelegateEvt, DelegateFinal, DelegateLaunchReq, DelegateLauncher,
-    DelegateStream,
-};
-use bbrt_session::loop_runner::DelegateHostMsg;
-
-struct ScriptedStream {
-    events: std::sync::Mutex<std::collections::VecDeque<DelegateEvt>>,
-    cancelled: std::sync::Mutex<bool>,
-}
-impl DelegateStream for ScriptedStream {
-    fn next(&mut self) -> Option<DelegateEvt> {
-        self.events.lock().unwrap().pop_front()
-    }
-    fn cancel(&mut self, graceful: bool) {
-        *self.cancelled.lock().unwrap() = graceful;
-    }
-    fn finalize(&mut self) -> DelegateFinal {
-        DelegateFinal {
-            summary: "委派摘要：改了 2 个文件".into(),
-            changed_files: vec!["a.rs".into()],
-            session_ref: Some("sess-x".into()),
-            exit_code: Some(0),
-        }
-    }
-}
-
-struct FakeDelegator;
-impl DelegateLauncher for FakeDelegator {
-    fn backends(&self) -> Vec<String> {
-        vec!["fake".into()]
-    }
-    fn launch(&self, _req: &DelegateLaunchReq) -> Result<Box<dyn DelegateStream>, String> {
-        Ok(Box::new(ScriptedStream {
-            events: std::sync::Mutex::new(
-                [
-                    DelegateEvt::Meta {
-                        text: "init".into(),
-                        session_ref: Some("sess-x".into()),
-                    },
-                    DelegateEvt::Delta {
-                        channel: DelegateChannel::Text,
-                        text: "正在改文件".into(),
-                    },
-                    DelegateEvt::ToolUse {
-                        call_id: "t1".into(),
-                        tool: "Edit".into(),
-                        args: serde_json::json!({}),
-                        risk: "medium",
-                    },
-                    DelegateEvt::ToolResult {
-                        call_id: "t1".into(),
-                        ok: true,
-                        summary: "ok".into(),
-                    },
-                    DelegateEvt::Exit {
-                        exit_code: Some(0),
-                        signal: None,
-                    },
-                ]
-                .into_iter()
-                .collect(),
-            ),
-            cancelled: std::sync::Mutex::new(false),
-        }))
-    }
-}
-
-/// 委派工具模型（第一轮 tool_calls=coding.delegate，第二轮收尾）
-struct DelegateToolModel {
-    calls: AtomicUsize,
-}
-impl ChatClient for DelegateToolModel {
-    fn chat(
-        &self,
-        _req: &ChatRequest,
-    ) -> Result<
-        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
-        bbrt_aigw::AigwError,
-    > {
-        let n = self.calls.fetch_add(1, Ordering::SeqCst);
-        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if n == 0 {
-            vec![
-                Ok(StreamEvent::ToolCallBegin {
-                    index: 0,
-                    id: "call-d1".into(),
-                    name: "coding.delegate".into(),
-                }),
-                Ok(StreamEvent::ToolCallDelta {
-                    index: 0,
-                    args_delta: r#"{"task":"修复构建","forbidden":["git push"]}"#.into(),
-                }),
-                Ok(StreamEvent::Done {
-                    finish: FinishReason::ToolCalls,
-                    usage: Usage {
-                        prompt_tokens: 10,
-                        completion_tokens: 5,
-                    },
-                }),
-            ]
-        } else {
-            vec![
-                Ok(StreamEvent::TextDelta {
-                    text: "委派结果已确认。".into(),
-                }),
-                Ok(StreamEvent::Done {
-                    finish: FinishReason::Stop,
-                    usage: Usage {
-                        prompt_tokens: 20,
-                        completion_tokens: 6,
-                    },
-                }),
-            ]
-        };
-        Ok(Box::new(events.into_iter()))
-    }
-}
-
-fn delegate_turn_setup() -> (Arc<CollectSink>, LoopDeps) {
-    let sink = Arc::new(CollectSink::default());
-    let model = Arc::new(DelegateToolModel {
-        calls: AtomicUsize::new(0),
-    });
-    let tools = Arc::new(FakeTools {
-        confirm: false,
-        executed: Mutex::new(vec![]),
-        fail: false,
-    });
-    (
-        sink.clone(),
-        LoopDeps {
-            model,
-            tools,
-            delegator: Some(Arc::new(FakeDelegator)),
-            memory: None,
-            wal: Arc::new(NoopEventLog),
-            sink,
-            skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-            fanout: None,
-            experts: None,
-            budget: BudgetConfig::default(),
-        },
-    )
-}
-
-#[test]
-fn delegate_flow_accept_review() {
-    let (sink, d) = delegate_turn_setup();
-    let mut runner = SessionRunner::new(
-        "s-d1".into(),
-        "/ws".into(),
-        PermissionMode::AutoEdit,
-        ModelTier::Strong,
-        None,
-    );
-    runner.permission_timeout = Duration::from_millis(800);
-    let dtx = runner.delegate_sender();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(60));
-        let _ = dtx.send(DelegateHostMsg::Launch {
-            backend: "fake".into(),
-            brief: None,
-        });
-        std::thread::sleep(Duration::from_millis(120));
-        let _ = dtx.send(DelegateHostMsg::Review { accept: true });
-    });
-    let report = runner.run_turn("委派修一下构建", &d, None);
-    assert!(!report.paused);
-    let evs = events_of(sink.as_ref());
-    // 状态链：delegating → waiting_review → running（含 brief/事件/end/review 镜像）
-    let states: Vec<String> = evs
-        .iter()
-        .filter_map(|e| match e {
-            SessionEvent::StateChanged { state, .. } => Some(state.clone()),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        states.contains(&"delegating".into()),
-        "应有 delegating 态: {states:?}"
-    );
-    assert!(
-        states.contains(&"waiting_review".into()),
-        "应有 waiting_review: {states:?}"
-    );
-    assert!(evs
-        .iter()
-        .any(|e| matches!(e, SessionEvent::DelegateBrief { .. })));
-    assert!(evs
-        .iter()
-        .any(|e| matches!(e, SessionEvent::DelegateEvt { kind, .. } if kind == "delta")));
-    assert!(evs
-        .iter()
-        .any(|e| matches!(e, SessionEvent::DelegateEnd { exit_code: 0, .. })));
-    assert!(evs.iter().any(|e| matches!(e, SessionEvent::DelegateReviewResolved { decision, .. } if decision == "accept")));
-    // 收尾轮看到委派摘要
-    assert!(events_of(sink.as_ref()).iter().any(
-        |e| matches!(e, SessionEvent::StreamDelta { delta, .. } if delta.contains("委派结果已确认"))
-    ));
-}
-
-#[test]
-fn delegate_flow_reject_review() {
-    let (sink, d) = delegate_turn_setup();
-    let mut runner = SessionRunner::new(
-        "s-d2".into(),
-        "/ws".into(),
-        PermissionMode::AutoEdit,
-        ModelTier::Strong,
-        None,
-    );
-    runner.permission_timeout = Duration::from_millis(800);
-    let dtx = runner.delegate_sender();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(60));
-        let _ = dtx.send(DelegateHostMsg::Launch {
-            backend: "fake".into(),
-            brief: None,
-        });
-        std::thread::sleep(Duration::from_millis(120));
-        let _ = dtx.send(DelegateHostMsg::Review { accept: false });
-    });
-    let _ = runner.run_turn("再委派一次", &d, None);
-    assert!(events_of(sink.as_ref())
-        .iter()
-        .any(|e| matches!(e, SessionEvent::DelegateReviewResolved { decision, .. } if decision == "reject")));
-}
-
-#[test]
-fn delegate_without_launcher_blocked_8030() {
-    let sink = Arc::new(CollectSink::default());
-    let model = Arc::new(DelegateToolModel {
-        calls: AtomicUsize::new(0),
-    });
-    let tools = Arc::new(FakeTools {
-        confirm: false,
-        executed: Mutex::new(vec![]),
-        fail: false,
-    });
-    let d = LoopDeps {
-        model,
-        tools,
-        delegator: None,
-        memory: None,
-        wal: Arc::new(NoopEventLog),
-        sink: sink.clone(),
-        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
-        budget: BudgetConfig::default(),
-    };
-    let mut runner = SessionRunner::new(
-        "s-d3".into(),
-        "/ws".into(),
-        PermissionMode::AutoEdit,
-        ModelTier::Strong,
-        None,
-    );
-    runner.permission_timeout = Duration::from_millis(200);
-    let _ = runner.run_turn("委派", &d, None);
-    assert!(events_of(sink.as_ref()).iter().any(|e| matches!(
-        e,
-        SessionEvent::ToolResult {
-            ok: false,
-            blocked_code: Some(8030),
-            ..
-        }
-    )));
 }
 
 // ---------------------------------------------------------------------------
@@ -1355,7 +1080,7 @@ fn system_prompt_carries_memory_guidance_and_recall() {
 }
 
 // ---------------------------------------------------------------------------
-// 委派审计链（delegate.* WAL 全点）与 model.switch
+// model.switch 审计
 // ---------------------------------------------------------------------------
 
 /// 记录型 WAL（WAL 断言用）
@@ -1364,106 +1089,6 @@ impl bbrt_session::loop_runner::EventLog for LogSink {
     fn append(&self, _sid: &str, type_: &str, _payload: &str) {
         self.0.lock().unwrap().push(type_.into());
     }
-}
-
-/// 全链 WAL：brief → launch → end → review（accept）均落账
-#[test]
-fn delegate_wal_audit_trail() {
-    use std::sync::atomic::AtomicUsize;
-    let sink = Arc::new(CollectSink::default());
-    let log = Arc::new(LogSink(std::sync::Mutex::new(vec![])));
-    let model = Arc::new(DelegateToolModel {
-        calls: AtomicUsize::new(0),
-    });
-    let d = LoopDeps {
-        model,
-        tools: Arc::new(FakeTools {
-            confirm: false,
-            executed: Mutex::new(vec![]),
-            fail: false,
-        }),
-        delegator: Some(Arc::new(FakeDelegator)),
-        memory: None,
-        wal: log.clone(),
-        sink,
-        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
-        budget: BudgetConfig::default(),
-    };
-    let mut runner = SessionRunner::new(
-        "s-dwal".into(),
-        "/ws".into(),
-        PermissionMode::AutoEdit,
-        ModelTier::Strong,
-        None,
-    );
-    runner.permission_timeout = Duration::from_millis(800);
-    let dtx = runner.delegate_sender();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(60));
-        let _ = dtx.send(DelegateHostMsg::Launch {
-            backend: "fake".into(),
-            brief: None,
-        });
-        std::thread::sleep(Duration::from_millis(120));
-        let _ = dtx.send(DelegateHostMsg::Review { accept: true });
-    });
-    let _ = runner.run_turn("委派修一下构建", &d, None);
-    let types = log.0.lock().unwrap().clone();
-    for expect in [
-        "delegate.brief",
-        "delegate.launch",
-        "delegate.end",
-        "delegate.review",
-    ] {
-        assert!(
-            types.iter().any(|t| t == expect),
-            "WAL 缺 {expect}: {types:?}"
-        );
-    }
-}
-
-/// brief 超时 8030 也落 WAL（放弃路径审计）
-#[test]
-fn delegate_brief_timeout_wal() {
-    use std::sync::atomic::AtomicUsize;
-    let sink = Arc::new(CollectSink::default());
-    let log = Arc::new(LogSink(std::sync::Mutex::new(vec![])));
-    let model = Arc::new(DelegateToolModel {
-        calls: AtomicUsize::new(0),
-    });
-    let d = LoopDeps {
-        model,
-        tools: Arc::new(FakeTools {
-            confirm: false,
-            executed: Mutex::new(vec![]),
-            fail: false,
-        }),
-        delegator: Some(Arc::new(FakeDelegator)),
-        memory: None,
-        wal: log.clone(),
-        sink,
-        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
-        budget: BudgetConfig::default(),
-    };
-    let mut runner = SessionRunner::new(
-        "s-dto".into(),
-        "/ws".into(),
-        PermissionMode::AutoEdit,
-        ModelTier::Strong,
-        None,
-    );
-    runner.permission_timeout = Duration::from_millis(200);
-    // 不发 Launch → brief 超时
-    let _ = runner.run_turn("委派但没人确认", &d, None);
-    let types = log.0.lock().unwrap().clone();
-    assert!(
-        types.iter().any(|t| t == "delegate.brief_timeout"),
-        "超时应落账: {types:?}"
-    );
 }
 
 /// model.switch（D11 §4 ModelSwitched 产生方）：空闲切换 → 事件 + WAL；
@@ -1488,7 +1113,6 @@ fn manager_switch_model_emits() {
             executed: Mutex::new(vec![]),
             fail: false,
         }),
-        delegator: None,
         memory: None,
         wal: log.clone(),
         sink: sink.clone(),
@@ -1572,7 +1196,6 @@ impl ChatClient for CapturingModel {
 fn capture_deps(model: Arc<CapturingModel>) -> LoopDeps {
     LoopDeps {
         model,
-        delegator: None,
         tools: Arc::new(FakeTools {
             confirm: false,
             executed: Mutex::new(vec![]),
@@ -1635,7 +1258,6 @@ fn switch_model_override_persists() {
             calls: AtomicUsize::new(0),
             tool_name: None,
         }),
-        delegator: None,
         tools: Arc::new(FakeTools {
             confirm: false,
             executed: Mutex::new(vec![]),
@@ -1774,7 +1396,6 @@ fn wait_deps(
 ) -> LoopDeps {
     LoopDeps {
         model,
-        delegator: None,
         tools: Arc::new(FakeTools {
             confirm: false,
             executed: Mutex::new(vec![]),
@@ -1790,7 +1411,7 @@ fn wait_deps(
     }
 }
 
-/// 已完成 run：立即返回结果摘要（委派带可续接句柄提示）
+/// 已完成 run：立即返回结果摘要（terminal 命令带 exit 摘要）
 #[test]
 fn subagent_wait_finished_run_returns_result() {
     let sink = Arc::new(CollectSink::default());
@@ -1804,9 +1425,8 @@ fn subagent_wait_finished_run_returns_result() {
                 "r-ab12cd34".to_string(),
                 bbrt_session::loop_runner::EventRunSnapshot {
                     status: "done".into(),
-                    kind: "delegate".into(),
-                    summary: "委派完成：新增 2 个文件并通过测试".into(),
-                    child_session_ref: "claude-sess-9".into(),
+                    kind: "terminal".into(),
+                    summary: "构建完成：cargo test 51 passed（exit 0）".into(),
                 },
             )]
             .into_iter()
@@ -1821,16 +1441,16 @@ fn subagent_wait_finished_run_returns_result() {
         ModelTier::Strong,
         None,
     );
-    let report = runner.run_turn("等那个委派的结果", &d, None);
+    let report = runner.run_turn("等那个后台命令的结果", &d, None);
     assert_eq!(report.tool_calls, 1);
     let evs = events_of(sink.as_ref());
     assert!(
         evs.iter().any(|e| matches!(
             e,
             SessionEvent::ToolResult { summary, .. }
-                if summary.contains("[委派完成·done]") && summary.contains("可续接句柄 claude-sess-9")
+                if summary.contains("[命令完成·done]") && summary.contains("cargo test 51 passed")
         )),
-        "应返回委派结果摘要: {evs:?}"
+        "应返回后台命令结果摘要: {evs:?}"
     );
 }
 
@@ -1888,7 +1508,6 @@ impl EventLog for BgStoreLog {
                 status: "running".into(),
                 kind: run.kind.to_string(),
                 summary: String::new(),
-                child_session_ref: String::new(),
             },
         );
     }
@@ -1968,10 +1587,6 @@ impl ToolExecutor for BgShellTools {
 #[test]
 fn run_command_background_returns_task_id_and_finishes() {
     let sink = Arc::new(CollectSink::default());
-    let model = Arc::new(FakeModel {
-        calls: AtomicUsize::new(0),
-        tool_name: Some("run_command".into()),
-    });
     // FakeModel 的 args 是 {"path":"foo.txt"}——需要 background:true，换脚本化模型
     struct BgModel {
         calls: AtomicUsize,
@@ -2028,7 +1643,6 @@ fn run_command_background_returns_task_id_and_finishes() {
     });
     let d = LoopDeps {
         model,
-        delegator: None,
         tools: Arc::new(BgShellTools),
         memory: None,
         wal: wal.clone(),
@@ -2145,7 +1759,6 @@ fn run_command_sync_times_out_into_background() {
     });
     let d = LoopDeps {
         model,
-        delegator: None,
         tools: Arc::new(BgShellTools),
         memory: None,
         wal: wal.clone(),
@@ -2204,7 +1817,6 @@ fn task_wait_terminal_task_returns_output() {
                     status: "done".into(),
                     kind: "terminal".into(),
                     summary: "bg-hello-world\n[exit_code=0]".into(),
-                    child_session_ref: String::new(),
                 },
             )]
             .into_iter()

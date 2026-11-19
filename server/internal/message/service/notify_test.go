@@ -480,7 +480,7 @@ func TestReportAgentTask(t *testing.T) {
 
 	// done：落卡 + 发事件
 	if err := svc.ReportAgentTask(ctx, 10001, messageapi.AgentTaskReportPayload{
-		RunID: "r-1", Kind: "delegate", Status: "done", SessionID: "s-1",
+		RunID: "r-1", Kind: "probe", Status: "done", SessionID: "s-1",
 		Title: "修复登录超时", Summary: "改了 auth.go 重试逻辑", ChangedFilesCount: 2, OriginDID: "did-A",
 	}); err != nil {
 		t.Fatal(err)
@@ -498,7 +498,7 @@ func TestReportAgentTask(t *testing.T) {
 
 	// 幂等：同 run_id+status 重报 → 不新增行、不再发事件（宿主重试安全）
 	if err := svc.ReportAgentTask(ctx, 10001, messageapi.AgentTaskReportPayload{
-		RunID: "r-1", Kind: "delegate", Status: "done", SessionID: "s-1", Title: "修复登录超时",
+		RunID: "r-1", Kind: "probe", Status: "done", SessionID: "s-1", Title: "修复登录超时",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +513,7 @@ func TestReportAgentTask(t *testing.T) {
 
 	// 同 run 不同终态（重试竞态后到 cancelled）→ 允许各自一次
 	if err := svc.ReportAgentTask(ctx, 10001, messageapi.AgentTaskReportPayload{
-		RunID: "r-1", Kind: "delegate", Status: "cancelled", SessionID: "s-1",
+		RunID: "r-1", Kind: "probe", Status: "cancelled", SessionID: "s-1",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +542,7 @@ func TestReportAgentTask(t *testing.T) {
 
 	// 枚举校验
 	for _, bad := range []messageapi.AgentTaskReportPayload{
-		{Kind: "delegate", Status: "done"},                   // 缺 run_id
+		{Kind: "probe", Status: "done"},                   // 缺 run_id
 		{RunID: "r-9", Kind: "bogus", Status: "done"},        // 非法 kind
 		{RunID: "r-9", Kind: "probe", Status: "interrupted"}, // 非法 status（终态三枚举外）
 	} {

@@ -51,8 +51,6 @@ pub enum ActionCategory {
     CorpWrite,
     /// git push / 凭据使用
     GitPush,
-    /// 委派编码（coding.delegate）
-    Delegate,
     /// 子 Agent（只读探查）
     Subagent,
 }
@@ -158,7 +156,6 @@ fn static_category(tool: &str) -> Option<ActionCategory> {
         // git push（A2 行 8，永不全自动）
         "git_push" => Some(ActionCategory::GitPush),
         // 委派编码（A2 行 9）
-        "coding.delegate" | "coding_delegate" => Some(ActionCategory::Delegate),
         // 子 Agent 只读探查（A2 行 10）
         "subagent" | "subagent_probe" => Some(ActionCategory::Subagent),
         _ => None,
@@ -277,8 +274,6 @@ fn matrix(category: ActionCategory, mode: PermissionMode) -> bool {
         ActionCategory::NetworkEgress => mode != PermissionMode::Ask,
         // git push（普通）：auto-edit+ ✅（D32：原三档 🔶；force push 归危险规则库双确认）
         ActionCategory::GitPush => mode != PermissionMode::Ask,
-        // 委派编码：auto-edit+ ✅（D32：原三档 🔶；子 agent 独立工作区隔离）
-        ActionCategory::Delegate => mode != PermissionMode::Ask,
         // 高危命令：三档 🔶 双重提示（不可永久记忆）
         // CorpWrite（公司域写）：三档 🔶 **唯一保留硬闸**——效果落他人/共享面不可撤回
         ActionCategory::DangerousCommand | ActionCategory::CorpWrite => false,
@@ -287,7 +282,7 @@ fn matrix(category: ActionCategory, mode: PermissionMode) -> bool {
 
 /// 确认卡可选 scope 集（A2 备注 + §4.2 限制，**D32 修订**：高危只 once；
 /// 网络出站可永久记忆（NetPolicy 白名单兜底下按域记忆合理）；
-/// 触人/出域类（CorpWrite/GitPush/Delegate）最多 Session——永久级另由
+/// 触人/出域类（CorpWrite/GitPush）最多 Session——永久级另由
 /// GrantStore::NEVER_PERMANENT_TOOLS 双保险硬拒）
 fn confirm_scopes(category: ActionCategory, mode: PermissionMode) -> Vec<GrantScope> {
     let _ = mode; // D32 起无按模式分支的特例（原 full-auto 任意命令首确认记忆已随矩阵放行消亡）
@@ -420,7 +415,6 @@ fn confirm_reason(category: ActionCategory, call: &ToolCall, ctx: &GateCtx) -> S
         ActionCategory::NetworkEgress => "网络出站：永不全自动（D13-A2 行 6，数据外泄面）".into(),
         ActionCategory::CorpWrite => "公司域写：永不全自动（D13-A2 行 7，09 §6.4）".into(),
         ActionCategory::GitPush => "git push / 凭据使用：永不全自动（D13-A2 行 8）".into(),
-        ActionCategory::Delegate => "委派编码：首次确认后端/工作区/简报（D13-A2 行 9）".into(),
         ActionCategory::DangerousCommand => {
             "高危命令：双重提示且禁止永久记忆（D13-A2 行 5）".into()
         }
@@ -770,26 +764,8 @@ mod tests {
     }
 
     #[test]
-    fn row9_delegate_follow_mode_row10_subagent_allow() {
+    fn row10_subagent_allow_all_modes() {
         let f = Fixture::new();
-        // 委派：ask 🔶，auto-edit+ ✅（D32：子 agent 独立工作区隔离）
-        assert!(matches!(
-            permission_gate(
-                PermissionMode::Ask,
-                &call("coding.delegate", &json!({})),
-                &f.ctx()
-            ),
-            Decision::Confirm { .. }
-        ));
-        for mode in [PermissionMode::AutoEdit, PermissionMode::FullAuto] {
-            assert!(
-                matches!(
-                    permission_gate(mode, &call("coding.delegate", &json!({})), &f.ctx()),
-                    Decision::Allow { .. }
-                ),
-                "{mode:?} 委派应放行"
-            );
-        }
         // 子 Agent 只读探查：全档放行
         for mode in MODES {
             assert!(matches!(

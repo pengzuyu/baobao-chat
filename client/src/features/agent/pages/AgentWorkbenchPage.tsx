@@ -49,15 +49,15 @@ async function resolveDefaultModel(): Promise<string | undefined> {
 }
 
 /** 回合进行中的会话状态集（回合气泡 active 判定） */
-const TURN_ACTIVE_STATUSES = new Set<string>(['running', 'waiting_permission', 'waiting_clarify', 'waiting_review', 'subagent_fanout', 'delegating']);
+const TURN_ACTIVE_STATUSES = new Set<string>(['running', 'waiting_permission', 'waiting_clarify', 'subagent_fanout']);
 
 /** 空流常量（selector 稳定返回：无会话/无条目时不随渲染新建引用） */
 const EMPTY_ITEMS: StreamItem[] = [];
 
 /** 会话状态徽标色（原 agent-status-badge--* 口径：运行=绿/等待=橙/错误=红/其余灰） */
 function statusTagColor(status: string): string | undefined {
-  if (status === 'running' || status === 'subagent_fanout' || status === 'delegating') return 'success';
-  if (status === 'waiting_permission' || status === 'waiting_review' || status === 'waiting_clarify' || status === 'starting') return 'warning';
+  if (status === 'running' || status === 'subagent_fanout') return 'success';
+  if (status === 'waiting_permission' || status === 'waiting_clarify' || status === 'starting') return 'warning';
   if (status === 'error') return 'error';
   return undefined;
 }
@@ -367,7 +367,7 @@ export function AgentWorkbenchPage() {
   // 停止=中断当前轮（2026-11-11）：有在跑的流/工具才显示（唯一入口=发送旁
   // Composer，2026-11-18 头部重复按钮退役）；paused=内部自动暂停
   // （OBO 到期/步数超限等），无流可断，只能「结束」；全局杀进程兜底=⌘⇧.
-  const canStop = status === 'running' || status === 'waiting_permission' || status === 'waiting_clarify' || status === 'subagent_fanout' || status === 'delegating';
+  const canStop = status === 'running' || status === 'waiting_permission' || status === 'waiting_clarify' || status === 'subagent_fanout';
   const modeOption = AGENT_MODE_OPTIONS.find((m) => m.value === activeSession?.mode);
   const modelChoice = (activeSessionId && modelBySession[activeSessionId]) || {
     policy: activeSession?.modelPolicy ?? 'auto',

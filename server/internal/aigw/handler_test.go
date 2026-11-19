@@ -192,7 +192,7 @@ func TestMeteringSceneAndSessionHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
 		strings.NewReader(`{"model":"bbc-fast","messages":[{"role":"user","content":"普通问题"}]}`))
 	req.Header.Set("Authorization", "Bearer dev")
-	req.Header.Set("X-BBC-Scene", "delegate")
+	req.Header.Set("X-BBC-Scene", "expert")
 	req.Header.Set("X-BBC-Agent-Session", "sess-42")
 	rec := httptest.NewRecorder()
 	gw.HandleChat(rec, req)
@@ -202,7 +202,7 @@ func TestMeteringSceneAndSessionHeader(t *testing.T) {
 	snap := meter.Snapshot()
 	found := false
 	for dim, row := range snap {
-		if dim.Scene == "delegate" && dim.Session == "sess-42" && row.Requests == 1 {
+		if dim.Scene == "expert" && dim.Session == "sess-42" && row.Requests == 1 {
 			found = true
 		}
 	}

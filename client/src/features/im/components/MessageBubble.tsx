@@ -1271,9 +1271,7 @@ const AGENT_LIVE_STATUSES = new Set<string>([
   'running',
   'waiting_permission',
   'waiting_clarify',
-  'waiting_review',
   'subagent_fanout',
-  'delegating',
 ]);
 
 /** 落流卡完成后保持展开的宽限（2026-11-11 用户口径）：到点后台自动折叠成摘要卡

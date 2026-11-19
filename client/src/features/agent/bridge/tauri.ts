@@ -244,18 +244,8 @@ export class TauriAgentBridge implements AgentBridge {
     await invoke('agent_set_mode', { sessionId, mode });
   }
 
-  async launchDelegate(sessionId: string, runId: string, backend: string): Promise<void> {
-    // taskBrief=null=沿用模型简报原稿（D16 主路径：确认不改稿）
-    await invoke('agent_delegate_launch', { sessionId, delegateTaskId: runId, backend, taskBrief: null });
-  }
-
-
-  async cancelDelegate(runId: string): Promise<void> {
-    await invoke('agent_delegate_cancel', { delegateTaskId: runId });
-  }
-
-  async reviewDelegate(runId: string, accept: boolean): Promise<void> {
-    await invoke('agent_delegate_review', { delegateTaskId: runId, accept });
+  async cancelRun(runId: string): Promise<void> {
+    await invoke('agent_run_cancel', { runId });
   }
 
   async registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo> {
@@ -323,12 +313,12 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         sessionId: sid,
         callId: str(raw.call_id),
         tool: str(raw.tool),
-        // D33：args 归一（self=JSON 字符串 / backend=对象 → 统一对象；修真机
-        // 终端卡头部命令显示不出的存量坑）
-        args: parseToolArgs(raw.args),
-        risk: (str(raw.risk) as RiskLevel) || 'low',
-        parallel: raw.parallel === true,
-        source: raw.source === 'backend' ? 'backend' : 'self',
+        // D33：args 归一（JSON 字符串 → 统一对象；修真机终端卡头部命令
+      // 显示不出的存量坑）
+      args: parseToolArgs(raw.args),
+      risk: (str(raw.risk) as RiskLevel) || 'low',
+      parallel: raw.parallel === true,
+      source: 'self',
       };
     case 'tool.result': {
       const blocked = raw.blocked as { rule?: string; kind?: string; code?: number } | undefined;
@@ -475,29 +465,6 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
       }
       return null; // 未知 item kind 前向兼容忽略
     }
-    case 'delegate.event': {
-      const runId = str(raw.delegate_task_id);
-      const kind = str(raw.kind);
-      const payload = (raw.payload as Record<string, unknown> | undefined) ?? {};
-      // meta 复合：简报待确认信号 / 审查结论镜像（bbrt bridge 映射口径）
-      if (kind === 'meta' && payload.brief_pending === true) {
-        return { type: 'delegateBrief', sessionId: sid, runId, backendSuggestion: str(payload.backend_suggestion) };
-      }
-      if (kind === 'meta' && typeof payload.review === 'string') {
-        return { type: 'delegateReviewResolved', sessionId: sid, runId, decision: payload.review === 'accept' ? 'accept' : 'reject' };
-      }
-      return { type: 'delegateEvt', sessionId: sid, runId, kind, payload };
-    }
-    case 'delegate.end':
-      return {
-        type: 'delegateEnd',
-        sessionId: sid,
-        runId: str(raw.delegate_task_id),
-        exitCode: num(raw.exit_code, -1),
-        summary: str(raw.summary),
-        changedFiles: (raw.changed_files as string[] | undefined) ?? [],
-        childSessionRef: raw.child_session_ref ? str(raw.child_session_ref) : undefined,
-      };
     default:
       return null; // 未知事件忽略 + 上层计数（前向兼容）
   }

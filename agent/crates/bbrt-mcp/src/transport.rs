@@ -189,7 +189,7 @@ impl StdioTransport {
 
 impl Drop for StdioTransport {
     fn drop(&mut self) {
-        // 先关 stdin（EOF 优雅退出）再 kill 兜底（进程组语义对齐 delegate procmgr 的收口）
+        // 先关 stdin（EOF 优雅退出）再 kill 兜底（进程组语义收口口径）
         let _ = self.stdin.flush();
         let _ = self.child.kill();
         let _ = self.child.wait();

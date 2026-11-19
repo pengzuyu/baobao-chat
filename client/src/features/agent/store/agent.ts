@@ -20,7 +20,6 @@ import type {
   SessionStatus,
 } from '../bridge/types';
 import { parseToolArgs } from '../bridge/types';
-import { toolHeadParam } from '../components/stream/toolFamilies';
 
 /** 会话流条目（UI 投影模型；stream.delta 增量拼进 agentText/reasoning 尾项） */
 export type StreamItem =
@@ -62,7 +61,7 @@ export type StreamItem =
       /** null=等待回答；对象=已回答/中断（answers=所选 label 串） */
       answer: null | { decision: 'answered' | 'cancelled'; answers: string; at: number };
     }
-  /** 子 Agent 卡（D16 类型 1；runId=任务 id（agent-/worker-/terminal- 前缀+32hex），状态由 subagent.event 驱动） */
+  /** 子 Agent 卡（D16 类型 1；runId=任务 id（agent-/terminal- 前缀+32hex），状态由 subagent.event 驱动） */
   | {
       kind: 'subagent';
       key: string;
@@ -70,18 +69,6 @@ export type StreamItem =
       taskDigest: string;
       status: 'running' | 'done' | 'failed';
       summary?: string;
-    }
-  /** 委派卡（D16 类型 3：brief 待确认 → running 后台 → review 审查 → resolved 终态） */
-  | {
-      kind: 'delegate';
-      key: string;
-      runId: string;
-      backend: string;
-      phase: 'brief' | 'running' | 'review' | 'resolved';
-      /** 后端输出尾部行（output/delta；≤50 行滚动窗） */
-      logs: string[];
-      end?: Extract<AgentEvent, { type: 'delegateEnd' }>;
-      decision?: 'accept' | 'reject';
     }
   | { kind: 'system'; key: string; text: string }
   /** 错误卡（error NTF 投影：8011 模型不可用/流中断、8010 超限等；不进 WAL——
@@ -144,13 +131,7 @@ interface AgentState {
   respondPermission: (requestId: string, decision: 'allow' | 'deny', scope?: GrantScope, editedArgs?: Record<string, unknown>) => void;
   /** D20 澄清回答（全流按 questionId 扫描置终态 + bridge 下发） */
   respondClarify: (questionId: string, answers: string[], freeText?: string) => void;
-  /** 确认委派启动（简报卡；乐观置 running，真实状态由 delegate.event 驱动） */
-  confirmDelegate: (runId: string, backend: string) => void;
-  /** 委派审查结论（审查卡；乐观置 resolved） */
-  reviewDelegate: (runId: string, accept: boolean) => void;
-  /** 取消委派（简报期/后台运行/审查期） */
-  cancelDelegate: (runId: string) => void;
-  /** 运行中子任务取消（探查/专家/委派通用） */
+  /** 运行中子任务取消（探查/专家/终端后台命令通用） */
   cancelRun: (runId: string) => void;
   /** 中断当前轮（2026-11-11：取代旧暂停/恢复——收口 idle，会话保留可继续追问） */
   stopActive: () => void;
@@ -267,19 +248,6 @@ function nextKey(prefix: string): string {
   return `${prefix}-${itemSeq}`;
 }
 
-/** 主流尾部倒扫最近的 coding.delegate 工具卡，取 args.task（委派 run 流播种
- *  的任务摘要源——delegateBrief 事件本身不带简报原文，数据就在主流工具卡上） */
-function lastDelegateTask(list: StreamItem[]): string {
-  for (let i = list.length - 1; i >= 0; i -= 1) {
-    const it = list[i];
-    if (it.kind !== 'tool') continue;
-    if (it.call.tool !== 'coding.delegate' && it.call.tool !== 'coding_delegate') continue;
-    const task = it.call.args?.task;
-    return typeof task === 'string' ? task : '';
-  }
-  return '';
-}
-
 /** 历史条目 → 流条目（回合气泡同构渲染；key 前缀 h- 区分直播条目。
  *  工具行合成 call/result 事件（args=脱敏 JSON 串 parse——D33 §3.4 WAL 补记后
  *  重启回放工具卡保真；旧行无 args → {} 降级）；reasoning 行→思考条目、
@@ -313,24 +281,6 @@ function historyToStreamItem(sid: string, it: HistoryItem, i: number): StreamIte
       };
   }
 }
-
-/** 定位并修补当前会话流内的委派卡（动作乐观更新；真实状态由事件驱动覆盖） */
-function patchDelegateCard(
-  get: () => AgentState,
-  set: (fn: (s: AgentState) => Partial<AgentState>) => void,
-  runId: string,
-  patch: (it: Extract<StreamItem, { kind: 'delegate' }>) => Extract<StreamItem, { kind: 'delegate' }>,
-) {
-  const sid = get().activeSessionId;
-  if (!sid) return;
-  set((s) => ({
-    streams: {
-      ...s.streams,
-      [sid]: (s.streams[sid] ?? []).map((it) => (it.kind === 'delegate' && it.runId === runId ? patch(it) : it)),
-    },
-  }));
-}
-
 
 function touchSession(sessions: AgentSessionMeta[], sessionId: string, patch: Partial<AgentSessionMeta>): AgentSessionMeta[] {
   return sessions.map((s) => (s.id === sessionId ? { ...s, ...patch, updatedAt: Date.now() } : s));
@@ -529,26 +479,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     void bridge.respondClarify(questionId, answers, freeText).catch(() => undefined);
   },
 
-  confirmDelegate: (runId, backend) => {
-    // 乐观置 running（真实流转由 delegate.event/output 驱动；120s 未确认 RT 侧自弃）
-    patchDelegateCard(get, set, runId, (it) => ({ ...it, phase: 'running' }));
-    const sid = get().activeSessionId;
-    if (sid) void bridge.launchDelegate(sid, runId, backend).catch(() => undefined);
-  },
-
-  reviewDelegate: (runId, accept) => {
-    patchDelegateCard(get, set, runId, (it) => ({ ...it, phase: 'resolved', decision: accept ? 'accept' : 'reject' }));
-    void bridge.reviewDelegate(runId, accept).catch(() => undefined);
-  },
-
-  cancelDelegate: (runId) => {
-    // 乐观置 resolved（终态展示"已取消"；RT 侧 delegate.cancel → cancelled run）
-    patchDelegateCard(get, set, runId, (it) => (it.phase === 'brief' ? { ...it, phase: 'resolved' } : it));
-    void bridge.cancelDelegate(runId).catch(() => undefined);
-  },
-
   cancelRun: (runId) => {
-    void bridge.cancelDelegate(runId).catch(() => undefined);
+    void bridge.cancelRun(runId).catch(() => undefined);
   },
 
   stopActive: () => {
@@ -957,106 +889,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             },
           };
         }
-        // ---- 委派卡（D16 类型 3：launch 后 turn 立即返回，end 异步驱动审查）----
-        case 'delegateBrief': {
-          const list = s.streams[event.sessionId] ?? [];
-          // 侧栏 run 流播种（与 subagentSpawn 同构）：任务摘要取主流最近的
-          // coding.delegate 工具卡 args.task——右栏运行详情头部即刻有标题
-          const taskText = lastDelegateTask(list);
-          const side = s.sideStreams[event.runId] ?? [
-            { kind: 'user' as const, key: `su-${event.runId}`, text: taskText || '（委派任务）', ts: Date.now() },
-          ];
-          const item: StreamItem = {
-            kind: 'delegate',
-            key: `dg-${event.runId}`,
-            runId: event.runId,
-            backend: event.backendSuggestion,
-            phase: 'brief',
-            logs: [],
-          };
-          return {
-            streams: { ...s.streams, [event.sessionId]: [...list, item] },
-            sideStreams: { ...s.sideStreams, [event.runId]: side },
-          };
-        }
-        case 'delegateEvt': {
-          const list = s.streams[event.sessionId] ?? [];
-          // 日志行组装（2026-11-18 参数可见性）：text 行（delta/warning/心跳/stderr）
-          // 直出；tool_use/tool_result 组装「⚙ 工具 · 首参」/「✓ 摘要」行——
-          // 此前 payload 无 text 即静默丢弃，工具动作完全不可见
-          const p = (event.payload && typeof event.payload === 'object' ? event.payload : {}) as Record<string, unknown>;
-          let line = typeof p.text === 'string' ? p.text : '';
-          if (!line && event.kind === 'tool_use') {
-            const tool = typeof p.tool === 'string' ? p.tool : '?';
-            const args = parseToolArgs(typeof p.args_masked === 'string' ? p.args_masked : '');
-            const head = toolHeadParam(tool, args);
-            line = `⚙ ${tool}${head ? ` · ${head}` : ''}`;
-          } else if (!line && event.kind === 'tool_result') {
-            const summary = typeof p.summary === 'string' && p.summary ? p.summary : '工具执行完成';
-            line = `${p.ok === true ? '✓' : '✗'} ${summary}`;
-          }
-          return {
-            streams: {
-              ...s.streams,
-              [event.sessionId]: list.map((it) => {
-                if (it.kind !== 'delegate' || it.runId !== event.runId) return it;
-                const logs = line ? [...it.logs, line].slice(-50) : it.logs;
-                return { ...it, phase: it.phase === 'brief' ? 'running' : it.phase, logs };
-              }),
-            },
-          };
-        }
-        case 'delegateEnd': {
-          const list = s.streams[event.sessionId] ?? [];
-          return {
-            streams: {
-              ...s.streams,
-              [event.sessionId]: list.map((it) =>
-                it.kind === 'delegate' && it.runId === event.runId
-                  ? { ...it, phase: event.exitCode === 0 ? 'review' : 'resolved', end: event }
-                  : it,
-              ),
-            },
-          };
-        }
-        case 'delegateReviewResolved': {
-          const list = s.streams[event.sessionId] ?? [];
-          // C 批：审查结论后台触达（此前后台审查超时=拒绝无任何二次通知）
-          if (!workbenchVisible()) {
-            void notifyAgentDone(
-              event.decision === 'accept' ? '委派结果已回填' : '委派结果已拒绝（审查超时）',
-              event.runId,
-            );
-          }
-          return {
-            streams: {
-              ...s.streams,
-              [event.sessionId]: list.map((it) =>
-                it.kind === 'delegate' && it.runId === event.runId ? { ...it, phase: 'resolved', decision: event.decision } : it,
-              ),
-            },
-          };
-        }
         default:
           return s;
       }
     });
     // 跨端终态上报（14 篇 §3.3 OQ-C32）：run 终态 → notify 域落卡 + agent.task.completed
     // 推其它在线设备（本端经 markReportedRun 自滤防双响；尽力而为不阻塞事件泵）
-    if (event.type === 'delegateEnd') {
-      const card = (useAgentStore.getState().streams[event.sessionId] ?? []).find(
-        (it) => it.kind === 'delegate' && it.runId === event.runId,
-      );
-      void reportAgentTask({
-        run_id: event.runId,
-        kind: 'delegate',
-        status: event.exitCode === 0 ? 'done' : 'failed',
-        session_id: event.sessionId,
-        title: card?.kind === 'delegate' ? `委派（${card.backend}）` : '委派任务',
-        summary: event.summary.slice(0, 80),
-        changed_files_count: event.changedFiles.length,
-      });
-    } else if (event.type === 'subagentEvent' && (event.phase === 'done' || event.phase === 'fail')) {
+    if (event.type === 'subagentEvent' && (event.phase === 'done' || event.phase === 'fail')) {
       const card = (useAgentStore.getState().streams[event.sessionId] ?? []).find(
         (it) => it.kind === 'subagent' && it.runId === event.runId,
       );
@@ -1071,12 +910,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
     // 本地完成通知（D16 本地环：工作台不可见时弹系统通知；跨端待服务端）
     if (!workbenchVisible()) {
-      if (event.type === 'delegateEnd') {
-        void notifyAgentDone(
-          `委派完成（${event.exitCode === 0 ? '待审查' : '退出 ' + event.exitCode}）`,
-          event.summary.slice(0, 80) || `run ${event.runId}`,
-        );
-      } else if (event.type === 'subagentJoin') {
+      if (event.type === 'subagentJoin') {
         const ok = event.results.filter((r) => r.ok).length;
         void notifyAgentDone('并行子任务完成', `${ok}/${event.results.length} 项成功，结论已回填`);
       }
@@ -1085,10 +919,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     if (
       (event.type === 'subagentSpawn' ||
         event.type === 'subagentJoin' ||
-        (event.type === 'subagentEvent' && (event.phase === 'done' || event.phase === 'fail')) ||
-        event.type === 'delegateBrief' ||
-        event.type === 'delegateEnd' ||
-        event.type === 'delegateReviewResolved') &&
+        (event.type === 'subagentEvent' && (event.phase === 'done' || event.phase === 'fail'))) &&
       event.sessionId
     ) {
       useAgentStore.getState().loadRuns(event.sessionId);
@@ -1123,12 +954,10 @@ export function composerDisabledFor(status: SessionStatus | undefined): { disabl
     case 'running':
       return { disabled: true, hint: 'Agent 处理中，可点停止中断' };
     case 'waiting_permission':
-    case 'waiting_review':
       return { disabled: true, hint: '等待你的审批…' };
     case 'waiting_clarify':
       return { disabled: true, hint: 'Agent 在等你回答提问…' };
     case 'subagent_fanout':
-    case 'delegating':
       return { disabled: true, hint: '子任务执行中…' };
     case 'paused':
       // 暂停入口已移除（2026-11-11）：paused 只剩步数上限等罕见内部触发，不可恢复

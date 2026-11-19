@@ -1,9 +1,8 @@
 /**
- * 工具家族分类（D33 §3.5）：classifyTool 按「内置 snake_case + 委派后端
- * PascalCase（normalize.rs 归一化的外部 CLI 工具名）」双命名映射到渲染家族；
- * 家族决定头部动作词/图标/关键参数提取与展开体形态（编辑=红绿 diff、
- * 终端=$命令+输出块、MCP=server 徽标拆解……）。未识别落 generic 兜底。
- * 本产品无删除文件工具（安全设计）——外部后端若有按 generic 如实显示。
+ * 工具家族分类（D33 §3.5）：classifyTool 按内置 snake_case 工具名映射到
+ * 渲染家族；家族决定头部动作词/图标/关键参数提取与展开体形态（编辑=红绿
+ * diff、终端=$命令+输出块、MCP=server 徽标拆解……）。未识别落 generic 兜底。
+ * 本产品无删除文件工具（安全设计）。
  */
 
 import {
@@ -43,16 +42,12 @@ export interface ToolFamilyMeta {
   icon: LucideIcon;
 }
 
-/** MCP 工具名拆解：内部 `mcp.{server}.{tool}` / 外部 `mcp__{server}__{tool}` */
+/** MCP 工具名拆解：`mcp.{server}.{tool}` */
 export function splitMcpName(tool: string): { server: string; rest: string } | null {
   if (tool.startsWith('mcp.')) {
     const parts = tool.split('.');
     if (parts.length >= 3) return { server: parts[1], rest: parts.slice(2).join('.') };
     return { server: parts[1] ?? '', rest: parts.slice(2).join('.') };
-  }
-  if (tool.startsWith('mcp__')) {
-    const parts = tool.split('__');
-    if (parts.length >= 3) return { server: parts[1], rest: parts.slice(2).join('__') };
   }
   return null;
 }
@@ -70,38 +65,27 @@ const MEMORY_LABELS: Record<string, string> = {
   memory_read: '记忆读取',
 };
 
-const INTERNAL_TOOLS = new Set(['subagent.adjust', 'subagent.cancel', 'coding.delegate']);
+const INTERNAL_TOOLS = new Set(['subagent.adjust', 'subagent.cancel']);
 
-/** 工具名 → 家族元信息（含内置与外部双命名映射） */
+/** 工具名 → 家族元信息 */
 export function classifyTool(tool: string): ToolFamilyMeta {
   if (tool === 'skill') return { family: 'generic', label: '技能', icon: Wrench }; // 实际渲染走 SkillCard，此分支不达
   if (splitMcpName(tool)) return { family: 'mcp', label: 'MCP', icon: Plug };
   if (INTERNAL_TOOLS.has(tool)) return { family: 'internal', label: '内部', icon: Radar };
   switch (tool) {
     case 'read_file':
-    case 'Read':
       return { family: 'fileRead', label: '读取', icon: FileText };
     case 'list_dir':
-    case 'LS':
       return { family: 'fileRead', label: '列目录', icon: FileText };
     case 'write_file':
-    case 'Write':
       return { family: 'fileWrite', label: '写入', icon: FilePlus };
     case 'edit_file':
-    case 'Edit':
-    case 'Update':
       return { family: 'fileEdit', label: '编辑', icon: FilePen };
     case 'search_files':
-    case 'Grep':
-    case 'Glob':
       return { family: 'search', label: '搜索', icon: Search };
     case 'run_command':
-    case 'Bash':
-    case 'Shell':
       return { family: 'terminal', label: '终端', icon: Terminal };
     case 'http_fetch':
-    case 'WebFetch':
-    case 'WebSearch':
       return { family: 'web', label: '网络', icon: Globe };
     case 'ask_user':
       return { family: 'ask', label: '提问', icon: HelpCircle };
@@ -162,9 +146,9 @@ export function contentScale(args: Record<string, unknown>): { lines: number; ch
   return { lines, chars: [...c].length };
 }
 
-/** 编辑类 diff 取参（内置 old/new；外部 old_string/new_string 或 content） */
+/** 编辑类 diff 取参 */
 export function editDiffArgs(args: Record<string, unknown>): { oldText?: string; newText?: string } {
-  const oldText = pickStr(args, ['old', 'old_string', 'oldStr']);
-  const newText = pickStr(args, ['new', 'new_string', 'newStr']);
+  const oldText = pickStr(args, ['old', 'oldStr']);
+  const newText = pickStr(args, ['new', 'newStr']);
   return { oldText, newText };
 }

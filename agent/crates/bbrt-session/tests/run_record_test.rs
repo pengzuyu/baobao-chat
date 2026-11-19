@@ -28,7 +28,6 @@ fn seed_session(store: &Store, id: &str) {
             title: "run 记录测试".into(),
             form: "workbench".into(),
             mode: "ask".into(),
-            backend: None,
             model_policy: "auto".into(),
             model_override: None,
             status: "idle".into(),
@@ -49,10 +48,10 @@ fn eventlog_impl_records_run_lifecycle_into_sqlite() {
     seed_session(&store, "sess-1");
     let wal: &dyn EventLog = &Mutex::new(store);
 
-    let run_id = wal.next_task_id("delegate").expect("发号失败");
+    let run_id = wal.next_task_id("terminal").expect("发号失败");
     assert!(
-        run_id.starts_with("worker-") && run_id.len() == "worker-".len() + 32,
-        "worker-+32hex: {run_id}"
+        run_id.starts_with("terminal-") && run_id.len() == "terminal-".len() + 32,
+        "terminal-+32hex: {run_id}"
     );
 
     wal.run_start(&RunStart {
@@ -61,25 +60,24 @@ fn eventlog_impl_records_run_lifecycle_into_sqlite() {
         root_session_id: "sess-1".into(),
         parent_run_id: String::new(),
         parent_call_id: "call-9".into(),
-        kind: "delegate",
-        def_ref: "backend:claude".into(),
+        kind: "terminal",
+        def_ref: "shell".into(),
         eta_hint_ms: 0,
         actor: String::new(),
     });
     wal.append_run(
         "sess-1",
         &run_id,
-        "delegate.launch",
-        "{\"backend\":\"claude\"}",
+        "subagent.trace",
+        "{\"kind\":\"text\",\"text\":\"cargo test\"}",
     );
-    wal.append_run("sess-1", &run_id, "delegate.end", "{\"exit\":0}");
+    wal.append_run("sess-1", &run_id, "terminal.cancel", "{\"graceful\":false}");
     wal.run_end(
         &run_id,
         &RunEnd {
             status: "done",
             eta_actual_ms: 42_000,
-            summary: "委派完成",
-            child_session_ref: "claude-sess-7",
+            summary: "构建完成 exit=0",
         },
     );
 
@@ -91,20 +89,21 @@ fn eventlog_impl_records_run_lifecycle_into_sqlite() {
     let r = &runs[0];
     assert_eq!(
         (r.id.as_str(), r.kind.as_str(), r.status.as_str()),
-        (run_id.as_str(), "delegate", "done")
+        (run_id.as_str(), "terminal", "done")
     );
-    assert_eq!(r.def_ref, "backend:claude");
+    assert_eq!(r.def_ref, "shell");
     assert_eq!(r.parent_call_id, "call-9");
     assert_eq!(r.eta_actual_ms, 42_000);
-    assert_eq!(r.child_session_ref, "claude-sess-7");
     assert!(r.ended_at.is_some());
 
-    // 事件归属：主循环事件 run_id 空；delegate.* 两条挂本 run
+    // 事件归属：主循环事件 run_id 空；run 专属事件挂本 run
     let events = store2.events_after("sess-1", 0, 100).unwrap();
     let with_run: Vec<&bbrt_store::EventRow> =
         events.iter().filter(|e| e.run_id == run_id).collect();
     assert_eq!(with_run.len(), 2);
-    assert!(with_run.iter().all(|e| e.type_.starts_with("delegate.")));
+    assert!(with_run
+        .iter()
+        .all(|e| e.type_ == "subagent.trace" || e.type_ == "terminal.cancel"));
 }
 
 /// 崩溃恢复：running run → interrupted（recover 调用路径）
@@ -114,7 +113,7 @@ fn recovery_marks_running_runs_interrupted() {
     seed_session(&store, "sess-2");
     {
         let wal: &dyn EventLog = &Mutex::new(store);
-        let id = wal.next_task_id("delegate").unwrap();
+        let id = wal.next_task_id("probe").unwrap();
         wal.run_start(&RunStart {
             run_id: id,
             session_id: "sess-2".into(),

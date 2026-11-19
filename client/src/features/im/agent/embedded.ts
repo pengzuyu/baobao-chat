@@ -122,7 +122,7 @@ export function currentRoundItems(items: StreamItem[]): StreamItem[] {
 }
 
 /**
- * StreamItems → 卡片 stages 投影（工具/子任务/委派统一为 tool 行；
+ * StreamItems → 卡片 stages 投影（工具/子任务统一为 tool 行；
  * permission/user 不进卡——审批在活动卡弹框，用户消息本身在消息流）。
  * **入参须先经 currentRoundItems 切片**（直接喂全会话流=跨轮串内容）。
  */
@@ -163,14 +163,6 @@ export function stagesFromStream(items: StreamItem[]): { stages: AgentStage[]; s
           name: `子任务 ${it.runId}`,
           status: it.status === 'running' ? 'running' : it.status === 'done' ? 'ok' : 'fail',
           summary: it.summary?.slice(0, 120) ?? it.taskDigest.slice(0, 120),
-        });
-        break;
-      case 'delegate':
-        stages.push({
-          t: 'tool',
-          name: `委派 ${it.backend}`,
-          status: it.phase === 'resolved' ? (it.decision === 'reject' ? 'fail' : 'ok') : 'running',
-          summary: it.end?.summary?.slice(0, 120),
         });
         break;
       case 'error':

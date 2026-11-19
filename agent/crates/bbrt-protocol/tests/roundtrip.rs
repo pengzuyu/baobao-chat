@@ -1,16 +1,16 @@
 //! bbrt-protocol 集成测试：
-//! 1) 全消息类型 serde roundtrip（HostToRuntime 17 变体 + RuntimeToHost 24 变体）；
+//! 1) 全消息类型 serde roundtrip（HostToRuntime 15 变体 + RuntimeToHost 21 变体）；
 //! 2) JSON 字符串 → 枚举 → JSON 的黄金样本断言（字段名/可选性/枚举值逐项对齐 D11 §4）；
 //! 3) 信封 wrap/unwrap 与 codec 行式读写。
 
 use std::io::Cursor;
 
 use bbrt_protocol::{
-    read_message, write_message, Blocked, BriefContextItem, ClarifyOption,
-    CodecError, CompactionPhase, Decision, DelegateEventKind, EndReason, Envelope,
+    read_message, write_message, Blocked, ClarifyOption,
+    CodecError, CompactionPhase, Decision, EndReason, Envelope,
     GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy, ModelSwitchReason,
-    PermissionMode, Preview, ProtocolError, RenewReason, ReviewDecision, RiskLevel, RuntimeToHost,
-    SessionState, StreamChannel, SubagentPhase, SubagentResult, TaskBrief, ThinkingLevel,
+    PermissionMode, Preview, ProtocolError, RenewReason, RiskLevel, RuntimeToHost,
+    SessionState, StreamChannel, SubagentPhase, SubagentResult, ThinkingLevel,
     ToolSource, ToolsReloadReason, Usage, PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
@@ -20,20 +20,6 @@ use serde_json::{json, Value};
 // ---------------------------------------------------------------------------
 // 构造样本
 // ---------------------------------------------------------------------------
-
-fn task_brief() -> TaskBrief {
-    TaskBrief {
-        task: "修复登录超时并跑通测试".into(),
-        workspace: "~/code/bbc-server".into(),
-        constraints: vec!["不修改 migrations/".into()],
-        context: vec![BriefContextItem {
-            source: "src/auth.rs:L42".into(),
-            excerpt: "db.wait(30s)".into(),
-        }],
-        acceptance: vec!["cargo test --lib 全绿".into()],
-        forbidden: vec!["git push".into()],
-    }
-}
 
 fn all_host_to_runtime() -> Vec<HostToRuntime> {
     vec![
@@ -51,7 +37,6 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             model: Some("p:1:glm-5.3".into()),
             skills: vec!["sql-review".into()],
             history_ref: None,
-            backend_hint: Some("zcode".into()),
             title: None,
         },
         HostToRuntime::UserMessage {
@@ -74,22 +59,10 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             answers: vec!["加漂移窗口".into()],
             free_text: Some("顺带补一条单测".into()),
         },
-        HostToRuntime::DelegateLaunch {
+        HostToRuntime::RunCancel {
             session_id: "sess-1".into(),
-            delegate_task_id: "dt-1".into(),
-            backend: "claude".into(),
-            task_brief: Some(task_brief()),
-            mode: PermissionMode::FullAuto,
-            workspace: "~/code/bbc".into(),
-        },
-        HostToRuntime::DelegateCancel {
-            delegate_task_id: "dt-1".into(),
+            run_id: "terminal-1".into(),
             graceful: true,
-        },
-        HostToRuntime::DelegateReview {
-            delegate_task_id: "dt-1".into(),
-            decision: ReviewDecision::Reject,
-            rejected_hunks: Some(vec!["hunk-2".into()]),
         },
         HostToRuntime::SessionInterrupt {
             session_id: "sess-1".into(),
@@ -277,25 +250,6 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
                 turn_done_at: None,
             }],
         },
-        RuntimeToHost::DelegateBrief {
-            session_id: "sess-1".into(),
-            brief: task_brief(),
-            backend_suggestion: "zcode".into(),
-        },
-        RuntimeToHost::DelegateEvent {
-            session_id: "sess-1".into(),
-            delegate_task_id: "dt-1".into(),
-            kind: DelegateEventKind::ToolUse,
-            payload: json!({"tool": "Edit", "file": "src/auth.rs"}),
-        },
-        RuntimeToHost::DelegateEnd {
-            session_id: "sess-1".into(),
-            delegate_task_id: "dt-1".into(),
-            exit_code: 0,
-            summary: "完成修复".into(),
-            changed_files: vec!["src/auth.rs".into()],
-            child_session_ref: Some("cs-9".into()),
-        },
         RuntimeToHost::SessionStateReport {
             session_id: "sess-1".into(),
             state: SessionState::WaitingPermission,
@@ -391,8 +345,8 @@ fn roundtrip_all_host_to_runtime() {
     let all = all_host_to_runtime();
     assert_eq!(
         all.len(),
-        19,
-        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong + D20 clarify.response（delegate.input 已随补充指令退役移除）"
+        17,
+        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong + D20 clarify.response（委派 delegate.* 已随委派域退役，run.cancel 取代）"
     );
     for msg in &all {
         roundtrip(msg);
@@ -404,7 +358,7 @@ fn roundtrip_all_runtime_to_host() {
     let all = all_runtime_to_host();
     assert_eq!(
         all.len(),
-        34,
+        31,
         "D11 §4 RT→宿主 21 类型 + 双向 ping/pong + 2026-11-11 interrupted/renamed + D20 clarify.request/状态样本 + D23 memory.forget.result"
     );
     for msg in &all {
@@ -428,7 +382,6 @@ fn golden_session_start() {
             model: None, // None=缺席不序列化(golden)
             skills: vec!["sql-review".into()],
             history_ref: None,
-            backend_hint: None,
             title: None,
         },
         json!({
@@ -459,7 +412,6 @@ fn golden_stream_channels() {
     for (channel, name) in [
         (StreamChannel::Text, "text"),
         (StreamChannel::Reasoning, "reasoning"),
-        (StreamChannel::Tool, "tool"),
     ] {
         golden(
             &RuntimeToHost::StreamDelta {
@@ -483,11 +435,11 @@ fn golden_tool_call_and_result() {
             args: json!({"path": "a.rs"}),
             risk: RiskLevel::Medium,
             parallel: false,
-            source: ToolSource::Backend,
+            source: ToolSource::Local,
         },
         json!({
             "type":"tool.call","callId":"c1","sessionId":"s","tool":"edit_file",
-            "args":{"path":"a.rs"},"risk":"medium","parallel":false,"source":"backend"
+            "args":{"path":"a.rs"},"risk":"medium","parallel":false,"source":"self"
         }),
     );
     golden(
@@ -717,41 +669,14 @@ fn golden_d33_subagent_trace_and_run_history() {
 }
 
 #[test]
-fn golden_delegate_brief_launch_end_review() {
-    let brief = RuntimeToHost::DelegateBrief {
-        session_id: "s".into(),
-        brief: task_brief(),
-        backend_suggestion: "zcode".into(),
-    };
+fn golden_run_cancel() {
     golden(
-        &brief,
-        json!({
-            "type":"delegate.brief","sessionId":"s","backendSuggestion":"zcode",
-            "brief":{
-                "task":"修复登录超时并跑通测试","workspace":"~/code/bbc-server",
-                "constraints":["不修改 migrations/"],
-                "context":[{"source":"src/auth.rs:L42","excerpt":"db.wait(30s)"}],
-                "acceptance":["cargo test --lib 全绿"],
-                "forbidden":["git push"]
-            }
-        }),
-    );
-    golden(
-        &HostToRuntime::DelegateReview {
-            delegate_task_id: "dt-1".into(),
-            decision: ReviewDecision::Accept,
-            rejected_hunks: None,
-        },
-        json!({"type":"delegate.review","delegateTaskId":"dt-1","decision":"accept"}),
-    );
-    golden(
-        &RuntimeToHost::DelegateEvent {
+        &HostToRuntime::RunCancel {
             session_id: "sess-1".into(),
-            delegate_task_id: "dt-1".into(),
-            kind: DelegateEventKind::ToolResult,
-            payload: json!({"ok": true}),
+            run_id: "terminal-9".into(),
+            graceful: false,
         },
-        json!({"type":"delegate.event","sessionId":"sess-1","delegateTaskId":"dt-1","kind":"tool_result","payload":{"ok":true}}),
+        json!({"type":"run.cancel","sessionId":"sess-1","runId":"terminal-9","graceful":false}),
     );
 }
 
@@ -913,9 +838,7 @@ fn golden_session_state_report_names() {
         ("running", SessionState::Running),
         ("waiting_permission", SessionState::WaitingPermission),
         ("waiting_clarify", SessionState::WaitingClarify),
-        ("waiting_review", SessionState::WaitingReview),
         ("subagent_fanout", SessionState::SubagentFanout),
-        ("delegating", SessionState::Delegating),
         ("paused", SessionState::Paused),
         ("error", SessionState::Error),
         ("ended", SessionState::Ended),
@@ -968,7 +891,6 @@ fn unknown_fields_are_tolerated() {
             model: None,
             skills: vec![],
             history_ref: None,
-            backend_hint: None,
             title: None,
         }
     );
@@ -988,7 +910,6 @@ fn envelope_wrap_unwrap_roundtrip() {
         model: None,
         skills: vec![],
         history_ref: None,
-        backend_hint: None,
         title: None,
     };
     let env = Envelope::wrap(PROTOCOL_VERSION, "h-1", &msg).expect("wrap");
@@ -1314,7 +1235,6 @@ fn golden_session_title_and_interrupt() {
             model: None,
             skills: vec![],
             history_ref: None,
-            backend_hint: None,
             title: Some("与张三的对话".into()),
         },
         json!({

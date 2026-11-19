@@ -16,10 +16,10 @@ use bbrt_aigw::{ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent,
 use bbrt_context::{estimate_tokens, Round};
 use bbrt_memory::MemoryEngine;
 
-use crate::delegate_bg::DelegateHub;
+use crate::bg_hub::BgHub;
 use crate::events::{SessionEvent, SessionSink};
 use crate::executor::{ToolExecutor, ToolInvocation, ToolOutcome};
-use crate::loop_runner::{DelegateHostMsg, EventLog};
+use crate::loop_runner::{BgHostMsg, EventLog};
 use crate::state::{self, SessionState};
 use bbrt_sec::gate::PermissionMode;
 
@@ -116,7 +116,7 @@ pub struct ProbeCtx {
     /// 主循环同款模型名（override 优先回落档位——"与主一致"）
     pub model_name: String,
     /// 运行中枢（D16 决策⑧：注册补充指令/取消通道；None=未装配仅本地跑）
-    pub hub: Option<Arc<DelegateHub>>,
+    pub hub: Option<Arc<BgHub>>,
 }
 
 /// 与主 to_chat_messages 同构的 system 组装（[技能]/[项目]/[记忆] 三段；
@@ -167,7 +167,7 @@ pub fn run_probe(
     let started = std::time::Instant::now();
     // 补充指令通道（D16 决策⑧）：注册先于执行循环——主 Agent/宿主
     // 经 hub 定向下发 Input（注入 user 轮）/Cancel（按指令取消）
-    let (input_tx, input_rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
+    let (input_tx, input_rx) = std::sync::mpsc::channel::<BgHostMsg>();
     if let Some(hub) = ctx.hub.as_ref() {
         hub.register(run_id, session_id, input_tx.clone());
     }
@@ -214,7 +214,7 @@ pub fn run_probe(
         // 补充指令 drain（每步轮询；注入为 user 轮——下一模型轮即见）
         while let Ok(msg) = input_rx.try_recv() {
             match msg {
-                DelegateHostMsg::Input { text } => {
+                BgHostMsg::Input { text } => {
                     wal.append_run(
                         session_id,
                         run_id,
@@ -231,7 +231,7 @@ pub fn run_probe(
                         summary: Some(format!("收到补充指令：{}", truncate_chars(&text, 40))),
                     });
                 }
-                DelegateHostMsg::Cancel { .. } => {
+                BgHostMsg::Cancel { .. } => {
                     wal.append_run(
                         session_id,
                         run_id,
@@ -240,7 +240,6 @@ pub fn run_probe(
                     );
                     cancelled = true;
                 }
-                _ => {}
             }
         }
         if cancelled {
@@ -383,7 +382,6 @@ pub fn run_probe(
             },
             eta_actual_ms: started.elapsed().as_millis() as i64,
             summary: &truncate_chars(&result.summary, 400),
-            child_session_ref: "",
         },
     );
     if let Some(hub) = ctx.hub.as_ref() {
@@ -491,7 +489,7 @@ pub fn fanout_probes(
             if let Some(hub) = hub {
                 hub.park_join(
                     &sid,
-                    crate::delegate_bg::DelegateJoin {
+                    crate::bg_hub::BgJoin {
                         name: "subagent.join".into(),
                         run_id: format!("fanout-{total}"),
                         summary: format!("## 并行子任务结果（后台完成）\n{digest}"),
@@ -513,7 +511,7 @@ pub struct FanoutEnv<'a> {
     /// 同步等待窗（超窗转后台，D16 决策④）
     pub wait_window: std::time::Duration,
     /// 后台产物 parking（None=无 manager 装配：后台收口仅发事件不注入）
-    pub hub: Option<Arc<crate::delegate_bg::DelegateHub>>,
+    pub hub: Option<Arc<crate::bg_hub::BgHub>>,
 }
 
 /// join 收口：协议事件 + WAL + 摘要文本（主上下文回填用）

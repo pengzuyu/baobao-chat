@@ -12,7 +12,6 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::delegation::{DelegateEvt, DelegateLaunchReq, DelegateLauncher};
 use bbrt_aigw::{ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent, ToolCallMsg};
 use bbrt_context::{
     assemble, budget_report, compact, AssembleParts, BudgetConfig, CompactionOutcome, Round,
@@ -33,15 +32,8 @@ pub const MAX_CONSECUTIVE_FAILURES: usize = 3;
 /// 审批等待窗口（09 §4.1 ⑥；测试可注入更短值）
 pub const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// 子任务同步等待窗（D16 决策④：探查/专家 120s 超窗转后台；委派直接后台）
+/// 子任务同步等待窗（D16 决策④：探查/专家 120s 超窗转后台）
 pub const SUBAGENT_WAIT_WINDOW: Duration = Duration::from_secs(120);
-
-/// 委派泵轮询节拍（宿主指令 drain/心跳检查粒度=读线程 recv_timeout 的超时值）
-pub(crate) const DELEGATE_POLL_TICK: Duration = Duration::from_millis(500);
-
-/// 委派空闲心跳阈值（距上条子进程事件超过该值发提示行；D16 决策④无执行
-/// 时长上限不动——本提示只补可见性，不做任何自动终止）
-pub(crate) const DELEGATE_IDLE_HINT: Duration = Duration::from_secs(90);
 
 /// run_command 同步等待阈值（hybrid：到点未完不杀，自动转后台返回任务 id
 /// 保住执行进度——对齐 Claude Code「超时转后台」；用户拍板 300s 保持现状口径）
@@ -53,7 +45,6 @@ pub(crate) fn static_eta_ms(kind: &str) -> i64 {
         "probe" => 45_000,
         "expert" => 180_000,
         "team" => 300_000,
-        "delegate" => 600_000,
         _ => 60_000,
     }
 }
@@ -84,28 +75,20 @@ pub struct ClarifyAnswer {
     pub free_text: Option<String>,
 }
 
-/// 宿主→循环的委派指令（delegate.launch/input/cancel/review 的 session 侧形态）
+/// 宿主→后台任务的指令（run.cancel / subagent.adjust 的 session 侧形态；
+/// 探查/专家/终端后台命令共用。外部委派的 Launch/Review 已随委派域退役）
 #[derive(Debug, Clone)]
-pub enum DelegateHostMsg {
-    Launch {
-        backend: String,
-        /// 用户编辑后的简报（None=用模型产出原稿）
-        brief: Option<bbrt_protocol::TaskBrief>,
-    },
-    /// 进程内子 agent 补充指令（probe/expert 经 subagent.adjust 注入下一模型轮；
-    /// 委派 stdin 下发已随「运行中补充指令」退役——委派泵不再消费此变体）
+pub enum BgHostMsg {
+    /// 进程内子 agent 补充指令（probe/expert 经 subagent.adjust 注入下一模型轮）
     Input {
         text: String,
     },
     Cancel {
         graceful: bool,
     },
-    Review {
-        accept: bool,
-    },
 }
 
-/// run 起始快照（D16 §3.1：agent_run 行的会话侧形态；三形态统一审计）
+/// run 起始快照（D16 §3.1：agent_run 行的会话侧形态；统一后台任务审计）
 #[derive(Debug, Clone)]
 pub struct RunStart {
     pub run_id: String,
@@ -114,11 +97,11 @@ pub struct RunStart {
     pub root_session_id: String,
     /// 父 run（team 成员 expert run=team run id；其余空）
     pub parent_run_id: String,
-    /// 触发本次 run 的工具调用 id（委派=coding.delegate 的 call_id）
+    /// 触发本次 run 的工具调用 id（terminal=run_command 的 call_id）
     pub parent_call_id: String,
-    /// probe | expert | team | delegate
+    /// probe | expert | team | terminal
     pub kind: &'static str,
-    /// builtin.probe / {expertId}@{version} / team:{topology} / backend:{type}
+    /// builtin.probe / {expertId}@{version} / team:{topology} / shell
     pub def_ref: String,
     /// ETA 预估毫秒（P1-6 滚动统计接线前恒 0）
     pub eta_hint_ms: i64,
@@ -132,8 +115,6 @@ pub struct RunEnd<'a> {
     pub status: &'a str,
     pub eta_actual_ms: i64,
     pub summary: &'a str,
-    /// 委派子进程会话句柄（--resume 续接；其余空）
-    pub child_session_ref: &'a str,
 }
 
 /// WAL 出口抽象（Store 实现；测试可注入 Noop）。
@@ -143,7 +124,7 @@ pub struct RunEnd<'a> {
 pub trait EventLog: Send + Sync {
     fn append(&self, session_id: &str, type_: &str, payload: &str);
 
-    /// 持久任务发号（统一后台任务体系：kind 分前缀 agent-/worker-/terminal-
+    /// 持久任务发号（统一后台任务体系：kind 分前缀 agent-/terminal-
     /// + 32 hex；None=未接 Store，调用方退回进程内临时 id）
     fn next_task_id(&self, _kind: &str) -> Option<String> {
         None
@@ -177,7 +158,6 @@ pub struct EventRunSnapshot {
     pub status: String,
     pub kind: String,
     pub summary: String,
-    pub child_session_ref: String,
 }
 pub struct NoopEventLog;
 impl EventLog for NoopEventLog {
@@ -215,7 +195,6 @@ impl EventLog for std::sync::Mutex<Store> {
                 eta_hint_ms: run.eta_hint_ms,
                 eta_actual_ms: 0,
                 summary: String::new(),
-                child_session_ref: String::new(),
                 actor: run.actor.clone(),
                 created_at: now,
                 started_at: now,
@@ -230,7 +209,6 @@ impl EventLog for std::sync::Mutex<Store> {
                 end.status,
                 end.eta_actual_ms,
                 end.summary,
-                end.child_session_ref,
             );
         }
     }
@@ -247,7 +225,6 @@ impl EventLog for std::sync::Mutex<Store> {
                 status: r.status,
                 kind: r.kind,
                 summary: r.summary,
-                child_session_ref: r.child_session_ref,
             })
         })
     }
@@ -337,9 +314,6 @@ pub struct SessionRunner {
     /// 澄清回执通道（D20 ask_user 阻塞等待；与审批通道分离——无超时，靠 recv 轮询中断）
     clarify_tx: Sender<ClarifyAnswer>,
     clarify_rx: Receiver<ClarifyAnswer>,
-    /// 委派宿主指令通道（launch/input/cancel/review；与审批通道分离）
-    delegate_tx: Sender<DelegateHostMsg>,
-    delegate_rx: Receiver<DelegateHostMsg>,
     /// W2② 连续错误计数器（同工具同错 ≥2 次 → feedback 教训；跨 turn 保留）
     err_tracker: bbrt_memory::ErrorTracker,
     /// 审批超时（测试注入）
@@ -347,10 +321,11 @@ pub struct SessionRunner {
     /// 子任务同步等待窗（D16 决策④：探查/专家 spawn 后同步等 120s，
     /// 超窗转后台继续跑——摘要经 hub park 下一轮回填；测试注入更短值）
     pub subagent_wait_window: Duration,
-    /// 后台委派中枢（D16 §5：Some=委派后台化——launch 后 turn 立即返回；
-    /// None=同步退化路径（raw runner 测试/嵌入式用法）。manager.start 注入，
-    /// 生产路径恒 Some；与 manager 共享同一实例（指令定向路由 + join 注入）
-    pub delegate_hub: Option<Arc<crate::delegate_bg::DelegateHub>>,
+    /// 后台任务中枢（D16 §5 后台化推广：探查/专家/会诊超窗与终端后台命令
+    /// 共用——run 注册/取消路由 + join parking。None=未装配（raw runner
+    /// 测试/嵌入式用法）。manager.start 注入，生产路径恒 Some；
+    /// 与 manager 共享同一实例
+    pub bg_hub: Option<Arc<crate::bg_hub::BgHub>>,
 }
 
 impl SessionRunner {
@@ -408,7 +383,6 @@ impl SessionRunner {
     ) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let (ctx, crx) = std::sync::mpsc::channel();
-        let (dtx, drx) = std::sync::mpsc::channel();
         Self {
             session_id,
             workspace,
@@ -424,19 +398,17 @@ impl SessionRunner {
             permission_rx: rx,
             clarify_tx: ctx,
             clarify_rx: crx,
-            delegate_tx: dtx,
-            delegate_rx: drx,
             // v0.1 恒开（`memory.heuristic=off` 开关随配置系统接线，D15 §2.2）
             err_tracker: bbrt_memory::ErrorTracker::new(true),
             permission_timeout: PERMISSION_TIMEOUT,
             subagent_wait_window: SUBAGENT_WAIT_WINDOW,
-            delegate_hub: None,
+            bg_hub: None,
         }
     }
 
-    /// 后台产物注入（D16 §5：委派/探查/团队经 hub park 的摘要由 manager
+    /// 后台产物注入（D16 §5：探查/会诊经 hub park 的摘要由 manager
     /// 在下一轮 run_turn 前 drain 后调用——主上下文以对应 join 轮次回填）
-    pub fn inject_delegate_join(&mut self, run_id: &str, name: &str, summary: &str) {
+    pub fn inject_bg_join(&mut self, run_id: &str, name: &str, summary: &str) {
         self.history.push(Round::Tool {
             call_id: run_id.to_string(),
             name: name.to_string(),
@@ -449,8 +421,6 @@ impl SessionRunner {
 pub struct LoopDeps {
     pub model: Arc<dyn ChatClient>,
     pub tools: Arc<dyn ToolExecutor>,
-    /// 委派启动器（None=未装配 → coding.delegate 返回 8030）
-    pub delegator: Option<Arc<dyn DelegateLauncher>>,
     pub memory: Option<Arc<MemoryEngine>>,
     pub wal: Arc<dyn EventLog>,
     pub sink: Arc<dyn SessionSink>,
@@ -511,12 +481,12 @@ impl SessionRunner {
                     model: Arc::clone(&deps.model),
                     tools: Arc::clone(&deps.tools),
                     mode: self.mode,
-                    hub: self.delegate_hub.clone(),
+                    hub: self.bg_hub.clone(),
                 };
                 let sid = self.session_id.clone();
                 let sink_bg = Arc::clone(&deps.sink);
                 let wal_bg = Arc::clone(&deps.wal);
-                let hub = self.delegate_hub.clone();
+                let hub = self.bg_hub.clone();
                 let (ttx, trx) = std::sync::mpsc::channel::<Option<crate::team::TeamResult>>();
                 let _ = std::thread::Builder::new()
                     .name("bbc-team".into())
@@ -555,7 +525,7 @@ impl SessionRunner {
                                 });
                                 hub.park_join(
                                     &sid,
-                                    crate::delegate_bg::DelegateJoin {
+                                    crate::bg_hub::BgJoin {
                                         name: "team.join".into(),
                                         run_id: team.run_id.clone(),
                                         summary: format!(
@@ -658,7 +628,7 @@ impl SessionRunner {
                         workspace: &self.workspace,
                         model_name,
                         wait_window: self.subagent_wait_window,
-                        hub: self.delegate_hub.clone(),
+                        hub: self.bg_hub.clone(),
                     },
                 );
                 self.state = crate::subagent::transition_join(self.state);
@@ -1180,11 +1150,9 @@ impl SessionRunner {
 
     /// run_command 后台执行（统一后台任务体系 2026-11-18）：gate 放行后、
     /// execute 之前拦截 background=true——spawn 进程组立即返回 terminal- 任务 id，
-    /// 专用线程收割落终态；无时长上限仅取消（对齐委派口径 D16 决策④）；
+    /// 专用线程收割落终态；无时长上限仅取消（D16 决策④口径）；
     /// 结果摘要（exit+输出尾部）存 agent_run.summary，task.wait 统一取回。
     fn run_command_background(&mut self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
-        const SIGINT: i32 = 2;
-        const SIGKILL: i32 = 9;
         let task_id = deps
             .wal
             .next_task_id("terminal")
@@ -1210,7 +1178,6 @@ impl SessionRunner {
                         status: "failed",
                         eta_actual_ms: started.elapsed().as_millis() as i64,
                         summary: &e,
-                        child_session_ref: "",
                     },
                 );
                 return ToolOutcome::Blocked { code: 8020, summary: e };
@@ -1235,21 +1202,21 @@ impl SessionRunner {
         const SIGKILL: i32 = 9;
         let task_id = task_id.to_string();
         // hub 注册（取消路由；未装配=退化，仅不可中途取消）
-        let rx = match self.delegate_hub.as_ref() {
+        let rx = match self.bg_hub.as_ref() {
             Some(hub) => {
-                let (tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
+                let (tx, rx) = std::sync::mpsc::channel::<BgHostMsg>();
                 hub.register(&task_id, &self.session_id, tx);
                 rx
             }
             None => {
-                let (_tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
+                let (_tx, rx) = std::sync::mpsc::channel::<BgHostMsg>();
                 rx
             }
         };
         let wal = deps.wal.clone();
         let sid = self.session_id.clone();
         let tid = task_id.clone();
-        let hub_for_cleanup = self.delegate_hub.clone();
+        let hub_for_cleanup = self.bg_hub.clone();
         let _ = std::thread::Builder::new()
             .name(format!("bbc-shell-{tid}"))
             .spawn(move || {
@@ -1258,7 +1225,7 @@ impl SessionRunner {
                 loop {
                     // 宿主指令 drain（取消：graceful=SIGINT→3s→SIGKILL；强制=直接杀）
                     while let Ok(msg) = rx.try_recv() {
-                        if let DelegateHostMsg::Cancel { graceful } = msg {
+                        if let BgHostMsg::Cancel { graceful } = msg {
                             cancelled = true;
                             wal.append_run(
                                 &sid,
@@ -1310,7 +1277,6 @@ impl SessionRunner {
                         status,
                         eta_actual_ms: r.duration_ms as i64,
                         summary: &summary,
-                        child_session_ref: "",
                     },
                 );
                 if let Some(hub) = hub_for_cleanup {
@@ -1380,16 +1346,6 @@ impl SessionRunner {
                     .to_string(),
                 );
                 let summary = match snap.kind.as_str() {
-                    "delegate" => format!(
-                        "[委派完成·{}] {}{}",
-                        snap.status,
-                        snap.summary,
-                        if snap.child_session_ref.is_empty() {
-                            String::new()
-                        } else {
-                            format!("；可续接句柄 {}（下次委派续上下文）", snap.child_session_ref)
-                        }
-                    ),
                     "terminal" => format!("[命令完成·{}] {}", snap.status, snap.summary),
                     _ => format!("[子任务完成·{}] {}", snap.status, snap.summary),
                 };
@@ -1437,7 +1393,7 @@ impl SessionRunner {
     }
 
     /// 子 Agent 运行中调整（D16 决策⑧）：subagent.adjust{run_id,instruction} /
-    /// subagent.cancel{run_id} → hub 定向 Input/Cancel（探查/专家/委派通用）
+    /// subagent.cancel{run_id} → hub 定向 Input/Cancel（探查/专家/终端通用）
     fn run_subagent_adjust(&self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
         let v: serde_json::Value =
             serde_json::from_str(&call.args_json).unwrap_or(serde_json::json!({}));
@@ -1452,7 +1408,7 @@ impl SessionRunner {
                 summary: "缺少 run_id 参数".into(),
             };
         }
-        let Some(hub) = self.delegate_hub.as_ref() else {
+        let Some(hub) = self.bg_hub.as_ref() else {
             return ToolOutcome::Blocked {
                 code: 8002,
                 summary: "运行中枢未装配（无法调整子任务）".into(),
@@ -1464,7 +1420,7 @@ impl SessionRunner {
                 "subagent.adjust",
                 &serde_json::json!({ "run_id": run_id, "op": "cancel" }).to_string(),
             );
-            DelegateHostMsg::Cancel { graceful: true }
+            BgHostMsg::Cancel { graceful: true }
         } else {
             let instruction = v
                 .get("instruction")
@@ -1482,7 +1438,7 @@ impl SessionRunner {
                 "subagent.adjust",
                 &serde_json::json!({ "run_id": run_id, "op": "input" }).to_string(),
             );
-            DelegateHostMsg::Input { text: instruction }
+            BgHostMsg::Input { text: instruction }
         };
         if hub.route(&run_id, &msg) {
             ToolOutcome::Ok {
@@ -1499,244 +1455,6 @@ impl SessionRunner {
         }
     }
 
-    /// 委派全流程：简报确认 → 宿主 launch → 事件流 → 审查 → 回填摘要
-    fn run_delegate(
-        &mut self,
-        deps: &LoopDeps,
-        call: &ToolInvocation,
-        masked: &str,
-        _risk: &str,
-    ) -> ToolOutcome {
-        // 2026-11-12：日常会话委派放开（原 8020 拒绝废除）——工作目录取
-        // exec_ws（日常=默认用户工作区，与工具沙箱同口径）
-        let Some(delegator) = deps.delegator.clone() else {
-            return ToolOutcome::Blocked {
-                code: 8030,
-                summary: "未装配委派后端（registry 为空）".into(),
-            };
-        };
-        // run 发号（D16 §3.1：委派 run=agent_run 行 kind=delegate；
-        // 未接 Store 时退回进程内临时 id，兼容旧格式 dt-{call_id}）
-        let run_id = deps
-            .wal
-            .next_task_id("delegate")
-            .unwrap_or_else(|| format!("dt-{}", call.call_id));
-        let backends = delegator.backends();
-        let suggestion = backends.first().cloned().unwrap_or_default();
-
-        // 状态 → delegating + 简报待确认（D11 #11：确认后才 launch）
-        self.state = state::begin_delegation(self.state).unwrap_or(SessionState::Delegating);
-        emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-            session_id: id,
-            state: "delegating".into(),
-            reason: "delegate.brief".into(),
-        });
-        emit(deps, &self.session_id, |id| SessionEvent::DelegateBrief {
-            session_id: id,
-            delegate_task_id: run_id.clone(),
-            backend_suggestion: suggestion.clone(),
-        });
-        deps.wal.append(
-            &self.session_id,
-            "delegate.brief",
-            &format!("{{\"run_id\":\"{run_id}\"}}"),
-        );
-
-        // 等宿主 delegate.launch（复用审批超时 120s；超时/取消=放弃该工具调用）
-        let (backend, brief_override) = match self.delegate_rx.recv_timeout(self.permission_timeout)
-        {
-            Ok(DelegateHostMsg::Launch { backend, brief }) => (backend, brief),
-            Ok(_) | Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {
-                deps.wal.append(
-                    &self.session_id,
-                    "delegate.brief_timeout",
-                    &format!("{{\"run_id\":\"{run_id}\",\"code\":8030}}"),
-                );
-                self.state =
-                    state::complete_delegation(self.state).unwrap_or(SessionState::Running);
-                return ToolOutcome::Blocked {
-                    code: 8030,
-                    summary: "委派未被确认或超时".into(),
-                };
-            }
-        };
-        let brief =
-            brief_override.unwrap_or_else(|| parse_brief(call, &self.exec_ws().to_string_lossy()));
-        // 任务摘要先取（brief 随 req move；delegate.launch WAL 的回放 User 种子）
-        let task_digest = crate::subagent::truncate_chars(&brief.task, 60);
-        let req = DelegateLaunchReq {
-            delegate_task_id: run_id.clone(),
-            // P0-2①：父会话关联接线（delegate_bridge → LaunchOpts.parent_session_id）
-            session_id: self.session_id.clone(),
-            backend: if backend.is_empty() {
-                suggestion
-            } else {
-                backend
-            },
-            brief,
-            mode: self.mode,
-        };
-        // run 起始（D16 §3.1：backend 确定后落 agent_run；简报超时未 launch
-        // 不产生 run 行——无执行过程，审计由 delegate.brief_timeout WAL 覆盖）
-        let started = std::time::Instant::now();
-        let def_ref = format!("backend:{}", req.backend);
-        let eta_hint = deps
-            .wal
-            .eta_hint(&def_ref)
-            .unwrap_or_else(|| static_eta_ms("delegate"));
-        deps.wal.run_start(&RunStart {
-            run_id: run_id.clone(),
-            session_id: self.session_id.clone(),
-            root_session_id: self.session_id.clone(),
-            parent_run_id: String::new(),
-            parent_call_id: call.call_id.clone(),
-            kind: "delegate",
-            def_ref: def_ref.clone(),
-            eta_hint_ms: eta_hint,
-            actor: String::new(),
-        });
-        let mut stream = match delegator.launch(&req) {
-            Ok(s) => s,
-            Err(e) => {
-                deps.wal.append_run(
-                    &self.session_id,
-                    &run_id,
-                    "delegate.launch_failed",
-                    &format!(
-                        "{{\"run_id\":\"{run_id}\",\"code\":8035,\"error\":\"{}\"}}",
-                        crate::subagent::truncate_chars(&e, 120)
-                    ),
-                );
-                deps.wal.run_end(
-                    &run_id,
-                    &RunEnd {
-                        status: "failed",
-                        eta_actual_ms: started.elapsed().as_millis() as i64,
-                        summary: &crate::subagent::truncate_chars(&e, 400),
-                        child_session_ref: "",
-                    },
-                );
-                emit(deps, &self.session_id, |id| SessionEvent::Error {
-                    session_id: id,
-                    code: 8035,
-                    message: format!("委派启动失败: {e}"),
-                    fatal: false,
-                });
-                self.state =
-                    state::complete_delegation(self.state).unwrap_or(SessionState::Running);
-                return ToolOutcome::Blocked {
-                    code: 8035,
-                    summary: e,
-                };
-            }
-        };
-        deps.wal.append_run(
-            &self.session_id,
-            &run_id,
-            "delegate.launch",
-            &format!(
-                "{{\"run_id\":\"{run_id}\",\"backend\":\"{}\",\"task\":\"{}\"}}",
-                req.backend,
-                escape_json(&task_digest)
-            ),
-        );
-
-        // ── 后台路径（D16 §5：hub 装配即后台——launch 后 turn 立即返回，会话
-        // 可继续对话；事件流/审查在专用线程，宿主指令经 hub 定向路由）──
-        if let Some(hub) = self.delegate_hub.clone() {
-            hub.spawn(
-                run_id.clone(),
-                self.session_id.clone(),
-                req.backend.clone(),
-                stream,
-                deps.sink.clone(),
-                deps.wal.clone(),
-                self.permission_timeout,
-                started,
-            );
-            self.state = state::complete_delegation(self.state).unwrap_or(SessionState::Running);
-            emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-                session_id: id,
-                state: "running".into(),
-                reason: "delegate.backgrounded".into(),
-            });
-            let _ = masked;
-            return ToolOutcome::Ok {
-                summary: format!(
-                    "[委派后台运行] {run_id}（后端 {}）执行中；完成后出审查卡，通过即自动回填结果",
-                    req.backend
-                ),
-                truncated: false,
-                exit_code: None,
-                duration_ms: 0,
-            };
-        }
-
-        // ── 同步退化路径（未装配 hub：raw runner 测试/嵌入式用法=旧阻塞语义）──
-        let cancelled = pump_delegate_stream(
-            &self.session_id,
-            &run_id,
-            &req.backend,
-            stream.as_mut(),
-            &self.delegate_rx,
-            Some(&self.interrupted),
-            deps.sink.as_ref(),
-            deps.wal.as_ref(),
-        );
-        let final_rep = finish_delegate_stream(
-            &self.session_id,
-            &run_id,
-            cancelled,
-            started,
-            stream.as_mut(),
-            deps.sink.as_ref(),
-            deps.wal.as_ref(),
-        );
-        let exit_code = final_rep.exit_code.unwrap_or(-1);
-        if exit_code != 0 {
-            self.state = state::fail_delegation(self.state).unwrap_or(SessionState::Running);
-            return ToolOutcome::Blocked {
-                code: 8033,
-                summary: format!("委派异常退出（exit={exit_code}）"),
-            };
-        }
-
-        // 审查（D11 #14-15：waiting_review；v0.1 对齐审批 120s 窗口，超时=拒绝，登记）
-        self.state = state::request_review(self.state).unwrap_or(SessionState::WaitingReview);
-        emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-            session_id: id,
-            state: "waiting_review".into(),
-            reason: "delegate.review".into(),
-        });
-        let accepted = await_delegate_review(
-            &self.delegate_rx,
-            self.permission_timeout,
-            Some(&self.interrupted),
-        );
-        resolve_delegate_review(
-            &self.session_id,
-            &run_id,
-            accepted,
-            deps.sink.as_ref(),
-            deps.wal.as_ref(),
-        );
-        self.state = state::resolve_review(self.state).unwrap_or(SessionState::Running);
-        let _ = masked;
-        if accepted {
-            ToolOutcome::Ok {
-                summary: format!("[委派完成] {}", final_rep.summary),
-                truncated: false,
-                exit_code: Some(exit_code),
-                duration_ms: 0,
-            }
-        } else {
-            ToolOutcome::Blocked {
-                code: 8002,
-                summary: "用户拒绝委派结果".into(),
-            }
-        }
-    }
-
     /// 单个工具调用全流程：门控 →（审批 → 记忆）→ 执行
     fn run_tool(
         &mut self,
@@ -1745,16 +1463,12 @@ impl SessionRunner {
         masked: &str,
         risk: &str,
     ) -> ToolOutcome {
-        // 委派编码（D11 §3 #11-13）：专用路径——delegating 态 + 宿主确认 + 事件流 + 审查
-        if call.name == "coding.delegate" || call.name == "coding_delegate" {
-            return self.run_delegate(deps, call, masked, risk);
-        }
         // 子 Agent 运行中调整（D16 决策⑧）：经 hub 定向下发补充指令/取消
-        // ——适用探查/专家/委派全部在跑 run（bbrt-tools 门面仅提供可发现性）
+        // ——适用探查/专家/终端全部在跑 run（bbrt-tools 门面仅提供可发现性）
         if call.name == "subagent.adjust" || call.name == "subagent.cancel" {
             return self.run_subagent_adjust(deps, call);
         }
-        // 等待子 Agent/委派结果（B 批 2026-11-18）：异步发起后主动等待/取回
+        // 等待子任务结果（B 批 2026-11-18）：异步发起后主动等待/取回
         if call.name == "task.wait" || call.name == "subagent.wait" {
             return self.run_subagent_wait(deps, call);
         }
@@ -2058,11 +1772,6 @@ impl SessionRunner {
         self.permission_tx.clone()
     }
 
-    /// 委派指令通道（宿主 launch/input/cancel/review 注入）
-    pub fn delegate_sender(&self) -> Sender<DelegateHostMsg> {
-        self.delegate_tx.clone()
-    }
-
     /// 澄清回执通道（宿主 clarify.response 注入；D20）
     pub fn clarify_sender(&self) -> Sender<ClarifyAnswer> {
         self.clarify_tx.clone()
@@ -2131,364 +1840,6 @@ pub(crate) fn risk_of(tool: &str) -> &'static str {
         "write_file" | "edit_file" | "git_status" | "git_diff" => "medium",
         _ => "high",
     }
-}
-
-/// 从 coding.delegate 的 args 构造简报（workspace 归一会话工作区）
-fn parse_brief(call: &ToolInvocation, workspace: &str) -> bbrt_protocol::TaskBrief {
-    let v: serde_json::Value =
-        serde_json::from_str(&call.args_json).unwrap_or(serde_json::json!({}));
-    let s = |k: &str| {
-        v.get(k)
-            .and_then(|x| x.as_str())
-            .unwrap_or_default()
-            .to_string()
-    };
-    let vecs = |k: &str| {
-        v.get(k)
-            .and_then(|x| x.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|i| i.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    bbrt_protocol::TaskBrief {
-        task: s("task"),
-        workspace: workspace.to_string(),
-        constraints: vecs("constraints"),
-        context: vec![],
-        acceptance: vecs("acceptance"),
-        forbidden: vecs("forbidden"),
-    }
-}
-
-/// 委派事件流泵（同步/后台两路径共用，D16 §5）：归一化事件外发 + WAL；
-/// Input 回显、Cancel/interrupt 优雅取消。2026-11-18 重构（真机 claude 委派
-/// 38 分钟零反馈事故）：
-/// - **超时轮询**：next_wait(DELEGATE_POLL_TICK) 取代阻塞 next()——子进程
-///   静默期不再卡死，cancel/补充指令秒级送达（此前只能等子进程吐下一行）；
-/// - **空闲心跳**：静默超过 DELEGATE_IDLE_HINT 发提示行（只补可见性，
-///   D16 决策④无时长上限不动）；
-/// - **参数全链路**：ToolUse 的 args 脱敏后随 DelegateEvt 上行（委派卡
-///   日志行见「后端在干什么」）+ subagent.trace 落 WAL/侧栏 run 流
-///   （run.history 回放同构投影；delegate.tool_use/tool_result 行退役
-///   ——全仓无消费者，过程明细统一走 subagent.trace 与 probe 一致）。
-/// 返回是否发生过取消请求（后台路径 interrupted=None——会话暂停不终止
-/// 后台委派，仅用户 cancel）。
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn pump_delegate_stream(
-    session_id: &str,
-    run_id: &str,
-    backend: &str,
-    stream: &mut dyn crate::delegation::DelegateStream,
-    rx: &Receiver<DelegateHostMsg>,
-    interrupted: Option<&AtomicBool>,
-    sink: &dyn SessionSink,
-    wal: &dyn EventLog,
-) -> bool {
-    pump_delegate_stream_timed(
-        session_id,
-        run_id,
-        backend,
-        stream,
-        rx,
-        interrupted,
-        sink,
-        wal,
-        DELEGATE_POLL_TICK,
-        DELEGATE_IDLE_HINT,
-    )
-}
-
-/// 参数化节拍版（生产包装用常量；测试注入毫秒级验证心跳/静默期取消）
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn pump_delegate_stream_timed(
-    session_id: &str,
-    run_id: &str,
-    backend: &str,
-    stream: &mut dyn crate::delegation::DelegateStream,
-    rx: &Receiver<DelegateHostMsg>,
-    interrupted: Option<&AtomicBool>,
-    sink: &dyn SessionSink,
-    wal: &dyn EventLog,
-    tick: Duration,
-    idle_hint: Duration,
-) -> bool {
-    let mut cancelled = false;
-    let mut last_event = std::time::Instant::now();
-    let mut last_hint = std::time::Instant::now();
-    // 工具发起时刻（call_id→t0；ToolResult 配对计算 duration_ms 进 trace）
-    let mut tool_started: std::collections::HashMap<String, std::time::Instant> =
-        std::collections::HashMap::new();
-    loop {
-        cancelled |= pump_host_msgs(session_id, run_id, stream, rx, interrupted, wal);
-        let evt = match stream.next_wait(tick) {
-            crate::delegation::WaitEvt::Ready(evt) => evt,
-            crate::delegation::WaitEvt::Idle => {
-                // 回旋：静默期宿主指令（cancel/补充指令）也要能送达
-                cancelled |= pump_host_msgs(session_id, run_id, stream, rx, interrupted, wal);
-                let idle_for = last_event.elapsed();
-                if idle_for >= idle_hint && last_hint.elapsed() >= idle_hint {
-                    last_hint = std::time::Instant::now();
-                    let text = format!(
-                        "⏱ {backend} 已 {} 秒无输出（进程仍在运行，可取消）",
-                        idle_for.as_secs()
-                    );
-                    sink.emit(SessionEvent::DelegateEvt {
-                        session_id: session_id.to_string(),
-                        delegate_task_id: run_id.to_string(),
-                        kind: "warning".into(),
-                        payload: format!("{{\"text\":\"{}\"}}", escape_json(&text)),
-                    });
-                }
-                continue;
-            }
-            crate::delegation::WaitEvt::Ended => break,
-        };
-        last_event = std::time::Instant::now();
-        let (kind, payload) = match evt {
-            DelegateEvt::Meta { text, .. } => ("meta", text),
-            DelegateEvt::Delta { channel, text } => {
-                // 侧栏 run 流：文本叙述（reasoning 通道同 probe 口径不外发）
-                if matches!(channel, crate::delegation::DelegateChannel::Text) && !text.is_empty() {
-                    crate::subagent::trace_out(
-                        sink,
-                        wal,
-                        session_id,
-                        run_id,
-                        bbrt_protocol::SubagentTraceItem::Text {
-                            text: crate::subagent::clamp_summary(&text),
-                        },
-                    );
-                }
-                (
-                    "delta",
-                    match channel {
-                        crate::delegation::DelegateChannel::Text => format!(
-                            "{{\"channel\":\"text\",\"text\":\"{}\"}}",
-                            escape_json(&text)
-                        ),
-                        crate::delegation::DelegateChannel::Reasoning => format!(
-                            "{{\"channel\":\"reasoning\",\"text\":\"{}\"}}",
-                            escape_json(&text)
-                        ),
-                    },
-                )
-            }
-            DelegateEvt::ToolUse {
-                call_id,
-                tool,
-                args,
-                risk,
-            } => {
-                let (masked, _) = bbrt_sec::masking::mask_and_digest(&args.to_string());
-                let risk_level = match risk {
-                    "low" => bbrt_protocol::RiskLevel::Low,
-                    "medium" => bbrt_protocol::RiskLevel::Medium,
-                    _ => bbrt_protocol::RiskLevel::High,
-                };
-                tool_started.insert(call_id.clone(), std::time::Instant::now());
-                crate::subagent::trace_out(
-                    sink,
-                    wal,
-                    session_id,
-                    run_id,
-                    bbrt_protocol::SubagentTraceItem::ToolCall {
-                        call_id: call_id.clone(),
-                        tool: tool.clone(),
-                        args_masked: masked.clone(),
-                        risk: risk_level,
-                    },
-                );
-                (
-                    "tool_use",
-                    format!(
-                        "{{\"call_id\":\"{}\",\"tool\":\"{}\",\"args_masked\":\"{}\",\"risk\":\"{risk}\"}}",
-                        escape_json(&call_id),
-                        escape_json(&tool),
-                        escape_json(&masked)
-                    ),
-                )
-            }
-            DelegateEvt::ToolResult { call_id, ok, summary } => {
-                let duration_ms = tool_started
-                    .remove(&call_id)
-                    .map(|t| t.elapsed().as_millis() as u64)
-                    .unwrap_or(0);
-                crate::subagent::trace_out(
-                    sink,
-                    wal,
-                    session_id,
-                    run_id,
-                    bbrt_protocol::SubagentTraceItem::ToolResult {
-                        call_id: call_id.clone(),
-                        ok,
-                        summary: crate::subagent::truncate_chars(&summary, 400),
-                        duration_ms,
-                    },
-                );
-                (
-                    "tool_result",
-                    format!(
-                        "{{\"call_id\":\"{}\",\"ok\":{ok},\"summary\":\"{}\",\"duration_ms\":{duration_ms}}}",
-                        escape_json(&call_id),
-                        escape_json(&summary)
-                    ),
-                )
-            }
-            DelegateEvt::Warning { text } => (
-                "warning",
-                // JSON 包装（payload.text）使前端日志行可渲染（此前裸文本不显示）
-                format!("{{\"text\":\"{}\"}}", escape_json(&text)),
-            ),
-            DelegateEvt::Exit { .. } => ("exit", String::new()),
-        };
-        sink.emit(SessionEvent::DelegateEvt {
-            session_id: session_id.to_string(),
-            delegate_task_id: run_id.to_string(),
-            kind: kind.to_string(),
-            payload,
-        });
-    }
-    cancelled
-}
-
-/// 泵内宿主指令 drain（interrupt 旗标 + Cancel 通道消息；Input 已随
-/// 「运行中补充指令」退役——进程内 probe/expert 的 Input 走 subagent.adjust 不经此泵）。
-/// 超时轮询的每个回旋点调用——静默期 cancel 也能及时送达。
-fn pump_host_msgs(
-    session_id: &str,
-    run_id: &str,
-    stream: &mut dyn crate::delegation::DelegateStream,
-    rx: &Receiver<DelegateHostMsg>,
-    interrupted: Option<&AtomicBool>,
-    wal: &dyn EventLog,
-) -> bool {
-    let mut cancelled = false;
-    if interrupted.is_some_and(|f| f.load(Ordering::Relaxed)) {
-        wal.append_run(
-            session_id,
-            run_id,
-            "delegate.cancel",
-            &format!("{{\"run_id\":\"{run_id}\",\"graceful\":true,\"source\":\"interrupt\"}}"),
-        );
-        cancelled = true;
-        stream.cancel(true);
-    }
-    while let Ok(msg) = rx.try_recv() {
-        match msg {
-            DelegateHostMsg::Cancel { graceful } => {
-                wal.append_run(
-                    session_id,
-                    run_id,
-                    "delegate.cancel",
-                    &format!("{{\"run_id\":\"{run_id}\",\"graceful\":{graceful}}}"),
-                );
-                cancelled = true;
-                stream.cancel(graceful);
-            }
-            _ => {}
-        }
-    }
-    cancelled
-}
-
-/// 委派收尾（两路径共用）：finalize → delegate.end（P0-2③ 全字段上行：
-/// changed_files/child_session_ref——diff 审查卡数据源与
-/// --resume 续接句柄）→ WAL + run 终态。
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn finish_delegate_stream(
-    session_id: &str,
-    run_id: &str,
-    cancelled: bool,
-    started: std::time::Instant,
-    stream: &mut dyn crate::delegation::DelegateStream,
-    sink: &dyn SessionSink,
-    wal: &dyn EventLog,
-) -> crate::delegation::DelegateFinal {
-    let final_rep = stream.finalize();
-    let exit_code = final_rep.exit_code.unwrap_or(-1);
-    sink.emit(SessionEvent::DelegateEnd {
-        session_id: session_id.to_string(),
-        delegate_task_id: run_id.to_string(),
-        exit_code,
-        summary: final_rep.summary.clone(),
-        changed_files: final_rep.changed_files.clone(),
-        child_session_ref: final_rep.session_ref.clone(),
-    });
-    wal.append_run(
-        session_id,
-        run_id,
-        "delegate.end",
-        &format!("{{\"run_id\":\"{run_id}\",\"exit\":{exit_code}}}"),
-    );
-    // run 终态（D16 §3.1：cancelled 区分于 failed；执行完成即落终态，
-    // 审查 reject 不改写 run 状态——决策在 delegate.review WAL 里）
-    wal.run_end(
-        run_id,
-        &RunEnd {
-            status: if cancelled {
-                "cancelled"
-            } else if exit_code != 0 {
-                "failed"
-            } else {
-                "done"
-            },
-            eta_actual_ms: started.elapsed().as_millis() as i64,
-            summary: &crate::subagent::truncate_chars(&final_rep.summary, 400),
-            child_session_ref: final_rep.session_ref.as_deref().unwrap_or(""),
-        },
-    );
-    final_rep
-}
-
-/// 审查等待（两路径共用；120s 窗口超时/取消/interrupt=拒绝——09 §7.4 口径）
-pub(crate) fn await_delegate_review(
-    rx: &Receiver<DelegateHostMsg>,
-    timeout: Duration,
-    interrupted: Option<&AtomicBool>,
-) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if interrupted.is_some_and(|f| f.load(Ordering::Relaxed)) {
-            return false;
-        }
-        let remain = deadline.saturating_duration_since(std::time::Instant::now());
-        if remain.is_zero() {
-            return false;
-        }
-        match rx.recv_timeout(remain) {
-            Ok(DelegateHostMsg::Review { accept }) => return accept,
-            Ok(DelegateHostMsg::Cancel { .. }) => return false,
-            Ok(_) => continue,
-            Err(_) => return false,
-        }
-    }
-}
-
-/// 审查结论落账（两路径共用）：WAL + 事件镜像
-pub(crate) fn resolve_delegate_review(
-    session_id: &str,
-    run_id: &str,
-    accepted: bool,
-    sink: &dyn SessionSink,
-    wal: &dyn EventLog,
-) {
-    wal.append_run(
-        session_id,
-        run_id,
-        "delegate.review",
-        &format!(
-            "{{\"run_id\":\"{run_id}\",\"decision\":\"{}\"}}",
-            if accepted { "accept" } else { "reject" }
-        ),
-    );
-    sink.emit(SessionEvent::DelegateReviewResolved {
-        session_id: session_id.to_string(),
-        delegate_task_id: run_id.to_string(),
-        decision: if accepted { "accept" } else { "reject" }.into(),
-    });
 }
 
 /// WAL/事件内嵌 JSON 字符串转义（避免手拼破坏 JSON 结构）
@@ -2712,214 +2063,5 @@ fn emit_memory_saved(deps: &LoopDeps, session_id: &str, outcome: &bbrt_memory::S
             name: ev.name.clone(),
             reason: ev.reason.clone(),
         });
-    }
-}
-
-#[cfg(test)]
-mod pump_tests {
-    //! 委派泵超时轮询重构（2026-11-18）的单元覆盖：空闲心跳、静默期取消
-    //! 及时性、ToolUse args 脱敏上行 + subagent.trace WAL 行。
-    use super::*;
-    use crate::delegation::{DelegateStream, WaitEvt};
-    use std::sync::Mutex;
-
-    /// 静默脚本流：next_wait 先 Idle N 次再按脚本吐事件，最后 Ended
-    struct IdleScriptStream {
-        idle_rounds: std::sync::atomic::AtomicU32,
-        events: Mutex<std::collections::VecDeque<DelegateEvt>>,
-        cancelled: Mutex<Option<bool>>,
-    }
-    impl DelegateStream for IdleScriptStream {
-        fn next(&mut self) -> Option<DelegateEvt> {
-            self.events.lock().unwrap().pop_front()
-        }
-        fn next_wait(&mut self, timeout: Duration) -> WaitEvt {
-            let n = self.idle_rounds.load(Ordering::Relaxed);
-            if n > 0 {
-                self.idle_rounds.store(n - 1, Ordering::Relaxed);
-                // 真实等一拍（模拟读线程 recv_timeout 超时；封顶防慢测试）
-                std::thread::sleep(timeout.min(Duration::from_millis(50)));
-                return WaitEvt::Idle;
-            }
-            self.events.lock().unwrap().pop_front().map(WaitEvt::Ready).unwrap_or(WaitEvt::Ended)
-        }
-        fn cancel(&mut self, graceful: bool) {
-            *self.cancelled.lock().unwrap() = Some(graceful);
-        }
-        fn finalize(&mut self) -> crate::delegation::DelegateFinal {
-            crate::delegation::DelegateFinal {
-                summary: String::new(),
-                changed_files: vec![],
-                session_ref: None,
-                exit_code: Some(0),
-            }
-        }
-    }
-
-    #[derive(Default)]
-    struct CollectSink {
-        evts: Mutex<Vec<SessionEvent>>,
-    }
-    impl SessionSink for CollectSink {
-        fn emit(&self, evt: SessionEvent) {
-            self.evts.lock().unwrap().push(evt);
-        }
-    }
-
-    #[derive(Default)]
-    struct CollectLog {
-        rows: Mutex<Vec<(String, String)>>,
-    }
-    impl EventLog for CollectLog {
-        fn append(&self, _session_id: &str, _type_: &str, _payload: &str) {}
-        fn append_run(&self, _session_id: &str, run_id: &str, type_: &str, payload: &str) {
-            self.rows.lock().unwrap().push((format!("{type_}:{run_id}"), payload.to_string()));
-        }
-    }
-
-    fn delegate_evts(sink: &CollectSink) -> Vec<(String, String)> {
-        sink.evts
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|e| match e {
-                SessionEvent::DelegateEvt { kind, payload, .. } => {
-                    Some((kind.clone(), payload.clone()))
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// 静默期心跳：无事件超过 idle_hint 发 warning 提示行（含后端名），
-    /// 且按 idle_hint 节流重复
-    #[test]
-    fn pump_emits_idle_heartbeat() {
-        let sink = std::sync::Arc::new(CollectSink::default());
-        let wal = std::sync::Arc::new(CollectLog::default());
-        let stream = IdleScriptStream {
-            idle_rounds: std::sync::atomic::AtomicU32::new(40), // 40×20ms≈800ms 静默
-            events: Mutex::new(std::collections::VecDeque::new()),
-            cancelled: Mutex::new(None),
-        };
-        let (_tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
-        let cancelled = pump_delegate_stream_timed(
-            "s-1",
-            "r-1",
-            "claude",
-            &mut { stream },
-            &rx,
-            None,
-            sink.as_ref(),
-            wal.as_ref(),
-            Duration::from_millis(20),
-            Duration::from_millis(80),
-        );
-        assert!(!cancelled);
-        let beats: Vec<_> = delegate_evts(&sink)
-            .into_iter()
-            .filter(|(k, p)| k == "warning" && p.contains("claude") && p.contains("无输出"))
-            .collect();
-        assert!(!beats.is_empty(), "静默期应有心跳提示：{beats:?}");
-        assert!(beats.len() <= 12, "心跳应按阈值节流：{}", beats.len());
-    }
-
-    /// 静默期取消：cancel 消息在无任何子进程事件的情况下送达（Idle 回旋 drain）
-    #[test]
-    fn pump_delivers_cancel_while_silent() {
-        let sink = std::sync::Arc::new(CollectSink::default());
-        let wal = std::sync::Arc::new(CollectLog::default());
-        let (tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
-        let stream = IdleScriptStream {
-            idle_rounds: std::sync::atomic::AtomicU32::new(50),
-            events: Mutex::new(std::collections::VecDeque::new()),
-            cancelled: Mutex::new(None),
-        };
-        let handle = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(60));
-            let _ = tx.send(DelegateHostMsg::Cancel { graceful: false });
-        });
-        let cancelled = pump_delegate_stream_timed(
-            "s-1",
-            "r-1",
-            "claude",
-            &mut { stream },
-            &rx,
-            None,
-            sink.as_ref(),
-            wal.as_ref(),
-            Duration::from_millis(20),
-            Duration::from_secs(3600), // 心跳不干扰本用例
-        );
-        handle.join().unwrap();
-        assert!(cancelled, "静默期 cancel 应送达");
-        assert!(
-            wal.rows.lock().unwrap().iter().any(|(t, _)| t == "delegate.cancel:r-1"),
-            "cancel 应落 WAL"
-        );
-    }
-
-    /// ToolUse args 全链路：payload 带 args_masked/risk 上行 + WAL 落 subagent.trace
-    /// （delegate.tool_use 行退役）+ SubagentTrace host 事件（侧栏 run 流数据源）
-    #[test]
-    fn pump_tool_args_reach_host_and_wal() {
-        let sink = std::sync::Arc::new(CollectSink::default());
-        let wal = std::sync::Arc::new(CollectLog::default());
-        let events = vec![
-            DelegateEvt::ToolUse {
-                call_id: "t1".into(),
-                tool: "Bash".into(),
-                args: serde_json::json!({"command": "cargo test"}),
-                risk: "medium",
-            },
-            DelegateEvt::ToolResult {
-                call_id: "t1".into(),
-                ok: true,
-                summary: "51 passed".into(),
-            },
-        ];
-        let stream = IdleScriptStream {
-            idle_rounds: std::sync::atomic::AtomicU32::new(0),
-            events: Mutex::new(events.into_iter().collect()),
-            cancelled: Mutex::new(None),
-        };
-        let (_tx, rx) = std::sync::mpsc::channel::<DelegateHostMsg>();
-        let _ = pump_delegate_stream_timed(
-            "s-1",
-            "r-1",
-            "claude",
-            &mut { stream },
-            &rx,
-            None,
-            sink.as_ref(),
-            wal.as_ref(),
-            Duration::from_millis(20),
-            Duration::from_secs(3600),
-        );
-        // 上行 payload：args_masked + risk（注意 mask 后 command 内容可能变化，只断言键存在）
-        let tool_use = delegate_evts(&sink)
-            .iter()
-            .find(|(k, _)| k == "tool_use")
-            .map(|(_, p)| p.clone())
-            .expect("应有 tool_use 上行");
-        assert!(tool_use.contains("args_masked"), "{tool_use}");
-        assert!(tool_use.contains("cargo test"), "args 未脱敏丢失：{tool_use}");
-        assert!(tool_use.contains("\"risk\":\"medium\""), "{tool_use}");
-        // WAL：subagent.trace 行（tool_call/tool_result），无 delegate.tool_use 残留
-        let rows = wal.rows.lock().unwrap().clone();
-        assert!(
-            rows.iter().any(|(t, p)| t == "subagent.trace:r-1" && p.contains("tool_call")),
-            "{rows:?}"
-        );
-        assert!(
-            rows.iter().any(|(t, p)| t == "subagent.trace:r-1" && p.contains("tool_result")),
-            "{rows:?}"
-        );
-        assert!(!rows.iter().any(|(t, _)| t.starts_with("delegate.tool_")), "{rows:?}");
-        // host SubagentTrace 事件（侧栏 run 流）
-        assert!(
-            sink.evts.lock().unwrap().iter().any(|e| matches!(e, SessionEvent::SubagentTrace { .. })),
-            "应有 SubagentTrace host 事件"
-        );
     }
 }

@@ -234,7 +234,6 @@ pub fn run_team(
             status: if failed.is_empty() { "done" } else { "failed" },
             eta_actual_ms: started.elapsed().as_millis() as i64,
             summary: &truncate_chars(&team_summary(&nodes), 400),
-            child_session_ref: "",
         },
     );
 

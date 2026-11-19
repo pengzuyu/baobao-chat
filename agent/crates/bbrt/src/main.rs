@@ -13,7 +13,6 @@
 //! - BBC_RT_TOKEN      网关令牌（v0.1 静态；OBO 通道阶段二接 hostapi::OboCache）
 
 mod bridge;
-mod delegate_bridge;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -209,8 +208,6 @@ fn run() -> Result<(), String> {
     let deps = LoopDeps {
         model,
         tools,
-        delegator: Some(delegate_bridge::bin_delegate_launcher()
-            as Arc<dyn bbrt_session::delegation::DelegateLauncher>),
         memory: Some(memory.clone()),
         wal: store.clone(),
         sink: sink.clone(),
@@ -780,49 +777,14 @@ fn dispatch(
             );
             None
         }
-        HostToRuntime::DelegateLaunch {
-            session_id,
-            delegate_task_id,
-            backend,
-            task_brief,
-            ..
-        } => {
-            // 简报阶段确认：run 尚未后台化（hub 未注册），按 session 定向
-            mgr.respond_delegate(
-                &delegate_task_id,
-                &session_id,
-                bbrt_session::loop_runner::DelegateHostMsg::Launch {
-                    backend,
-                    brief: task_brief, // None=沿用模型原稿（D16：确认不改稿是主路径）
-                },
-            )
-            .ok();
-            None // 委派事件流（delegate.event/end）即回显
-        }
-        HostToRuntime::DelegateCancel {
-            delegate_task_id,
+        // 取消后台 run（run.cancel：terminal 后台命令/探查/专家在跑任务统一入口）
+        HostToRuntime::RunCancel {
+            run_id,
             graceful,
-        } => {
-            mgr.respond_delegate(
-                &delegate_task_id,
-                "",
-                bbrt_session::loop_runner::DelegateHostMsg::Cancel { graceful },
-            )
-            .ok();
-            None
-        }
-        HostToRuntime::DelegateReview {
-            delegate_task_id,
-            decision,
             ..
         } => {
-            let accept = matches!(decision, bbrt_protocol::ReviewDecision::Accept);
-            mgr.respond_delegate(
-                &delegate_task_id,
-                "",
-                bbrt_session::loop_runner::DelegateHostMsg::Review { accept },
-            )
-            .ok();
+            mgr.respond_run_cancel(&run_id, bbrt_session::loop_runner::BgHostMsg::Cancel { graceful })
+                .ok();
             None
         }
         // run 清单（D16 §3.1：agent_run 投影；run 面板/审计检索）

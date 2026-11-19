@@ -162,7 +162,6 @@ pub(crate) fn register_all(registry: &mut ToolRegistry) {
     registry.register(memory::memory_save_def());
     registry.register(memory::memory_forget_def());
     registry.register(memory::memory_read_def());
-    registry.register(memory::coding_delegate_def());
     registry.register(memory::subagent_adjust_def());
     registry.register(memory::subagent_cancel_def());
     // 统一后台任务体系：等待任意后台任务结果（loop_runner 拦截，仅注册可发现性）

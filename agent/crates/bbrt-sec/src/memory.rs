@@ -29,13 +29,12 @@ pub enum GrantScope {
 
 /// 永久记忆硬名单（§4.2 限制条款；**D32 修订**：触人/出域动作最多 Session 级记忆，
 /// file_upload/app_write 补齐 CorpWrite 全集；网络出站 http_fetch 可记忆故不在此列）
-const NEVER_PERMANENT_TOOLS: [&str; 6] = [
+const NEVER_PERMANENT_TOOLS: [&str; 5] = [
     "git_push",
     "doc_write",
     "im_send",
     "file_upload",
     "app_write",
-    "coding.delegate",
 ];
 
 /// 一条授权记忆（§5.1 agent_tool_grant 表的内存形态）

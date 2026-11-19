@@ -84,7 +84,6 @@ fn seed_session(store: &Store, dir: &Path, session_id: &str) {
             title: session_id.into(),
             form: "workbench".into(),
             mode: "ask".into(),
-            backend: None,
             model_policy: "strong".into(),
             model_override: None,
             status: "idle".into(),
@@ -216,7 +215,6 @@ fn wal_replay_recovers_user_turn_after_fix() {
     let deps = LoopDeps {
         model: Arc::new(FakeModel(AtomicUsize::new(0))),
         tools: Arc::new(AllowTools),
-        delegator: None,
         memory: None,
         wal: Arc::new(log.clone()),
         sink: Arc::new(CollectSink(Mutex::new(vec![]))),
@@ -276,7 +274,6 @@ fn manager_workspace_of() {
     let deps = LoopDeps {
         model: Arc::new(FakeModel(AtomicUsize::new(0))),
         tools: Arc::new(AllowTools),
-        delegator: None,
         memory: None,
         wal: Arc::new(bbrt_session::NoopEventLog),
         sink,

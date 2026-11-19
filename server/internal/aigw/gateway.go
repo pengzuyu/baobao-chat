@@ -244,7 +244,7 @@ type MeterDim struct {
 	User     int64
 	Svc      string // svc:kb；用户调用空
 	Session  string // X-BBC-Agent-Session
-	Scene    string // chat/embed/rerank/delegate/expert
+	Scene    string // chat/embed/rerank/expert
 	Tier     string
 	Provider int64
 }

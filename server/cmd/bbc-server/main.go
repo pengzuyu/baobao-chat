@@ -778,7 +778,7 @@ func main() {
 		}
 		return out
 	}
-	// Agent 计量聚合（PAD-14）：aigw Meter Snapshot 按（tenant,user）聚合 chat/delegate/expert 场景
+	// Agent 计量聚合（PAD-14）：aigw Meter Snapshot 按（tenant,user）聚合 chat/expert 场景
 	adminOpts.AgentUsage = func(tenantID int64) []adminservice.AgentUsageRow {
 		type acc struct {
 			req, tok, last int64

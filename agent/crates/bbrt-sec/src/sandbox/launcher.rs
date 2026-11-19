@@ -3,7 +3,8 @@
 //!
 //! 执行语义：
 //! - 直接 spawn 目标程序（无 OS 包装）；进程组隔离（pre_exec setpgid(0,0)），
-//!   `BBC_SANDBOX=1` 环境标记保留（bbrt-delegate procmgr 孤儿扫描依赖该标记，名字不改）
+//!   `BBC_SANDBOX=1` 环境标记保留（历史遗留名：曾供委派 procmgr 孤儿扫描，
+//!   现为 DetachedCommand 后台命令与外部扫描的兼容口径，不改名）
 //! - **生命周期（L5）**：新进程组 → 墙钟超时（默认 300s，可配 1–600s）
 //!   → SIGINT → 3s 宽限 → SIGKILL 杀**整组**（kill(-pgid)）；主进程退出后防御性补杀
 //!   组内残留（nohup 后台进程场景，B12 行 8）。输出经临时文件捕获（不受残留进程持管道

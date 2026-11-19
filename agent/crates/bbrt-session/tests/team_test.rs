@@ -485,7 +485,6 @@ fn loop_expert_consult_wiring() {
     let deps = LoopDeps {
         model: model.clone(),
         tools: tools.clone(),
-        delegator: None,
         memory: None,
         wal: Arc::new(log.clone()),
         sink: sink.clone(),
@@ -594,7 +593,6 @@ fn loop_expert_invalid_graph_fallback() {
     let deps = LoopDeps {
         model: Arc::new(Plain),
         tools: Arc::new(AllowTools),
-        delegator: None,
         memory: None,
         wal: Arc::new(log.clone()),
         sink,

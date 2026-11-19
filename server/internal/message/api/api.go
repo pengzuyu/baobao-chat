@@ -812,7 +812,7 @@ type NotificationEvent struct {
 // 上报以用户 OBO token 鉴权，UserID 恒取 token sub——body 不接受越权指定接收人）
 type AgentTaskReportPayload struct {
 	RunID             string `json:"run_id"`                        // r-{seq}（幂等键）
-	Kind              string `json:"kind"`                          // probe | expert | team | delegate
+	Kind              string `json:"kind"`                          // probe | expert | team
 	Status            string `json:"status"`                        // done | failed | cancelled
 	SessionID         string `json:"session_id"`                    // 父会话
 	ParentRunID       string `json:"parent_run_id,omitempty"`       // 父 run（链路展示用）

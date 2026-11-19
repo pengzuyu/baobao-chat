@@ -286,7 +286,7 @@ func (s *Service) BroadcastNotice(ctx context.Context, _ int64, title, digest st
 
 // agentTaskKinds / agentTaskStatuses D16 agent_run 终态枚举（上报校验）
 var (
-	agentTaskKinds   = map[string]bool{"probe": true, "expert": true, "team": true, "delegate": true}
+	agentTaskKinds   = map[string]bool{"probe": true, "expert": true, "team": true}
 	agentTaskStatus  = map[string]bool{"done": true, "failed": true, "cancelled": true}
 	agentTaskOutcome = map[string]string{"done": "已完成", "failed": "失败", "cancelled": "已取消"}
 )
@@ -304,7 +304,7 @@ func (s *Service) ReportAgentTask(ctx context.Context, userID int64, p messageap
 		return errx.New(errx.CodeBadRequest, "run_id 必填")
 	}
 	if !agentTaskKinds[p.Kind] {
-		return errx.New(errx.CodeBadRequest, "kind 应为 probe/expert/team/delegate")
+		return errx.New(errx.CodeBadRequest, "kind 应为 probe/expert/team")
 	}
 	if !agentTaskStatus[p.Status] {
 		return errx.New(errx.CodeBadRequest, "status 应为 done/failed/cancelled")

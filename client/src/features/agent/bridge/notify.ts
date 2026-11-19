@@ -89,7 +89,7 @@ export async function notifyAgentDone(title: string, body: string): Promise<void
 /** 上报体（snake，对齐服务端 AgentTaskReportPayload / D16 agent_run 终态快照） */
 export interface AgentTaskReport {
   run_id: string;
-  kind: 'probe' | 'expert' | 'team' | 'delegate';
+  kind: 'probe' | 'expert' | 'team';
   status: 'done' | 'failed' | 'cancelled';
   session_id: string;
   parent_run_id?: string;

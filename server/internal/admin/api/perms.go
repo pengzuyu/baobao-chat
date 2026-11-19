@@ -56,7 +56,6 @@ var permDictionary = []PermGroup{
 		{"agent:tool:run_command", "agent", "执行命令工具"},
 		{"agent:mode:full_auto", "agent", "全自动模式"},
 		{"agent:app:install", "agent", "安装生态应用"},
-		{"agent:delegate:use", "agent", "使用本地委派（D17）"},
 	}},
 	{"mail", "邮件", []PermPoint{
 		{"mail:use", "mail", "使用邮箱（22 篇）"},

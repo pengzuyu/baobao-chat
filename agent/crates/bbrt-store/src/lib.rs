@@ -1,7 +1,7 @@
 //! bbrt-store（D11 §2.8）：Runtime 本地 SQLite 的唯一封装。
 //!
 //! 职责边界：
-//! - 全 Runtime 唯一的 SQLite 访问点，session/sec/tools/delegate 等一律经由本 crate 读写；
+//! - 全 Runtime 唯一的 SQLite 访问点，session/sec/tools 等一律经由本 crate 读写；
 //! - 打开即配置：WAL 模式、busy_timeout=5000ms、foreign_keys=ON（D11 §11 头注）；
 //! - 迁移版本化：PRAGMA user_version 前向滚移、只增不改（见 migrate.rs）；
 //! - 行结构体映射手写、SQL 全参数化（防注入），不引 ORM。
@@ -20,7 +20,7 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 pub use queries::{
-    BackendRow, ContextRow, DelegateTaskRow, EventRow, GrantRow, RunRow,
+    ContextRow, EventRow, GrantRow, RunRow,
     SessionListRow, SessionRow, ViolationRow, Workspace,
 };
 
@@ -121,7 +121,6 @@ pub(crate) mod testutil {
             title: "测试会话".to_string(),
             form: "workbench".to_string(),
             mode: "ask".to_string(),
-            backend: None,
             model_policy: "auto".to_string(),
             model_override: None,
             status: "idle".to_string(),

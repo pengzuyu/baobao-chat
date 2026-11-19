@@ -149,12 +149,6 @@ const (
 	CodeAuditChainBroken     Code = 8027 // 审计哈希链断裂
 	CodeKeychainDenied       Code = 8028 // 钥匙串访问被拒
 
-	CodeDelegateBackendMissing Code = 8030 // 委派后端未安装
-	CodeDelegateVersionDiff    Code = 8031 // 后端版本不符
-	CodeDelegateDisabled       Code = 8032 // 后端被策略禁用
-	CodeDelegateCrashed        Code = 8033 // 子进程异常退出
-	CodeDelegateTimeout        Code = 8034 // 委派超时
-	CodeDelegateWorkspaceBusy  Code = 8035 // 工作区被占用
 
 	CodeEcoMinRuntime      Code = 8040 // 生态包 minRuntime 不满足
 	CodeEcoPackageInvalid  Code = 8041 // 技能包结构非法

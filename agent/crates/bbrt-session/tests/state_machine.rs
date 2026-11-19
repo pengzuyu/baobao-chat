@@ -1,24 +1,22 @@
-//! 状态机迁移表测试（D11 §3）：20 条合法迁移全过 + 非法迁移抽样拒绝。
+//! 状态机迁移表测试（D11 §3）：合法迁移全过 + 非法迁移抽样拒绝
+//! （委派审查迁移 #11-15 已随外部委派域退役，现存 15 条）。
 //! 状态机为纯函数：超时/计数场景由调用方判定后驱动，测试中直接给定终态输入。
 
 use bbrt_session::state::{
-    accept_user_message, begin, begin_delegation, begin_fanout, clarify_resolved,
-    complete_delegation, complete_round, end, fail_delegation, fail_initialization,
-    fail_unrecoverable, initialized, join_subagents, pause, permission_exhausted,
-    permission_resolved, request_clarify, request_permission, request_review, resolve_review,
+    accept_user_message, begin, begin_fanout, clarify_resolved, complete_round, end,
+    fail_initialization, fail_unrecoverable, initialized, join_subagents, pause,
+    permission_exhausted, permission_resolved, request_clarify, request_permission,
     resume, retry_from_error,
 };
 use bbrt_session::{SessionState, TransitionError};
 
-const ALL: [SessionState; 11] = [
+const ALL: [SessionState; 9] = [
     SessionState::Starting,
     SessionState::Idle,
     SessionState::Running,
     SessionState::WaitingPermission,
     SessionState::WaitingClarify,
-    SessionState::WaitingReview,
     SessionState::SubagentFanout,
-    SessionState::Delegating,
     SessionState::Paused,
     SessionState::Error,
     SessionState::Ended,
@@ -132,46 +130,6 @@ fn row_10_subagent_fanout_to_running() {
 }
 
 #[test]
-fn row_11_running_to_delegating() {
-    ok(
-        begin_delegation(SessionState::Running),
-        SessionState::Delegating,
-    );
-}
-
-#[test]
-fn row_12_delegating_to_running() {
-    ok(
-        complete_delegation(SessionState::Delegating),
-        SessionState::Running,
-    );
-}
-
-#[test]
-fn row_13_delegating_to_error() {
-    ok(
-        fail_delegation(SessionState::Delegating),
-        SessionState::Error,
-    );
-}
-
-#[test]
-fn row_14_running_to_waiting_review() {
-    ok(
-        request_review(SessionState::Running),
-        SessionState::WaitingReview,
-    );
-}
-
-#[test]
-fn row_15_waiting_review_to_running() {
-    ok(
-        resolve_review(SessionState::WaitingReview),
-        SessionState::Running,
-    );
-}
-
-#[test]
 fn row_16_running_to_paused() {
     ok(pause(SessionState::Running), SessionState::Paused);
 }
@@ -241,10 +199,7 @@ fn illegal_input_paths() {
 fn illegal_permission_paths() {
     // 权限请求只从 running 进入
     illegal(request_permission(SessionState::Idle), SessionState::Idle);
-    illegal(
-        request_permission(SessionState::WaitingReview),
-        SessionState::WaitingReview,
-    );
+    illegal(request_permission(SessionState::Paused), SessionState::Paused);
     // 回填/升级只从 waiting_permission
     illegal(
         permission_resolved(SessionState::Running),
@@ -268,41 +223,7 @@ fn illegal_fanout_paths() {
         SessionState::SubagentFanout,
     );
     illegal(join_subagents(SessionState::Running), SessionState::Running);
-    illegal(
-        join_subagents(SessionState::Delegating),
-        SessionState::Delegating,
-    );
-}
-
-#[test]
-fn illegal_delegation_paths() {
-    illegal(begin_delegation(SessionState::Idle), SessionState::Idle);
-    illegal(
-        begin_delegation(SessionState::Delegating),
-        SessionState::Delegating,
-    );
-    illegal(
-        complete_delegation(SessionState::Running),
-        SessionState::Running,
-    );
-    illegal(
-        fail_delegation(SessionState::Running),
-        SessionState::Running,
-    );
-    // 注意：delegating 不允许直连 waiting_review（按权威迁移表 #14，须先回 running）
-    illegal(
-        request_review(SessionState::Delegating),
-        SessionState::Delegating,
-    );
-}
-
-#[test]
-fn illegal_review_paths() {
-    illegal(resolve_review(SessionState::Running), SessionState::Running);
-    illegal(
-        resolve_review(SessionState::Delegating),
-        SessionState::Delegating,
-    );
+    illegal(join_subagents(SessionState::Paused), SessionState::Paused);
 }
 
 #[test]
@@ -366,20 +287,6 @@ fn lifecycle_permission_timeout_escalation() {
 }
 
 #[test]
-fn lifecycle_subagent_then_delegation_then_review() {
-    let s = begin();
-    let s = initialized(s).unwrap();
-    let s = accept_user_message(s).unwrap();
-    let s = begin_fanout(s).unwrap();
-    let s = join_subagents(s).unwrap(); // running
-    let s = begin_delegation(s).unwrap(); // delegating
-    let s = complete_delegation(s).unwrap(); // running（#12）
-    let s = request_review(s).unwrap(); // waiting_review（#14，running 出发）
-    let s = resolve_review(s).unwrap(); // running
-    assert_eq!(complete_round(s).unwrap(), SessionState::Idle);
-}
-
-#[test]
 fn lifecycle_error_retry_loop() {
     let s = begin();
     let s = initialized(s).unwrap();
@@ -391,21 +298,6 @@ fn lifecycle_error_retry_loop() {
     let s = resume(s).unwrap(); // → running
     assert_eq!(s, SessionState::Running);
 }
-
-#[test]
-fn lifecycle_delegation_failure() {
-    let s = begin();
-    let s = initialized(s).unwrap();
-    let s = accept_user_message(s).unwrap();
-    let s = begin_delegation(s).unwrap();
-    let s = fail_delegation(s).unwrap(); // 8033/8034 → error
-    assert_eq!(s, SessionState::Error);
-    assert_eq!(end(s), SessionState::Ended);
-}
-
-// ---------------------------------------------------------------------------
-// 错误类型契约
-// ---------------------------------------------------------------------------
 
 #[test]
 fn transition_error_impl_std_error() {
@@ -428,9 +320,8 @@ fn session_state_enum_is_shared_with_protocol() {
     for st in ALL {
         assert_eq!(SessionState::parse(&st.to_string()), Some(st));
     }
-    assert_eq!(
-        SessionState::parse("delegating"),
-        Some(SessionState::Delegating)
-    );
+    // 委派审查两态已随委派域退役：旧线路名不得再解析出状态
+    assert_eq!(SessionState::parse("delegating"), None);
+    assert_eq!(SessionState::parse("waiting_review"), None);
     assert_eq!(SessionState::parse("active"), None); // 08 篇旧枚举不得出现
 }

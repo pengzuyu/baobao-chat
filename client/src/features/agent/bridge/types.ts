@@ -16,9 +16,7 @@ export type SessionStatus =
   | 'running'
   | 'waiting_permission'
   | 'waiting_clarify'
-  | 'waiting_review'
   | 'subagent_fanout'
-  | 'delegating'
   | 'paused'
   | 'error'
   | 'ended';
@@ -39,7 +37,7 @@ export type HistoryItem =
 
 /**
  * 工具 args 归一（D33 §2 存量坑修复）：self 工具的 wire args 是 JSON **字符串**
- * （bridge.rs 包 Value::String 上行）、委派后端归一化事件是对象——统一 parse 成
+ * （bridge.rs 包 Value::String 上行）——统一 parse 成
  * 对象；解析失败/非对象回落 {}。normalizeEvent 与 historyToStreamItem 共用。
  */
 export function parseToolArgs(raw: unknown): Record<string, unknown> {
@@ -86,13 +84,12 @@ export interface RunInfo {
   rootSessionId: string;
   parentRunId: string;
   parentCallId: string;
-  kind: 'probe' | 'expert' | 'team' | 'delegate' | 'terminal';
+  kind: 'probe' | 'expert' | 'team' | 'terminal';
   defRef: string;
   status: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
   etaHintMs: number;
   etaActualMs: number;
   summary: string;
-  childSessionRef: string;
   createdAt: number;
   startedAt: number;
   endedAt?: number;
@@ -151,7 +148,7 @@ export type AgentEvent =
       args: Record<string, unknown>;
       risk: RiskLevel;
       parallel?: boolean;
-      source?: 'self' | 'backend';
+      source?: 'self';
     }
   | {
       type: 'toolResult';
@@ -225,23 +222,6 @@ export type AgentEvent =
         | { kind: 'tool_call'; callId: string; tool: string; argsMasked: string; risk: RiskLevel }
         | { kind: 'tool_result'; callId: string; ok: boolean; summary: string; durationMs: number };
     }
-  /**
-   * 委派（D16 类型 3：本机 CLI 后台运行——launch 后 turn 立即返回，
-   * delegate.end 异步到达驱动审查卡）。brief 阶段待确认（delegate.launch），
-   * 事件 kind：meta|output|tool_use|tool_result|warning
-   */
-  | { type: 'delegateBrief'; sessionId: string; runId: string; backendSuggestion: string }
-  | { type: 'delegateEvt'; sessionId: string; runId: string; kind: string; payload: Record<string, unknown> }
-  | {
-      type: 'delegateEnd';
-      sessionId: string;
-      runId: string;
-      exitCode: number;
-      summary: string;
-      changedFiles: string[];
-      childSessionRef?: string;
-    }
-  | { type: 'delegateReviewResolved'; sessionId: string; runId: string; decision: 'accept' | 'reject' };
 
 /**
  * Agent 桥接接口：UI 只面对该接口（D08 §5.1 Tauri 命令表的前端封装）。
@@ -289,13 +269,8 @@ export interface AgentBridge {
   /** 会话内切换权限模式（agent_set_mode） */
   setMode(sessionId: string, mode: PermissionMode): Promise<void>;
 
-  /** 确认委派启动（agent_delegate_launch；backend=简报卡建议后端；
-   *  D16 主路径=不改简报直接确认，编辑稿随 P1 简报编辑器） */
-  launchDelegate(sessionId: string, runId: string, backend: string): Promise<void>;
-  /** 取消委派（agent_delegate_cancel；简报期/后台运行/审查期均可） */
-  cancelDelegate(runId: string): Promise<void>;
-  /** 委派审查结论（agent_delegate_review；delegate.end 到达后出现审查卡） */
-  reviewDelegate(runId: string, accept: boolean): Promise<void>;
+  /** 取消后台 run（agent_run_cancel → run.cancel：terminal 后台命令/探查/专家通用） */
+  cancelRun(runId: string): Promise<void>;
 
   /** D19 项目登记（workspace.register：realpath upsert，同目录重复打开不换身份） */
   registerWorkspace(path: string, name?: string): Promise<AgentWorkspaceInfo>;
@@ -316,9 +291,7 @@ export const SESSION_STATUS_LABELS: Record<SessionStatus, string> = {
   running: '运行中',
   waiting_permission: '等待审批',
   waiting_clarify: '等你回答',
-  waiting_review: '等待审查',
   subagent_fanout: '子任务并行',
-  delegating: '委派中',
   paused: '已暂停',
   error: '错误',
   ended: '已结束',

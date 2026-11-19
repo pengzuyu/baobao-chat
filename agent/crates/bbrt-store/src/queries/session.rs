@@ -7,7 +7,7 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use crate::{now_ms, Store, StoreError};
 
-/// agent_session 行。workspace_id/backend/ended_at/summary 可空。
+/// agent_session 行。workspace_id/ended_at/summary 可空。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")] // 嵌套 struct 自带 rename_all（历史 bug 教训）
 pub struct SessionRow {
@@ -20,7 +20,6 @@ pub struct SessionRow {
     /// ask | auto-edit | full-auto
     pub mode: String,
     /// 委派后端 zcode|claude|generic|builtin（17 篇增列）
-    pub backend: Option<String>,
     /// fast | strong | auto
     pub model_policy: String,
     /// 会话级模型直达引用（0023 多供应商；p:<provider_id>:<model>）。
@@ -37,7 +36,7 @@ pub struct SessionRow {
 
 /// SELECT 列清单（顺序与 from_row 一致）
 const COLS: &str =
-    "id, workspace_id, title, form, mode, backend, model_policy, model_override, status, \
+    "id, workspace_id, title, form, mode, model_policy, model_override, status, \
                     share_enabled, created_at, updated_at, ended_at, summary";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
@@ -47,15 +46,14 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         title: row.get(2)?,
         form: row.get(3)?,
         mode: row.get(4)?,
-        backend: row.get(5)?,
-        model_policy: row.get(6)?,
-        model_override: row.get(7)?,
-        status: row.get(8)?,
-        share_enabled: row.get::<_, i64>(9)? != 0,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
-        ended_at: row.get(12)?,
-        summary: row.get(13)?,
+        model_policy: row.get(5)?,
+        model_override: row.get(6)?,
+        status: row.get(7)?,
+        share_enabled: row.get::<_, i64>(8)? != 0,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+        ended_at: row.get(11)?,
+        summary: row.get(12)?,
     })
 }
 
@@ -64,16 +62,15 @@ impl Store {
     pub fn insert_session(&self, s: &SessionRow) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO agent_session
-                 (id, workspace_id, title, form, mode, backend, model_policy, model_override, status,
+                 (id, workspace_id, title, form, mode, model_policy, model_override, status,
                   share_enabled, created_at, updated_at, ended_at, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 s.id,
                 s.workspace_id,
                 s.title,
                 s.form,
                 s.mode,
-                s.backend,
                 s.model_policy,
                 s.model_override,
                 s.status,
@@ -188,7 +185,8 @@ impl Store {
     }
 
     /// 启动清扫（2026-11-10 内嵌卡真机事故）：进程刚起=一切进行中状态都是
-    /// 上个进程的遗物（running/waiting_*/delegating/paused/starting → error）。
+    /// 上个进程的遗物（running/waiting_*/paused/starting → error；
+    /// 另含已退役的 waiting_review/delegating——存量库残留行仍须收口）。
     /// 否则死会话永远占 UI 与「活跃≤3」名额，且 input/stop 均 NotFound 无法收口。
     /// 返回清扫行数（idle/ended/error 不动）。
     pub fn sweep_interrupted_on_boot(&self) -> Result<u32, StoreError> {
@@ -325,7 +323,6 @@ mod tests {
             .unwrap();
         let mut s = testutil::sample_session("sess-1");
         s.workspace_id = Some("ws-1".to_string());
-        s.backend = Some("zcode".to_string());
         s.share_enabled = true;
         s.summary = Some("干了点活".to_string());
         store.insert_session(&s).unwrap();

@@ -2,7 +2,7 @@
 # 依赖方向由 CI cargo-deny 强制（禁止环）：protocol ← 所有。
 [workspace]
 resolver = "2"
-members = ["crates/bbrt-protocol", "crates/bbrt-session", "crates/bbrt-sec", "crates/bbrt-delegate", "crates/bbrt-memory", "crates/bbrt-store", "crates/bbrt-context", "crates/bbrt-aigw", "crates/bbrt-hostapi", "crates/bbrt-mcp", "crates/bbrt-tools", "crates/bbrt"]
+members = ["crates/bbrt-protocol", "crates/bbrt-session", "crates/bbrt-sec", "crates/bbrt-memory", "crates/bbrt-store", "crates/bbrt-context", "crates/bbrt-aigw", "crates/bbrt-hostapi", "crates/bbrt-mcp", "crates/bbrt-tools", "crates/bbrt"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,7 +24,6 @@ bbrt-hostapi = { path = "crates/bbrt-hostapi" }
 bbrt-mcp = { path = "crates/bbrt-mcp" }
 bbrt-tools = { path = "crates/bbrt-tools" }
 bbrt-session = { path = "crates/bbrt-session" }
-bbrt-delegate = { path = "crates/bbrt-delegate" }
 
 # Runtime 二进制随客户端分发、有 <80MB 空闲内存预算（08 §1.2）：发布构建开全程序 LTO
 [profile.release]

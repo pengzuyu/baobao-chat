@@ -20,7 +20,6 @@ import { ReasoningBlock } from './ReasoningBlock';
 import { PermissionCard, type PermissionDecision } from '../PermissionCard';
 import { ClarifyCard, type ClarifySubmit } from '../ClarifyCard';
 import { SubagentCard } from '../SubagentCard';
-import { DelegateCard } from '../DelegateCard';
 import { TypingState } from '../TypingState';
 
 type UserItem = Extract<StreamItem, { kind: 'user' }>;
@@ -135,8 +134,6 @@ export function renderStreamItems(
         );
       case 'subagent':
         return <SubagentCard key={item.key} item={item} />;
-      case 'delegate':
-        return <DelegateCard key={item.key} item={item} />;
       case 'system':
         return <SystemRow key={item.key} text={item.text} />;
       case 'error':

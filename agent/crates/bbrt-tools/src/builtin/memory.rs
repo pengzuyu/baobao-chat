@@ -313,21 +313,19 @@ pub fn memory_read_def() -> ToolDef {
     }
 }
 
-/// coding.delegate 薄门面（D11 §2.4 coding.rs：定义 inputSchema/风险级，执行由 session
-/// 循环的委派专用路径承接——本 crate 的 execute 不会收到该调用；schema 即模型可发现面）
 /// subagent.adjust 薄门面（D16 决策⑧：运行中子任务补充指令——探查/专家/
-/// 委派通用；执行由 session 循环专用路径经 hub 定向下发，execute 不会收到）
+/// 后台命令通用；执行由 session 循环专用路径经 hub 定向下发，execute 不会收到）
 pub fn subagent_adjust_def() -> ToolDef {
     ToolDef {
         name: "subagent.adjust".into(),
-        description: "向正在运行的子任务（探查/专家/委派，run_id 见会话内子任务卡或\
+        description: "向正在运行的子任务（探查/专家/后台命令，run_id 见会话内子任务卡或\
                       运行记录）下发补充指令调整方向；下一轮即生效。\
                       已结束的 run 不可调整（重新派发即可）"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "run_id": {"type": "string", "description": "目标任务 id（agent-/worker-/terminal- 前缀）"},
+                "run_id": {"type": "string", "description": "目标任务 id（agent-/terminal- 前缀）"},
                 "instruction": {"type": "string", "description": "补充/调整指令（一句话）"}
             },
             "required": ["run_id", "instruction"]
@@ -338,13 +336,13 @@ pub fn subagent_adjust_def() -> ToolDef {
 }
 
 /// task.wait 薄门面（统一后台任务体系 2026-11-18：等待任意后台任务终态并取回
-/// 结果——子 agent（agent-）/委派（worker-）/terminal 后台命令（terminal-）；
+/// 结果——子 agent（agent-）/terminal 后台命令（terminal-）；
 /// 执行由 session 循环专用路径承接，execute 不会收到）
 pub fn task_wait_def() -> ToolDef {
     ToolDef {
         name: "task.wait".into(),
         description: "等待指定的后台任务完成并返回其结果摘要——适用于子 agent\
-                      （agent- 前缀 id）、委派（worker-）、后台命令（terminal-）。\
+                      （agent- 前缀 id）、后台命令（terminal-）。\
                       异步发起任何后台任务后，需要其输出才能继续下一步时调用；\
                       已完成的任务立即返回结果；超时则返回「仍在运行」\
                       （可再次调用继续等待，或先处理其他事务）"
@@ -352,7 +350,7 @@ pub fn task_wait_def() -> ToolDef {
         input_schema: json!({
             "type": "object",
             "properties": {
-                "run_id": {"type": "string", "description": "目标任务 id（agent-/worker-/terminal- 前缀）"},
+                "run_id": {"type": "string", "description": "目标任务 id（agent-/terminal- 前缀）"},
                 "timeout_secs": {"type": "integer", "description": "最长等待秒数（默认 120，上限 3600）"}
             },
             "required": ["run_id"]
@@ -366,13 +364,13 @@ pub fn task_wait_def() -> ToolDef {
 pub fn subagent_cancel_def() -> ToolDef {
     ToolDef {
         name: "subagent.cancel".into(),
-        description: "取消正在运行的后台任务（子 agent/委派/后台命令通用；\
+        description: "取消正在运行的后台任务（子 agent/后台命令通用；\
                       优雅取消，已产出部分结果会保留。）"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "run_id": {"type": "string", "description": "目标任务 id（agent-/worker-/terminal- 前缀）"}
+                "run_id": {"type": "string", "description": "目标任务 id（agent-/terminal- 前缀）"}
             },
             "required": ["run_id"]
         }),
@@ -381,28 +379,3 @@ pub fn subagent_cancel_def() -> ToolDef {
     }
 }
 
-pub fn coding_delegate_def() -> ToolDef {
-    ToolDef {
-        name: "coding.delegate".into(),
-        description: "把编码任务委派给本地编码智能体（Claude Code/zcode/通用 CLI）：\
-                      产出任务简报→用户确认→子进程执行→diff 审查。\
-                      适合大范围重构/测试修复等可独立交付的编码工作；\
-                      简读文件仍用 read_file/search_files 更高效"
-            .into(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "task": {"type": "string", "description": "任务目标（一句话，具体可验收）"},
-                "constraints": {"type": "array", "items": {"type": "string"},
-                                 "description": "约束（如 不改公共 API）"},
-                "acceptance": {"type": "array", "items": {"type": "string"},
-                                "description": "验收标准（命令/行为描述）"},
-                "forbidden": {"type": "array", "items": {"type": "string"},
-                               "description": "禁止事项（注入子进程环境；如 git push）"}
-            },
-            "required": ["task"]
-        }),
-        risk: RiskLevel::High,
-        category: bbrt_sec::gate::ActionCategory::Delegate,
-    }
-}

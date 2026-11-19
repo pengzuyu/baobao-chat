@@ -1,8 +1,8 @@
-//! 会话状态机（D11 §3 全迁移表，20 条迁移，starting + 9 态）。
+//! 会话状态机（D11 §3 迁移表；委派审查迁移 #11-15 已随外部委派域退役
+//! 2026-11-18，现存 starting + 7 态）。
 //!
 //! 不变量：
-//! - 纯函数、无 IO、无时钟：超时判定（waiting_permission 120s 视为拒绝；OBO 60s 宽限；
-//!   委派软超时 30min）与计数（步数>50、连续失败>3、累计超时≥3）全部由调用方判定后
+//! - 纯函数、无 IO、无时钟：超时判定（waiting_permission 120s 视为拒绝；OBO 60s 宽限）与计数（步数>50、连续失败>3、累计超时≥3）全部由调用方判定后
 //!   驱动对应迁移函数，状态机只保证"迁移合法性"。
 //! - D11 §3 的"transition() 是唯一出口"在此落实为：全部迁移函数收敛到私有 expect()，
 //!   后续 emitter/wal（§2.2）在统一出口挂接 WAL 同步与 session.state 上报。
@@ -158,60 +158,6 @@ pub fn join_subagents(state: SessionState) -> Result<SessionState, TransitionErr
         SessionState::Running,
         state,
         "join 汇总（D11 §3 #10）",
-    )
-}
-
-/// #11 running→delegating：coding.delegate 确认通过且子进程 spawn 成功。
-/// 工作区锁获取失败（8035）时调用方不得进入本迁移（留在 running）。
-pub fn begin_delegation(state: SessionState) -> Result<SessionState, TransitionError> {
-    expect(
-        SessionState::Running,
-        SessionState::Delegating,
-        state,
-        "委派启动（D11 §3 #11）",
-    )
-}
-
-/// #12 delegating→running：delegate.end(exit=0)，diff 已提取并建检查点
-pub fn complete_delegation(state: SessionState) -> Result<SessionState, TransitionError> {
-    expect(
-        SessionState::Delegating,
-        SessionState::Running,
-        state,
-        "委派正常结束（D11 §3 #12）",
-    )
-}
-
-/// #13 delegating→error：子进程异常退出（8033）/ 委派软超时（8034，默认 30min 可配）
-pub fn fail_delegation(state: SessionState) -> Result<SessionState, TransitionError> {
-    expect(
-        SessionState::Delegating,
-        SessionState::Error,
-        state,
-        "委派异常（D11 §3 #13）",
-    )
-}
-
-/// #14 running→waiting_review：委派完成 / 编排层判定需用户审查（无自动超时）。
-/// 注：§3 ASCII 图中画有 delegating→waiting_review 直连，但权威迁移表 #14 只允许
-/// running→waiting_review；按表实现（delegating 先经 #12 回 running）。
-pub fn request_review(state: SessionState) -> Result<SessionState, TransitionError> {
-    expect(
-        SessionState::Running,
-        SessionState::WaitingReview,
-        state,
-        "等待用户审查（D11 §3 #14）",
-    )
-}
-
-/// #15 waiting_review→running：接受 / 拒绝并恢复检查点后继续。
-/// 拒绝且用户选择终止的路径走 end()（#19 任意态→ended）。
-pub fn resolve_review(state: SessionState) -> Result<SessionState, TransitionError> {
-    expect(
-        SessionState::WaitingReview,
-        SessionState::Running,
-        state,
-        "审查结论回填（D11 §3 #15）",
     )
 }
 

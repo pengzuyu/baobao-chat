@@ -220,64 +220,11 @@ pub fn workspace_forget(host: Host, id: String) -> Result<Value, String> {
     Ok(json!({ "ok": ok }))
 }
 
-/// 确认委派启动（delegate.launch；D16 §5 简报阶段——run 尚未后台化，
-/// RT 按 sessionId 定向投递 runner 通道）。task_brief=None=沿用模型原稿
-/// （确认不改稿是主路径；编辑稿随 P1 简报编辑器）。mode/workspace 为协议
-/// 必填字段，从会话缓存回填（RT dispatch 侧忽略）。
-/// D30 拍板4 防环：外部会话禁委派（bbc→delegate→claude→bbc 递归熔断，
-/// delegate 必经本命令层，壳层一行拦截、RT 零改动）。
+/// 取消后台 run（run.cancel：terminal 后台命令/探查/专家在跑任务统一入口；
+/// RT 侧 hub 按 run_id 定向路由，未命中报 NotFound）
 #[tauri::command]
-pub fn agent_delegate_launch(
-    host: Host,
-    ext_hub: tauri::State<'_, std::sync::Arc<crate::ext_agent::ExtHub>>,
-    session_id: String,
-    delegate_task_id: String,
-    backend: String,
-    task_brief: Option<Value>,
-) -> Result<(), String> {
-    if ext_hub.is_external(&host, &session_id) {
-        return Err("外部智能体接入的会话不允许委派（防递归）".into());
-    }
-    let (mode, workspace) = host
-        .list_sessions()
-        .iter()
-        .find(|s| s["id"].as_str() == Some(session_id.as_str()))
-        .map(|s| {
-            (
-                s["mode"].as_str().unwrap_or("ask").to_string(),
-                s["workspace"].as_str().unwrap_or("").to_string(),
-            )
-        })
-        .unwrap_or_else(|| ("ask".into(), String::new()));
-    host.fire(
-        "delegate.launch",
-        json!({
-            "sessionId": session_id, "delegateTaskId": delegate_task_id, "backend": backend,
-            "taskBrief": task_brief, "mode": mode, "workspace": workspace,
-        }),
-    )
-}
-
-/// 取消委派（SIGINT→3s→SIGKILL 进程组；后台/简报期均可）
-#[tauri::command]
-pub fn agent_delegate_cancel(host: Host, delegate_task_id: String) -> Result<(), String> {
-    host.fire(
-        "delegate.cancel",
-        json!({ "delegateTaskId": delegate_task_id, "graceful": true }),
-    )
-}
-
-/// 委派审查结论（delegate.review；后台 run 经 hub 按 run_id 定向路由）
-#[tauri::command]
-pub fn agent_delegate_review(
-    host: Host,
-    delegate_task_id: String,
-    accept: bool,
-) -> Result<(), String> {
-    host.fire(
-        "delegate.review",
-        json!({ "delegateTaskId": delegate_task_id, "decision": if accept { "accept" } else { "reject" } }),
-    )
+pub fn agent_run_cancel(host: Host, run_id: String) -> Result<(), String> {
+    host.fire("run.cancel", json!({ "runId": run_id, "graceful": true }))
 }
 
 /// run 清单（D16 §3.1：runs.list REQ → agent_run 行 camelCase 投影；

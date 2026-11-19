@@ -119,7 +119,6 @@ fn skill_catalog_listed_in_system_only() {
     let deps = LoopDeps {
         model: Arc::new(CaptureModel(captured.clone(), AtomicUsize::new(0))),
         tools: Arc::new(NoopTools),
-        delegator: None,
         memory: None,
         wal: Arc::new(NoopEventLog),
         sink: Arc::new(CollectSink(Mutex::new(vec![]))),
@@ -271,7 +270,6 @@ fn pick_tools_not_narrowed_by_skill_declarations() {
     let deps = LoopDeps {
         model: model.clone(),
         tools: Arc::new(ThreeTools),
-        delegator: None,
         memory: None,
         wal: Arc::new(bbrt_session::loop_runner::NoopEventLog),
         sink: Arc::new(CollectSink(std::sync::Mutex::new(vec![]))),
@@ -317,7 +315,6 @@ fn pick_tools_keeps_full_when_undeclared() {
     let deps = LoopDeps {
         model: model.clone(),
         tools: Arc::new(ThreeTools),
-        delegator: None,
         memory: None,
         wal: Arc::new(bbrt_session::loop_runner::NoopEventLog),
         sink: Arc::new(CollectSink(std::sync::Mutex::new(vec![]))),

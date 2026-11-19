@@ -149,7 +149,6 @@ fn row(id: &str) -> bbrt_store::SessionRow {
         title: "t".into(),
         form: "workbench".into(),
         mode: "ask".into(),
-        backend: None,
         model_policy: "fast".into(),
         model_override: None,
         status: "idle".into(),

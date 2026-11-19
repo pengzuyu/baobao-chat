@@ -206,7 +206,6 @@ fn deps_for(
     LoopDeps {
         model,
         tools,
-        delegator: None,
         memory: None,
         wal: Arc::new(log),
         sink,
@@ -417,7 +416,7 @@ fn fanout_window_timeout_goes_background() {
         log.clone(),
         tools,
     );
-    let hub = Arc::new(bbrt_session::delegate_bg::DelegateHub::new());
+    let hub = Arc::new(bbrt_session::bg_hub::BgHub::new());
     let mut runner = SessionRunner::new(
         "s-bg-fan".into(),
         "/ws".into(),
@@ -426,7 +425,7 @@ fn fanout_window_timeout_goes_background() {
         None,
     );
     runner.subagent_wait_window = std::time::Duration::from_millis(150);
-    runner.delegate_hub = Some(hub.clone());
+    runner.bg_hub = Some(hub.clone());
 
     let t0 = std::time::Instant::now();
     runner.run_turn("梳理这个项目的认证与配置", &deps, None);
@@ -458,7 +457,7 @@ fn fanout_window_timeout_goes_background() {
     assert!(joins[0].summary.contains("慢探查结论"));
 
     // 注入回填（manager 级 drain→inject 同款调用面）
-    runner.inject_delegate_join("fanout-2", &joins[0].name, &joins[0].summary);
+    runner.inject_bg_join("fanout-2", &joins[0].name, &joins[0].summary);
 }
 
 // ---------------------------------------------------------------------------
@@ -532,7 +531,7 @@ fn fanout_midrun_adjust_injected() {
         log.clone(),
         tools,
     );
-    let hub = Arc::new(bbrt_session::delegate_bg::DelegateHub::new());
+    let hub = Arc::new(bbrt_session::bg_hub::BgHub::new());
     let mut runner = SessionRunner::new(
         "s-adj".into(),
         "/ws".into(),
@@ -541,7 +540,7 @@ fn fanout_midrun_adjust_injected() {
         None,
     );
     runner.subagent_wait_window = std::time::Duration::from_millis(250);
-    runner.delegate_hub = Some(hub.clone());
+    runner.bg_hub = Some(hub.clone());
     runner.run_turn("梳理认证与配置", &deps, None);
 
     // 从 spawn 事件拿 run_id（探查注册于 spawn 前——路由即达）
@@ -562,7 +561,7 @@ fn fanout_midrun_adjust_injected() {
     // 运行中补充：经 hub 定向下发（主 Agent subagent.adjust 同通道）
     assert!(hub.route(
         &run_id,
-        &bbrt_session::loop_runner::DelegateHostMsg::Input {
+        &bbrt_session::loop_runner::BgHostMsg::Input {
             text: "只聚焦配置加载链路，忽略认证".into(),
         }
     ));

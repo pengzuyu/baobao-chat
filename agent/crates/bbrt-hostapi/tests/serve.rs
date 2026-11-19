@@ -15,7 +15,7 @@ use bbrt_hostapi::{
     MAX_PENDING_WRITE_BYTES,
 };
 use bbrt_protocol::{
-    read_message, write_message, CodecError, DelegateEventKind, Envelope, HostToRuntime,
+    read_message, write_message, CodecError, Envelope, HostToRuntime, SubagentTraceItem,
     MemoryListItem, RuntimeToHost, SessionState, PROTOCOL_VERSION,
 };
 use serde_json::json;
@@ -522,11 +522,10 @@ fn transport_write_backpressure_beyond_8mb() {
         let env = Envelope::wrap(
             PROTOCOL_VERSION,
             "r-1",
-            &RuntimeToHost::DelegateEvent {
+            &RuntimeToHost::SubagentTrace {
                 session_id: "sess-1".into(),
-                delegate_task_id: "dt-1".into(),
-                kind: DelegateEventKind::Meta,
-                payload: json!({ "blob": big }),
+                sub_id: "r-1".into(),
+                item: SubagentTraceItem::Text { text: big.clone() },
             },
         )
         .unwrap();

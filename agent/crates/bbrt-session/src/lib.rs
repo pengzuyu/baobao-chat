@@ -15,9 +15,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bg_hub;
 pub mod compactor;
-pub mod delegate_bg;
-pub mod delegation;
 pub mod events;
 pub mod executor;
 pub mod expert;
@@ -30,10 +29,6 @@ pub mod subagent;
 pub mod team;
 
 pub use compactor::FastCompactor;
-pub use delegation::{
-    DelegateChannel, DelegateEvt, DelegateFinal, DelegateLaunchReq, DelegateLauncher,
-    DelegateStream,
-};
 pub use events::{ModelTier, NullSink, SessionEvent, SessionSink, StreamChannel};
 pub use executor::{CheckOutcome, CommandHandoff, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview};
 pub use expert::{
@@ -51,10 +46,10 @@ pub use manager::{
 pub use recovery::{recover, InFlightTool, ReplayReport};
 pub use skills::{SkillEntry, SkillIndex};
 pub use state::{
-    accept_user_message, begin, begin_delegation, begin_fanout, complete_delegation,
-    complete_round, end, fail_delegation, fail_initialization, fail_unrecoverable, initialized,
-    join_subagents, pause, permission_exhausted, permission_resolved, request_permission,
-    request_review, resolve_review, resume, retry_from_error, SessionState, TransitionError,
+    accept_user_message, begin, begin_fanout, complete_round, end, fail_initialization,
+    fail_unrecoverable, initialized, join_subagents, pause, permission_exhausted,
+    permission_resolved, request_permission, resume, retry_from_error, SessionState,
+    TransitionError,
 };
 pub use subagent::{FanoutPlanner, FastPlanner, ProbeResult, ProbeSpec};
 pub use team::{

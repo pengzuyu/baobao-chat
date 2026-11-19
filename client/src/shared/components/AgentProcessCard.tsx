@@ -198,8 +198,8 @@ function Elapsed({ startedAt }: { startedAt: number }) {
  * 「用时 X · N 次LLM调用 · N 次工具执行 · N 个子agent」——
  * - LLM 调用数 = thinking/conclusion 文本段与工具段交替的合并段数（文本后紧跟
  *   工具=同一次调用，工具后新文本=下一次）
- * - 工具执行数 = 工具行（子任务/委派行不计入，另计子 agent 数——stages 投影中
- *   其 name 前缀为「子任务」/「委派」）
+ * - 工具执行数 = 工具行（子任务行不计入，另计子 agent 数——stages 投影中
+ *   其 name 前缀为「子任务」）
  * - durMs 缺省（未收口）省略用时段；仅基于 stages（landed 卡/其他端查看者可算）
  */
 export function agentStatsText(stages: AgentStage[], durMs?: number | null): string {
@@ -213,9 +213,9 @@ export function agentStatsText(stages: AgentStage[], durMs?: number | null): str
       prev = 'text';
     } else if (s.t === 'tool') {
       const name = s.name ?? '';
-      if (name.startsWith('子任务') || name.startsWith('委派')) {
+      if (name.startsWith('子任务')) {
         subs += 1;
-        // 透明：不打断文本段（对齐 items 级口径——子任务/委派卡不属 LLM 调用段）
+        // 透明：不打断文本段（对齐 items 级口径——子任务卡不属 LLM 调用段）
       } else {
         tools += 1;
         if (prev !== 'text') llmCalls += 1; // 无前置文本的工具批次=独立一次调用

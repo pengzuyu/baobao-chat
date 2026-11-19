@@ -20,7 +20,6 @@ version = "0.1.0"
 dependencies = [
  "bbrt-aigw",
  "bbrt-context",
- "bbrt-delegate",
  "bbrt-hostapi",
  "bbrt-mcp",
  "bbrt-memory",
@@ -48,16 +47,6 @@ dependencies = [
 name = "bbrt-context"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "bbrt-delegate"
-version = "0.1.0"
-dependencies = [
- "bbrt-protocol",
  "serde",
  "serde_json",
  "thiserror",

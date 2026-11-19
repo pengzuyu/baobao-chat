@@ -78,7 +78,16 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn idx_with(name: &str) -> Arc<Mutex<bbrt_session::skills::SkillIndex>> {
-        let eco = std::env::temp_dir().join(format!("bbc-skill-tool-{}", std::process::id()));
+        // 每调用独立目录（同模块测试并行跑，共用 pid 级目录会互相覆写 SKILL.md
+        // 造成 scan/write 竞态——曾表现为随机 FAILED 的 flaky）
+        let uniq = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let eco = std::env::temp_dir().join(format!(
+            "bbc-skill-tool-{}-{uniq}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(eco.join("d")).unwrap();
         std::fs::write(
             eco.join("d/SKILL.md"),
