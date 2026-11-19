@@ -129,6 +129,24 @@ export interface ClarifyOptionDTO {
   description?: string;
 }
 
+/** 一轮 LLM 调用用量（D36）：in=prompt（当前上下文大小）、out=completion、
+ *  cached=缓存命中 tokens（上游未上报则缺省）、model=上游实际模型名（快照名可含日期） */
+export interface TurnUsage {
+  in: number;
+  out: number;
+  cached?: number;
+  model?: string;
+}
+
+/**
+ * 会话历史查询结果（D36）：items=历史条目；usage=WAL 最后一条 assistant.done 的用量
+ * （重启后输入框状态条恢复用；旧会话/无记录时缺省）
+ */
+export interface HistoryLoadResult {
+  items: HistoryItem[];
+  usage?: TurnUsage;
+}
+
 /**
  * UI 订阅的 Agent 事件联合（D08 §5.2 IPC 事件表的 camelCase 镜像）。
  * 命名 ↔ 协议：streamDelta=stream.delta / stateChanged=session.state /
@@ -138,7 +156,7 @@ export interface ClarifyOptionDTO {
  */
 export type AgentEvent =
   | { type: 'streamDelta'; sessionId: string; seq: number; delta: string; channel: 'text' | 'reasoning' }
-  | { type: 'streamDone'; sessionId: string; finishReason: string; usage: { in: number; out: number } }
+  | { type: 'streamDone'; sessionId: string; finishReason: string; usage: TurnUsage }
   /** 协议级错误（error NTF：8011 模型不可用/流中断、8010 超限等；sessionId 可空=全局错误） */
   | { type: 'error'; sessionId: string; code: number; message: string; fatal: boolean }
   | { type: 'stateChanged'; sessionId: string; state: SessionStatus; reason?: string }
@@ -254,8 +272,9 @@ export interface AgentBridge {
   renameSession(sessionId: string, title: string): Promise<string>;
   /** 结束会话（agent_stop，reason=user） */
   endSession(sessionId: string): Promise<void>;
-  /** 会话历史（session.history 直读 WAL：打开会话加载聊天记录；空=无历史） */
-  loadHistory(sessionId: string): Promise<HistoryItem[]>;
+  /** 会话历史（session.history 直读 WAL：打开会话加载聊天记录；空=无历史；
+   *  D36：附最后一条 assistant.done 用量（重启后状态条恢复）） */
+  loadHistory(sessionId: string): Promise<HistoryLoadResult>;
   /** run 历史（D33 run.history：子 agent 侧栏过程回放——spawn→User/trace→Assistant·Tool；空=无过程行） */
   loadRunHistory(runId: string): Promise<HistoryItem[]>;
   /** 全局紧急停止（agent_emergency_stop：杀进程组 + 未决审批作废，INT-AG-12） */

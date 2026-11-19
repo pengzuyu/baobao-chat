@@ -47,7 +47,9 @@ impl ChatClient for CaptureModel {
                     usage: Usage {
                         prompt_tokens: 5,
                         completion_tokens: 1,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else {
@@ -56,7 +58,9 @@ impl ChatClient for CaptureModel {
                 usage: Usage {
                     prompt_tokens: 5,
                     completion_tokens: 1,
+                    cached_tokens: None,
                 },
+                model: None,
             })]
         };
         Ok(Box::new(events.into_iter()))
@@ -185,7 +189,9 @@ impl ChatClient for ToolsCaptureModel {
                     usage: Usage {
                         prompt_tokens: 4,
                         completion_tokens: 1,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else {
@@ -194,7 +200,9 @@ impl ChatClient for ToolsCaptureModel {
                 usage: Usage {
                     prompt_tokens: 4,
                     completion_tokens: 1,
+                    cached_tokens: None,
                 },
+                model: None,
             })]
         };
         Ok(Box::new(events.into_iter()))

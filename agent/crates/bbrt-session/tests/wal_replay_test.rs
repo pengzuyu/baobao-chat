@@ -149,7 +149,9 @@ impl ChatClient for FakeModel {
                     usage: Usage {
                         prompt_tokens: 10,
                         completion_tokens: 2,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else {
@@ -162,7 +164,9 @@ impl ChatClient for FakeModel {
                     usage: Usage {
                         prompt_tokens: 12,
                         completion_tokens: 3,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         };

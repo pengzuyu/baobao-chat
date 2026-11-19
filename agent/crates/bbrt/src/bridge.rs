@@ -158,12 +158,16 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             finish,
             usage_in,
             usage_out,
+            cached_tokens,
+            model,
         } => RuntimeToHost::StreamDone {
             session_id: session_id.clone(),
             finish_reason: finish.clone(),
             usage: Usage {
                 in_tokens: *usage_in,
                 out_tokens: *usage_out,
+                cached_tokens: *cached_tokens,
+                model: model.clone(),
             },
         },
         SessionEvent::ToolCall {

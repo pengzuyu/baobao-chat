@@ -240,8 +240,10 @@ fn mock_happy_path_sse_with_request_assertions() {
                 finish: FinishReason::Stop,
                 usage: Usage {
                     prompt_tokens: 21,
-                    completion_tokens: 5
-                }
+                    completion_tokens: 5,
+                    cached_tokens: None,
+                },
+                model: None,
             },
         ]
     );
@@ -335,7 +337,8 @@ fn mock_429_then_200_retries_with_backoff() {
         events,
         vec![StreamEvent::Done {
             finish: FinishReason::Stop,
-            usage: Usage::default()
+            usage: Usage::default(),
+            model: None,
         }]
     );
     assert_eq!(gw.connection_count(), 2, "429 后应恰好重试 1 次");
@@ -455,7 +458,8 @@ fn mock_set_base_url_switches_target() {
             },
             StreamEvent::Done {
                 finish: FinishReason::Stop,
-                usage: Usage::default()
+                usage: Usage::default(),
+                model: None,
             },
         ]
     );

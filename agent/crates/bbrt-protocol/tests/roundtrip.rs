@@ -6,11 +6,10 @@
 use std::io::Cursor;
 
 use bbrt_protocol::{
-    read_message, write_message, Blocked, ClarifyOption,
-    CodecError, CompactionPhase, Decision, EndReason, Envelope,
-    GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy, ModelSwitchReason,
-    PermissionMode, Preview, ProtocolError, RenewReason, RiskLevel, RuntimeToHost,
-    SessionState, StreamChannel, SubagentPhase, SubagentResult, ThinkingLevel,
+    read_message, write_message, Blocked, ClarifyOption, CodecError, CompactionPhase, Decision,
+    EndReason, Envelope, GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy,
+    ModelSwitchReason, PermissionMode, Preview, ProtocolError, RenewReason, RiskLevel,
+    RuntimeToHost, SessionState, StreamChannel, SubagentPhase, SubagentResult, ThinkingLevel,
     ToolSource, ToolsReloadReason, Usage, PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
@@ -105,7 +104,9 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             reason: Some("user".into()),
         },
         // D33 §3.3：run 历史回放
-        HostToRuntime::RunHistory { run_id: "r-9".into() },
+        HostToRuntime::RunHistory {
+            run_id: "r-9".into(),
+        },
     ]
 }
 
@@ -139,6 +140,7 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             usage: Usage {
                 in_tokens: 1200,
                 out_tokens: 300,
+                ..Default::default()
             },
         },
         RuntimeToHost::ToolCall {
@@ -673,7 +675,9 @@ fn golden_d33_subagent_trace_and_run_history() {
         }),
     );
     golden(
-        &HostToRuntime::RunHistory { run_id: "r-9".into() },
+        &HostToRuntime::RunHistory {
+            run_id: "r-9".into(),
+        },
         json!({"type":"run.history","runId":"r-9"}),
     );
     golden(
@@ -715,6 +719,7 @@ fn golden_stream_done_usage_and_error() {
             usage: Usage {
                 in_tokens: 10,
                 out_tokens: 20,
+                ..Default::default()
             },
         },
         json!({"type":"stream.done","sessionId":"s","finishReason":"tool_calls","usage":{"in":10,"out":20}}),
@@ -727,6 +732,38 @@ fn golden_stream_done_usage_and_error() {
             session_id: None,
         },
         json!({"type":"error","code":8011,"message":"ai-gateway 不可用","fatal":false}),
+    );
+}
+
+#[test]
+fn golden_stream_done_cached_and_model() {
+    // D36：usage 增 cached_tokens/model（桌面端据此解析上下文上限）
+    golden(
+        &RuntimeToHost::StreamDone {
+            session_id: "s".into(),
+            finish_reason: "stop".into(),
+            usage: Usage {
+                in_tokens: 1000,
+                out_tokens: 50,
+                cached_tokens: Some(900),
+                model: Some("glm-4.6".into()),
+            },
+        },
+        json!({"type":"stream.done","sessionId":"s","finishReason":"stop","usage":{"in":1000,"out":50,"cached_tokens":900,"model":"glm-4.6"}}),
+    );
+    // D36：session.history.result 增 lastUsage（重启后状态条恢复）
+    golden(
+        &RuntimeToHost::SessionHistoryResult {
+            session_id: "s".into(),
+            items: vec![],
+            last_usage: Some(Usage {
+                in_tokens: 10,
+                out_tokens: 2,
+                cached_tokens: Some(8),
+                model: Some("gpt-4o".into()),
+            }),
+        },
+        json!({"type":"session.history.result","sessionId":"s","items":[],"lastUsage":{"in":10,"out":2,"cached_tokens":8,"model":"gpt-4o"}}),
     );
 }
 
@@ -1192,6 +1229,7 @@ fn golden_session_history_messages() {
                     text: "已修复".into(),
                 },
             ],
+            last_usage: None,
         },
         json!({
             "type":"session.history.result",

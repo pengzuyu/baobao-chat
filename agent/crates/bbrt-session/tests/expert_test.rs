@@ -65,7 +65,9 @@ impl ChatClient for ScriptModel {
                     usage: Usage {
                         prompt_tokens: 4,
                         completion_tokens: 2,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else if self.always_tool || req.messages.len() <= 2 {
@@ -84,7 +86,9 @@ impl ChatClient for ScriptModel {
                     usage: Usage {
                         prompt_tokens: 6,
                         completion_tokens: 2,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else {
@@ -97,7 +101,9 @@ impl ChatClient for ScriptModel {
                     usage: Usage {
                         prompt_tokens: 6,
                         completion_tokens: 4,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         };

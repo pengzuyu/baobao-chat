@@ -106,6 +106,7 @@
 - **数据**：直播 `sideStreams[runId]`（`subagentSpawn` 播种 user 条目=taskDigest；`subagentTrace` 投影：text→agentText、tool_call/result→tool 条目按 callId 配对）；打开时若空 → `loadRunHistory(runId)` 回放（run.history REQ，D33 §3.3 不变）。
 - **布局**：`useSplitWidth('agent-dock', 400, 280, 760, 'right')` + `SplitHandle`（中栏与坞之间；右侧栏向右拖=变窄）+ `paneRef` 拖动直写；**收起/展开**：展开态按钮在坞 tab 条最右（右上角），收起态按钮在中栏 header 最右（运行中 tab 带圆点）。原「运行详情激活即 304→480」动态加宽退役。
 - **扩展点**：`DockTab.type` 当前仅 `'subagent'`；未来 browser/文件打开等内容增 type 后同坞渲染（内容区通用化，对齐 zcode 右栏定位）。
+- **输入框状态条**（上下文消耗/占比/缓存命中率）见 **D36**（2026-11-19）：上限知识在桌面端本地注册表，服务端零改动；`Composer` 经 `statusInfo` 插槽承载。
 
 ## 4. 批次划分（每批一提交一推送）
 

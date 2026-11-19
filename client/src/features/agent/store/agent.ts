@@ -14,10 +14,12 @@ import type {
   AgentSessionMeta,
   AgentWorkspaceInfo,
   HistoryItem,
+  HistoryLoadResult,
   RunInfo,
   GrantScope,
   PermissionMode,
   SessionStatus,
+  TurnUsage,
 } from '../bridge/types';
 import { parseToolArgs } from '../bridge/types';
 
@@ -111,8 +113,8 @@ interface AgentState {
   streams: Record<string, StreamItem[]>;
   /** sessionId → 当前模型选择（model.switched 维护；override=直达引用 p:<id>:<model>） */
   modelBySession: Record<string, { policy: 'fast' | 'strong' | 'auto'; override?: string }>;
-  /** sessionId → 最近一轮用量（stream.done usage） */
-  usageBySession: Record<string, { in: number; out: number }>;
+  /** sessionId → 最近一轮 LLM 用量（stream.done；D36 增 cached/model——输入框状态条） */
+  usageBySession: Record<string, TurnUsage>;
   /** sessionId → run 记录（D16 §3.1 runs.list；子任务生命周期事件触发刷新） */
   runsBySession: Record<string, RunInfo[]>;
   /** D33 §3.2/§3.3：runId → 子 agent 过程流（subagentSpawn 播种 user 条目 +
@@ -129,6 +131,12 @@ interface AgentState {
   /** 思考强度档位（2026-11-11 zcode 同款三档；全局用户选择，随每条消息下发） */
   thinkLevel: 'low' | 'medium' | 'high';
   setThinkLevel: (level: 'low' | 'medium' | 'high') => void;
+
+  /** D36：模型上下文上限本机覆盖（键=小写模型 ID；仅本机 localStorage，不落服务端）。
+   *  与内置预设共同服务输入框状态条占比；设置 · Agent 可编辑 */
+  modelContextOverrides: Record<string, number>;
+  /** 覆盖/删除（tokens<=0 或 null=删除；键归一为小写） */
+  setModelContextOverride: (modelId: string, tokens: number | null) => void;
 
   /** D19 项目登记表（workspace.list；last_opened_at 倒序） */
   workspaces: AgentWorkspaceInfo[];
@@ -226,6 +234,35 @@ function persistDockCollapsed(collapsed: boolean): void {
     localStorage.setItem(DOCK_COLLAPSED_KEY, collapsed ? '1' : '0');
   } catch {
     /* localStorage 不可用静默——仅本次会话生效 */
+  }
+}
+
+/** D36：模型上下文上限本机覆盖（bbc:agent:model-context = {模型ID: tokens}） */
+const MODEL_CONTEXT_KEY = 'bbc:agent:model-context';
+
+function readModelContextOverrides(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(MODEL_CONTEXT_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      const n = typeof v === 'number' ? v : Number(v);
+      const key = k.trim().toLowerCase();
+      if (key && Number.isFinite(n) && n > 0) out[key] = Math.round(n);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function persistModelContextOverrides(overrides: Record<string, number>): void {
+  try {
+    localStorage.setItem(MODEL_CONTEXT_KEY, JSON.stringify(overrides));
+  } catch {
+    /* 持久化失败静默——仅本次会话生效 */
   }
 }
 
@@ -385,6 +422,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   usageBySession: {},
   runsBySession: {},
   thinkLevel: 'medium',
+  modelContextOverrides: readModelContextOverrides(),
   sideStreams: {},
   dockTabs: [],
   dockActiveBySession: {},
@@ -418,21 +456,37 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   loadHistoryIfEmpty: async (sid) => {
     if (!sid || (get().streams[sid] ?? []).length > 0) return;
-    let items: HistoryItem[];
+    let res: HistoryLoadResult;
     try {
-      items = await bridge.loadHistory(sid);
+      res = await bridge.loadHistory(sid);
     } catch {
       return; // 历史加载失败不阻断（直播照常；空态=无历史）
     }
-    // 拉取期间可能已有新事件（乐观上屏/直播）→ 仅在仍为空时回填
+    // 拉取期间可能已有新事件（乐观上屏/直播）→ 仅在仍为空时回填；
+    // D36：WAL 最后一条用量一并回填（重启后输入框状态条恢复）
     set((s) =>
       (s.streams[sid] ?? []).length > 0
         ? s
-        : { streams: { ...s.streams, [sid]: items.map((it, i) => historyToStreamItem(sid, it, i)) } },
+        : {
+            streams: { ...s.streams, [sid]: res.items.map((it, i) => historyToStreamItem(sid, it, i)) },
+            ...(res.usage ? { usageBySession: { ...s.usageBySession, [sid]: res.usage } } : {}),
+          },
     );
   },
 
   setThinkLevel: (level) => set({ thinkLevel: level }),
+
+  setModelContextOverride: (modelId, tokens) => {
+    const key = modelId.trim().toLowerCase();
+    if (!key) return;
+    set((s) => {
+      const next = { ...s.modelContextOverrides };
+      if (tokens === null || !Number.isFinite(tokens) || tokens <= 0) delete next[key];
+      else next[key] = Math.round(tokens);
+      persistModelContextOverrides(next);
+      return { modelContextOverrides: next };
+    });
+  },
 
   createSession: async (opts) => {
     // D19：workspace 缺省=日常对话（空串，无工作目录——文件/命令类工具不可用，
@@ -675,11 +729,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       switch (event.type) {
         case 'streamDone': {
           const list = closeStreaming(s.streams[event.sessionId] ?? []);
-          const usage = s.usageBySession[event.sessionId];
-          const merged = usage && usage.in === event.usage.in && usage.out === event.usage.out ? usage : event.usage;
+          const prev = s.usageBySession[event.sessionId];
+          // D36：cached/model 随 usage 一并替换（同一轮多步=最后一次调用为准）
+          const same = prev && prev.in === event.usage.in && prev.out === event.usage.out
+            && prev.cached === event.usage.cached && prev.model === event.usage.model;
           return {
             streams: { ...s.streams, [event.sessionId]: list },
-            usageBySession: { ...s.usageBySession, [event.sessionId]: merged },
+            usageBySession: same ? s.usageBySession : { ...s.usageBySession, [event.sessionId]: event.usage },
           };
         }
         case 'error': {

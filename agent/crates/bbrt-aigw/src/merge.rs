@@ -17,6 +17,8 @@ pub struct MergedTurn {
     pub finish: FinishReason,
     /// token 用量；无 usage 终帧时缺省 0。
     pub usage: Usage,
+    /// 上游实际模型名（D36；无 Done/上游未回时 None）
+    pub model: Option<String>,
 }
 
 /// 合并一轮流事件。规则：
@@ -31,6 +33,7 @@ pub fn merge_stream_events(events: Vec<StreamEvent>) -> MergedTurn {
     let mut slots: Vec<(String, String, String)> = Vec::new();
     let mut finish = FinishReason::Stop;
     let mut usage = Usage::default();
+    let mut model: Option<String> = None;
 
     for event in events {
         match event {
@@ -48,9 +51,13 @@ pub fn merge_stream_events(events: Vec<StreamEvent>) -> MergedTurn {
             StreamEvent::Done {
                 finish: f,
                 usage: u,
+                model: m,
             } => {
                 finish = f;
                 usage = u;
+                if m.is_some() {
+                    model = m;
+                }
             }
         }
     }
@@ -67,6 +74,7 @@ pub fn merge_stream_events(events: Vec<StreamEvent>) -> MergedTurn {
             .collect(),
         finish,
         usage,
+        model,
     }
 }
 
@@ -119,7 +127,9 @@ mod tests {
                 usage: Usage {
                     prompt_tokens: 120,
                     completion_tokens: 33,
+                    cached_tokens: None,
                 },
+                model: None,
             },
         ];
         let merged = merge_stream_events(events);
@@ -181,7 +191,9 @@ mod tests {
             usage: Usage {
                 prompt_tokens: 9,
                 completion_tokens: 0,
+                cached_tokens: None,
             },
+            model: None,
         }]);
         assert_eq!(only_done.finish, FinishReason::Length);
         assert_eq!(only_done.usage.prompt_tokens, 9);

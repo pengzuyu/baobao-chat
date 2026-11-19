@@ -49,7 +49,9 @@ impl ChatClient for CaptureModel {
                 usage: Usage {
                     prompt_tokens: 5,
                     completion_tokens: 2,
+                    cached_tokens: None,
                 },
+                model: None,
             }),
         ];
         Ok(Box::new(events.into_iter()))

@@ -34,6 +34,7 @@ import { AgentRightDock } from '../components/AgentRightDock';
 import { AgentStreamView } from '../components/stream/AgentStreamView';
 import type { PermissionDecision } from '../components/PermissionCard';
 import { ModelThinkPicker } from '../components/ModelThinkPicker';
+import { ContextUsageMeter } from '../components/ContextUsageMeter';
 import { convIdOfSession } from '../../im/agent/embedded';
 import { Composer } from '../components/Composer';
 import { fetchPluginCommands, type PluginCommand } from '../../eco/api/plugins';
@@ -109,6 +110,7 @@ export function AgentWorkbenchPage() {
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
   const selectSession = useAgentStore((s) => s.selectSession);
   const modelBySession = useAgentStore((s) => s.modelBySession);
+  const usageBySession = useAgentStore((s) => s.usageBySession);
   const runsBySession = useAgentStore((s) => s.runsBySession);
   const loadRuns = useAgentStore((s) => s.loadRuns);
   const dockTabsAll = useAgentStore((s) => s.dockTabs);
@@ -629,6 +631,12 @@ export function AgentWorkbenchPage() {
                 onSend={(text) => void sendText(text)}
                 onStop={stopActive}
                 commands={pluginCommands}
+                statusInfo={
+                  <ContextUsageMeter
+                    usage={activeSessionId ? usageBySession[activeSessionId] : undefined}
+                    modelHint={modelChoice.override}
+                  />
+                }
                 modePicker={
                   <Dropdown menu={modeMenu} trigger={['click']}>
                     <Button

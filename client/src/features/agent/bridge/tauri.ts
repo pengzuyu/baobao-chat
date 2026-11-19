@@ -21,7 +21,7 @@
  *  report_list/report_get 已随日报整域退役一并删除） |
  *
  * 事件 payload 字段（宿主透传 stdio 协议镜像 + 宿主补充）：
- * - `stream.delta` { session_id, delta, seq, channel } / `stream.done` { session_id, finish_reason, usage }
+ * - `stream.delta` { session_id, delta, seq, channel } / `stream.done` { session_id, finish_reason, usage{in,out,cached_tokens?,model?} }
  * - `session.state` { session_id, state, reason } / `session.ended` { session_id, summary }
  * - `tool.call` { session_id, call_id, tool, args, risk, parallel, source }
  * - `tool.result` { session_id, call_id, ok, summary, truncated, exit_code, duration_ms, blocked }
@@ -42,13 +42,24 @@ import type {
   ClarifyOptionDTO,
   GrantScope,
   HistoryItem,
+  HistoryLoadResult,
   MemoryType,
   PermissionMode,
   PermissionPreview,
   RiskLevel,
   RunInfo,
   SessionStatus,
+  TurnUsage,
 } from './types';
+
+/** wire usage（snake_case）→ TurnUsage（D36：cached_tokens/model 可选，缺省=未知） */
+function mapTurnUsage(raw: { in?: number; out?: number; cached_tokens?: number; model?: string } | undefined): TurnUsage | undefined {
+  if (!raw) return undefined;
+  const usage: TurnUsage = { in: num(raw.in), out: num(raw.out) };
+  if (typeof raw.cached_tokens === 'number') usage.cached = raw.cached_tokens;
+  if (typeof raw.model === 'string' && raw.model) usage.model = raw.model;
+  return usage;
+}
 
 /** Tauri WebView 注入标记：存在才启用真实桥（否则 getAgentBridge() 回落 mock） */
 export function isTauriAvailable(): boolean {
@@ -210,10 +221,14 @@ export class TauriAgentBridge implements AgentBridge {
     await invoke('agent_stop', { sessionId, reason: 'user' });
   }
 
-  async loadHistory(sessionId: string): Promise<HistoryItem[]> {
-    // RT session.history.result 原样透传（camelCase；items 缺省 []）
-    const rep = await invoke<{ items?: HistoryItem[] }>('session_history', { sessionId });
-    return rep.items ?? [];
+  async loadHistory(sessionId: string): Promise<HistoryLoadResult> {
+    // RT session.history.result 原样透传（camelCase；items 缺省 []）；
+    // D36：lastUsage=WAL 最后一条 assistant.done 用量（重启后状态条恢复）
+    const rep = await invoke<{
+      items?: HistoryItem[];
+      lastUsage?: { in?: number; out?: number; cached_tokens?: number; model?: string };
+    }>('session_history', { sessionId });
+    return { items: rep.items ?? [], usage: mapTurnUsage(rep.lastUsage) };
   }
 
   async loadRunHistory(runId: string): Promise<HistoryItem[]> {
@@ -284,16 +299,18 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         delta: str(raw.delta),
         channel: raw.channel === 'reasoning' ? 'reasoning' : 'text',
       };
-    case 'stream.done':
+    case 'stream.done': {
+      // D36：usage 可带 cached_tokens/model（上游实际模型；缺省=未知）
+      const usage = mapTurnUsage(
+        raw.usage as { in?: number; out?: number; cached_tokens?: number; model?: string } | undefined,
+      );
       return {
         type: 'streamDone',
         sessionId: sid,
         finishReason: str(raw.finish_reason, 'stop'),
-        usage: {
-          in: num((raw.usage as { in?: number } | undefined)?.in),
-          out: num((raw.usage as { out?: number } | undefined)?.out),
-        },
+        usage: usage ?? { in: 0, out: 0 },
       };
+    }
     case 'session.state':
       return {
         type: 'stateChanged',

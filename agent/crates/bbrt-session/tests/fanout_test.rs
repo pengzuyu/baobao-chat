@@ -52,7 +52,9 @@ impl ChatClient for MainModel {
                 usage: Usage {
                     prompt_tokens: 8,
                     completion_tokens: 2,
+                    cached_tokens: None,
                 },
+                model: None,
             }),
         ];
         Ok(Box::new(events.into_iter()))
@@ -101,7 +103,9 @@ impl ChatClient for ProbeModel {
                     usage: Usage {
                         prompt_tokens: 8,
                         completion_tokens: 2,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else if req.messages.len() <= 2 {
@@ -120,7 +124,9 @@ impl ChatClient for ProbeModel {
                     usage: Usage {
                         prompt_tokens: 6,
                         completion_tokens: 2,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else {
@@ -133,7 +139,9 @@ impl ChatClient for ProbeModel {
                     usage: Usage {
                         prompt_tokens: 6,
                         completion_tokens: 3,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         };
@@ -381,7 +389,9 @@ impl ChatClient for SlowProbeModel {
                     usage: Usage {
                         prompt_tokens: 5,
                         completion_tokens: 2,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else {
@@ -394,7 +404,9 @@ impl ChatClient for SlowProbeModel {
                     usage: Usage {
                         prompt_tokens: 5,
                         completion_tokens: 2,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         };
@@ -489,7 +501,9 @@ impl ChatClient for AdjustableModel {
                     usage: Usage {
                         prompt_tokens: 5,
                         completion_tokens: 3,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else {
@@ -509,7 +523,9 @@ impl ChatClient for AdjustableModel {
                     usage: Usage {
                         prompt_tokens: 5,
                         completion_tokens: 2,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         };

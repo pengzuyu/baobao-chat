@@ -836,6 +836,9 @@ impl SessionRunner {
             let mut tool_calls: Vec<ToolCallMsg> = vec![];
             let mut finish = FinishReason::Stop;
             let mut usage = (0u64, 0u64);
+            // D36：上游缓存命中/实际模型名（最后一次 Done 为准；None=未知）
+            let mut cached_tokens: Option<u64> = None;
+            let mut model_name: Option<String> = None;
             let mut stream_failed: Option<String> = None;
             for ev in stream {
                 match ev {
@@ -876,9 +879,14 @@ impl SessionRunner {
                     Ok(StreamEvent::Done {
                         finish: f,
                         usage: u,
+                        model: m,
                     }) => {
                         finish = f;
                         usage = (u.prompt_tokens as u64, u.completion_tokens as u64);
+                        cached_tokens = u.cached_tokens.map(|v| v as u64);
+                        if m.is_some() {
+                            model_name = m;
+                        }
                     }
                     Err(e) => {
                         stream_failed = Some(e.to_string());
@@ -910,6 +918,8 @@ impl SessionRunner {
                 },
                 usage_in: usage.0,
                 usage_out: usage.1,
+                cached_tokens,
+                model: model_name.clone(),
             });
             // 思考全文先行落 WAL（非空才落；置于 assistant.done 前——回放顺序
             // =直播顺序 thinking→正文。D33 思考回放批次，正文前的过程条目）
@@ -923,21 +933,25 @@ impl SessionRunner {
             // 崩溃恢复契约：一轮模型输出完成（recovery 以 assistant.done
             // 配对 user.text 落 assistant 轮，摘要级重建即可续会话）。
             // text=本轮回复原文（工作台 session.history 加载聊天记录数据源；
-            // 旧行缺此字段 → 历史加载跳过该轮，渐进降级）
+            // 旧行缺此字段 → 历史加载跳过该轮，渐进降级）；
+            // D36：附 cached_tokens/model（session.history.lastUsage 恢复状态条用，
+            // 旧行缺省=未知）
             deps.wal.append(
                 &self.session_id,
                 "assistant.done",
-                &format!(
-                    "{{\"finish\":\"{}\",\"usage_in\":{},\"usage_out\":{},\"text\":\"{}\"}}",
-                    match finish {
+                &serde_json::json!({
+                    "finish": match finish {
                         FinishReason::Stop => "stop",
                         FinishReason::ToolCalls => "tool_calls",
                         FinishReason::Length => "length",
                     },
-                    usage.0,
-                    usage.1,
-                    escape_json(&text)
-                ),
+                    "usage_in": usage.0,
+                    "usage_out": usage.1,
+                    "text": text,
+                    "cached_tokens": cached_tokens,
+                    "model": model_name,
+                })
+                .to_string(),
             );
             self.history.push(Round::Assistant {
                 content: text.clone(),

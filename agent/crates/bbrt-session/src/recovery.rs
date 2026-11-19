@@ -6,7 +6,7 @@
 //! D11 开放问题 6 已登记单写收敛方向）。
 
 use bbrt_context::Round;
-use bbrt_protocol::HistoryItem;
+use bbrt_protocol::{HistoryItem, Usage};
 use bbrt_store::{EventRow, Store};
 
 use crate::events::SessionEvent;
@@ -303,6 +303,35 @@ pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
         }
     }
     items
+}
+
+/// WAL → 最近一次模型调用用量（D36：session.history.lastUsage，重启后输入框状态条恢复）。
+/// 数据源=倒序找最后一条带 usage_in 的 assistant.done（cached_tokens/model 旧行缺省=未知）。
+pub fn wal_last_usage(events: &[EventRow]) -> Option<Usage> {
+    for ev in events.iter().rev() {
+        if ev.type_ != "assistant.done" {
+            continue;
+        }
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&ev.payload) else {
+            continue; // 坏行跳过（不影响历史加载）
+        };
+        let Some(in_tokens) = payload.get("usage_in").and_then(|x| x.as_u64()) else {
+            continue; // 旧行缺 usage → 继续往前找
+        };
+        return Some(Usage {
+            in_tokens,
+            out_tokens: payload
+                .get("usage_out")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0),
+            cached_tokens: payload.get("cached_tokens").and_then(|x| x.as_u64()),
+            model: payload
+                .get("model")
+                .and_then(|x| x.as_str())
+                .map(str::to_string),
+        });
+    }
+    None
 }
 
 /// WAL → run 历史条目（D33 §3.3 run.history 回执投影，侧栏子 agent 过程回放）。
@@ -624,5 +653,34 @@ mod history_tests {
                 HistoryItem::Assistant { text: "已定位问题".into() },
             ]
         );
+    }
+
+    /// D36：session.history.lastUsage 取最后一条带 usage_in 的 assistant.done；
+    /// 旧行缺 cached_tokens/model → None 降级（不臆造 0）。
+    #[test]
+    fn last_usage_reads_latest_assistant_done() {
+        let events = vec![
+            ev(
+                1,
+                "assistant.done",
+                r#"{"finish":"stop","usage_in":10,"usage_out":2,"text":"a"}"#,
+            ),
+            ev(2, "user.text", r#"{"text":"b"}"#),
+            ev(
+                3,
+                "assistant.done",
+                r#"{"finish":"stop","usage_in":1200,"usage_out":300,"cached_tokens":900,"model":"glm-4.6","text":"b"}"#,
+            ),
+        ];
+        let usage = wal_last_usage(&events).expect("应有用量");
+        assert_eq!(usage.in_tokens, 1200);
+        assert_eq!(usage.out_tokens, 300);
+        assert_eq!(usage.cached_tokens, Some(900));
+        assert_eq!(usage.model.as_deref(), Some("glm-4.6"));
+
+        let old = wal_last_usage(&events[..1]).expect("旧行也有 in/out");
+        assert_eq!(old.in_tokens, 10);
+        assert_eq!(old.cached_tokens, None);
+        assert_eq!(old.model, None);
     }
 }

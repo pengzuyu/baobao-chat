@@ -68,7 +68,9 @@ impl ChatClient for FakeModel {
                         usage: Usage {
                             prompt_tokens: 100,
                             completion_tokens: 20,
+                            cached_tokens: None,
                         },
+                        model: None,
                     }),
                 ]
             } else {
@@ -81,7 +83,9 @@ impl ChatClient for FakeModel {
                         usage: Usage {
                             prompt_tokens: 120,
                             completion_tokens: 8,
+                            cached_tokens: None,
                         },
+                        model: None,
                     }),
                 ]
             };
@@ -347,7 +351,9 @@ impl ChatClient for FakeClarifyModel {
                     usage: Usage {
                         prompt_tokens: 100,
                         completion_tokens: 20,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else {
@@ -360,7 +366,9 @@ impl ChatClient for FakeClarifyModel {
                     usage: Usage {
                         prompt_tokens: 120,
                         completion_tokens: 8,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         };
@@ -611,7 +619,9 @@ impl ChatClient for AlwaysToolModel {
                 usage: Usage {
                     prompt_tokens: 1,
                     completion_tokens: 1,
+                    cached_tokens: None,
                 },
+                model: None,
             }),
         ];
         Ok(Box::new(events.into_iter()))
@@ -852,7 +862,9 @@ impl ChatClient for AlwaysToolOk {
                 usage: Usage {
                     prompt_tokens: 1,
                     completion_tokens: 1,
+                    cached_tokens: None,
                 },
+                model: None,
             }),
         ];
         Ok(Box::new(events.into_iter()))
@@ -902,7 +914,9 @@ impl ChatClient for ScriptedModel {
                 usage: Usage {
                     prompt_tokens: 10,
                     completion_tokens: 5,
+                    cached_tokens: None,
                 },
+                model: None,
             }),
         ];
         Ok(Box::new(events.into_iter()))
@@ -1201,7 +1215,9 @@ impl ChatClient for CapturingModel {
                     usage: Usage {
                         prompt_tokens: 5,
                         completion_tokens: 1,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
             .into_iter(),
@@ -1374,7 +1390,9 @@ impl ChatClient for FakeWaitModel {
                     usage: Usage {
                         prompt_tokens: 10,
                         completion_tokens: 4,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         } else {
@@ -1385,7 +1403,9 @@ impl ChatClient for FakeWaitModel {
                     usage: Usage {
                         prompt_tokens: 10,
                         completion_tokens: 4,
+                        cached_tokens: None,
                     },
+                    model: None,
                 }),
             ]
         };
@@ -1634,7 +1654,9 @@ fn run_command_background_returns_task_id_and_finishes() {
                         usage: Usage {
                             prompt_tokens: 10,
                             completion_tokens: 4,
+                            cached_tokens: None,
                         },
+                        model: None,
                     }),
                 ]
             } else {
@@ -1645,7 +1667,9 @@ fn run_command_background_returns_task_id_and_finishes() {
                         usage: Usage {
                             prompt_tokens: 10,
                             completion_tokens: 4,
+                            cached_tokens: None,
                         },
+                        model: None,
                     }),
                 ]
             };
@@ -1750,7 +1774,9 @@ fn run_command_sync_times_out_into_background() {
                         usage: Usage {
                             prompt_tokens: 10,
                             completion_tokens: 4,
+                            cached_tokens: None,
                         },
+                        model: None,
                     }),
                 ]
             } else {
@@ -1761,7 +1787,9 @@ fn run_command_sync_times_out_into_background() {
                         usage: Usage {
                             prompt_tokens: 10,
                             completion_tokens: 4,
+                            cached_tokens: None,
                         },
+                        model: None,
                     }),
                 ]
             };
@@ -1888,7 +1916,9 @@ impl ChatClient for RecordingModel {
                 usage: Usage {
                     prompt_tokens: 1,
                     completion_tokens: 1,
+                    cached_tokens: None,
                 },
+                model: None,
             }),
         ];
         Ok(Box::new(events.into_iter()))

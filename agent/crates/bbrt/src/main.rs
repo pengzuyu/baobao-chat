@@ -570,6 +570,7 @@ fn dispatch(
             };
             Some(RuntimeToHost::SessionHistoryResult {
                 items: bbrt_session::recovery::wal_history(&events),
+                last_usage: bbrt_session::recovery::wal_last_usage(&events),
                 session_id,
             })
         }

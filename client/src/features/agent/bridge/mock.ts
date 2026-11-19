@@ -17,6 +17,7 @@ import type {
   AgentWorkspaceInfo,
   GrantScope,
   HistoryItem,
+  HistoryLoadResult,
   RunInfo,
   PermissionMode,
   PermissionPreview,
@@ -347,9 +348,9 @@ export class MockAgentBridge implements AgentBridge {
     this.finishSession(sessionId, '会话已结束（用户主动结束）');
   }
 
-  async loadHistory(_sessionId: string): Promise<HistoryItem[]> {
+  async loadHistory(_sessionId: string): Promise<HistoryLoadResult> {
     // mock 剧本是内存态不落 WAL——历史加载返回空（真实链路 session.history 读库）
-    return [];
+    return { items: [] };
   }
 
   async loadRunHistory(_runId: string): Promise<HistoryItem[]> {

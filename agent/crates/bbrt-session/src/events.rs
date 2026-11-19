@@ -54,6 +54,10 @@ pub enum SessionEvent {
         finish: String, // stop | tool_calls | length
         usage_in: u64,
         usage_out: u64,
+        /// D36：上游缓存命中 tokens（None=未上报）
+        cached_tokens: Option<u64>,
+        /// D36：上游实际模型名（None=上游未回）
+        model: Option<String>,
     },
     /// tool.call（参数已脱敏）
     ToolCall {

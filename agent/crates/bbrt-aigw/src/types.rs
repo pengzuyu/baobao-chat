@@ -76,8 +76,13 @@ pub enum StreamEvent {
     },
     /// 工具参数 JSON 增量（按 index 对应到 ToolCallBegin 的槽位，拼接成完整 arguments）。
     ToolCallDelta { index: usize, args_delta: String },
-    /// 一轮生成结束：finish_reason + usage 汇总（stream.done 的 usage{in,out} 来源）。
-    Done { finish: FinishReason, usage: Usage },
+    /// 一轮生成结束：finish_reason + usage 汇总 + 上游实际模型名（D36：客户端据此
+    /// 在**桌面端**上下文注册表里解析上限；上游未回 model=None）。
+    Done {
+        finish: FinishReason,
+        usage: Usage,
+        model: Option<String>,
+    },
 }
 
 /// 生成结束原因（OpenAI finish_reason 子集，v0.1 仅映射这三种；未知值报 Protocol）。
@@ -93,6 +98,9 @@ pub enum FinishReason {
 pub struct Usage {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
+    /// 缓存命中 tokens（D36：上游 `usage.prompt_tokens_details.cached_tokens`
+    /// 或 DeepSeek 风格 `prompt_cache_hit_tokens`；None=上游未上报，不臆造 0）
+    pub cached_tokens: Option<usize>,
 }
 
 /// 构造发送给网关的请求体：ChatRequest + `stream: true`。

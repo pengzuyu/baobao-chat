@@ -31,11 +31,13 @@ interface ComposerProps {
   modePicker?: ReactNode;
   /** 模型+思考强度选择（2026-11-11 zcode 同款合体 Popover：页面注入 ModelThinkPicker） */
   modelPicker?: ReactNode;
+  /** 运行态状态条（D36：上下文消耗/占比/缓存命中；页面注入 ContextUsageMeter） */
+  statusInfo?: ReactNode;
   /** 插件斜杠命令表（D22/L5；空表=功能关闭零成本） */
   commands?: PluginCommand[];
 }
 
-export function Composer({ disabled, disabledHint, canStop, onSend, onStop, modePicker, modelPicker, commands = [] }: ComposerProps) {
+export function Composer({ disabled, disabledHint, canStop, onSend, onStop, modePicker, modelPicker, statusInfo, commands = [] }: ComposerProps) {
   const { token } = theme.useToken();
   const [text, setText] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -200,7 +202,11 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
         aria-label="Agent 会话输入框"
       />
       <Flex justify="space-between" align="center" gap={8} wrap>
-        {modePicker}
+        {/* 左：权限模式 + 运行态状态条（D36 上下文用量，靠近输入区） */}
+        <Flex align="center" gap={8} wrap style={{ minWidth: 0 }}>
+          {modePicker}
+          {statusInfo}
+        </Flex>
         {/* 模型 chip 紧挨操作区（2026-11-12 用户口径：靠近发送按钮） */}
         <Flex align="center" gap={8}>
           {modelPicker}

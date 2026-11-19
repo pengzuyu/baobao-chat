@@ -26,11 +26,23 @@ use crate::types::{FinishReason, StreamEvent, Usage};
 /// OpenAI 兼容 SSE chunk（wire 形态，snake_case 按 OpenAI 实际字段解析）。
 #[derive(Debug, Deserialize)]
 struct ChatChunkDto {
+    /// 上游实际模型名（OpenAI 每个 chunk 顶层都带；D36 捕获后供客户端解析上下文上限）
+    #[serde(default)]
+    model: Option<String>,
     #[serde(default)]
     choices: Vec<ChoiceDto>,
     /// usage 终帧可能在最后 chunk 内，也可能是独立的 usage 帧（无 choices）。
     #[serde(default)]
     usage: Option<UsageDto>,
+    /// 网关 usage 终帧（docs/19 §6.2）是**顶层** prompt_tokens/completion_tokens
+    /// （上游未回 usage 时含网关估算）——D36 起作为兜底解析；cached_tokens 当前网关
+    /// 不回传，预留同名字段前向兼容。
+    #[serde(default)]
+    prompt_tokens: Option<usize>,
+    #[serde(default)]
+    completion_tokens: Option<usize>,
+    #[serde(default)]
+    cached_tokens: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +91,28 @@ struct UsageDto {
     prompt_tokens: Option<usize>,
     #[serde(default)]
     completion_tokens: Option<usize>,
+    /// OpenAI 风格：`prompt_tokens_details.cached_tokens`
+    #[serde(default)]
+    prompt_tokens_details: Option<PromptTokensDetailsDto>,
+    /// DeepSeek 风格：`prompt_cache_hit_tokens`
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PromptTokensDetailsDto {
+    #[serde(default)]
+    cached_tokens: Option<usize>,
+}
+
+impl UsageDto {
+    /// 缓存命中 tokens（两种上游字段二选一；都没有=None=未知）
+    fn cached_tokens(&self) -> Option<usize> {
+        self.prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .or(self.prompt_cache_hit_tokens)
+    }
 }
 
 /// finish_reason → FinishReason（v0.1 仅这三种；未知值显式报 Protocol，不做静默映射）。
@@ -102,6 +136,8 @@ pub(crate) struct SseEventIterator<R: Read> {
     pending: VecDeque<StreamEvent>,
     finish: Option<FinishReason>,
     usage: Usage,
+    /// 上游实际模型名（D36：随 Done 外发；同一流内后到的非空值覆盖先前的）
+    model: Option<String>,
     saw_done: bool,
     done_emitted: bool,
     finished: bool,
@@ -115,6 +151,7 @@ impl<R: Read> SseEventIterator<R> {
             pending: VecDeque::new(),
             finish: None,
             usage: Usage::default(),
+            model: None,
             saw_done: false,
             done_emitted: false,
             finished: false,
@@ -130,9 +167,23 @@ impl<R: Read> SseEventIterator<R> {
         }
         let chunk: ChatChunkDto = serde_json::from_str(payload)
             .map_err(|e| AigwError::Serialization(format!("SSE chunk 解析失败：{e}")))?;
+        let ChatChunkDto {
+            model,
+            choices,
+            usage,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+        } = chunk;
+        // D36：上游实际模型名（每个 chunk 都带；空串忽略）
+        if let Some(m) = model {
+            if !m.is_empty() {
+                self.model = Some(m);
+            }
+        }
         let mut events = Vec::new();
         // v0.1 单 choice：只取 choices[0]
-        if let Some(choice) = chunk.choices.into_iter().next() {
+        if let Some(choice) = choices.into_iter().next() {
             let _ = choice.index; // 多 choice 场景 v0.1 不支持，index 恒按 0 处理
             if let Some(delta) = choice.delta {
                 if let Some(content) = delta.content {
@@ -176,11 +227,23 @@ impl<R: Read> SseEventIterator<R> {
             }
         }
         // usage 终帧（可能在最后 chunk，也可能是独立帧）
-        if let Some(u) = chunk.usage {
+        if let Some(u) = usage {
             self.usage = Usage {
                 prompt_tokens: u.prompt_tokens.unwrap_or(0),
                 completion_tokens: u.completion_tokens.unwrap_or(0),
+                cached_tokens: u.cached_tokens(),
             };
+        }
+        // 网关 usage 终帧（顶层字段，上游未回 usage 时含网关估算）——兜底；
+        // cached 只在不覆盖已有值的前提下采纳（网关当前不回 cached）
+        if let Some(p) = prompt_tokens {
+            self.usage.prompt_tokens = p;
+            if let Some(c) = completion_tokens {
+                self.usage.completion_tokens = c;
+            }
+            if cached_tokens.is_some() {
+                self.usage.cached_tokens = cached_tokens;
+            }
         }
         Ok(events)
     }
@@ -197,6 +260,7 @@ impl<R: Read> SseEventIterator<R> {
             Some(Ok(StreamEvent::Done {
                 finish,
                 usage: self.usage,
+                model: self.model.take(),
             }))
         } else {
             // 响应体结束但流未正常终止（无 [DONE]、无 finish_reason）→ 断流
@@ -344,8 +408,10 @@ mod tests {
                         finish: FinishReason::Stop,
                         usage: Usage {
                             prompt_tokens: 11,
-                            completion_tokens: 7
-                        }
+                            completion_tokens: 7,
+                            cached_tokens: None,
+                        },
+                        model: None,
                     },
                 ],
                 "max_read={max}"
@@ -387,7 +453,8 @@ mod tests {
                 },
                 StreamEvent::Done {
                     finish: FinishReason::ToolCalls,
-                    usage: Usage::default()
+                    usage: Usage::default(),
+                    model: None,
                 },
             ]
         );
@@ -415,8 +482,10 @@ mod tests {
                     finish: FinishReason::Stop,
                     usage: Usage {
                         prompt_tokens: 5,
-                        completion_tokens: 2
-                    }
+                        completion_tokens: 2,
+                        cached_tokens: None,
+                    },
+                    model: None,
                 },
             ]
         );
@@ -444,7 +513,8 @@ mod tests {
                 },
                 StreamEvent::Done {
                     finish: FinishReason::Stop,
-                    usage: Usage::default()
+                    usage: Usage::default(),
+                    model: None,
                 },
             ]
         );
@@ -466,7 +536,8 @@ mod tests {
                 events.last(),
                 Some(&StreamEvent::Done {
                     finish: expect,
-                    usage: Usage::default()
+                    usage: Usage::default(),
+                    model: None,
                 })
             );
         }
@@ -521,8 +592,99 @@ mod tests {
             events,
             vec![StreamEvent::Done {
                 finish: FinishReason::Stop,
-                usage: Usage::default()
+                usage: Usage::default(),
+                model: None,
             }]
+        );
+    }
+
+    /// D36：上游 chunk 的 model + usage.prompt_tokens_details.cached_tokens
+    /// → Done.model / Usage.cached_tokens（客户端解析上下文上限/缓存命中率）。
+    #[test]
+    fn captures_model_and_cached_tokens_from_upstream() {
+        let body = concat!(
+            "data: {\"model\":\"glm-4.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n",
+            "\n",
+            "data: {\"model\":\"glm-4.6\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n",
+            "\n",
+            "data: [DONE]\n",
+            "\n",
+        );
+        let events = ok_events(run_sse(body, 4));
+        assert_eq!(
+            events,
+            vec![
+                StreamEvent::TextDelta {
+                    text: "ok".to_string()
+                },
+                StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 100,
+                        completion_tokens: 5,
+                        cached_tokens: Some(80),
+                    },
+                    model: Some("glm-4.6".to_string()),
+                },
+            ]
+        );
+    }
+
+    /// D36：DeepSeek 风格 `prompt_cache_hit_tokens` 同样识别为缓存命中。
+    #[test]
+    fn captures_deepseek_cache_hit_tokens() {
+        let body = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n",
+            "\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":1,\"prompt_cache_hit_tokens\":40}}\n",
+            "\n",
+            "data: [DONE]\n",
+            "\n",
+        );
+        let events = ok_events(run_sse(body, 4));
+        assert_eq!(
+            events,
+            vec![StreamEvent::Done {
+                finish: FinishReason::Stop,
+                usage: Usage {
+                    prompt_tokens: 50,
+                    completion_tokens: 1,
+                    cached_tokens: Some(40),
+                },
+                model: None,
+            }]
+        );
+    }
+
+    /// D36：网关 usage 终帧是**顶层** prompt_tokens/completion_tokens（上游未回 usage
+    /// 时的兜底）——不得覆盖已捕获的 cached/model。
+    #[test]
+    fn gateway_terminal_usage_frame_fills_top_level_tokens() {
+        let body = concat!(
+            "data: {\"model\":\"glm-4.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n",
+            "\n",
+            "data: {\"request_id\":\"x\",\"prompt_tokens\":7,\"completion_tokens\":3,\"tier\":\"strong\"}\n",
+            "\n",
+            "data: [DONE]\n",
+            "\n",
+        );
+        let events = ok_events(run_sse(body, 4));
+        assert_eq!(
+            events,
+            vec![
+                StreamEvent::TextDelta {
+                    text: "ok".to_string()
+                },
+                StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 7,
+                        completion_tokens: 3,
+                        cached_tokens: None,
+                    },
+                    model: Some("glm-4.6".to_string()),
+                },
+            ]
         );
     }
 }

@@ -203,13 +203,19 @@ pub enum ToolSource {
 // payload 复合结构
 // ---------------------------------------------------------------------------
 
-/// 一轮生成用量（stream.done.usage{in,out}；字段名 `in` 是保留字，用 rename 映射）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// 一轮生成用量（stream.done.usage{in,out}；字段名 `in` 是保留字，用 rename 映射）。
+/// D36 增可选 cached_tokens/model：cached=上游缓存命中（未上报=None）；model=上游实际
+/// 模型名（桌面端据此在本机上下文注册表解析上限，不落服务端）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     #[serde(rename = "in")]
     pub in_tokens: u64,
     #[serde(rename = "out")]
     pub out_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// 子 Agent 汇总结果（summary ≤2k tokens，不回传原文，D11 §7）
@@ -1001,12 +1007,16 @@ pub enum RuntimeToHost {
     #[serde(rename = "session.renamed", rename_all = "camelCase")]
     SessionRenamed { session_id: String, title: String },
 
-    /// session.history 回执（seq 升序；空=无历史或会话不存在）
+    /// session.history 回执（seq 升序；空=无历史或会话不存在）。
+    /// D36：lastUsage=WAL 最后一条 assistant.done 的用量（重启后输入框状态条恢复；
+    /// 旧会话/无记录=None）。
     #[serde(rename = "session.history.result", rename_all = "camelCase")]
     SessionHistoryResult {
         session_id: String,
         #[serde(default)]
         items: Vec<HistoryItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_usage: Option<Usage>,
     },
 
     /// run.history 回执（D33；空=run 不存在或无过程行）
