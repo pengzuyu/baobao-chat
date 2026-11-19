@@ -75,6 +75,10 @@ pub struct StartParams {
     /// 崩溃恢复产物（session.start 带 historyRef 时由装配层先行 recover；
     /// None=全新会话）
     pub restored: Option<crate::recovery::ReplayReport>,
+    /// D35 定时任务：无人值守（禁 ask_user + 提示词约束）
+    pub unattended: bool,
+    /// D35 定时任务：审批等待秒数（None=默认 120s；Some(0)=不超时）
+    pub approval_timeout_secs: Option<u64>,
 }
 
 struct ManagedSession {
@@ -206,6 +210,16 @@ impl SessionManager {
         // 后台任务中枢注入（D16 §5：经 manager 的会话恒可后台；
         // raw runner（测试/嵌入式）保持 None=退化）
         runner.bg_hub = Some(self.hub.clone());
+        // D35 定时任务：无人值守 + 审批等待窗口（None=默认 120s；0=不超时）
+        runner.unattended = p.unattended;
+        if let Some(secs) = p.approval_timeout_secs {
+            runner.permission_timeout = if secs == 0 {
+                // recv_timeout 不支持无限：一年近似“不超时”，用户仍可「取消运行」
+                std::time::Duration::from_secs(365 * 24 * 3600)
+            } else {
+                std::time::Duration::from_secs(secs.min(7 * 24 * 3600))
+            };
+        }
         self.permission_tx
             .lock()
             .unwrap()

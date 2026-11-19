@@ -184,9 +184,8 @@ export function ensureAgentEventSubscribed(): void {
   });
 }
 
-/** requestId → 120s 到点计时器（到点置 timeout=拒绝语义，D08 §3.4） */
+/** requestId → 审批倒计时（到点置 timeout=拒绝语义；窗口随事件 expiresAt，D35） */
 const permTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const PERMISSION_TIMEOUT_MS = 120_000;
 
 let itemSeq = 0;
 
@@ -660,23 +659,32 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           const list = s.streams[event.sessionId] ?? [];
           const item: StreamItem = { kind: 'permission', key: `p-${event.requestId}`, request: event, outcome: null };
           // 系统通知（2026-11-11 真机事故：审批弹框挂在活动卡/工作台页，用户不在场
-          // → 120s 无人应答自动拒绝，表现为"很久没响应"）——跨页面可见
-          void sendSystemNotification('Agent 请求审批', `${event.tool}（120 秒内未响应将自动拒绝）`);
-          // 120s 到点 → timeout（=拒绝，UI 灰显）；桥侧（Runtime）同样按超时拒绝收口
-          const timer = setTimeout(() => {
-            permTimers.delete(event.requestId);
-            useAgentStore.setState((st) => ({
-              streams: {
-                ...st.streams,
-                [event.sessionId]: (st.streams[event.sessionId] ?? []).map((it) =>
-                  it.kind === 'permission' && it.request.requestId === event.requestId && it.outcome === null
-                    ? { ...it, outcome: 'timeout' }
-                    : it,
-                ),
-              },
-            }));
-          }, PERMISSION_TIMEOUT_MS);
-          permTimers.set(event.requestId, timer);
+          // → 无人应答自动拒绝，表现为"很久没响应"）——跨页面可见。
+          // D35：窗口按事件 expiresAt（定时任务=任务配置，0=不超时；普通会话 120s）
+          const timeoutMs = event.expiresAt <= 0 ? 0 : Math.max(0, event.expiresAt - Date.now());
+          const windowText =
+            timeoutMs === 0
+              ? '等待人工审批（不超时）'
+              : timeoutMs >= 60_000
+                ? `${Math.round(timeoutMs / 60_000)} 分钟内未响应将自动拒绝`
+                : `${Math.round(timeoutMs / 1000)} 秒内未响应将自动拒绝`;
+          void sendSystemNotification('Agent 请求审批', `${event.tool}（${windowText}）`);
+          if (timeoutMs > 0) {
+            const timer = setTimeout(() => {
+              permTimers.delete(event.requestId);
+              useAgentStore.setState((st) => ({
+                streams: {
+                  ...st.streams,
+                  [event.sessionId]: (st.streams[event.sessionId] ?? []).map((it) =>
+                    it.kind === 'permission' && it.request.requestId === event.requestId && it.outcome === null
+                      ? { ...it, outcome: 'timeout' }
+                      : it,
+                  ),
+                },
+              }));
+            }, timeoutMs);
+            permTimers.set(event.requestId, timer);
+          }
           return { streams: { ...s.streams, [event.sessionId]: [...list, item] } };
         }
         case 'permissionResponse': {

@@ -4,11 +4,12 @@
 //! 事件回流：agent_bridge 事件泵 → app.emit("agent://event", payload)（setup 装配注入）。
 
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tauri::State;
 
 use crate::agent_bridge::AgentHost;
 
-type Host<'a> = State<'a, AgentHost>;
+type Host<'a> = State<'a, Arc<AgentHost>>;
 
 /// 会话列表（宿主缓存镜像；协议无查询消息）
 #[tauri::command]
@@ -48,6 +49,8 @@ pub fn agent_start_session(
         &model_policy,
         model.as_deref(),
         title.as_deref(),
+        false,
+        None,
     )?;
     Ok(json!({ "session_id": sid }))
 }

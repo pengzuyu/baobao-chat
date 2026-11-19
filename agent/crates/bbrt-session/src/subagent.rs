@@ -117,6 +117,8 @@ pub struct ProbeCtx {
     pub model_name: String,
     /// 运行中枢（D16 决策⑧：注册补充指令/取消通道；None=未装配仅本地跑）
     pub hub: Option<Arc<BgHub>>,
+    /// D35 定时任务：无人值守（工具面剔除 ask_user）
+    pub unattended: bool,
 }
 
 /// 与主 to_chat_messages 同构的 system 组装（[技能]/[项目]/[记忆] 三段；
@@ -206,7 +208,16 @@ pub fn run_probe(
     );
 
     let system_full = probe_system(&ctx, &spec.task);
-    let tools = ctx.tools.tool_specs();
+    // D35 无人值守：子 agent 工具面同样剔除 ask_user（无执行体，防误调）
+    let tools = if ctx.unattended {
+        ctx.tools
+            .tool_specs()
+            .into_iter()
+            .filter(|s| s.name != "ask_user")
+            .collect()
+    } else {
+        ctx.tools.tool_specs()
+    };
     let mut history: Vec<Round> = vec![];
     let mut steps = 0usize;
     let mut cancelled = false;
@@ -435,6 +446,7 @@ pub fn fanout_probes(
             workspace: env.workspace.to_string(),
             model_name: env.model_name.clone(),
             hub: env.hub.clone(),
+            unattended: env.unattended,
         };
         let tx = tx.clone();
         let sink = Arc::clone(&sink);
@@ -512,6 +524,8 @@ pub struct FanoutEnv<'a> {
     pub wait_window: std::time::Duration,
     /// 后台产物 parking（None=无 manager 装配：后台收口仅发事件不注入）
     pub hub: Option<Arc<crate::bg_hub::BgHub>>,
+    /// D35 定时任务：无人值守（子 agent 工具面剔除 ask_user）
+    pub unattended: bool,
 }
 
 /// join 收口：协议事件 + WAL + 摘要文本（主上下文回填用）

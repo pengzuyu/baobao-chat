@@ -12,6 +12,7 @@
 use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ use tauri::State;
 
 use crate::agent_bridge::AgentHost;
 
-type Host<'a> = State<'a, AgentHost>;
+type Host<'a> = State<'a, Arc<AgentHost>>;
 
 /// 包体上限（与服务端 Go 校验器一致，D22 §3.1）
 const PLUGIN_MAX_BYTES: usize = 10 << 20;

@@ -166,6 +166,8 @@ fn manager_run_cancel_unknown_run_not_found() {
             model_override: None,
             title: "取消路由".into(),
             restored: None,
+            unattended: false,
+            approval_timeout_secs: None,
         },
     )
     .unwrap();

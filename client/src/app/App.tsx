@@ -26,9 +26,12 @@ import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
 import { AppStorePage } from '../features/eco/pages/AppStorePage';
 import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
+import { SchedulesPage } from '../features/agent/pages/SchedulesPage';
 import { PluginPage } from '../features/eco/pages/PluginPage';
 import { ensureAgentEventSubscribed, useAgentStore } from '../features/agent/store/agent';
-import { isLocallyReported, notifyAgentDone } from '../features/agent/bridge/notify';
+import { isLocallyReported, notifyAgentDone, notifyScheduleApproval } from '../features/agent/bridge/notify';
+import { scheduleSyncCalendar } from '../features/agent/bridge/schedule';
+import { isTauriAvailable } from '../features/agent/bridge/tauri';
 import { AdminLayout } from '../features/admin/pages/AdminLayout';
 import { DashboardPage } from '../features/admin/pages/DashboardPage';
 import { EcoAppsPage } from '../features/admin/pages/EcoAppsPage';
@@ -37,6 +40,7 @@ import { SkillsPage } from '../features/admin/pages/SkillsPage';
 import { OrgDirectoryPage } from '../features/admin/pages/OrgDirectoryPage';
 import { RolesPage } from '../features/admin/pages/RolesPage';
 import { NoticesPage } from '../features/admin/pages/NoticesPage';
+import { CalendarPage } from '../features/admin/pages/CalendarPage';
 import { AgentGovernancePage } from '../features/admin/pages/AgentGovernancePage';
 import { PluginGovernancePage } from '../features/admin/pages/PluginGovernancePage';
 import { KbGovernancePage } from '../features/admin/pages/KbGovernancePage';
@@ -186,6 +190,48 @@ function useWsLifecycle(): void {
     };
   }, [logout, queryClient, refreshPerms]);
 
+  // D35 定时任务（纯本地）：壳事件 → 本地系统通知（完成/等待审批）
+  useEffect(() => {
+    if (!isTauriAvailable()) return;
+    let un: (() => void) | null = null;
+    let disposed = false;
+    void import('@tauri-apps/api/event').then(({ listen }) =>
+      listen<{
+        kind: string;
+        run?: { status: string; error?: string | null; summary?: string | null };
+      }>('schedule://event', (e) => {
+        const p = e.payload;
+        if (p.kind === 'run_finished' && p.run) {
+          const ok = p.run.status === 'success';
+          void notifyAgentDone(
+            ok ? '定时任务完成' : '定时任务失败',
+            (p.run.error || p.run.summary || '').slice(0, 100) || '打开 Agent → 定时任务查看详情',
+          );
+        } else if (p.kind === 'run_changed' && p.run?.status === 'waiting_approval') {
+          void notifyScheduleApproval(
+            '定时任务等待审批',
+            '打开 Agent → 定时任务 → 历史 → 去审批',
+          );
+        }
+      }),
+    ).then((off) => {
+      if (disposed) off();
+      else un = off;
+    });
+    return () => {
+      disposed = true;
+      un?.();
+    };
+  }, []);
+
+  // D35：登录后同步工作日日历（今年+明年，失败静默；用户可在任务页手动同步）
+  useEffect(() => {
+    if (!token || USE_MOCK || !isTauriAvailable()) return;
+    const y = new Date().getFullYear();
+    void scheduleSyncCalendar(y).catch(() => {});
+    void scheduleSyncCalendar(y + 1).catch(() => {});
+  }, [token]);
+
   useEffect(() => {
     if (token && !USE_MOCK) {
       // 稳定设备号（D28 批0）：Rust 持久化 uuid 单源——替换 dev-device 硬编码
@@ -292,6 +338,7 @@ export function App() {
         {/* Agent 工作台域（D08）：PAG-01/02/03 工作台（记忆/日报页已退役——平台后台组织，不做用户浏览面） */}
         <Route path="/agent" element={<AgentWorkbenchPage />} />
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />
+        <Route path="/agent/schedules" element={<SchedulesPage />} />
         <Route path="/agent/plugins" element={<PluginPage />} />
         {/* 管理后台（D10 阶段一务实版）：仪表盘/用户/策略/用量/审计五页；
             一级"管理"入口按 me.perms admin:* 显隐（MainLayout），服务端守卫 2003 兜底 */}
@@ -303,6 +350,7 @@ export function App() {
           <Route path="users/import" element={<Navigate to="/admin/org" replace />} />
           <Route path="roles" element={<RolesPage />} />
           <Route path="notices" element={<NoticesPage />} />
+          <Route path="calendar" element={<CalendarPage />} />
           <Route path="agent" element={<AgentGovernancePage />} />
           <Route path="plugins" element={<PluginGovernancePage />} />
           <Route path="org" element={<OrgDirectoryPage />} />

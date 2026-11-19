@@ -84,6 +84,14 @@ export async function notifyAgentDone(title: string, body: string): Promise<void
   await sendSystemNotification(title, body);
 }
 
+/**
+ * 定时任务等待审批（D35）：审批是需要用户动作的时效事件，**不受免打扰静默**
+ * （夜里等待审批被吞会导致任务超时被拒）；仅 Tauri 宿主弹系统通知。
+ */
+export async function notifyScheduleApproval(title: string, body: string): Promise<void> {
+  await sendSystemNotification(title, body);
+}
+
 // ── 跨端档：run 终态上报（14 篇 §3.3；服务端幂等键 run_id+status，重试安全）──
 
 /** 上报体（snake，对齐服务端 AgentTaskReportPayload / D16 agent_run 终态快照） */

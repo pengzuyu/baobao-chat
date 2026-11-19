@@ -292,6 +292,8 @@ fn manager_workspace_of() {
             model_override: None,
             title: "t".into(),
             restored: None,
+            unattended: false,
+            approval_timeout_secs: None,
         },
     )
     .unwrap();

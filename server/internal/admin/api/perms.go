@@ -75,6 +75,7 @@ var permDictionary = []PermGroup{
 		{"admin:agent:revoke", "admin", "吊销 Agent 会话"},
 		{"admin:notice:publish", "admin", "租户公告发布（12 篇 §6.3）"},
 		{"admin:mail:govern", "admin", "邮件域治理（22 篇）"},
+		{"admin:calendar:manage", "admin", "工作日日历维护（D35）"},
 	}},
 	{"platform", "平台运营", []PermPoint{
 		{"platform:tenant:manage", "platform", "租户生命周期"},

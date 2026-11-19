@@ -506,6 +506,8 @@ pub struct ExpertCtx {
     pub mode: PermissionMode,
     /// 运行中枢（D16 决策⑧：Activation 注册补充指令/取消通道；None=仅本地跑）
     pub hub: Option<Arc<crate::bg_hub::BgHub>>,
+    /// D35 定时任务：无人值守（专家工具白名单再剔除 ask_user）
+    pub unattended: bool,
 }
 
 /// 单次 Activation 产物（摘要回填主上下文/审计用）
@@ -660,7 +662,7 @@ pub fn run_expert(
         let req = ChatRequest {
             model: assembled.model.clone(),
             messages: msgs,
-            tools: expert_specs(ctx.tools.as_ref(), &assembled.tool_names),
+            tools: expert_specs(ctx.tools.as_ref(), &assembled.tool_names, ctx.unattended),
             thinking: None,
         };
         let Ok(stream) = ctx.model.chat(&req) else {
@@ -747,12 +749,13 @@ pub fn run_expert(
     result
 }
 
-/// 白名单工具 specs（模型只见装配过滤后子集）
-fn expert_specs(tools: &dyn ToolExecutor, names: &[String]) -> Vec<ToolSpec> {
+/// 白名单工具 specs（模型只见装配过滤后子集；D35 无人值守再剔除 ask_user）
+fn expert_specs(tools: &dyn ToolExecutor, names: &[String], unattended: bool) -> Vec<ToolSpec> {
     tools
         .tool_specs()
         .into_iter()
         .filter(|s| names.contains(&s.name))
+        .filter(|s| !(unattended && s.name == "ask_user"))
         .collect()
 }
 

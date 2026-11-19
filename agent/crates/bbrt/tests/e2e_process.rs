@@ -239,6 +239,8 @@ fn e2e_full_runtime_process() {
             skills: vec![],
             history_ref: None,
             title: None,
+            unattended: false,
+            approval_timeout_secs: None,
         },
     );
     let _sr = until(&pump, "session.ready", &mut seen);

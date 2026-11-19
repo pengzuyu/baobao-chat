@@ -360,6 +360,8 @@ fn dispatch(
             model,
             history_ref,
             title,
+            unattended,
+            approval_timeout_secs,
             ..
         } => {
             let tier = match model_policy {
@@ -401,6 +403,8 @@ fn dispatch(
                     // 2026-11-11：宿主可带初始标题（embedded 会话来源名）；缺省=库默认口径
                     title: title.unwrap_or_else(|| "新会话".into()),
                     restored,
+                    unattended,
+                    approval_timeout_secs,
                 },
             ) {
                 Ok(rep) => Some(RuntimeToHost::SessionReady {
@@ -1125,6 +1129,9 @@ fn revive_session(
             model_override: row.model_override,
             title: row.title,
             restored: Some(replay),
+            // 恢复路径不带 unattended（WAL 未记录该标记；按普通会话恢复）
+            unattended: false,
+            approval_timeout_secs: None,
         },
     )
     .map(|_| true)

@@ -317,6 +317,8 @@ pub struct SessionRunner {
     err_tracker: bbrt_memory::ErrorTracker,
     /// 审批超时（测试注入）
     pub permission_timeout: Duration,
+    /// D35 定时任务：无人值守——工具面剔除 ask_user + SYSTEM_PROMPT 追加约束
+    pub unattended: bool,
     /// 子任务同步等待窗（D16 决策④：探查/专家 spawn 后同步等 120s，
     /// 超窗转后台继续跑——摘要经 hub park 下一轮回填；测试注入更短值）
     pub subagent_wait_window: Duration,
@@ -400,6 +402,7 @@ impl SessionRunner {
             // v0.1 恒开（`memory.heuristic=off` 开关随配置系统接线，D15 §2.2）
             err_tracker: bbrt_memory::ErrorTracker::new(true),
             permission_timeout: PERMISSION_TIMEOUT,
+            unattended: false,
             subagent_wait_window: SUBAGENT_WAIT_WINDOW,
             bg_hub: None,
         }
@@ -485,6 +488,7 @@ impl SessionRunner {
                     model: Arc::clone(&deps.model),
                     tools: Arc::clone(&deps.tools),
                     mode: self.mode,
+                    unattended: self.unattended,
                     hub: self.bg_hub.clone(),
                 };
                 let sid = self.session_id.clone();
@@ -604,6 +608,12 @@ impl SessionRunner {
                             ModelTier::Fast => "bbc-fast".to_string(),
                             ModelTier::Strong => "bbc-strong".to_string(),
                         });
+                // D35：无人值守上下文传给子 agent（禁 ask_user + 提示词约束）
+                let fanout_system = if self.unattended {
+                    format!("{SYSTEM_PROMPT}{UNATTENDED_NOTE}")
+                } else {
+                    SYSTEM_PROMPT.to_string()
+                };
                 let outcome = crate::subagent::fanout_probes(
                     &self.session_id,
                     self.mode,
@@ -613,7 +623,8 @@ impl SessionRunner {
                     Arc::clone(&deps.wal),
                     &subs,
                     &crate::subagent::FanoutEnv {
-                        system: SYSTEM_PROMPT,
+                        system: &fanout_system,
+                        unattended: self.unattended,
                         skills: &deps.skills,
                         memory: deps.memory.as_ref(),
                         workspace: &self.workspace,
@@ -754,10 +765,20 @@ impl SessionRunner {
                 idx.render_catalog()
             };
             let allowed_tools: Option<Vec<String>> = None;
+            // D35 无人值守：工具面剔除 ask_user（三层保障之二；分支防御在 run_tool）
+            let mut tool_specs = deps.tools.tool_specs();
+            if self.unattended {
+                tool_specs.retain(|s| s.name != "ask_user");
+            }
+            let system_prompt = if self.unattended {
+                format!("{SYSTEM_PROMPT}{UNATTENDED_NOTE}")
+            } else {
+                SYSTEM_PROMPT.to_string()
+            };
             let assembled = assemble(
                 &deps.budget,
                 AssembleParts {
-                    system: SYSTEM_PROMPT,
+                    system: &system_prompt,
                     skills: &skills_text,
                     project: &self.project_line(),
                     memory_index: &memory_index,
@@ -778,7 +799,7 @@ impl SessionRunner {
             let req = ChatRequest {
                 model: model_name,
                 messages,
-                tools: pick_tools(deps.tools.tool_specs(), &allowed_tools),
+                tools: pick_tools(tool_specs, &allowed_tools),
                 // 思考强度三档（2026-11-11 zcode 同款，轮级生效）：low=disabled /
                 // medium=enabled / high=enabled+大预算；缺省=medium
                 thinking: Some(
@@ -1467,6 +1488,14 @@ impl SessionRunner {
         // waiting_clarify 态 + clarify.request 事件 + **不超时**等待（1s 轮询查
         // 中断旗标，用户「停止」= cancelled 收口）；回答以工具结果回给模型
         if call.name == "ask_user" {
+            // D35 无人值守：工具面已剔除，此处再防御（模型硬调/旧上下文残留）
+            if self.unattended {
+                return ToolOutcome::Blocked {
+                    code: 8002,
+                    summary: "无人值守定时执行不支持向用户提问，请按最合理默认继续并在结论说明假设"
+                        .into(),
+                };
+            }
             return self.run_ask_user(deps, call);
         }
         // run_command 后台执行拦截（统一后台任务体系）：gate 放行后、execute 前
@@ -1771,6 +1800,10 @@ impl SessionRunner {
 
 /// 系统提示（08 篇行为规格 + D15 §2.2 W1 记忆使用规范 + D19 分级 + D20 澄清规范；技能注入阶段二）
 pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoChat 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n向用户提问（ask_user 工具）：仅在关键决策影响后续大量工作、或用户意图存在实质歧义时使用——方案二选一、破坏性操作确认、需求方向取舍。能合理自决的不问；一次只问一个问题，选项 2-4 个（label 简短 + description 说明取舍）；用户不选点「其他」也能自由作答。提问后等待回答，不要自行猜测答案。\n\n长期记忆（memory_save 工具，跨会话生效；自动按作用域分区）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 作用域（自动路由，无需指定）：user 类存用户级（所有会话可见）；project/feedback/reference 类在项目会话中存该项目专属分区，在日常对话中存用户级。[记忆]区含[用户记忆]与[项目记忆]两段时，项目段仅对本项目会话生效。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。";
+
+/// D35 定时任务无人值守追加段（append 在 SYSTEM_PROMPT 后）：ask_user 已从
+/// 工具面移除，此处再明确行为约束——不提问、按合理默认继续、结论说明假设。
+pub(crate) const UNATTENDED_NOTE: &str = "\n\n[无人值守定时执行] 本次运行由定时任务自动触发，用户不在旁边：禁止向用户提问（ask_user 不可用）；遇到不确定的信息按最合理默认继续，并在最终结论中明确说明所做的假设。";
 
 /// 组装结果 → 模型消息序列（system/记忆/项目 → history → 工具结果）
 fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {

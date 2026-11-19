@@ -197,4 +197,10 @@ const (
 	CodeMailPolicyDenied     Code = 9034 // 被策略禁止
 	CodeMailDNSNotReady      Code = 9035 // 域名/DNS 未就绪
 	CodeMailRelayRejected    Code = 9036 // 对外发送被中继拒绝
+
+	// 工作日日历子段（D35；9037-9039 留通用/邮件顺延）
+	CodeWorkdayParamInvalid  Code = 9040 // 日历参数非法（年份越界/日期不属该年/重复/名称超长）
+	CodeWorkdayImportInvalid Code = 9041 // 日历导入格式非法（缺字段/枚举非法/version 不支持）
+	CodeWorkdayYearMismatch  Code = 9042 // 日历导入年份不匹配
+	CodeWorkdayTooManyDays   Code = 9043 // 日历条目数超限（>366）
 )

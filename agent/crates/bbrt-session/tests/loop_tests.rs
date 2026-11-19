@@ -137,11 +137,19 @@ impl ToolExecutor for FakeTools {
         Ok(())
     }
     fn tool_specs(&self) -> Vec<ToolSpec> {
-        vec![ToolSpec {
-            name: "read_file".into(),
-            description: "读文件".into(),
-            input_schema: serde_json::json!({"type":"object"}),
-        }]
+        vec![
+            ToolSpec {
+                name: "read_file".into(),
+                description: "读文件".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            },
+            // D35：无人值守工具面过滤断言用（ask_user 无执行体，主循环按名拦截）
+            ToolSpec {
+                name: "ask_user".into(),
+                description: "提问".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            },
+        ]
     }
 }
 
@@ -680,6 +688,8 @@ fn manager_limits_three_active_sessions() {
                 model_override: None,
                 title: "t".into(),
                 restored: None,
+                unattended: false,
+                approval_timeout_secs: None,
             },
         )
         .unwrap();
@@ -693,7 +703,9 @@ fn manager_limits_three_active_sessions() {
                 model_policy: ModelTier::Fast,
                 model_override: None,
                 title: "t".into(),
-                restored: None
+                restored: None,
+                unattended: false,
+                approval_timeout_secs: None,
             }
         ),
         Err(ManagerError::TooManyActive)
@@ -709,6 +721,8 @@ fn manager_limits_three_active_sessions() {
             model_override: None,
             title: "t".into(),
             restored: None,
+            unattended: false,
+            approval_timeout_secs: None,
         },
     )
     .unwrap();
@@ -1131,6 +1145,8 @@ fn manager_switch_model_emits() {
             model_override: None,
             title: "切换测试".into(),
             restored: None,
+            unattended: false,
+            approval_timeout_secs: None,
         },
     )
     .unwrap();
@@ -1281,6 +1297,8 @@ fn switch_model_override_persists() {
             model_override: Some("p:2:deepseek-chat".into()),
             title: "引用持久化".into(),
             restored: None,
+            unattended: false,
+            approval_timeout_secs: None,
         },
     )
     .unwrap();
@@ -1841,5 +1859,96 @@ fn task_wait_terminal_task_returns_output() {
                 if summary.contains("[命令完成·done]") && summary.contains("bg-hello-world")
         )),
         "task.wait 应返回命令输出: {evs:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// D35 定时任务无人值守：工具面剔除 ask_user + 硬调防御
+// ---------------------------------------------------------------------------
+
+/// 记录模型请求里的工具面（断言过滤用）
+struct RecordingModel {
+    tools: Mutex<Vec<String>>,
+}
+impl ChatClient for RecordingModel {
+    fn chat(
+        &self,
+        req: &ChatRequest,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+        bbrt_aigw::AigwError,
+    > {
+        *self.tools.lock().unwrap() = req.tools.iter().map(|t| t.name.clone()).collect();
+        let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = vec![
+            Ok(StreamEvent::TextDelta {
+                text: "ok".into(),
+            }),
+            Ok(StreamEvent::Done {
+                finish: FinishReason::Stop,
+                usage: Usage {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                },
+            }),
+        ];
+        Ok(Box::new(events.into_iter()))
+    }
+}
+
+#[test]
+fn unattended_filters_ask_user_tool_spec() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(RecordingModel {
+        tools: Mutex::new(vec![]),
+    });
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let d = deps(model.clone(), tools, sink, None);
+    let mut runner = SessionRunner::new(
+        "s-tools".into(),
+        String::new(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    runner.unattended = true;
+    let _ = runner.run_turn("列一下工具", &d, None);
+    let names = model.tools.lock().unwrap().clone();
+    assert!(names.contains(&"read_file".to_string()), "普通工具应保留: {names:?}");
+    assert!(!names.contains(&"ask_user".to_string()), "无人值守应剔除 ask_user: {names:?}");
+}
+
+#[test]
+fn unattended_blocks_ask_user_call_without_clarify_event() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeClarifyModel {
+        calls: AtomicUsize::new(0),
+        ask_args: GOOD_ASK_ARGS.into(),
+    });
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let d = deps(model, tools, sink.clone(), None);
+    let mut runner = SessionRunner::new(
+        "s-block".into(),
+        String::new(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    runner.unattended = true;
+    let rep = runner.run_turn("无人值守跑一下", &d, None);
+    assert_eq!(rep.tool_calls, 1);
+    let evts = events_of(&sink);
+    assert!(
+        !evts
+            .iter()
+            .any(|e| matches!(e, SessionEvent::ClarifyRequest { .. })),
+        "无人值守不应发 clarify.request: {evts:?}"
     );
 }

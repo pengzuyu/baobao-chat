@@ -328,4 +328,6 @@ type AdminService interface {
 	UsageSummary(ctx context.Context, tenantID int64, days int) (*UsageSummary, error)
 	// ListAudit 审计时间线
 	ListAudit(ctx context.Context, tenantID int64, cursor, limit int64) (*AuditPage, error)
+	// RecordAudit 通用审计落库（跨域管理写操作复用；D35 工作日日历）
+	RecordAudit(ctx context.Context, tenantID, operatorID int64, action, target string, detail map[string]any) error
 }

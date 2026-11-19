@@ -478,6 +478,13 @@ pub enum HostToRuntime {
         /// 缺省=库内默认「新会话」，由宿主在首条用户消息后经 session.rename 派生）
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// D35 定时任务：无人值守执行——禁用 ask_user（工具面移除+分支防御）、
+        /// SYSTEM_PROMPT 追加“不能提问、按合理默认继续”约束
+        #[serde(default, skip_serializing_if = "is_false")]
+        unattended: bool,
+        /// D35 定时任务：权限审批等待秒数（None=默认 120s；Some(0)=不超时）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_timeout_secs: Option<u64>,
     },
 
     /// 用户输入（REQ，回执=接受入队）
@@ -1099,4 +1106,9 @@ pub enum ProtocolError {
     PayloadNotObject,
     #[error("消息缺少 type 判别字段")]
     MissingTag,
+}
+
+/// serde skip_serializing_if 辅助：bool 为 false 时省略（D35 unattended 旧 golden 兼容）
+fn is_false(b: &bool) -> bool {
+    !*b
 }

@@ -43,6 +43,9 @@ pub struct SessionCache {
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// D35 定时任务：审批等待秒数（None=普通会话 120s；Some(0)=不超时）。
+    /// 前端据此设置审批卡倒计时（否则定时任务 30 分钟窗口会被 120s 误判超时）。
+    pub approval_timeout_secs: Option<u64>,
 }
 
 impl SessionCache {
@@ -52,6 +55,7 @@ impl SessionCache {
             "mode": self.mode, "model_policy": self.model_policy,
             "model_override": self.model_override, "status": self.status,
             "created_at": self.created_at, "updated_at": self.updated_at,
+            "approval_timeout_secs": self.approval_timeout_secs,
         })
     }
 }
@@ -267,6 +271,21 @@ impl AgentHost {
 
     pub fn data_dir(&self) -> &PathBuf {
         &self.data_dir
+    }
+
+    /// D35：日历同步用——当前 access token（未登录 None）
+    pub fn access_token(&self) -> Option<String> {
+        self.shared
+            .token
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(t, _)| t.clone())
+    }
+
+    /// D35：日历同步用——网关基址（不含 /api/v1）
+    pub fn gateway(&self) -> &str {
+        &self.gateway
     }
 
     /// 会话列表快照（updated_at 倒序；FE 期望 snake_case 行）。
@@ -650,6 +669,8 @@ impl AgentHost {
         model_policy: &str,
         model: Option<&str>,
         title: Option<&str>,
+        unattended: bool,
+        approval_timeout_secs: Option<u64>,
     ) -> Result<String, String> {
         self.ensure_running()?;
         let n = self.seq_session.fetch_add(1, Ordering::SeqCst) + 1;
@@ -668,11 +689,15 @@ impl AgentHost {
             status: "starting".into(),
             created_at: now,
             updated_at: now,
+            approval_timeout_secs,
         });
         let payload = json!({
             "sessionId": sid, "workspace": workspace, "mode": mode,
             "modelPolicy": model_policy, "model": model, "skills": [],
             "title": title,
+            // D35 定时任务：无人值守 + 审批等待窗口（普通会话 false/缺省）
+            "unattended": unattended,
+            "approvalTimeoutSecs": approval_timeout_secs,
         });
         // REQ 失败（超时/握手）或 RT 错误回执（type=error，如 8001 活跃会话超限）
         // 都须回滚缓存行——否则列表留永久 starting 幽灵行且白占 RT 名额
@@ -1159,10 +1184,15 @@ mod tests {
                 status: "starting".into(),
                 created_at: 0,
                 updated_at: 0,
+                approval_timeout_secs: None,
             }]),
             token: Mutex::new(None),
             // D22 L4：Shared.user（换账号重推装配）——测试补齐缺省空身份
             user: Mutex::new((String::new(), String::new())),
+            // D28 Q0：设备号/OBO 权限集/网关基址（测试缺省空 + 本地兜底）
+            did: Mutex::new(String::new()),
+            obo_scopes: Mutex::new(Vec::new()),
+            gateway: "http://127.0.0.1:8090".into(),
             halted: AtomicBool::new(false),
         });
         (shared, "s1".into())

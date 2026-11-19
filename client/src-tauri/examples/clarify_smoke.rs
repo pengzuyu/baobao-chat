@@ -66,7 +66,7 @@ fn main() {
     let host = Arc::new(AgentHost::new(data_dir, emit));
 
     let sid = host
-        .start_session(ws.to_str().unwrap(), "ask", "strong", None, None)
+        .start_session(ws.to_str().unwrap(), "ask", "strong", None, None, false, None)
         .expect("start_session");
     println!("== session: {sid}");
 

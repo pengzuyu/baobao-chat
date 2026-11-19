@@ -285,7 +285,7 @@ pub fn ext_agent_status(hub: tauri::State<'_, Arc<ExtHub>>) -> Result<Value, Str
 #[tauri::command]
 pub fn ext_agent_token_regen(
     hub: tauri::State<'_, Arc<ExtHub>>,
-    host: tauri::State<'_, AgentHost>,
+    host: tauri::State<'_, Arc<AgentHost>>,
 ) -> Result<Value, String> {
     let token = format!(
         "{}{}",
@@ -522,7 +522,7 @@ fn handle_send(
     if text.trim().is_empty() {
         return Err((-32602, "params.message.parts 无文本".into()));
     }
-    let host = app.state::<AgentHost>();
+    let host = app.state::<Arc<AgentHost>>();
     // 续聊：taskId 或 metadata.sessionId 指向既有会话
     let reuse = params["message"]["taskId"]
         .as_str()
@@ -537,6 +537,8 @@ fn handle_send(
                 "auto",
                 None,
                 Some(&format!("{EXTERNAL_TITLE_PREFIX}·{}", truncate(&text, 24))),
+                false,
+                None,
             )
             .map_err(|e| (-32603, format!("会话创建失败：{e}")))?,
     };
@@ -561,7 +563,7 @@ fn handle_get(app: &AppHandle, hub: &ExtHub, params: Value) -> Result<Value, (i6
     let mut task = hub
         .snapshot(sid)
         .ok_or_else(|| (-32602, format!("任务不存在: {sid}")))?;
-    hub.ensure_answer(&app.state::<AgentHost>(), sid, &mut task);
+    hub.ensure_answer(&app.state::<Arc<AgentHost>>(), sid, &mut task);
     Ok(task_json(sid, &task.state, task.answer.as_deref(), task.note.as_deref()))
 }
 
@@ -574,7 +576,7 @@ fn handle_cancel(app: &AppHandle, hub: &ExtHub, params: Value) -> Result<Value, 
     if hub.snapshot(sid).is_none() {
         return Err((-32602, format!("任务不存在: {sid}")));
     }
-    let host = app.state::<AgentHost>();
+    let host = app.state::<Arc<AgentHost>>();
     host.request("session.interrupt", json!({ "sessionId": sid }))
         .map_err(|e| (-32603, format!("中断失败：{e}")))?;
     if let Some(t) = hub.tasks.lock().unwrap().get_mut(sid) {

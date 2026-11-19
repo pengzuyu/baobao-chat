@@ -71,6 +71,8 @@ interface SessionRow {
   updated_at: number;
   ended_at?: number;
   summary?: string;
+  /** D35 定时任务：审批等待秒数（None=普通会话 120s；0=不超时） */
+  approval_timeout_secs?: number | null;
 }
 
 /** 宿主推送的原始事件（snake_case；type 为点号协议名） */
@@ -124,6 +126,7 @@ function mapSession(row: SessionRow): AgentSessionMeta {
     updatedAt: row.updated_at,
     endedAt: row.ended_at,
     summary: row.summary,
+    approvalTimeoutSecs: row.approval_timeout_secs ?? undefined,
   };
 }
 
@@ -341,7 +344,9 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
             : undefined,
       };
     }
-    case 'permission.request':
+    case 'permission.request': {
+      // D35 定时任务：壳注入 approval_timeout_secs（0=不超时；普通会话缺省 120s）
+      const secs = typeof raw.approval_timeout_secs === 'number' ? raw.approval_timeout_secs : undefined;
       return {
         type: 'permissionRequest',
         sessionId: sid,
@@ -351,8 +356,9 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
         reason: str(raw.reason),
         preview: (raw.preview as PermissionPreview | undefined) ?? { kind: 'command', command: '', cwd: '', dangerFlags: [] },
         options: (raw.options as GrantScope[] | undefined) ?? ['once'],
-        expiresAt: num(raw.expires_at, Date.now() + 120_000),
+        expiresAt: secs === 0 ? 0 : Date.now() + (secs !== undefined ? secs * 1000 : 120_000),
       };
+    }
     case 'permission.response':
       return {
         type: 'permissionResponse',

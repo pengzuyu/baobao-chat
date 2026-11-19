@@ -8,10 +8,11 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Menu } from 'antd';
 import type { MenuProps } from 'antd';
-import { Bot, Puzzle } from 'lucide-react';
+import { Bot, CalendarClock, Puzzle } from 'lucide-react';
 
 const TABS = [
   { to: '/agent', icon: Bot, label: '工作台' },
+  { to: '/agent/schedules', icon: CalendarClock, label: '定时任务' },
   { to: '/agent/plugins', icon: Puzzle, label: '插件' },
 ] as const;
 

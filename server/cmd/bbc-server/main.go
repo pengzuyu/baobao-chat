@@ -74,6 +74,10 @@ import (
 	stickerapi "github.com/baobaochat/server/internal/sticker/api"
 	stickerrepo "github.com/baobaochat/server/internal/sticker/repo"
 	stickerservice "github.com/baobaochat/server/internal/sticker/service"
+	"github.com/baobaochat/server/internal/workday"
+	workdayapi "github.com/baobaochat/server/internal/workday/api"
+	workdayrepo "github.com/baobaochat/server/internal/workday/repo"
+	workdayservice "github.com/baobaochat/server/internal/workday/service"
 	"github.com/baobaochat/server/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -897,6 +901,22 @@ func main() {
 	requireAnyAdmin := adminGuard(func(ctx context.Context, uid int64) bool {
 		return adminSvc.IsAdmin(ctx, httpx.TenantID(ctx), uid)
 	}, "需要管理员权限")
+	// 工作日日历（D35）：用户只读同步（客户端定时任务）+ 管理端维护（12 月日历页）
+	var workdayStore workdayrepo.Repo
+	if pgPool != nil {
+		workdayStore = workdayrepo.NewPostgres(pgPool)
+	} else {
+		workdayStore = workdayrepo.NewMemory()
+	}
+	workdaySvc := workday.NewModule(workdayservice.Options{
+		Audit: adminSvc.RecordAudit, // 管理端写操作入 admin_audit_action
+	}, workdayStore).API()
+	mux.Handle("GET /api/v1/workday-calendar", authed(handleWorkdayYear(workdaySvc)))
+	mux.Handle("GET /api/v1/admin/workday-calendar", requirePerm("admin:calendar:manage")(handleWorkdayYear(workdaySvc)))
+	mux.Handle("PUT /api/v1/admin/workday-calendar/days", requirePerm("admin:calendar:manage")(handleWorkdayUpsert(workdaySvc)))
+	mux.Handle("POST /api/v1/admin/workday-calendar/reset", requirePerm("admin:calendar:manage")(handleWorkdayReset(workdaySvc)))
+	mux.Handle("POST /api/v1/admin/workday-calendar/import", requirePerm("admin:calendar:manage")(handleWorkdayImport(workdaySvc)))
+	mux.Handle("GET /api/v1/admin/workday-calendar/export", requirePerm("admin:calendar:manage")(handleWorkdayExport(workdaySvc)))
 	// 权限点字典（PAD-08 权限树数据源；admin:role:manage）
 	mux.Handle("GET /api/v1/admin/perm-points", requirePerm("admin:role:manage")(handleAdminPermPoints()))
 	// 当前用户权限摘要（03 篇 §7；perm.changed 后端侧重拉源；登录用户即可）
@@ -3229,9 +3249,9 @@ func seedBuiltinRoles(store adminrepo.RoleRepo) {
 	// 偏差登记延后；"管理员"补齐 admin:* 全集——裸码 "admin" 保留兼容已部署旧种子行）。
 	builtin := []adminrepo.Role{
 		{Name: "管理员", Description: "租户管理域全集（内置；不含 platform:*）", IsBuiltin: true,
-		Permissions: []string{"admin",
-			"admin:org:manage", "admin:user:manage",
-			"admin:role:manage", "admin:role:assign", "admin:app:publish",
+			Permissions: []string{"admin",
+				"admin:org:manage", "admin:user:manage",
+				"admin:role:manage", "admin:role:assign", "admin:app:publish",
 				"admin:policy:manage", "admin:audit:read", "admin:audit:export",
 				"admin:usage:read", "admin:kb:govern", "admin:agent:revoke",
 				"admin:notice:publish", "admin:mail:govern"}},
@@ -3459,7 +3479,7 @@ func handleAdminImportUsers(svc adminapi.AdminService) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			DeptID int64                     `json:"dept_id"`
+			DeptID int64                    `json:"dept_id"`
 			Rows   []adminapi.ImportUserRow `json:"rows"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
@@ -4125,6 +4145,136 @@ func handleNotifyPrefSet(svc messageapi.MessageService) http.HandlerFunc {
 			return
 		}
 		dto, err := svc.SetNotifyPref(r.Context(), httpx.TenantID(r.Context()), uid, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, dto)
+	}
+}
+
+// ── 工作日日历 REST 壳（D35）──
+
+// workdayYear 取 year 查询参数（缺省当前年；范围由 service 校验）
+func workdayYear(r *http.Request) (int, error) {
+	s := r.URL.Query().Get("year")
+	if s == "" {
+		return time.Now().Year(), nil
+	}
+	y, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, errx.New(errx.CodeWorkdayParamInvalid, "year 非法")
+	}
+	return y, nil
+}
+
+func handleWorkdayYear(svc workdayapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		year, err := workdayYear(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		dto, err := svc.Year(r.Context(), httpx.TenantID(r.Context()), year)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, dto)
+	}
+}
+
+type workdayUpsertReq struct {
+	Year int                   `json:"year"`
+	Days []workdayapi.DayInput `json:"days"`
+}
+
+func handleWorkdayUpsert(svc workdayapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req workdayUpsertReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		year := req.Year
+		if year == 0 {
+			year = time.Now().Year()
+		}
+		if err := svc.UpsertDays(r.Context(), httpx.TenantID(r.Context()), uid, year, req.Days); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true})
+	}
+}
+
+type workdayResetReq struct {
+	Year  int      `json:"year"`
+	Dates []string `json:"dates"`
+}
+
+func handleWorkdayReset(svc workdayapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req workdayResetReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		year := req.Year
+		if year == 0 {
+			year = time.Now().Year()
+		}
+		if err := svc.ResetDays(r.Context(), httpx.TenantID(r.Context()), uid, year, req.Dates); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"ok": true})
+	}
+}
+
+func handleWorkdayImport(svc workdayapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := uidFrom(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		var req workdayapi.ImportReq
+		if err := decodeJSON(r, &req); err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		if req.Year == 0 {
+			req.Year = time.Now().Year()
+		}
+		res, err := svc.Import(r.Context(), httpx.TenantID(r.Context()), uid, req)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, res)
+	}
+}
+
+func handleWorkdayExport(svc workdayapi.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		year, err := workdayYear(r)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		region := r.URL.Query().Get("region")
+		dto, err := svc.Export(r.Context(), httpx.TenantID(r.Context()), year, region)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return

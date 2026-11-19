@@ -11,13 +11,14 @@
 //! 注入全走生产代码路径）。
 
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::collections::HashMap;
 use std::fs;
 use tauri::State;
 
 use crate::agent_bridge::AgentHost;
 
-type Host<'a> = State<'a, AgentHost>;
+type Host<'a> = State<'a, Arc<AgentHost>>;
 
 /// 钥匙串条目（account={server}/{key}——与插件 config 的 service 分离，
 /// 卸载清理互不影响）

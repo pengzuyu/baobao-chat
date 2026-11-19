@@ -12,6 +12,7 @@ pub mod brand;
 pub mod ext_agent;
 pub mod plugin_commands;
 pub mod mcp_commands;
+pub mod schedule;
 
 use std::sync::Arc;
 
@@ -119,13 +120,26 @@ pub fn run() {
             // （WebView + ExtHub.dispatch 任务状态机）+ 命令层防环查询共用
             let hub = Arc::new(ext_agent::ExtHub::new());
             let hub_emit = hub.clone();
-            let emit = Arc::new(move |payload: serde_json::Value| {
+            // D35 定时任务：本地调度（tasks/runs/calendar）+ 事件旁路（会话状态→run）
+            let schedule_store = schedule::Store::open(data_dir.join("schedules"))?;
+            let schedule_rt = schedule::Runtime::new(app.handle().clone(), schedule_store);
+            let rt_emit = schedule_rt.clone();
+            let emit = Arc::new(move |mut payload: serde_json::Value| {
                 hub_emit.dispatch(&payload);
+                rt_emit.dispatch(&payload);
+                // 定时会话的审批请求补真实等待窗口（前端倒计时用）
+                rt_emit.patch_event(&mut payload);
                 // 派发失败（无窗口监听）不影响桥运行
                 let _ = handle.emit("agent://event", payload);
             });
-            app.manage(AgentHost::new(data_dir.clone(), emit));
+            let host = Arc::new(AgentHost::new(data_dir.clone(), emit));
+            app.manage(host.clone());
             app.manage(hub.clone());
+            // 调度线程：抢到单实例锁才跑（双开时只有首个实例执行任务）
+            if !schedule::start(schedule_rt.clone(), host.clone()) {
+                eprintln!("[bbc-schedule] 另一个实例持有调度锁，本实例不跑定时任务");
+            }
+            app.manage(schedule_rt);
             ext_agent::start(app.handle().clone(), hub, data_dir);
             Ok(())
         })
@@ -173,7 +187,18 @@ pub fn run() {
             mcp_commands::mcp_personal_set_enabled,
             mcp_commands::mcp_test_connection,
             ext_agent::ext_agent_status,
-            ext_agent::ext_agent_token_regen
+            ext_agent::ext_agent_token_regen,
+            // D35 定时任务（纯本地调度）
+            schedule::schedule_list,
+            schedule::schedule_runs,
+            schedule::schedule_create,
+            schedule::schedule_update,
+            schedule::schedule_delete,
+            schedule::schedule_set_enabled,
+            schedule::schedule_run_now,
+            schedule::schedule_cancel_run,
+            schedule::schedule_sync_calendar,
+            schedule::schedule_calendar_status
         ])
         .run(context)
         .expect("Tauri 应用启动失败");

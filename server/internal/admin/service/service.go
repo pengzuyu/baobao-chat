@@ -658,6 +658,11 @@ func (s *Service) audit(ctx context.Context, tenantID, operatorID int64, action,
 	return err
 }
 
+// RecordAudit 通用审计落库（跨域管理写操作复用；D35 工作日日历等模块经 main 注入）
+func (s *Service) RecordAudit(ctx context.Context, tenantID, operatorID int64, action, target string, detail map[string]any) error {
+	return s.audit(ctx, tenantID, operatorID, action, target, detail)
+}
+
 // ── 聚合小工具 ──
 
 type dailyAgg struct {
