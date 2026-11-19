@@ -291,7 +291,7 @@
 | L2 | 客户端插件页 | PluginPage（市场/已安装/详情/配置表单四区）+ 下载落盘双端复跑校验 + plugin-state.json（enabled/activeVersion）多版本管理 + SkillTab.tsx 删除并入 + `/plugins` 路由挂工作台域 | tsc/vite build 绿；真机检索→安装→已安装管理 | [x] 2026-11-12（e5f6416；SkillTab 已删并入） |
 | L3 | 装配链 | 宿主装配器（系统级 env 源+插件级 .mcp.json 两源合并+`${PLUGIN_ROOT}` 替换）+ 宿主协议 `mcp.config` 动态下发（McpClient 重配：断开移除/懒连新增）+ SkillIndex 扫描路径扩展（无 triggers 技能 name 兜底触发+索引区）+ tools.reload 接线 | 真机：装带 MCP 插件→会话内出现 `mcp.<server>.*` 工具且调用过审批卡 | [x] 2026-11-12（a5ed35e） |
 | L4 | 身份层 | bbrt-mcp 调用层三变量族替换（`${BBC_USER_TOKEN}` HTTP-only/`${CONFIG:*}`/`${PLUGIN_ROOT}`）+ `auth.push`/`config.push` 宿主协议 + 钥匙串接线 + OBO `_meta.bbcObo` 泛化 + 身份使用标识 UI | 真机：HTTP 插件工具带 Bearer 调通同生态服务；config token 注入外部系统头 | [x] 2026-11-12（c87834b；实现收敛：CONFIG/USER_ID 装配静态替换+保存/换号重推，弃 config.push/auth.push——仅 TOKEN 必须动态） |
-| L5 | 命令与专家 | `/` 命令列表+模板渲染（$ARGUMENTS/$1..$9，纯客户端注入用户消息）+ agents frontmatter→专家 Persona Manifest 翻译器（走现有专家装配交集） | 真机：/release 出模板；插件专家可被选中会诊 | [x] 2026-11-12（51f4833；IM 聊天页斜杠命令后续登记） |
+| L5 | 命令与专家 | `/` 命令列表+模板渲染（$ARGUMENTS/$1..$9，纯客户端注入用户消息）+ agents frontmatter→专家 Persona Manifest 翻译器（走现有专家装配交集） | 真机：/release 出模板；插件专家可被选中使用 | [x] 2026-11-12（51f4833；IM 聊天页斜杠命令后续登记；验收口径「可被选中会诊」随协作图退役 2026-11-19 改为「可被选中使用」） |
 
 ## 批次 M：Agent 记忆系统升级（D23，2026-11-12 M1-M3 编码完成待真机验收）
 

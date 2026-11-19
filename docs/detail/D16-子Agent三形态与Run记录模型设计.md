@@ -1,6 +1,6 @@
 # D16 - 子 Agent 形态与 Run 记录模型设计
 
-> **口径修订（2026-11-19）**：原「三形态」中的**类型 3 本机 CLI 委派**（bbrt-delegate：claude/zcode/generic 三后端、简报确认、diff 审查、DelegateCard）已**整域退役**；run 模型与统一后台任务体系保留并推广到 **terminal 后台命令**（run_command 超时转后台）。现存形态=通用子 agent（probe）/专家（expert）/会诊（team）+ terminal 后台任务，全部共用 agent_run 审计行。下方历史内容中涉及委派的行已标注或改写，未标注的委派段落视为历史留档。
+> **口径修订（2026-11-19）**：原「三形态」中的**类型 3 本机 CLI 委派**（bbrt-delegate：claude/zcode/generic 三后端、简报确认、diff 审查、DelegateCard）已**整域退役**；**会诊/协作图（team）**（Team Graph 三拓扑、黑板通信、TeamRun/NodeRun、FastCaster 组队选角）已**整域退役**（迁移 006）。run 模型与统一后台任务体系保留并推广到 **terminal 后台命令**（run_command 超时转后台）。现存形态=通用子 agent（probe）/专家（expert）+ terminal 后台任务，全部共用 agent_run 审计行。下方历史内容中涉及委派/team 的行已标注或改写，未标注的段落视为历史留档。
 
 | 项 | 内容 |
 |---|---|
@@ -49,10 +49,10 @@ CREATE TABLE agent_run (
     id               TEXT PRIMARY KEY,   -- r-{seq}，持久发号（跨重启唯一）
     session_id       TEXT NOT NULL,      -- 父会话（发起 spawn 的主会话）
     root_session_id  TEXT NOT NULL,      -- 调用链根会话（顶层 run＝父会话 id）
-    parent_run_id    TEXT NOT NULL DEFAULT '', -- 父 run（team 成员 expert run＝team run id）
+    parent_run_id    TEXT NOT NULL DEFAULT '', -- 父 run（嵌套子任务用；顶层恒空）
     parent_call_id   TEXT NOT NULL DEFAULT '', -- 触发本次 run 的工具调用 id（terminal=run_command call_id）
-    kind             TEXT NOT NULL,      -- probe | expert | team | terminal
-    def_ref          TEXT NOT NULL DEFAULT '', -- builtin.probe / {expertId}@{version} / team:{topo} / backend:{type}
+    kind             TEXT NOT NULL,      -- probe | expert | terminal
+    def_ref          TEXT NOT NULL DEFAULT '', -- builtin.probe / {expertId}@{version} / shell
     status           TEXT NOT NULL,      -- running | done | failed | cancelled | interrupted
     eta_hint_ms      INTEGER NOT NULL DEFAULT 0,
     eta_actual_ms    INTEGER NOT NULL DEFAULT 0,

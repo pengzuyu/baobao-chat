@@ -42,7 +42,7 @@
 - 发射点（run_probe 循环）：drain 后 text 非空 → trace(text)；每个 tc 执行前 → trace(tool_call)；execute 返回 → trace(tool_result)。
 - 持久化：每个 trace 同步 `wal.append_run(session_id, run_id, "subagent.trace", payload)`（agent_event.run_id 列既有）。
 - bridge.rs 映射：risk `medium→mid` 与 tool.call 同口径；events.rs 加 SessionEvent::SubagentTrace。
-- 范围：v0.1 仅 probe（探查是 fan-out 主力）；expert/team 登记阶段二（team.rs 循环同构可后续套用）。
+- 范围：v0.1 仅 probe（探查是 fan-out 主力）；expert 登记阶段二（expert.rs 循环同构可后续套用；原 team 随协作图退役 2026-11-19）。
 - 前端路由：trace 按 runId 进 `sideStreams`，**不进主时间线**（主流仍只有 spawn 卡+done 摘要，防噪音）。
 
 ### 3.3 run.history 回放 REQ
@@ -50,7 +50,7 @@
 - `HostToRuntime::RunHistory { run_id }` → `RuntimeToHost::RunHistoryResult { run_id, items: Vec<HistoryItem> }`（照 session.history 模式：main.rs 分发 + store `events_by_run(run_id)` 查询 + 投影）。
 - 投影 `wal_run_history(events)`：`subagent.spawn` 行 → `User{task}`（payload 已含 task 截断 60 字）；`subagent.trace` text → `Assistant{text}`；tool_call/tool_result 按 call_id 配对 → `Tool{call_id, tool, ok, summary, args}`；其余行忽略。
 - 透传链：Tauri command `run_history`（agent_commands.rs 照 session_history）→ bridge `runHistory(runId)` → store `loadRunHistory`。
-- 运行详情：probe/expert/team/terminal 统一走 run.history 回放（原 delegate 的 childSessionRef 子会话历史随委派域退役 2026-11-19）。
+- 运行详情：probe/expert/terminal 统一走 run.history 回放（原 delegate 的 childSessionRef 子会话历史随委派域退役 2026-11-19；原 team 随协作图退役同日）。
 
 ### 3.4 WAL args 保真（历史回放）
 
@@ -142,7 +142,7 @@
 ## 7. 登记不做（阶段二）
 
 - 子 agent 逐 token 流式 trace（现整段，IPC 省）；probe reasoning 不外发（现状丢弃）。
-- expert/team 的 trace（team.rs 循环同构，后续套用）。
+- expert 的 trace（expert.rs 循环同构，后续套用）。
 - 隐式触发词注入的「自动加载」提示行（机制整体移除，见拍板 #2）。
 - 思考/审批/澄清入历史回放（WAL 摘要级既定口径）。
 
