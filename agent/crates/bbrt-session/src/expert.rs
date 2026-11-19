@@ -14,8 +14,9 @@
 //!   :{activationId}`（WAL expert.* 类型，协议事件复用 subagent.*——协议
 //!   已冻结 18 篇，不新增变体）
 //!
-//! v0.1 边界：Team Graph 编排（三种拓扑/黑板/TeamRun）与 OBO scope 最小化
-//! （防线二）不在本模块——装配器是编排层的基元。
+//! v0.1 边界：OBO scope 最小化（防线二）不在本模块——装配器是执行基元。
+//! 单专家调用（D14 §3.3 精简形态）见本模块 `FastPicker`；协作图/会诊
+//! （Team Graph）已随 team 域退役（2026-11-19）。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -507,7 +508,7 @@ pub struct ExpertCtx {
     pub hub: Option<Arc<crate::bg_hub::BgHub>>,
 }
 
-/// 单次 Activation 产物（编排层黑板/汇总用）
+/// 单次 Activation 产物（摘要回填主上下文/审计用）
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpertResult {
     /// 持久 run id（D16 §3.1：接 Store 时 r-{seq}；否则退回进程内临时 id）
@@ -764,6 +765,139 @@ fn last_text(history: &[Round]) -> String {
             _ => None,
         })
         .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// 专家库索引与单专家选角（D14 §3.3 自动选角的精简形态）
+// ---------------------------------------------------------------------------
+
+/// 专家库索引：扫描 `eco/experts/*.yaml`（一文件一 manifest；解析失败
+/// 静默跳过不阻塞其余——降级语义同技能装载；tools.reload 联动由 bin 侧重扫）
+#[derive(Debug, Clone, Default)]
+pub struct ExpertIndex {
+    pub manifests: Vec<ExpertManifest>,
+}
+
+impl ExpertIndex {
+    /// 扫描专家库目录（缺失/空目录=空索引；yaml/yml 双扩展）。
+    /// `{id}.override.yaml` = 本地覆写（D16 §6 三层配置：建议配置→覆写→
+    /// 硬上限）：tools/skills 合并增强、constraints/model 覆盖后重校验；
+    /// 坏覆写降级=沿用建议配置（不阻塞该专家可用）。
+    pub fn scan(dir: &std::path::Path) -> Self {
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => return Self::default(),
+        };
+        let mut manifests: Vec<ExpertManifest> = vec![];
+        let mut overrides: Vec<(String, String)> = vec![]; // (id, 覆写文本)
+        for p in rd.filter_map(|e| e.ok()).map(|e| e.path()) {
+            if !matches!(p.extension().and_then(|x| x.to_str()), Some("yaml" | "yml")) {
+                continue;
+            }
+            let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            if let Some(stem) = name
+                .strip_suffix(".override.yaml")
+                .or_else(|| name.strip_suffix(".override.yml"))
+            {
+                overrides.push((stem.to_string(), text));
+            } else if let Ok(m) = parse_manifest(&text) {
+                manifests.push(m);
+            }
+        }
+        for (id, text) in overrides {
+            let Some(m) = manifests.iter_mut().find(|m| m.id == id) else {
+                continue; // 孤儿覆写（上游已删）：忽略
+            };
+            if let Err(e) = apply_override(m, &text) {
+                eprintln!("[bbrt] 专家 {id} 本地覆写非法，沿用建议配置：{e}");
+            }
+        }
+        manifests.sort_by(|a, b| a.id.cmp(&b.id)); // 确定性：选角清单顺序稳定
+        Self { manifests }
+    }
+
+    /// 按 id 取 manifest
+    pub fn get(&self, id: &str) -> Option<&ExpertManifest> {
+        self.manifests.iter().find(|m| m.id == id)
+    }
+
+    /// 选角清单文本（id + display + persona 摘要——快模型视角）
+    fn roster(&self) -> String {
+        self.manifests
+            .iter()
+            .map(|m| {
+                format!(
+                    "- {}：{}｜{}",
+                    m.id,
+                    m.display,
+                    truncate_chars(m.persona.trim(), 60)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// 单专家派发（选角产物：装配后的专家 + 角色位标签 + 任务简报）
+pub struct ExpertPick {
+    /// 角色位标签（缺省=manifest display；回填标题用）
+    pub label: String,
+    pub expert: Arc<AssembledExpert>,
+    /// 任务简报（当前=用户原话）
+    pub task: String,
+}
+
+/// 专家调用源（依赖倒置：loop_runner 只依赖本 trait；bin 装配 FastPicker，
+/// 测试注入假件。None=零行为回主循环——专家调用是优化不是依赖，降级语义同探查）
+pub trait ExpertSource: Send + Sync {
+    /// 判定是否需要某位专家并装配（命中返回单专家派发；装配过滤已生效）
+    fn pick(&self, model: &dyn ChatClient, user_text: &str) -> Option<ExpertPick>;
+}
+
+/// 快模型单专家选角器（D14 §3.3：任务关键词 × manifest 能力声明匹配；输出
+/// JSON {expert}——解析失败/围栏噪声/幻觉 id 一律降级不调用）。装配闭包由
+/// bin 注入（registry/skills/policy 绑定侧）。
+pub struct FastPicker<F>
+where
+    F: Fn(&ExpertManifest) -> AssembledExpert + Send + Sync,
+{
+    pub index: ExpertIndex,
+    /// manifest → 装配产物（assemble() 的绑定封装，含 dropped 标灰信息）
+    pub assemble_for: F,
+}
+
+const PICKER_SYSTEM: &str = "判定任务是否需要交给某位专家执行。可用专家清单：\nROSTER\n\
+    输出纯 JSON（无围栏无解释）：\n\
+    {\"expert\": \"专家id\"} 或 {\"expert\": null}\n\
+    判定：任务明确需要清单中某位专家的专业视角，且清单中有匹配专家（最多 1 个）；\
+    单一问题/清单不匹配/普通问答输出 null。";
+
+impl<F> ExpertSource for FastPicker<F>
+where
+    F: Fn(&ExpertManifest) -> AssembledExpert + Send + Sync,
+{
+    fn pick(&self, model: &dyn ChatClient, user_text: &str) -> Option<ExpertPick> {
+        if self.index.manifests.is_empty() {
+            return None;
+        }
+        let system = PICKER_SYSTEM.replacen("ROSTER", &self.index.roster(), 1);
+        let out = crate::loop_runner::chat_text(model, &system, user_text).ok()?;
+        let v: serde_json::Value =
+            serde_json::from_str(crate::subagent::strip_fence(&out).trim()).ok()?;
+        let id = v.get("expert")?.as_str()?;
+        // 幻觉 id 防线：只认清单内专家（声明式——不在库=不存在）
+        let m = self.index.get(id)?;
+        Some(ExpertPick {
+            label: m.display.clone(),
+            expert: Arc::new((self.assemble_for)(m)),
+            task: user_text.to_string(),
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

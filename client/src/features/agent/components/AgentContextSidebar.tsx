@@ -20,7 +20,6 @@ import { AgentStreamView } from './stream/AgentStreamView';
 const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = {
   probe: '子任务',
   expert: '专家',
-  team: '团队',
   terminal: '终端',
 };
 

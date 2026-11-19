@@ -26,14 +26,14 @@ pub mod recovery;
 pub mod skills;
 pub mod state;
 pub mod subagent;
-pub mod team;
 
 pub use compactor::FastCompactor;
 pub use events::{ModelTier, NullSink, SessionEvent, SessionSink, StreamChannel};
 pub use executor::{CheckOutcome, CommandHandoff, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview};
 pub use expert::{
     apply_override, assemble, parse_manifest, AssemblePolicy, AssembledExpert, Dropped,
-    ExpertConstraints, ExpertCtx, ExpertError, ExpertManifest, ExpertResult, ManifestTools,
+    ExpertConstraints, ExpertCtx, ExpertError, ExpertIndex, ExpertManifest, ExpertPick,
+    ExpertResult, ExpertSource, FastPicker, ManifestTools,
 };
 pub use loop_runner::{
     EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, SessionRunner,
@@ -52,7 +52,3 @@ pub use state::{
     TransitionError,
 };
 pub use subagent::{FanoutPlanner, FastPlanner, ProbeResult, ProbeSpec};
-pub use team::{
-    run_team, validate_graph, NodeResult, TeamError, TeamGraph, TeamMember, TeamResult,
-    TEAM_MAX_MEMBERS, TEAM_MAX_TOTAL_STEPS,
-};

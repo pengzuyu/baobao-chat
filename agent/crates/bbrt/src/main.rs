@@ -181,21 +181,21 @@ fn run() -> Result<(), String> {
         model.clone(),
     ))));
 
-    // 专家会诊启用（D14 §3.3 / D16 P1-5）：本地专家库扫描（含 .override.yaml
-    // 覆写合并——D16 §6 三层配置）→ FastCaster 快模型选角（判定优先于探查）。
-    // 空库零成本（manifests_empty 直接不组队）；选角是优化不是依赖，降级语义同探查
-    let expert_index = bbrt_session::team::ExpertIndex::scan(&data_dir.join("eco/experts"));
-    let skills_for_cast = skills_index.clone();
-    let tools_for_cast: Arc<dyn ToolExecutor> = tools.clone();
-    let caster = Arc::new(bbrt_session::team::FastCaster {
+    // 专家调用启用（D14 §3.3 / D16 P1-5）：本地专家库扫描（含 .override.yaml
+    // 覆写合并——D16 §6 三层配置）→ FastPicker 快模型单专家选角（判定优先于探查）。
+    // 空库零成本（空索引直接不调用）；选角是优化不是依赖，降级语义同探查
+    let expert_index = bbrt_session::expert::ExpertIndex::scan(&data_dir.join("eco/experts"));
+    let skills_for_pick = skills_index.clone();
+    let tools_for_pick: Arc<dyn ToolExecutor> = tools.clone();
+    let picker = Arc::new(bbrt_session::expert::FastPicker {
         index: expert_index,
         // 装配闭包：manifest ∩ 工具注册表（含 MCP）∩ 技能库；租户策略
         // （AssemblePolicy.deny_tools）随策略面接线注入，v0.1 空策略
         assemble_for: move |m| {
             bbrt_session::expert::assemble(
                 m,
-                &tools_for_cast.tool_specs(),
-                &skills_for_cast.lock().unwrap(),
+                &tools_for_pick.tool_specs(),
+                &skills_for_pick.lock().unwrap(),
                 &bbrt_session::expert::AssemblePolicy::default(),
             )
         },
@@ -213,7 +213,7 @@ fn run() -> Result<(), String> {
         sink: sink.clone(),
         skills: skills_index.clone(),
         fanout: Some(Arc::new(bbrt_session::FastPlanner)),
-        experts: Some(caster),
+        experts: Some(picker),
         budget: Default::default(),
     };
     let mut mgr_build = SessionManager::new(deps, Some(store.clone()));

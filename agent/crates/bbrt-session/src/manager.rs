@@ -95,7 +95,7 @@ pub struct SessionManager {
     permission_tx: Mutex<HashMap<String, Sender<PermissionResponse>>>,
     /// 澄清回执路由表（D20 ask_user）
     clarify_tx: Mutex<HashMap<String, Sender<crate::loop_runner::ClarifyAnswer>>>,
-    /// 后台任务中枢（D16 §5：探查/专家/会诊超窗与终端后台命令的取消
+    /// 后台任务中枢（D16 §5：探查/专家超窗与终端后台命令的取消
     /// 路由 + join parking；start 时注入 runner 共享）
     hub: Arc<crate::bg_hub::BgHub>,
     /// D19 会话工作区表（bin 装配时与 tools 管线共享同一实例；start/end 维护）
@@ -276,8 +276,8 @@ impl SessionManager {
             .unwrap()
             .take()
             .ok_or_else(|| ManagerError::Busy(session_id.into()))?;
-        // 后台产物注入（D16 §5：超窗探查/会诊的摘要在此回填主上下文，
-        // 以 subagent.join/team.join 轮次参与本轮组装）
+        // 后台产物注入（D16 §5：超窗探查/专家的摘要在此回填主上下文，
+        // 以 subagent.join/expert.join 轮次参与本轮组装）
         for join in self.hub.drain_joins(session_id) {
             runner.inject_bg_join(&join.run_id, &join.name, &join.summary);
         }

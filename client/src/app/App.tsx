@@ -285,7 +285,7 @@ export function App() {
         <Route path="/kb/my" element={<MyArticlesPage />} />
         {/* 邮箱（22 篇 MAI-01~04：三栏/写信/设置/搜索） */}
         <Route path="/mail" element={<MailPage />} />
-        {/* 专家库（D14 PAG-13~15：公司/个人库/编辑器；协作图视图随 agent_* 接线） */}
+        {/* 专家库（D14 PAG-13~15：公司/个人库/编辑器） */}
         <Route path="/experts" element={<ExpertLibraryPage />} />
         {/* 应用商店（E1/D09 PEC-07：catalog 差异+安装） */}
         <Route path="/apps" element={<AppStorePage />} />

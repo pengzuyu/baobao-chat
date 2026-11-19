@@ -14,13 +14,15 @@ use crate::StoreError;
 /// 迁移脚本清单（下标即版本号-1）。001_init 为 D11 §11 全表 DDL 逐表照建；
 /// 002 增列 model_override（会话级模型直达引用，0023 多供应商）；
 /// 003 子 Agent run 记录模型（agent_run 表 + agent_event.run_id，D16 §3.1）；
-/// 004 terminal 后台命令入 run 表；005 委派域退役（删表/清 kind/去列）。
+/// 004 terminal 后台命令入 run 表；005 委派域退役（删表/清 kind/去列）；
+/// 006 会诊/协作图（team）退役（kind 收窄 + 清存量 team 行）。
 const MIGRATIONS: &[&str] = &[
     include_str!("migrations/001_init.sql"),
     include_str!("migrations/002_model_override.sql"),
     include_str!("migrations/003_subagent_run.sql"),
     include_str!("migrations/004_terminal_run.sql"),
     include_str!("migrations/005_retire_delegate.sql"),
+    include_str!("migrations/006_retire_team.sql"),
 ];
 
 /// 执行所有未应用的迁移。

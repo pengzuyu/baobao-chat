@@ -7,7 +7,9 @@ use bbrt_aigw::{ChatClient, ChatRequest, FinishReason, StreamEvent, ToolSpec, Us
 use bbrt_sec::gate::PermissionMode;
 use bbrt_session::events::{SessionEvent, SessionSink};
 use bbrt_session::executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome};
-use bbrt_session::expert::{assemble, parse_manifest, run_expert, AssemblePolicy, ExpertCtx};
+use bbrt_session::expert::{
+    assemble, parse_manifest, run_expert, AssemblePolicy, ExpertCtx, ExpertIndex,
+};
 use bbrt_session::loop_runner::EventLog;
 use bbrt_session::{SkillEntry, SkillIndex};
 
@@ -247,7 +249,7 @@ fn run_expert_full_chain() {
         "评审 PR #42 的改动",
         sink.as_ref(),
         &log,
-        "", // parent_run_id（无 team 编排）
+        "", // parent_run_id（顶层调用，无父 run）
     );
 
     assert!(r.ok);
@@ -308,7 +310,7 @@ fn run_expert_step_limit() {
         "评审",
         sink.as_ref(),
         &log,
-        "", // parent_run_id（无 team 编排）
+        "", // parent_run_id（顶层调用，无父 run）
     );
 
     assert!(!r.ok);
@@ -352,11 +354,77 @@ fn run_expert_context_budget() {
         "评审",
         sink.as_ref(),
         &log,
-        "", // parent_run_id（无 team 编排）
+        "", // parent_run_id（顶层调用，无父 run）
     );
 
     assert!(!r.ok);
     assert!(r.summary.contains("超上下文预算"));
     // 未消耗模型轮（预算检查先于请求）
     assert!(model.seen.lock().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 专家库索引（D14 §3.3 单专家选角的数据源）
+// ---------------------------------------------------------------------------
+
+fn yaml_for(id: &str, display: &str) -> String {
+    format!(
+        "id: {id}\ntype: local\nversion: 1.0.0\ndisplay: {display}\npersona: |\n  {display}视角。\nconstraints:\n  max_steps: 20\nsource: company\n"
+    )
+}
+
+fn scan_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, body) in files {
+        std::fs::write(dir.path().join(name), body).unwrap();
+    }
+    dir
+}
+
+/// ExpertIndex：合法/非法混合扫描（失败跳过不阻塞）+ 按 id 取
+#[test]
+fn expert_index_scan() {
+    let dir = scan_dir(&[
+        ("a.yaml", &yaml_for("corp.sec", "安全专家")),
+        ("b.yaml", &yaml_for("corp.perf", "性能专家")),
+        ("broken.yaml", "id: 坏的\n缺必填: true\n"),
+        ("c.txt", "非 yaml 扩展"),
+    ]);
+    let idx = ExpertIndex::scan(dir.path());
+    assert_eq!(idx.manifests.len(), 2, "坏文件跳过、非 yaml 忽略");
+    assert!(idx.get("corp.sec").is_some());
+    assert!(idx.get("不存在").is_none());
+    // 目录缺失=空索引
+    assert!(ExpertIndex::scan(std::path::Path::new("/nonexistent"))
+        .manifests
+        .is_empty());
+}
+
+/// ExpertIndex::scan：{id}.override.yaml 合并进 manifest；坏覆写降级沿用建议配置
+#[test]
+fn expert_index_merges_override_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let edir = dir.path().join("experts");
+    std::fs::create_dir_all(&edir).unwrap();
+    std::fs::write(
+        edir.join("corp.demo.yaml"),
+        "id: corp.demo\ntype: local\nversion: 1.0.0\ndisplay: 演示\npersona: |\n  干活\nconstraints:\n  max_steps: 20\nsource: company\n",
+    )
+    .unwrap();
+    std::fs::write(
+        edir.join("corp.demo.override.yaml"),
+        "tools:\n  builtin: [read_file]\nconstraints:\n  max_steps: 80\nmodel: { tier: fast }\n",
+    )
+    .unwrap();
+    std::fs::write(edir.join("corp.bad.override.yaml"), "persona: |\n  x\n").unwrap();
+
+    let idx = ExpertIndex::scan(&edir);
+    assert_eq!(idx.manifests.len(), 1, "坏覆写不产生专家行");
+    let m = idx.get("corp.demo").unwrap();
+    assert_eq!(m.constraints.max_steps, 80, "覆写调参生效");
+    assert_eq!(m.model_tier, "fast");
+    assert!(
+        m.tools.builtin.contains(&"read_file".to_string()),
+        "覆写加工具生效"
+    );
 }

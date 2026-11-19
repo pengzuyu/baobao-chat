@@ -84,7 +84,7 @@ export interface RunInfo {
   rootSessionId: string;
   parentRunId: string;
   parentCallId: string;
-  kind: 'probe' | 'expert' | 'team' | 'terminal';
+  kind: 'probe' | 'expert' | 'terminal';
   defRef: string;
   status: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
   etaHintMs: number;

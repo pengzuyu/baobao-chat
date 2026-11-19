@@ -1,8 +1,9 @@
 //! 子 Agent run 记录（agent_run，D16 §3.1）。
 //!
-//! 后台任务（probe/expert/team/terminal）统一审计行：一次调用 = 一条 run
+//! 后台任务（probe/expert/terminal）统一审计行：一次调用 = 一条 run
 //! 加一段带 run_id 的 agent_event 事件流，可完整重放（审计口径）。
-//! 外部 CLI 委派（kind=delegate）已随委派域退役（2026-11-18 迁移 005）。
+//! 外部 CLI 委派（kind=delegate）已随委派域退役（2026-11-18 迁移 005）；
+//! 会诊/协作图（kind=team）已随 team 域退役（2026-11-19 迁移 006）。
 
 use rusqlite::{params, Row};
 
@@ -17,15 +18,15 @@ pub struct RunRow {
     pub session_id: String,
     /// 调用链根会话（顶层 run=父会话 id）
     pub root_session_id: String,
-    /// 父 run（team 成员 expert run=team run id；其余空）
+    /// 父 run（嵌套子任务用；顶层 run 恒空）
     #[serde(default)]
     pub parent_run_id: String,
     /// 触发本次 run 的工具调用 id（terminal=run_command call_id）
     #[serde(default)]
     pub parent_call_id: String,
-    /// probe | expert | team | terminal
+    /// probe | expert | terminal
     pub kind: String,
-    /// builtin.probe / {expertId}@{version} / team:{topology} / shell
+    /// builtin.probe / {expertId}@{version} / shell
     #[serde(default)]
     pub def_ref: String,
     /// running | done | failed | cancelled | interrupted（interrupted 仅恢复写入）
@@ -70,7 +71,7 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<RunRow> {
 
 impl Store {
     /// 持久发号（统一后台任务体系 2026-11-18）：按 kind 分前缀 + uuid 全长
-    /// 32 位 hex——子 agent（probe/expert/team）=`agent-`、terminal 后台
+    /// 32 位 hex——子 agent（probe/expert）=`agent-`、terminal 后台
     /// 命令=`terminal-`（用户拍板口径；id 即类型可读，
     /// task.wait/task id 跨类型通用）。碰撞查重重试 ≤5 兜底；存量 id
     /// （r-*/dt-*/sub-* 等）不迁移——所有消费方按精确字符串匹配天然兼容。
@@ -236,7 +237,6 @@ mod tests {
         let cases = [
             ("probe", "agent-"),
             ("expert", "agent-"),
-            ("team", "agent-"),
             ("terminal", "terminal-"),
         ];
         let mut seen = std::collections::HashSet::new();
@@ -311,6 +311,61 @@ mod tests {
             assert!(!has_col("agent_run", "child_session_ref"));
             assert!(!has_col("agent_session", "backend"));
         }
+    }
+
+    /// 006 迁移：模拟 v5 老库（重建含 team 的 CHECK + 版本拨回 5）重 open——
+    /// 存量 probe/expert 无损、存量 team 行清洗、新库不再可插 team
+    #[test]
+    fn migration_006_drops_team_rows_and_narrows_kind() {
+        let (dir, store) = testutil::open_store();
+        testutil::seed_session(&store, "sess-1");
+        drop(store);
+        let db = dir.path().join("agent").join("runtime.sqlite3");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            // 重建 v5 形态（CHECK 含 team）并灌入三 kind 行
+            conn.execute_batch(
+                "DROP TABLE agent_run;
+                 CREATE TABLE agent_run (
+                   id                TEXT PRIMARY KEY,
+                   session_id        TEXT NOT NULL REFERENCES agent_session(id),
+                   root_session_id   TEXT NOT NULL,
+                   parent_run_id     TEXT NOT NULL DEFAULT '',
+                   parent_call_id    TEXT NOT NULL DEFAULT '',
+                   kind              TEXT NOT NULL CHECK(kind IN('probe','expert','team','terminal')),
+                   def_ref           TEXT NOT NULL DEFAULT '',
+                   status            TEXT NOT NULL CHECK(status IN('running','done','failed','cancelled','interrupted')),
+                   eta_hint_ms       INTEGER NOT NULL DEFAULT 0,
+                   eta_actual_ms     INTEGER NOT NULL DEFAULT 0,
+                   summary           TEXT NOT NULL DEFAULT '',
+                   actor             TEXT NOT NULL DEFAULT '',
+                   created_at        INTEGER NOT NULL,
+                   started_at        INTEGER NOT NULL,
+                   ended_at          INTEGER
+                 );
+                 CREATE INDEX idx_run_session ON agent_run(session_id, created_at);
+                 CREATE INDEX idx_run_root ON agent_run(root_session_id);
+                 INSERT INTO agent_run (id, session_id, root_session_id, parent_run_id,
+                   parent_call_id, kind, def_ref, status, eta_hint_ms, eta_actual_ms,
+                   summary, actor, created_at, started_at)
+                 VALUES ('agent-p','sess-1','sess-1','','','probe','builtin.probe','done',0,0,'','',1,1),
+                        ('agent-x','sess-1','sess-1','','','expert','corp.reviewer@1.0.0','done',0,0,'','',1,1),
+                        ('agent-t','sess-1','sess-1','','','team','team:consult','done',0,0,'','',1,1);
+                 PRAGMA user_version = 5;",
+            )
+            .unwrap();
+        }
+        let store2 = crate::Store::open(&db).unwrap();
+        assert!(store2.run_by_id("agent-p").unwrap().is_some(), "probe 应保留");
+        assert!(store2.run_by_id("agent-x").unwrap().is_some(), "expert 应保留");
+        assert!(store2.run_by_id("agent-t").unwrap().is_none(), "team 行应清洗");
+        // 收窄后的 CHECK：team 不可再插入
+        assert!(
+            store2
+                .insert_run(&start_row("agent-t2", "sess-1", "team"))
+                .is_err(),
+            "kind=team 应被约束拒绝"
+        );
     }
 
     /// 按 id 单查：run_by_id 命中/未命中

@@ -44,7 +44,6 @@ pub(crate) fn static_eta_ms(kind: &str) -> i64 {
     match kind {
         "probe" => 45_000,
         "expert" => 180_000,
-        "team" => 300_000,
         _ => 60_000,
     }
 }
@@ -95,13 +94,13 @@ pub struct RunStart {
     pub session_id: String,
     /// 调用链根会话（v0.1 子 agent 均为顶层：root=session；嵌套链随 P1 扩展）
     pub root_session_id: String,
-    /// 父 run（team 成员 expert run=team run id；其余空）
+    /// 父 run（嵌套子任务用；顶层 run 恒空）
     pub parent_run_id: String,
     /// 触发本次 run 的工具调用 id（terminal=run_command 的 call_id）
     pub parent_call_id: String,
-    /// probe | expert | team | terminal
+    /// probe | expert | terminal
     pub kind: &'static str,
-    /// builtin.probe / {expertId}@{version} / team:{topology} / shell
+    /// builtin.probe / {expertId}@{version} / shell
     pub def_ref: String,
     /// ETA 预估毫秒（P1-6 滚动统计接线前恒 0）
     pub eta_hint_ms: i64,
@@ -321,7 +320,7 @@ pub struct SessionRunner {
     /// 子任务同步等待窗（D16 决策④：探查/专家 spawn 后同步等 120s，
     /// 超窗转后台继续跑——摘要经 hub park 下一轮回填；测试注入更短值）
     pub subagent_wait_window: Duration,
-    /// 后台任务中枢（D16 §5 后台化推广：探查/专家/会诊超窗与终端后台命令
+    /// 后台任务中枢（D16 §5 后台化推广：探查/专家超窗与终端后台命令
     /// 共用——run 注册/取消路由 + join parking。None=未装配（raw runner
     /// 测试/嵌入式用法）。manager.start 注入，生产路径恒 Some；
     /// 与 manager 共享同一实例
@@ -406,7 +405,7 @@ impl SessionRunner {
         }
     }
 
-    /// 后台产物注入（D16 §5：探查/会诊经 hub park 的摘要由 manager
+    /// 后台产物注入（D16 §5：探查/专家经 hub park 的摘要由 manager
     /// 在下一轮 run_turn 前 drain 后调用——主上下文以对应 join 轮次回填）
     pub fn inject_bg_join(&mut self, run_id: &str, name: &str, summary: &str) {
         self.history.push(Round::Tool {
@@ -428,9 +427,9 @@ pub struct LoopDeps {
     pub skills: Arc<Mutex<crate::skills::SkillIndex>>,
     /// 探查子 Agent 判定器（08 §4.5；None=未装配零行为，FastPlanner 见 subagent.rs）
     pub fanout: Option<Arc<dyn crate::subagent::FanoutPlanner>>,
-    /// 专家会诊源（D14 §3.3 选角；None=未装配零行为，FastCaster 见 team.rs）。
+    /// 专家调用源（D14 §3.3 单专家选角；None=未装配零行为，FastPicker 见 expert.rs）。
     /// 判定优先于探查——专家=重执行体，探查=信息收集优化
-    pub experts: Option<Arc<dyn crate::team::ExpertSource>>,
+    pub experts: Option<Arc<dyn crate::expert::ExpertSource>>,
     pub budget: BudgetConfig,
 }
 
@@ -464,19 +463,24 @@ impl SessionRunner {
             &format!("{{\"text\":\"{}\"}}", escape_json(user_text)),
         );
 
-        // 专家会诊（D14 §3：选角命中 → run_team 并行 Activation → 摘要回填；
-        // 优先于探查——多专家并行产出结论后主 Agent 综合规划。状态复用
-        // #9/#10（"并行子任务执行中"同语义；TeamRun 并发 ≤1 由本顺序天然保证）
+        // 单专家调用（D14 §3.3 精简形态：选角命中 → run_expert → 摘要回填；
+        // 优先于探查——专家=重执行体，探查=信息收集优化。状态复用 #9/#10
+        // （"并行子任务执行中"同语义；专家并发 ≤1 由本顺序天然保证）
         if let Some(source) = deps.experts.as_ref() {
-            if let Some(graph) = source.cast(deps.model.as_ref(), user_text) {
+            if let Some(pick) = source.pick(deps.model.as_ref(), user_text) {
                 self.state = crate::subagent::transition_fanout(self.state);
                 emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
                     session_id: id,
                     state: "subagent_fanout".into(),
-                    reason: "team.cast".into(),
+                    reason: "expert.pick".into(),
                 });
-                // 等待窗 + 超窗转后台（D16 决策④：同探查口径；TeamRun 在
-                // 专用线程，窗内收口即时回填 / 超窗 park 摘要下一轮注入）
+                deps.wal.append(
+                    &self.session_id,
+                    "expert.pick",
+                    &format!("{{\"expert\":\"{}\"}}", escape_json(&pick.label)),
+                );
+                // 等待窗 + 超窗转后台（D16 决策④：同探查口径；专家在专用线程，
+                // 窗内收口即时回填 / 超窗 park 摘要下一轮注入）
                 let ctx = crate::expert::ExpertCtx {
                     model: Arc::clone(&deps.model),
                     tools: Arc::clone(&deps.tools),
@@ -487,50 +491,43 @@ impl SessionRunner {
                 let sink_bg = Arc::clone(&deps.sink);
                 let wal_bg = Arc::clone(&deps.wal);
                 let hub = self.bg_hub.clone();
-                let (ttx, trx) = std::sync::mpsc::channel::<Option<crate::team::TeamResult>>();
+                let label = pick.label.clone();
+                let (etx, erx) = std::sync::mpsc::channel::<crate::expert::ExpertResult>();
                 let _ = std::thread::Builder::new()
-                    .name("bbc-team".into())
+                    .name("bbc-expert".into())
                     .spawn(move || {
-                        let team = crate::team::run_team(
+                        let result = crate::expert::run_expert(
                             &ctx,
                             &sid,
-                            &graph,
+                            &pick.expert,
+                            &pick.task,
                             sink_bg.as_ref(),
                             wal_bg.as_ref(),
+                            "",
                         );
                         // rx 已关（主线程超窗弃等）→ send Err：超窗路径 park 摘要
-                        // （TeamError 非 Clone：ok() 值传递，Err 路径无产物不 park）
-                        let parked = match &team {
-                            Ok(t) => Some(t.clone()),
-                            Err(_) => None,
-                        };
-                        if ttx.send(team.ok()).is_err() {
-                            if let (Some(hub), Some(team)) = (hub, parked) {
-                                // C 批：超窗 team 完成也发事件（通知/run 面板刷新；
-                                // 与窗内收口同构——此前后台完成零协议级终态）
+                        if etx.send(result.clone()).is_err() {
+                            if let Some(hub) = hub {
+                                // 超窗完成也发事件（通知/run 面板刷新；与窗内收口同构）
                                 sink_bg.emit(SessionEvent::SubagentJoined {
                                     session_id: sid.clone(),
-                                    results: team
-                                        .nodes
-                                        .iter()
-                                        .map(|n| bbrt_protocol::SubagentResult {
-                                            sub_id: n.result.run_id.clone(),
-                                            ok: n.result.ok,
-                                            summary: crate::subagent::truncate_chars(
-                                                &n.result.summary,
-                                                120,
-                                            ),
-                                        })
-                                        .collect(),
+                                    results: vec![bbrt_protocol::SubagentResult {
+                                        sub_id: result.run_id.clone(),
+                                        ok: result.ok,
+                                        summary: crate::subagent::truncate_chars(
+                                            &result.summary,
+                                            120,
+                                        ),
+                                    }],
                                 });
                                 hub.park_join(
                                     &sid,
                                     crate::bg_hub::BgJoin {
-                                        name: "team.join".into(),
-                                        run_id: team.run_id.clone(),
+                                        name: "expert.join".into(),
+                                        run_id: result.run_id.clone(),
                                         summary: format!(
-                                            "## 专家会诊结果（后台完成）\n{}",
-                                            team.summary
+                                            "## 专家结论（后台完成）\n{}",
+                                            result.summary
                                         ),
                                     },
                                 );
@@ -538,13 +535,13 @@ impl SessionRunner {
                         }
                     });
                 // rx 先移出（超窗须显式 drop 才能让线程 send 失败→走 park 路径）
-                let (team_in_window, timed_out) = {
-                    let rx = trx;
+                let (expert_in_window, timed_out) = {
+                    let rx = erx;
                     match rx.recv_timeout(self.subagent_wait_window) {
-                        Ok(opt) => (opt, false),
+                        Ok(result) => (Some(result), false),
                         // 关窗瞬间防丢：非阻塞补收一次再弃等（drop 触发 park）
                         Err(_) => match rx.try_recv() {
-                            Ok(opt) => (opt, false),
+                            Ok(result) => (Some(result), false),
                             Err(_) => {
                                 drop(rx);
                                 (None, true)
@@ -553,39 +550,33 @@ impl SessionRunner {
                     }
                 };
                 self.state = crate::subagent::transition_join(self.state);
-                if let Some(team) = team_in_window {
+                if let Some(result) = expert_in_window {
                     self.history.push(Round::Tool {
-                        call_id: format!("team-{}", team.run_id),
-                        name: "team.join".to_string(),
-                        summary: format!("## 专家会诊结果\n{}", team.summary),
+                        call_id: format!("expert-{}", result.run_id),
+                        name: "expert.join".to_string(),
+                        summary: format!("## 专家结论（{}）\n{}", label, result.summary),
                     });
-                    // C 批：team 完成事件（此前零协议级终态——通知/run 面板刷新断链）
                     emit(deps, &self.session_id, |id| SessionEvent::SubagentJoined {
                         session_id: id,
-                        results: team
-                            .nodes
-                            .iter()
-                            .map(|n| bbrt_protocol::SubagentResult {
-                                sub_id: n.result.run_id.clone(),
-                                ok: n.result.ok,
-                                summary: crate::subagent::truncate_chars(&n.result.summary, 120),
-                            })
-                            .collect(),
+                        results: vec![bbrt_protocol::SubagentResult {
+                            sub_id: result.run_id.clone(),
+                            ok: result.ok,
+                            summary: crate::subagent::truncate_chars(&result.summary, 120),
+                        }],
                     });
                     emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
                         session_id: id,
                         state: "running".into(),
-                        reason: "team.join".into(),
+                        reason: "expert.join".into(),
                     });
                 } else if timed_out {
-                    deps.wal.append(&self.session_id, "team.backgrounded", "{}");
+                    deps.wal.append(&self.session_id, "expert.backgrounded", "{}");
                     emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
                         session_id: id,
                         state: "running".into(),
-                        reason: "team.backgrounded".into(),
+                        reason: "expert.backgrounded".into(),
                     });
                 }
-                // else：图校验拒绝（选角器已前置校验，此处兜底）→ 回 running 走主循环
             }
         }
 

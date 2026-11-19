@@ -812,11 +812,11 @@ type NotificationEvent struct {
 // 上报以用户 OBO token 鉴权，UserID 恒取 token sub——body 不接受越权指定接收人）
 type AgentTaskReportPayload struct {
 	RunID             string `json:"run_id"`                        // r-{seq}（幂等键）
-	Kind              string `json:"kind"`                          // probe | expert | team
+	Kind              string `json:"kind"`                          // probe | expert
 	Status            string `json:"status"`                        // done | failed | cancelled
 	SessionID         string `json:"session_id"`                    // 父会话
 	ParentRunID       string `json:"parent_run_id,omitempty"`       // 父 run（链路展示用）
-	DefRef            string `json:"def_ref,omitempty"`             // builtin.probe / {expertId}@{ver} / backend:{type}
+	DefRef            string `json:"def_ref,omitempty"`             // builtin.probe / {expertId}@{ver}
 	Title             string `json:"title"`                         // 任务标题（通知标题用）
 	Summary           string `json:"summary,omitempty"`             // 结果摘要截断
 	ChangedFilesCount int    `json:"changed_files_count,omitempty"` // 变更文件数（展示用，不含内容）

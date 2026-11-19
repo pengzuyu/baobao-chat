@@ -5,7 +5,7 @@
  * - 日常对话区：workspace='' 且 IM 来源（embeddedIds 命中，💬 徽标，标题=「与xxx的对话」/
  *   「xxx · 群聊」）的会话平铺；2026-11-17 收窄——工作台建的空目录会话改落任务区
  * - 任务区：任务会话（workspace='' 非 IM 来源——含任务区「+」新建与历史数据）平铺在前，
- *   runs.list 跨会话全量（子代理探查/专家会诊/终端后台命令）随其后，运行中置顶，点击跳所属会话
+ *   runs.list 跨会话全量（子代理探查/专家/终端后台命令）随其后，运行中置顶，点击跳所属会话
  * - 顶部双入口：[+ 新建任务会话（任务区头）] [打开项目目录（项目区头，plugin-dialog 目录选择）]
  * - 会话项：状态点（●运行/◐等待/○暂停/✕错误/▪结束）+ 标题 + 相对时间 + 状态 chip
  * - 六态由父层推导后传入（loading/empty/error/offline 走 StateView）
@@ -28,17 +28,16 @@ import { Button } from '../../../shared/ui/Button';
 import { formatListTime } from '../../../shared/utils/time';
 import { embeddedSessionIds } from '../../im/agent/embedded';
 
-/** run 类型徽标（D16 三类 + 统一后台任务体系的 terminal） */
+/** run 类型徽标（D16 两形态 + 统一后台任务体系的 terminal） */
 const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = {
   probe: '探查',
   expert: '专家',
-  team: '会诊',
   terminal: '终端',
 };
 
-/** run 类型徽标色（专家/会诊=紫） */
+/** run 类型徽标色（专家=紫） */
 function runKindColor(kind: RunInfo['kind']): string | undefined {
-  if (kind === 'expert' || kind === 'team') return 'purple';
+  if (kind === 'expert') return 'purple';
   return undefined;
 }
 
@@ -387,7 +386,7 @@ export const AgentSessionList = memo(function AgentSessionList({
       // 任务会话在前（+ 新建即落此区），子任务 run 随后；两组同现时以小节头分隔
       children:
         taskSessions.length === 0 && taskRuns.length === 0
-          ? [hintItem('hint:no-task', '点右上 + 新建任务会话；探查/专家会诊/后台命令的子任务也在此汇总')]
+          ? [hintItem('hint:no-task', '点右上 + 新建任务会话；探查/专家/后台命令的子任务也在此汇总')]
           : [
               ...taskSessions.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s, '任务会话 · 无工作目录') })),
               ...(taskSessions.length > 0 && taskRuns.length > 0 ? [hintItem('subhead:task-runs', '子任务运行')] : []),

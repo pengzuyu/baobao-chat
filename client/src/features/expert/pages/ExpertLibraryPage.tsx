@@ -1,7 +1,7 @@
 /**
  * PAG-13/14/15 专家库页（D14 §4）：公司库/个人库双栏卡片 + 编辑器弹窗
  * （manifest YAML 发布，个人命名空间校验提示）+ 详情抽屉（manifest 预览/
- * 下架/删除）。PAG-16 协作图/PAG-17 摘要卡=Agent 会话产物视图，随
+ * 下架/删除）。
  * D17：「用此专家开会话」入口——建工作台会话（mode=ask + manifest model 直达引用；
  * persona/skills 注入随宿主 expert_id 参数阶段二，登记）。
  * D26-O3：exp-* 自研壳退役——卡片→Card、编辑器→Modal+Form、详情→Drawer、

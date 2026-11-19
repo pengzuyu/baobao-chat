@@ -1,11 +1,11 @@
-//! 后台任务中枢（D16 §5 后台化推广：探查/专家/会诊超窗与终端后台命令）。
+//! 后台任务中枢（D16 §5 后台化推广：探查/专家超窗与终端后台命令）。
 //!
 //! 职责：
 //! - **后台 run 注册表**（run_id → 指令通道）：宿主 run.cancel / 模型侧
 //!   subagent.adjust 定向路由到具体 run（P0-2②——取代对全部活跃会话的
 //!   广播，修多会话并存时的误投）；
 //! - **产物 parking**：后台完成的摘要按会话入队，manager 在下一次 run_turn
-//!   前 drain 并注入主上下文（subagent.join/team.join 轮次，
+//!   前 drain 并注入主上下文（subagent.join/expert.join 轮次，
 //!   loop_runner::inject_bg_join）；
 //! - **会话收口**：session.end 时对本会话全部后台 run 优雅取消。
 //!
@@ -25,7 +25,7 @@ struct BgRun {
     tx: Sender<BgHostMsg>,
 }
 
-/// 待回填主上下文的产物（多形态共用：subagent.join/team.join）
+/// 待回填主上下文的产物（多形态共用：subagent.join/expert.join）
 #[derive(Debug, Clone, PartialEq)]
 pub struct BgJoin {
     /// 注入 history 的轮次名（Round::Tool.name）
@@ -146,7 +146,7 @@ mod tests {
         hub.park_join(
             "s-1",
             BgJoin {
-                name: "team.join".into(),
+                name: "expert.join".into(),
                 run_id: "r-2".into(),
                 summary: "y".into(),
             },
@@ -154,7 +154,7 @@ mod tests {
         hub.park_join(
             "s-2",
             BgJoin {
-                name: "team.join".into(),
+                name: "expert.join".into(),
                 run_id: "r-3".into(),
                 summary: "z".into(),
             },
