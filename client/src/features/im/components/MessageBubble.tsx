@@ -18,9 +18,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Flex, Image, Popover, Tag, Typography, theme } from 'antd';
+import { Flex, Image, Popover, Tag, Typography, message as antdMessage, theme } from 'antd';
 import { useAgentStore } from '../../agent/store/agent';
 import { getAgentBridge } from '../../agent/bridge';
+import { useImStore } from '../store/im';
 import { currentRoundItems, roundQuestionOf, stagesFromStream } from '../agent/embedded';
 import {
   AlertCircle,
@@ -31,7 +32,6 @@ import {
   ChevronDown,
   Clock3,
   FileText,
-  Forward,
   Image as ImageIcon,
   Lightbulb,
   ListOrdered,
@@ -40,6 +40,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Send,
   SmilePlus,
   Video,
 } from 'lucide-react';
@@ -1138,10 +1139,7 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
             <VideoCard body={videoBody} />
           ) : message.type === 'agent_card' && isAgentCardBody(message.body) ? (
             <span style={bubbleStyle(true)}>
-              <AgentCardMsg
-                body={message.body as AgentCardBody}
-                onForward={actions?.onForward ? () => actions.onForward(message) : undefined}
-              />
+              <AgentCardMsg body={message.body as AgentCardBody} convId={message.convId} />
             </span>
           ) : (
             <span style={bubbleStyle(true)}>
@@ -1303,7 +1301,7 @@ function agentCardPlainText(md: string): string {
  *   迷你卡——完成起 2 分钟宽限到点自动折叠，宽限期内新回合开始立即折叠
  * - 应答条（仅回答 agent 的交互）：待审批黄条 + D20 提问蓝条——与聊天页弹框同感
  */
-export function AgentCardMsg({ body, onForward }: { body: AgentCardBody; onForward?: () => void }) {
+export function AgentCardMsg({ body, convId }: { body: AgentCardBody; convId: string }) {
   const { token } = theme.useToken();
   // 订阅只取引用（2026-11-11 卡顿修复）：此前 4 个 selector 内各做 O(流长) 扫描，
   // store 每次 set（流式期每 delta）都会执行——聊天里每轮一张历史卡，成本 ×卡数；
@@ -1364,6 +1362,28 @@ export function AgentCardMsg({ body, onForward }: { body: AgentCardBody; onForwa
     liveProj ??
     // 状态校正兜底（无人 PATCH 场景）：落流停在 running 而会话已收口 → 按 done 渲染
     (body.status === 'running' && !live ? { ...body, status: 'done', ended_at: body.ended_at ?? Date.now() } : body);
+
+  // 结论纯文本（2026-11-20 修订）：折叠态摘要与卡上「发送到本会话」共用（剥 markdown，
+  // 发的是纯文本消息与显示一致）
+  let conclusionPlainText = '';
+  for (let i = display.stages.length - 1; i >= 0; i -= 1) {
+    if (display.stages[i].t === 'conclusion') {
+      conclusionPlainText = agentCardPlainText(display.stages[i].md ?? '').trim();
+      break;
+    }
+  }
+  // 「发送到本会话」（2026-11-20 修订口径）：结论以纯文本消息发到本卡所在会话——
+  // 固定目标不弹选择、不支持发到其他私聊/群聊；走 im store sendText 全链（乐观+outbox）
+  const sendConclusion = () => {
+    if (!convId || !conclusionPlainText) return;
+    void useImStore
+      .getState()
+      .sendText(convId, conclusionPlainText)
+      .then(
+        () => antdMessage.success('已发送到本会话'),
+        () => antdMessage.error('发送失败，请重试'),
+      );
+  };
 
   // ---- 一行折叠态（仅 IM；口径见组件头注）----
   const done = display.status !== 'running';
@@ -1428,13 +1448,6 @@ export function AgentCardMsg({ body, onForward }: { body: AgentCardBody; onForwa
       display.status === 'done' ? token.colorSuccess : display.status === 'failed' || display.status === 'cancelled' ? token.colorError : token.colorTextSecondary;
     const hasThinking = display.stages.some((s) => s.t === 'thinking');
     const durMs = display.started_at && display.ended_at ? display.ended_at - display.started_at : null;
-    let conclusionText = '';
-    for (let i = display.stages.length - 1; i >= 0; i -= 1) {
-      if (display.stages[i].t === 'conclusion') {
-        conclusionText = agentCardPlainText(display.stages[i].md ?? '');
-        break;
-      }
-    }
     return (
       <div
         data-testid="agent-card-collapsed"
@@ -1501,7 +1514,7 @@ export function AgentCardMsg({ body, onForward }: { body: AgentCardBody; onForwa
             </span>
           </Flex>
         ) : null}
-        {conclusionText ? (
+        {conclusionPlainText ? (
           <div
             style={{
               fontSize: 13,
@@ -1515,25 +1528,25 @@ export function AgentCardMsg({ body, onForward }: { body: AgentCardBody; onForwa
               wordBreak: 'break-word',
             }}
           >
-            {conclusionText}
+            {conclusionPlainText}
           </div>
         ) : null}
-        {/* 卡上显式转发（2026-11-20 拍板）：收口后右下角常驻小按钮（整卡点击展开，
-            须 stopPropagation）；running 不给转（对端会收到永远转圈的卡） */}
-        {onForward && display.status !== 'running' ? (
+        {/* 卡上「发送到本会话」（2026-11-20 修订：固定发本会话不弹选择）：收口后右下角
+            常驻小按钮（整卡点击展开，须 stopPropagation）；running/无结论不给发 */}
+        {convId && display.status !== 'running' && conclusionPlainText ? (
           <Button
             size="small"
             variant="text"
-            icon={<Forward size={12} aria-hidden />}
-            title="转发到其他会话"
-            data-testid="agent-card-forward"
+            icon={<Send size={12} aria-hidden />}
+            title="把结论以文本消息发送到本会话"
+            data-testid="agent-card-send"
             onClick={(e) => {
               e.stopPropagation();
-              onForward();
+              sendConclusion();
             }}
             style={{ position: 'absolute', right: 4, bottom: 2, height: 22, paddingInline: 6, fontSize: 12, color: token.colorTextTertiary, background: token.colorFillQuaternary }}
           >
-            转发
+            发送
           </Button>
         ) : null}
       </div>
@@ -1596,19 +1609,19 @@ export function AgentCardMsg({ body, onForward }: { body: AgentCardBody; onForwa
               ))}
             </Flex>
           ) : null}
-          {/* 卡上显式转发（2026-11-20）：收口后卡尾右下角（与折叠态同口径） */}
-          {onForward && display.status !== 'running' ? (
+          {/* 卡上「发送到本会话」（2026-11-20 修订）：收口后卡尾右下角（与折叠态同口径） */}
+          {convId && display.status !== 'running' && conclusionPlainText ? (
             <Flex justify="flex-end" style={{ width: '100%', marginTop: 6 }}>
               <Button
                 size="small"
                 variant="text"
-                icon={<Forward size={12} aria-hidden />}
-                title="转发到其他会话"
-                data-testid="agent-card-forward"
-                onClick={onForward}
+                icon={<Send size={12} aria-hidden />}
+                title="把结论以文本消息发送到本会话"
+                data-testid="agent-card-send"
+                onClick={sendConclusion}
                 style={{ fontSize: 12, color: token.colorTextTertiary }}
               >
-                转发
+                发送
               </Button>
             </Flex>
           ) : null}

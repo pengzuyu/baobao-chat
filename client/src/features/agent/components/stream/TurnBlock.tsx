@@ -253,13 +253,14 @@ export const TurnBlock = memo(
           </div>
         ) : null}
         {active && processItems.length === 0 && !lastAnswer ? <TypingState text="Agent 正在处理" /> : null}
-        {/* 发送到聊天（2026-11-20）：回合收口且有最终回答才出现——右对齐轻量文字按钮 */}
+        {/* 发送到聊天（2026-11-20 修订：固定发到本会话对应的来源私聊/群聊，无选择）：
+            回合收口且有最终回答才出现——右对齐轻量文字按钮 */}
         {!active && onShare && lastAnswer ? (
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button
               type="button"
               onClick={() => onShare(user, items)}
-              title="把本回合最终回答以文本消息发到私聊/群聊"
+              title="把本回合最终回答以文本消息发送到本会话对应的聊天"
               style={{
                 display: 'flex',
                 alignItems: 'center',
