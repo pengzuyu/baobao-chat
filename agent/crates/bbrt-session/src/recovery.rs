@@ -293,8 +293,10 @@ pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
             }
             // 收口时刻回填最后一个 user 条目（与直播收口盖 turnDoneAt 同口径）
             "turn.end" => {
-                if let Some(HistoryItem::User { turn_done_at, .. }) =
-                    items.iter_mut().rev().find(|it| matches!(it, HistoryItem::User { .. }))
+                if let Some(HistoryItem::User { turn_done_at, .. }) = items
+                    .iter_mut()
+                    .rev()
+                    .find(|it| matches!(it, HistoryItem::User { .. }))
                 {
                     *turn_done_at = Some(ev.created_at);
                 }
@@ -356,7 +358,11 @@ pub fn wal_run_history(events: &[EventRow]) -> Vec<HistoryItem> {
         match ev.type_.as_str() {
             "subagent.spawn" => {
                 if let Some(task) = str_field("task") {
-                    if !task.is_empty() && !items.iter().any(|it| matches!(it, HistoryItem::User { .. })) {
+                    if !task.is_empty()
+                        && !items
+                            .iter()
+                            .any(|it| matches!(it, HistoryItem::User { .. }))
+                    {
                         items.push(HistoryItem::User {
                             text: task,
                             // run 级行无 turn.start/end——侧栏回放不带冻结用时
@@ -411,9 +417,21 @@ mod history_tests {
     #[test]
     fn run_history_projects_spawn_seed_and_trace() {
         let events = vec![
-            ev(1, "subagent.spawn", r#"{"run_id":"r-1","eta_hint_ms":1000,"task":"修复登录 bug"}"#),
-            ev(2, "subagent.trace", r#"{"kind":"tool_call","callId":"t1","tool":"Bash","argsMasked":"{\"command\":\"cargo test\"}","risk":"low"}"#),
-            ev(3, "subagent.trace", r#"{"kind":"tool_result","callId":"t1","ok":true,"summary":"51 passed","durationMs":1200}"#),
+            ev(
+                1,
+                "subagent.spawn",
+                r#"{"run_id":"r-1","eta_hint_ms":1000,"task":"修复登录 bug"}"#,
+            ),
+            ev(
+                2,
+                "subagent.trace",
+                r#"{"kind":"tool_call","callId":"t1","tool":"Bash","argsMasked":"{\"command\":\"cargo test\"}","risk":"low"}"#,
+            ),
+            ev(
+                3,
+                "subagent.trace",
+                r#"{"kind":"tool_result","callId":"t1","ok":true,"summary":"51 passed","durationMs":1200}"#,
+            ),
         ];
         let items = wal_run_history(&events);
         assert_eq!(items.len(), 2);
@@ -501,13 +519,22 @@ mod history_tests {
         let events = vec![
             ev_at(1, 1_000, "turn.start", r#"{"text_len":4}"#),
             ev(2, "user.text", r#"{"text":"查下日志"}"#),
-            ev(3, "assistant.thinking", r#"{"text":"先 grep error 再看时间线"}"#),
+            ev(
+                3,
+                "assistant.thinking",
+                r#"{"text":"先 grep error 再看时间线"}"#,
+            ),
             ev(
                 4,
                 "assistant.done",
                 r#"{"finish":"stop","usage_in":9,"usage_out":3,"text":"结论如下"}"#,
             ),
-            ev_at(5, 5_000, "turn.end", r#"{"steps":1,"paused":false,"interrupted":false}"#),
+            ev_at(
+                5,
+                5_000,
+                "turn.end",
+                r#"{"steps":1,"paused":false,"interrupted":false}"#,
+            ),
             // 空思考不落条目
             ev(6, "assistant.thinking", r#"{"text":""}"#),
         ];
@@ -612,22 +639,38 @@ mod history_tests {
             EventRow {
                 id: 1,
                 run_id: "r-9".into(),
-                ..ev(11, "subagent.spawn", r#"{"run_id":"r-9","eta_hint_ms":0,"task":"定位超时来源"}"#)
+                ..ev(
+                    11,
+                    "subagent.spawn",
+                    r#"{"run_id":"r-9","eta_hint_ms":0,"task":"定位超时来源"}"#,
+                )
             },
             EventRow {
                 id: 2,
                 run_id: "r-9".into(),
-                ..ev(12, "subagent.trace", r#"{"kind":"tool_call","callId":"c1","tool":"read_file","argsMasked":"{\"path\":\"a.rs\"}","risk":"low"}"#)
+                ..ev(
+                    12,
+                    "subagent.trace",
+                    r#"{"kind":"tool_call","callId":"c1","tool":"read_file","argsMasked":"{\"path\":\"a.rs\"}","risk":"low"}"#,
+                )
             },
             EventRow {
                 id: 3,
                 run_id: "r-9".into(),
-                ..ev(13, "subagent.trace", r#"{"kind":"tool_result","callId":"c1","ok":true,"summary":"42 行","durationMs":18}"#)
+                ..ev(
+                    13,
+                    "subagent.trace",
+                    r#"{"kind":"tool_result","callId":"c1","ok":true,"summary":"42 行","durationMs":18}"#,
+                )
             },
             EventRow {
                 id: 4,
                 run_id: "r-9".into(),
-                ..ev(14, "subagent.trace", r#"{"kind":"text","text":"已定位问题"}"#)
+                ..ev(
+                    14,
+                    "subagent.trace",
+                    r#"{"kind":"text","text":"已定位问题"}"#,
+                )
             },
             EventRow {
                 id: 5,
@@ -650,7 +693,9 @@ mod history_tests {
                     summary: Some("42 行".into()),
                     args: Some("{\"path\":\"a.rs\"}".into()),
                 },
-                HistoryItem::Assistant { text: "已定位问题".into() },
+                HistoryItem::Assistant {
+                    text: "已定位问题".into()
+                },
             ]
         );
     }

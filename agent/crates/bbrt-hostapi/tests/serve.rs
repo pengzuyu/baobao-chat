@@ -15,8 +15,8 @@ use bbrt_hostapi::{
     MAX_PENDING_WRITE_BYTES,
 };
 use bbrt_protocol::{
-    read_message, write_message, CodecError, Envelope, HostToRuntime, SubagentTraceItem,
-    MemoryListItem, RuntimeToHost, SessionState, PROTOCOL_VERSION,
+    read_message, write_message, CodecError, Envelope, HostToRuntime, MemoryListItem,
+    RuntimeToHost, SessionState, SubagentTraceItem, PROTOCOL_VERSION,
 };
 use serde_json::json;
 

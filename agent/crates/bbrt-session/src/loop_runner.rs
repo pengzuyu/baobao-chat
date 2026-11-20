@@ -1925,10 +1925,10 @@ const STATUS_PROMPT_HEAD_LINES: usize = 40;
 
 /// D19 记忆作用域路由：user 类（身份/偏好）恒用户级；
 /// project/feedback/reference 类随会话工作目录落项目分区（日常会话回落用户级）
-fn route_scope<'a>(
-    ws: Option<&'a std::path::Path>,
+fn route_scope(
+    ws: Option<&std::path::Path>,
     mtype: bbrt_memory::MemoryType,
-) -> Option<&'a std::path::Path> {
+) -> Option<&std::path::Path> {
     match mtype {
         bbrt_memory::MemoryType::User => None,
         _ => ws,
@@ -2022,20 +2022,17 @@ fn distill_memories(
     }
     // D37：进度增量并入台账（仅项目会话；拒绝覆盖/零增量静默跳过不阻塞收口）
     if let (Some(ws), Some(delta)) = (ws, payload.progress.as_ref()) {
-        match m.merge_status(ws, delta, session_id) {
-            Ok(Some((outcome, stats))) => {
-                emit_memory_saved(deps, session_id, &outcome);
-                deps.wal.append(
-                    session_id,
-                    "status.merge",
-                    &format!(
-                        "{{\"added\":{},\"completed\":{},\"redacted\":{}}}",
-                        stats.added, stats.completed, stats.redacted
-                    ),
-                );
-                saved += 1;
-            }
-            _ => {}
+        if let Ok(Some((outcome, stats))) = m.merge_status(ws, delta, session_id) {
+            emit_memory_saved(deps, session_id, &outcome);
+            deps.wal.append(
+                session_id,
+                "status.merge",
+                &format!(
+                    "{{\"added\":{},\"completed\":{},\"redacted\":{}}}",
+                    stats.added, stats.completed, stats.redacted
+                ),
+            );
+            saved += 1;
         }
     }
     saved

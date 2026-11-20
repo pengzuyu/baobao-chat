@@ -264,8 +264,7 @@ impl ToolExecutor for PipelineExecutor {
             }
         };
         let mut det = det;
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs(wait_secs.max(1));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(wait_secs.max(1));
         loop {
             match det.try_wait() {
                 Ok(Some(_)) | Err(_) => break,
@@ -281,10 +280,7 @@ impl ToolExecutor for PipelineExecutor {
         let outcome = if r.resource_killed {
             ToolOutcome::Blocked {
                 code: 8022,
-                summary: mask(&format!(
-                    "进程资源超限被终止（8022）：{}ms",
-                    r.duration_ms
-                )),
+                summary: mask(&format!("进程资源超限被终止（8022）：{}ms", r.duration_ms)),
             }
         } else {
             ToolOutcome::Ok {

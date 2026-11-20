@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use bbrt_protocol::{
-    Blocked, CompactionPhase, Envelope, GrantScope, ModelPolicy,
-    ModelSwitchReason, Preview, RiskLevel, RuntimeToHost, SessionState, StreamChannel, Usage,
+    Blocked, CompactionPhase, Envelope, GrantScope, ModelPolicy, ModelSwitchReason, Preview,
+    RiskLevel, RuntimeToHost, SessionState, StreamChannel, Usage,
 };
 use bbrt_session::events::SessionEvent;
 use bbrt_session::SessionSink;

@@ -418,8 +418,10 @@ impl DetachedCommand {
 
         let stdout_file = temp_dir.join("stdout.bin");
         let stderr_file = temp_dir.join("stderr.bin");
-        let out_f = fs::File::create(&stdout_file).map_err(|e| format!("stdout 文件创建失败: {e}"))?;
-        let err_f = fs::File::create(&stderr_file).map_err(|e| format!("stderr 文件创建失败: {e}"))?;
+        let out_f =
+            fs::File::create(&stdout_file).map_err(|e| format!("stdout 文件创建失败: {e}"))?;
+        let err_f =
+            fs::File::create(&stderr_file).map_err(|e| format!("stderr 文件创建失败: {e}"))?;
 
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)

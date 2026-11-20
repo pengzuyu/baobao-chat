@@ -91,14 +91,16 @@ impl Store {
                 return Ok(id);
             }
         }
-        Err(StoreError::Sqlite("任务 id 随机发号连续碰撞（5 次重试）".into()))
+        Err(StoreError::Sqlite(
+            "任务 id 随机发号连续碰撞（5 次重试）".into(),
+        ))
     }
 
     /// 按 id 单查（subagent.wait 终态轮询/结果取回）
     pub fn run_by_id(&self, run_id: &str) -> Result<Option<RunRow>, StoreError> {
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {RUN_COLS} FROM agent_run WHERE id = ?1"
-        ))?;
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {RUN_COLS} FROM agent_run WHERE id = ?1"))?;
         let mut rows = stmt.query(params![run_id])?;
         match rows.next()? {
             Some(row) => Ok(Some(from_row(row)?)),
@@ -143,13 +145,7 @@ impl Store {
              SET status = ?2, eta_actual_ms = ?3, summary = ?4,
                  ended_at = ?5
              WHERE id = ?1",
-            params![
-                run_id,
-                status,
-                eta_actual_ms,
-                summary,
-                now_ms()
-            ],
+            params![run_id, status, eta_actual_ms, summary, now_ms()],
         )?;
         if n == 0 {
             return Err(StoreError::Sqlite(format!("run 不存在: {run_id}")));
@@ -244,7 +240,8 @@ mod tests {
             for _ in 0..4 {
                 let id = store.next_task_id(kind).unwrap();
                 assert!(
-                    id.starts_with(prefix) && id.len() == prefix.len() + 32
+                    id.starts_with(prefix)
+                        && id.len() == prefix.len() + 32
                         && id[prefix.len()..].chars().all(|c| c.is_ascii_hexdigit()),
                     "格式应为 {prefix}+32hex: {id}"
                 );
@@ -269,10 +266,10 @@ mod tests {
     fn migration_005_preserves_data_and_retires_legacy_columns() {
         let (dir, store) = testutil::open_store();
         testutil::seed_session(&store, "sess-1");
-        store.insert_run(&start_row("r-1", "sess-1", "probe")).unwrap();
         store
-            .finish_run("r-1", "done", 123, "旧数据")
+            .insert_run(&start_row("r-1", "sess-1", "probe"))
             .unwrap();
+        store.finish_run("r-1", "done", 123, "旧数据").unwrap();
         drop(store);
         // 版本拨回 4 并补回 005 删除的两列，模拟 005 前老库（v4 形态）
         let db = dir.path().join("agent").join("runtime.sqlite3");
@@ -294,13 +291,17 @@ mod tests {
         // 新 kind：terminal 可插可查（v5 CHECK 生效）
         let tid = store2.next_task_id("terminal").unwrap();
         assert!(tid.starts_with("terminal-"));
-        store2.insert_run(&start_row(&tid, "sess-1", "terminal")).unwrap();
+        store2
+            .insert_run(&start_row(&tid, "sess-1", "terminal"))
+            .unwrap();
         assert_eq!(store2.run_by_id(&tid).unwrap().unwrap().kind, "terminal");
         // 旧列确已退役
         {
             let conn = rusqlite::Connection::open(&db).unwrap();
             let has_col = |table: &str, col: &str| -> bool {
-                let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})")).unwrap();
+                let mut stmt = conn
+                    .prepare(&format!("PRAGMA table_info({table})"))
+                    .unwrap();
                 let names: Vec<String> = stmt
                     .query_map([], |r| r.get::<_, String>(1))
                     .unwrap()
@@ -356,9 +357,18 @@ mod tests {
             .unwrap();
         }
         let store2 = crate::Store::open(&db).unwrap();
-        assert!(store2.run_by_id("agent-p").unwrap().is_some(), "probe 应保留");
-        assert!(store2.run_by_id("agent-x").unwrap().is_some(), "expert 应保留");
-        assert!(store2.run_by_id("agent-t").unwrap().is_none(), "team 行应清洗");
+        assert!(
+            store2.run_by_id("agent-p").unwrap().is_some(),
+            "probe 应保留"
+        );
+        assert!(
+            store2.run_by_id("agent-x").unwrap().is_some(),
+            "expert 应保留"
+        );
+        assert!(
+            store2.run_by_id("agent-t").unwrap().is_none(),
+            "team 行应清洗"
+        );
         // 收窄后的 CHECK：team 不可再插入
         assert!(
             store2
@@ -374,7 +384,9 @@ mod tests {
         let (_dir, store) = testutil::open_store();
         testutil::seed_session(&store, "sess-1");
         let id = store.next_task_id("probe").unwrap();
-        store.insert_run(&start_row(&id, "sess-1", "probe")).unwrap();
+        store
+            .insert_run(&start_row(&id, "sess-1", "probe"))
+            .unwrap();
         let row = store.run_by_id(&id).unwrap().expect("应命中");
         assert_eq!(row.kind, "probe");
         assert_eq!(row.status, "running");

@@ -20,8 +20,7 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 pub use queries::{
-    ContextRow, EventRow, GrantRow, RunRow,
-    SessionListRow, SessionRow, ViolationRow, Workspace,
+    ContextRow, EventRow, GrantRow, RunRow, SessionListRow, SessionRow, ViolationRow, Workspace,
 };
 
 /// 存储层错误。

@@ -5,8 +5,8 @@
 use bbrt_session::state::{
     accept_user_message, begin, begin_fanout, clarify_resolved, complete_round, end,
     fail_initialization, fail_unrecoverable, initialized, join_subagents, pause,
-    permission_exhausted, permission_resolved, request_clarify, request_permission,
-    resume, retry_from_error,
+    permission_exhausted, permission_resolved, request_clarify, request_permission, resume,
+    retry_from_error,
 };
 use bbrt_session::{SessionState, TransitionError};
 
@@ -199,7 +199,10 @@ fn illegal_input_paths() {
 fn illegal_permission_paths() {
     // 权限请求只从 running 进入
     illegal(request_permission(SessionState::Idle), SessionState::Idle);
-    illegal(request_permission(SessionState::Paused), SessionState::Paused);
+    illegal(
+        request_permission(SessionState::Paused),
+        SessionState::Paused,
+    );
     // 回填/升级只从 waiting_permission
     illegal(
         permission_resolved(SessionState::Running),

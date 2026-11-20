@@ -35,8 +35,7 @@ pub struct SessionRow {
 }
 
 /// SELECT 列清单（顺序与 from_row 一致）
-const COLS: &str =
-    "id, workspace_id, title, form, mode, model_policy, model_override, status, \
+const COLS: &str = "id, workspace_id, title, form, mode, model_policy, model_override, status, \
                     share_enabled, created_at, updated_at, ended_at, summary";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
@@ -293,7 +292,7 @@ mod tests {
             "与张三的对话"
         );
         // 超长截断到 60 字符 + 省略号
-        let long: String = std::iter::repeat('长').take(80).collect();
+        let long = "长".repeat(80);
         assert_eq!(store.rename_session("sess-r1", &long).unwrap(), 1);
         let got = store.get_session("sess-r1").unwrap().unwrap().title;
         assert_eq!(got.chars().count(), 61, "60 字 + 省略号");

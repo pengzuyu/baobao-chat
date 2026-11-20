@@ -220,6 +220,7 @@ fn prefix_match(prefix: &str, cmd: &str) -> bool {
 /// - 「执行一个文件」形态：首程序 ∈ 解释器/脚本运行器（sh/bash/zsh/python/
 ///   node…）或任务运行器（npm/pnpm/yarn/bun/make/just——执行 package.json/
 ///   Makefile 等 agent 可写文件）——文件内容绕过词法，边界在模式信任不在内容审查。
+///
 /// 保守取向：运算符在引号内出现也判非直调（向严偏移可接受；cargo test 等经典
 /// 构建直调不受影响）。
 fn is_plain_direct_invocation(cmd: &str) -> bool {

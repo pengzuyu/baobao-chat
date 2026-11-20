@@ -84,10 +84,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or_default();
-        let eco = std::env::temp_dir().join(format!(
-            "bbc-skill-tool-{}-{uniq}",
-            std::process::id()
-        ));
+        let eco =
+            std::env::temp_dir().join(format!("bbc-skill-tool-{}-{uniq}", std::process::id()));
         std::fs::create_dir_all(eco.join("d")).unwrap();
         std::fs::write(
             eco.join("d/SKILL.md"),

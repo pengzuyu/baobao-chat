@@ -6,12 +6,12 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
 use bbrt_aigw::{ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent, ToolSpec, Usage};
+use bbrt_sec::gate::PermissionMode;
 use bbrt_session::bg_hub::{BgHub, BgJoin};
 use bbrt_session::events::{ModelTier, SessionEvent, SessionSink};
 use bbrt_session::executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome};
 use bbrt_session::loop_runner::{BgHostMsg, LoopDeps, NoopEventLog, SessionRunner};
 use bbrt_session::manager::{SessionManager, StartParams};
-use bbrt_sec::gate::PermissionMode;
 
 /// 收集 sink
 #[derive(Default)]
@@ -36,10 +36,7 @@ impl ChatClient for CaptureModel {
         Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
         bbrt_aigw::AigwError,
     > {
-        self.seen
-            .lock()
-            .unwrap()
-            .push(req.messages.clone());
+        self.seen.lock().unwrap().push(req.messages.clone());
         let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = vec![
             Ok(StreamEvent::TextDelta {
                 text: "收到。".into(),
@@ -62,7 +59,9 @@ impl ChatClient for CaptureModel {
 struct NopTools;
 impl ToolExecutor for NopTools {
     fn check(&self, _mode: PermissionMode, _call: &ToolInvocation) -> CheckOutcome {
-        CheckOutcome::Allow { source: String::new() }
+        CheckOutcome::Allow {
+            source: String::new(),
+        }
     }
     fn execute(&self, _mode: PermissionMode, _call: &ToolInvocation) -> ToolOutcome {
         ToolOutcome::Ok {
