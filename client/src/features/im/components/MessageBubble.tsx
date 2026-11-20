@@ -31,6 +31,7 @@ import {
   ChevronDown,
   Clock3,
   FileText,
+  Forward,
   Image as ImageIcon,
   Lightbulb,
   ListOrdered,
@@ -1137,7 +1138,10 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
             <VideoCard body={videoBody} />
           ) : message.type === 'agent_card' && isAgentCardBody(message.body) ? (
             <span style={bubbleStyle(true)}>
-              <AgentCardMsg body={message.body as AgentCardBody} />
+              <AgentCardMsg
+                body={message.body as AgentCardBody}
+                onForward={actions?.onForward ? () => actions.onForward(message) : undefined}
+              />
             </span>
           ) : (
             <span style={bubbleStyle(true)}>
@@ -1299,7 +1303,7 @@ function agentCardPlainText(md: string): string {
  *   迷你卡——完成起 2 分钟宽限到点自动折叠，宽限期内新回合开始立即折叠
  * - 应答条（仅回答 agent 的交互）：待审批黄条 + D20 提问蓝条——与聊天页弹框同感
  */
-export function AgentCardMsg({ body }: { body: AgentCardBody }) {
+export function AgentCardMsg({ body, onForward }: { body: AgentCardBody; onForward?: () => void }) {
   const { token } = theme.useToken();
   // 订阅只取引用（2026-11-11 卡顿修复）：此前 4 个 selector 内各做 O(流长) 扫描，
   // store 每次 set（流式期每 delta）都会执行——聊天里每轮一张历史卡，成本 ×卡数；
@@ -1452,6 +1456,7 @@ export function AgentCardMsg({ body }: { body: AgentCardBody }) {
           color: token.colorText,
           fontSize: 12,
           cursor: 'pointer',
+          position: 'relative',
         }}
         onClick={(e) => {
           e.stopPropagation();
@@ -1513,6 +1518,24 @@ export function AgentCardMsg({ body }: { body: AgentCardBody }) {
             {conclusionText}
           </div>
         ) : null}
+        {/* 卡上显式转发（2026-11-20 拍板）：收口后右下角常驻小按钮（整卡点击展开，
+            须 stopPropagation）；running 不给转（对端会收到永远转圈的卡） */}
+        {onForward && display.status !== 'running' ? (
+          <Button
+            size="small"
+            variant="text"
+            icon={<Forward size={12} aria-hidden />}
+            title="转发到其他会话"
+            data-testid="agent-card-forward"
+            onClick={(e) => {
+              e.stopPropagation();
+              onForward();
+            }}
+            style={{ position: 'absolute', right: 4, bottom: 2, height: 22, paddingInline: 6, fontSize: 12, color: token.colorTextTertiary, background: token.colorFillQuaternary }}
+          >
+            转发
+          </Button>
+        ) : null}
       </div>
     );
   }
@@ -1549,7 +1572,7 @@ export function AgentCardMsg({ body }: { body: AgentCardBody }) {
               </Button>
             </Flex>
           ) : null}
-          {pendingClarify && pendingClarify.kind === 'clarify' && live ? (
+              {pendingClarify && pendingClarify.kind === 'clarify' && live ? (
             <Flex
               align="center"
               gap={8}
@@ -1571,6 +1594,22 @@ export function AgentCardMsg({ body }: { body: AgentCardBody }) {
                   {o.label}
                 </Button>
               ))}
+            </Flex>
+          ) : null}
+          {/* 卡上显式转发（2026-11-20）：收口后卡尾右下角（与折叠态同口径） */}
+          {onForward && display.status !== 'running' ? (
+            <Flex justify="flex-end" style={{ width: '100%', marginTop: 6 }}>
+              <Button
+                size="small"
+                variant="text"
+                icon={<Forward size={12} aria-hidden />}
+                title="转发到其他会话"
+                data-testid="agent-card-forward"
+                onClick={onForward}
+                style={{ fontSize: 12, color: token.colorTextTertiary }}
+              >
+                转发
+              </Button>
             </Flex>
           ) : null}
           </Flex>

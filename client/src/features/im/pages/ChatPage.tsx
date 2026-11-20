@@ -649,6 +649,12 @@ export function ChatPage() {
         .catch(() => undefined);
     },
     onForward: (m) => {
+      // agent 卡未收口禁转（2026-11-20）：running 态 body 转出去对端永远转圈——
+      // 卡上显式转发按钮同口径（display.status），菜单/悬浮双入口统一在此兜底
+      if (m.type === 'agent_card' && (m.body as { status?: string } | undefined)?.status === 'running') {
+        message.warning('Agent 回复未完成，暂不能转发');
+        return;
+      }
       setForwardMode('one_by_one');
       setForwardIds([m.msgId]);
     },

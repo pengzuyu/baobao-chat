@@ -9,7 +9,7 @@
 
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import { Typography, theme } from 'antd';
-import { CheckCircle2, ChevronRight } from 'lucide-react';
+import { CheckCircle2, ChevronRight, Send } from 'lucide-react';
 import { MarkdownText } from '../../../../shared/components/MarkdownText';
 import { agentStatsText } from '../../../../shared/components/AgentProcessCard';
 import { stagesFromStream } from '../../../im/agent/embedded';
@@ -152,10 +152,13 @@ interface TurnBlockProps {
   /** 回合进行中：过程平铺全显示 + 实时统计不打烊 */
   active: boolean;
   onRespond: (d: PermissionDecision) => void;
+  /** 回合收口后「发送到聊天」入口（2026-11-20）：把最终回答以纯文本消息发到
+   *  私聊/群聊；仅主时间线传入（右栏子 agent 流不出现） */
+  onShare?: (user: UserItem, items: StreamItem[]) => void;
 }
 
 export const TurnBlock = memo(
-  function TurnBlock({ user, items, active, onRespond }: TurnBlockProps) {
+  function TurnBlock({ user, items, active, onRespond, onShare }: TurnBlockProps) {
     const { token } = theme.useToken();
     // 最终回答 = 最后一段 agentText；其余进过程区
     let lastAnswerIdx = -1;
@@ -250,12 +253,40 @@ export const TurnBlock = memo(
           </div>
         ) : null}
         {active && processItems.length === 0 && !lastAnswer ? <TypingState text="Agent 正在处理" /> : null}
+        {/* 发送到聊天（2026-11-20）：回合收口且有最终回答才出现——右对齐轻量文字按钮 */}
+        {!active && onShare && lastAnswer ? (
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={() => onShare(user, items)}
+              title="把本回合最终回答以文本消息发到私聊/群聊"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 8px',
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: 12,
+                color: token.colorTextTertiary,
+                borderRadius: 6,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = token.colorPrimary)}
+              onMouseLeave={(e) => (e.currentTarget.style.color = token.colorTextTertiary)}
+            >
+              <Send size={12} aria-hidden />
+              发送到聊天
+            </button>
+          </div>
+        ) : null}
       </div>
     );
   },
   (a, b) =>
     a.active === b.active &&
     a.onRespond === b.onRespond &&
+    a.onShare === b.onShare &&
     a.user === b.user &&
     a.items.length === b.items.length &&
     a.items.every((it, i) => it === b.items[i]),

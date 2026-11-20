@@ -36,9 +36,12 @@ export interface AgentStreamViewProps {
   onRespond: (d: PermissionDecision) => void;
   /** 末回合运行中（收口折叠↔平铺全显示切换）；缺省 false（历史/侧栏终态） */
   active?: boolean;
+  /** 回合「发送到聊天」入口（2026-11-20）：仅工作台主时间线传入——右栏子 agent
+   *  流不传（子 agent 回答回流主对话，不独立分享） */
+  onShareTurn?: (user: UserItem, items: StreamItem[]) => void;
 }
 
-export function AgentStreamView({ items, onRespond, active = false }: AgentStreamViewProps) {
+export function AgentStreamView({ items, onRespond, active = false, onShareTurn }: AgentStreamViewProps) {
   const { head, turns } = useMemo(() => groupTurns(items), [items]);
   return (
     <>
@@ -47,7 +50,13 @@ export function AgentStreamView({ items, onRespond, active = false }: AgentStrea
       {turns.map((t, i) => (
         <Fragment key={t.user.key}>
           <UserBlock text={t.user.text} />
-          <TurnBlock user={t.user} items={t.items} active={i === turns.length - 1 && active} onRespond={onRespond} />
+          <TurnBlock
+            user={t.user}
+            items={t.items}
+            active={i === turns.length - 1 && active}
+            onRespond={onRespond}
+            onShare={onShareTurn}
+          />
         </Fragment>
       ))}
       {/* 运行中但尚无回合可挂载（回合启动阶段）→ 独立打点 */}

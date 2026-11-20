@@ -36,6 +36,7 @@ import type { PermissionDecision } from '../components/PermissionCard';
 import { ModelThinkPicker } from '../components/ModelThinkPicker';
 import { ContextUsageMeter } from '../components/ContextUsageMeter';
 import { convIdOfSession } from '../../im/agent/embedded';
+import { SendToConvModal } from '../components/SendToConvModal';
 import { Composer } from '../components/Composer';
 import { fetchPluginCommands, type PluginCommand } from '../../eco/api/plugins';
 
@@ -246,6 +247,17 @@ export function AgentWorkbenchPage() {
   const stickBottomRef = useRef(true);
   const [atBottom, setAtBottom] = useState(true); // ref 供 RO/计数读，state 供浮标渲染
   const [awayCount, setAwayCount] = useState(0); // 离底期间新增流条目数（浮标 Badge）
+  /** 「发送到聊天」待发回合（2026-11-20）：TurnBlock 按钮 → SendToConvModal */
+  const [shareTurn, setShareTurn] = useState<{ user: Extract<StreamItem, { kind: 'user' }>; items: StreamItem[] } | null>(null);
+  /** 待发文本=回合最后一段 agentText（与 TurnBlock 最终回答同口径） */
+  const shareAnswerText = useMemo(() => {
+    if (!shareTurn) return '';
+    for (let i = shareTurn.items.length - 1; i >= 0; i -= 1) {
+      const it = shareTurn.items[i];
+      if (it.kind === 'agentText') return it.text;
+    }
+    return '';
+  }, [shareTurn]);
   const prevLenRef = useRef(items.length);
   // 容器挂载标记（loading/empty/none 分支不渲染 streamNode）：跨分支切换时
   // contentRef 指向新元素，RO 须随挂载重 observe——依赖 [] 的旧写法在「首载
@@ -483,7 +495,7 @@ export function AgentWorkbenchPage() {
         {/* 内容层：padding/gap 自滚动容器移入（RO 观察本层高度，运行提示挂载等
             非 items 驱动的高度变化也能触发吸底）；视觉口径不变（padding 16/gap 14） */}
         <div ref={streamContentRef} style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <AgentStreamView items={items} onRespond={handleRespond} active={turnActive} />
+          <AgentStreamView items={items} onRespond={handleRespond} active={turnActive} onShareTurn={(user, items) => setShareTurn({ user, items })} />
         </div>
       </div>
       {scrollFab}
@@ -682,6 +694,10 @@ export function AgentWorkbenchPage() {
           </aside>
         ) : null}
       </div>
+      {/* 回合「发送到聊天」（2026-11-20）：最终回答 → 纯文本消息发到选定私聊/群聊 */}
+      {shareTurn && shareAnswerText ? (
+        <SendToConvModal answerText={shareAnswerText} onClose={() => setShareTurn(null)} />
+      ) : null}
     </div>
   );
 }
