@@ -625,6 +625,11 @@ export function ChatPage() {
   /** 打开转发弹窗（批量条「转发」=默认逐条；「合并转发」=默认合并） */
   const openForward = useCallback(
     (mode: 'merge' | 'one_by_one') => {
+      // agent 卡不支持转发到其他会话（2026-11-20 拍板）：多选批量含 agent_card 一律拦
+      if (selectedMsgs.some((m) => m.type === 'agent_card')) {
+        message.warning('Agent 回复不支持转发到其他会话');
+        return;
+      }
       const ids = selectedMsgs.map((m) => m.msgId);
       if (ids.length === 0) return;
       setForwardMode(mode);
@@ -649,10 +654,10 @@ export function ChatPage() {
         .catch(() => undefined);
     },
     onForward: (m) => {
-      // agent 卡未收口禁转（2026-11-20）：running 态 body 转出去对端永远转圈——
-      // 卡上显式转发按钮同口径（display.status），菜单/悬浮双入口统一在此兜底
-      if (m.type === 'agent_card' && (m.body as { status?: string } | undefined)?.status === 'running') {
-        message.warning('Agent 回复未完成，暂不能转发');
+      // agent 卡不支持转发到其他会话（2026-11-20 拍板）：分享唯一出口=「发送到本会话」；
+      // 菜单入口已随 msgActionsVisible 移除，此处兜底（含 running——转出去对端永远转圈）
+      if (m.type === 'agent_card') {
+        message.warning('Agent 回复不支持转发到其他会话');
         return;
       }
       setForwardMode('one_by_one');

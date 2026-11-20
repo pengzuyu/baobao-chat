@@ -1019,6 +1019,31 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
 
 /** 回应切换：add/remove 由调用方按 ext.reactions 现态判定（全量快照回收保证一致） */
   const doReact = (emoji: string) => actions?.onReact(message, emoji);
+  /** agent 卡「发送到本会话」（2026-11-20 修订：按钮放气泡外悬浮操作条——卡内绝对
+   *  定位与折叠态两行结论重叠异常，用户报）：结论剥 markdown 纯文本发到本卡所在会话
+   *  （固定目标，不支持发到其他私聊/群聊）；收口且有结论才给入口 */
+  const agentCardShareable =
+    message.type === 'agent_card' && isAgentCardBody(message.body) && (message.body as AgentCardBody).status !== 'running';
+  const sendAgentCardConclusion = () => {
+    if (!isAgentCardBody(message.body)) return;
+    const b = message.body;
+    let md = '';
+    for (let i = b.stages.length - 1; i >= 0; i -= 1) {
+      if (b.stages[i].t === 'conclusion') {
+        md = b.stages[i].md ?? '';
+        break;
+      }
+    }
+    const text = agentCardPlainText(md).trim();
+    if (!text) return;
+    void useImStore
+      .getState()
+      .sendText(message.convId, text)
+      .then(
+        () => antdMessage.success('已发送到本会话'),
+        () => antdMessage.error('发送失败，请重试'),
+      );
+  };
 
   // 多选模式（INT-IM-14）：整行可点切换勾选；气泡内容经 pointerEvents:none 收敛交互
   const selecting = multiSelect?.active === true;
@@ -1139,7 +1164,7 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
             <VideoCard body={videoBody} />
           ) : message.type === 'agent_card' && isAgentCardBody(message.body) ? (
             <span style={bubbleStyle(true)}>
-              <AgentCardMsg body={message.body as AgentCardBody} convId={message.convId} />
+              <AgentCardMsg body={message.body as AgentCardBody} />
             </span>
           ) : (
             <span style={bubbleStyle(true)}>
@@ -1211,6 +1236,24 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
               >
                 回复
               </Button>
+              {/* agent 卡专属「发送到本会话」（2026-11-20 修订：气泡外操作条——
+                  卡内按钮与折叠态结论重叠；agent 卡无转发，此为唯一分享出口） */}
+              {agentCardShareable ? (
+                <Button
+                  variant="text"
+                  size="small"
+                  data-testid="agent-card-send"
+                  title="把结论以文本消息发送到本会话"
+                  style={{ fontSize: 12, color: token.colorTextSecondary }}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    sendAgentCardConclusion();
+                  }}
+                >
+                  <Send size={12} aria-hidden style={{ marginRight: 3 }} />
+                  发送
+                </Button>
+              ) : null}
               {/* ⋯ 打开统一右键菜单（锚定按钮左下角；菜单内动作复用同一套 handlers） */}
               {onOpenMsgMenu ? (
                 <Button
@@ -1301,7 +1344,7 @@ function agentCardPlainText(md: string): string {
  *   迷你卡——完成起 2 分钟宽限到点自动折叠，宽限期内新回合开始立即折叠
  * - 应答条（仅回答 agent 的交互）：待审批黄条 + D20 提问蓝条——与聊天页弹框同感
  */
-export function AgentCardMsg({ body, convId }: { body: AgentCardBody; convId: string }) {
+export function AgentCardMsg({ body }: { body: AgentCardBody }) {
   const { token } = theme.useToken();
   // 订阅只取引用（2026-11-11 卡顿修复）：此前 4 个 selector 内各做 O(流长) 扫描，
   // store 每次 set（流式期每 delta）都会执行——聊天里每轮一张历史卡，成本 ×卡数；
@@ -1363,8 +1406,8 @@ export function AgentCardMsg({ body, convId }: { body: AgentCardBody; convId: st
     // 状态校正兜底（无人 PATCH 场景）：落流停在 running 而会话已收口 → 按 done 渲染
     (body.status === 'running' && !live ? { ...body, status: 'done', ended_at: body.ended_at ?? Date.now() } : body);
 
-  // 结论纯文本（2026-11-20 修订）：折叠态摘要与卡上「发送到本会话」共用（剥 markdown，
-  // 发的是纯文本消息与显示一致）
+  // 结论纯文本（2026-11-20）：折叠态摘要用（剥 markdown）——「发送到本会话」按钮
+  // 移至气泡外悬浮操作条（折叠卡内绝对定位与两行结论重叠，用户报异常），此处不再管发送
   let conclusionPlainText = '';
   for (let i = display.stages.length - 1; i >= 0; i -= 1) {
     if (display.stages[i].t === 'conclusion') {
@@ -1372,18 +1415,6 @@ export function AgentCardMsg({ body, convId }: { body: AgentCardBody; convId: st
       break;
     }
   }
-  // 「发送到本会话」（2026-11-20 修订口径）：结论以纯文本消息发到本卡所在会话——
-  // 固定目标不弹选择、不支持发到其他私聊/群聊；走 im store sendText 全链（乐观+outbox）
-  const sendConclusion = () => {
-    if (!convId || !conclusionPlainText) return;
-    void useImStore
-      .getState()
-      .sendText(convId, conclusionPlainText)
-      .then(
-        () => antdMessage.success('已发送到本会话'),
-        () => antdMessage.error('发送失败，请重试'),
-      );
-  };
 
   // ---- 一行折叠态（仅 IM；口径见组件头注）----
   const done = display.status !== 'running';
@@ -1531,24 +1562,6 @@ export function AgentCardMsg({ body, convId }: { body: AgentCardBody; convId: st
             {conclusionPlainText}
           </div>
         ) : null}
-        {/* 卡上「发送到本会话」（2026-11-20 修订：固定发本会话不弹选择）：收口后右下角
-            常驻小按钮（整卡点击展开，须 stopPropagation）；running/无结论不给发 */}
-        {convId && display.status !== 'running' && conclusionPlainText ? (
-          <Button
-            size="small"
-            variant="text"
-            icon={<Send size={12} aria-hidden />}
-            title="把结论以文本消息发送到本会话"
-            data-testid="agent-card-send"
-            onClick={(e) => {
-              e.stopPropagation();
-              sendConclusion();
-            }}
-            style={{ position: 'absolute', right: 4, bottom: 2, height: 22, paddingInline: 6, fontSize: 12, color: token.colorTextTertiary, background: token.colorFillQuaternary }}
-          >
-            发送
-          </Button>
-        ) : null}
       </div>
     );
   }
@@ -1607,22 +1620,6 @@ export function AgentCardMsg({ body, convId }: { body: AgentCardBody; convId: st
                   {o.label}
                 </Button>
               ))}
-            </Flex>
-          ) : null}
-          {/* 卡上「发送到本会话」（2026-11-20 修订）：收口后卡尾右下角（与折叠态同口径） */}
-          {convId && display.status !== 'running' && conclusionPlainText ? (
-            <Flex justify="flex-end" style={{ width: '100%', marginTop: 6 }}>
-              <Button
-                size="small"
-                variant="text"
-                icon={<Send size={12} aria-hidden />}
-                title="把结论以文本消息发送到本会话"
-                data-testid="agent-card-send"
-                onClick={sendConclusion}
-                style={{ fontSize: 12, color: token.colorTextTertiary }}
-              >
-                发送
-              </Button>
             </Flex>
           ) : null}
           </Flex>

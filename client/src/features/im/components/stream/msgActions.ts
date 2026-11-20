@@ -65,7 +65,9 @@ export function msgActionsVisible(msg: Message, myUid: string, now: number = Dat
     reply: true,
     quote: true,
     copy: true,
-    forward: serverReachable,
+    // agent 卡不支持转发到其他会话（2026-11-20 拍板）：分享唯一出口=「发送到本会话」
+    // （悬浮操作条按钮）；多选批量含 agent_card 的转发在 ChatPage openForward 兜底拦截
+    forward: serverReachable && msg.type !== 'agent_card',
     favorite: serverReachable,
     saveKb: serverReachable && msg.type === 'text',
     multiSelect: serverReachable,
