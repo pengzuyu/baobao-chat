@@ -9,7 +9,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use bbrt_aigw::{ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent, ToolCallMsg};
@@ -294,7 +294,9 @@ pub(crate) fn chat_text(
 pub struct SessionRunner {
     pub session_id: String,
     pub workspace: String,
-    pub mode: PermissionMode,
+    /// 会话权限模式（共享句柄：session.set_mode 中途切档即时生效——runner 被
+    /// turn 线程取走期间 manager 仍经同一 Arc 改写；读点每次取当前值）
+    pub mode: Arc<RwLock<PermissionMode>>,
     pub model_policy: ModelTier,
     /// 会话级模型直达引用（0023：p:<provider_id>:<model>；None=档位别名）。
     /// 仅主循环对话模型；planner/压缩/探查/选角等辅助调用恒档位
@@ -385,7 +387,7 @@ impl SessionRunner {
         Self {
             session_id,
             workspace,
-            mode,
+            mode: Arc::new(RwLock::new(mode)),
             model_policy,
             model_override,
             state: state::begin(),
@@ -404,6 +406,17 @@ impl SessionRunner {
             subagent_wait_window: SUBAGENT_WAIT_WINDOW,
             bg_hub: None,
         }
+    }
+
+    /// 模式共享句柄（start 时克隆入 ManagedSession——session.set_mode 经
+    /// manager 改写同一实例，runner 被 turn 线程取走期间也能生效）
+    pub fn mode_handle(&self) -> Arc<RwLock<PermissionMode>> {
+        Arc::clone(&self.mode)
+    }
+
+    /// 当前模式（消费点取读锁即时值——中途切档对下一个工具调用生效）
+    fn cur_mode(&self) -> PermissionMode {
+        *self.mode.read().unwrap()
     }
 
     /// 后台产物注入（D16 §5：探查/专家经 hub park 的摘要由 manager
@@ -485,7 +498,7 @@ impl SessionRunner {
                 let ctx = crate::expert::ExpertCtx {
                     model: Arc::clone(&deps.model),
                     tools: Arc::clone(&deps.tools),
-                    mode: self.mode,
+                    mode: self.cur_mode(),
                     unattended: self.unattended,
                     hub: self.bg_hub.clone(),
                 };
@@ -615,7 +628,7 @@ impl SessionRunner {
                 };
                 let outcome = crate::subagent::fanout_probes(
                     &self.session_id,
-                    self.mode,
+                    self.cur_mode(),
                     Arc::clone(&deps.model),
                     Arc::clone(&deps.tools),
                     Arc::clone(&deps.sink),
@@ -1147,7 +1160,7 @@ impl SessionRunner {
             let started = std::time::Instant::now();
             return match deps
                 .tools
-                .execute_or_handoff(self.mode, call, BG_SWITCH_AFTER_SECS)
+                .execute_or_handoff(self.cur_mode(), call, BG_SWITCH_AFTER_SECS)
             {
                 crate::executor::CommandHandoff::Done(out) => out,
                 crate::executor::CommandHandoff::StillRunning(det) => {
@@ -1170,7 +1183,7 @@ impl SessionRunner {
                 }
             };
         }
-        deps.tools.execute(self.mode, call)
+        deps.tools.execute(self.cur_mode(), call)
     }
 
     /// run_command 后台执行（统一后台任务体系 2026-11-18）：gate 放行后、
@@ -1523,7 +1536,7 @@ impl SessionRunner {
         {
             return self.run_command_background(deps, call);
         }
-        match deps.tools.check(self.mode, call) {
+        match deps.tools.check(self.cur_mode(), call) {
             CheckOutcome::Allow { source } => {
                 let _ = source;
                 self.execute_maybe_handoff(deps, call)
@@ -1560,42 +1573,19 @@ impl SessionRunner {
                     &format!("{{\"request_id\":\"{request_id}\"}}"),
                 );
 
-                // 等待宿主回执；120s 超时=拒绝（09 §7.4）
-                let decision = match self.permission_rx.recv_timeout(self.permission_timeout) {
-                    Ok(resp)
-                        if resp.request_id == request_id
-                            && resp.decision == PermissionDecision::Allow =>
-                    {
-                        let _ = deps.tools.record_grant(self.mode, call, resp.scope);
+                // 等待宿主回执：1s 轮询查中断旗（用户「停止」→ 作废未决审批收口
+                // cancelled，与 clarify 等待同款——否则旗置上仍要干等超时）；
+                // 120s 超时=拒绝（09 §7.4）。checked_add 溢出（D35 不超时=一年
+                // 近似）时恒等 1s 步进、永不进超时分支
+                let expires_at = std::time::Instant::now().checked_add(self.permission_timeout);
+                let decision = loop {
+                    if self.interrupted.load(Ordering::Relaxed) {
                         emit(deps, &self.session_id, |id| {
                             SessionEvent::PermissionResolved {
                                 session_id: id,
                                 request_id: request_id.clone(),
-                                decision: "allow".into(),
-                                scope: format!("{:?}", resp.scope).to_lowercase(),
-                            }
-                        });
-                        // 用户编辑过命令 → 覆盖 args（D08 editedArgs）
-                        let mut exec_call = call.clone();
-                        if let Some(edited) = resp.edited {
-                            exec_call.args_json = edited;
-                        }
-                        self.state =
-                            state::permission_resolved(self.state).unwrap_or(SessionState::Running);
-                        deps.wal.append(
-                            &self.session_id,
-                            "permission.resolved",
-                            &format!("{{\"request_id\":\"{request_id}\",\"decision\":\"allow\"}}"),
-                        );
-                        Some(exec_call)
-                    }
-                    Ok(resp) if resp.request_id == request_id => {
-                        emit(deps, &self.session_id, |id| {
-                            SessionEvent::PermissionResolved {
-                                session_id: id,
-                                request_id: request_id.clone(),
-                                decision: "deny".into(),
-                                scope: format!("{:?}", resp.scope).to_lowercase(),
+                                decision: "cancelled".into(),
+                                scope: "once".into(),
                             }
                         });
                         self.state =
@@ -1603,12 +1593,17 @@ impl SessionRunner {
                         deps.wal.append(
                             &self.session_id,
                             "permission.resolved",
-                            &format!("{{\"request_id\":\"{request_id}\",\"decision\":\"deny\"}}"),
+                            &format!(
+                                "{{\"request_id\":\"{request_id}\",\"decision\":\"cancelled\"}}"
+                            ),
                         );
-                        None
+                        break None;
                     }
-                    Ok(_) => None, // 迟到的其它回执：按超时处理
-                    Err(RecvTimeoutError::Timeout) => {
+                    let wait = expires_at
+                        .map(|dl| dl.saturating_duration_since(std::time::Instant::now()))
+                        .filter(|remain| !remain.is_zero())
+                        .map(|remain| remain.min(Duration::from_secs(1)));
+                    let Some(wait) = wait else {
                         emit(deps, &self.session_id, |id| {
                             SessionEvent::PermissionResolved {
                                 session_id: id,
@@ -1626,9 +1621,62 @@ impl SessionRunner {
                                 "{{\"request_id\":\"{request_id}\",\"decision\":\"timeout\"}}"
                             ),
                         );
-                        None
+                        break None;
+                    };
+                    match self.permission_rx.recv_timeout(wait) {
+                        Ok(resp)
+                            if resp.request_id == request_id
+                                && resp.decision == PermissionDecision::Allow =>
+                        {
+                            let _ = deps.tools.record_grant(self.cur_mode(), call, resp.scope);
+                            emit(deps, &self.session_id, |id| {
+                                SessionEvent::PermissionResolved {
+                                    session_id: id,
+                                    request_id: request_id.clone(),
+                                    decision: "allow".into(),
+                                    scope: format!("{:?}", resp.scope).to_lowercase(),
+                                }
+                            });
+                            // 用户编辑过命令 → 覆盖 args（D08 editedArgs）
+                            let mut exec_call = call.clone();
+                            if let Some(edited) = resp.edited {
+                                exec_call.args_json = edited;
+                            }
+                            self.state = state::permission_resolved(self.state)
+                                .unwrap_or(SessionState::Running);
+                            deps.wal.append(
+                                &self.session_id,
+                                "permission.resolved",
+                                &format!(
+                                    "{{\"request_id\":\"{request_id}\",\"decision\":\"allow\"}}"
+                                ),
+                            );
+                            break Some(exec_call);
+                        }
+                        Ok(resp) if resp.request_id == request_id => {
+                            emit(deps, &self.session_id, |id| {
+                                SessionEvent::PermissionResolved {
+                                    session_id: id,
+                                    request_id: request_id.clone(),
+                                    decision: "deny".into(),
+                                    scope: format!("{:?}", resp.scope).to_lowercase(),
+                                }
+                            });
+                            self.state = state::permission_resolved(self.state)
+                                .unwrap_or(SessionState::Running);
+                            deps.wal.append(
+                                &self.session_id,
+                                "permission.resolved",
+                                &format!(
+                                    "{{\"request_id\":\"{request_id}\",\"decision\":\"deny\"}}"
+                                ),
+                            );
+                            break None;
+                        }
+                        Ok(_) => continue, // 迟到的其它回执丢弃继续等（原按超时处理）
+                        Err(RecvTimeoutError::Timeout) => continue,
+                        Err(RecvTimeoutError::Disconnected) => break None,
                     }
-                    Err(RecvTimeoutError::Disconnected) => None,
                 };
                 match decision {
                     Some(exec_call) => self.execute_maybe_handoff(deps, &exec_call),

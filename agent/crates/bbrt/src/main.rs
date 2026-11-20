@@ -149,6 +149,10 @@ fn run() -> Result<(), String> {
     // 工具执行按会话解析沙箱根）
     let session_workspaces = bbrt_session::SessionWorkspaces::new();
     let tools = Arc::new(bbrt_tools::PipelineExecutor::new(bbrt_tools::ToolsConfig {
+        // 策略必须显式 Some：None 会被 gate ①按"策略缺失=最严档 Ask"压回
+        // （09 §7.4），会话模式全失效（full-auto 仍全量审批的根因）。桌面单机
+        // 无租户策略面，空策略=无禁用表+无档位顶，矩阵按会话模式原生生效
+        policy: Some(bbrt_sec::gate::ToolPolicy::default()),
         // D19：兜底根置空=未登记会话一切读写被拒（安全失败方向）；真实会话
         // 恒经 session_workspaces 表路由到各自项目目录（修旧全局 "." 占位缺口）
         workspace: PathBuf::new(),
@@ -517,6 +521,25 @@ fn dispatch(
         HostToRuntime::SessionInterrupt { session_id } => {
             let _ = mgr.interrupt(&session_id);
             Some(RuntimeToHost::SessionInterrupted { session_id })
+        }
+        // 中途切权限模式（补协议缺口：此前宿主仅本地记录，门控恒按
+        // session.start 时的模式）——NTF 无成对回执，UI 状态宿主本地已改
+        HostToRuntime::SessionSetMode { session_id, mode } => {
+            let (sec_mode, mode_str) = match mode {
+                bbrt_protocol::PermissionMode::Ask => (bbrt_sec::gate::PermissionMode::Ask, "ask"),
+                bbrt_protocol::PermissionMode::AutoEdit => {
+                    (bbrt_sec::gate::PermissionMode::AutoEdit, "auto-edit")
+                }
+                bbrt_protocol::PermissionMode::FullAuto => {
+                    (bbrt_sec::gate::PermissionMode::FullAuto, "full-auto")
+                }
+            };
+            let _ = mgr.set_mode(&session_id, sec_mode);
+            // 持久化（复活/重启按新档恢复）；落库失败不阻断——内存态已生效
+            if let Ok(guard) = store.lock() {
+                let _ = guard.update_session_mode(&session_id, mode_str);
+            }
+            None
         }
         // 2026-11-11：会话重命名——直接落库（会话不须在运行态；历史会话也可改名）
         HostToRuntime::SessionRename { session_id, title } => match store.lock() {

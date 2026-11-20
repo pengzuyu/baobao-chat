@@ -5,8 +5,9 @@
 //! receiver 随 runner 被 turn 线程取走，二者互不阻塞）。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use bbrt_store::Store;
 
@@ -84,6 +85,13 @@ pub struct StartParams {
 struct ManagedSession {
     /// turn 线程取走执行、结束归还（None=进行中）
     runner: Mutex<Option<SessionRunner>>,
+    /// 中断旗（与 runner.interrupted 同一 Arc 单独存）：回合进行中 runner 被
+    /// turn 线程取走（runner=None），interrupt() 若只对 runner 置旗则永远置
+    /// 不上——停止按钮全链路回执"成功"却无效果。持 Arc 才能穿透取走窗口
+    interrupt_flag: Arc<AtomicBool>,
+    /// 权限模式（与 runner.mode 同一 RwLock 单独存，同中断旗理由）：
+    /// session.set_mode 中途切档即时生效，不依赖 runner 归还
+    mode: Arc<RwLock<PermissionMode>>,
     state: Mutex<SessionState>,
     /// 工作区路径（手动检查点/恢复时 bin 解析 workspace 用；runner 可能被 turn 线程取走故单独存）
     workspace: String,
@@ -250,10 +258,19 @@ impl SessionManager {
             restored,
             replayed_events: replayed,
         };
+        // 中断旗句柄：runner move 进会话表前克隆（interrupt() 经此置旗，
+        // 不依赖可能被 turn 线程取走的 runner）
+        let interrupt_handle = runner.interrupted.clone();
+        // 模式句柄：同上（set_mode 经此改写，与 runner.mode 同一 RwLock）
+        let mode_handle = runner.mode_handle();
         guard.insert(
             session_id,
             Arc::new(ManagedSession {
                 runner: Mutex::new(Some(runner)),
+                // 中断旗与 runner.interrupted 同一 Arc（run_turn 开头清旗同一实例，
+                // 新一轮不受上一轮中断影响）
+                interrupt_flag: interrupt_handle.clone(),
+                mode: mode_handle.clone(),
                 state: Mutex::new(SessionState::Idle),
                 workspace: workspace_real.clone(),
             }),
@@ -486,16 +503,28 @@ impl SessionManager {
         self.sessions.lock().unwrap().len()
     }
 
-    /// 暂停/紧急停止旗标（循环在事件/步间检查；未决权限作废由超时兜底）
+    /// 暂停/紧急停止旗标（循环在事件/步间检查；未决审批作废由等待循环轮询旗收口）。
+    /// 对 entry.interrupt_flag 置旗而非 runner——回合进行中 runner 被 turn 线程
+    /// 取走（旧实现静默跳过=点停止全链路回执成功却无效果）
     pub fn interrupt(&self, session_id: &str) -> Result<(), ManagerError> {
         let guard = self.sessions.lock().unwrap();
         let entry = guard
             .get(session_id)
             .ok_or_else(|| ManagerError::NotFound(session_id.into()))?;
-        if let Some(r) = entry.runner.lock().unwrap().as_ref() {
-            r.interrupted
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
+        entry.interrupt_flag.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// 会话中途切权限模式（session.set_mode；补协议缺口——此前模式只随
+    /// session.start 进 runtime，中途切档 UI 已变、门控仍按旧模式审批）。
+    /// 经 entry.mode（与 runner.mode 同一 RwLock）改写：回合进行中 runner
+    /// 被取走也即时生效，下一个工具调用按新模式门控
+    pub fn set_mode(&self, session_id: &str, mode: PermissionMode) -> Result<(), ManagerError> {
+        let guard = self.sessions.lock().unwrap();
+        let entry = guard
+            .get(session_id)
+            .ok_or_else(|| ManagerError::NotFound(session_id.into()))?;
+        *entry.mode.write().unwrap() = mode;
         Ok(())
     }
 }

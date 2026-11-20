@@ -10,9 +10,10 @@
 //! - obo.token 是 token 唯一下行通道；RT 侧 obo.renew REQ 由宿主应答
 //! - 握手硬约束：首条必须 initialize（10s 窗口）→ initialize.result → runtime.ready
 //!
-//! 已知协议缺口（登记）：agent_set_mode 无协议消息（宿主本地记录）；
-//! emergency_stop=杀进程（D09 §4.6）。旧 session.pause/resume 用户通道已随
-//! 2026-11-11「停止=中断当前轮」口径移除（session.interrupt 取代，收口 idle）。
+//! 已知协议缺口（登记）：emergency_stop=杀进程（D09 §4.6）。旧
+//! session.pause/resume 用户通道已随 2026-11-11「停止=中断当前轮」口径移除
+//! （session.interrupt 取代，收口 idle）；agent_set_mode 原缺口（仅宿主本地
+//! 记录）已由 session.set_mode 协议消息补齐（中途切档即时生效）。
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -160,7 +161,10 @@ impl Shared {
     fn issue_obo(&self, access: &str) -> Result<String, String> {
         let did = self.did.lock().unwrap().clone();
         let scopes = self.obo_scopes.lock().unwrap().clone();
-        let url = format!("{}/api/v1/auth/obo/token", self.gateway.trim_end_matches('/'));
+        let url = format!(
+            "{}/api/v1/auth/obo/token",
+            self.gateway.trim_end_matches('/')
+        );
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
             .build()
@@ -174,7 +178,10 @@ impl Shared {
             .json()
             .map_err(|e| format!("OBO 响应解析失败: {e}"))?;
         if resp["code"].as_i64() != Some(0) {
-            return Err(format!("OBO 签发被拒 (code={} message={})", resp["code"], resp["message"]));
+            return Err(format!(
+                "OBO 签发被拒 (code={} message={})",
+                resp["code"], resp["message"]
+            ));
         }
         resp["data"]["obo_token"]
             .as_str()
@@ -755,8 +762,13 @@ impl AgentHost {
         Ok(json!({ "ok": true, "title": final_title }))
     }
 
-    /// 权限模式本地切换（协议缺口：HostToRuntime 无 mode 设置消息，登记）
-    pub fn set_mode(&self, session_id: &str, mode: &str) {
+    /// 权限模式切换：本地会话行即时更新（UI 一致性）+ session.set_mode 下发
+    /// runtime（补协议缺口——此前只本地记录，门控恒按 session.start 时的模式，
+    /// 中途切档不生效）。mode 先校验，非法值不落本地也不下发
+    pub fn set_mode(&self, session_id: &str, mode: &str) -> Result<(), String> {
+        if !matches!(mode, "ask" | "auto-edit" | "full-auto") {
+            return Err(format!("未知权限模式: {mode}"));
+        }
         let now = now_ms();
         if let Some(row) = self
             .shared
@@ -769,6 +781,10 @@ impl AgentHost {
             row.mode = mode.to_string();
             row.updated_at = now;
         }
+        self.fire(
+            "session.set_mode",
+            json!({ "sessionId": session_id, "mode": mode }),
+        )
     }
 
     /// 紧急停止：杀 Runtime + 未决 REQ 全部失败（D09 §4.6）
@@ -998,9 +1014,9 @@ fn append_personal(
                 taken.push(name.clone());
                 out.push(w);
             }
-            None => eprintln!(
-                "[bbc-bridge] 个人 MCP server '{name}' 定义非法（缺 command/url），跳过"
-            ),
+            None => {
+                eprintln!("[bbc-bridge] 个人 MCP server '{name}' 定义非法（缺 command/url），跳过")
+            }
         }
     }
 }

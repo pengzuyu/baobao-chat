@@ -72,7 +72,10 @@ pub fn agent_input(
     // Ok——上层 agentFlow 全链无感知）。注意幽灵会话的「会话不存在」是异步
     // error 事件（ack 仍 queued），前端另有映射自愈兜底
     if rep["type"] == "error" {
-        return Err(format!("消息被拒：{}", rep["message"].as_str().unwrap_or("runtime error")));
+        return Err(format!(
+            "消息被拒：{}",
+            rep["message"].as_str().unwrap_or("runtime error")
+        ));
     }
     Ok(json!({ "ok": true }))
 }
@@ -91,11 +94,11 @@ pub fn agent_switch_model(
     )
 }
 
-/// 权限模式（协议缺口：宿主本地记录）
+/// 权限模式切换：本地会话行 + session.set_mode 下发 runtime（中途切档即时生效；
+/// 原协议缺口=仅本地记录，门控恒按 session.start 时的模式）
 #[tauri::command]
 pub fn agent_set_mode(host: Host, session_id: String, mode: String) -> Result<(), String> {
-    host.set_mode(&session_id, &mode);
-    Ok(())
+    host.set_mode(&session_id, &mode)
 }
 
 /// 中断当前轮（2026-11-11 取代旧 agent_pause/resume——暂停按钮已移除，

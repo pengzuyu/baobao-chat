@@ -68,6 +68,10 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
         HostToRuntime::SessionInterrupt {
             session_id: "sess-1".into(),
         },
+        HostToRuntime::SessionSetMode {
+            session_id: "sess-1".into(),
+            mode: PermissionMode::FullAuto,
+        },
         HostToRuntime::SessionRename {
             session_id: "sess-1".into(),
             title: "与张三的对话".into(),
@@ -349,8 +353,8 @@ fn roundtrip_all_host_to_runtime() {
     let all = all_host_to_runtime();
     assert_eq!(
         all.len(),
-        17,
-        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong + D20 clarify.response（委派 delegate.* 已随委派域退役，run.cancel 取代）"
+        18,
+        "D11 §4 宿主→RT 15 类型 + D15 追加 3 类型 + model.switch + 双向 ping/pong + D20 clarify.response + session.set_mode（委派 delegate.* 已随委派域退役，run.cancel 取代）"
     );
     for msg in &all {
         roundtrip(msg);
@@ -1317,6 +1321,13 @@ fn golden_session_title_and_interrupt() {
             session_id: "sess-1".into(),
         },
         json!({"type":"session.interrupt","sessionId":"sess-1"}),
+    );
+    golden(
+        &HostToRuntime::SessionSetMode {
+            session_id: "sess-1".into(),
+            mode: PermissionMode::FullAuto,
+        },
+        json!({"type":"session.set_mode","sessionId":"sess-1","mode":"full-auto"}),
     );
     golden(
         &HostToRuntime::SessionRename {

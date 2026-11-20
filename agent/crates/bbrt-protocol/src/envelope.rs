@@ -572,6 +572,15 @@ pub enum HostToRuntime {
     #[serde(rename = "session.interrupt", rename_all = "camelCase")]
     SessionInterrupt { session_id: String },
 
+    /// 会话中途切权限模式（NTF 无成对回执；补旧协议缺口——此前宿主仅本地记录，
+    /// runtime 恒用 session.start 时的模式，切档不生效）。即时生效：下一个工具
+    /// 调用按新模式门控（升档 full-auto 的二次确认在宿主侧完成）
+    #[serde(rename = "session.set_mode", rename_all = "camelCase")]
+    SessionSetMode {
+        session_id: String,
+        mode: PermissionMode,
+    },
+
     /// 会话重命名（REQ→session.renamed；标题派生/手动改名统一通道）
     #[serde(rename = "session.rename", rename_all = "camelCase")]
     SessionRename { session_id: String, title: String },

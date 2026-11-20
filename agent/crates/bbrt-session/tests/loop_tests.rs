@@ -533,6 +533,153 @@ fn permission_timeout_counts_as_deny() {
     ));
 }
 
+/// 回合进行中（runner 被 turn 线程取走、阻塞在等审批）interrupt() 仍能置旗：
+/// 旧实现对 entry.runner（None）置旗被静默跳过=点停止全链路回执成功却无效果；
+/// 修复后经 ManagedSession.interrupt_flag 穿透取走窗口，等审批 1s 轮询感知
+/// → PermissionResolved(cancelled) 收口 interrupted
+#[test]
+fn interrupt_flags_through_taken_runner_while_waiting_permission() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeModel {
+        calls: AtomicUsize::new(0),
+        tool_name: Some("run_command".into()),
+    });
+    let tools = Arc::new(FakeTools {
+        confirm: true, // 首工具 NeedConfirm → 阻塞在等审批
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let mgr = Arc::new(SessionManager::new(
+        deps(model, tools.clone(), sink.clone(), None),
+        None,
+    ));
+    mgr.start(
+        "s-ir".into(),
+        StartParams {
+            workspace: "/w".into(),
+            mode: PermissionMode::Ask,
+            model_policy: ModelTier::Strong,
+            model_override: None,
+            title: "t".into(),
+            restored: None,
+            unattended: false,
+            // 回归兜底：若中断失效 5s 超时收口（report.interrupted=false 断言失败
+            // 而非挂死）；正常路径中断 <2s 收口
+            approval_timeout_secs: Some(5),
+        },
+    )
+    .unwrap();
+    // turn 独立线程：runner 被取走、阻塞在 permission 等待
+    let turn_mgr = Arc::clone(&mgr);
+    let turn = std::thread::spawn(move || turn_mgr.run_turn("s-ir", "跑个命令", None).unwrap());
+    // 等审批卡出现（=runner 已被取走且阻塞在 recv）再中断
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::PermissionRequest { .. }))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "3s 内未出现审批卡，turn 未进入等待"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    mgr.interrupt("s-ir").unwrap(); // 旧实现：runner=None 静默跳过
+    let report = turn.join().unwrap();
+    assert!(report.interrupted, "回合进行中中断应生效收口");
+    assert_eq!(
+        tools.executed.lock().unwrap().len(),
+        0,
+        "中断后不应执行工具"
+    );
+    assert!(events_of(sink.as_ref()).iter().any(|e| matches!(
+        e,
+        SessionEvent::PermissionResolved { decision, .. } if decision == "cancelled"
+    )));
+}
+
+/// 感知模式的假工具：check 记录每次收到的 mode（验证 session.set_mode
+/// 中途切档对下一个工具门控即时生效——共享句柄与 runner 读点同一实例）
+struct ModeProbeTools {
+    seen: Mutex<Vec<PermissionMode>>,
+}
+impl ToolExecutor for ModeProbeTools {
+    fn check(&self, mode: PermissionMode, _call: &ToolInvocation) -> CheckOutcome {
+        self.seen.lock().unwrap().push(mode);
+        CheckOutcome::Allow {
+            source: "matrix".into(),
+        }
+    }
+    fn execute(&self, _mode: PermissionMode, _call: &ToolInvocation) -> ToolOutcome {
+        ToolOutcome::Ok {
+            summary: "ok".into(),
+            truncated: false,
+            exit_code: Some(0),
+            duration_ms: 1,
+        }
+    }
+    fn record_grant(
+        &self,
+        _m: PermissionMode,
+        _c: &ToolInvocation,
+        _s: GrantScope,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn tool_specs(&self) -> Vec<ToolSpec> {
+        vec![ToolSpec {
+            name: "run_command".into(),
+            description: "跑命令".into(),
+            input_schema: serde_json::json!({"type":"object"}),
+        }]
+    }
+}
+
+#[test]
+fn set_mode_takes_effect_on_next_tool_gate() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(FakeModel {
+        calls: AtomicUsize::new(0),
+        tool_name: Some("run_command".into()),
+    });
+    // 探针句柄共享：一份进 LoopDeps，测试侧留一份读 seen
+    let probe = Arc::new(ModeProbeTools {
+        seen: Mutex::new(vec![]),
+    });
+    let d = LoopDeps {
+        model,
+        tools: probe.clone(),
+        memory: None,
+        wal: Arc::new(NoopEventLog),
+        sink: sink.clone(),
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let mgr = SessionManager::new(d, None);
+    mgr.start(
+        "s-sm".into(),
+        StartParams {
+            workspace: "/w".into(),
+            mode: PermissionMode::Ask, // 以 Ask 启动
+            model_policy: ModelTier::Strong,
+            model_override: None,
+            title: "t".into(),
+            restored: None,
+            unattended: false,
+            approval_timeout_secs: None,
+        },
+    )
+    .unwrap();
+    // 中途切 full-auto（此前协议缺口：runtime 恒按 start 时的模式）
+    mgr.set_mode("s-sm", PermissionMode::FullAuto).unwrap();
+    let report = mgr.run_turn("s-sm", "跑个命令", None).unwrap();
+    assert_eq!(report.tool_calls, 1);
+    // 门控收到的模式=切换后的 full-auto（start 时的 Ask 已被覆盖）
+    assert_eq!(*probe.seen.lock().unwrap(), vec![PermissionMode::FullAuto]);
+}
+
 #[test]
 fn memory_heuristic_and_daily_report() {
     let tmp = tempfile::tempdir().unwrap();

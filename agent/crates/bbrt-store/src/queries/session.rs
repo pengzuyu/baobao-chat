@@ -125,6 +125,16 @@ impl Store {
         Ok(())
     }
 
+    /// 权限模式回写（session.set_mode 持久化——复活/重启按新档恢复）。
+    pub fn update_session_mode(&self, id: &str, mode: &str) -> Result<(), StoreError> {
+        let now = now_ms();
+        self.conn.execute(
+            "UPDATE agent_session SET mode = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, mode, now],
+        )?;
+        Ok(())
+    }
+
     /// 会话重命名（2026-11-11：标题派生/手动改名；updated_at 随之刷新）。
     /// 空白标题返回 Err 不落库；返回受影响行数（0=会话不存在）。
     pub fn rename_session(&self, id: &str, title: &str) -> Result<u32, StoreError> {
