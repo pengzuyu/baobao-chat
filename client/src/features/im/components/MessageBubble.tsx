@@ -21,8 +21,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Flex, Image, Popover, Tag, Typography, message as antdMessage, theme } from 'antd';
 import { useAgentStore } from '../../agent/store/agent';
 import { getAgentBridge } from '../../agent/bridge';
-import { useImStore } from '../store/im';
 import { currentRoundItems, roundQuestionOf, stagesFromStream } from '../agent/embedded';
+import { sendBotText } from '../api/im';
+import { MarkdownText } from '../../../shared/components/MarkdownText';
 import {
   AlertCircle,
   ArrowDownToLine,
@@ -56,6 +57,7 @@ import { ApplyCard } from './ApplyCard';
 import { EmojiPicker } from './EmojiPicker';
 import { hasAnyMsgAction, msgActionsVisible } from './stream/msgActions';
 import type { MenuAnchor } from './stream/MsgContextMenu';
+import { isBotTextMsg } from '../model/types';
 import type {
   FileMessageBody,
   MemberRole,
@@ -1011,6 +1013,9 @@ export function MessageBubble({
   // 编辑/撤回显隐不再在此判——悬浮条瘦身（快捷 emoji+回复+⋯），条件项全部移入
   // 统一右键菜单，与菜单共用 msgActionsVisible（INT-IM-25）
   const text = isText && 'text' in message.body ? message.body.text : '';
+  /** AI 名义消息（2026-11-20 拍板「{senderName}的BOT」）：agent 结论经「发送到聊天」
+   *  发出——恒按对方样式（ChatPage mine 判定已排除），AI 头像+「xx的BOT」名义+markdown 渲染 */
+  const isBot = isBotTextMsg(message);
 
   /** agent_card 体窄化（D18 §4.1：kind=embedded_agent 才渲染过程卡；未知 kind 走兜底附件卡） */
 function isAgentCardBody(b: unknown): b is AgentCardBody {
@@ -1020,12 +1025,15 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
 /** 回应切换：add/remove 由调用方按 ext.reactions 现态判定（全量快照回收保证一致） */
   const doReact = (emoji: string) => actions?.onReact(message, emoji);
   /** agent 卡「发送到本会话」（2026-11-20 修订：按钮放气泡外悬浮操作条——卡内绝对
-   *  定位与折叠态两行结论重叠异常，用户报）：结论剥 markdown 纯文本发到本卡所在会话
-   *  （固定目标，不支持发到其他私聊/群聊）；收口且有结论才给入口 */
+   *  定位与折叠态两行结论重叠异常，用户报）：结论以 **bot 名义**（AI 头像+「{发起人}
+   *  的BOT」+markdown 渲染，非本人样式）发到本卡所在会话（固定目标，不支持发到
+   *  其他私聊/群聊）；收口且有结论才给入口；返回是否成功（按钮翻「已发送到聊天」） */
   const agentCardShareable =
     message.type === 'agent_card' && isAgentCardBody(message.body) && (message.body as AgentCardBody).status !== 'running';
-  const sendAgentCardConclusion = () => {
-    if (!isAgentCardBody(message.body)) return;
+  /** 「发送到聊天」已发态（组件态不持久化——刷新后可再发，重复发送=有意再发一条） */
+  const [botSent, setBotSent] = useState(false);
+  const sendAgentCardConclusion = async (): Promise<boolean> => {
+    if (!isAgentCardBody(message.body)) return false;
     const b = message.body;
     let md = '';
     for (let i = b.stages.length - 1; i >= 0; i -= 1) {
@@ -1034,15 +1042,14 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
         break;
       }
     }
-    const text = agentCardPlainText(md).trim();
-    if (!text) return;
-    void useImStore
-      .getState()
-      .sendText(message.convId, text)
-      .then(
-        () => antdMessage.success('已发送到本会话'),
-        () => antdMessage.error('发送失败，请重试'),
-      );
+    if (!md.trim()) return false;
+    try {
+      await sendBotText(message.convId, md);
+      return true;
+    } catch {
+      antdMessage.error('发送失败，请重试');
+      return false;
+    }
   };
 
   // 多选模式（INT-IM-14）：整行可点切换勾选；气泡内容经 pointerEvents:none 收敛交互
@@ -1114,13 +1121,14 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
           {selected ? <Check size={12} /> : null}
         </Button>
       ) : null}
-      <Avatar name={message.senderName} size={32} />
+      <Avatar name={isBot ? 'BOT' : message.senderName} size={32} group={isBot ? 'bot' : null} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         {/* agent_card 恒左对齐（2026-11-11）：本人发起的卡不显示发送者名（回答主体是
-         * Agent，卡头已标识）；他人卡保留名字（群聊归属有意义） */}
+         * Agent，卡头已标识）；他人卡保留名字（群聊归属有意义）。
+         * bot 名义消息（2026-11-20）恒显示「{发起人}的BOT」——不同人发的 AI 消息要区分 */}
         {mine || (message.type === 'agent_card' && message.senderId === myUid) ? null : (
           <Text style={{ fontSize: 12, color: token.colorTextTertiary, textAlign: mine ? 'right' : undefined }}>
-            {message.senderName}
+            {isBot ? `${message.senderName}的BOT` : message.senderName}
           </Text>
         )}
         <div
@@ -1133,11 +1141,17 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
           }}
         >
           {isText ? (
-            <span style={{ ...bubbleStyle(false), fontSize: token.fontSize, color: token.colorText, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>
+            <span style={{ ...bubbleStyle(false), fontSize: token.fontSize, color: token.colorText, wordBreak: 'break-word', ...(isBot ? undefined : { whiteSpace: 'pre-wrap' }) }}>
               <ReplyQuote message={message} onLocate={actions?.onLocate} />
-              <Text>
-                <TextWithMentions text={text} mentions={message.mentions} />
-              </Text>
+              {/* bot 名义消息（2026-11-20）：markdown 原文渲染（拍板「渲染完的信息」，
+                  非本人样式的原 markdown 源码文本）；无 mention 语义 */}
+              {isBot ? (
+                <MarkdownText text={text} />
+              ) : (
+                <Text>
+                  <TextWithMentions text={text} mentions={message.mentions} />
+                </Text>
+              )}
               {message.status === 3 ? (
                 <Text style={{ fontSize: 10, color: token.colorTextQuaternary, marginInlineStart: 6 }}>
                   已编辑
@@ -1173,14 +1187,15 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
           )}
 
           {/* 悬浮操作条（瘦身，INT-IM-25）：快捷 emoji + 回复 + ⋯（开统一菜单；
-              编辑/撤回/转发/收藏/多选移入菜单，减少重复入口——快捷表情区无菜单语义，保留原样） */}
+              编辑/撤回/转发/收藏/多选移入菜单，减少重复入口——快捷表情区无菜单语义，保留原样）。
+              agent 卡位置例外（2026-11-20 拍板）：气泡外围**右下角**（其余消息仍右上方） */}
           {actions && !selecting && (hovered || emojiPickerOpen) ? (
             <Flex
               align="center"
               gap={2}
               style={{
                 position: 'absolute',
-                top: -22,
+                ...(message.type === 'agent_card' ? { top: 'auto', bottom: -27 } : { top: -22 }),
                 right: 4,
                 padding: '2px 4px',
                 background: token.colorBgContainer,
@@ -1208,7 +1223,7 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
                 open={emojiPickerOpen}
                 onOpenChange={setEmojiPickerOpen}
                 trigger="click"
-                placement="topRight"
+                placement={message.type === 'agent_card' ? 'bottomRight' : 'topRight'}
                 content={
                   <EmojiPicker
                     onPick={(e) => {
@@ -1237,21 +1252,25 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
                 回复
               </Button>
               {/* agent 卡专属「发送到本会话」（2026-11-20 修订：气泡外操作条——
-                  卡内按钮与折叠态结论重叠；agent 卡无转发，此为唯一分享出口） */}
+                  卡内按钮与折叠态结论重叠；agent 卡无转发，此为唯一分享出口）。
+                  已发态翻「已发送到聊天」并禁用（组件态，重复发有意为之可刷新后再发） */}
               {agentCardShareable ? (
                 <Button
                   variant="text"
                   size="small"
                   data-testid="agent-card-send"
-                  title="把结论以文本消息发送到本会话"
+                  disabled={botSent}
+                  title="把结论以 AI 名义（BOT）消息发送到本会话"
                   style={{ fontSize: 12, color: token.colorTextSecondary }}
                   onClick={(ev) => {
                     ev.stopPropagation();
-                    sendAgentCardConclusion();
+                    void sendAgentCardConclusion().then((ok) => {
+                      if (ok) setBotSent(true);
+                    });
                   }}
                 >
                   <Send size={12} aria-hidden style={{ marginRight: 3 }} />
-                  发送
+                  {botSent ? '已发送到聊天' : '发送'}
                 </Button>
               ) : null}
               {/* ⋯ 打开统一右键菜单（锚定按钮左下角；菜单内动作复用同一套 handlers） */}
@@ -1450,10 +1469,18 @@ export function AgentCardMsg({ body }: { body: AgentCardBody }) {
     prevUserCountRef.current = userCount;
   }, [userCount, done, clearGrace]);
   /** 手动展开/收起：清宽限定时器（手动优先，本轮不再后台抢折） */
+  /** 卡根 ref（折叠卡/展开卡互斥挂同一 ref）：展开时 scrollIntoView 自动滚出
+   *  被撑出的内容（2026-11-20 用户报「展开后还得手动滚动看全」；block:'nearest'
+   *  完全可见不动、底部被裁则滚到可见） */
+  const rootRef = useRef<HTMLDivElement>(null);
   const toggleExpanded = useCallback(() => {
     clearGrace();
-    setExpanded((v) => !v);
-  }, [clearGrace]);
+    const willExpand = !expanded;
+    setExpanded(willExpand);
+    if (willExpand) {
+      requestAnimationFrame(() => rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+    }
+  }, [clearGrace, expanded]);
 
   // 空终态（无过程无结论且非运行）不渲染——与 AgentProcessCard 空卡口径一致
   if (!expanded && display.stages.length === 0 && !live) return null;
@@ -1481,6 +1508,7 @@ export function AgentCardMsg({ body }: { body: AgentCardBody }) {
     const durMs = display.started_at && display.ended_at ? display.ended_at - display.started_at : null;
     return (
       <div
+        ref={rootRef}
         data-testid="agent-card-collapsed"
         role="button"
         tabIndex={0}
@@ -1566,7 +1594,7 @@ export function AgentCardMsg({ body }: { body: AgentCardBody }) {
     );
   }
   return (
-    <>
+    <div ref={rootRef} style={{ minWidth: 0 }}>
       <AgentProcessCard
         body={display}
         startedAt={display.started_at}
@@ -1625,6 +1653,6 @@ export function AgentCardMsg({ body }: { body: AgentCardBody }) {
           </Flex>
         }
       />
-    </>
+    </div>
   );
 }

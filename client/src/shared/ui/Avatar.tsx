@@ -5,7 +5,7 @@
 
 import type { CSSProperties } from 'react';
 import { Avatar as AntdAvatar } from 'antd';
-import { Megaphone, Users } from 'lucide-react';
+import { Bot, Megaphone, Users } from 'lucide-react';
 
 /** 色板：饱和度对企业场景、白字对比可用（亮暗主题通用） */
 const PALETTE = [
@@ -30,12 +30,13 @@ function hashName(name: string): number {
 
 /** 任意像素值皆可（通讯录 22/72 等非标准档；fontSize/iconSize 均按 size 派生） */
 export type AvatarSize = number;
-export type AvatarGroup = 'group' | 'broadcast';
+export type AvatarGroup = 'group' | 'broadcast' | 'bot';
 
 interface AvatarProps {
   name: string;
   size?: AvatarSize;
-  /** group=群聊图标底；broadcast=广播群（橙底喇叭，飞书式警示感） */
+  /** group=群聊图标底；broadcast=广播群（橙底喇叭，飞书式警示感）；bot=AI 名义
+   *  消息固定头像（主色底机器人图标，2026-11-20「{xx}的BOT」） */
   group?: AvatarGroup | null;
   className?: string;
   /** 行内布局透传（如 flex:'none'；后写覆盖默认取色样式） */
@@ -43,7 +44,7 @@ interface AvatarProps {
 }
 
 export function Avatar({ name, size = 40, group = null, className, style }: AvatarProps) {
-  const color = group === 'broadcast' ? '#f0872c' : PALETTE[hashName(name) % PALETTE.length];
+  const color = group === 'broadcast' ? '#f0872c' : group === 'bot' ? 'var(--bbc-primary)' : PALETTE[hashName(name) % PALETTE.length];
   const iconSize = Math.round(size * 0.5);
 
   return (
@@ -57,6 +58,8 @@ export function Avatar({ name, size = 40, group = null, className, style }: Avat
         <Users size={iconSize} strokeWidth={2} />
       ) : group === 'broadcast' ? (
         <Megaphone size={iconSize} strokeWidth={2} />
+      ) : group === 'bot' ? (
+        <Bot size={iconSize} strokeWidth={2} />
       ) : (
         name.slice(0, 1)
       )}

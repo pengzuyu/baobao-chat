@@ -53,11 +53,20 @@ export interface MergeForwardBody {
 
 /** 消息体（骨架阶段覆盖 text 与附件；system 为 PIM-12 参数集；全集见 D03 §6.3；call_card 随 rtc 域瘦身移除） */
 export type MessageBody =
-  | { text: string }
+  /** text 消息体；bot=true 为「AI 名义消息」（2026-11-20：agent 结论经「发送到聊天」
+   *  发出——服务端 text 校验只解析 text 字段、body 原文透传落库，渲染侧按 bot 标记
+   *  走对方样式：左对齐+AI 头像+「{senderName}的BOT」名义+markdown 渲染） */
+  | { text: string; bot?: true }
   | FileMessageBody
   | SystemBody
   | MergeForwardBody
   | Record<string, never>;
+
+/** AI 名义消息判定（type=text 且 body.bot=true）——ChatPage mine 排除与
+ *  MessageBubble 渲染分支共用（2026-11-20） */
+export function isBotTextMsg(m: Pick<Message, 'type' | 'body'>): boolean {
+  return m.type === 'text' && (m.body as { bot?: unknown } | undefined)?.bot === true;
+}
 
 /** 引用快照（服务端 ext.reply_digest，D03 §5.2） */
 export interface ReplyDigest {

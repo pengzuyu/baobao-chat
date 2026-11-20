@@ -34,7 +34,7 @@ import {
 import { uploadFileSmart } from '../api/files';
 import { sendStickerMessage } from '../api/stickers';
 import { hydrateConv, hydrateLocal, hookSyncOnReconnect, resendOutbox, runSync } from '../api/local';
-import type { Mention, Message } from '../model/types';
+import { isBotTextMsg, type Mention, type Message } from '../model/types';
 import { formatMuteUntil } from './systemMessageRegistry';
 import { TYPING_TTL_MS, useImStore } from '../store/im';
 import { ChatHeader } from '../components/ChatHeader';
@@ -924,6 +924,9 @@ export function ChatPage() {
         minHeight: 0,
         overflowY: 'auto',
         padding: 16,
+        /* 底部余量（2026-11-20 用户拍板「气泡与输入框保持一定距离」）：最后一条消息
+           下方留出 agent 卡右下角悬浮操作条（bottom:-27）完整显示的空间 */
+        paddingBottom: 56,
         display: 'flex',
         flexDirection: 'column',
         gap: 12,
@@ -962,8 +965,9 @@ export function ChatPage() {
           <MessageBubble
             message={m}
             /* agent_card 恒按对方样式渲染（2026-11-11 用户口径：AI 回答左对齐+头像
-             * 在左——即使发起人是自己，回答主体是 Agent；顺带不显示发送回执尾标） */
-            mine={m.senderId === myUid && m.type !== 'system' && m.type !== 'agent_card'}
+             * 在左——即使发起人是自己，回答主体是 Agent；顺带不显示发送回执尾标）；
+             * bot 名义消息同口径（2026-11-20「{senderName}的BOT」——AI 头像+左对齐） */
+            mine={m.senderId === myUid && m.type !== 'system' && m.type !== 'agent_card' && !isBotTextMsg(m)}
             onRetry={(clientMsgId) => convId && void retrySend(convId, clientMsgId)}
             peerReadSeq={(convId && peerReadSeq[convId]) || 0}
             actions={m.type === 'system' ? undefined : bubbleActions}

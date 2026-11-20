@@ -36,6 +36,7 @@ import type { PermissionDecision } from '../components/PermissionCard';
 import { ModelThinkPicker } from '../components/ModelThinkPicker';
 import { ContextUsageMeter } from '../components/ContextUsageMeter';
 import { convIdOfSession } from '../../im/agent/embedded';
+import { sendBotText } from '../../im/api/im';
 import { useImStore } from '../../im/store/im';
 import { Composer } from '../components/Composer';
 import { fetchPluginCommands, type PluginCommand } from '../../eco/api/plugins';
@@ -248,11 +249,12 @@ export function AgentWorkbenchPage() {
   const [atBottom, setAtBottom] = useState(true); // ref 供 RO/计数读，state 供浮标渲染
   const [awayCount, setAwayCount] = useState(0); // 离底期间新增流条目数（浮标 Badge）
   /** 回合「发送到聊天」（2026-11-20 修订：固定发到本会话对应的来源私聊/群聊，
-   *  不弹目标选择、不支持发到其他会话）——最终回答以纯文本消息发出；非 embedded
-   *  会话无来源（embeddedConvId=null）→ 回调 undefined=按钮不渲染 */
+   *  不弹目标选择、不支持发到其他会话）——最终回答以 **bot 名义**消息发出（AI 头像+
+   *  「{发起人}的BOT」+markdown 渲染，非本人样式）；非 embedded 会话无来源
+   *  （embeddedConvId=null）→ 回调 undefined=按钮不渲染；返回是否成功（按钮翻已发态） */
   const shareTurnToConv = useCallback(
-    (_user: Extract<StreamItem, { kind: 'user' }>, items: StreamItem[]) => {
-      if (!embeddedConvId) return;
+    async (_user: Extract<StreamItem, { kind: 'user' }>, items: StreamItem[]): Promise<boolean> => {
+      if (!embeddedConvId) return false;
       let text = '';
       for (let i = items.length - 1; i >= 0; i -= 1) {
         const it = items[i];
@@ -261,15 +263,16 @@ export function AgentWorkbenchPage() {
           break;
         }
       }
-      if (!text.trim()) return;
+      if (!text.trim()) return false;
       const name = useImStore.getState().convs.find((c) => c.id === embeddedConvId)?.name;
-      void useImStore
-        .getState()
-        .sendText(embeddedConvId, text)
-        .then(
-          () => message.success(`已发送到${name ? ` ${name}` : '对应聊天'}`),
-          () => message.error('发送失败，请重试'),
-        );
+      try {
+        await sendBotText(embeddedConvId, text);
+        message.success(`已发送到${name ? ` ${name}` : '对应聊天'}`);
+        return true;
+      } catch {
+        message.error('发送失败，请重试');
+        return false;
+      }
     },
     [embeddedConvId],
   );

@@ -152,9 +152,10 @@ interface TurnBlockProps {
   /** 回合进行中：过程平铺全显示 + 实时统计不打烊 */
   active: boolean;
   onRespond: (d: PermissionDecision) => void;
-  /** 回合收口后「发送到聊天」入口（2026-11-20）：把最终回答以纯文本消息发到
-   *  私聊/群聊；仅主时间线传入（右栏子 agent 流不出现） */
-  onShare?: (user: UserItem, items: StreamItem[]) => void;
+  /** 回合收口后「发送到聊天」入口（2026-11-20）：把最终回答以 bot 名义消息发到
+   *  本会话对应的私聊/群聊；仅主时间线传入（右栏子 agent 流不出现）；
+   *  返回是否成功（true=按钮翻「已发送到聊天」并禁用） */
+  onShare?: (user: UserItem, items: StreamItem[]) => Promise<boolean> | boolean | void;
 }
 
 export const TurnBlock = memo(
@@ -188,6 +189,9 @@ export const TurnBlock = memo(
     }, [items, active, user.turnDoneAt, user.ts]);
 
     const [expanded, setExpanded] = useState(false);
+    /** 本回合「发送到聊天」已发态（2026-11-20）：成功后翻文案禁用（memo 内组件态，
+     *  props 引用稳定时保留；切会话重挂即复位=可再发一条） */
+    const [shared, setShared] = useState(false);
     const showProcess = active || expanded || hasBlocking;
 
     return (
@@ -254,13 +258,20 @@ export const TurnBlock = memo(
         ) : null}
         {active && processItems.length === 0 && !lastAnswer ? <TypingState text="Agent 正在处理" /> : null}
         {/* 发送到聊天（2026-11-20 修订：固定发到本会话对应的来源私聊/群聊，无选择）：
-            回合收口且有最终回答才出现——右对齐轻量文字按钮 */}
+            回合收口且有最终回答才出现——右对齐轻量文字按钮；已发态翻文案禁用
+            （组件态不持久化，刷新后可再发=有意再发一条） */}
         {!active && onShare && lastAnswer ? (
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button
               type="button"
-              onClick={() => onShare(user, items)}
-              title="把本回合最终回答以文本消息发送到本会话对应的聊天"
+              disabled={shared}
+              onClick={() => {
+                if (shared) return;
+                void Promise.resolve(onShare(user, items)).then((ok) => {
+                  if (ok !== false) setShared(true);
+                });
+              }}
+              title={shared ? '本回合最终回答已发送' : '把本回合最终回答发送到本会话对应的聊天'}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -268,16 +279,16 @@ export const TurnBlock = memo(
                 padding: '2px 8px',
                 border: 'none',
                 background: 'transparent',
-                cursor: 'pointer',
+                cursor: shared ? 'default' : 'pointer',
                 fontSize: 12,
-                color: token.colorTextTertiary,
+                color: shared ? token.colorTextQuaternary : token.colorTextTertiary,
                 borderRadius: 6,
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = token.colorPrimary)}
-              onMouseLeave={(e) => (e.currentTarget.style.color = token.colorTextTertiary)}
+              onMouseEnter={(e) => !shared && (e.currentTarget.style.color = token.colorPrimary)}
+              onMouseLeave={(e) => (e.currentTarget.style.color = shared ? token.colorTextQuaternary : token.colorTextTertiary)}
             >
               <Send size={12} aria-hidden />
-              发送到聊天
+              {shared ? '已发送到聊天' : '发送到聊天'}
             </button>
           </div>
         ) : null}

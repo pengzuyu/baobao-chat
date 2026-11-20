@@ -70,6 +70,8 @@ export async function fetchMessages(convId: string): Promise<Paged<Message>> {
  * 幂等：重试复用同一 client_msg_id，服务端返回原 seq（14 篇 §5.3）。
  * reply_to_seq：引用回复（快照由服务端按源消息冗余入 ext）。
  * mentions：@提及（含 @全体 all=true，服务端按 mention_all_policy 校验 3014）。
+ * bodyExtra：随 body 附加的字段（2026-11-20 bot 名义标记 bot:true——服务端 text
+ * 校验只解析 text 字段、body 原文透传落库，渲染侧见 isBotTextMsg）。
  */
 export async function sendTextMessage(
   convId: string,
@@ -77,6 +79,7 @@ export async function sendTextMessage(
   text: string,
   replyToSeq?: number,
   mentions?: Mention[],
+  bodyExtra?: Record<string, unknown>,
 ): Promise<SendAck> {
   if (USE_MOCK) {
     await delay(600);
@@ -86,10 +89,20 @@ export async function sendTextMessage(
     conv_id: convId,
     client_msg_id: clientMsgId,
     type: 'text',
-    body: { text },
+    body: { text, ...bodyExtra },
     ...(replyToSeq && replyToSeq > 0 ? { reply_to_seq: replyToSeq } : {}),
     ...(mentions && mentions.length > 0 ? { mentions } : {}),
   });
+}
+
+/**
+ * agent 结论以 bot 名义发到会话（2026-11-20「{senderName}的BOT」拍板）：type=text +
+ * body.bot 标记（markdown 原文随 text 落库，渲染端 isBotTextMsg 判定后按 AI 名义
+ * markdown 渲染）。服务端零改动：text 内容策略只解析 text 字段（额外字段忽略）、
+ * body 原文透传落库。幂等键每次新生成（用户手动分享，重复点击=有意再发一条）。
+ */
+export async function sendBotText(convId: string, markdown: string): Promise<void> {
+  await sendTextMessage(convId, `bot-${crypto.randomUUID()}`, markdown, undefined, undefined, { bot: true });
 }
 
 /**
