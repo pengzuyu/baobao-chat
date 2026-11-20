@@ -34,6 +34,10 @@ export type StreamItem =
        *  stateChanged 打点（idle/error/ended/paused，含 interrupt）——回合结束
        *  必有终态收口；新 user 条目天然重置 */
       turnDoneAt?: number;
+      /** 回合发起方（2026-11-20 修「工作台回合泄漏进 IM」）：im=聊天页发送
+       *  （sendTextTo，落流卡覆盖）；workbench=工作台发送（sendText，不落卡）。
+       *  历史回填/子 agent 流不带＝未知，EmbeddedAgentSync 按「非 im 不落」保守处理 */
+      origin?: 'im' | 'workbench';
     }
   | { kind: 'agentText'; key: string; text: string; streaming: boolean }
   | { kind: 'reasoning'; key: string; text: string; streaming: boolean }
@@ -511,8 +515,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     if (!sid || !text.trim()) return;
     const wasFirst = !(get().streams[sid] ?? []).some((it) => it.kind === 'user');
     // 乐观上屏（与 sendText 同款；embedded 会话在 im 聊天卡消费，工作台打开时同样可见）
+    // origin=im：EmbeddedAgentSync 只落流聊天页发起的回合（工作台发起不进 IM 消息流）
     set((s) => ({
-      streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now() }] },
+      streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now(), origin: 'im' }] },
       sessions: touchSession(s.sessions, sid, {}),
     }));
     await bridge.sendMessage(sid, text, get().thinkLevel);
@@ -526,9 +531,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const sid = get().activeSessionId;
     if (!sid || !text.trim()) return;
     const wasFirst = !(get().streams[sid] ?? []).some((it) => it.kind === 'user');
-    // 乐观上屏（D08：agent_input 发送后 UI 乐观追加）
+    // 乐观上屏（D08：agent_input 发送后 UI 乐观追加）；origin=workbench 不落 IM 卡
     set((s) => ({
-      streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now() }] },
+      streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now(), origin: 'workbench' }] },
       sessions: touchSession(s.sessions, sid, {}),
     }));
     await bridge.sendMessage(sid, text, get().thinkLevel);

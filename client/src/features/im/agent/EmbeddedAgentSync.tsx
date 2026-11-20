@@ -132,6 +132,12 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
       retrySyncRef.current = true;
       return;
     }
+    // 回合发起方闸门（2026-11-20 修「工作台回合泄漏进 IM」）：未持有落流目标时，
+    // 只有聊天页发起（origin=im）的回合才落新卡——工作台发起/历史未知回合在此
+    // 静默返回（此前挂载后流事件一触发就走「无目标→落新卡」分支，把工作台整轮
+    // 带进 IM 消息流）。已认领 running 卡（landedMsgRef 有值）不受限，PATCH 照常
+    const lastUserItem = [...stream].reverse().find((it) => it.kind === 'user');
+    if (!landedMsgRef.current && lastUserItem?.origin !== 'im') return;
     // 只投影当前轮（最后一条 user 之后）——喂全会话流会让新卡在模型响应前
     // 顶着上一轮的 conclusion（2026-11-11「新卡带旧答案」修复）
     const { stages, sources, rounds } = stagesFromStream(currentRoundItems(stream));
