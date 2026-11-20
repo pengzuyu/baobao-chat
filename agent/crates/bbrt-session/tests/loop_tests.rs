@@ -1011,6 +1011,99 @@ fn w3_distills_memories_on_session_end() {
         .any(|e| matches!(e, SessionEvent::SessionEnded { .. })));
 }
 
+/// D37：项目会话 W3 输出对象 payload——记忆与进度一次调用双产出
+///（progress 并入台账 status 条目 + memory.saved 回执；memories 照旧落项目分区）
+#[test]
+fn w3_object_payload_merges_project_progress() {
+    let sink = Arc::new(CollectSink::default());
+    let model = ScriptedModel::new(vec![
+        "批0-4 已推 697707c。".into(), // run_turn 对话
+        // W3 提炼：对象 payload（memories + progress 两类）
+        "{\"memories\":[{\"title\":\"端口 8090 约定\",\"type\":\"project\",\"body\":\"开发服务走 8090。\"}],\
+         \"progress\":{\"done\":[\"11-19 D35：批0-4 已推 697707c\"],\
+         \"todo\":[\"D35：真机八项验收\"],\"blockers\":[],\
+         \"decisions\":[\"D37：台账仅会话结束自动写\"],\
+         \"pitfalls\":[\"改日历要重算 workday next_run\"]}}"
+            .into(),
+    ]);
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let mem = test_memory(tmp.path());
+    let d = deps(model, tools, sink.clone(), Some(mem.clone()));
+    let mut runner = SessionRunner::new(
+        "s-w3p".into(),
+        ws.to_string_lossy().into_owned(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    let _ = runner.run_turn("D35 定时任务做到哪了", &d, None);
+    runner.end(&d, "");
+
+    // 进度台账落盘（status 条目，五段合并）
+    let body = mem.status_body(&ws).expect("W3 应产出项目进度台账");
+    assert!(body.contains("批0-4 已推 697707c"), "{body}");
+    assert!(body.contains("- [ ] D35：真机八项验收"), "{body}");
+    assert!(body.contains("台账仅会话结束自动写"), "{body}");
+    assert!(body.contains("改日历要重算 workday next_run"), "{body}");
+    // memories 照旧落项目分区（project 类随会话目录）
+    let list = mem.list_scoped(Some(&ws));
+    assert!(
+        list.iter().any(|e| e.title.contains("端口 8090 约定")),
+        "对象 payload 的 memories 应照常落盘：{list:?}"
+    );
+    assert!(
+        list.iter()
+            .any(|e| e.mtype == bbrt_memory::MemoryType::Status),
+        "台账条目应在分区列表：{list:?}"
+    );
+    // 台账回执（memory.saved，type=status）
+    assert!(events_of(sink.as_ref()).iter().any(
+        |e| matches!(e, SessionEvent::MemorySaved { title, .. } if title.contains("项目进度台账"))
+    ));
+}
+
+/// D37：日常会话（无 workspace）不产生进度——对象 payload 的 progress 跳过，
+/// 且全程不触碰项目分区目录
+#[test]
+fn w3_progress_skipped_for_daily_sessions() {
+    let sink = Arc::new(CollectSink::default());
+    let model = ScriptedModel::new(vec![
+        "好了。".into(),
+        "{\"memories\":[],\"progress\":{\"done\":[\"某进展\"]}}".into(),
+    ]);
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let mem = test_memory(tmp.path());
+    let d = deps(model, tools, sink.clone(), Some(mem));
+    let mut runner = SessionRunner::new(
+        "s-w3d".into(),
+        String::new(), // 日常会话
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    let _ = runner.run_turn("聊聊", &d, None);
+    runner.end(&d, "");
+    assert!(
+        !tmp.path().join("agent/memory/projects").exists(),
+        "日常会话不应创建任何项目分区"
+    );
+    assert!(events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::SessionEnded { .. })));
+}
+
 #[test]
 fn w3_distill_swallows_unparseable_output() {
     let sink = Arc::new(CollectSink::default());
@@ -1397,7 +1490,9 @@ impl ChatClient for FakeWaitModel {
             ]
         } else {
             vec![
-                Ok(StreamEvent::TextDelta { text: "拿到结果了".into() }),
+                Ok(StreamEvent::TextDelta {
+                    text: "拿到结果了".into(),
+                }),
                 Ok(StreamEvent::Done {
                     finish: FinishReason::Stop,
                     usage: Usage {
@@ -1419,19 +1514,12 @@ struct SnapLog {
 }
 impl EventLog for SnapLog {
     fn append(&self, _session_id: &str, _t: &str, _p: &str) {}
-    fn run_snapshot(
-        &self,
-        run_id: &str,
-    ) -> Option<bbrt_session::loop_runner::EventRunSnapshot> {
+    fn run_snapshot(&self, run_id: &str) -> Option<bbrt_session::loop_runner::EventRunSnapshot> {
         self.rows.lock().unwrap().get(run_id).cloned()
     }
 }
 
-fn wait_deps(
-    model: Arc<FakeWaitModel>,
-    wal: Arc<SnapLog>,
-    sink: Arc<CollectSink>,
-) -> LoopDeps {
+fn wait_deps(model: Arc<FakeWaitModel>, wal: Arc<SnapLog>, sink: Arc<CollectSink>) -> LoopDeps {
     LoopDeps {
         model,
         tools: Arc::new(FakeTools {
@@ -1549,21 +1637,14 @@ impl EventLog for BgStoreLog {
             },
         );
     }
-    fn run_end(
-        &self,
-        run_id: &str,
-        end: &bbrt_session::loop_runner::RunEnd<'_>,
-    ) {
+    fn run_end(&self, run_id: &str, end: &bbrt_session::loop_runner::RunEnd<'_>) {
         let mut rows = self.rows.lock().unwrap();
         if let Some(snap) = rows.get_mut(run_id) {
             snap.status = end.status.to_string();
             snap.summary = end.summary.to_string();
         }
     }
-    fn run_snapshot(
-        &self,
-        run_id: &str,
-    ) -> Option<bbrt_session::loop_runner::EventRunSnapshot> {
+    fn run_snapshot(&self, run_id: &str) -> Option<bbrt_session::loop_runner::EventRunSnapshot> {
         self.rows.lock().unwrap().get(run_id).cloned()
     }
 }
@@ -1661,7 +1742,9 @@ fn run_command_background_returns_task_id_and_finishes() {
                 ]
             } else {
                 vec![
-                    Ok(StreamEvent::TextDelta { text: "已转后台".into() }),
+                    Ok(StreamEvent::TextDelta {
+                        text: "已转后台".into(),
+                    }),
                     Ok(StreamEvent::Done {
                         finish: FinishReason::Stop,
                         usage: Usage {
@@ -1738,7 +1821,11 @@ fn run_command_background_returns_task_id_and_finishes() {
     }
     let snap = final_snap.expect("后台线程应在 3s 内落终态");
     assert_eq!(snap.status, "done");
-    assert!(snap.summary.contains("bg-hello-world"), "摘要应含输出: {}", snap.summary);
+    assert!(
+        snap.summary.contains("bg-hello-world"),
+        "摘要应含输出: {}",
+        snap.summary
+    );
 }
 
 /// hybrid：同步 run_command（无 background）到阈值自动转后台——返回任务 id
@@ -1781,7 +1868,9 @@ fn run_command_sync_times_out_into_background() {
                 ]
             } else {
                 vec![
-                    Ok(StreamEvent::TextDelta { text: "转后台了".into() }),
+                    Ok(StreamEvent::TextDelta {
+                        text: "转后台了".into(),
+                    }),
                     Ok(StreamEvent::Done {
                         finish: FinishReason::Stop,
                         usage: Usage {
@@ -1837,7 +1926,10 @@ fn run_command_sync_times_out_into_background() {
     let mut done = false;
     while std::time::Instant::now() < deadline {
         let rows = wal.rows.lock().unwrap();
-        if rows.values().any(|s| s.status == "done" && s.summary.contains("bg-hello-world")) {
+        if rows
+            .values()
+            .any(|s| s.status == "done" && s.summary.contains("bg-hello-world"))
+        {
             done = true;
             break;
         }
@@ -1908,9 +2000,7 @@ impl ChatClient for RecordingModel {
     > {
         *self.tools.lock().unwrap() = req.tools.iter().map(|t| t.name.clone()).collect();
         let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = vec![
-            Ok(StreamEvent::TextDelta {
-                text: "ok".into(),
-            }),
+            Ok(StreamEvent::TextDelta { text: "ok".into() }),
             Ok(StreamEvent::Done {
                 finish: FinishReason::Stop,
                 usage: Usage {
@@ -1947,8 +2037,14 @@ fn unattended_filters_ask_user_tool_spec() {
     runner.unattended = true;
     let _ = runner.run_turn("列一下工具", &d, None);
     let names = model.tools.lock().unwrap().clone();
-    assert!(names.contains(&"read_file".to_string()), "普通工具应保留: {names:?}");
-    assert!(!names.contains(&"ask_user".to_string()), "无人值守应剔除 ask_user: {names:?}");
+    assert!(
+        names.contains(&"read_file".to_string()),
+        "普通工具应保留: {names:?}"
+    );
+    assert!(
+        !names.contains(&"ask_user".to_string()),
+        "无人值守应剔除 ask_user: {names:?}"
+    );
 }
 
 #[test]

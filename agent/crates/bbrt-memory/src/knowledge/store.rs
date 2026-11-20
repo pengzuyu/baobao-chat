@@ -3,8 +3,9 @@
 //!
 //! 本文件只管"文件层"：frontmatter 手写解析/序列化（仅 `key: value` 与
 //! `key: [a, b]` 行，不引 yaml 库）、slug 化、脱敏特征扫描、目录扫描、
-//! 索引重写与 LRU 淘汰候选；save/list/delete/recall 的业务语义在
-//! `mod.rs` 的 `KnowledgeStore`。
+//! 索引重写；save/list/delete/recall 的业务语义在 `mod.rs` 的
+//! `KnowledgeStore`。（D37：单条 4KB 上限废除——项目记忆与状态不限大小，
+//! 2026-11-19 用户拍板，以后有需要再加。）
 
 use std::fs;
 use std::path::Path;
@@ -13,8 +14,6 @@ use std::path::Path;
 // 硬性约束常量（D15 §2.1）
 // ---------------------------------------------------------------------------
 
-/// 单条正文上限 4KB
-pub const MAX_BODY_BYTES: usize = 4 * 1024;
 /// 标题上限（一句话 ≤40 字）
 pub const MAX_TITLE_CHARS: usize = 40;
 /// 索引钩子上限（D23 §4.2：索引行=路由信息非正文——钩子在渲染层截断到
@@ -27,7 +26,8 @@ pub const INDEX_FILE: &str = "MEMORY.md";
 // 类型
 // ---------------------------------------------------------------------------
 
-/// 记忆类型（frontmatter `type` 字段）：用户偏好 / 项目事实 / 工作方式反馈 / 外部指针
+/// 记忆类型（frontmatter `type` 字段）：用户偏好 / 项目事实 / 工作方式反馈 / 外部指针 /
+/// 项目进度台账（D37 状态类，仅项目层、W3 专用——`memory_save` 拒绝手工写入）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryType {
@@ -39,6 +39,8 @@ pub enum MemoryType {
     Feedback,
     /// 外部指针（reference）
     Reference,
+    /// 项目进度台账（status；D23 #10 状态类扩展位兑现，仅项目分区）
+    Status,
 }
 
 impl MemoryType {
@@ -49,6 +51,7 @@ impl MemoryType {
             "project" => Some(Self::Project),
             "feedback" => Some(Self::Feedback),
             "reference" => Some(Self::Reference),
+            "status" => Some(Self::Status),
             _ => None,
         }
     }
@@ -85,7 +88,7 @@ pub struct SaveInput {
     pub title: String,
     /// 记忆类型
     pub mtype: MemoryType,
-    /// 正文（≤4KB，命中密钥特征拒写）
+    /// 正文（D37 起不限大小；命中密钥特征拒写）
     pub body: String,
     /// 产生会话
     pub session: String,
@@ -108,9 +111,9 @@ pub enum MemoryError {
     /// 正文/标题命中密钥特征 → 拒写（D15 §4）
     #[error("内容命中密钥特征，拒写：{0}（D15 §4 脱敏约束）")]
     SensitiveContent(&'static str),
-    /// 正文超过 4KB 上限
-    #[error("记忆正文超限：{actual} 字节 > 上限 {max} 字节")]
-    BodyTooLarge { actual: usize, max: usize },
+    /// D37：status（项目进度台账）仅属于项目会话——日常对话无工作目录
+    #[error("项目进度（status）仅属于项目会话：日常对话无工作目录")]
+    StatusRequiresProject,
     /// D23 公共层单条超限（≤80 字，一条一事实一句一线）
     #[error("公共记忆单条超限：{actual} 字 > 上限 {max} 字")]
     GlobalEntryTooLong { actual: usize, max: usize },
@@ -252,6 +255,7 @@ impl MemoryEntry {
             MemoryType::Project => "project",
             MemoryType::Feedback => "feedback",
             MemoryType::Reference => "reference",
+            MemoryType::Status => "status",
         }
     }
 
@@ -367,12 +371,14 @@ pub(crate) fn index_line(e: &MemoryEntry) -> String {
 /// 钩子摘要：正文首个非空行；正文全空时退回标题。
 /// D23 §4.2：索引行=路由信息非正文——一律截断到 `MAX_HOOK_CHARS`
 /// （渲染层截断而非拒写：索引可重建故无损，W2 自动路径长首行不丢教训）。
+/// D37：跳过 Markdown 标题行（`#` 开头）——status 正文以 `##` 分段，
+/// 首个标题行不是有效钩子。
 pub(crate) fn hook_of(e: &MemoryEntry) -> String {
     let hook = e
         .body
         .lines()
         .map(str::trim)
-        .find(|l| !l.is_empty())
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
         .unwrap_or(&e.title);
     hook.chars().take(MAX_HOOK_CHARS).collect()
 }

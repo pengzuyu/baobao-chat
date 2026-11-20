@@ -17,7 +17,6 @@ pub mod store;
 pub use heuristic::{detect_memory_hint, ErrorTracker, Heuristic, LessonCandidate};
 pub use store::{
     rebuild_index, scan_entries, IndexOutcome, MemoryEntry, MemoryError, MemoryType, SaveInput,
-    MAX_BODY_BYTES,
 };
 
 use std::fs;
@@ -106,20 +105,15 @@ impl KnowledgeStore {
         }
     }
 
-    /// W1 写入（D15 §2.2 同题更新规则 + §2.1 容量/脱敏约束；D23 §4.2 LRU 废除）：
-    /// 1. 标题规范化、正文 ≤4KB、标题与正文过密钥特征扫描（命中拒写）；
+    /// W1 写入（D15 §2.2 同题更新规则 + §2.1 脱敏约束；D23 §4.2 LRU 废除；
+    /// D37 拍板：**单条正文不限大小**——D15 的 4KB 上限废除，增长治理靠
+    /// 使用纪律 + 注入侧 assemble 预算截断兜底，以后有需要再加容量）：
+    /// 1. 标题规范化（≤40 字护索引）、标题与正文过密钥特征扫描（命中拒写）；
     /// 2. slug 相等或 title 完全相等 → 原地更新（保留 created_at）；
     /// 3. 先写条目文件（tmp+rename），再整写 `MEMORY.md` 索引。
-    ///    容量不设限——知识类静默淘汰的事故面大于无限增长（蒸馏纪律 P1 治理）。
+    ///    条目数不设限——知识类静默淘汰的事故面大于无限增长（蒸馏纪律 P1 治理）。
     pub fn save(&self, input: &SaveInput) -> Result<SaveResult, MemoryError> {
         let title = normalize_title(&input.title).ok_or(MemoryError::EmptyTitle)?;
-        if input.body.len() > MAX_BODY_BYTES {
-            // String::len 即 UTF-8 字节数（4KB 上限按字节计）
-            return Err(MemoryError::BodyTooLarge {
-                actual: input.body.len(),
-                max: MAX_BODY_BYTES,
-            });
-        }
         // 脱敏双检：标题与正文都不得携带密钥特征（D15 §4）
         if let Some(what) = find_secret(&title).or_else(|| find_secret(&input.body)) {
             return Err(MemoryError::SensitiveContent(what));

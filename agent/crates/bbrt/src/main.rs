@@ -346,11 +346,7 @@ fn dispatch(
         HostToRuntime::Initialize { .. } => Some(RuntimeToHost::InitializeResult {
             runtime_version: env!("CARGO_PKG_VERSION").into(),
             tools: vec![],
-            capabilities: vec![
-                "session".into(),
-                "tools".into(),
-                "memory".into(),
-            ],
+            capabilities: vec!["session".into(), "tools".into(), "memory".into()],
         }),
         HostToRuntime::SessionStart {
             session_id,
@@ -607,6 +603,7 @@ fn dispatch(
                             bbrt_memory::MemoryType::Project => "project".into(),
                             bbrt_memory::MemoryType::Feedback => "feedback".into(),
                             bbrt_memory::MemoryType::Reference => "reference".into(),
+                            bbrt_memory::MemoryType::Status => "status".into(),
                         },
                         // MemorySummary.updated_at 为 RFC3339 字符串；协议要毫秒——解析失败回 0（展示层兜底）
                         updated_at: chrono_free_ms(&e.updated_at),
@@ -784,12 +781,13 @@ fn dispatch(
         }
         // 取消后台 run（run.cancel：terminal 后台命令/探查/专家在跑任务统一入口）
         HostToRuntime::RunCancel {
-            run_id,
-            graceful,
-            ..
+            run_id, graceful, ..
         } => {
-            mgr.respond_run_cancel(&run_id, bbrt_session::loop_runner::BgHostMsg::Cancel { graceful })
-                .ok();
+            mgr.respond_run_cancel(
+                &run_id,
+                bbrt_session::loop_runner::BgHostMsg::Cancel { graceful },
+            )
+            .ok();
             None
         }
         // run 清单（D16 §3.1：agent_run 投影；run 面板/审计检索）

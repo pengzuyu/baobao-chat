@@ -4,6 +4,7 @@
 - 定稿：2026-11-10
 - 关联：08（Agent 总体）/ D08（工作台）/ D09（工具与安全）/ D11（Runtime 内部）/ D13（沙箱）/ D15（记忆双轨）/ D18（IM 内嵌卡）
 - 范围：bbrt 协议+store+memory+session+tools、Tauri 壳、客户端 agent 工作台；**服务端零改动**（D15 口径：记忆本地文件唯一权威）
+- **D37 落地注记（2026-11-19）**：§4「分区天然继承 4KB/200 条 LRU」双过期——200 条 LRU 已随 D23 拍板 B 废除；单条 4KB 已随 [D37](D37-项目进度台账设计.md) 废除（项目记忆与状态不限大小）；分区另增第五类 `status`（项目进度台账，W3 会话结束自动写、注入 [项目进度] 段）。
 
 > **落地注记（2026-11-12 · 日常=默认用户工作区，ZCode 式口径修订）**：原「日常对话=无目录，workspace 类工具整体 8020 拒绝」废除——真机实测 IM embedded 会话全部落日常、agent 什么工具都用不了（用户在私聊/群聊让 agent 干活是主场景）。新口径：**不绑项目的会话（日常/任务/embedded）共用同一用户级默认工作空间 `~/.baobaochat/workspace`**（env `BBC_RT_DEFAULT_WORKSPACE` 可覆盖；bbrt-sec `sandbox::default_user_workspace()`），pipeline `session_env` 日常分支走项目会话同款沙箱覆写（沙箱根=该目录，越界仍 8020 词法+内核双拦）（原「`coding.delegate` 日常放开（cwd=默认工作区）」已随委派域退役删除，2026-11-19）。**数据模型与记忆分级不动**：`workspace_id` 空=日常判定、工作台双区 UI、记忆路由（日常仍用户级，`ws_path()` 语义保留）原样。前端 ChatPage embedded 建会话废除「跟随最近项目」恒日常。子代理（SessionWorkspaces 未登记）沙箱仍兜底全局根，按主会话路由登记阶段二。
 

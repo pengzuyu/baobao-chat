@@ -5,6 +5,9 @@
 //!   W3（会话结束提炼）阶段二随 aigw 压缩摘要接入。
 //! - **公共层** `global/`（D23）：用户级换制——journal.jsonl（真相）+ USER.md
 //!   （压实视图=缓存）；十类硬枚举+硬度轴；user 类与日常会话回落路由至此。
+//! - **项目进度台账** `status.rs`（D37）：`status` 类型记忆条目的五段正文
+//!   编解码（待办/已做/阻塞/决策/坑，加法合并不裁剪）；仅 W3 会话结束写入，
+//!   注入为 [记忆] 块第三段 `[项目进度]`。
 //! - 装配：`MemoryEngine` 组合 global + knowledge，被 bbrt-session 依赖。
 //!   （D15 被动轨 journal/digest 活动日报已随日报 UI 整域退役移除。）
 //!
@@ -15,6 +18,7 @@
 
 pub mod global;
 pub mod knowledge;
+pub mod status;
 
 pub use global::{
     compaction_prompt, global_line, parse_compacted, AddOutcome, Compactor, GlobalEntry,
@@ -23,9 +27,10 @@ pub use global::{
 };
 pub use knowledge::{
     detect_memory_hint, ErrorTracker, Heuristic, IndexOutcome, KnowledgeStore, LessonCandidate,
-    MemoryEntry, MemoryError, MemorySummary, MemoryType, SaveInput, SaveResult, MAX_BODY_BYTES,
+    MemoryEntry, MemoryError, MemorySummary, MemoryType, SaveInput, SaveResult,
     RECALL_FULL_ENTRIES, RECALL_TOP_K,
 };
+pub use status::{StatusDelta, StatusMergeStats, STATUS_TITLE};
 
 use std::collections::HashMap;
 use std::fs;
@@ -213,10 +218,14 @@ pub struct MemoryEngine {
     projects_dir: PathBuf,
     /// D19 分区缓存（realpath → store；KnowledgeStore=PathBuf+Arc 时钟，克隆廉价）
     project_stores: Mutex<HashMap<PathBuf, KnowledgeStore>>,
+    /// D37 进度合并锁：跨 clone 共享同一把（与 GlobalStore「克隆=新锁」不同——
+    /// 多会话并发结束时 W3 各持引擎克隆，读-合并-写必须进程内串行防丢更新）
+    status_lock: Arc<Mutex<()>>,
 }
 
 impl Clone for MemoryEngine {
-    /// 手工实现：缓存 Mutex 不 Clone——锁出内层 HashMap 克隆（分区 store 廉价）
+    /// 手工实现：缓存 Mutex 不 Clone——锁出内层 HashMap 克隆（分区 store 廉价）；
+    /// `status_lock` 为 Arc 共享（克隆后仍是同一把锁，D37）
     fn clone(&self) -> Self {
         let cached = self
             .project_stores
@@ -229,6 +238,7 @@ impl Clone for MemoryEngine {
             knowledge: self.knowledge.clone(),
             projects_dir: self.projects_dir.clone(),
             project_stores: Mutex::new(cached),
+            status_lock: Arc::clone(&self.status_lock),
         }
     }
 }
@@ -305,6 +315,7 @@ impl MemoryEngine {
             knowledge,
             projects_dir: memory_root.join("projects"),
             project_stores: Mutex::new(HashMap::new()),
+            status_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -366,6 +377,9 @@ impl MemoryEngine {
                 MemoryType::User | MemoryType::Project => GlobalType::Profile,
                 MemoryType::Feedback => GlobalType::Lesson,
                 MemoryType::Reference => GlobalType::Glossary,
+                // D37：进度台账仅属于项目分区；日常会话（ws=None 走到这）拒绝，
+                // 不回落公共层（进度是项目状态，不是用户画像）
+                MemoryType::Status => return Err(MemoryError::StatusRequiresProject),
             };
             let text = global_line(&input.title, &input.body);
             return self.save_global(gtype, &text, &input.session);
@@ -534,13 +548,13 @@ impl MemoryEngine {
         }
     }
 
-    /// D19 作用域召回（loop_runner [记忆] 块数据源；D23 §6 修订）：
+    /// D19 作用域召回（记忆两段；D37 拆出——W3 去重参考用，不含进度段）：
     /// - 用户段 = **USER.md 全文**（公共层压实视图，≤3000 字常载成本恒定，
     ///   取代旧用户级 MEMORY.md 全量/Top-K）；
     /// - 项目段 = 分区 MEMORY.md（D15 v0.2 分档沿用：≤50 全量/>50 Top-K）；
     /// - 日常（None/空）仅用户段；项目会话两段带 `[用户记忆]`/`[项目记忆·<分区>]`
     ///   小节头（单段为空则只注另一段；两段皆空 → 空串）。
-    pub fn recall_scoped(&self, workspace: Option<&Path>, query: &str) -> String {
+    pub fn recall_memory_scoped(&self, workspace: Option<&Path>, query: &str) -> String {
         let user_part = self.global.view();
         let project =
             match workspace.and_then(|w| (!w.as_os_str().is_empty()).then(|| w.to_path_buf())) {
@@ -564,6 +578,76 @@ impl MemoryEngine {
         }
     }
 
+    /// 作用域召回（loop_runner [记忆] 块数据源；D23 §6 + D37 进度段）：
+    /// `recall_memory_scoped` 两段之外，项目会话再追加 `[项目进度]`（status
+    /// 条目正文全文）。日常会话无进度段；无台账时输出与旧口径逐字节一致。
+    pub fn recall_scoped(&self, workspace: Option<&Path>, query: &str) -> String {
+        let mut out = self.recall_memory_scoped(workspace, query);
+        if let Some(ws) = workspace.filter(|w| !w.as_os_str().is_empty()) {
+            let real = fs::canonicalize(ws).unwrap_or_else(|_| ws.to_path_buf());
+            if let Some(body) = self.status_body(&real) {
+                if out.is_empty() {
+                    out = format!("[项目进度]\n{body}");
+                } else {
+                    out.push_str("\n\n[项目进度]\n");
+                    out.push_str(&body);
+                }
+            }
+        }
+        out
+    }
+
+    /// D37：项目进度台账正文（status 条目；不存在 / 非 status / 空正文 → None）。
+    pub fn status_body(&self, ws: &Path) -> Option<String> {
+        let real = fs::canonicalize(ws).unwrap_or_else(|_| ws.to_path_buf());
+        let store = self.project_store(&real).ok()?;
+        let slug = knowledge::store::slugify(status::STATUS_TITLE);
+        let entry = store.get(&slug).ok()??;
+        if entry.mtype != MemoryType::Status {
+            return None; // 同名非 status 条目（用户手写同题记忆）不冒充台账
+        }
+        if entry.body.trim().is_empty() {
+            None
+        } else {
+            Some(entry.body)
+        }
+    }
+
+    /// D37 会话结束合并进度（W3 唯一写入方；`status_lock` 串行「读-合并-写」）：
+    /// - 同名条目非 status 类型 → `Ok(None)` 拒绝覆盖；
+    /// - 正文非五段格式 / delta 零新增 → `Ok(None)` 跳过（不空转重写）；
+    /// - 写入走 `save_memory_scoped`（同题原地更新 + memory.saved 事件语义）。
+    pub fn merge_status(
+        &self,
+        ws: &Path,
+        delta: &status::StatusDelta,
+        session: &str,
+    ) -> Result<Option<(SaveOutcome, status::StatusMergeStats)>, MemoryError> {
+        let real = fs::canonicalize(ws).unwrap_or_else(|_| ws.to_path_buf());
+        let _guard = self.status_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let store = self.project_store(&real).map_err(MemoryError::Io)?;
+        let slug = knowledge::store::slugify(status::STATUS_TITLE);
+        let existing = store.get(&slug)?;
+        if let Some(e) = &existing {
+            if e.mtype != MemoryType::Status {
+                return Ok(None); // 同名非 status：拒绝覆盖
+            }
+        }
+        let Some((body, stats)) =
+            status::merge_status_body(existing.as_ref().map(|e| e.body.as_str()), delta)
+        else {
+            return Ok(None); // 正文非台账格式 / 无新内容
+        };
+        let input = SaveInput {
+            title: status::STATUS_TITLE.to_string(),
+            body,
+            mtype: MemoryType::Status,
+            session: session.to_string(),
+            links: vec![],
+        };
+        let outcome = self.save_memory_scoped(Some(&real), &input)?;
+        Ok(Some((outcome, stats)))
+    }
 }
 
 // ---------------------------------------------------------------------------

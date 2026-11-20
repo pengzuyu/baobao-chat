@@ -48,6 +48,7 @@
 | D33 | [工作台 Agent 消息流渲染设计](D33-工作台Agent消息流渲染设计.md) | D08/D18/D19/D16/D22/D26 | **zcode 式平铺流**：弃回合卡片·类型化块（思考/工具族细分：读/写/编辑红绿diff/终端/搜索/git/MCP 徽标/记忆/内部/兜底）·用户消息也平铺·收口过程折叠一行统计（总耗时）·skill 显式工具（Claude Code 同款，结果=正文注入，隐式触发词退役）·subagent.trace 过程事件+run.history 回放（子 agent 侧栏=右栏 Tabs 运行详情，AgentStreamView 与中栏共用）·WAL tool.call 补 args_masked（重启保真）·args 字符串归一化修真机终端卡存量坑·IM 卡不动（修订「两处同一实现」拍板） |
 | D35 | [Agent 定时任务与工作日日历设计](D35-Agent定时任务与工作日日历设计.md) | D08/D11/D32/D33/D10/12/14 | **纯本地调度**：任务/调度/执行/历史全在 Tauri 壳（tasks.json/runs.jsonl/calendar 缓存），服务端不存任务不推送；三类型互斥 cron/once/workday（无通用跳过顺延）；权限复用三档模式，审批在会话内 D33 内嵌卡（通知+任务页跳转）；`session.start` 增 unattended/approvalTimeoutSecs，ask_user 三层禁用；服务端只做工作日日历域（默认规则+例外覆盖、租户级、12 月管理页、内网 JSON 导入+外网脚本） |
 | D36 | [Agent 用量与上下文显示设计](D36-Agent用量与上下文显示设计.md) | D08/D11/D19/D33 | **输入框状态条**：上下文消耗/占比/缓存命中率；**上限知识完全放桌面端**（内置知名模型预设 + 本机覆盖 + K/M 智能单位，服务端零改动，新增模型只更新桌面应用）；占比仅在上限可知时显示，否则只显示已用+缓存；SSE 解析上游 model/cached → `stream.done.usage` → WAL → `session.history.lastUsage` 重启恢复 |
+| D37 | [项目进度台账设计](D37-项目进度台账设计.md) | D15/D19/D23 | **记忆形态的状态扩展**（兑现 D23 #10 状态类扩展位）：进度=一条普通项目记忆条目（`MemoryType::Status`/`项目进度台账.md`，复用 KnowledgeStore::save+memory.saved 回执，零新存储/协议/UI）·完全扁平五段（待办/已做/阻塞/决策/坑，无目标无线程无 thread_id）·仅会话结束 W3 自动写（对象 payload memories+progress 双产出/数组兜底/转录保首条）·注入为 [记忆] 第三段 [项目进度]（probe 继承/assemble 截断兜底）·加法合并（归一化去重+todo→done 对账+脱敏丢条+拒识不覆盖+跨 clone 共享锁）·**D15 单条 4KB 上限废除**（项目记忆与状态不限大小，拍板 2026-11-19）·memory_save 拒绝 status |
 
 ## 模板（D01 §13）
 

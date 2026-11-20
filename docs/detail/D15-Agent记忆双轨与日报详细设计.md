@@ -1,5 +1,7 @@
 # D15 - Agent 记忆双轨与日报详细设计
 
+> **D37 落地注记（2026-11-19）**：**§2.1 单条正文 ≤4KB 上限废除**（用户拍板：项目记忆与状态不限大小，以后有需要再加；增长治理=使用纪律+注入侧 assemble 预算截断兜底）；`MemoryType` 增第五类 `status`（项目进度台账，见 [D37](D37-项目进度台账设计.md)）——仅项目分区、W3 会话结束自动写入、`memory_save` 拒绝手工写入；`hook_of` 跳过 Markdown 标题行。标题/钩子 40 字与密钥拒写保留。
+
 > **D19 落地注记（2026-11-10）**：知识记忆已分级——用户级维持 {dataDir}/agent/memory/；项目级新增 {dataDir}/agent/memory/projects/<目录名-哈希>/ 分区（scope_key）。写入按类型路由：user 类→用户级，project/feedback/reference 类随会话工作目录落项目分区（日常回落用户级）；召回注入 [用户记忆]+[项目记忆] 两段；memory.list/delete 增 scope/workspacePath 参数、memory.saved 事件带 scope。本篇 §2.1「每用户一个扁平目录」口径由 D19 修订。
 
 

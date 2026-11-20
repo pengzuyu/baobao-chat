@@ -231,29 +231,51 @@ fn save_rejects_secret_like_body_and_oversize() {
     assert!(store.list().is_empty());
     assert!(!store.dir().join(INDEX_FILE).exists());
 
-    // 正文超 4KB 拒写
-    let big = "x".repeat(4 * 1024 + 1);
-    assert!(matches!(
-        store.save(&input("大正文", &big)).unwrap_err(),
-        MemoryError::BodyTooLarge {
-            actual: 4097,
-            max: 4096
-        }
-    ));
-    // 4KB 整（含多字节字符按字节计）边界可写
-    let edge = "忆".repeat(2048); // 3 字节 × 2048 = 6144 > 4096 → 应拒
-    assert!(matches!(
-        store.save(&input("中文超限", &edge)).unwrap_err(),
-        MemoryError::BodyTooLarge { .. }
-    ));
+    // D37（2026-11-19 拍板）：单条正文不限大小——D15 的 4KB 上限废除，
+    // 超长正文（含多字节字符按字节远超旧限）应正常写入
+    let big = format!("{}{}", "x".repeat(4 * 1024 + 1), "忆".repeat(2048));
+    store.save(&input("大正文", &big)).unwrap();
+    assert_eq!(store.get("大正文").unwrap().unwrap().body, big);
     store.save(&input("正常", "ok 正文")).unwrap();
-    assert_eq!(store.list().len(), 1);
+    assert_eq!(store.list().len(), 2);
 
     // 空标题拒写
     assert!(matches!(
         store.save(&input("   ", "x")).unwrap_err(),
         MemoryError::EmptyTitle
     ));
+}
+
+// ---------------------------------------------------------------------------
+// D37：status 类型 frontmatter 往返 + hook_of 跳过 Markdown 标题行
+// ---------------------------------------------------------------------------
+
+#[test]
+fn status_type_frontmatter_roundtrip_and_hook_skips_heading() {
+    let (store, _clock, _dir) = setup("2026-11-06T10:00:00+08:00", "2026-11-06");
+    let mut s = input("项目进度台账", "## 待办\n- [ ] D35：真机八项验收\n");
+    s.mtype = MemoryType::Status;
+    store.save(&s).unwrap();
+
+    let e = store.get("项目进度台账").unwrap().unwrap();
+    assert_eq!(e.mtype, MemoryType::Status);
+    assert_eq!(e.body, "## 待办\n- [ ] D35：真机八项验收\n");
+
+    // 索引行钩子取首个非标题正文行（`- [ ] D35：…` 去复选前缀后为正文，
+    // 但 hook_of 只剥 `## ` 标题行——复选行本身即钩子，仍含 [ ] 前缀可读）
+    let index = fs::read_to_string(store.dir().join(INDEX_FILE)).unwrap();
+    assert!(!index.contains("— ## 待办"), "钩子不应是标题行：{index}");
+    assert!(index.contains("D35"), "钩子应含正文内容：{index}");
+
+    // 同题更新保留 created_at（status 走同一 save 语义）
+    let s2 = SaveInput {
+        body: "## 已做\n- 批0 完成\n".into(),
+        ..s.clone()
+    };
+    store.save(&s2).unwrap();
+    let e2 = store.get("项目进度台账").unwrap().unwrap();
+    assert_eq!(e2.created_at, e.created_at, "同题更新保留 created_at");
+    assert!(e2.updated_at >= e.updated_at);
 }
 
 // ---------------------------------------------------------------------------

@@ -58,8 +58,8 @@ export function parseToolArgs(raw: unknown): Record<string, unknown> {
 /** 审批记忆粒度（09 §4.2 三级记忆） */
 export type GrantScope = 'once' | 'session' | 'permanent';
 
-/** 知识记忆四类（D15 §2.1 frontmatter type） */
-export type MemoryType = 'user' | 'project' | 'feedback' | 'reference';
+/** 知识记忆类型（D15 §2.1 四类 + D37 status=项目进度台账） */
+export type MemoryType = 'user' | 'project' | 'feedback' | 'reference' | 'status';
 
 /** 会话元信息（agent_session 表投影，D08 §6.1） */
 export interface AgentSessionMeta {

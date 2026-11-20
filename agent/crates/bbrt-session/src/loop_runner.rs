@@ -203,12 +203,7 @@ impl EventLog for std::sync::Mutex<Store> {
     }
     fn run_end(&self, run_id: &str, end: &RunEnd<'_>) {
         if let Ok(store) = self.lock() {
-            let _ = store.finish_run(
-                run_id,
-                end.status,
-                end.eta_actual_ms,
-                end.summary,
-            );
+            let _ = store.finish_run(run_id, end.status, end.eta_actual_ms, end.summary);
         }
     }
     fn append_run(&self, session_id: &str, run_id: &str, type_: &str, payload: &str) {
@@ -220,11 +215,14 @@ impl EventLog for std::sync::Mutex<Store> {
     }
     fn run_snapshot(&self, run_id: &str) -> Option<EventRunSnapshot> {
         self.lock().ok().and_then(|s| {
-            s.run_by_id(run_id).ok().flatten().map(|r| EventRunSnapshot {
-                status: r.status,
-                kind: r.kind,
-                summary: r.summary,
-            })
+            s.run_by_id(run_id)
+                .ok()
+                .flatten()
+                .map(|r| EventRunSnapshot {
+                    status: r.status,
+                    kind: r.kind,
+                    summary: r.summary,
+                })
         })
     }
 }
@@ -574,7 +572,8 @@ impl SessionRunner {
                         reason: "expert.join".into(),
                     });
                 } else if timed_out {
-                    deps.wal.append(&self.session_id, "expert.backgrounded", "{}");
+                    deps.wal
+                        .append(&self.session_id, "expert.backgrounded", "{}");
                     emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
                         session_id: id,
                         state: "running".into(),
@@ -1206,7 +1205,10 @@ impl SessionRunner {
                         summary: &e,
                     },
                 );
-                return ToolOutcome::Blocked { code: 8020, summary: e };
+                return ToolOutcome::Blocked {
+                    code: 8020,
+                    summary: e,
+                };
             }
         };
         self.adopt_background_command(deps, det, &task_id, started, true)
@@ -1357,8 +1359,7 @@ impl SessionRunner {
         };
         let started = std::time::Instant::now();
         let deadline = started + Duration::from_secs(timeout_secs);
-        let is_final =
-            |st: &str| matches!(st, "done" | "failed" | "cancelled" | "interrupted");
+        let is_final = |st: &str| matches!(st, "done" | "failed" | "cancelled" | "interrupted");
         loop {
             if is_final(&snap.status) {
                 deps.wal.append(
@@ -1813,7 +1814,7 @@ impl SessionRunner {
 }
 
 /// 系统提示（08 篇行为规格 + D15 §2.2 W1 记忆使用规范 + D19 分级 + D20 澄清规范；技能注入阶段二）
-pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoChat 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n向用户提问（ask_user 工具）：仅在关键决策影响后续大量工作、或用户意图存在实质歧义时使用——方案二选一、破坏性操作确认、需求方向取舍。能合理自决的不问；一次只问一个问题，选项 2-4 个（label 简短 + description 说明取舍）；用户不选点「其他」也能自由作答。提问后等待回答，不要自行猜测答案。\n\n长期记忆（memory_save 工具，跨会话生效；自动按作用域分区）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 作用域（自动路由，无需指定）：user 类存用户级（所有会话可见）；project/feedback/reference 类在项目会话中存该项目专属分区，在日常对话中存用户级。[记忆]区含[用户记忆]与[项目记忆]两段时，项目段仅对本项目会话生效。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。";
+pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoChat 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n向用户提问（ask_user 工具）：仅在关键决策影响后续大量工作、或用户意图存在实质歧义时使用——方案二选一、破坏性操作确认、需求方向取舍。能合理自决的不问；一次只问一个问题，选项 2-4 个（label 简短 + description 说明取舍）；用户不选点「其他」也能自由作答。提问后等待回答，不要自行猜测答案。\n\n长期记忆（memory_save 工具，跨会话生效；自动按作用域分区）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 作用域（自动路由，无需指定）：user 类存用户级（所有会话可见）；project/feedback/reference 类在项目会话中存该项目专属分区，在日常对话中存用户级。[记忆]区含[用户记忆]与[项目记忆]两段时，项目段仅对本项目会话生效。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。\n- [项目进度]（项目会话）：本项目跨会话工作台账，每次会话结束自动更新（已做/待办/阻塞/决策/坑），视为可信背景；续作先看其中待办与已做，与当前对话冲突以用户最新说法为准。";
 
 /// D35 定时任务无人值守追加段（append 在 SYSTEM_PROMPT 后）：ask_user 已从
 /// 工具面移除，此处再明确行为约束——不提问、按合理默认继续、结论说明假设。
@@ -1919,6 +1920,8 @@ fn emit(deps: &LoopDeps, session_id: &str, f: impl FnOnce(String) -> SessionEven
 const DISTILL_MAX_ITEMS: usize = 3;
 /// W3 会话转录总量上限（字符；超出截断，保尾部最近的轮次）
 const DISTILL_TRANSCRIPT_MAX_CHARS: usize = 8_000;
+/// D37：W3 提示词中已有进度台账的头部行数（去重参考，控提示长度）
+const STATUS_PROMPT_HEAD_LINES: usize = 40;
 
 /// D19 记忆作用域路由：user 类（身份/偏好）恒用户级；
 /// project/feedback/reference 类随会话工作目录落项目分区（日常会话回落用户级）
@@ -1932,9 +1935,10 @@ fn route_scope<'a>(
     }
 }
 
-/// W3：会话结束把"决策/偏好/教训"提炼成长期记忆。模型失败、输出不可解析、
-/// 条目非法（空标题/未知类型）一律静默跳过——绝不阻塞会话收口。返回落盘条数。
-/// D19：条目按类型分级（user→用户级；其余随会话目录落项目分区）。
+/// W3：会话结束提炼——①"决策/偏好/教训"落长期记忆；②（D37，项目会话）
+/// 进度增量并入项目进度台账。模型失败、输出不可解析、条目非法一律静默
+/// 跳过——绝不阻塞会话收口。返回落盘条数（记忆+进度合计）。
+/// D19：记忆条目按类型分级（user→用户级；其余随会话目录落项目分区）。
 fn distill_memories(
     deps: &LoopDeps,
     session_id: &str,
@@ -1953,27 +1957,57 @@ fn distill_memories(
         return 0;
     }
     // 已有索引喂给模型防重复（取头 60 行控提示长度；save 侧同题去重兜底）。
-    // D19：项目会话喂用户+项目两域索引
-    let existing = m.recall_scoped(ws, "");
+    // D19：项目会话喂用户+项目两域索引；D37：改喂不含进度段的记忆召回
+    // （进度段单独喂全量头 40 行，避免 60 行截断把台账切掉）
+    let existing = m.recall_memory_scoped(ws, "");
     let existing_head: String = existing.lines().take(60).collect::<Vec<_>>().join("\n");
-    let system = format!(
-        "从会话记录提炼值得跨会话记住的长期事实。只输出 JSON 数组（最多 {DISTILL_MAX_ITEMS} 条，\
-         无可记输出 []），每项形如 {{\"title\":\"一句话标题≤40字\",\
-         \"type\":\"user|project|feedback|reference\",\
-         \"body\":\"事实正文（feedback 须含 Why 与 How to apply 两行）\"}}。\
-         只记：用户身份/偏好/习惯、项目关键事实与决策、被用户纠正的教训。\
-         不记：临时内容、代码细节、密钥。以下为已有记忆索引，与其重复的不要产出：\n\
-         {existing_head}"
-    );
+    let system = if ws.is_some() {
+        // D37：项目会话一次调用同时产出记忆与进度增量（对象 payload）
+        let status_head = ws
+            .and_then(|w| m.status_body(w))
+            .map(|b| {
+                b.lines()
+                    .take(STATUS_PROMPT_HEAD_LINES)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_else(|| "（暂无）".to_string());
+        format!(
+            "从会话记录提炼两类内容，只输出一个 JSON 对象（无可记输出 \
+             {{\"memories\":[],\"progress\":{{}}}}），形如：\n\
+             {{\"memories\":[{{\"title\":\"一句话标题≤40字\",\
+             \"type\":\"user|project|feedback|reference\",\
+             \"body\":\"事实正文（feedback 须含 Why 与 How to apply 两行）\"}}],\n\
+             \"progress\":{{\"done\":[\"11-19 D35：批0-4 已推 xxx，程序侧全绿\"],\
+             \"todo\":[\"D35：真机八项验收\"],\"blockers\":[],\"decisions\":[],\"pitfalls\":[]}}}}\n\
+             规则：\n\
+             - memories 只记可泛化的长期事实（最多 {DISTILL_MAX_ITEMS} 条）：用户身份/偏好/习惯、\
+             项目关键事实与决策、被用户纠正的教训；不记临时内容、代码细节、密钥。\n\
+             - progress 只记本项目本次会话的任务状态：done=已完成（条目带 日期+任务名 前缀）、\
+             todo=下一步待办、blockers=阻塞与风险、decisions=本任务拍板、pitfalls=本次踩的坑。\n\
+             - 分工勿混写：progress=本任务进行态；memories=换个会话仍成立的持久事实；\
+             同一内容不要两边都写。\n\
+             以下为已有记忆索引，与其重复的 memories 不要产出：\n{existing_head}\n\
+             以下为已有项目进度台账，与其重复的 progress 条目不要产出：\n{status_head}"
+        )
+    } else {
+        format!(
+            "从会话记录提炼值得跨会话记住的长期事实。只输出 JSON 数组（最多 {DISTILL_MAX_ITEMS} 条，\
+             无可记输出 []），每项形如 {{\"title\":\"一句话标题≤40字\",\
+             \"type\":\"user|project|feedback|reference\",\
+             \"body\":\"事实正文（feedback 须含 Why 与 How to apply 两行）\"}}。\
+             只记：用户身份/偏好/习惯、项目关键事实与决策、被用户纠正的教训。\
+             不记：临时内容、代码细节、密钥。以下为已有记忆索引，与其重复的不要产出：\n\
+             {existing_head}"
+        )
+    };
     let raw = match chat_text(deps.model.as_ref(), &system, &transcript) {
         Ok(s) => s,
         Err(_) => return 0, // 提炼是增益路径：模型不可用/空回复 → 放弃
     };
+    let payload = parse_distill_payload(&raw);
     let mut saved = 0usize;
-    for item in parse_distill_items(&raw)
-        .into_iter()
-        .take(DISTILL_MAX_ITEMS)
-    {
+    for item in payload.memories.into_iter().take(DISTILL_MAX_ITEMS) {
         let input = bbrt_memory::SaveInput {
             title: item.title,
             body: item.body,
@@ -1986,11 +2020,30 @@ fn distill_memories(
             saved += 1;
         }
     }
+    // D37：进度增量并入台账（仅项目会话；拒绝覆盖/零增量静默跳过不阻塞收口）
+    if let (Some(ws), Some(delta)) = (ws, payload.progress.as_ref()) {
+        match m.merge_status(ws, delta, session_id) {
+            Ok(Some((outcome, stats))) => {
+                emit_memory_saved(deps, session_id, &outcome);
+                deps.wal.append(
+                    session_id,
+                    "status.merge",
+                    &format!(
+                        "{{\"added\":{},\"completed\":{},\"redacted\":{}}}",
+                        stats.added, stats.completed, stats.redacted
+                    ),
+                );
+                saved += 1;
+            }
+            _ => {}
+        }
+    }
     saved
 }
 
 /// 会话历史 → 提炼转录：仅 User/Assistant 文本轮（工具摘要信噪低不入），
-/// 每轮截 2K 字符；总量超限从头部丢弃（保最近的轮次）
+/// 每轮截 2K 字符；总量超限从头部丢弃（保最近的轮次）——**首条用户消息
+/// 永远保留**（D37：任务目标/需求原话通常在首条，进度提炼的任务归属依据）
 fn transcript_of(history: &[Round]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for r in history {
@@ -2011,13 +2064,16 @@ fn transcript_of(history: &[Round]) -> String {
         lines.push(format!("{role}：{cut}"));
     }
     let mut total: usize = lines.iter().map(|l| l.chars().count()).sum();
-    while total > DISTILL_TRANSCRIPT_MAX_CHARS && !lines.is_empty() {
-        // 头部（最旧）轮次整行丢弃；仍超限则该行本身已被 2K 截断，退出
-        let dropped = lines.remove(0);
+    // 从第二条起丢最旧（首条=任务目标锚点，D37）
+    while total > DISTILL_TRANSCRIPT_MAX_CHARS && lines.len() > 1 {
+        let dropped = lines.remove(1);
         total -= dropped.chars().count();
-        if dropped.chars().count() > DISTILL_TRANSCRIPT_MAX_CHARS {
-            break;
-        }
+    }
+    if total > DISTILL_TRANSCRIPT_MAX_CHARS && lines.len() == 1 {
+        lines[0] = lines[0]
+            .chars()
+            .take(DISTILL_TRANSCRIPT_MAX_CHARS)
+            .collect();
     }
     let mut out = lines.join("\n");
     out.push('\n');
@@ -2031,8 +2087,70 @@ struct DistillItem {
     mtype: bbrt_memory::MemoryType,
 }
 
-/// 提炼输出解析：剥 ```json 围栏、截取最外层 [...] 段 → JSON 数组；
-/// 缺字段/未知类型/空串的条目逐项丢弃（坏一条不弃整批）
+/// W3 输出整体（D37 对象 payload + 旧数组兼容）：
+/// - 对象 `{"memories":[...],"progress":{...}}` → 记忆条目 + 进度增量；
+/// - 解析不出对象 → 回退旧数组（仅 memories）；
+/// - 坏条逐项丢弃（坏一条不弃整批）；memories 中 `type=status` 一律丢弃
+///   （台账唯一写入方 = progress → `merge_status`，防止绕过合并护栏）。
+struct DistillPayload {
+    memories: Vec<DistillItem>,
+    progress: Option<bbrt_memory::StatusDelta>,
+}
+
+/// 提炼输出解析（对象优先，数组兜底）。
+/// 对象判定=剥围栏后**外层即 `{` 开头**——防旧数组输出被劫持（数组元素里的
+/// `{}` 不能被误当外层对象，否则 memories 全丢）；对象整串解析失败再退
+/// `{…}` 子串（容忍尾随解释文本），仍失败则按旧数组解析。
+fn parse_distill_payload(raw: &str) -> DistillPayload {
+    let trimmed = raw.trim();
+    let body = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .map(|s| s.strip_suffix("```").unwrap_or(s))
+        .unwrap_or(trimmed);
+    if body.starts_with('{') {
+        // 整串解析失败再截子串（容忍 `{...}` 后尾随解释文本）
+        let obj_src: Option<serde_json::Value> = serde_json::from_str(body).ok().or_else(|| {
+            body.rfind('}')
+                .and_then(|end| serde_json::from_str(&body[..=end]).ok())
+        });
+        if let Some(serde_json::Value::Object(map)) = obj_src {
+            let memories = map
+                .get("memories")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(distill_item_of).collect())
+                .unwrap_or_default();
+            let progress = map
+                .get("progress")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<bbrt_memory::StatusDelta>(v).ok());
+            return DistillPayload { memories, progress };
+        }
+    }
+    DistillPayload {
+        memories: parse_distill_items(raw),
+        progress: None,
+    }
+}
+
+/// 单条 memory 候选解析（数组/对象两形态共用）；
+/// `type=status` 丢弃（D37：台账专用类型不进 memories）
+fn distill_item_of(v: &serde_json::Value) -> Option<DistillItem> {
+    let title = v.get("title")?.as_str()?.trim().to_string();
+    let text = v.get("body")?.as_str()?.trim().to_string();
+    let mtype = bbrt_memory::MemoryType::parse(v.get("type")?.as_str()?)?;
+    if title.is_empty() || text.is_empty() || mtype == bbrt_memory::MemoryType::Status {
+        return None;
+    }
+    Some(DistillItem {
+        title,
+        body: text,
+        mtype,
+    })
+}
+
+/// 提炼输出解析（旧数组形态，日常会话/对象解析失败兜底）：剥 ```json 围栏、
+/// 截取最外层 [...] 段 → JSON 数组；缺字段/未知类型/空串的条目逐项丢弃
 fn parse_distill_items(raw: &str) -> Vec<DistillItem> {
     let trimmed = raw.trim();
     let body = trimmed
@@ -2052,21 +2170,7 @@ fn parse_distill_items(raw: &str) -> Vec<DistillItem> {
     let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(&body[start..=end]) else {
         return vec![];
     };
-    arr.iter()
-        .filter_map(|v| {
-            let title = v.get("title")?.as_str()?.trim().to_string();
-            let text = v.get("body")?.as_str()?.trim().to_string();
-            let mtype = bbrt_memory::MemoryType::parse(v.get("type")?.as_str()?)?;
-            if title.is_empty() || text.is_empty() {
-                return None;
-            }
-            Some(DistillItem {
-                title,
-                body: text,
-                mtype,
-            })
-        })
-        .collect()
+    arr.iter().filter_map(distill_item_of).collect()
 }
 
 /// 记忆写入/更新 → 协议事件外发（memory.saved + memory.evicted；W1/W2/W3 共用）
@@ -2076,6 +2180,7 @@ fn emit_memory_saved(deps: &LoopDeps, session_id: &str, outcome: &bbrt_memory::S
         bbrt_memory::MemoryType::Project => "project",
         bbrt_memory::MemoryType::Feedback => "feedback",
         bbrt_memory::MemoryType::Reference => "reference",
+        bbrt_memory::MemoryType::Status => "status",
     };
     // D19 作用域透传（user 域省略字段=旧口径兼容）
     let (scope, workspace_name) = if outcome.saved.scope == "project" {

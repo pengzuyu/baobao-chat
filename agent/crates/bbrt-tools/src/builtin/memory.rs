@@ -88,6 +88,14 @@ pub(crate) fn save(
                 ),
             )
         })?;
+        // D37：项目进度台账唯一写入方=W3 会话结束合并——手工写入拒绝
+        // （防绕过 status.rs 的加法合并/去重/拒识护栏整篇覆盖台账）
+        if mtype == MemoryType::Status {
+            return Err(deny(
+                CODE_TOOL_ARGS,
+                "type=status 是项目进度台账（每次会话结束自动更新），不支持手工写入",
+            ));
+        }
         let input = SaveInput {
             title,
             mtype,
@@ -123,7 +131,7 @@ pub(crate) fn save(
                     duration_ms: 0,
                 })
             }
-            // 含 D15 §4 脱敏拒写（SensitiveContent）与 4KB/80 字上限等
+            // 含 D15 §4 脱敏拒写（SensitiveContent）与公共层 80 字上限等
             Err(e) => Err(deny(CODE_TOOL_ARGS, format!("记忆写入被拒：{e}"))),
         }
     });
@@ -146,7 +154,7 @@ pub fn memory_save_def() -> ToolDef {
                       /授权=硬肯定许可/人际=对具体他人的协作事实/术语=私有词汇\
                       /目标=阶段性方向（带截止日期到期自清）/教训=泛化失败规律。\
                       项目知识（项目会话）：project=项目事实/feedback=教训\
-                      /reference=外部指针（一文件一事实+MEMORY.md 索引，≤4KB，\
+                      /reference=外部指针（一文件一事实+MEMORY.md 索引，\
                       同题更新不重复；日常会话自动回落公共层）。单条凝练一句一线。"
             .into(),
         input_schema: json!({
@@ -378,4 +386,3 @@ pub fn subagent_cancel_def() -> ToolDef {
         category: bbrt_sec::gate::ActionCategory::ReadOnly,
     }
 }
-

@@ -506,8 +506,8 @@ impl GlobalStore {
 // 纯函数
 // ---------------------------------------------------------------------------
 
-/// 归一文本（去敏去空白+小写）：去重/同题判定键
-fn normalize_text(s: &str) -> String {
+/// 归一文本（去空白+小写）：去重/同题判定键（D37 起 status.rs 台账去重共用）
+pub(crate) fn normalize_text(s: &str) -> String {
     s.chars()
         .filter(|c| !c.is_whitespace())
         .collect::<String>()
@@ -598,7 +598,8 @@ pub fn migrate_legacy_user_store(
             crate::knowledge::MemoryType::User => Some(GlobalType::Profile),
             crate::knowledge::MemoryType::Feedback => Some(GlobalType::Lesson),
             crate::knowledge::MemoryType::Reference => Some(GlobalType::Glossary),
-            crate::knowledge::MemoryType::Project => None, // 归档不灌 journal
+            // 归档不灌 journal（status 为 D37 新类型，legacy 文件族不可能出现——防御分支）
+            crate::knowledge::MemoryType::Project | crate::knowledge::MemoryType::Status => None,
         };
         if let Some(gtype) = gtype {
             let text = global_line(&e.title, &e.body);

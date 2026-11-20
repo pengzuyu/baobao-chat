@@ -722,6 +722,16 @@ fn memory_save_十类直通公共层与四类回落() {
         ),
     ));
     assert_eq!(code, 8002);
+    // ④ D37：status 手工写入拒绝（项目进度台账唯一写入方=会话结束自动合并）
+    let (code, msg) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "memory_save",
+            serde_json::json!({"title": "项目进度台账", "type": "status", "body": "## 已做\n- x"}),
+        ),
+    ));
+    assert_eq!(code, 8002);
+    assert!(msg.contains("项目进度台账"), "拒绝文案应说明台账：{msg}");
 }
 
 /// 独立工作区（memory 测试不依赖主夹具的 tempdir 生命周期）
