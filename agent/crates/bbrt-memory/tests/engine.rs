@@ -7,7 +7,9 @@ use std::fs;
 use std::sync::Arc;
 
 use bbrt_memory::knowledge::store::INDEX_FILE;
-use bbrt_memory::{FixedClock, MemoryEngine, MemoryEvictedEvent, MemorySavedEvent, MemoryType, SaveInput};
+use bbrt_memory::{
+    FixedClock, MemoryEngine, MemoryEvictedEvent, MemorySavedEvent, MemoryType, SaveInput,
+};
 
 /// 引擎 + 可变固定时钟脚手架（保留句柄模拟跨日推进）
 fn setup(now: &str, today: &str) -> (MemoryEngine, Arc<FixedClock>, tempfile::TempDir) {
@@ -143,12 +145,12 @@ fn memory_saved_payload_roundtrip_camel_case() {
     // D19 项目作用域：workspaceName 携带分区名；scope 缺省反序列化回落 user
     let proj = MemorySavedEvent {
         scope: "project".into(),
-        workspace_name: Some("baobao-chat-72ab07a9e501bc35".into()),
+        workspace_name: Some("baobao-work-72ab07a9e501bc35".into()),
         ..ev.clone()
     };
     let proj_json = serde_json::to_string(&proj).unwrap();
     assert!(proj_json.contains(r#""scope":"project""#));
-    assert!(proj_json.contains(r#""workspaceName":"baobao-chat-72ab07a9e501bc35""#));
+    assert!(proj_json.contains(r#""workspaceName":"baobao-work-72ab07a9e501bc35""#));
     assert_eq!(
         serde_json::from_str::<MemorySavedEvent>(&proj_json).unwrap(),
         proj

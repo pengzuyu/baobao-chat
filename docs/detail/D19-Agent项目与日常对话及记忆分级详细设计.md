@@ -53,7 +53,7 @@
 
 ## 4. 记忆分级（bbrt-memory）
 
-- **物理布局**：用户级维持 `{dataDir}/agent/memory/`；项目级 `{dataDir}/agent/memory/projects/<scope_key>/`，`scope_key=<目录名净化>-<路径 FNV-1a 64 哈希 16hex>`（ZCode 风格，如 `baobao-chat-72ab07a9e501bc35`；realpath 归一防路径别名）。分区天然继承 4KB/200 条 LRU/脱敏拒写（KnowledgeStore 复用）。
+- **物理布局**：用户级维持 `{dataDir}/agent/memory/`；项目级 `{dataDir}/agent/memory/projects/<scope_key>/`，`scope_key=<目录名净化>-<路径 sha256 前 16hex>`（ZCode 同款，2026-11-20 由 FNV-1a 64 换制，旧 FNV 分区不迁移作废；目录名保留 Unicode 字母数字（CJK 可读）截 48 字符，如 `baobao-work-72ab07a9e501bc35`；realpath 归一防路径别名）。分区天然继承 200 条 LRU/脱敏拒写（KnowledgeStore 复用；单条 4KB 上限已随 D37 废除）。
 - **路由规则（类型驱动）**：`user` 类恒用户级；`project/feedback/reference` 类在项目会话→项目分区，日常会话→回落用户级。四个写入路径全走该规则：W1 `memory_save` 工具（pipeline 按会话解析 ws）、W2① 启发式（恒 user 类→用户级）、W2② 工具教训 feedback（随会话目录）、W3 会话结束提炼（逐条按类型路由；已有索引喂两域合并头 60 行）。
 - **召回**：`recall_scoped(ws, query)`——项目会话注 `[用户记忆]`+`[项目记忆·<分区>]` 两段（单段空则只注另一段），日常仅用户段；子代理 ProbeCtx 同口径。
 - **提示词**：SYSTEM_PROMPT 记忆规范补作用域说明（自动路由无需指定）；[项目] 行日常会话显示「日常对话（无工作目录）」。

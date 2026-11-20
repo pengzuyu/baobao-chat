@@ -40,6 +40,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
 // 可注入时钟（时间戳/日界统一出口；测试注入固定值）
@@ -149,7 +150,7 @@ pub struct MemorySavedEvent {
     /// D19 作用域："user" | "project"（默认 user=旧口径；D23 起 user=公共层）
     #[serde(default = "default_scope_user")]
     pub scope: String,
-    /// D19 项目分区名（scope=project 时携带；scope_key 形如 baobao-chat-72ab07a9…）
+    /// D19 项目分区名（scope=project 时携带；scope_key 形如 baobao-work-72ab07a9…）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_name: Option<String>,
     /// D23 公共层十类标签（画像/偏好/…；None=项目分区知识记忆）
@@ -254,9 +255,11 @@ impl std::fmt::Debug for MemoryEngine {
     }
 }
 
-/// D19 项目分区 key：`<目录名>-<路径 FNV-1a 64 哈希 16hex>`（ZCode 风格）。
-/// 目录名仅保留 [A-Za-z0-9._-]（其余折叠为 -，CJK 项目名退化为纯哈希段仍稳定）；
-/// 同名不同路径靠哈希段区分；调用方先 canonicalize 再取 key（路径别名归一）。
+/// D19 项目分区 key：`<目录名>-<路径 sha256 前 16hex>`（ZCode 同款；
+/// 2026-11-20 由 FNV-1a 64 换制对齐，旧 FNV 分区不迁移、作废口径）。
+/// 目录名保留 Unicode 字母数字与 . _（其余折叠为 -，截 48 字符防文件名超限，
+/// CJK 项目名不再退化 project-）；同名不同路径靠哈希段区分；
+/// 调用方先 canonicalize 再取 key（路径别名归一）。
 pub fn scope_key(path: &Path) -> String {
     let dir_name = path
         .file_name()
@@ -265,8 +268,10 @@ pub fn scope_key(path: &Path) -> String {
     let mut sane = String::new();
     let mut last_dash = false;
     for c in dir_name.chars() {
-        if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
-            sane.push(c);
+        if c.is_alphanumeric() || c == '.' || c == '_' {
+            if sane.chars().count() < 48 {
+                sane.push(c);
+            }
             last_dash = false;
         } else if !last_dash {
             sane.push('-');
@@ -279,13 +284,10 @@ pub fn scope_key(path: &Path) -> String {
     } else {
         sane
     };
-    // FNV-1a 64
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in path.to_string_lossy().as_bytes() {
-        hash ^= *b as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{sane}-{hash:016x}")
+    // sha256 前 16hex；输入 = 绝对路径字符串字节（与 ZCode 一致）
+    let digest = Sha256::digest(path.to_string_lossy().as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    format!("{sane}-{}", &hex[..16])
 }
 
 impl MemoryEngine {
@@ -740,13 +742,19 @@ mod scoped_tests {
     /// 分区 key：目录名净化 + 路径哈希；同名不同路径区分、别名归一。
     #[test]
     fn scope_key_sanitizes_and_hashes() {
+        // 固定向量锁死算法（sha256 前 16hex，防回退 FNV）：
+        // sha256("/tmp/proj-p") = caf7c0822513f18f…
+        assert_eq!(
+            scope_key(Path::new("/tmp/proj-p")),
+            "proj-p-caf7c0822513f18f"
+        );
         let a = scope_key(Path::new("/Users/me/code/baobao-chat"));
         let b = scope_key(Path::new("/Users/other/code/baobao-chat"));
         assert!(a.starts_with("baobao-chat-"), "{a}");
         assert_ne!(a, b, "同名不同路径必须不同 key");
-        // CJK 目录名净化为空 → project 兜底
+        // CJK 目录名保留可读（2026-11-20 放宽：不再退化 project-）
         let cjk = scope_key(Path::new("/Users/me/code/宝贝项目"));
-        assert!(cjk.starts_with("project-"), "{cjk}");
+        assert!(cjk.starts_with("宝贝项目-"), "{cjk}");
     }
 
     /// 作用域写入：项目分区与用户级物理隔离；事件带 scope/workspace_name。

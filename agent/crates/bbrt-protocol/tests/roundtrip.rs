@@ -1368,12 +1368,12 @@ fn golden_d19_memory_scope_fields() {
             memory_type: "project".into(),
             updated: false,
             scope: Some(MemoryScope::Project),
-            workspace_name: Some("baobao-chat-72ab07a9e501bc35".into()),
+            workspace_name: Some("baobao-work-72ab07a9e501bc35".into()),
         },
         json!({
             "type":"memory.saved","sessionId":"sess-1","name":"端口-8090",
             "title":"端口 8090 约定","memoryType":"project","updated":false,
-            "scope":"project","workspaceName":"baobao-chat-72ab07a9e501bc35"
+            "scope":"project","workspaceName":"baobao-work-72ab07a9e501bc35"
         }),
     );
 }
