@@ -16,13 +16,17 @@
  * 行高（2026-11-17 高度重叠报修）：antd Menu 项定高 40px 且行高 40px 会向内层继承，
  * 双行 label（标题+时间）按 40px/行撑破定高项→裁切串行——各 label 统一 inline-flex +
  * verticalAlign:middle + lineHeight 1.4 自管行高，双行内容 ~36px 收进 40px 项内。
+ * 会话折叠（2026-11-19 用户口径，历史会话长期占位）：项目分组/任务区默认只列最近
+ * INITIAL_SESSION_LIMIT(5) 条，其余收成「加载更多（还有 N 条）」，每次点击再放
+ * LOAD_MORE_STEP(10) 条；项目分组收起→展开重置回 5 条，左栏整体收起会卸载本组件、
+ * 重新展开同样回到初始态（日常对话区不在本次折叠口径内）。
  */
 
 import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, Badge, Flex, Menu, Tag, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
-import { Bot, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Plus, Trash2 } from 'lucide-react';
+import { Bot, ChevronDown, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Plus, Trash2 } from 'lucide-react';
 import type { AgentSessionMeta, AgentWorkspaceInfo } from '../bridge/types';
 import { SESSION_STATUS_LABELS } from '../bridge/types';
 import { Button } from '../../../shared/ui/Button';
@@ -76,6 +80,12 @@ interface ProjectGroup {
   path: string;
   sessions: AgentSessionMeta[];
 }
+
+/** 会话折叠口径（2026-11-19）：默认只显示最近 5 条，点「加载更多」每次再放 10 条 */
+const INITIAL_SESSION_LIMIT = 5;
+const LOAD_MORE_STEP = 10;
+/** 任务区折叠计数的 storage key（项目分组用 proj:<path>） */
+const TASKS_GROUP_KEY = 'tasks';
 
 interface AgentSessionListProps {
   sessions: AgentSessionMeta[];
@@ -166,6 +176,9 @@ export const AgentSessionList = memo(function AgentSessionList({
 
   // 折叠态：默认展开含活跃会话的项目；切项目即用（状态不持久化，v0.1 简化）
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // 「加载更多」展开量（key=proj:<path> / tasks）：未记录=初始 5 条；
+  // 项目分组收起时清回初始态（重新展开回到最近 5 条，用户口径 2026-11-19）
+  const [sessionLimits, setSessionLimits] = useState<Record<string, number>>({});
   const activeIn = (g: ProjectGroup) => g.sessions.some((s) => s.id === activeId);
   const isOpen = (g: ProjectGroup) => (collapsed[g.path] === undefined ? true : !collapsed[g.path]);
 
@@ -239,6 +252,28 @@ export const AgentSessionList = memo(function AgentSessionList({
 
   const projKey = (path: string) => `proj:${path}`;
   const sessionKey = (id: string) => `session:${id}`;
+  const limitOf = (groupKey: string) => sessionLimits[groupKey] ?? INITIAL_SESSION_LIMIT;
+
+  /** 「加载更多」行（折叠后剩余条数提示；点击在 onMenuClick 按 more:<组key> 展开） */
+  const moreItem = (groupKey: string, remaining: number): NonNullable<MenuProps['items']>[number] => ({
+    key: `more:${groupKey}`,
+    label: (
+      <span style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 4, lineHeight: 1.4, fontSize: 12, color: token.colorPrimary }}>
+        <ChevronDown size={12} aria-hidden />
+        加载更多
+        <span style={{ fontSize: 11, color: token.colorTextTertiary }}>（还有 {remaining} 条）</span>
+      </span>
+    ),
+  });
+
+  /** 会话子项折叠：只列前 N 条（初始 5 / 点过「加载更多」逐次 +10），其余收进「加载更多」 */
+  const foldedSessionItems = (groupKey: string, list: AgentSessionMeta[], origin?: string): NonNullable<MenuProps['items']> => {
+    const shown = list.slice(0, limitOf(groupKey));
+    const children: NonNullable<MenuProps['items']> = shown.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s, origin) }));
+    const remaining = list.length - shown.length;
+    if (remaining > 0) children.push(moreItem(groupKey, remaining));
+    return children;
+  };
 
   const items: MenuProps['items'] = [
     {
@@ -303,7 +338,7 @@ export const AgentSessionList = memo(function AgentSessionList({
               children:
                 g.sessions.length === 0
                   ? [hintItem(`hint:${g.path}`, '暂无会话——点项目行上的 + 新建')]
-                  : g.sessions.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s) })),
+                  : foldedSessionItems(projKey(g.path), g.sessions),
             })),
     },
     {
@@ -320,10 +355,11 @@ export const AgentSessionList = memo(function AgentSessionList({
       type: 'group',
       label: sectionHead(<ListTodo size={12} aria-hidden />, '任务', headAct('新建任务会话', onNewTask)),
       // 任务会话（+ 新建即落此区）；子 agent run 记录不在左栏（右栏内容坞按会话归属展示）
+      // 2026-11-19：超过 5 条折叠，点「加载更多」逐次展开
       children:
         taskSessions.length === 0
           ? [hintItem('hint:no-task', '点右上 + 新建任务会话；子任务过程点子任务卡「查看过程」在右栏查看')]
-          : taskSessions.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s, '任务会话 · 无工作目录') })),
+          : foldedSessionItems(TASKS_GROUP_KEY, taskSessions, '任务会话 · 无工作目录'),
     },
   ];
 
@@ -331,12 +367,32 @@ export const AgentSessionList = memo(function AgentSessionList({
   const onOpenChange = (keys: string[]) => {
     // 项目分组展开态收敛回 collapsed 记录（默认展开=未记录）
     const open = new Set(keys);
+    // 收起的分组重置「加载更多」——重新展开回到最近 5 条（用户口径 2026-11-19）
+    const wasOpen = new Set(openKeys);
+    setSessionLimits((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const g of projectGroups) {
+        const k = projKey(g.path);
+        if (wasOpen.has(k) && !open.has(k) && next[k] !== undefined) {
+          delete next[k];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
     setCollapsed(Object.fromEntries(projectGroups.map((g) => [g.path, !open.has(projKey(g.path))])));
   };
 
   const onMenuClick: MenuProps['onClick'] = ({ key }) => {
     if (key.startsWith('session:')) {
       onSelect(key.slice('session:'.length));
+      return;
+    }
+    if (key.startsWith('more:')) {
+      // 加载更多：该分组（proj:<path> / tasks）展开量 +10
+      const groupKey = key.slice('more:'.length);
+      setSessionLimits((prev) => ({ ...prev, [groupKey]: (prev[groupKey] ?? INITIAL_SESSION_LIMIT) + LOAD_MORE_STEP }));
       return;
     }
     // 分组标签/提示行不响应
