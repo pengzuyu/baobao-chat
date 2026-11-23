@@ -1,0 +1,93 @@
+# =============================================================================
+# K8s 部署包（GitHub Actions；2026-11-23）
+#
+# 用途：公网 runner 构建 K8s 形态的两枚镜像 + helm chart，组装成单包 artifact，
+# 下载后拷入内网，按包内 INSTALL-K8S.md 分步部署（全程内网，无需外网）。
+#
+# 产物：baobaochat-k8s-v<ver>.tar.gz（组装见 scripts/release/gen-k8s-package.sh）
+#   ├── INSTALL-K8S.md               7 步分步操作（含预生成凭据与 Secret 命令）
+#   ├── images/bbc-app-<ver>.tar.gz  服务端镜像（load 后推内网私服 8182）
+#   ├── images/web-<ver>.tar.gz      接入层镜像（官网+更新源+/api /ws 分流，唯一入口）
+#   ├── chart/bbc-*.tgz              helm chart
+#   ├── deps/*.yaml                  命名空间/PG/RustFS/建桶/web 入口
+#   └── values-k8s.example.yaml      helm values（预填私服与随机凭据）
+#
+# 与 compose 包（deploy-package.yml）的分工：
+#   compose 包 = 单 VM 形态；K8s 包 = 集群形态。两者独立触发，互不依赖。
+# 镜像来源：bbc-app/web 由本 workflow 构建；pgvector/rustfs/aws-cli 走内网 8181 mirror。
+# 签名：不接触 updater 私钥（无 Secrets）。
+# =============================================================================
+name: K8s 部署包
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本标签（镜像 tag，如 0.1.4）'
+        required: true
+        type: string
+      registry:
+        description: '内网私服前缀（写进 values；如 172.16.19.3:8182/baobaochat）'
+        required: false
+        default: '172.16.19.3:8182/baobaochat'
+        type: string
+
+env:
+  APP_TAG: baobaochat/bbc-app
+  WEB_TAG: baobaochat/web
+
+jobs:
+  package:
+    name: 构建 K8s 部署包
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: 构建 bbc-app 镜像（linux/amd64）
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg GOPROXY=https://proxy.golang.org,direct \
+            -t "${APP_TAG}:${{ inputs.version }}" server/
+
+      - name: 构建官网静态文件
+        run: |
+          if [ -f website/package-lock.json ]; then
+            npm --prefix website ci --no-audit --no-fund
+          else
+            npm --prefix website install --no-audit --no-fund
+          fi
+          npm --prefix website run build
+
+      - name: 构建接入层镜像（官网+更新源+入口代理）
+        run: |
+          mkdir -p build/web/website-dist
+          cp -R website/dist/. build/web/website-dist/
+          cp deploy/k8s/baobao-chat/web-image/Dockerfile build/web/
+          cp deploy/k8s/baobao-chat/web-image/nginx.conf build/web/
+          docker build --platform linux/amd64 -t "${WEB_TAG}:${{ inputs.version }}" build/web/
+
+      - name: 导出镜像
+        run: |
+          mkdir -p dist/images
+          docker save "${APP_TAG}:${{ inputs.version }}" | gzip > "dist/images/bbc-app-${{ inputs.version }}.tar.gz"
+          docker save "${WEB_TAG}:${{ inputs.version }}" | gzip > "dist/images/web-${{ inputs.version }}.tar.gz"
+          ls -lh dist/images/
+
+      - name: 组装 K8s 部署包
+        env:
+          BBC_K8S_VERSION: ${{ inputs.version }}
+          BBC_REGISTRY: ${{ inputs.registry }}
+        run: bash scripts/release/gen-k8s-package.sh
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baobaochat-k8s-v${{ inputs.version }}
+          path: dist/baobaochat-k8s-v${{ inputs.version }}.tar.gz
+          retention-days: 30
