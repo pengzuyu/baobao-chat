@@ -31,7 +31,15 @@ for f in \
 done
 
 # 替换用 python（sed 对 JSON/带空格正则可读性差）；expect 保证只动该动的那一处
-python3 - "$VERSION" "$ROOT" <<'PY'
+# 解释器兼容：mac/Linux 用 python3；GitHub Windows runner 的 Git Bash 常只有 python
+# （WindowsApps 的 python3 是商店占位符，须实际执行验活后再采用）
+PY_BIN="$(command -v python3 || true)"
+if [ -z "$PY_BIN" ] || ! "$PY_BIN" -c 'import sys' >/dev/null 2>&1; then
+  PY_BIN="$(command -v python || true)"
+fi
+[ -n "$PY_BIN" ] || { echo "[set-version] 需要 python3 或 python" >&2; exit 1; }
+
+"$PY_BIN" - "$VERSION" "$ROOT" <<'PY'
 import json, re, sys, pathlib
 
 ver, root = sys.argv[1], pathlib.Path(sys.argv[2])

@@ -48,7 +48,10 @@ jobs:
 
       - name: 安装前端依赖
         shell: bash
-        run: npm --prefix client install --no-audit --no-fund
+        working-directory: client
+        # 勿写成 `npm --prefix client install`：npm 已知 Windows bug
+        # （npm/cli#7722 归并 #4511）忽略 prefix，改去 cwd 找 package.json → ENOENT
+        run: npm install --no-audit --no-fund
 
       - name: 覆盖版本号（可选）
         if: ${{ inputs.version != '' }}

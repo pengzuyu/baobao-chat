@@ -36,7 +36,7 @@ $Version = $Conf.version
 $Out = Join-Path $Root "out\release\v$Version\windows-x86_64"
 
 if (-not (Test-Path "$Root\client\node_modules")) {
-  Write-Error "[build-desktop] 先装依赖：npm --prefix client install"
+  Write-Error "[build-desktop] 先装依赖：cd client; npm install（勿用 npm --prefix，Windows 上 npm/cli#7722 会忽略 prefix）"
 }
 
 # 品牌产物一致性门禁（D31）：brand/brand.json 改动未跑生成器则拒绝出包
