@@ -1,6 +1,6 @@
 [package]
 name = "baobaochat-client"
-version = "0.1.0"
+version = "0.1.1"
 description = "BaobaoChat 客户端（Tauri 2 壳）"
 authors = ["BaobaoChat"]
 edition = "2021"

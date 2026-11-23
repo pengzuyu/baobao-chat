@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bbrt-aigw",
  "bbrt-context",
@@ -36,7 +36,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-aigw"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-context"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-hostapi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bbrt-protocol",
  "serde",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bbrt-protocol",
  "rustls",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-memory"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-sec"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-session"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bbrt-aigw",
  "bbrt-context",
@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rusqlite",
  "serde",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-tools"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bbrt-aigw",
  "bbrt-context",

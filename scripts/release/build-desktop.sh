@@ -12,7 +12,8 @@
 #     bash scripts/release/build-desktop.sh
 # 环境变量：
 #   BBC_PUBLIC_URL               必填，http(s)://域名（不带尾斜杠、不带 /api 前缀）
-#   TAURI_SIGNING_PRIVATE_KEY    updater minisign 私钥（内容或路径）+ TAURI_SIGNING_PASSWORD
+#   TAURI_SIGNING_PRIVATE_KEY    updater minisign 私钥（内容或路径）
+#                                + 口令 TAURI_SIGNING_PRIVATE_KEY_PASSWORD（TAURI_SIGNING_PASSWORD 亦认）
 #                                缺失时须 BBC_ALLOW_UNSIGNED=1（试包可、发布不可）
 #   BBC_TRIPLES                  覆盖目标：macOS 默认 "x86_64-apple-darwin
 #                                aarch64-apple-darwin"，Linux 默认 "x86_64-unknown-linux-gnu"
@@ -37,9 +38,16 @@ if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
   if [ "${BBC_ALLOW_UNSIGNED:-0}" = 1 ]; then
     echo "[build-desktop] ⚠ 无签名私钥（BBC_ALLOW_UNSIGNED=1）：出包无 .sig，仅可本地试装、不可发布" >&2
   else
-    echo "[build-desktop] 缺 TAURI_SIGNING_PRIVATE_KEY（+TAURI_SIGNING_PASSWORD）——updater 签名必需；本地试包可 BBC_ALLOW_UNSIGNED=1" >&2
+    echo "[build-desktop] 缺 TAURI_SIGNING_PRIVATE_KEY（+TAURI_SIGNING_PRIVATE_KEY_PASSWORD）——updater 签名必需；本地试包可 BBC_ALLOW_UNSIGNED=1" >&2
     exit 1
   fi
+fi
+
+# 口令变量名兼容：Tauri v2 CLI 实际认 TAURI_SIGNING_PRIVATE_KEY_PASSWORD；
+# 本脚本早期文档口径写的是 TAURI_SIGNING_PASSWORD——两者任传其一，这里统一导出
+# （否则 tauri build 报 "assuming an empty password" → "Wrong password for that key"）
+if [ -n "${TAURI_SIGNING_PASSWORD:-}" ] && [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$TAURI_SIGNING_PASSWORD"
 fi
 
 case "$(uname -s)" in
