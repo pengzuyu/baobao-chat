@@ -107,13 +107,79 @@ if (found === 0) {
 
 const pubDate = new Date().toISOString();
 const latest = { version: VER, notes: NOTES, pub_date: pubDate, platforms };
-const releaseInfo = { version: VER, date: pubDate, notes: NOTES, downloads };
+
+// ── 历史版本列表（2026-11-23）：官网下载区展示旧版可回退 ──
+// 扫描 out/release/v*/ 全部版本（含当前），生成 releases 倒序数组。
+// 元信息（date/notes）优先读各版本 latest.json；缺则用目录 mtime。
+// 注：本地清理旧产物后历史会丢——publish.sh 发布时会与服务器现有清单合并保底。
+function scanVersion(ver) {
+  const dir = resolve(ROOT, `out/release/v${ver}`);
+  const dl = [];
+  for (const p of PLATFORMS) {
+    const pdir = resolve(dir, p.key);
+    if (!existsSync(pdir)) continue;
+    const files = readdirSync(pdir).filter((f) => statSync(resolve(pdir, f)).isFile());
+    for (const f of files.filter((x) => !x.endsWith('.sig'))) {
+      dl.push({
+        platform: p.key,
+        label: p.label,
+        file: f,
+        url: `${BASE}/update/releases/v${ver}/${p.key}/${encodeURIComponent(f)}`,
+        size: statSync(resolve(pdir, f)).size,
+        sha256: sha256(resolve(pdir, f)),
+        autoUpdate: p.updaterRe.test(f),
+      });
+    }
+  }
+  let date = null;
+  let notes = '';
+  const lj = resolve(dir, 'latest.json');
+  if (existsSync(lj)) {
+    try {
+      const d = JSON.parse(readFileSync(lj, 'utf8'));
+      date = d.pub_date || null;
+      notes = d.notes || '';
+    } catch {
+      /* 损坏清单忽略，回落 mtime */
+    }
+  }
+  if (!date) date = new Date(statSync(dir).mtime).toISOString();
+  return { version: ver, date, notes, downloads: dl };
+}
+
+const relRoot = resolve(ROOT, 'out/release');
+const versions = existsSync(relRoot)
+  ? readdirSync(relRoot)
+      .map((d) => /^v(\d+\.\d+\.\d+)$/.exec(d))
+      .filter(Boolean)
+      .map((m) => m[1])
+  : [];
+if (!versions.includes(VER)) versions.push(VER);
+const semverDesc = (a, b) => {
+  const A = a.split('.').map(Number);
+  const B = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (A[i] !== B[i]) return B[i] - A[i];
+  return 0;
+};
+versions.sort(semverDesc);
+
+const releases = [];
+for (const v of versions) {
+  if (v === VER) {
+    releases.push({ version: VER, date: pubDate, notes: NOTES, downloads });
+    continue;
+  }
+  const s = scanVersion(v);
+  if (s.downloads.length > 0) releases.push(s);
+}
+
+const releaseInfo = { version: VER, date: pubDate, notes: NOTES, downloads, releases };
 
 writeFileSync(resolve(OUT, 'latest.json'), `${JSON.stringify(latest, null, 2)}\n`);
 writeFileSync(resolve(OUT, 'release-info.json'), `${JSON.stringify(releaseInfo, null, 2)}\n`);
 
 console.log(`[gen-manifest] v${VER}：updater 平台 ${found}/${PLATFORMS.length}，官网直链 ${downloads.length} 个`);
-console.log(`[gen-manifest] 已写 ${resolve(OUT, 'latest.json')} 与 release-info.json`);
+console.log(`[gen-manifest] 历史版本 ${releases.length - 1} 个（releases 数组）；已写 ${resolve(OUT, 'latest.json')} 与 release-info.json`);
 if (found < PLATFORMS.length) {
   console.warn('[gen-manifest] ⚠ 非全量清单——publish.sh 默认拒发（BBC_ALLOW_PARTIAL=1 放行）');
 }

@@ -184,6 +184,37 @@ function Roadmap() {
   );
 }
 
+/** 历史版本列表（可回退下载；数据源 release-info.json 的 releases 数组） */
+function HistoryReleases({ current }: { current: ReleaseInfo }) {
+  const history = (current.releases ?? []).filter((r) => r.version !== current.version);
+  if (history.length === 0) return null;
+  return (
+    <details className="release-notes history-releases">
+      <summary>历史版本（{history.length} 个，可回退下载）</summary>
+      <div className="history-list">
+        {history.map((r) => (
+          <div key={r.version} className="history-item">
+            <div className="history-head">
+              <strong>v{r.version}</strong>
+              <span>{formatDate(r.date)}</span>
+            </div>
+            <ul>
+              {r.downloads.map((d) => (
+                <li key={d.file}>
+                  <a href={d.url} download>
+                    {d.file}
+                  </a>
+                  <span className="download-meta"> · {formatSize(d.size)} · {d.label}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function DownloadSection() {
   const [info, setInfo] = useState<ReleaseInfo | null | 'loading'>('loading');
 
@@ -252,6 +283,7 @@ function DownloadSection() {
                 <pre>{info.notes}</pre>
               </details>
             ) : null}
+            <HistoryReleases current={info} />
             <p className="download-verify">
               安装包均附 minisign 签名（客户端自动校验）；校验和见各文件 sha256，
               可在下载后自行核对。旧版本安装后启动即提示自动更新，无需手动重装。

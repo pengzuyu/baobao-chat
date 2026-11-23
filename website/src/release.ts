@@ -21,11 +21,20 @@ export interface DownloadItem {
   autoUpdate: boolean;
 }
 
+export interface ReleaseEntry {
+  version: string;
+  date: string;
+  notes: string;
+  downloads: DownloadItem[];
+}
+
 export interface ReleaseInfo {
   version: string;
   date: string;
   notes: string;
   downloads: DownloadItem[];
+  /** 历史版本（含最新，按版本倒序；旧清单无此字段时缺省） */
+  releases?: ReleaseEntry[];
 }
 
 export async function loadReleaseInfo(): Promise<ReleaseInfo | null> {

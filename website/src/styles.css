@@ -499,3 +499,47 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── 历史版本列表 ── */
+.history-releases {
+  margin-top: 16px;
+}
+
+.history-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.history-item {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-alt);
+}
+
+.history-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 14px;
+}
+
+.history-head span {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.history-item ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.history-item li + li {
+  margin-top: 6px;
+}
+
+.history-item a {
+  color: var(--primary);
+}

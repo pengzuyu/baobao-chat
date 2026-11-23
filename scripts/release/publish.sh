@@ -49,6 +49,36 @@ if [ -n "$MISSING" ] && [ "${BBC_ALLOW_PARTIAL:-0}" != 1 ]; then
 fi
 [ -n "$MISSING" ] && echo "[publish] ⚠ BBC_ALLOW_PARTIAL=1：缺平台（${MISSING}）按现状发布"
 
+# ---- 1.5 历史清单合并（2026-11-23）----
+# gen-manifest 只扫本地 out/release/v*/——本地清理旧产物后历史会丢；
+# 发布前拉服务器现有 release-info.json，把其 releases 并入本次清单（版本号去重，本次覆盖）。
+OLD_INFO=$(mktemp)
+if ssh "$HOST" "cat '$UPDATES_DIR/release-info.json'" > "$OLD_INFO" 2>/dev/null && [ -s "$OLD_INFO" ]; then
+  python3 - "$OLD_INFO" "$OUT/release-info.json" <<'PY'
+import json, sys
+old_path, new_path = sys.argv[1], sys.argv[2]
+try:
+    old = json.load(open(old_path))
+except Exception:
+    sys.exit(0)  # 服务器清单损坏：跳过合并（本次清单照发）
+new = json.load(open(new_path))
+by_ver = {r["version"]: r for r in (old.get("releases") or [])}
+for r in (new.get("releases") or []):
+    by_ver[r["version"]] = r  # 本次数据覆盖同版本
+def key(v):
+    return tuple(int(x) for x in v.split("."))
+merged = sorted(by_ver.values(), key=lambda r: key(r["version"]), reverse=True)
+new["releases"] = merged
+with open(new_path, "w", encoding="utf-8") as f:
+    json.dump(new, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+print(f"[publish] 历史清单合并完成：releases 共 {len(merged)} 个（本次 v{new['version']}）")
+PY
+else
+  echo "[publish] 服务器无既有清单（首次发布）：跳过历史合并"
+fi
+rm -f "$OLD_INFO"
+
 # ---- 2. rsync 发布（平台子目录随产物目录原样；清单两份置卷根）----
 echo "[publish] v$VERSION → $HOST:$UPDATES_DIR"
 ssh "$HOST" "mkdir -p '$UPDATES_DIR/releases'"
