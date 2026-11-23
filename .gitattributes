@@ -1,0 +1,9 @@
+# 换行统一（2026-11-23）：仓库内文本一律 LF（存储与检出都是 LF）
+#
+# 背景=Windows 上 git 默认 core.autocrlf=true 会把文本检出成 CRLF，实测两处踩坑：
+#   ①Windows CI 出包（build-desktop.ps1 → brand --check）按 LF 生成的产物
+#     与 CRLF 工作区逐字节比对 → 误报「4 处产物过期」，整步判红
+#   ②bash 脚本在 Git Bash 下遇 CRLF 报 "$'\r': command not found"
+#     （set-version.sh / prepare-bbrt-sidecar.sh 等）
+# text=auto 让 git 自动识别二进制（png/ico/icns/jpg 等不受影响）
+* text=auto eol=lf

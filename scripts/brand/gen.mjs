@@ -34,6 +34,10 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const CHECK = process.argv.includes('--check');
 
+// 行尾归一：Windows 上 core.autocrlf=true 会把文本检出成 CRLF，
+// 按字节比对会把 LF 生成的产物误报「过期」；比对前一律归一为 LF
+const norm = (s) => (s == null ? s : s.replace(/\r\n/g, '\n'));
+
 // ── 读取与校验 brand.json ──
 const BRAND_PATH = resolve(ROOT, 'brand/brand.json');
 const brand = JSON.parse(readFileSync(BRAND_PATH, 'utf8'));
@@ -140,7 +144,7 @@ const LOGO_SRC = resolve(ROOT, 'brand/assets/logo.svg');
 const LOGO_DST = resolve(ROOT, 'client/public/logo.svg');
 const logoSrc = readFileSync(LOGO_SRC, 'utf8');
 let logoSame = true;
-try { logoSame = readFileSync(LOGO_DST, 'utf8') === logoSrc; } catch { logoSame = false; }
+try { logoSame = norm(readFileSync(LOGO_DST, 'utf8')) === norm(logoSrc); } catch { logoSame = false; }
 
 // ── 产物 6：index.html <title> 重写（正则幂等）──
 const INDEX_HTML = resolve(ROOT, 'client/index.html');
@@ -165,7 +169,7 @@ for (const out of outputs) {
   const abs = resolve(ROOT, out.path);
   let cur = null;
   try { cur = readFileSync(abs, 'utf8'); } catch { /* 不存在 */ }
-  if (cur === out.text) continue; // 幂等：内容一致跳过
+  if (norm(cur) === norm(out.text)) continue; // 幂等：内容一致跳过
   if (CHECK) {
     console.error(`[brand] ✗ --check 不一致: ${out.path}（改了 brand/brand.json 后先跑 make brand-conf）`);
     fail++;
