@@ -49,8 +49,9 @@ x-bbc-env: &bbc-env
   BBC_CORS_ORIGINS: ${BBC_CORS_ORIGINS:-}
   BBC_REDIS_ADDR: ${BBC_REDIS_ADDR:-redis:6379}
   BBC_S3_ENDPOINT: ${BBC_S3_ENDPOINT:-http://rustfs:9000}
-  # 预签名对外基址（D25）：空=回落本地盘（不起对象存储）；配域名形态 https://host/oss
-  # 或内网直连 http://ip:9000——客户端直传/直下走它，签名按对外 host 计算（nginx strip+Host 透传）
+  # 预签名对外基址（D25）：客户端直传/直下走它，签名按对外 host 计算（nginx strip+Host 透传）。
+  # ★生产必填：留空=回落 http://rustfs:9000（容器内地址）→ 客户端拿到不可达 URL，文件上传失败。
+  # 域名形态 http(s)://host/oss（compose 默认拓扑）；内网直连形态 http://ip:9000
   BBC_S3_PUBLIC_ENDPOINT: ${BBC_S3_PUBLIC_ENDPOINT:-}
   BBC_S3_USE_PATH_STYLE: ${BBC_S3_USE_PATH_STYLE:-true}
   BBC_S3_BUCKET: ${BBC_S3_BUCKET:-bbc-data}
@@ -134,7 +135,7 @@ services:
   # ===========================================================================
   app-init:
     # 借用 postgres 镜像的 psql/pg_isready 执行 init 脚本（bbc-app 为 distroless 无 shell）
-    image: ${POSTGRES_IMAGE:-postgres:16.4-alpine3.20}   # 国内网络可指内网/加速镜像，如 172.16.105.109:30003/pengzuyu/postgres-pgvector:16（含 pgvector）
+    image: ${POSTGRES_IMAGE:-postgres:16.4-alpine3.20}   # 国内网络可指内网/加速镜像，如 registry.example.internal/baobaochat/postgres-pgvector:16（含 pgvector）
     profiles: [core, deps]
     restart: "no"
     entrypoint: ["sh", "/init/01-init.sh"]
@@ -158,7 +159,7 @@ services:
   # 容量基线（§3.3 1k 档）：2C4G、shared_buffers 1G、应用侧连接池 50
   # ===========================================================================
   pg:
-    image: ${POSTGRES_IMAGE:-postgres:16.4-alpine3.20}   # 国内网络可指内网/加速镜像，如 172.16.105.109:30003/pengzuyu/postgres-pgvector:16（含 pgvector）
+    image: ${POSTGRES_IMAGE:-postgres:16.4-alpine3.20}   # 国内网络可指内网/加速镜像，如 registry.example.internal/baobaochat/postgres-pgvector:16（含 pgvector）
     profiles: [core, deps]
     restart: unless-stopped
     logging: *default-logging

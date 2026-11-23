@@ -49,7 +49,7 @@ spec:
       containers:
         - name: rustfs
           # 转推 Harbor（README 步骤 1）；上游 rustfs/rustfs:1.0.5（Apache-2.0，D29）
-          image: 172.16.105.109:30003/pengzuyu/rustfs:1.0.5
+          image: registry.example.internal/baobaochat/rustfs:1.0.5
           imagePullPolicy: IfNotPresent
           env:
             - name: RUSTFS_ACCESS_KEY

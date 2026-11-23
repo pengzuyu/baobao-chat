@@ -25,7 +25,7 @@ spec:
       containers:
         - name: aws-cli
           # 转推 Harbor（README 步骤 1）；上游 amazon/aws-cli:2.31.4
-          image: 172.16.105.109:30003/pengzuyu/aws-cli:2.31.4
+          image: registry.example.internal/baobaochat/aws-cli:2.31.4
           imagePullPolicy: IfNotPresent
           env:
             - name: AWS_ACCESS_KEY_ID

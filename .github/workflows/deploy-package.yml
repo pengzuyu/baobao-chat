@@ -10,7 +10,7 @@
 #   ├── images/base-images.tar.gz     其余 5 镜像（bundle_images=true 时）
 #   └── compose/                      docker-compose.yml + .env.internal + init/ + 脚本
 #                                     + volumes/website（官网静态，构建产物）
-# 镜像策略（依据内网 Nexus 172.16.19.3）：
+# 镜像策略（依据内网 Nexus registry.example.internal）：
 #   - bbc-app 随包 docker load（无需推私服；多机部署可用 registry_prefix 改走 8182）
 #   - 第三方 5 个走 daemon.json registry-mirrors（8181 代理 Docker Hub）自动回源
 #   - bundle_images=true：包内带全部 6 镜像（mirror 不可用时完全离线兜底，~400MB）
@@ -27,7 +27,7 @@ on:
         required: true
         type: string
       registry_prefix:
-        description: '可选：多机部署时 bbc-app 的私服前缀（如 172.16.19.3:8182/baobaochat）；留空=随包 load'
+        description: '可选：多机部署时 bbc-app 的私服前缀（如 registry.example.internal/baobaochat）；留空=随包 load'
         required: false
         default: ''
         type: string

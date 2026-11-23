@@ -18,7 +18,7 @@
 #   BBC_K8S_VERSION=0.1.4 bash scripts/release/gen-k8s-package.sh
 # 环境变量：
 #   BBC_K8S_VERSION   必填，版本标签（镜像 tag 与 values.imageTag）
-#   BBC_REGISTRY      可选，私服前缀（默认 172.16.19.3:8182/baobaochat）
+#   BBC_REGISTRY      可选，私服前缀（默认读 scripts/release/.registry.local，缺省为示例占位）
 #   BBC_NODE_IP       可选，节点对外 IP 占位（默认 <NODE_IP>，部署时替换）
 #   BBC_DEPLOY_OUT    可选，产物目录（默认 dist）
 #
@@ -31,7 +31,15 @@
 set -euo pipefail
 
 VER="${BBC_K8S_VERSION:?BBC_K8S_VERSION 必填（如 0.1.4）}"
-REGISTRY="${BBC_REGISTRY:-172.16.19.3:8182/baobaochat}"
+
+# 私服前缀：优先环境变量 BBC_REGISTRY；其次本地文件 scripts/release/.registry.local
+# （不入库，.gitignore 的 *.local 已覆盖）；最后用示例占位。
+# 内部构建只需把真实私服前缀写进本地文件，无需改本脚本。
+REGISTRY_LOCAL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.registry.local"
+if [ -z "${BBC_REGISTRY:-}" ] && [ -f "$REGISTRY_LOCAL" ]; then
+  BBC_REGISTRY="$(tr -d '[:space:]' < "$REGISTRY_LOCAL")"
+fi
+REGISTRY="${BBC_REGISTRY:-registry.example.internal/baobaochat}"
 NODE_IP="${BBC_NODE_IP:-<NODE_IP>}"
 BUNDLE="${BBC_BUNDLE_IMAGES:-0}"
 OUT="${BBC_DEPLOY_OUT:-dist}"
@@ -48,6 +56,9 @@ rm -rf "$PKG"
 mkdir -p "$PKG/images" "$PKG/chart" "$PKG/deps"
 
 cp "$OUT/images/bbc-app-$VER.tar.gz" "$OUT/images/web-$VER.tar.gz" "$PKG/images/"
+# OIDC 密钥生成脚本随包（INSTALL 的「后续启用 OIDC」段直接 bash gen-oidc-key.sh）
+cp "$ROOT/scripts/release/gen-oidc-key.sh" "$PKG/"
+chmod +x "$PKG/gen-oidc-key.sh"
 
 # ---- helm chart 打包 ----
 helm package "$ROOT/deploy/helm/bbc" -d "$PKG/chart" >/dev/null
@@ -57,9 +68,9 @@ CHART_NAME=$(basename "$CHART_TGZ" .tgz)
 # ---- 依赖清单（deploy/k8s/baobao-chat 的 yaml + web 入口）----
 cp "$ROOT/deploy/k8s/baobao-chat/"*.yaml "$PKG/deps/"
 cp "$ROOT/deploy/k8s/baobao-chat/web.yaml" "$PKG/deps/web.yaml"
-# 依赖清单镜像名统一指向本次目标私服（源 yaml 里是旧 Harbor 172.16.105.109:30003/pengzuyu）
+# 依赖清单镜像名统一指向本次目标私服（源 yaml 里是旧 Harbor registry.example.internal/baobaochat）
 for f in "$PKG/deps/"*.yaml; do
-  sed -i.bak "s|172\.16\.105\.109:30003/pengzuyu|$REGISTRY|g" "$f" && rm -f "$f.bak"
+  sed -i.bak "s|registry\.example\.internal/baobaochat|$REGISTRY|g" "$f" && rm -f "$f.bak"
 done
 # 全量离线：基础镜像 tar 随包（K8s 节点不能 docker load 直用，仍需推私服一次）
 if [ "$BUNDLE" = "1" ]; then
@@ -118,7 +129,7 @@ externalServices:
   # redis 段不填：服务端代码无 Redis 依赖（2026-11-23 核实），compose 侧 redis 为历史预留
 
 secrets:
-  # 生态应用 OIDC 登录（可选；bash scripts/release/gen-oidc-key.sh 生成后填入）
+  # 生态应用 OIDC 登录（可选；包根 bash gen-oidc-key.sh 生成后填入）
   # oidcSigningKey: "<base64 单行>"   # 对应 config.oidcIssuer: "http://NODE_IP:30808"
   dbDsn: postgres://bbc:$PG_PW@bbc-pg.baobao-chat.svc.cluster.local:5432/bbc?sslmode=disable
   jwtSecret: $JWT
@@ -141,12 +152,12 @@ helm version --short                    # helm ≥ 3.12
 kubectl get storageclass                # 有默认 StorageClass（web 更新源 PVC 用）
 \`\`\`
 
-$( if [ "$BUNDLE" = "1" ]; then echo "全量离线包：依赖镜像随包提供，节点无需 registry-mirrors（仍需 insecure-registries 允许 8182 http）。"; else echo "节点需配 Docker 私服（Nexus 172.16.19.3）——每台可能调度到的节点 \`/etc/docker/daemon.json\`："; fi )
+$( if [ "$BUNDLE" = "1" ]; then echo "全量离线包：依赖镜像随包提供，节点无需 registry-mirrors（仍需 insecure-registries 允许 8182 http）。"; else echo "节点需配 Docker 私服（内部 Registry）——每台可能调度到的节点 \`/etc/docker/daemon.json\`："; fi )
 
 \`\`\`json
 {
-  "insecure-registries": ["172.16.19.3:8181", "172.16.19.3:8182"],
-  "registry-mirrors": ["http://172.16.19.3:8181"]
+  "insecure-registries": ["registry-mirror.example.internal", "registry.example.internal"],
+  "registry-mirrors": ["http://registry-mirror.example.internal"]
 }
 \`\`\`
 \`\`\`bash
@@ -163,7 +174,7 @@ docker load -i images/bbc-app-$VER.tar.gz
 docker load -i images/web-$VER.tar.gz
 docker tag baobaochat/bbc-app:$VER $REGISTRY/bbc-app:$VER
 docker tag baobaochat/web:$VER     $REGISTRY/web:$VER
-docker login 172.16.19.3:8182      # 凭据见公告板《私服使用手册》
+docker login registry.example.internal      # 凭据向运维获取
 docker push $REGISTRY/bbc-app:$VER
 docker push $REGISTRY/web:$VER
 \`\`\`
@@ -186,7 +197,7 @@ docker push __REG__/aws-cli:2.31.4
 BUNDLE_STEP
 fi )
 > 私服需认证时，再建拉取凭据（否则跳过）：
-> \`kubectl -n baobao-chat create secret docker-registry regcred --docker-server=172.16.19.3:8182 --docker-username=*** --docker-password=***\`
+> \`kubectl -n baobao-chat create secret docker-registry regcred --docker-server=registry.example.internal --docker-username=*** --docker-password=***\`
 > 并在 \`values-k8s.example.yaml\` 的 \`global.imagePullSecrets\` 填 \`[{ name: regcred }]\`。
 
 ## 2. 命名空间与凭据
@@ -261,20 +272,20 @@ kubectl -n baobao-chat cp -r releases       \$POD:/usr/share/nginx/updates/
 
 不启用=零影响（服务端走临时密钥，普通账号登录不受影响）。
 
-```bash
+\`\`\`bash
 # 1. 生成密钥（mac 或任意有 openssl 的机器）
-bash scripts/release/gen-oidc-key.sh    # 取输出里的 BBC_OIDC_SIGNING_KEY=<base64> 值
+bash gen-oidc-key.sh    # 取输出里的 BBC_OIDC_SIGNING_KEY=<base64> 值
 # 2. helm upgrade 时注入两值
-helm -n baobao-chat upgrade bbc chart/$CHART_NAME.tgz \
-  --reuse-values \
-  --set secrets.oidcSigningKey='<base64 串>' \
+helm -n baobao-chat upgrade bbc chart/$CHART_NAME.tgz \\
+  --reuse-values \\
+  --set secrets.oidcSigningKey='<base64 串>' \\
   --set config.oidcIssuer='http://$NODE_IP:30808'
 # 3. 等 app 滚动完成
 kubectl -n baobao-chat rollout status deploy/bbc-app
-```
+\`\`\`
 
-验证：`curl http://$NODE_IP:30808/oauth2/.well-known/openid-configuration` 的 issuer 应为
-`http://$NODE_IP:30808`（须与 config.oidcIssuer 完全一致）。
+验证：\`curl http://$NODE_IP:30808/oauth2/.well-known/openid-configuration\` 的 issuer 应为
+\`http://$NODE_IP:30808\`（须与 config.oidcIssuer 完全一致）。
 
 ## 升级（后续版本）
 

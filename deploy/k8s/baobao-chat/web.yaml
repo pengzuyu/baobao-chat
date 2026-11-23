@@ -8,7 +8,7 @@
 # 部署前提：helm chart 已装且 app.service.type=ClusterIP（否者 8080/30808 端口冲突）。
 #
 # 替换项（部署前 sed 或 kubectl set image）：
-#   __IMAGE__  接入层镜像，如 172.16.19.3:8182/baobaochat/web:0.1.4
+#   __IMAGE__  接入层镜像，如 registry.example.internal/baobaochat/web:0.1.4
 # =============================================================================
 apiVersion: v1
 kind: PersistentVolumeClaim

@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       public_url:
-        description: '服务端地址（编译期注入三链：API/WS/updater；如 http://172.16.105.109）'
+        description: '服务端地址（编译期注入三链：API/WS/updater；如 http://<SERVER_IP>）'
         required: true
         type: string
       version:

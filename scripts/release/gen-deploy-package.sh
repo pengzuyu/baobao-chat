@@ -5,7 +5,7 @@
 # 背景：内网服务器无外网、无源码、无编译环境，只需 Docker + 一个包。本脚本把
 # 「compose 编排 + 预填 .env + 官网静态 + bbc-app 镜像 + 安装说明」组装成单包。
 #
-# 镜像获取策略（2026-11-23 定案，依据内网 Nexus 172.16.19.3）：
+# 镜像获取策略（2026-11-23 定案，依据内部 Registry）：
 #   - bbc-app（内部自建）：随包 docker load，本地 tag baobaochat/bbc-app:<ver>
 #     ——无需推私服、无需登录凭据；多机部署时可用 BBC_REGISTRY_PREFIX 改走 8182
 #   - 第三方 5 个（pgvector/nginx/redis/rustfs/aws-cli）：compose 默认名，
@@ -20,7 +20,7 @@
 # 环境变量：
 #   BBC_DEPLOY_VERSION     必填，版本标签（与镜像 tag 一致）
 #   BBC_REGISTRY_PREFIX    可选，多机部署时 bbc-app 的私服前缀
-#                          （如 172.16.19.3:8182/baobaochat）；空=本地 load 模式
+#                          （如 registry.example.internal/baobaochat）；空=本地 load 模式
 #   BBC_BUNDLE_IMAGES      可选，1=包内带全部 6 镜像（完全离线兜底）；0=默认
 #   BBC_DEPLOY_OUT         可选，产物目录（默认 dist）
 #
@@ -67,6 +67,24 @@ rm -f "$PKG/compose/.env"   # 不带本机 .env（模板走 .env.internal）
 cp -R "$ROOT/website/dist/." "$PKG/compose/volumes/website/"
 cp "$OUT/images/bbc-app-$VER.tar.gz" "$PKG/images/"
 [ "$BUNDLE" = "1" ] && cp "$OUT/images/base-images.tar.gz" "$PKG/images/"
+# OIDC 密钥生成脚本随包（INSTALL 的「后续启用 OIDC」段直接 bash gen-oidc-key.sh）
+cp "$ROOT/scripts/release/gen-oidc-key.sh" "$PKG/"
+chmod +x "$PKG/gen-oidc-key.sh"
+
+# ---- 接入层自签证书（volumes 被排除，包内必须自带）----
+# nginx-lb 的 443 段引用 /etc/nginx/certs/tls.crt：缺证书=容器启动即 emerg 退出。
+# v0.1 客户端走 http（80），443 仅备用；生产切 https 时用内部 CA 签发的同名文件覆盖。
+CERT_DIR="$PKG/compose/volumes/certs"
+mkdir -p "$CERT_DIR"
+openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+  -keyout "$CERT_DIR/tls.key" -out "$CERT_DIR/tls.crt" \
+  -subj "/CN=baobaochat" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+  >/dev/null 2>&1 || {
+  echo "[gen-deploy-package] 自签证书生成失败（需 openssl 1.1.1+）" >&2
+  exit 1
+}
+cp "$CERT_DIR/tls.crt" "$CERT_DIR/ca.crt"
 
 # ---- .env.internal：预填镜像源与随机凭据 ----
 PW=$(openssl rand -hex 16)
@@ -116,9 +134,11 @@ BBC_S3_SECRET_KEY=$S3SK
 # 留空=无法创建/装配带密钥的供应商（智谱等）→ Agent 不可用；已随机生成，建议沿用
 BBC_KMS_MASTER_KEY=$KMS
 
-# 对象存储（栈内 RustFS；PUBLIC_ENDPOINT 空=客户端经 nginx /oss/ 代理）
+# 对象存储（栈内 RustFS）。PUBLIC_ENDPOINT=客户端可达基址（预签名直传/直下）：
+# ★必须与 BBC_PUBLIC_DOMAIN 同 host + /oss 后缀（nginx 已带 /oss/ 代理）；
+#   留空=签名按容器内地址 http://rustfs:9000 生成 → 客户端不可达（文件上传/客户端发布均失败）
 BBC_S3_ENDPOINT=http://rustfs:9000
-BBC_S3_PUBLIC_ENDPOINT=
+BBC_S3_PUBLIC_ENDPOINT=http://CHANGE_ME/oss
 BBC_S3_USE_PATH_STYLE=true
 BBC_S3_BUCKET=bbc-data
 BBC_S3_BACKUP_BUCKET=bbc-backup
@@ -140,15 +160,15 @@ else
   LOAD_BASE='# 其余镜像首次由 compose 自动经私服 mirror 拉取（见上方 daemon.json）'
   MIRROR_SECTION='## 前置：Docker 私服配置（必需，否则第三方镜像拉不到）
 
-内网 Nexus 私服（172.16.19.3）：8181=registry-mirror（代理 Docker Hub）·
+内部私服（示例地址 registry.example.internal）：8181=镜像代理（代理 Docker Hub）·
 8182=自建镜像仓库 · 8081=通用仓库（yum/apt/docker-ce 安装源）。
 
 `/etc/docker/daemon.json`：
 
 ```json
 {
-  "insecure-registries": ["172.16.19.3:8181", "172.16.19.3:8182"],
-  "registry-mirrors": ["http://172.16.19.3:8181"]
+  "insecure-registries": ["registry-mirror.example.internal", "registry.example.internal"],
+  "registry-mirrors": ["http://registry-mirror.example.internal"]
 }
 ```
 
@@ -158,7 +178,7 @@ systemctl daemon-reload && systemctl restart docker
 
 - registry-mirrors 使 `docker pull nginx:1.27.4-alpine3.21` 等自动经私服回源
 - 私服未缓存的镜像首次回源可能较慢（多试几次即进缓存）
-- 私服登录凭据向运维/公告板《私服使用手册》查询，勿写入本包'
+- 私服登录凭据向运维获取，勿写入本包'
 fi
 
 cat > "$PKG/INSTALL.md" <<EOF
@@ -207,9 +227,9 @@ cd compose && ./upgrade.sh <新ver>   # 备份→迁移→滚动→健康检查�
 ## 多机部署（可选）
 单机直接 docker load 即可。若多台服务器，可把 bbc-app 推入私服 8182 一次：
 \`\`\`bash
-docker tag baobaochat/bbc-app:$VER 172.16.19.3:8182/baobaochat/bbc-app:$VER
-docker login 172.16.19.3:8182 && docker push 172.16.19.3:8182/baobaochat/bbc-app:$VER
-# 之后出包用 BBC_REGISTRY_PREFIX=172.16.19.3:8182/baobaochat 生成 .env.internal 即可免 load
+docker tag baobaochat/bbc-app:$VER registry.example.internal/baobaochat/bbc-app:$VER
+docker login registry.example.internal && docker push registry.example.internal/baobaochat/bbc-app:$VER
+# 之后出包用 BBC_REGISTRY_PREFIX=registry.example.internal/baobaochat 生成 .env.internal 即可免 load
 \`\`\`
 
 ## 后续启用 OIDC（生态应用用 BaobaoChat 账号登录；首次可跳过）
@@ -218,18 +238,18 @@ docker login 172.16.19.3:8182 && docker push 172.16.19.3:8182/baobaochat/bbc-app
 不启用=零影响（临时密钥，普通登录不受任何影响）。
 
 启用三步（不重建数据、不停服务）：
-```bash
+\`\`\`bash
 # 1. mac 或服务器上生成密钥（输出两行，直接追加进 .env）
-bash scripts/release/gen-oidc-key.sh >> compose/.env
+bash gen-oidc-key.sh >> compose/.env
 # 2. 把 .env 里 BBC_OIDC_ISSUER=CHANGE_ME 改成实际访问地址
-#    （与 BBC_PUBLIC_DOMAIN 同值，如 http://172.16.19.100；末尾不带斜杠）
+#    （与 BBC_PUBLIC_DOMAIN 同值，如 http://<SERVER_IP>；末尾不带斜杠）
 # 3. 只重启 app 容器
 cd compose && docker compose up -d app
-```
+\`\`\`
 
-验证：`curl http://<BBC_PUBLIC_DOMAIN>/oauth2/.well-known/openid-configuration` 返回 issuer 等元数据。
+验证：\`curl http://<BBC_PUBLIC_DOMAIN>/oauth2/.well-known/openid-configuration\` 返回 issuer 等元数据。
 生态应用接入用：授权 \`/oauth2/authorize\`、token \`/oauth2/token\`、公钥 \`/oauth2/keys\`，
-issuer 填 `http://<BBC_PUBLIC_DOMAIN>`（须与 .env 的 BBC_OIDC_ISSUER 完全一致）。
+issuer 填 \`http://<BBC_PUBLIC_DOMAIN>\`（须与 .env 的 BBC_OIDC_ISSUER 完全一致）。
 
 ## 客户端分发
 - 安装包经 http://<BBC_PUBLIC_DOMAIN>/update/ 分发（latest.json + 各平台包）

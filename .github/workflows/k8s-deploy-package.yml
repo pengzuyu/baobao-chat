@@ -27,9 +27,9 @@ on:
         required: true
         type: string
       registry:
-        description: '内网私服前缀（写进 values；如 172.16.19.3:8182/baobaochat）'
+        description: '私服前缀（写进 values）；留空=用仓库变量 BBC_REGISTRY_PREFIX，仍空则用示例占位'
         required: false
-        default: '172.16.19.3:8182/baobaochat'
+        default: ''
         type: string
 
 env:
@@ -89,7 +89,7 @@ jobs:
       - name: 组装 K8s 部署包
         env:
           BBC_K8S_VERSION: ${{ inputs.version }}
-          BBC_REGISTRY: ${{ inputs.registry }}
+          BBC_REGISTRY: ${{ inputs.registry || vars.BBC_REGISTRY_PREFIX }}
         run: bash scripts/release/gen-k8s-package.sh
 
       - name: 上传 artifact

@@ -1,7 +1,10 @@
 # baobao-chat 命名空间部署 Runbook（K8s 裸 HTTP 直连形态）
 
-目标环境：`https://172.16.105.109:6443`（kubeconfig context `kubernetes-super-admin@kubernetes`），
-镜像仓库 Harbor `172.16.105.109:30003/pengzuyu/<服务名>:<tag>`。
+> 文中集群地址、Registry 与 NodePort 均为示例占位（`*.example.internal` / `<NODE_IP>`），
+> 部署前替换为你自己的环境；打包脚本会把镜像前缀统一替换为实际私服（见 `gen-k8s-package.sh`）。
+
+目标环境：`https://k8s-api.example.internal:6443`（kubeconfig context `kubernetes-super-admin@kubernetes`），
+镜像仓库 Harbor `registry.example.internal/baobaochat/<服务名>:<tag>`。
 
 **形态口径**：依赖组件（PG+pgvector / RustFS）自建于 `baobao-chat` 命名空间；
 app 经 NodePort `30808` 裸 HTTP 直连（桌面端 bbrt 不支持 TLS，/api /ws 同口直达）；
@@ -12,15 +15,15 @@ Helm chart（`deploy/helm/bbc`）只管 bbc-server 本体；本目录清单管�
 
 ```sh
 # bbc-app（多阶段构建，builder golang:1.26-alpine；按节点架构选 --platform）
-docker build --platform linux/amd64 -t 172.16.105.109:30003/pengzuyu/bbc-app:0.1.0 server/
-docker push 172.16.105.109:30003/pengzuyu/bbc-app:0.1.0
+docker build --platform linux/amd64 -t registry.example.internal/baobaochat/bbc-app:0.1.0 server/
+docker push registry.example.internal/baobaochat/bbc-app:0.1.0
 
 # 第三方镜像转推（集群节点不便直连 Docker Hub 时统一走 Harbor）
 for img in "pgvector/pgvector:pg16" "rustfs/rustfs:1.0.5" "amazon/aws-cli:2.31.4"; do
   docker pull --platform linux/amd64 "$img"
   repo="${img%%/*}"; tag="${img##*:}"
-  docker tag "$img" "172.16.105.109:30003/pengzuyu/$repo:$tag"
-  docker push "172.16.105.109:30003/pengzuyu/$repo:$tag"
+  docker tag "$img" "registry.example.internal/baobaochat/$repo:$tag"
+  docker push "registry.example.internal/baobaochat/$repo:$tag"
 done
 ```
 
@@ -64,26 +67,26 @@ kubectl -n baobao-chat rollout status deploy/bbc-app --timeout=300s
 ## 步骤 6：冒烟 + 首管理员
 
 ```sh
-curl http://172.16.105.109:30808/healthz          # 200
-curl http://172.16.105.109:30808/readyz           # 200（PG ping 通）
-curl http://172.16.105.109:30808/api/v1/setup/status   # 空库=未初始化态
+curl http://<NODE_IP>:30808/healthz          # 200
+curl http://<NODE_IP>:30808/readyz           # 200（PG ping 通）
+curl http://<NODE_IP>:30808/api/v1/setup/status   # 空库=未初始化态
 
 # 首管理员（空库只能走 setup；桌面客户端连本环境即进向导，或直接）：
-curl -X POST http://172.16.105.109:30808/api/v1/setup/bootstrap \
+curl -X POST http://<NODE_IP>:30808/api/v1/setup/bootstrap \
   -H 'Content-Type: application/json' \
   -d '{"employee_no":"admin","display_name":"平台管理员","password":"<密码>"}'
 ```
 
 ## 客户端指向
 
-桌面端（Tauri）连接地址 = `http://172.16.105.109:30808/api/v1`（构建时 `VITE_API_BASE`
-或客户端内配置）。文件 >8MB 走 RustFS 预签名直传（`172.16.105.109:30900`），<20MB 走服务端中转。
+桌面端（Tauri）连接地址 = `http://<NODE_IP>:30808/api/v1`（构建时 `VITE_API_BASE`
+或客户端内配置）。文件 >8MB 走 RustFS 预签名直传（`<NODE_IP>:30900`），<20MB 走服务端中转。
 
 ## 常见处置
 
 - **migrate Job 失败**：`kubectl -n baobao-chat logs job/bbc-migrate`；基线 0001 需 pgvector
   扩展（镜像非 pgvector 版必失败）。
-- **镜像拉取失败**：确认 Harbor 登录（`docker login 172.16.105.109:30003`）与节点 containerd
+- **镜像拉取失败**：确认 Harbor 登录（`docker login registry.example.internal`）与节点 containerd
   对该 registry 的信任配置。
 - **S3 凭据轮换**：改 `bbc-s3-cred` Secret + `.local-values.yaml` → 重跑 rustfs-init Job →
   `helm upgrade`。

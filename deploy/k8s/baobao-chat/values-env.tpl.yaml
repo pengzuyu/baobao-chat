@@ -5,8 +5,8 @@
 # 依赖组件自建于 baobao-chat 命名空间（postgres.yaml / rustfs.yaml）
 # =============================================================================
 global:
-  domain: 172.16.105.109:30808          # BBC_PUBLIC_DOMAIN（信息性：对外基址无域名形态）
-  imageRegistry: 172.16.105.109:30003/pengzuyu
+  domain: <NODE_IP>:30808          # BBC_PUBLIC_DOMAIN（信息性：对外基址无域名形态）
+  imageRegistry: registry.example.internal/baobaochat
   imageTag: "0.1.0"
 
 # bbc-gateway 镜像未交付（单体 app 内嵌 WS）——保持关闭
@@ -33,7 +33,7 @@ externalServices:
     address: bbc-redis.baobao-chat.svc.cluster.local:6379   # 服务端未消费（占位，未部署）
   s3:
     endpoint: http://bbc-rustfs.baobao-chat.svc.cluster.local:9000
-    publicEndpoint: http://172.16.105.109:30900   # 预签名直传/票据下载对外基址（NodePort）
+    publicEndpoint: http://<NODE_IP>:30900   # 预签名直传/票据下载对外基址（NodePort）
     bucket: bbc-data
     backupBucket: bbc-backup
     usePathStyle: true

@@ -87,8 +87,10 @@ BBC_REDIS_ADDR=redis:6379
 #    rustfs 服务与 rustfs-init 均直接复用 BBC_S3_ACCESS_KEY/SECRET_KEY，无需单独根凭据键
 # -----------------------------------------------------------------------------
 BBC_S3_ENDPOINT=http://rustfs:9000
-# 预签名对外基址（D25）：空=回落本地盘（不启用对象存储）；启用后客户端直传/直下走它。
+# 预签名对外基址（D25）：客户端直传/直下走它。★生产必填——留空=签名按容器内地址
+# http://rustfs:9000 生成，客户端不可达（文件上传/客户端发布上传均失败）。
 # compose 域名形态 http(s)://<对外host>/oss（nginx 已带 /oss/ 代理）；内网直连形态 http://<host>:9000
+# 开发机（dev-up.sh 起 deps 组、不起 nginx）保持空即可，客户端直连 http://127.0.0.1:9000 场景另配
 BBC_S3_PUBLIC_ENDPOINT=
 BBC_S3_USE_PATH_STYLE=true                   # RustFS/S3 兼容实现须 path-style；云 S3 置 false
 BBC_S3_BUCKET=bbc-data                       # helm: externalServices.s3.bucket（版本化）
@@ -136,4 +138,4 @@ MAIL_ADMIN_PASSWORD=mail_change_me           # helm: secrets.mailAdminPassword �
 # 首次启用前必须完成 DNS 五项检测：MX / SPF / DKIM / DMARC / autodiscover（22 篇 §8）
 
 # PostgreSQL 镜像（官方 tag 国内拉取慢时可指内网 Harbor；pgvector 版为 kb_chunk 预备）
-# POSTGRES_IMAGE=172.16.105.109:30003/pengzuyu/postgres-pgvector:16
+# POSTGRES_IMAGE=registry.example.internal/baobaochat/postgres-pgvector:16

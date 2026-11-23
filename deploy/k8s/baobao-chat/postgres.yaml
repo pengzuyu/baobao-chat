@@ -47,7 +47,7 @@ spec:
       containers:
         - name: postgres
           # 转推 Harbor（README 步骤 1）；上游 pgvector/pgvector:pg16
-          image: 172.16.105.109:30003/pengzuyu/pgvector:pg16
+          image: registry.example.internal/baobaochat/pgvector:pg16
           imagePullPolicy: IfNotPresent
           env:
             - name: POSTGRES_USER
