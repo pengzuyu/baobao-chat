@@ -11,6 +11,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Button } from './Button';
+import { pushLog } from '../log/devlog';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -34,6 +35,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   override componentDidCatch(error: Error, info: ErrorInfo): void {
     // 真机无 devtools 时的唯一现场（bbrt.log 同思路：观测先行）
     console.error('[ErrorBoundary] 渲染异常', error, info.componentStack);
+    // 开发者日志总线（2026-11-23）：DevPanel 可见/可导出——不再只留 console（生产包没有）
+    pushLog({
+      level: 'error',
+      source: 'render',
+      message: error.message || '渲染异常',
+      stack: error.stack,
+      data: { name: error.name, component_stack: info.componentStack ?? undefined },
+    });
   }
 
   override componentDidUpdate(prev: Readonly<ErrorBoundaryProps>): void {

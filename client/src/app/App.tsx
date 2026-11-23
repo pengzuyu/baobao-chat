@@ -66,6 +66,8 @@ import { AboutPage } from '../features/settings/pages/AboutPage';
 import { sendSystemNotification } from '../features/agent/bridge/notify';
 import { startUpdaterAutoCheck } from '../features/settings/updater';
 import { message as antdMessage } from 'antd';
+import { DevPanel } from '../shared/ui/DevPanel';
+import { toggleDevPanel } from '../shared/log/devlog';
 
 /** WS 基址：显式 VITE_WS_BASE > 同源推导自 VITE_API_BASE（统一入口路径分流，见 ws.ts） */
 const WS_BASE: string = resolveWsBase();
@@ -115,6 +117,21 @@ function useDevReloadHotkey(): void {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'r') {
         e.preventDefault();
         window.location.reload();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+}
+
+/** 开发者面板键（2026-11-23 开发者模式）：⌘⇧D / Ctrl+Shift+D 全局开关——生产包无
+ * devtools 时现场排查第一入口（错误/网络/WS 事件环形日志，见 shared/log/devlog.ts） */
+function useDevPanelHotkey(): void {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        toggleDevPanel();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -268,6 +285,7 @@ export function App() {
   }, []);
   useEmergencyStopHotkey();
   useDevReloadHotkey();
+  useDevPanelHotkey();
   useGlobalToast();
   // agent 事件监听宿主化（2026-11-11 根因修复）：App 挂载即注册——不再依赖
   // 懒 init，任何整页重载/HMR 后恒有监听（否则壳泵照发、webview 无人听）
@@ -291,9 +309,12 @@ export function App() {
   const restoring = useAuthStore((s) => s.restoring);
   if (restoring) {
     return (
-      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center' }}>
-        正在恢复登录…
-      </div>
+      <>
+        <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center' }}>
+          正在恢复登录…
+        </div>
+        <DevPanel />
+      </>
     );
   }
 
@@ -385,6 +406,7 @@ export function App() {
       {oidcConfirmReq && (
         <OidcConfirmCard reqId={oidcConfirmReq} onClose={() => setOidcConfirmReq(null)} />
       )}
+      <DevPanel />
     </BrowserRouter>
   );
 }

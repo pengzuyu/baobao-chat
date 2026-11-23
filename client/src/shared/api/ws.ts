@@ -11,6 +11,7 @@
  */
 
 import { ApiError, getErrorText } from './http';
+import { maskUrl, pushLog } from '../log/devlog';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -168,15 +169,30 @@ export class WsClient {
     };
     ws.onmessage = (ev: MessageEvent) => this.handleMessage(String(ev.data));
     ws.onclose = (ev: CloseEvent) => {
+      const failedPending = this.pending.size; // cleanup 清空前取数：并进断开详情条
       this.cleanup();
       // 认证失败 4001：服务端关闭且不重连（14 篇 §2.1）
       if (ev.code === 4001) {
+        pushLog({
+          level: 'error',
+          source: 'ws',
+          message: 'WS 认证失败被服务端关闭（code 4001），已触发登出',
+          data: { code: ev.code, reason: ev.reason, failed_pending: failedPending },
+        });
         this.manualClosed = true;
         this.setStatus('idle');
         this.onAuthError?.();
         return;
       }
-      if (!this.manualClosed) this.scheduleReconnect();
+      if (!this.manualClosed) {
+        pushLog({
+          level: 'warn',
+          source: 'ws',
+          message: `WS 连接断开（code ${ev.code}${ev.reason ? `：${ev.reason}` : ''}，${failedPending} 个未决请求失败），稍后重连`,
+          data: { code: ev.code, reason: ev.reason, failed_pending: failedPending, attempt: this.reconnectAttempt },
+        });
+        this.scheduleReconnect();
+      }
     };
     ws.onerror = () => {
       // onclose 随后触发，统一走重连调度
@@ -193,6 +209,7 @@ export class WsClient {
       const envelope: WsRequestEnvelope = { v: PROTOCOL_VERSION, id, type, ts: Date.now(), payload };
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        pushLog({ level: 'warn', source: 'ws', message: `ack 超时（10s）：${type}`, data: { type, id } });
         reject(new Error(`ack 超时：${type}`)); // 10s 无 ack → 上层重试
       }, ACK_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timer });
@@ -206,6 +223,7 @@ export class WsClient {
     try {
       env = JSON.parse(raw) as WsAnyEnvelope;
     } catch {
+      pushLog({ level: 'warn', source: 'ws', message: '收到非法 WS 帧（JSON 解析失败），已丢弃' });
       return; // 非法帧丢弃
     }
     if ('ack' in env) {
@@ -279,6 +297,27 @@ export class WsClient {
   private setStatus(status: WsStatus): void {
     if (this.status === status) return;
     this.status = status;
+    // 状态机变迁留痕（开发者模式·DevPanel 事件 Tab）；offline 由 onclose 的
+    // 断开详情条覆盖（code/reason/未决数），不重复记
+    if (status !== 'offline') {
+      pushLog({
+        level: 'info',
+        source: 'ws',
+        message:
+          status === 'online'
+            ? 'WS 已连接'
+            : status === 'connecting'
+              ? this.reconnectAttempt > 0
+                ? `WS 重连中（第 ${this.reconnectAttempt + 1} 次）`
+                : 'WS 连接中'
+              : 'WS 已断开（登出/主动）',
+        data: {
+          status,
+          attempt: this.reconnectAttempt,
+          url: this.connectArgs ? maskUrl(this.connectArgs.url) : undefined,
+        },
+      });
+    }
     this.onStateChange?.(status, this.reconnectAttempt);
   }
 }

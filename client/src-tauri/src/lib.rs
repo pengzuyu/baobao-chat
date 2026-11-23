@@ -38,6 +38,19 @@ fn win_minimize(window: tauri::Window) -> Result<(), String> {
     window.minimize().map_err(|e| e.to_string())
 }
 
+/// 打开 WebView 调试台（2026-11-23 开发者模式）：DevPanel·环境 Tab 按钮触发；
+/// release 可用依赖 Cargo devtools feature（debug 构建默认可用）；浏览器形态前端不走此命令。
+/// open_devtools 在 tauri 小版本间签名有差异（() / Result<()>），`let _` 两态兼容，
+/// 失败仅静默——feature 已在编译期保证可用性，运行期几乎不存在失败路径。
+#[tauri::command]
+fn open_devtools(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(win) = app.get_webview_window("main") else {
+        return Err("主窗口不存在".into());
+    };
+    let _ = win.open_devtools();
+    Ok(())
+}
+
 /// 主窗口尺寸按显示器工作区收口（2026-11-23 Windows 真机修复）。
 ///
 /// 根因：`tauri.conf.json` 把窗口写死 1280×800 逻辑像素且不随屏幕变化。Windows 上
@@ -196,6 +209,7 @@ pub fn run() {
             sys_open_url,
             http_get_stub,
             win_minimize,
+            open_devtools,
             agent_commands::session_list,
             agent_commands::session_history,
             agent_commands::run_history,

@@ -6,9 +6,11 @@
  * D26-O3：品牌区/信息行→Card+Flex+List、错误条→Alert（about-、settings- 系自研类退役）。
  */
 
-import { Alert, Card, Flex, List, Progress, Space, Tag, Typography } from 'antd';
+import { Alert, Card, Flex, List, Progress, Space, Switch, Tag, Typography } from 'antd';
 import { invoke } from '@tauri-apps/api/core';
+import { useState } from 'react';
 import { Button } from '../../../shared/ui/Button';
+import { isDevEnabled, setDevEnabled } from '../../../shared/log/devlog';
 import pkg from '../../../../package.json';
 import { Logo } from '../../../shared/ui/Logo';
 import { APP_NAME, TAGLINE } from '../../../shared/brand';
@@ -128,6 +130,31 @@ function UpdateCard() {
   );
 }
 
+/** 开发者卡片（2026-11-23 开发者模式）：⌘⇧D 打开过诊断面板（bbc:dev 置位）后显示；
+ * 关闭开关即摘牌收起面板——普通用户视角无感 */
+function DevCard() {
+  const [enabled, setEnabled] = useState(isDevEnabled());
+  return (
+    <Card size="small" title="开发者">
+      <Flex align="center" justify="space-between">
+        <span>开发者模式</span>
+        <Switch
+          size="small"
+          checked={enabled}
+          onChange={(v) => {
+            setDevEnabled(v);
+            setEnabled(v);
+          }}
+        />
+      </Flex>
+      <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+        ⌘⇧D / Ctrl+Shift+D 打开诊断面板（错误、网络与连接事件日志，仅存内存）；
+        日志导出与环境信息由你手动操作，不自动上传。
+      </Typography.Text>
+    </Card>
+  );
+}
+
 export function AboutPage() {
   return (
     <div>
@@ -148,6 +175,8 @@ export function AboutPage() {
         </Card>
 
         <UpdateCard />
+
+        {isDevEnabled() ? <DevCard /> : null}
 
         <Card size="small" title="技术栈与文档">
           <List

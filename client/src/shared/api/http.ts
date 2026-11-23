@@ -6,6 +6,8 @@
  * - 写操作幂等：调用方传 Idempotency-Key（14 篇 §5.3）
  */
 
+import { pushLog, sanitizeForLog } from '../log/devlog';
+
 /** REST 统一响应包（14 篇 §5.2） */
 export interface ApiEnvelope<T> {
   code: number;
@@ -178,6 +180,7 @@ interface RequestOptions {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, idempotencyKey, signal } = options;
+  const startedAt = Date.now(); // 耗时埋点（开发者模式，DevPanel·网络 Tab）
   const headers = new Headers();
   const token = tokenProvider();
   if (token) headers.set('Authorization', `Bearer ${token}`); // token 注入
@@ -195,12 +198,24 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   } catch (e) {
     // 主动取消（组件卸载/query 失效）透传不提示；断网/CORS 等网络层失败统一 9004 兜底
     if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    pushLog({
+      level: 'error',
+      source: 'http',
+      message: `${method} ${path} 网络层失败（${Date.now() - startedAt}ms）`,
+      data: { method, path, status: 0, code: 9004, request_body: sanitizeForLog(body) },
+    });
     throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
   }
 
   // 429 限流：读取 Retry-After（14 篇 §5.1）
   if (res.status === 429) {
     const retryAfter = Number(res.headers.get('Retry-After') ?? '0') || undefined;
+    pushLog({
+      level: 'warn',
+      source: 'http',
+      message: `${method} ${path} 429 限流（${Date.now() - startedAt}ms）`,
+      data: { method, path, status: 429, code: 9003, retry_after_sec: retryAfter },
+    });
     throw scheduleFallback(new ApiError(9003, getErrorText(9003), { retryAfterSec: retryAfter }));
   }
 
@@ -208,6 +223,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   try {
     envelope = (await res.json()) as ApiEnvelope<T>;
   } catch {
+    pushLog({
+      level: 'error',
+      source: 'http',
+      message: `${method} ${path} 响应非 JSON（HTTP ${res.status}，${Date.now() - startedAt}ms）`,
+      data: { method, path, status: res.status, code: 9004 },
+    });
     throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
   }
 
@@ -223,8 +244,29 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       err.claim();
       unauthorizedHandler?.(err);
     }
+    pushLog({
+      level: 'error',
+      source: 'http',
+      message: `${method} ${path} 业务错误 ${envelope.code}：${err.message}（HTTP ${res.status}，${Date.now() - startedAt}ms）`,
+      data: {
+        method,
+        path,
+        status: res.status,
+        code: envelope.code,
+        message: err.message,
+        trace_id: envelope.trace_id,
+        details: sanitizeForLog(envelope.details),
+        request_body: sanitizeForLog(body),
+      },
+    });
     throw scheduleFallback(err);
   }
+  pushLog({
+    level: 'info',
+    source: 'http',
+    message: `${method} ${path} ${res.status}（${Date.now() - startedAt}ms）`,
+    data: { method, path, status: res.status, code: 0, trace_id: envelope.trace_id },
+  });
   return envelope.data;
 }
 
@@ -242,6 +284,7 @@ export const http = {
  * 失败时服务端可能返回 JSON 错误包或原始 zip，统一非 2xx 抛 ApiError（认领交给调用方）。
  */
 export async function downloadBlob(path: string): Promise<Blob> {
+  const startedAt = Date.now();
   const headers = new Headers();
   const token = tokenProvider();
   if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -250,23 +293,43 @@ export async function downloadBlob(path: string): Promise<Blob> {
     res = await fetch(resolveUrl(path), { headers });
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    pushLog({
+      level: 'error',
+      source: 'http',
+      message: `GET ${path} 下载网络层失败（${Date.now() - startedAt}ms）`,
+      data: { method: 'GET', path, status: 0, code: 9004 },
+    });
     throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
   }
   if (!res.ok) {
     // 尝试解 JSON 错误包（如 401/404 的信封），失败则按状态码兜底
     let code = res.status;
     let msg = `下载失败（HTTP ${res.status}）`;
+    let traceId: string | undefined;
     try {
       const envelope = (await res.json()) as ApiEnvelope<unknown>;
       if (envelope.code !== 0) {
         code = envelope.code;
         msg = envelope.message?.trim() || getErrorText(code);
+        traceId = envelope.trace_id;
       }
     } catch {
       /* 非 JSON 体：保持状态码口径 */
     }
+    pushLog({
+      level: 'error',
+      source: 'http',
+      message: `GET ${path} 下载失败（HTTP ${res.status}，${Date.now() - startedAt}ms）`,
+      data: { method: 'GET', path, status: res.status, code, trace_id: traceId },
+    });
     throw scheduleFallback(new ApiError(code, msg));
   }
+  pushLog({
+    level: 'info',
+    source: 'http',
+    message: `GET ${path} ${res.status} blob（${Date.now() - startedAt}ms）`,
+    data: { method: 'GET', path, status: res.status, code: 0 },
+  });
   return res.blob();
 }
 
@@ -275,6 +338,7 @@ export async function downloadBlob(path: string): Promise<Blob> {
  * 透传（浏览器自动设 Content-Type boundary），服务端信封解包同 request。
  */
 export async function postMultipart<T>(path: string, formData: FormData): Promise<T> {
+  const startedAt = Date.now();
   const headers = new Headers();
   const token = tokenProvider();
   if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -283,12 +347,24 @@ export async function postMultipart<T>(path: string, formData: FormData): Promis
     res = await fetch(resolveUrl(path), { method: 'POST', headers, body: formData });
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    pushLog({
+      level: 'error',
+      source: 'http',
+      message: `POST ${path} 上传网络层失败（${Date.now() - startedAt}ms）`,
+      data: { method: 'POST', path, status: 0, code: 9004 },
+    });
     throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
   }
   let envelope: ApiEnvelope<T>;
   try {
     envelope = (await res.json()) as ApiEnvelope<T>;
   } catch {
+    pushLog({
+      level: 'error',
+      source: 'http',
+      message: `POST ${path} 上传响应非 JSON（HTTP ${res.status}，${Date.now() - startedAt}ms）`,
+      data: { method: 'POST', path, status: res.status, code: 9004 },
+    });
     throw scheduleFallback(new ApiError(9004, getErrorText(9004)));
   }
   if (envelope.code !== 0) {
@@ -299,7 +375,26 @@ export async function postMultipart<T>(path: string, formData: FormData): Promis
       err.claim();
       unauthorizedHandler?.(err);
     }
+    pushLog({
+      level: 'error',
+      source: 'http',
+      message: `POST ${path} 上传业务错误 ${envelope.code}：${err.message}（HTTP ${res.status}，${Date.now() - startedAt}ms）`,
+      data: {
+        method: 'POST',
+        path,
+        status: res.status,
+        code: envelope.code,
+        message: err.message,
+        trace_id: envelope.trace_id,
+      },
+    });
     throw scheduleFallback(err);
   }
+  pushLog({
+    level: 'info',
+    source: 'http',
+    message: `POST ${path} ${res.status} 上传（${Date.now() - startedAt}ms）`,
+    data: { method: 'POST', path, status: res.status, code: 0, trace_id: envelope.trace_id },
+  });
   return envelope.data;
 }
