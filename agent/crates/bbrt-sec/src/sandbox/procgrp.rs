@@ -135,6 +135,13 @@ pub(crate) struct ProcGroup {
     job: windows_sys::Win32::Foundation::HANDLE,
 }
 
+// SAFETY: Job 句柄是 Win32 内核对象句柄（HANDLE = *mut c_void，裸指针默认 !Send），
+// 内核对象句柄无线程亲和性——TerminateJobObject/CloseHandle 可在任意线程调用。
+// ProcGroup 独占该句柄所有权（Drop 关闭），跨线程 move 不产生并发双用，故手动补
+// Send（detached 监控线程需要把携带 ProcGroup 的 DetachedCommand 整体 move 进 spawn）。
+#[cfg(windows)]
+unsafe impl Send for ProcGroup {}
+
 #[cfg(windows)]
 mod imp {
     use super::ProcGroup;
