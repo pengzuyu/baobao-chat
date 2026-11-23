@@ -27,12 +27,11 @@ import { classifyTool, contentScale, editDiffArgs, splitMcpName, toolHeadParam }
 type ToolItem = Extract<StreamItem, { kind: 'tool' }>;
 type ClarifyItem = Extract<StreamItem, { kind: 'clarify' }>;
 
-/** 8020-8026 拦截码文案（14 篇 §7；原 ToolCard 表随回合气泡退役迁此）；
+/** 8020/8022-8026 拦截码文案（14 篇 §7；8021 已随拒绝类退役 2026-11-23；
  *  8002=审批拒绝/超时（loop_runner Blocked） */
 const BLOCK_LABELS: Record<number, string> = {
   8002: '用户拒绝/审批超时',
   8020: '权限/路径拦截',
-  8021: '危险命令规则',
   8022: '资源超限',
   8023: '命令超时',
   8024: '符号链接逃逸',

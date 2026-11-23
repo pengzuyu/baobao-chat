@@ -28,11 +28,10 @@ pub mod masking;
 pub mod memory;
 pub mod sandbox;
 
-pub use danger_rules::{DangerRuleSet, Rule, RuleAction, RuleCategory, RuleHit};
+pub use danger_rules::{DangerRuleSet, Rule, RuleCategory, RuleHit};
 pub use errors::{
-    CODE_DANGER_BLOCKED, CODE_NETWORK_NOT_ALLOWED, CODE_NO_PERMISSION_POINT, CODE_RESOURCE_LIMIT,
-    CODE_SANDBOX_DENIED, CODE_SENSITIVE_READ, CODE_SYMLINK_ESCAPE, CODE_TIMEOUT,
-    CODE_TOOL_DISABLED,
+    CODE_NETWORK_NOT_ALLOWED, CODE_NO_PERMISSION_POINT, CODE_RESOURCE_LIMIT, CODE_SANDBOX_DENIED,
+    CODE_SENSITIVE_READ, CODE_SYMLINK_ESCAPE, CODE_TIMEOUT, CODE_TOOL_DISABLED,
 };
 pub use gate::{
     permission_gate, ActionCategory, AllowSource, Decision, GateCtx, PermissionMode, ToolCall,

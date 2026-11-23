@@ -13,8 +13,9 @@ pub const CODE_TOOL_DISABLED: u32 = 8006;
 /// 8020：命令被沙箱拒绝（路径越界 / 资源白名单；符号链接逃逸单独走 8024）
 pub const CODE_SANDBOX_DENIED: u32 = 8020;
 
-/// 8021：危险命令识别拦截（规则库"拒绝类"命中，09 篇 §4.4）
-pub const CODE_DANGER_BLOCKED: u32 = 8021;
+// 8021 已退役（2026-11-23 用户拍板：危险规则库"拒绝类"降级统一双确认，
+// 不再有不经确认的直接拦截路径；码位保留不复用。loop_runner 的
+// SessionEvent::Error 复用 8021 数字表「连续工具失败超限」为历史遗留）
 
 /// 8022：进程资源超限被终止（CPU/内存；macOS 为 rlimit 尽力 + 监控杀超限）
 pub const CODE_RESOURCE_LIMIT: u32 = 8022;
