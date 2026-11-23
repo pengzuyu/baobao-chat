@@ -1264,7 +1264,11 @@ func main() {
 
 	// 全局中间件链（D02 §6 固定顺序：trace→recovery→access-log→rate-limit→…）
 	limiter := httpx.NewLimiter(50, 100)                                                  // 阶段一按 IP；三档（租户/用户/Agent）阶段二接 Redis
-	corsOrigins := strings.Split(envOr("BBC_CORS_ORIGINS", "http://localhost:5173"), ",") // 开发态跨域；生产同源反代空转
+	// 开发态跨域（vite 5173）+ 桌面端生产包（Tauri webview 页面 origin：
+	// macOS=tauri://localhost、Windows/Linux=http://tauri.localhost——页面与 API
+	// 服务器必跨源，webview 拦无 CORS 头的响应；首版真机装机实测暴露）
+	corsOrigins := strings.Split(envOr("BBC_CORS_ORIGINS",
+		"http://localhost:5173,tauri://localhost,http://tauri.localhost"), ",")
 	handler := httpx.Chain(mux,
 		httpx.Trace,
 		httpx.Recovery,
