@@ -20,6 +20,17 @@ brand/
 
 只改了 `brand.json` 没换图标时，日常跑 `make brand-conf` 即可（不动 icons/）。
 
+## 🤖 agent 区（Agent 身份定制，2026-11-23）
+
+企业自定义 **AI Agent 的身份**（系统提示词层面，类比 AGENTS.md）——只影响模型行为与自称，不影响 UI 显示名：
+
+| 字段 | 说明 |
+|---|---|
+| `agent.name` | Agent 提示词开头句「你是 X 的本机 Agent」中的自称。**留空 `""` = 跟品牌 `name` 走**（零配置）；也可与产品名不同（如产品叫 ACME Work、Agent 叫「小安」） |
+| `agent.identity` | 企业自定义身份段（自由文本），拼在公共系统提示词之后：公司背景、助手人设、行为侧重等。**留空 `""` = 不追加**（默认行为与官方一致） |
+
+改后跑 `make brand-conf` 重新生成 + 重编译即生效（构建期定死，无运行时修改入口）；默认双空值对提示词零影响。
+
 ## ⚠ identity 身份区（默认勿动）
 
 `identity.identifier` 与 `identity.deep_link_scheme` 是**身份标识而非品牌**，默认锁定：
@@ -44,6 +55,7 @@ mail 模块懒开户（`工号@域`）均以该 env 为源，与 `brand.json` �
 |---|---|---|
 | `client/src/shared/brand.ts` | gen.mjs | 前端全部品牌文案触点 |
 | `client/src-tauri/src/brand.rs` | gen.mjs | 壳深链 register 等常量 |
+| `agent/crates/bbrt-session/src/brand.rs` | gen.mjs | Agent 提示词身份句自称 + 企业身份段 |
 | `client/src-tauri/tauri.conf.json`（productName/identifier/标题/scheme/pubkey） | gen.mjs 原地 patch | tauri build / NSIS 快捷方式名 |
 | `client/public/logo.svg` | assets 复制 | Logo 组件 / favicon |
 | `client/index.html` `<title>` | page_title | webview 文档标题 |

@@ -5,6 +5,10 @@
   "copyright": "© 2026 BaobaoChat",
   "device_name": "BaobaoChat Desktop",
   "mail_domain": "bbc.io",
+  "agent": {
+    "name": "",
+    "identity": ""
+  },
   "identity": {
     "identifier": "com.baobaochat.client",
     "deep_link_scheme": "bbc"

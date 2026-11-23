@@ -106,7 +106,7 @@ pub struct ProbeCtx {
     pub model: Arc<dyn ChatClient>,
     pub tools: Arc<dyn ToolExecutor>,
     pub mode: PermissionMode,
-    /// 主 system prompt（loop_runner::SYSTEM_PROMPT）
+    /// 主 system prompt 基底（loop_runner::system_prompt_base()，含品牌身份句与企业身份段）
     pub system: String,
     /// 技能索引（按任务文本命中注入，同主口径 ≤3 条）
     pub skills: Arc<Mutex<crate::skills::SkillIndex>>,

@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bg_hub;
+pub mod brand;
 pub mod compactor;
 pub mod events;
 pub mod executor;

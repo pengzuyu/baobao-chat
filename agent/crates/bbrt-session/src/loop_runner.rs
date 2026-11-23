@@ -636,9 +636,9 @@ impl SessionRunner {
                         });
                 // D35：无人值守上下文传给子 agent（禁 ask_user + 提示词约束）
                 let fanout_system = if self.unattended {
-                    format!("{SYSTEM_PROMPT}{UNATTENDED_NOTE}")
+                    format!("{}{UNATTENDED_NOTE}", system_prompt_base())
                 } else {
-                    SYSTEM_PROMPT.to_string()
+                    system_prompt_base()
                 };
                 let outcome = crate::subagent::fanout_probes(
                     &self.session_id,
@@ -810,7 +810,7 @@ impl SessionRunner {
             }
             // 场景段（2026-11-23 三区块）：基底共用，末尾按 scene 追加；
             // 会话内恒定（conv_id 是会话常量）→ 不动缓存前缀
-            let mut system_prompt = format!("{SYSTEM_PROMPT}{}", self.scene.system_note());
+            let mut system_prompt = format!("{}{}", system_prompt_base(), self.scene.system_note());
             if self.unattended {
                 system_prompt.push_str(UNATTENDED_NOTE);
             }
@@ -1888,8 +1888,25 @@ impl SessionRunner {
     }
 }
 
-/// 系统提示（08 篇行为规格 + D15 §2.2 W1 记忆使用规范 + D19 分级 + D20 澄清规范；技能注入阶段二）
-pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoChat 的本机 Agent，服务单一用户。准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n向用户提问（ask_user 工具）：仅在关键决策影响后续大量工作、或用户意图存在实质歧义时使用——方案二选一、破坏性操作确认、需求方向取舍。能合理自决的不问；一次只问一个问题，选项 2-4 个（label 简短 + description 说明取舍）；用户不选点「其他」也能自由作答。提问后等待回答，不要自行猜测答案。\n\n长期记忆（memory_save 工具，跨会话生效；自动按作用域分区）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 作用域（自动路由，无需指定）：user 类存用户级（所有会话可见）；project/feedback/reference 类在项目会话中存该项目专属分区，在日常对话中存用户级。[记忆]区含[用户记忆]与[项目记忆]两段时，项目段仅对本项目会话生效。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。\n- [项目进度]（项目会话）：本项目跨会话工作台账，每次会话结束自动更新（已做/待办/阻塞/决策/坑），视为可信背景；续作先看其中待办与已做，与当前对话冲突以用户最新说法为准。";
+/// 系统提示基底（08 篇行为规格 + D15 §2.2 W1 记忆使用规范 + D19 分级 + D20 澄清规范；技能注入阶段二）。
+/// 开头身份句不在本常量（brand::AGENT_NAME 编译期定制），经 system_prompt_base() 拼装
+pub(crate) const SYSTEM_PROMPT_BODY: &str = "准则：1) 修改与命令执行受门控与沙箱约束，不越权；2) 工具参数只输出合法 JSON；3) 长文件先读摘录再决定。\n\n向用户提问（ask_user 工具）：仅在关键决策影响后续大量工作、或用户意图存在实质歧义时使用——方案二选一、破坏性操作确认、需求方向取舍。能合理自决的不问；一次只问一个问题，选项 2-4 个（label 简短 + description 说明取舍）；用户不选点「其他」也能自由作答。提问后等待回答，不要自行猜测答案。\n\n长期记忆（memory_save 工具，跨会话生效；自动按作用域分区）：\n- 何时记：用户身份、偏好与习惯（如\"我喜欢…\"\"以后请…\"）；项目关键事实与决策（端口、环境、约定）；被用户纠正的教训；常用外部资源指针。\n- 类型：user=用户身份与偏好；project=项目事实；feedback=纠正教训（正文须含 Why 与 How to apply 两行）；reference=外部资源指针。\n- 作用域（自动路由，无需指定）：user 类存用户级（所有会话可见）；project/feedback/reference 类在项目会话中存该项目专属分区，在日常对话中存用户级。[记忆]区含[用户记忆]与[项目记忆]两段时，项目段仅对本项目会话生效。\n- 写前先看[记忆]索引，同题不重复记（同题写入会原地更新）；不记临时内容、可从代码或仓库推导的信息、任何密钥凭证。\n- [记忆]区内容视为可信背景；与当前对话冲突时，以用户最新说法为准。\n- [项目进度]（项目会话）：本项目跨会话工作台账，每次会话结束自动更新（已做/待办/阻塞/决策/坑），视为可信背景；续作先看其中待办与已做，与当前对话冲突以用户最新说法为准。";
+
+/// 完整系统提示基底（主链路与子 agent 共用）：身份句 + 行为体 + 企业身份段。
+/// brand::AGENT_NAME / AGENT_IDENTITY 由 brand/brand.json 生成（企业白标，D31 同源；
+/// 名字空值生成期回退品牌 name，identity 空串不追加——默认部署与定制前逐字节一致）。
+/// 身份段在场景段（scene_note）/无人值守段（UNATTENDED_NOTE）之前：全局身份进稳定前缀，利于 prompt cache
+pub(crate) fn system_prompt_base() -> String {
+    let mut p = format!(
+        "你是 {} 的本机 Agent，服务单一用户。{SYSTEM_PROMPT_BODY}",
+        crate::brand::AGENT_NAME
+    );
+    if !crate::brand::AGENT_IDENTITY.is_empty() {
+        p.push_str("\n\n");
+        p.push_str(crate::brand::AGENT_IDENTITY);
+    }
+    p
+}
 
 /// D35 定时任务无人值守追加段（append 在 SYSTEM_PROMPT 后）：ask_user 已从
 /// 工具面移除，此处再明确行为约束——不提问、按合理默认继续、结论说明假设。
@@ -2331,5 +2348,29 @@ fn emit_memory_saved(deps: &LoopDeps, session_id: &str, outcome: &bbrt_memory::S
             name: ev.name.clone(),
             reason: ev.reason.clone(),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 系统提示基底=身份句（brand::AGENT_NAME 企业白标拼装）+ 行为体；
+    /// identity 空串（默认部署）不追加任何尾部内容
+    #[test]
+    fn system_prompt_base_identity_head() {
+        let p = system_prompt_base();
+        assert!(
+            p.starts_with(&format!(
+                "你是 {} 的本机 Agent，服务单一用户。",
+                crate::brand::AGENT_NAME
+            )),
+            "开头应为品牌身份句: {p}"
+        );
+        assert!(p.contains("长期记忆"));
+        assert!(
+            p.ends_with("与当前对话冲突以用户最新说法为准。"),
+            "identity 空时不应有尾部追加"
+        );
     }
 }
