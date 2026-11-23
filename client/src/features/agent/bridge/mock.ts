@@ -110,7 +110,7 @@ const now = Date.now();
 function seedSessions(): AgentSessionMeta[] {
   return [
     {
-      id: 'sess-mock-01',
+      id: 'sess_mock_01',
       title: '修复登录超时',
       workspace: '~/code/bbc-server',
       mode: 'auto-edit',
@@ -120,7 +120,7 @@ function seedSessions(): AgentSessionMeta[] {
       updatedAt: now - 40 * MIN,
     },
     {
-      id: 'sess-mock-02',
+      id: 'sess_mock_02',
       title: '退款接口调研',
       workspace: '~/code/order-svc',
       mode: 'ask',
@@ -132,7 +132,7 @@ function seedSessions(): AgentSessionMeta[] {
       summary: '产出 POST /refunds 接口方案与错误码约定，已同步给 PM',
     },
     {
-      id: 'sess-mock-03',
+      id: 'sess_mock_03',
       title: '周报草稿',
       // D19：日常对话（无工作目录——文件/命令类工具不可用）
       workspace: '',
@@ -186,7 +186,6 @@ export class MockAgentBridge implements AgentBridge {
   /** D20 待决提问（无超时；中断/紧急停止时镜像 cancelled 收口） */
   private pendingClarifies = new Map<string, PendingClarify>();
   private seqCounters = new Map<string, number>();
-  private sessionSeq = 0;
 
   // ---- 事件通道 ----
 
@@ -219,7 +218,6 @@ export class MockAgentBridge implements AgentBridge {
 
   async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, _origin?: import('./types').SessionOriginInfo): Promise<AgentSessionMeta> {
     await delay(200);
-    this.sessionSeq += 1;
     // D19：项目会话自动登记（对齐 bbrt manager.start 的 realpath upsert 行为）
     if (workspace) {
       const name = workspace.split('/').filter(Boolean).pop() ?? '项目';
@@ -240,7 +238,7 @@ export class MockAgentBridge implements AgentBridge {
     }
     // 建会话即 idle（对齐真实桥：session.start 同步等完 session.ready 回执才返回）
     const meta: AgentSessionMeta = {
-      id: `sess-mock-n${this.sessionSeq}`,
+      id: `sess_${crypto.randomUUID()}`, // 对齐真实桥 ID 口径（sess_ + UUID v4）
       title: title?.trim() || '新会话',
       workspace,
       mode,

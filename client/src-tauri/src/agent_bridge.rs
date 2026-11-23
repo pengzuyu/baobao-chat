@@ -708,7 +708,9 @@ impl AgentHost {
     ) -> Result<String, String> {
         self.ensure_running()?;
         let n = self.seq_session.fetch_add(1, Ordering::SeqCst) + 1;
-        let sid = format!("sess-{}-{}", now_ms(), n);
+        // ID 口径对齐 zcode（2026-11-20 用户拍板）：sess_ + UUID v4（复用 D28 设备号
+        // 已引入的 uuid 依赖）；进程内 seq 只留给默认标题「会话 {n}」占位编号
+        let sid = format!("sess_{}", uuid::Uuid::new_v4());
         let now = now_ms();
         self.shared.sessions.lock().unwrap().push(SessionCache {
             id: sid.clone(),
