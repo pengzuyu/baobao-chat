@@ -1,0 +1,18 @@
+{
+  "name": "baobaochat-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "BaobaoChat 公网官网（Astro 静态站：产品介绍 / 能力页 / 对比 / 文档 / FAQ）。内网更新源仍由 website/ 承担，两者分离。",
+  "scripts": {
+    "predev": "node scripts/sync-brand.mjs",
+    "dev": "astro dev",
+    "prebuild": "node scripts/sync-brand.mjs",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "3.7.6",
+    "astro": "5.18.2"
+  }
+}

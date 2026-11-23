@@ -1,0 +1,70 @@
+---
+import FeatureLayout from '../../layouts/FeatureLayout.astro';
+---
+
+<FeatureLayout
+  slug="plugins-mcp"
+  title="插件与 MCP 生态"
+  lead="兼容 Claude Code 格式的插件超集：技能、命令、专家、MCP 声明五类组件；MCP 服务器按企业、插件、个人三源接入，凭据存系统钥匙串。给 Agent 扩能力，不必改代码。"
+  extraKeywords={['插件系统', 'MCP', 'Model Context Protocol', 'Claude Code 插件', '技能分发', 'MCP 服务器']}
+  ctaTitle="把团队的工具接进来"
+  ctaDesc="管理员上架插件、配好 MCP；成员在客户端一键安装，Agent 立刻多出对应工具。"
+>
+  <h2>插件是什么</h2>
+  <p>
+    插件是一个声明式包，用来扩展 Agent 的能力面。组件类型与 Claude Code 对齐并做了超集：
+  </p>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>组件</th><th>作用</th></tr></thead>
+      <tbody>
+        <tr><td><code>skills</code></td><td>技能：带说明与步骤的可复用工作流，Agent 按场景匹配调用</td></tr>
+        <tr><td><code>commands</code></td><td>斜杠命令：把常用指令固化成一句话触发</td></tr>
+        <tr><td><code>agents</code></td><td>专家定义：领域人设、工具白名单、模型偏好</td></tr>
+        <tr><td><code>mcp</code></td><td>MCP 服务器声明：把外部系统包装成 Agent 工具</td></tr>
+        <tr><td><code>hooks</code></td><td>生命周期声明（出于安全，不执行任意脚本）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>插件市场与分发</h2>
+  <ul>
+    <li>管理员统一上架、签名、灰度；成员在客户端浏览与安装。</li>
+    <li>更新与撤销集中管理：撤销后客户端自动停用，不留残余工具。</li>
+    <li>插件可以声明 MCP 依赖，安装时一并下发配置。</li>
+  </ul>
+
+  <h2>MCP 三源接入</h2>
+  <p>Agent 看到的 MCP 工具来自三个来源，按优先级合并：</p>
+  <ol>
+    <li><strong>企业内置</strong>：管理员统一配置，全员可用。</li>
+    <li><strong>插件声明</strong>：随插件安装生效。</li>
+    <li><strong>个人配置</strong>：成员自己添加，仅自己可见。</li>
+  </ol>
+  <p>
+    支持 Streamable HTTP 与 stdio 两类服务；配置界面提供"测试连接"，走真实链路验证而不是只查配置格式。
+    TLS 校验默认开启，可为企业自签证书单独放行。
+  </p>
+
+  <h2>凭据与身份注入</h2>
+  <ul>
+    <li>MCP 凭据存系统钥匙串（macOS Keychain / Windows Credential Manager），不落明文配置文件。</li>
+    <li>身份变量在装配期注入：静态配置（用户 ID、配置项）替换后落盘，访问令牌动态获取、只存内存。</li>
+    <li>外部系统看到的始终是"某个具体用户"的身份，便于对方审计。</li>
+  </ul>
+
+  <h2>为什么工具面统一走 MCP</h2>
+  <p>
+    内部工具协议只保留一条标准路径：所有外部能力都以 MCP 服务器接入，
+    不再维护自定义插件协议。这样企业已有的 MCP 生态可以直接复用，
+    Agent 的工具目录也保持可解释、可审计。
+  </p>
+
+  <h2>典型用法</h2>
+  <ul>
+    <li>把内部工单系统包装成 MCP 工具，Agent 查单、改状态。</li>
+    <li>把 GitLab / 代码检索接入，Agent 在回答里直接引用仓库内容。</li>
+    <li>用技能把"周报整理""发版检查"固化成团队标准动作。</li>
+    <li>用专家定义限定某类任务只能用只读工具，降低误操作面。</li>
+  </ul>
+</FeatureLayout>

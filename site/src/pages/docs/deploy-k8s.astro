@@ -1,0 +1,99 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+
+const title = 'Kubernetes 部署 · 文档';
+const description =
+  'BaobaoChat Kubernetes 部署：命名空间与密钥、依赖组件、对象存储初始化、Helm 安装、迁移 Job、web 接入层与升级顺序。';
+---
+
+<DocsLayout
+  title={title}
+  description={description}
+  path="/docs/deploy-k8s/"
+  current="k8s"
+  lead="适合已有 K8s 平台、需要多副本、自愈与滚动升级的组织；与 Compose 形态能力等价。"
+>
+  <h2>前置</h2>
+  <ul>
+    <li>Kubernetes 集群与 Helm 3；一个可用的 StorageClass。</li>
+    <li>镜像可入库：私有 Registry，或按包内说明 <code>docker load</code> 后导入节点。</li>
+    <li>数据库与对象存储二选一：使用包内 <code>deps/</code> 自带组件，或对接已有 PostgreSQL 16（pgvector）与 S3 兼容存储。</li>
+  </ul>
+
+  <h2>安装顺序</h2>
+  <pre><code>{`# 1) 命名空间
+kubectl apply -f deps/namespace.yaml
+
+# 2) 密钥（值取自 values 文件，二者必须一致）
+kubectl -n baobao-chat create secret generic bbc-pg-cred \\
+  --from-literal=password='<PG 密码>'
+kubectl -n baobao-chat create secret generic bbc-s3-cred \\
+  --from-literal=accessKey='<S3 AK>' --from-literal=secretKey='<S3 SK>'
+
+# 3) 依赖组件（使用外部 PG/S3 时跳过）
+kubectl apply -f deps/postgres.yaml
+kubectl apply -f deps/rustfs.yaml
+
+# 4) 对象存储初始化：建 bbc-data / bbc-backup / bbc-releases 三桶
+kubectl apply -f deps/rustfs-init.yaml
+
+# 5) 安装应用
+helm install bbc chart/bbc-<ver>.tgz -n baobao-chat -f values-k8s.example.yaml
+
+# 6) web 接入层（官网 + 更新源 + 入口代理三合一）
+sed "s|__IMAGE__|<私服>/web:<ver>|" deps/web.yaml | kubectl apply -f -`}</code></pre>
+
+  <h2>迁移 Job</h2>
+  <p>Helm 以 hook 方式执行迁移，安装/升级后等待其完成：</p>
+  <pre><code>{`kubectl wait --for=condition=complete job \\
+  -l app.kubernetes.io/component=migrate -n baobao-chat --timeout=300s`}</code></pre>
+  <p>迁移未完成前不要滚动应用副本；升级顺序固定为「迁移 → 应用 → 接入层」。</p>
+
+  <h2>values 关键项</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>键</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td><code>global.domain</code></td><td>对外地址（含端口，如 <code>&lt;NODE_IP&gt;:30808</code>）；必须与客户端出包地址一致</td></tr>
+        <tr><td><code>global.imageTag</code></td><td>镜像 tag；必须与 Compose 侧 <code>BBC_IMAGE_TAG</code> 同 tag</td></tr>
+        <tr><td><code>config.logLevel</code> / <code>config.updateChannel</code></td><td>日志级别 / 客户端更新通道</td></tr>
+        <tr><td><code>config.otelEndpoint</code></td><td>可观测端点（可选）</td></tr>
+        <tr><td><code>config.oidcIssuer</code> / <code>secrets.oidcSigningKey</code></td><td>启用生态应用 OIDC 登录时填写</td></tr>
+        <tr><td><code>secrets.*</code></td><td>JWT、KMS 主密钥、S3 凭据、AI 上游 Key</td></tr>
+        <tr><td><code>externalServices.s3.*</code></td><td>使用外部对象存储时的端点、桶与凭据</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>访问与首次初始化</h2>
+  <ul>
+    <li>入口为 web 接入层的 NodePort（默认 <code>30808</code>）。</li>
+    <li>首次访问 <code>/</code> 会跳转 <code>/setup</code> 创建首个超级管理员；空库不预置演示账号。</li>
+    <li>随后在管理后台配置 AI 供应商与模型，Agent 才可用。</li>
+  </ul>
+
+  <h2>升级</h2>
+  <pre><code>{`# 1) 迁移 hook 随 helm upgrade 自动执行
+helm upgrade bbc chart/bbc-<new>.tgz -n baobao-chat -f values-k8s.yaml
+
+# 2) 等待迁移完成
+kubectl wait --for=condition=complete job \\
+  -l app.kubernetes.io/component=migrate -n baobao-chat --timeout=300s
+
+# 3) 更新接入层镜像（Recreate 策略，会有短暂中断）
+kubectl -n baobao-chat set image deploy/bbc-web web=<私服>/web:<new>`}</code></pre>
+
+  <h2>排障</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>现象</th><th>排查</th></tr></thead>
+      <tbody>
+        <tr><td>Pod Pending</td><td>PVC 未绑定；检查 StorageClass 与容量</td></tr>
+        <tr><td>迁移 Job 失败</td><td>看 Job 日志；多为密钥不一致或数据库不可达</td></tr>
+        <tr><td>上传失败</td><td>对象存储桶策略与 <code>externalServices.s3</code> 公网端点配置</td></tr>
+        <tr><td>客户端连不上</td><td><code>global.domain</code> 与客户端出包地址不一致（参见快速开始第 1 节）</td></tr>
+        <tr><td>登录后掉线</td><td>接入层未转发 <code>/ws</code> 或未开启 Upgrade</td></tr>
+      </tbody>
+    </table>
+  </div>
+</DocsLayout>

@@ -1,0 +1,89 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import CtaBand from '../components/CtaBand.astro';
+import { APP_NAME } from '../data/brand';
+import { GITHUB_URL, VERSION } from '../data/site';
+
+const title = `下载与分发 · ${APP_NAME}`;
+const description = 'BaobaoChat 客户端与服务端的获取方式：客户端与部署地址编译期绑定，通过管理后台上传、发布与回滚分发；服务端支持 Compose 与 K8s 交付。';
+---
+
+<BaseLayout title={title} description={description} path="/download/">
+  <section class="page-head">
+    <div class="wrap">
+      <div class="breadcrumb"><a href="/">首页</a> / 下载</div>
+      <h1>下载与分发</h1>
+      <p class="lead">
+        客户端的服务端地址在编译期写死，装错环境连不上。因此我们不提供"通用安装包下载"——
+        客户端由你的管理员统一分发，保证地址一致。
+      </p>
+    </div>
+  </section>
+
+  <div class="wrap" style="padding: 40px 0 8px;">
+    <div class="prose" style="max-width: 860px;">
+      <h2>客户端怎么获取</h2>
+      <ol>
+        <li><strong>自建安装包</strong>：用仓库 <code>scripts/release/</code> 构建，出包时注入
+          <code>BBC_PUBLIC_URL=&lt;你的服务端地址&gt;</code>。</li>
+        <li><strong>管理后台分发</strong>：管理员在「客户端发布」上传安装包（浏览器直传对象存储、
+          前端计算 SHA-256、附签名），发布后成员从内置更新通道获取。</li>
+        <li><strong>更新与回滚</strong>：客户端按 <code>/update/latest.json</code> 检查更新；
+          管理后台可发布新版本，也可把指针回滚到历史版本。</li>
+      </ol>
+      <p>
+        平台覆盖：Windows、macOS、Linux（Tauri 2）。安装包小于 30 MB。
+      </p>
+
+      <h2>服务端怎么获取</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>形态</th><th>内容</th><th>入口</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Docker Compose 离线包</td>
+              <td>应用镜像 + 5 个第三方镜像 + compose 配置 + 备份/升级脚本</td>
+              <td><a href="/docs/deploy-compose/">Compose 部署指南</a></td>
+            </tr>
+            <tr>
+              <td>Kubernetes 包</td>
+              <td>Helm chart + 依赖清单 + web 接入层 + 迁移 Job</td>
+              <td><a href="/docs/deploy-k8s/">K8s 部署指南</a></td>
+            </tr>
+            <tr>
+              <td>源码构建</td>
+              <td>Go 服务端 / Rust Agent / 前端与桌面壳</td>
+              <td><a href={GITHUB_URL} target="_blank" rel="noopener">GitHub 仓库</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>公开 Release 状态</h2>
+      <p>
+        当前版本 <strong>{VERSION}</strong> 的交付以服务端部署包与管理后台分发为主，
+        公开 GitHub Release 安装包尚未提供（正在整理签名与校验流程）。
+        关注 <a href={`${GITHUB_URL}/releases`} target="_blank" rel="noopener">Releases 页面</a> 获取后续版本。
+      </p>
+      <blockquote>
+        提醒：不要把 A 环境的客户端装到 B 环境的服务端上——地址不匹配时无法登录，且客户端没有运行时改地址的入口。
+      </blockquote>
+
+      <h2>校验与签名</h2>
+      <ul>
+        <li>发布包提供 SHA-256 校验值，上传后由管理后台再算一次并落库。</li>
+        <li>客户端自动更新要求安装包附带签名文件（<code>.sig</code>），签名不匹配的包不会被接受。</li>
+        <li>建议在分发前用内部渠道公布哈希值，供成员自行核对。</li>
+      </ul>
+    </div>
+  </div>
+
+  <CtaBand
+    title="先部署服务端，再分发客户端"
+    desc="地址契约在第一步就要定下来：服务端地址 = 客户端出包地址，之后不再改。"
+    primaryLabel="快速开始"
+    primaryHref="/docs/quickstart/"
+    secondaryLabel="Compose 部署"
+    secondaryHref="/docs/deploy-compose/"
+  />
+</BaseLayout>

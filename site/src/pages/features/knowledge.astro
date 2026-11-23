@@ -1,0 +1,63 @@
+---
+import FeatureLayout from '../../layouts/FeatureLayout.astro';
+---
+
+<FeatureLayout
+  slug="knowledge"
+  title="知识库与 RAG"
+  lead="公司知识库与我的笔记，两个维度覆盖组织知识与个人沉淀；PostgreSQL + pgvector + 中文分词检索，权限过滤前置到 SQL，Agent 拿到的每一条都经过可见性校验。"
+  extraKeywords={['企业知识库', 'RAG', '检索增强生成', '中文分词', 'pgvector', '知识管理', '私有化知识库']}
+  ctaTitle="把散落的文档变成 Agent 的上下文"
+  ctaDesc="知识库随服务端部署，数据留在内网；Agent 通过检索 API 取用，答案可回溯到原文。"
+>
+  <h2>两个维度，不搞复杂的空间体系</h2>
+  <p>
+    很多知识库产品先让你建"空间"、配成员、定角色，最后没人维护。
+    BaobaoChat 只保留两个维度：
+  </p>
+  <ul>
+    <li><strong>公司知识库</strong>：组织级共享知识，按部门 / 角色 / 资源 ACL 控制可见范围。</li>
+    <li><strong>我的笔记</strong>：个人沉淀，默认私有，可主动提升为组织知识。</li>
+  </ul>
+  <p>
+    页面以浏览与检索为主，写入通过 API 完成——Agent 可以替你整理、归档、更新知识，
+    而不是让你在表单里手工搬运。
+  </p>
+
+  <h2>摄入管线</h2>
+  <ol>
+    <li><strong>解析</strong>：抽取正文与结构，保留标题层级与来源信息。</li>
+    <li><strong>切分</strong>：按语义边界切块，保留上下文重叠，避免把一句话劈开。</li>
+    <li><strong>向量化</strong>：调用企业配置的嵌入模型（可指向内网 vLLM / Ollama）。</li>
+    <li><strong>增量更新</strong>：文档修订后重建受影响分块，不全量重跑。</li>
+  </ol>
+
+  <h2>检索：中文优先，权限前置</h2>
+  <ul>
+    <li>PostgreSQL 16 + <code>pgvector</code> 向量检索，<code>zhparser</code> 中文分词。</li>
+    <li><strong>权限过滤前置</strong>：检索 SQL 直接注入当前用户的可见集，绝不"先召回再过滤"——后者既慢又会泄漏存在性。</li>
+    <li>返回结果带来源文档与分块位置，Agent 的回答可回溯到原文。</li>
+    <li>检索接口同时供页面搜索与 Agent 工具调用，口径一致。</li>
+  </ul>
+
+  <h2>给 Agent 的可信上下文</h2>
+  <p>
+    知识库不是独立产品，而是 Agent 的上下文来源之一。Agent 在工作中按需检索，
+    把命中片段连同来源一起带进推理；用户能在过程区看到"查了什么、命中哪一段"，
+    而不是只拿到一个无法核验的答案。
+  </p>
+
+  <h2>部署与数据边界</h2>
+  <ul>
+    <li>知识库数据存在你自己的 PostgreSQL 中，向量与原文同库，备份策略统一。</li>
+    <li>嵌入模型可完全内网部署，文档内容不出企业边界。</li>
+    <li>多租户隔离：<code>tenant_id</code> + 行级安全 + 存储前缀，跨租户不可见。</li>
+  </ul>
+
+  <h2>适用场景</h2>
+  <ul>
+    <li>把制度、规范、产品文档变成可问答的组织记忆。</li>
+    <li>研发团队沉淀排障手册、接口说明，Agent 排查时自动引用。</li>
+    <li>个人把会议纪要、调研笔记变成下次会话的上下文。</li>
+  </ul>
+</FeatureLayout>

@@ -1,0 +1,77 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import CtaBand from '../components/CtaBand.astro';
+import { APP_NAME } from '../data/brand';
+import { FEATURES } from '../data/site';
+
+interface Props {
+  slug: string;
+  title: string;
+  lead: string;
+  extraKeywords?: string[];
+  ctaTitle?: string;
+  ctaDesc?: string;
+  ctaSecondaryLabel?: string;
+  ctaSecondaryHref?: string;
+}
+
+const {
+  slug,
+  title,
+  lead,
+  extraKeywords = [],
+  ctaTitle = '在内网把它跑起来',
+  ctaDesc = 'docker compose 一条命令拉起全栈（PG / Redis / 对象存储 / 服务端），再用 /setup 向导建首个管理员。',
+  ctaSecondaryLabel = '查看所有能力',
+  ctaSecondaryHref = '/features/',
+} = Astro.props;
+
+const feature = FEATURES.find((f) => f.slug === slug);
+if (!feature) throw new Error(`未知能力 slug: ${slug}`);
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'WebPage',
+  name: `${title} · ${APP_NAME}`,
+  description: lead,
+  keywords: [...feature.keywords, ...extraKeywords].join(', '),
+};
+---
+
+<BaseLayout
+  title={`${title} · ${APP_NAME} 企业 IM 与 AI Agent 工作台`}
+  description={lead}
+  path={`/features/${slug}/`}
+  jsonLd={jsonLd}
+>
+  <section class="page-head">
+    <div class="wrap">
+      <div class="breadcrumb"><a href="/">首页</a> / <a href="/features/">能力</a> / {title}</div>
+      <h1>{title}</h1>
+      <p class="lead">{lead}</p>
+    </div>
+  </section>
+
+  <div class="wrap">
+    <div class="prose" style="padding: 44px 0 12px;">
+      <h2>关键能力</h2>
+      <ul class="check-list">
+        {feature.points.map((p) => <li>{p}</li>)}
+      </ul>
+      <slot />
+      <p style="margin-top: 40px; font-size: 0.9rem; color: var(--fg-muted);">
+        想了解实现细节？可阅读 <a href="/docs/architecture/">架构概览</a> 或直接
+        <a href="/docs/quickstart/">部署一套</a> 试用。
+      </p>
+    </div>
+  </div>
+
+  <CtaBand
+    title={ctaTitle}
+    desc={ctaDesc}
+    primaryLabel="快速开始"
+    primaryHref="/docs/quickstart/"
+    secondaryLabel={ctaSecondaryLabel}
+    secondaryHref={ctaSecondaryHref}
+  />
+</BaseLayout>

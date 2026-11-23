@@ -1,0 +1,87 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+
+const title = '白标与换名 · 文档';
+const description =
+  'BaobaoChat 白标：品牌单源目录 brand/，改名字/标语/版权/设备名/邮箱域，替换 logo 与图标，一条命令重生成客户端与服务端配置。';
+---
+
+<DocsLayout
+  title={title}
+  description={description}
+  path="/docs/whitelabel/"
+  current="whitelabel"
+  lead="MIT 协议允许内网白标换名换标；所有品牌文案收敛在一个目录，改完跑生成命令即可。"
+>
+  <h2>唯一改动面</h2>
+  <pre><code>{`brand/
+  brand.json        品牌配置（名字/标语/版权/设备名/邮箱域 + Agent 身份区）
+  assets/
+    logo.svg        UI 内 logo（登录页/侧栏/关于页 + favicon 源）
+    icon.png        1024×1024 OS 图标源图（安装包/任务栏图标由此生成）`}</code></pre>
+  <p>不要改源代码里的文案；生成脚本会把 <code>brand.json</code> 渲染到客户端与服务端各触点。</p>
+
+  <h2>五步换牌</h2>
+  <ol>
+    <li>改 <code>brand.json</code> 的品牌字段。</li>
+    <li>替换 <code>assets/logo.svg</code> 与 <code>assets/icon.png</code>。</li>
+    <li>跑 <code>make brand</code>（生成产物 + 重生成全套 OS 图标）。</li>
+    <li>启用客户端自动更新时：自备签名密钥，公钥填 <code>updater_pubkey</code>，出包时带签名私钥环境变量。</li>
+    <li>按常规出包：<code>BBC_PUBLIC_URL=&lt;你的地址&gt; bash scripts/release/build-desktop.sh</code>。</li>
+  </ol>
+  <p>只改文案不换图标时，跑 <code>make brand-conf</code> 即可（不动 icons）。</p>
+
+  <h2>品牌字段</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>字段</th><th>影响</th></tr></thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>产品显示名（登录页、侧栏、关于页、通知署名）</td></tr>
+        <tr><td><code>page_title</code></td><td>窗口标题</td></tr>
+        <tr><td><code>tagline</code></td><td>登录页标语</td></tr>
+        <tr><td><code>copyright</code></td><td>版权行</td></tr>
+        <tr><td><code>device_name</code></td><td>设备名（通知、配对等）</td></tr>
+        <tr><td><code>mail_domain</code></td><td>生成邮箱后缀（工号@该域）</td></tr>
+        <tr><td><code>agent.name</code></td><td>Agent 提示词中的自称；留空 = 跟 <code>name</code> 走</td></tr>
+        <tr><td><code>agent.identity</code></td><td>企业自定义身份段（公司背景/人设）；留空不追加</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>⚠ 身份区默认勿动</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>字段</th><th>改动后果</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>identity.identifier</code></td>
+          <td>应用数据目录与钥匙串整体迁移：老用户<strong>全员静默登出</strong>、本地数据「消失」且无任何报错</td>
+        </tr>
+        <tr>
+          <td><code>identity.deep_link_scheme</code></td>
+          <td>深链确认登录静默失效；须与服务端 <code>BBC_DEEP_LINK_SCHEME</code> 保持一致</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这两个字段是「身份标识」而非「品牌」：换公司名不需要动它们。</p>
+
+  <h2>服务端配套项</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>环境变量</th><th>对应</th></tr></thead>
+      <tbody>
+        <tr><td><code>BBC_BRAND_NAME</code></td><td>服务端侧产品显示名（OIDC 等待页等文案）</td></tr>
+        <tr><td><code>BBC_MAIL_DOMAIN</code></td><td>与 <code>brand.json</code> 的 <code>mail_domain</code> 一致</td></tr>
+        <tr><td><code>BBC_DEEP_LINK_SCHEME</code></td><td>与 <code>identity.deep_link_scheme</code> 一致</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>验证</h2>
+  <ul>
+    <li>生成脚本自带一致性校验，产物与服务端配置不一致会直接失败。</li>
+    <li>装一次客户端，检查登录页、侧栏、窗口标题、关于页、通知署名五处文案。</li>
+    <li>截图与文档里不要再出现原品牌名——白标要彻底，否则检索时仍会被识别为原产品。</li>
+  </ul>
+</DocsLayout>

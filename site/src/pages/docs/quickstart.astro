@@ -1,0 +1,144 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+
+const title = '快速开始 · 文档';
+const description =
+  'BaobaoChat 快速开始：确认地址契约、载入离线镜像、配置 .env 三处必改项、一条命令起服、创建首个管理员、配置 AI 供应商。';
+---
+
+<DocsLayout
+  title={title}
+  description={description}
+  path="/docs/quickstart/"
+  current="quickstart"
+  lead="目标：15 分钟内在内网跑起一套服务端，并用管理员账号登录。客户端分发见下方说明。"
+>
+  <h2>1. 先确认地址契约（最容易返工的一步）</h2>
+  <p>
+    客户端在<strong>编译期</strong>把服务端地址写死成三条链（API <code>/api/v1</code>、WS <code>/ws</code>、
+    更新源 <code>/update/latest.json</code>），安装后无法在客户端里修改。因此：
+  </p>
+  <blockquote>
+    部署地址必须与客户端出包时的 <code>BBC_PUBLIC_URL</code> 完全一致——协议、IP/域名、端口、有无尾斜杠都要一致。
+  </blockquote>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>形态</th><th>客户端出包地址</th><th>服务端配置</th></tr></thead>
+      <tbody>
+        <tr><td>Compose 单机（80 端口）</td><td><code>http://&lt;SERVER_IP&gt;</code></td><td><code>BBC_PUBLIC_DOMAIN=&lt;SERVER_IP&gt;</code></td></tr>
+        <tr><td>Kubernetes（NodePort 30808）</td><td><code>http://&lt;NODE_IP&gt;:30808</code></td><td><code>global.domain=&lt;NODE_IP&gt;:30808</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    如果部署完成后才发现地址不一致：改服务端无效，<strong>只能重新出客户端包</strong>。
+    自建客户端包时用：
+  </p>
+  <pre><code>{`BBC_PUBLIC_URL=http://<SERVER_IP> bash scripts/release/build-desktop.sh`}</code></pre>
+
+  <h2>2. 前置条件</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>项</th><th>要求</th></tr></thead>
+      <tbody>
+        <tr><td>服务器</td><td>4C8G 起步，磁盘按文件量预留；80 端口可用（443 可选）</td></tr>
+        <tr><td>Docker</td><td>Engine ≥ 24，Compose v2.20+（<code>docker compose version</code>）</td></tr>
+        <tr><td>模型</td><td>兼容 OpenAI 协议的云端 API，或内网 vLLM / Ollama（可后配）</td></tr>
+        <tr><td>离线包</td><td><code>baobaochat-deploy-v&lt;ver&gt;.tar.gz</code>（含应用镜像与 5 个第三方镜像）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>3. 解包与校验</h2>
+  <pre><code>{`tar xzf baobaochat-deploy-v<ver>.tar.gz
+cd baobaochat-deploy-v<ver>
+sha256sum -c SHA256SUMS | tail -3     # 期望全部 OK
+
+docker load -i images/bbc-app-<ver>.tar.gz
+docker load -i images/base-images.tar.gz
+docker images | grep -E "bbc-app|pgvector|rustfs|nginx|redis"`}</code></pre>
+
+  <h2>4. 配置 .env（三处必改）</h2>
+  <pre><code>{`cp compose/.env.internal compose/.env
+vi compose/.env`}</code></pre>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>键</th><th>改成</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>BBC_PUBLIC_DOMAIN</code></td>
+          <td><code>&lt;SERVER_IP&gt;</code>（不带协议与路径）</td>
+          <td>服务端对外基址；更新清单 URL 由它推导</td>
+        </tr>
+        <tr>
+          <td><code>BBC_S3_PUBLIC_ENDPOINT</code></td>
+          <td><code>http://&lt;SERVER_IP&gt;/oss</code></td>
+          <td>文件走预签名直传；留空会签出容器内地址，客户端不可达，头像/文件/客户端发布上传全部失败</td>
+        </tr>
+        <tr>
+          <td><code>POSTGRES_PASSWORD</code> + <code>BBC_DB_DSN</code></td>
+          <td>保持随机值，或两处同步修改</td>
+          <td>两处不一致 = 应用连不上数据库</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    其余凭据（<code>BBC_JWT_SECRET</code> / <code>BBC_S3_ACCESS_KEY</code> /
+    <code>BBC_S3_SECRET_KEY</code> / <code>BBC_KMS_MASTER_KEY</code>）随包已随机生成，建议原样保留。
+    其中 <strong>KMS 主密钥删掉或换掉 = 已录入的供应商 API Key 全部解不开</strong>。
+  </p>
+
+  <h2>5. 起服</h2>
+  <pre><code>{`cd compose
+docker compose --profile core up -d
+docker compose ps`}</code></pre>
+  <p>首次启动会自动完成三件事：</p>
+  <ol>
+    <li><code>rustfs-init</code> 建三个桶：<code>bbc-data</code>（版本化）、<code>bbc-backup</code>、<code>bbc-releases</code>（客户端安装包，匿名只读）。</li>
+    <li><code>app</code> 启动时自动应用迁移（62 张表，约 30–60 秒）。</li>
+    <li><code>app-init</code> 只负责等数据库就绪，跑完即 <code>exited(0)</code>，属正常。</li>
+  </ol>
+
+  <h2>6. 健康校验</h2>
+  <pre><code>{`curl -s http://<SERVER_IP>/healthz                     # → ok
+curl -s http://<SERVER_IP>/api/v1/setup/status          # → {"need_setup":true,...}
+curl -s -o /dev/null -w '%{http_code}\\n' http://<SERVER_IP>/update/latest.json
+#   404 属正常（尚未发布客户端）`}</code></pre>
+
+  <h2>7. 创建首个管理员</h2>
+  <p>
+    浏览器打开 <code>http://&lt;SERVER_IP&gt;/</code>，会自动跳转 <code>/setup</code> 向导：
+    填管理员账号、姓名、口令，完成后自动登录。
+    <strong>向导只在系统无任何用户时出现，建户即永久关闭。</strong>
+    空库不会预置任何演示账号。
+  </p>
+
+  <h2>8. 配置 AI 供应商（Agent 的前置）</h2>
+  <ol>
+    <li>管理后台 → <strong>AI 供应商</strong> → 新增。</li>
+    <li>填名称、Base URL（如 <code>https://open.bigmodel.cn/api/paas/v4</code>）与 API Key。</li>
+    <li>在模型清单登记要用的模型名，设为默认路由。</li>
+    <li>到工作台发一句「你好」，确认 Agent 有回复。</li>
+  </ol>
+  <p>
+    Key 由 <code>BBC_KMS_MASTER_KEY</code> 信封加密后存库，管理台只回显掩码。
+    供应商没配好时 IM/文件等功能正常，只是 Agent 不可用。
+  </p>
+
+  <h2>9. 客户端怎么装</h2>
+  <p>
+    客户端由管理员在<strong>管理后台 → 客户端发布</strong>上传并发布，内置更新通道（签名校验 + 灰度）自动分发；
+    也可从仓库 <code>scripts/release/</code> 自行构建。注意第 1 步的地址契约——客户端包是为你的部署地址编译的，
+    不能跨环境混用。
+  </p>
+
+  <h2>冒烟清单（5 分钟）</h2>
+  <ul>
+    <li>两个账号互发消息（管理后台可建第二人）。</li>
+    <li>传一张图片并下载回来（验证对象存储与预签名）。</li>
+    <li>知识库新建一篇笔记。</li>
+    <li>工作台发一句「你好」，Agent 有回复（验证供应商与 KMS）。</li>
+    <li>管理后台 → 审计，能看到刚才的操作。</li>
+  </ul>
+</DocsLayout>

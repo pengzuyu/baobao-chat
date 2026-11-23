@@ -1,0 +1,56 @@
+---
+import BaseLayout from './BaseLayout.astro';
+
+interface Props {
+  title: string;
+  description: string;
+  path: string;
+  current: string;
+  lead?: string;
+  jsonLd?: Record<string, unknown>;
+}
+
+const { title, description, path, current, lead, jsonLd } = Astro.props;
+const nav = [
+  { href: '/docs/', label: '文档概览', id: 'index' },
+  { href: '/docs/quickstart/', label: '快速开始', id: 'quickstart' },
+  { href: '/docs/deploy-compose/', label: 'Docker Compose 部署', id: 'compose' },
+  { href: '/docs/deploy-k8s/', label: 'Kubernetes 部署', id: 'k8s' },
+  { href: '/docs/whitelabel/', label: '白标与换名', id: 'whitelabel' },
+  { href: '/docs/architecture/', label: '架构概览', id: 'architecture' },
+];
+---
+
+<BaseLayout title={title} description={description} path={path} jsonLd={jsonLd}>
+  <section class="page-head">
+    <div class="wrap">
+      <div class="breadcrumb"><a href="/">首页</a> / <a href="/docs/">文档</a></div>
+      <h1>{title.replace(/ · 文档$/, '')}</h1>
+      {lead && <p class="lead">{lead}</p>}
+    </div>
+  </section>
+
+  <div class="wrap">
+    <div class="docs-layout">
+      <aside class="docs-nav">
+        <h4>使用与部署</h4>
+        <ul>
+          {nav.map((n) => (
+            <li>
+              <a href={n.href} aria-current={n.id === current ? 'page' : undefined}>{n.label}</a>
+            </li>
+          ))}
+        </ul>
+        <h4>产品</h4>
+        <ul>
+          <li><a href="/features/">能力总览</a></li>
+          <li><a href="/compare/">对比表</a></li>
+          <li><a href="/faq/">常见问题</a></li>
+        </ul>
+      </aside>
+      <div class="prose">
+        <slot />
+      </div>
+    </div>
+  </div>
+</BaseLayout>

@@ -1,0 +1,116 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import CtaBand from '../components/CtaBand.astro';
+import { APP_NAME } from '../data/brand';
+import { GITHUB_URL } from '../data/site';
+
+const title = `更新日志 · ${APP_NAME}`;
+const description = `BaobaoChat 版本更新日志：v0.1 首个公开版本的 IM、Agent 工作台、知识库、插件与 MCP、A2A 接入、OIDC、部署与发布管理。`;
+
+const releases = [
+  {
+    version: 'v0.1',
+    date: '2026-11-23',
+    note: '首个公开版本。产品定位收敛为「企业 IM + AI Agent 工作台」，不含音视频通话与在线文档。',
+    groups: [
+      {
+        name: 'IM 即时通讯',
+        items: [
+          '私聊、群聊、广播群；@ 与引用、编辑撤回、转发、已读回执、收藏、表情',
+          '通讯录全员可见、自助注册、四档在线状态、全文搜索、通知中心',
+          '消息多端同步（seq 游标增量 + 断线补齐）；文件分片/断点/秒传与缩略图',
+        ],
+      },
+      {
+        name: 'AI Agent 工作台',
+        items: [
+          '自研 Agent 循环，思考/工具/结论流式可见；项目区与日常区分离',
+          '三档权限（询问/自动编辑/全自动）与内嵌审批卡、提问卡',
+          '子代理（并行探查 / 声明式专家）、后台终端任务、定时任务（cron/一次性/工作日历）',
+          '会话记忆与项目进度台账；IM 会话内嵌 Agent 卡',
+        ],
+      },
+      {
+        name: '知识库与生态',
+        items: [
+          '公司知识库 + 我的笔记两维度；pgvector + zhparser 中文检索，权限过滤前置',
+          '插件系统（Claude Code 格式超集：skills/commands/agents/hooks/mcp）与插件市场',
+          'MCP 三源接入（企业/插件/个人）、凭据存系统钥匙串、动态下发',
+        ],
+      },
+      {
+        name: '开放与治理',
+        items: [
+          'A2A / MCP 被调用面：壳内 127.0.0.1 回环服务，外部智能体一条命令接入',
+          'OIDC 统一登录（生态应用 SSO，per-app token aud 绑定）',
+          '多租户 RLS、RBAC + 数据范围、AI 网关、审计哈希链、工作日日历',
+          '客户端发布管理：上传 → 发布 → 回滚/撤回；上传签名校验与灰度',
+        ],
+      },
+      {
+        name: '部署与交付',
+        items: [
+          'Docker Compose 单机全栈（含对象存储与可观测栈）',
+          'Kubernetes Helm chart（迁移 Job / PVC / 接入层 NodePort）',
+          '内网离线包；品牌白标单源（brand/ 目录一条命令重生成）',
+        ],
+      },
+    ],
+  },
+];
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'ItemList',
+  name: `${APP_NAME} 更新日志`,
+  itemListElement: releases.map((r, i) => ({
+    '@type': 'ListItem',
+    position: i + 1,
+    name: `${r.version}（${r.date}）`,
+    description: r.note,
+  })),
+};
+---
+
+<BaseLayout title={title} description={description} path="/changelog/" jsonLd={jsonLd}>
+  <section class="page-head">
+    <div class="wrap">
+      <div class="breadcrumb"><a href="/">首页</a> / 更新日志</div>
+      <h1>更新日志</h1>
+      <p class="lead">公开版本的能力变更。内部修复与设计决策不在此发布。</p>
+    </div>
+  </section>
+
+  <div class="wrap" style="padding: 40px 0 8px;">
+    {releases.map((r) => (
+      <article class="prose" style="max-width: 860px; margin-bottom: 48px;">
+        <h2 style="display:flex;align-items:baseline;gap:12px;">
+          {r.version}
+          <span style="font-size:0.85rem;color:var(--fg-muted);font-weight:400;">{r.date}</span>
+        </h2>
+        <p>{r.note}</p>
+        {r.groups.map((g) => (
+          <>
+            <h3>{g.name}</h3>
+            <ul>
+              {g.items.map((item) => <li>{item}</li>)}
+            </ul>
+          </>
+        ))}
+      </article>
+    ))}
+
+    <p style="font-size: 0.9rem; color: var(--fg-muted);">
+      完整提交历史见 <a href={GITHUB_URL} target="_blank" rel="noopener">GitHub 仓库</a>。
+    </p>
+  </div>
+
+  <CtaBand
+    title="想自己验证这些能力？"
+    desc="Compose 一条命令起全栈，/setup 建管理员，十几分钟就能走完冒烟清单。"
+    primaryLabel="快速开始"
+    primaryHref="/docs/quickstart/"
+    secondaryLabel="能力总览"
+    secondaryHref="/features/"
+  />
+</BaseLayout>

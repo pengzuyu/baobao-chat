@@ -1,0 +1,113 @@
+---
+import { APP_NAME, COPYRIGHT } from '../data/brand';
+import { GITHUB_URL, LICENSE_NAME, VERSION } from '../data/site';
+
+interface Props {
+  lang?: string;
+}
+
+const { lang = 'zh-CN' } = Astro.props;
+const isEn = lang.startsWith('en');
+const homeHref = isEn ? '/en/' : '/';
+const blurb = isEn
+  ? 'Self-hosted enterprise IM + AI agent workspace. The desktop client runs agents locally; the server can live entirely inside your network, so data never leaves your boundary. MIT licensed, white-label ready.'
+  : '自托管的企业 IM + AI Agent 工作台。桌面客户端本地执行 Agent，服务端可完全部署在内网，数据不出企业边界；MIT 协议开源，支持白标换名。';
+
+const cols = isEn
+  ? [
+      {
+        title: 'Product',
+        links: [
+          { label: 'Features', href: '/features/' },
+          { label: 'IM', href: '/features/im/' },
+          { label: 'Agent workspace', href: '/features/agent/' },
+          { label: 'Compare', href: '/compare/' },
+        ],
+      },
+      {
+        title: 'Docs',
+        links: [
+          { label: 'Quick start', href: '/docs/quickstart/' },
+          { label: 'Docker Compose', href: '/docs/deploy-compose/' },
+          { label: 'Kubernetes', href: '/docs/deploy-k8s/' },
+          { label: 'White-label', href: '/docs/whitelabel/' },
+          { label: 'Architecture', href: '/docs/architecture/' },
+        ],
+      },
+      {
+        title: 'Project',
+        links: [
+          { label: 'GitHub', href: GITHUB_URL },
+          { label: 'Changelog', href: '/changelog/' },
+          { label: 'FAQ', href: '/faq/' },
+          { label: `${LICENSE_NAME} License`, href: `${GITHUB_URL}/blob/master/LICENSE` },
+        ],
+      },
+    ]
+  : [
+      {
+        title: '产品',
+        links: [
+          { label: '能力总览', href: '/features/' },
+          { label: 'IM 即时通讯', href: '/features/im/' },
+          { label: 'Agent 工作台', href: '/features/agent/' },
+          { label: '与同类项目对比', href: '/compare/' },
+        ],
+      },
+      {
+        title: '文档',
+        links: [
+          { label: '快速开始', href: '/docs/quickstart/' },
+          { label: 'Docker Compose 部署', href: '/docs/deploy-compose/' },
+          { label: 'Kubernetes 部署', href: '/docs/deploy-k8s/' },
+          { label: '白标与换名', href: '/docs/whitelabel/' },
+          { label: '架构概览', href: '/docs/architecture/' },
+        ],
+      },
+      {
+        title: '项目',
+        links: [
+          { label: 'GitHub 仓库', href: GITHUB_URL },
+          { label: '更新日志', href: '/changelog/' },
+          { label: '常见问题', href: '/faq/' },
+          { label: `${LICENSE_NAME} License`, href: `${GITHUB_URL}/blob/master/LICENSE` },
+        ],
+      },
+    ];
+---
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href={homeHref}>
+          <img src="/logo.svg" alt="" width="24" height="24" />
+          <span>{APP_NAME}</span>
+        </a>
+        <p>{blurb}</p>
+      </div>
+      {cols.map((col) => (
+        <div>
+          <h4>{col.title}</h4>
+          <ul>
+            {col.links.map((l) => (
+              <li>
+                <a href={l.href} target={l.href.startsWith('http') ? '_blank' : undefined} rel={l.href.startsWith('http') ? 'noopener' : undefined}>
+                  {l.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+    <div class="footer-bottom">
+      <span>{COPYRIGHT} · {VERSION}</span>
+      <span>
+        {isEn
+          ? 'Official site of an open-source project. The client requires a self-hosted server.'
+          : '本站为开源项目官网；客户端需配合自建服务端使用。'}
+      </span>
+    </div>
+  </div>
+</footer>

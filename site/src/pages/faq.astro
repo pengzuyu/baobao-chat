@@ -1,0 +1,122 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import CtaBand from '../components/CtaBand.astro';
+import { APP_NAME } from '../data/brand';
+
+const title = `常见问题 · ${APP_NAME}`;
+const description =
+  'BaobaoChat 常见问题：能否内网离线部署、和飞书钉钉企业微信的区别、支持哪些模型、Agent 权限如何控制、是否免费可商用、能否白标换名、是否支持多租户与外部智能体接入。';
+
+interface QA {
+  q: string;
+  a: string;
+}
+
+const faqs: QA[] = [
+  {
+    q: `${APP_NAME} 是什么？`,
+    a: '自托管的企业协作工作台：桌面客户端里有私聊群聊、通讯录、知识库，以及一个能在你电脑本地执行任务的 AI Agent；服务端用 Go 编写，可完全部署在内网。MIT 协议开源。',
+  },
+  {
+    q: '能完全内网 / 离线部署吗？数据会不会外传？',
+    a: '可以。服务端（应用、PostgreSQL、Redis、对象存储）全部部署在你自己的环境；模型可以指向内网 vLLM / Ollama，也可以只在 AI 网关里配置内网可达的供应商端点。客户端与服务端的通信只发生在你的内网，是否出网完全取决于你配置的模型供应商。',
+  },
+  {
+    q: '和飞书 / 钉钉 / 企业微信有什么区别？',
+    a: '它们是企业级办公平台，覆盖音视频、在线文档、审批与移动端。BaobaoChat 不做这些：它聚焦两件事——团队聊天 + AI Agent 在员工设备上执行任务，并且可私有化、可白标换名。它更适合作为 AI 工作台与现有 IM 并存，而不是整套替换。',
+  },
+  {
+    q: '能替代公司现有的 IM 吗？有群聊吗？',
+    a: '有完整的私聊、群聊、广播群、通讯录、四档在线状态、已读回执、搜索与文件传输。但它当前不含音视频通话、在线文档协作与移动端 App；如果需要这些，建议保留现有 IM，把本产品定位为 AI 工作台。',
+  },
+  {
+    q: '支持哪些大模型？能接本地 vLLM / Ollama 吗？',
+    a: '通过 AI 网关统一接入，兼容 OpenAI 协议的服务都可以：GLM、Qwen、DeepSeek 等云端 API，也能指向内网 vLLM、Ollama 等自建端点。模型清单可手工维护，供应商 Key 由管理员在后台配置。',
+  },
+  {
+    q: 'Agent 会不会乱删我的文件？权限怎么控制？',
+    a: 'Agent 在本地执行，但写文件、执行命令等操作受三档权限控制：询问（每次审批）、自动编辑（编辑自动、命令确认）、全自动（高危操作仍双确认）。审批卡内嵌在工具卡里，可跨端确认，所有操作全程留痕可审计。',
+  },
+  {
+    q: '支持 Windows / macOS / Linux 吗？',
+    a: '客户端基于 Tauri 2，覆盖 Windows、macOS 与 Linux；安装包小于 30 MB，空闲内存低于 300 MB。',
+  },
+  {
+    q: '免费吗？商用需要授权吗？',
+    a: 'MIT 协议免费使用、修改、分发，包含商用与内网白标换名；唯一义务是分发时保留 LICENSE 文件。',
+  },
+  {
+    q: '能换成我们自己公司的名字和 logo 吗？',
+    a: '可以。品牌是单源配置：改 brand/brand.json（名字、标语、版权行、邮箱域）并替换 logo 与图标，跑一条生成命令即可；客户端页面标题与服务端相关配置会跟着生成。',
+  },
+  {
+    q: '支持多租户 / 多子公司吗？',
+    a: '支持。tenant_id 贯穿所有表与 API，PostgreSQL 启用行级安全，对象存储按租户分前缀；适合集团多子公司或多事业部隔离部署。',
+  },
+  {
+    q: '知识库支持什么格式？中文检索效果如何？',
+    a: '文档经解析、切分、向量化后存入 PostgreSQL + pgvector，中文使用 zhparser 分词；检索权限前置到 SQL，Agent 的回答可回溯到原文。具体支持格式以部署版本为准。',
+  },
+  {
+    q: '能让 Claude Code 这类外部智能体接入吗？',
+    a: '可以。桌面端壳内提供只监听本机的 A2A 与 MCP 服务（默认 127.0.0.1:8791），Claude Code 一条 claude mcp add 命令即可接入；工具调用走与界面相同的权限门，外部会话在任务区可见。',
+  },
+  {
+    q: '部署需要什么配置？要 GPU 吗？',
+    a: '服务端 4C8G 起步即可跑；GPU 只在你自己部署嵌入模型或本地大模型时需要，使用云端 API 则不需要。支持 Docker Compose 与 Kubernetes 两种形态，也提供内网离线包。',
+  },
+  {
+    q: '有移动端吗？有音视频通话或在线文档吗？',
+    a: '当前都没有。产品聚焦桌面端（Windows / macOS / Linux）的团队聊天与 Agent 工作台；音视频通话、会议与在线文档协作已从代码中移除。',
+  },
+  {
+    q: '这是个人项目还是公司产品？',
+    a: '以开源项目形式发布（MIT），可自由用于企业内部部署与白标分发。问题反馈与功能讨论请走 GitHub 仓库 issue。',
+  },
+];
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map((f) => ({
+    '@type': 'Question',
+    name: f.q,
+    acceptedAnswer: { '@type': 'Answer', text: f.a },
+  })),
+};
+---
+
+<BaseLayout title={title} description={description} path="/faq/" jsonLd={jsonLd}>
+  <section class="page-head">
+    <div class="wrap">
+      <div class="breadcrumb"><a href="/">首页</a> / 常见问题</div>
+      <h1>常见问题</h1>
+      <p class="lead">部署、模型、权限、许可与边界——先把这些问题答清楚，再决定要不要试。</p>
+    </div>
+  </section>
+
+  <div class="wrap" style="padding: 40px 0 8px;">
+    <div class="faq">
+      {faqs.map((f) => (
+        <details>
+          <summary>{f.q}</summary>
+          <div class="answer"><p>{f.a}</p></div>
+        </details>
+      ))}
+    </div>
+
+    <p style="margin-top: 28px; font-size: 0.9rem; color: var(--fg-muted);">
+      没找到答案？<a href="https://github.com/pengzuyu/baobao-chat/issues" target="_blank" rel="noopener">在 GitHub 提 issue</a>
+      或直接 <a href="/docs/quickstart/">部署一套试试</a>。
+    </p>
+  </div>
+
+  <CtaBand
+    title="答案不如自己跑一遍"
+    desc="内网 Compose 一条命令拉起全栈，/setup 向导建首个管理员，十几分钟就能看到界面。"
+    primaryLabel="快速开始"
+    primaryHref="/docs/quickstart/"
+    secondaryLabel="对比表"
+    secondaryHref="/compare/"
+  />
+</BaseLayout>

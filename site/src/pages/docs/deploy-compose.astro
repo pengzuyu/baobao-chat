@@ -1,0 +1,97 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+
+const title = 'Docker Compose 部署 · 文档';
+const description =
+  'BaobaoChat 单机 Compose 部署：服务拓扑、关键环境变量、数据卷与备份、升级回滚、HTTPS 切换与常见故障排查。';
+---
+
+<DocsLayout
+  title={title}
+  description={description}
+  path="/docs/deploy-compose/"
+  current="compose"
+  lead="适合单台虚拟机、内网小规模（≤2k 用户）与无自愈要求的场景；与 K8s 形态能力等价，数据可平移。"
+>
+  <h2>服务拓扑</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>服务</th><th>作用</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>nginx-lb</code></td><td>入口反向代理</td><td>HTTP 80；可选 443（需证书文件存在）</td></tr>
+        <tr><td><code>app</code></td><td>Go 服务端</td><td>模块化单体，默认 2 副本</td></tr>
+        <tr><td><code>app-init</code></td><td>等数据库就绪</td><td>跑完即退出（<code>exited(0)</code> 正常）</td></tr>
+        <tr><td><code>pg</code></td><td>PostgreSQL 16</td><td>pgvector 扩展；启动自动跑迁移</td></tr>
+        <tr><td><code>redis</code></td><td>缓存与在线状态</td><td>—</td></tr>
+        <tr><td><code>rustfs</code> / <code>rustfs-init</code></td><td>S3 兼容对象存储</td><td>init 建 <code>bbc-data</code> / <code>bbc-backup</code> / <code>bbc-releases</code> 三桶</td></tr>
+        <tr><td><code>update-src</code> / <code>website</code></td><td>更新源与官网</td><td>提供 <code>/update/*</code> 与静态站</td></tr>
+        <tr><td><code>prometheus</code> / <code>otel-collector</code> / <code>grafana</code> / <code>alertmanager</code></td><td>可观测栈（可选）</td><td>按 <code>--profile</code> 启用</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>关键环境变量</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>键</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td><code>BBC_PUBLIC_DOMAIN</code></td><td>对外基址（不带协议），更新清单 URL 由它推导</td></tr>
+        <tr><td><code>BBC_S3_PUBLIC_ENDPOINT</code></td><td>浏览器侧对象存储地址，通常 <code>http://&lt;域名&gt;/oss</code></td></tr>
+        <tr><td><code>BBC_S3_ENDPOINT</code></td><td>服务端访问对象存储地址（容器网络内）</td></tr>
+        <tr><td><code>BBC_APP_REPLICAS</code></td><td>应用副本数，默认 2</td></tr>
+        <tr><td><code>BBC_LOG_LEVEL</code></td><td>日志级别，生产默认 <code>info</code></td></tr>
+        <tr><td><code>BBC_UPDATE_CHANNEL</code></td><td>客户端更新通道：<code>stable</code> / <code>beta</code></td></tr>
+        <tr><td><code>BBC_AI_UPSTREAM_BASE_URL</code></td><td>默认模型上游（如内网 vLLM <code>http://vllm.internal:8000/v1</code>）</td></tr>
+        <tr><td><code>BBC_BRAND_NAME</code></td><td>产品显示名（OIDC 等待页等文案源）</td></tr>
+        <tr><td><code>BBC_MAIL_DOMAIN</code></td><td>生成邮箱后缀（工号@该域）</td></tr>
+        <tr><td><code>BBC_OIDC_ISSUER</code></td><td>对外 OIDC issuer；启用生态应用登录时必填</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    凭据类（<code>BBC_JWT_SECRET</code>、<code>BBC_KMS_MASTER_KEY</code>、<code>BBC_S3_ACCESS_KEY</code>、
+    <code>BBC_S3_SECRET_KEY</code>、数据库口令）随包随机生成，上线前确认未被改动。
+  </p>
+
+  <h2>数据卷与备份</h2>
+  <ul>
+    <li><code>pg-data</code>：数据库主数据；<code>pg-wal-archive</code>：WAL 归档 + 基础备份。</li>
+    <li><code>bbc-data</code>：应用文件域；<code>redis-data</code>：缓存持久化。</li>
+    <li>随包提供 <code>backup.sh</code> / <code>restore.sh</code>：备份数据库、配置与证书到指定目录；恢复按同版本执行。</li>
+    <li>对象存储桶需单独做版本化与异地副本策略（<code>bbc-data</code> 已开启版本化）。</li>
+  </ul>
+
+  <h2>升级与回滚</h2>
+  <pre><code>{`# 1) 载入新镜像
+docker load -i images/bbc-app-<new>.tar.gz
+
+# 2) 一键升级（磁盘预检 -> 备份 -> 迁移 -> 滚动 -> 健康检查）
+./upgrade.sh
+
+# 3) 需要回退时
+./rollback.sh`}</code></pre>
+  <p>升级前请务必确认已备份；迁移只向前，回滚镜像不等于回滚数据库结构。</p>
+
+  <h2>切换到 HTTPS</h2>
+  <p>
+    <code>compose/volumes/certs/</code> 随包带一套自签证书（nginx 443 段要求文件存在，否则容器启动失败）。
+    切换时用内部 CA 签发的 <code>tls.crt</code> / <code>tls.key</code> / <code>ca.crt</code> 同名覆盖，然后：
+  </p>
+  <pre><code>{`docker compose up -d nginx-lb`}</code></pre>
+  <p>
+    注意：客户端地址在编译期写死，切换 HTTPS 后<strong>需要重新出客户端包</strong>（见快速开始第 1 节）。
+  </p>
+
+  <h2>常见故障</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>现象</th><th>排查</th></tr></thead>
+      <tbody>
+        <tr><td>网页 502</td><td><code>docker compose ps</code> + <code>logs app</code>；多为数据库连不上（<code>BBC_DB_DSN</code> 与 <code>POSTGRES_PASSWORD</code> 不一致）</td></tr>
+        <tr><td>上传头像/文件失败</td><td><code>BBC_S3_PUBLIC_ENDPOINT</code> 未改成 <code>http://&lt;域名&gt;/oss</code></td></tr>
+        <tr><td>Agent 无响应</td><td>管理后台检查 AI 供应商连通性；确认 <code>BBC_KMS_MASTER_KEY</code> 未被更换</td></tr>
+        <tr><td>登录后立即掉线</td><td>WS 地址不可达：检查入口代理是否转发 <code>/ws</code> 并支持 Upgrade</td></tr>
+      </tbody>
+    </table>
+  </div>
+</DocsLayout>

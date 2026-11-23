@@ -1,0 +1,64 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+
+const title = '文档概览 · 文档';
+const description =
+  'BaobaoChat 文档：快速开始、Docker Compose 部署、Kubernetes 部署、白标换名与架构概览。';
+---
+
+<DocsLayout
+  title={title}
+  description={description}
+  path="/docs/"
+  current="index"
+  lead="从这里开始部署与使用。公网文档只覆盖使用与架构概览；内部设计细节不在此发布。"
+>
+  <h2>按目标选入口</h2>
+  <div class="grid" style="margin: 20px 0 36px;">
+    <a class="card" href="/docs/quickstart/" style="display:block;color:inherit;">
+      <h3>我想先跑起来</h3>
+      <p>环境要求、一条命令起全栈、建首个管理员、填模型 Key、装客户端。</p>
+    </a>
+    <a class="card" href="/docs/deploy-compose/" style="display:block;color:inherit;">
+      <h3>我要正式部署（单机）</h3>
+      <p>Compose 拓扑、环境变量、对象存储、备份与升级。</p>
+    </a>
+    <a class="card" href="/docs/deploy-k8s/" style="display:block;color:inherit;">
+      <h3>我要上 Kubernetes</h3>
+      <p>Helm chart、PVC、迁移 Job、对象存储初始化、NodePort 接入。</p>
+    </a>
+    <a class="card" href="/docs/whitelabel/" style="display:block;color:inherit;">
+      <h3>我要换成自己的品牌</h3>
+      <p>改一个品牌目录，重生成客户端与服务端配置。</p>
+    </a>
+  </div>
+
+  <h2>部署前需要准备</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>项</th><th>要求</th></tr></thead>
+      <tbody>
+        <tr><td>服务器</td><td>4C8G 起步；磁盘按文件量预留（对象存储可独立挂载）</td></tr>
+        <tr><td>Docker</td><td>24+ 与 Compose v2（K8s 形态则需 Helm 3）</td></tr>
+        <tr><td>数据库</td><td>PostgreSQL 16（需 pgvector 扩展；Compose 形态已内置）</td></tr>
+        <tr><td>对象存储</td><td>S3 兼容（内置 RustFS，也可对接已有对象存储）</td></tr>
+        <tr><td>模型</td><td>兼容 OpenAI 协议的云端 API，或内网 vLLM / Ollama</td></tr>
+        <tr><td>客户端构建（可选）</td><td>Node 20+、Rust 工具链（仅自建安装包时需要）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>几个容易踩的坑</h2>
+  <ul>
+    <li><strong>首次部署没有演示账号</strong>：空库需访问 <code>/setup</code> 创建首个超级管理员。</li>
+    <li><strong>模型 Key 配错表现为"发消息没反应"</strong>：先在管理后台完成 AI 供应商连通性测试。</li>
+    <li><strong>对象存储地址分内外</strong>：服务端访问地址与浏览器预签名地址可能不同，需分别配置。</li>
+    <li><strong>K8s 下迁移要先跑</strong>：升级前执行迁移 Job，应用 Deployment 再滚动。</li>
+  </ul>
+
+  <h2>升级与回滚</h2>
+  <p>
+    服务端升级走镜像 + 迁移；客户端通过内置更新通道（签名校验 + 灰度）升级。
+    管理后台的「客户端发布」支持上传、发布、回滚与撤回，回滚只移动版本指针，不改动已发布文件。
+  </p>
+</DocsLayout>

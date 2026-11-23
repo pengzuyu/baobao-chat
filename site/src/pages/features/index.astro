@@ -1,0 +1,81 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import CtaBand from '../../components/CtaBand.astro';
+import { APP_NAME } from '../../data/brand';
+import { FEATURES } from '../../data/site';
+
+const title = `能力总览 · ${APP_NAME}`;
+const description =
+  'BaobaoChat 的六块能力：IM 即时通讯、AI Agent 工作台、知识库与 RAG、插件与 MCP 生态、被外部智能体调用、治理安全与部署。每块能力共用同一套身份、权限与审计。';
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'CollectionPage',
+  name: title,
+  description,
+  hasPart: FEATURES.map((f) => ({
+    '@type': 'WebPage',
+    name: f.title,
+    description: f.summary,
+    url: `/features/${f.slug}/`,
+  })),
+};
+---
+
+<BaseLayout title={title} description={description} path="/features/" jsonLd={jsonLd}>
+  <section class="page-head">
+    <div class="wrap">
+      <div class="breadcrumb"><a href="/">首页</a> / 能力</div>
+      <h1>六块能力，一套身份与权限</h1>
+      <p class="lead">
+        每块能力都可以独立使用；组合起来，才是"聊天、查资料、让 AI 干活"在同一个客户端里完成的完整工作台。
+      </p>
+    </div>
+  </section>
+
+  <div class="wrap" style="padding: 44px 0 8px;">
+    <div class="grid">
+      {FEATURES.map((f) => (
+        <a class="card" href={`/features/${f.slug}/`} style="display:block;color:inherit;">
+          <h3>{f.title}</h3>
+          <p>{f.summary}</p>
+          <p style="margin-top: 12px; color: var(--brand); font-weight: 600; font-size: 0.88rem;">
+            了解详情 →
+          </p>
+        </a>
+      ))}
+    </div>
+
+    <div class="prose" style="margin-top: 52px;">
+      <h2>能力与形态对照</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>能力</th><th>桌面客户端</th><th>服务端</th><th>管理后台</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>私聊 / 群聊 / 通讯录 / 在线状态</td><td class="yes">✓</td><td class="yes">✓ 消息与同步</td><td class="yes">✓ 组织与策略</td></tr>
+            <tr><td>文件与图片（分片 / 秒传 / 缩略图）</td><td class="yes">✓</td><td class="yes">✓ 对象存储</td><td class="yes">✓ 配额</td></tr>
+            <tr><td>AI Agent（本地执行 / 审批 / 子代理）</td><td class="yes">✓ 主体</td><td class="yes">✓ 鉴权与模型代理</td><td class="yes">✓ 策略与审计</td></tr>
+            <tr><td>知识库与 RAG 检索</td><td class="yes">✓ 使用与上传</td><td class="yes">✓ 摄入与检索</td><td class="yes">✓ 授权管理</td></tr>
+            <tr><td>插件 / 技能 / MCP</td><td class="yes">✓ 安装与运行</td><td class="yes">✓ 下发与市场</td><td class="yes">✓ 上架审核</td></tr>
+            <tr><td>被外部智能体调用（A2A / MCP）</td><td class="yes">✓ 壳内回环服务</td><td class="no">—</td><td class="yes">✓ 授权可见</td></tr>
+            <tr><td>多租户 / RBAC / OIDC / AI 网关 / 审计</td><td class="yes">✓ 登录与授权</td><td class="yes">✓ 全链</td><td class="yes">✓ 配置</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top: 16px; font-size: 0.88rem; color: var(--fg-muted);">
+        Agent 一律在用户设备本地执行；服务端只做鉴权、分发、模型代理与审计，不执行用户代码。
+      </p>
+    </div>
+  </div>
+
+  <CtaBand
+    title="想知道它能不能替掉你现在的组合？"
+    desc="对比表按「定位差异」而非「谁更强」来写：AI 对话面板、企业 IM、AI 应用平台，各自解决什么。"
+    primaryLabel="看对比"
+    primaryHref="/compare/"
+    secondaryLabel="快速开始"
+    secondaryHref="/docs/quickstart/"
+  />
+</BaseLayout>

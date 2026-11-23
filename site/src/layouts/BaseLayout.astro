@@ -1,0 +1,71 @@
+---
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { APP_NAME } from '../data/brand';
+import { absoluteUrl } from '../data/site';
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description: string;
+  /** 站内路径，如 /features/im/ —— 用于 canonical */
+  path: string;
+  lang?: string;
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
+  alternates?: { hreflang: string; href: string }[];
+  noindex?: boolean;
+}
+
+const {
+  title,
+  description,
+  path,
+  lang = 'zh-CN',
+  jsonLd,
+  alternates = [],
+  noindex = false,
+} = Astro.props;
+
+const canonical = absoluteUrl(path);
+const ogImage = absoluteUrl('/icon.png');
+const ld = jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [];
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta name="robots" content={noindex ? 'noindex, nofollow' : 'index, follow, max-image-preview:large'} />
+    <meta name="theme-color" content="#1677ff" />
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={APP_NAME} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+
+    {alternates.map((a) => <link rel="alternate" hreflang={a.hreflang} href={absoluteUrl(a.href)} />)}
+    {ld.map((item) => <script type="application/ld+json" is:inline set:html={JSON.stringify(item)} />)}
+    <!-- 调试用：构建时可通过 SITE_URL 确认站点根 -->
+    <meta name="generator" content="Astro" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+  </head>
+  <body>
+    <Header />
+    <main>
+      <slot />
+    </main>
+    <Footer />
+  </body>
+</html>

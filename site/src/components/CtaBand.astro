@@ -1,0 +1,36 @@
+---
+interface Props {
+  title: string;
+  desc: string;
+  primaryLabel?: string;
+  primaryHref?: string;
+  secondaryLabel?: string;
+  secondaryHref?: string;
+}
+const {
+  title,
+  desc,
+  primaryLabel = '阅读快速开始',
+  primaryHref = '/docs/quickstart/',
+  secondaryLabel,
+  secondaryHref,
+} = Astro.props;
+import { GITHUB_URL, LICENSE_NAME } from '../data/site';
+---
+
+<section class="section">
+  <div class="wrap">
+    <div class="cta-band">
+      <div>
+        <h2>{title}</h2>
+        <p>{desc}</p>
+      </div>
+      <div class="btn-row">
+        <a class="btn btn-primary btn-lg" href={primaryHref}>{primaryLabel}</a>
+        {secondaryLabel && secondaryHref && (
+          <a class="btn btn-lg" href={secondaryHref}>{secondaryLabel}</a>
+        )}
+      </div>
+    </div>
+  </div>
+</section>

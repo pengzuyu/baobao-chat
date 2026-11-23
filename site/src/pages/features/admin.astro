@@ -1,0 +1,84 @@
+---
+import FeatureLayout from '../../layouts/FeatureLayout.astro';
+---
+
+<FeatureLayout
+  slug="admin"
+  title="治理、安全与部署"
+  lead="多租户硬隔离、RBAC 与数据范围、OIDC 统一登录、AI 网关作为模型唯一出口、审计哈希链；一套管理后台管住组织、策略、用量与客户端发布。交付支持 Compose 与 Kubernetes 两种形态。"
+  extraKeywords={['多租户', 'RBAC', 'OIDC', 'SSO 统一登录', 'AI 网关', '审计日志', '私有化部署', 'Helm Chart']}
+  ctaTitle="先看部署，再看治理"
+  ctaDesc="内网 Compose 一条命令起步；K8s 用 Helm chart 带 PVC、迁移 Job 与对象存储初始化。"
+  ctaSecondaryLabel="看架构概览"
+  ctaSecondaryHref="/docs/architecture/"
+>
+  <h2>多租户与权限模型</h2>
+  <ul>
+    <li><strong>硬隔离</strong>：<code>tenant_id</code> 贯穿所有表与 API；PostgreSQL 行级安全（RLS）；对象存储按租户分前缀。</li>
+    <li><strong>RBAC + 数据范围</strong>：角色决定"能做什么"，数据范围决定"能看到谁的数据"，资源 ACL 做例外授权。</li>
+    <li><strong>组织与用户</strong>：组织树、部门负责人、批量导入（姓名 + 工号自动生成 + 企业邮箱域）、自助注册开关。</li>
+    <li><strong>通讯录策略</strong>：全员可见或按组织限制，由管理员配置。</li>
+  </ul>
+
+  <h2>OIDC 统一登录</h2>
+  <p>
+    服务端内嵌标准 OIDC Provider（单进程 <code>/oauth2/*</code>，ES256 签名 + JWKS），
+    企业生态应用填一个 issuer 就能用企业账号登录：
+  </p>
+  <ul>
+    <li>公开客户端走 PKCE，无 client secret 可泄漏。</li>
+    <li>per-app token 绑定 <code>aud</code> 且短时效，一个应用的 token 不能用于另一个。</li>
+    <li>桌面端登录确认走深链 + 6 位码；Web 兜底依赖 IdP 会话，7 天内免重登。</li>
+    <li>主账号 token 永不出设备。</li>
+  </ul>
+
+  <h2>AI 网关：模型流量的唯一出口</h2>
+  <ul>
+    <li>所有模型调用经网关：路由表、供应商故障转移、熔断与降级。</li>
+    <li>按租户 / 用户 / 应用计量与配额；调用日志可审计。</li>
+    <li>敏感字段脱敏后出网；可配置只允许内网模型端点。</li>
+    <li>BYOK：管理员在后台填供应商 Key 与模型清单，模型可手填。</li>
+  </ul>
+
+  <h2>审计与合规</h2>
+  <ul>
+    <li>消息、文档访问、Agent 工具调用、管理操作全链留痕。</li>
+    <li>审计日志追加写、哈希链防篡改，可按人 / 时间 / 动作检索。</li>
+    <li>Agent 操作带 <code>act</code> 声明，能区分"用户本人"与"Agent 代为操作"。</li>
+  </ul>
+
+  <h2>运维面</h2>
+  <ul>
+    <li><strong>工作日日历</strong>：默认工作日 / 特殊工作日 / 节假日三态 + 例外，支持内网 JSON 导入，供定时任务使用。</li>
+    <li><strong>客户端发布管理</strong>：管理后台上传安装包（浏览器直传对象存储、前端算 SHA-256、附签名）→ 发布 → 回滚或撤回；客户端与官网按同一份清单消费。</li>
+    <li><strong>白标</strong>：换名字、换 logo、换邮箱域只改一个品牌目录，跑一条命令重生成产物。</li>
+    <li><strong>数据与备份</strong>：PostgreSQL 为唯一事实源，对象存储存文件；两者备份策略统一编排。</li>
+  </ul>
+
+  <h2>部署形态</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>形态</th><th>适用</th><th>包含</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Docker Compose</td>
+          <td>单机起步、内网快速验证</td>
+          <td>应用、PG（pgvector）、Redis、对象存储、迁移任务、Web 接入层</td>
+        </tr>
+        <tr>
+          <td>Kubernetes（Helm）</td>
+          <td>已有 K8s 平台、多副本</td>
+          <td>Deployment / PVC / 迁移 Job / 对象存储初始化 / NodePort 接入层</td>
+        </tr>
+        <tr>
+          <td>内网离线包</td>
+          <td>不能出网的环境</td>
+          <td>全量镜像与安装脚本，部署机一条命令安装</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:0.88rem;color:var(--fg-muted);">
+    首次部署后访问 <code>/setup</code> 创建首个超级管理员；空库不会预置演示账号。
+  </p>
+</FeatureLayout>

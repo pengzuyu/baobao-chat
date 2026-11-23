@@ -1,0 +1,124 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+
+const title = '架构概览 · 文档';
+const description =
+  'BaobaoChat 架构概览：Tauri 桌面客户端进程模型、Go 模块化单体服务端、PostgreSQL/Redis/对象存储数据层、Agent 本地执行与服务端模型代理、关键链路与设计原则。';
+
+const topo = `┌───────────────── 桌面客户端（Tauri 2）─────────────────┐
+│  UI (WebView)  ←IPC→  Rust 核心  ←stdio→  Agent Runtime │
+│                                          （独立 sidecar）│
+│  IM · Agent 工作台 · 知识库 · 管理入口                    │
+└───────────┬──────────────┬──────────────┬───────────────┘
+            │ WSS 事件      │ REST API     │ 本机回环
+            │              │              │ A2A / MCP (127.0.0.1)
+┌───────────▼──────────────▼──────────────▼───────────────┐
+│                     Go 模块化单体                        │
+│ gateway · auth · org · message · file · kb · app-registry│
+│ ai-gateway · admin · audit · notify                      │
+└──────┬──────────────┬────────────────┬───────────────────┘
+       │              │                │
+ PostgreSQL 16     Redis 7       对象存储（S3 兼容 / RustFS）
+ (+pgvector/zhparser)             bbc-data / bbc-backup / bbc-releases`;
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'TechArticle',
+  headline: 'BaobaoChat 架构概览',
+  description,
+};
+---
+
+<DocsLayout title={title} description={description} path="/docs/architecture/" current="architecture" lead="给架构师与运维的概览：进程模型、服务划分、数据层与关键链路。公网只发布概览，不含内部详细设计。" jsonLd={jsonLd}>
+  <h2>总览</h2>
+  <pre><code>{topo}</code></pre>
+
+  <h2>客户端进程模型</h2>
+  <ul>
+    <li><strong>UI（WebView）</strong>：React 18 + TypeScript + Ant Design，负责所有界面与交互。</li>
+    <li><strong>Rust 核心</strong>：窗口、托盘、深链、钥匙串、更新、本地文件与进程管理；通过 IPC 与 UI 通信。</li>
+    <li><strong>Agent Runtime（sidecar）</strong>：独立进程，stdio JSONL 协议；执行 Agent 循环、工具调用与本地命令。</li>
+    <li>Agent 一律在本地执行——这是"使用本人系统权限"的唯一安全途径。</li>
+  </ul>
+
+  <h2>服务端模块</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>模块</th><th>职责</th></tr></thead>
+      <tbody>
+        <tr><td><code>gateway</code></td><td>HTTP/WS 接入、鉴权中间件、限流</td></tr>
+        <tr><td><code>auth</code></td><td>登录、令牌、OIDC Provider（<code>/oauth2/*</code>）</td></tr>
+        <tr><td><code>org</code></td><td>租户、组织树、用户、角色与数据范围</td></tr>
+        <tr><td><code>message</code></td><td>会话、消息、已读、同步游标</td></tr>
+        <tr><td><code>file</code></td><td>文件元数据、预签名直传、缩略图</td></tr>
+        <tr><td><code>kb</code></td><td>知识库摄入、检索（权限前置）、文档读取</td></tr>
+        <tr><td><code>app-registry</code></td><td>插件/生态应用注册、签名、分发</td></tr>
+        <tr><td><code>ai-gateway</code></td><td>模型路由、配额、熔断、脱敏、计量</td></tr>
+        <tr><td><code>admin</code> / <code>audit</code> / <code>notify</code></td><td>管理面、审计哈希链、通知分发</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>数据层</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>组件</th><th>用途</th><th>要点</th></tr></thead>
+      <tbody>
+        <tr><td>PostgreSQL 16</td><td>唯一事实源</td><td>pgvector（检索）、zhparser（中文分词）、大表按月分区、行级安全</td></tr>
+        <tr><td>Redis 7</td><td>缓存与在线状态</td><td>非事实源，可重建</td></tr>
+        <tr><td>对象存储</td><td>文件与安装包</td><td>S3 兼容（内置 RustFS）；<code>bbc-data</code> 版本化、<code>bbc-releases</code> 匿名只读</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>关键链路</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>链路</th><th>过程</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>登录与身份</td>
+          <td>账号/OIDC 登录 → 主 token 只存设备 → Agent 访问资源时换取短时效 OBO token（带 <code>act</code> 声明）</td>
+        </tr>
+        <tr>
+          <td>消息同步</td>
+          <td>WSS 推送实时事件 + REST 按 <code>seq</code> 游标增量拉取；断线重连补齐缺口</td>
+        </tr>
+        <tr>
+          <td>Agent 执行</td>
+          <td>客户端装配上下文 → 本地 sidecar 跑循环 → 模型调用经服务端 ai-gateway → 工具在本地执行 → 审批与审计上送</td>
+        </tr>
+        <tr>
+          <td>知识库检索</td>
+          <td>查询 → 权限可见集注入 SQL → 向量/分词检索 → 返回分块与来源 → 进入 Agent 上下文</td>
+        </tr>
+        <tr>
+          <td>客户端更新</td>
+          <td>客户端拉 <code>/update/latest.json</code> → 校验签名与 SHA-256 → 灰度下发；管理后台可回滚指针</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>设计原则</h2>
+  <ol>
+    <li><strong>身份一致性（OBO）</strong>：Agent 与生态应用对内部资源的访问都以用户本人身份进行，禁止服务级超级账号。</li>
+    <li><strong>本地优先执行</strong>：服务端只做鉴权、分发、模型代理与审计，不执行用户代码。</li>
+    <li><strong>权限最小化</strong>：危险操作必须确认；权限模式可切换、可审计。</li>
+    <li><strong>一切可审计</strong>：全链路留痕，审计日志追加写 + 哈希链。</li>
+    <li><strong>多租户硬隔离</strong>：<code>tenant_id</code> 贯穿、行级安全、存储分前缀。</li>
+    <li><strong>资源克制</strong>：客户端安装包 &lt; 30 MB、空闲内存 &lt; 300 MB、冷启动 &lt; 2 s。</li>
+    <li><strong>协议开放</strong>：内部工具协议对齐 MCP 概念；WS/REST 带版本号与兼容窗口。</li>
+  </ol>
+
+  <h2>部署拓扑</h2>
+  <ul>
+    <li><strong>Compose</strong>：单机；nginx 入口 + app 副本 + PG/Redis/RustFS + 可观测栈。</li>
+    <li><strong>Kubernetes</strong>：Helm chart；迁移 Job、PVC、对象存储初始化、web 接入层 NodePort。</li>
+    <li>两种形态能力等价，数据可平移。</li>
+  </ul>
+
+  <p style="margin-top: 28px; font-size: 0.9rem; color: var(--fg-muted);">
+    本文为架构概览，详细设计文档（数据表结构、协议字段、安控矩阵）不对外发布。
+  </p>
+</DocsLayout>

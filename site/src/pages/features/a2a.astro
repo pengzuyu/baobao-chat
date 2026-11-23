@@ -1,0 +1,67 @@
+---
+import FeatureLayout from '../../layouts/FeatureLayout.astro';
+---
+
+<FeatureLayout
+  slug="a2a"
+  title="被外部智能体调用"
+  lead="桌面端壳内跑一个只监听本机的 A2A 正身与 MCP 脸，Claude Code、zcode 等外部智能体一条命令就能接入，调用聊天、知识库、邮件、日历等本产品能力。"
+  extraKeywords={['A2A', 'Agent2Agent', 'MCP server', 'Claude Code 接入', '外部智能体', '本机回环', 'Agent 互操作']}
+  ctaTitle="让你的编码代理用上企业上下文"
+  ctaDesc="装好客户端并授权，外部智能体就能查组织、读知识库、发消息、写文档——身份仍是你本人。"
+>
+  <h2>为什么只做"被调用"</h2>
+  <p>
+    很多产品选择"主动委派外部编码代理"，代价是链路长、权限混乱、失败难排查。
+    BaobaoChat 反过来：把本产品能力以标准协议暴露出去，让外部智能体来调用。
+    这样调用方仍是用户熟悉的工具，权限与审计却完整落在本产品内。
+  </p>
+
+  <h2>两个面孔，一套能力</h2>
+  <ul>
+    <li><strong>A2A（Agent2Agent）</strong>：标准任务模型，适合支持 A2A 的智能体互通。</li>
+    <li><strong>MCP</strong>：把能力包装成 MCP 工具，适合 Claude Code、zcode 等 MCP 客户端。</li>
+    <li>两者共用同一套工具目录与权限判定，行为一致。</li>
+  </ul>
+
+  <h2>接入方式</h2>
+  <p>服务只监听本机回环地址（默认 <code>127.0.0.1:8791</code>），不暴露到局域网与公网。以 Claude Code 为例：</p>
+  <pre><code># 在客户端设置页生成并复制授权 token 后
+claude mcp add baobaochat --transport http \
+  http://127.0.0.1:8791/mcp \
+  --header "Authorization: Bearer &lt;token&gt;"</code></pre>
+  <p>不需要额外插件包，一条命令即可。</p>
+
+  <h2>能调用什么</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>类别</th><th>工具示例</th><th>风险档</th></tr></thead>
+      <tbody>
+        <tr><td>组织与人员</td><td>按姓名 / 工号查人、查会话、在线状态</td><td>只读</td></tr>
+        <tr><td>消息</td><td>读取会话历史、发送消息（可带文件）</td><td>只读 / 写</td></tr>
+        <tr><td>知识库</td><td>空间与节点浏览、检索、读文档</td><td>只读</td></tr>
+        <tr><td>文档</td><td>写入与更新</td><td>写</td></tr>
+        <tr><td>邮件</td><td>读信、发信</td><td>只读 / 写</td></tr>
+        <tr><td>日历</td><td>工作日历查询</td><td>只读</td></tr>
+        <tr><td>文件</td><td>文件列表与读取</td><td>只读</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>安全设计</h2>
+  <ul>
+    <li><strong>仅本机</strong>：回环地址监听，不可从网络访问。</li>
+    <li><strong>token 授权</strong>：设置页生成，可随时吊销；token 每次装配轮换。</li>
+    <li><strong>权限判定不变</strong>：外部调用走与界面完全相同的权限门；写类操作按当前模式确认，只读在全自动模式下可静默放行。</li>
+    <li><strong>会话可见</strong>：外部智能体发起的每个会话都在任务区可见，标题标明来源，可回看过程。</li>
+    <li><strong>无凭证外泄</strong>：被调用的子智能体不持有任何公司凭证；主账号 token 不出设备。</li>
+  </ul>
+
+  <h2>典型用法</h2>
+  <ul>
+    <li>在 Claude Code 里改完代码，让它顺手把变更说明发到项目群。</li>
+    <li>让编码代理先查公司知识库的接口规范，再动手实现。</li>
+    <li>用外部智能体批量整理知识库、更新文档。</li>
+    <li>把「查人 + 建会话 + 发通知」串成一次工具调用。</li>
+  </ul>
+</FeatureLayout>

@@ -1,0 +1,233 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import CtaBand from '../components/CtaBand.astro';
+import { APP_NAME } from '../data/brand';
+import { FEATURES, KEYWORDS, absoluteUrl } from '../data/site';
+
+const title = `${APP_NAME}：自托管的企业 IM + AI Agent 工作台`;
+const description =
+  'BaobaoChat 是开源自托管的企业协作工作台：私聊群聊、通讯录、知识库与本地执行的 AI Agent 在同一个桌面客户端里。服务端可完全部署在内网，数据不出企业边界；支持 MCP 插件、多租户治理与白标换名。MIT 协议。';
+
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: APP_NAME,
+    applicationCategory: 'BusinessApplication',
+    applicationSubCategory: '企业协作 / AI 工作台',
+    operatingSystem: 'Windows, macOS, Linux',
+    description,
+    url: absoluteUrl('/'),
+    license: 'https://opensource.org/licenses/MIT',
+    isAccessibleForFree: true,
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'CNY' },
+    keywords: KEYWORDS.join(', '),
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: APP_NAME,
+    url: absoluteUrl('/'),
+    inLanguage: 'zh-CN',
+  },
+];
+---
+
+<BaseLayout
+  title={title}
+  description={description}
+  path="/"
+  jsonLd={jsonLd}
+  alternates={[
+    { hreflang: 'zh-CN', href: '/' },
+    { hreflang: 'en', href: '/en/' },
+    { hreflang: 'x-default', href: '/' },
+  ]}
+>
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="eyebrow">MIT 开源 · 自托管 · 内网可离线</span>
+        <h1>把企业 IM 和能干活的 AI Agent，放进同一个桌面客户端</h1>
+        <p class="lead">
+          私聊群聊、通讯录、知识库检索，与在本地执行的 Agent 共处一个客户端；
+          Go 服务端可完全部署在内网，数据不出企业边界。Agent 全过程可见，危险操作要你点头。
+        </p>
+        <div class="btn-row">
+          <a class="btn btn-primary btn-lg" href="/docs/quickstart/">快速开始部署</a>
+          <a class="btn btn-lg" href="/features/">查看能力</a>
+        </div>
+        <div class="hero-meta">
+          <span>Tauri 2 桌面端（Win / macOS / Linux）</span>
+          <span>Go 模块化单体服务端</span>
+          <span>自研 Rust Agent 运行时</span>
+          <span>PostgreSQL + pgvector</span>
+        </div>
+      </div>
+
+      <div class="matrix" aria-label="能力布局示意">
+        <div class="matrix-head">
+          <i></i><i></i><i></i>
+          <span style="margin-left:8px">{APP_NAME} · 能力区块</span>
+        </div>
+        <div class="matrix-body">
+          <div class="matrix-item">
+            <span class="dot"></span>
+            <div><b>IM 即时通讯</b><small>私聊 · 群聊 · 广播群 · 通讯录 · 多端同步</small></div>
+          </div>
+          <div class="matrix-item">
+            <span class="dot g"></span>
+            <div><b>Agent 工作台</b><small>本地执行 · 三档权限 · 审批卡 · 子代理 · 定时任务</small></div>
+          </div>
+          <div class="matrix-item">
+            <span class="dot g"></span>
+            <div><b>知识库 RAG</b><small>公司知识库 + 我的笔记 · 中文分词 · 权限过滤检索</small></div>
+          </div>
+          <div class="matrix-item">
+            <span class="dot y"></span>
+            <div><b>插件与 MCP</b><small>Claude Code 格式超集 · 插件市场 · MCP 三源接入</small></div>
+          </div>
+          <div class="matrix-item">
+            <span class="dot"></span>
+            <div><b>治理与安全</b><small>多租户 RLS · RBAC · OIDC 统一登录 · AI 网关 · 审计哈希链</small></div>
+          </div>
+        </div>
+        <div class="matrix-note">能力区块示意（非产品截图）</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>为什么要把它做成一个产品</h2>
+        <p>内网里同时落地"团队协作"和"AI 干活"，常见方案都要拼四套系统。</p>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <span class="tag">问题 1</span>
+          <h3>通用 AI 聊天工具落不了地</h3>
+          <p>
+            数据要出网、Agent 碰不到本机文件与环境；权限只能靠"人盯人"，
+            无法审计，也无法交给企业安全团队。
+          </p>
+        </div>
+        <div class="card">
+          <span class="tag">问题 2</span>
+          <h3>企业 IM 里没有"能干活的人"</h3>
+          <p>
+            聊天、文件、通讯录很好用，但要把"帮我把这份周报整理成 PPT"变成可执行任务，
+            还得切到另一个 AI 平台。
+          </p>
+        </div>
+        <div class="card">
+          <span class="tag">问题 3</span>
+          <h3>拼装方案成本高、体验割裂</h3>
+          <p>
+            IM + AI 平台 + 知识库 + 模型网关，四套系统四套账号；
+            权限模型不统一，审计链路断在每个边界上。
+          </p>
+        </div>
+      </div>
+      <p style="margin-top: 28px; color: var(--fg-muted);">
+        {APP_NAME} 把它们收敛成一个客户端 + 一套服务端：同一份身份、同一套权限、同一条审计链。
+      </p>
+    </div>
+  </section>
+
+  <section class="section section-alt">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>六块能力，一套身份与权限</h2>
+        <p>每块能力都可独立使用，组合起来才是完整工作台。</p>
+      </div>
+      <div class="grid">
+        {FEATURES.map((f) => (
+          <a class="card" href={`/features/${f.slug}/`} style="display:block;color:inherit;">
+            <h3>{f.title}</h3>
+            <p>{f.summary}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap two-col">
+      <div class="prose">
+        <h2>核心设计决策</h2>
+        <ul>
+          <li><strong>Agent 在本地执行</strong>：服务端只做鉴权、分发、模型代理与审计，不执行用户代码。</li>
+          <li><strong>Agent 以用户身份行事（OBO）</strong>：短时效 token + <code>act</code> 声明 + 双写审计，禁止服务级超级账号。</li>
+          <li><strong>权限最小化</strong>：询问 / 自动编辑 / 全自动三档，写文件、执行命令等危险操作必须确认。</li>
+          <li><strong>多租户硬隔离</strong>：<code>tenant_id</code> 贯穿所有表与 API，PostgreSQL 行级安全 + 存储前缀。</li>
+          <li><strong>知识库权限前置</strong>：检索 SQL 直接注入用户可见集，绝不后过滤。</li>
+          <li><strong>资源克制</strong>：客户端安装包 &lt; 30 MB，空闲内存 &lt; 300 MB。</li>
+        </ul>
+      </div>
+      <div class="prose">
+        <h2>技术栈</h2>
+        <pre><code>客户端   Tauri 2 + React 18 + TypeScript + Ant Design 5
+Agent    Rust sidecar（自研循环，stdio JSONL，OpenAI 兼容流式）
+服务端   Go 模块化单体（gateway / auth / org / message /
+         file / kb / ai-gateway / admin / audit / notify）
+数据     PostgreSQL 16（pgvector + zhparser + 分区）
+         Redis 7 · 对象存储（S3 兼容 / RustFS）
+AI       ai-gateway：GLM / Qwen / DeepSeek / vLLM 私有化
+交付     docker compose / Helm chart / 内网离线包
+        客户端自动更新（签名 + 灰度）</code></pre>
+        <p style="margin-top: 18px;">
+          <a href="/docs/architecture/">查看架构概览 →</a>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-alt">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>两种部署形态，都在内网</h2>
+        <p>推荐单机或小集群起步，按用户规模横向扩展。</p>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Docker Compose（推荐起步）</h3>
+          <p>
+            一条命令拉起服务端、PostgreSQL、Redis、对象存储与迁移任务；
+            适合 4C8G 起步，单机可支撑数百人日常协作。
+          </p>
+          <p style="margin-top: 14px;"><a href="/docs/deploy-compose/">Compose 部署指南 →</a></p>
+        </div>
+        <div class="card">
+          <h3>Kubernetes（Helm Chart）</h3>
+          <p>
+            带 PVC、迁移 Job、对象存储初始化与 NodePort 接入层；
+            适合已有 K8s 平台、需要多副本与滚动升级的组织。
+          </p>
+          <p style="margin-top: 14px;"><a href="/docs/deploy-k8s/">K8s 部署指南 →</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="cta-band">
+        <div>
+          <h2>和同类项目比，它不一样在哪</h2>
+          <p>AI 对话面板没有 IM，IM 没有能执行任务的 Agent——我们把两者做进同一套身份与权限。</p>
+        </div>
+        <a class="btn btn-lg" href="/compare/">看对比表 →</a>
+      </div>
+    </div>
+  </section>
+
+  <CtaBand
+    title="准备好在自己内网跑一套了吗？"
+    desc="MIT 协议，源码可审计；docker compose 一条命令拉起全栈，/setup 向导建首个管理员。"
+    primaryLabel="快速开始"
+    primaryHref="/docs/quickstart/"
+    secondaryLabel="在 GitHub 查看源码"
+    secondaryHref="https://github.com/pengzuyu/baobao-chat"
+  />
+</BaseLayout>

@@ -1,0 +1,229 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import CtaBand from '../components/CtaBand.astro';
+import { APP_NAME } from '../data/brand';
+
+const title = `与同类项目对比 · ${APP_NAME}`;
+const description =
+  'BaobaoChat 与 LibreChat、Open WebUI、Tailchat、野火 IM、Dify 的定位差异对比：谁能私有化、谁有企业 IM、谁的 Agent 能在本机执行并接受审批、谁的治理面适合内网。';
+
+const rows = [
+  {
+    dim: '定位',
+    self: '企业 IM + AI Agent 工作台',
+    librechat: 'AI 对话面板',
+    openwebui: 'AI 对话 / RAG 面板',
+    tailchat: 'IM + 插件生态',
+    wildfire: '企业 IM',
+    dify: 'AI 应用 / 工作流平台',
+  },
+  {
+    dim: '私聊 / 群聊',
+    self: 'yes:✓ 私聊、群聊、广播群',
+    librechat: 'no:—',
+    openwebui: 'no:—',
+    tailchat: 'yes:✓',
+    wildfire: 'yes:✓',
+    dify: 'no:—',
+  },
+  {
+    dim: '通讯录 / 组织树 / 在线状态',
+    self: 'yes:✓',
+    librechat: 'partial:基础用户管理',
+    openwebui: 'partial:基础用户管理',
+    tailchat: 'partial:群组',
+    wildfire: 'yes:✓',
+    dify: 'no:—',
+  },
+  {
+    dim: 'Agent 在用户本机执行（用本机权限）',
+    self: 'yes:✓ 本地 sidecar',
+    librechat: 'partial:服务端工具 / 代码解释器',
+    openwebui: 'partial:服务端工具',
+    tailchat: 'partial:插件中转',
+    wildfire: 'partial:需另配 Hermes',
+    dify: 'no:服务端工作流',
+  },
+  {
+    dim: 'Agent 过程可见 + 分级审批',
+    self: 'yes:✓ 三档权限 + 内嵌审批卡',
+    librechat: 'partial:部分',
+    openwebui: 'partial:部分',
+    tailchat: 'no:—',
+    wildfire: 'no:—',
+    dify: 'partial:部分',
+  },
+  {
+    dim: '知识库 / RAG',
+    self: 'yes:✓ 公司知识库 + 我的笔记',
+    librechat: 'partial:基础',
+    openwebui: 'yes:✓',
+    tailchat: 'partial:插件',
+    wildfire: 'no:—',
+    dify: 'yes:✓',
+  },
+  {
+    dim: '插件 / MCP',
+    self: 'yes:✓ 插件超集 + MCP 三源',
+    librechat: 'yes:MCP',
+    openwebui: 'yes:MCP',
+    tailchat: 'yes:插件',
+    wildfire: 'no:—',
+    dify: 'partial:工具 / 插件',
+  },
+  {
+    dim: '多租户硬隔离 / RBAC / 审计链',
+    self: 'yes:✓',
+    librechat: 'partial:基础',
+    openwebui: 'partial:基础',
+    tailchat: 'partial:群组权限',
+    wildfire: 'yes:✓ 企业版更完整',
+    dify: 'partial:工作空间',
+  },
+  {
+    dim: '桌面客户端',
+    self: 'yes:✓ Tauri（Win / macOS / Linux）',
+    librechat: 'partial:Web / 桌面壳',
+    openwebui: 'partial:Web',
+    tailchat: 'partial:Web / 桌面壳',
+    wildfire: 'yes:✓ PC 客户端（UI 套件收费）',
+    dify: 'partial:Web',
+  },
+  {
+    dim: '白标换名',
+    self: 'yes:✓ 改一个品牌目录',
+    librechat: 'partial:改代码 / 配置',
+    openwebui: 'partial:改代码 / 配置',
+    tailchat: 'partial:改代码',
+    wildfire: 'partial:社区版受限',
+    dify: 'partial:商业版',
+  },
+  {
+    dim: '许可',
+    self: 'yes:MIT',
+    librechat: 'no:MIT',
+    openwebui: 'no:开源（见项目许可）',
+    tailchat: 'no:Apache-2.0',
+    wildfire: 'no:社区版免费',
+    dify: 'no:Apache-2.0 + 附加条款',
+  },
+];
+
+const cell = (v: string) => {
+  const [kind, ...rest] = v.split(':');
+  const text = rest.join(':') || (kind === 'yes' ? '✓' : kind === 'no' ? '—' : '部分');
+  const cls = kind === 'yes' ? 'yes' : kind === 'partial' ? 'partial' : 'no';
+  return { cls, text };
+};
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'WebPage',
+  name: title,
+  description,
+  about: ['企业即时通讯', 'AI Agent', '私有化部署', '开源协作软件'],
+};
+---
+
+<BaseLayout title={title} description={description} path="/compare/" jsonLd={jsonLd}>
+  <section class="page-head">
+    <div class="wrap">
+      <div class="breadcrumb"><a href="/">首页</a> / 对比</div>
+      <h1>和同类项目比，差在哪、强在哪</h1>
+      <p class="lead">
+        这张表按「定位差异」写，不评谁更强：AI 对话面板、企业 IM、AI 应用平台各有擅长的场景。
+        选型的关键是——你要不要"员工互相聊天"和"AI 在员工电脑上干活"同时成立。
+      </p>
+    </div>
+  </section>
+
+  <div class="wrap" style="padding: 40px 0 8px;">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>维度</th>
+            <th>{APP_NAME}</th>
+            <th>LibreChat</th>
+            <th>Open WebUI</th>
+            <th>Tailchat</th>
+            <th>野火 IM</th>
+            <th>Dify</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr>
+              <td><strong>{r.dim}</strong></td>
+              {[r.self, r.librechat, r.openwebui, r.tailchat, r.wildfire, r.dify].map((v, i) => {
+                const c = cell(v);
+                return <td class={i === 0 ? c.cls : undefined} style={i === 0 ? 'background:var(--brand-soft)' : undefined}>{c.text}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top: 14px; font-size: 0.84rem; color: var(--fg-muted);">
+      信息基于各项目公开资料整理（截至 2026-11），可能随版本变化，请以各项目官方说明为准。
+    </p>
+
+    <div class="prose" style="margin-top: 48px;">
+      <h2>怎么选</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>只要一个内网 AI 对话入口</h3>
+          <p>
+            成员主要和 AI 对话、不要求员工互相聊天——LibreChat 或 Open WebUI 更轻，
+            部署成本低，功能也够。
+          </p>
+        </div>
+        <div class="card">
+          <h3>主要目标是替代全员日常 IM</h3>
+          <p>
+            需要音视频、在线文档、移动端这类重型 IM 能力——野火 IM / Tailchat 更合适；
+            本产品当前不含音视频通话与在线文档。
+          </p>
+        </div>
+        <div class="card">
+          <h3>要让 AI 在员工电脑上真的干活</h3>
+          <p>
+            AI 需要读写本机文件、执行命令、查企业知识库，还要能审批与审计——这类"本地执行 + 企业治理"的组合，
+            正是 {APP_NAME} 的设计目标。
+          </p>
+        </div>
+        <div class="card">
+          <h3>要搭业务 AI 应用 / 工作流</h3>
+          <p>
+            面向业务系统的编排、知识库问答机器人、API 发布——Dify 的定位更贴，
+            本产品更偏"员工侧的协作与 Agent 工作台"。
+          </p>
+        </div>
+      </div>
+
+      <h2>一个常见的组合方案</h2>
+      <p>
+        如果组织里已经有成熟的 IM，也不想替换：保留现有 IM，把 {APP_NAME} 作为
+        "AI 工作台 + 知识库 + Agent 治理"独立部署；需要外部智能体协作时，
+        通过本产品壳内 MCP 服务把能力开放给现有工具，而不是强行替换聊天入口。
+      </p>
+
+      <h2>我们刻意不做的事</h2>
+      <ul>
+        <li>不做音视频通话与在线文档（相关域已从代码移除，聚焦协作与 Agent）。</li>
+        <li>不做移动端原生 App。</li>
+        <li>不主动委派外部编码代理（只做被调用，见 <a href="/features/a2a/">A2A / MCP</a>）。</li>
+      </ul>
+      <p>把边界说清楚，比把功能列表拉长更有用。</p>
+    </div>
+  </div>
+
+  <CtaBand
+    title="看完还是想自己跑一套？"
+    desc="MIT 协议、源码可审计；内网 Compose 一条命令起步，先建管理员再拉人。"
+    primaryLabel="快速开始"
+    primaryHref="/docs/quickstart/"
+    secondaryLabel="常见问题"
+    secondaryHref="/faq/"
+  />
+</BaseLayout>
