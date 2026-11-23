@@ -102,13 +102,20 @@ for TRIPLE in $TRIPLES_STR; do
   (cd "$ROOT/client" && ./node_modules/.bin/tauri build \
       --target "$TRIPLE" --config "$REL_CONF")
 
-  # 收集 bundle 产物（tauri build --target 落 target/<triple>/release/bundle/）
+  # 收集 bundle 产物（tauri build --target 落 target/<triple>/release/bundle/）。
+  # 精准按文件模式收（整目录 cp 会卷入 icon.icns/bundle_dmg.sh 等中间产物）；
+  # .app 目录不收——updater 走 .app.tar.gz、官网直链给 .dmg。
   BUNDLE="$ROOT/client/src-tauri/target/$TRIPLE/release/bundle"
   mkdir -p "$OUT"
-  for d in macos dmg appimage deb; do
-    [ -d "$BUNDLE/$d" ] && cp -R "$BUNDLE/$d/." "$OUT/"
+  shopt -s nullglob
+  for f in "$BUNDLE/macos/"*.app.tar.gz "$BUNDLE/macos/"*.app.tar.gz.sig \
+           "$BUNDLE/dmg/"*.dmg \
+           "$BUNDLE/appimage/"*.AppImage "$BUNDLE/appimage/"*.AppImage.sig \
+           "$BUNDLE/deb/"*.deb; do
+    cp "$f" "$OUT/"
   done
-  echo "[build-desktop] 产物已收至 $OUT："
+  shopt -u nullglob
+  echo "[build-desktop] 产物已收至 ${OUT}："
   (cd "$OUT" && ls -lh | awk 'NR>1 {printf "    %10s  %s\n", $5, $9}')
 done
 
