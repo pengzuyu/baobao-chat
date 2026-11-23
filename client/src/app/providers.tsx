@@ -10,7 +10,7 @@ import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/reac
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import enUS from 'antd/locale/en_US';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useThemeStore } from '../shared/store/theme';
 import { useI18nStore } from '../shared/i18n';
 import { useAuthStore } from '../features/auth/store/auth';
@@ -58,6 +58,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
   const accent = useThemeStore((s) => s.accent);
   const locale = useI18nStore((s) => s.locale);
   const mode = resolved === 'dark' ? 'dark' : 'light';
+  // 系统「减少动态效果」（Windows：设置→辅助功能→视觉效果→动画效果=关）
+  const reduceMotion = useReducedMotion();
 
   // D27 机制核心：--bbc-* CSS 变量随 antd 主题单源注入（残余自研 CSS 与 antd 组件同源联动）
   useEffect(() => {
@@ -68,10 +70,23 @@ export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthCacheBoundary>
-        <ConfigProvider locale={locale === 'en' ? enUS : zhCN} theme={antdThemeFrom(mode, accent)}>
+        <ConfigProvider locale={locale === 'en' ? enUS : zhCN} theme={antdThemeFrom(mode, accent, reduceMotion)}>
           {children}
         </ConfigProvider>
       </AuthCacheBoundary>
     </QueryClientProvider>
   );
+}
+
+/** prefers-reduced-motion 订阅（跟随系统切换，不必重启应用） */
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setReduced(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => setReduced(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return reduced;
 }

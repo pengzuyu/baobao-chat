@@ -38,6 +38,47 @@ fn win_minimize(window: tauri::Window) -> Result<(), String> {
     window.minimize().map_err(|e| e.to_string())
 }
 
+/// 主窗口尺寸按显示器工作区收口（2026-11-23 Windows 真机修复）。
+///
+/// 根因：`tauri.conf.json` 把窗口写死 1280×800 逻辑像素且不随屏幕变化。Windows 上
+/// 只要工作区放不下（1366×768 笔记本 100%、1080p 用 125%/150% 缩放都很常见），窗口
+/// 就比屏幕高：贴底部的 UI（左侧栏头像）被切到屏幕外，贴边弹出的弹层（头像菜单、弹窗
+/// 内的下拉）也只会按 WebView 视口算位置、不认屏幕边界，于是落进不可见区域——用户看到
+/// 的就是「点了完全没反应」。这里启动时把内容区尺寸收口到工作区（扣掉标题栏/边框与
+/// 四周余量）并重新居中；屏幕放得下时原样返回，零副作用。
+fn fit_window_to_monitor(win: &tauri::WebviewWindow) {
+    let (Ok(Some(monitor)), Ok(inner)) = (win.current_monitor(), win.inner_size()) else {
+        return;
+    };
+    let Ok(outer) = win.outer_size() else { return };
+    let scale = if monitor.scale_factor() > 0.0 {
+        monitor.scale_factor()
+    } else {
+        1.0
+    };
+    // 标题栏 + 边框 = 外框与内容区之差（Windows 约 32px 高；macOS 无边框为 0）
+    let deco_w = outer.width.saturating_sub(inner.width);
+    let deco_h = outer.height.saturating_sub(inner.height);
+    let margin = (12.0 * scale).round() as u32; // 四周余量：避免贴屏幕边、窗口阴影被裁
+    let area = monitor.work_area();
+    let max_w = area.size.width.saturating_sub(deco_w + margin * 2);
+    let max_h = area.size.height.saturating_sub(deco_h + margin * 2);
+    if max_w == 0 || max_h == 0 || (inner.width <= max_w && inner.height <= max_h) {
+        return;
+    }
+    // 最小尺寸同步收口：配置写死的 960×600 在小屏上同样顶出屏幕，不收口 set_size 不生效
+    let _ = win.set_min_size(Some(tauri::LogicalSize::new(
+        (max_w as f64 / scale).min(960.0),
+        (max_h as f64 / scale).min(600.0),
+    )));
+    let _ = win.set_size(tauri::PhysicalSize::new(
+        inner.width.min(max_w),
+        inner.height.min(max_h),
+    ));
+    // 原窗口可能已被系统把标题栏/底边居中到屏幕外，收口后重新居中
+    let _ = win.center();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // updater 条件注册（16 篇 §5.1）：plugins.updater.pubkey 未填（signer 密钥未生成）
@@ -77,6 +118,11 @@ pub fn run() {
             std::panic::set_hook(Box::new(|info| {
                 eprintln!("[bbc-panic] {info}");
             }));
+            // 窗口尺寸按显示器工作区收口（2026-11-23 Windows 真机：窗口高出屏幕导致
+            // 贴底 UI 与贴边弹层落到可视区外，表现为「点了没反应」）
+            if let Some(main_win) = app.get_webview_window("main") {
+                fit_window_to_monitor(&main_win);
+            }
             // 深链路由（D28 批2/Q2b）：bbc://auth?req={id} → WebView 事件
             // oidc://confirm-req（确认卡组件监听）。冷启动（链接拉起 App）经
             // get_current 补投；运行中经 deep-link://new-url。dev 形态 macOS 需

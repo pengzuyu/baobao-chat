@@ -242,7 +242,7 @@ export function ClientReleasePage() {
       render: (_, r) =>
         r.status === 'draft' ? (
           <Popconfirm title="删除该草稿？" okText="删除" cancelText="取消" onConfirm={() => void doDelete(r.id)}>
-            <Button size="small" variant="secondary" danger>
+            <Button size="small" danger>
               删除
             </Button>
           </Popconfirm>
@@ -343,7 +343,10 @@ export function ClientReleasePage() {
             <Input placeholder="0.2.0（与产物文件名中的版本一致）" />
           </Form.Item>
           <Form.Item name="platform" label="平台" rules={[{ required: true }]}>
-            <Select options={PLATFORMS} />
+            {/* 弹窗内下拉挂到表单项上（2026-11-23 Windows 真机）：默认挂 body，
+                弹层坐标与层级都跨出弹窗上下文，真机上出现过「点了弹不出来」；
+                挂进弹窗内部后跟随弹窗层级与滚动，5 个固定选项也不会被裁 */}
+            <Select options={PLATFORMS} getPopupContainer={(trigger) => trigger.parentElement ?? document.body} />
           </Form.Item>
           <Form.Item label="安装包文件" required>
             <Upload.Dragger

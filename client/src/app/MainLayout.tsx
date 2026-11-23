@@ -254,17 +254,27 @@ export function MainLayout() {
               style={{ flex: 1, minWidth: 0, borderInlineEnd: 'none', background: 'transparent' }}
             />
           </ConfigProvider>
-          <Dropdown menu={avatarMenu} placement="topRight" trigger={['click']}>
-            {/* 头像+常驻状态文字（2026-11-20 用户反馈：纯灰点在圆角方形头像角上错位、
-                离线态不显眼；文字随状态着色，比单点更清晰饱满） */}
-            <Flex vertical align="center" gap={3} title={user?.name ?? '未登录'} style={{ padding: '8px 8px 6px', cursor: 'pointer' }}>
-              <PresenceBadge status={myPresence}>
-                <Avatar name={user?.name ?? '?'} size={32} />
-              </PresenceBadge>
-              <span style={{ fontSize: 11, lineHeight: 1, userSelect: 'none', color: presenceColors[myPresence].dot }}>
-                {PRESENCE_LABEL[myPresence]}
-              </span>
-            </Flex>
+          {/* 菜单朝窗口内侧展开（2026-11-23 Windows 真机）：头像贴窗口最左缘，
+              topRight 会把菜单右缘对齐到触发器右缘、整体向窗口外（负 x）伸出去，
+              依赖 rc-trigger 的 adjustX 兜底才有得看；topLeft 直接向内展开，不赌兜底。
+              触发器用原生 button（与聊天页「+」新建会话同款，已验证可弹）：rc-trigger
+              的 click 动作经 cloneElement 注入到子元素上，原生元素能保证拿到事件与 ref */}
+          <Dropdown menu={avatarMenu} placement="topLeft" trigger={['click']}>
+            <button
+              type="button"
+              style={{ background: 'none', border: 'none', padding: 0, width: '100%', cursor: 'pointer', display: 'block' }}
+            >
+              {/* 头像+常驻状态文字（2026-11-20 用户反馈：纯灰点在圆角方形头像角上错位、
+                  离线态不显眼；文字随状态着色，比单点更清晰饱满） */}
+              <Flex vertical align="center" gap={3} title={user?.name ?? '未登录'} style={{ padding: '8px 8px 6px' }}>
+                <PresenceBadge status={myPresence}>
+                  <Avatar name={user?.name ?? '?'} size={32} />
+                </PresenceBadge>
+                <span style={{ fontSize: 11, lineHeight: 1, userSelect: 'none', color: presenceColors[myPresence].dot }}>
+                  {PRESENCE_LABEL[myPresence]}
+                </span>
+              </Flex>
+            </button>
           </Dropdown>
         </div>
       </Layout.Sider>

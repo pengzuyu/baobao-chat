@@ -93,8 +93,13 @@ const toneOf = (mode: Mode, accent: ThemeAccent) => ACCENTS[accent][mode];
 
 const FONT_FAMILY = `-apple-system, 'PingFang SC', 'Microsoft YaHei', 'Inter', sans-serif`;
 
-/** antd ThemeConfig 单源工厂（D26 §2 起沿用；D27 修订2 扩 accent 维度） */
-export function antdThemeFrom(mode: Mode, accent: ThemeAccent = DEFAULT_ACCENT): ThemeConfig {
+/** antd ThemeConfig 单源工厂（D26 §2 起沿用；D27 修订2 扩 accent 维度）
+ *
+ * `reduceMotion`：系统「减少动态效果」（Windows 辅助功能里关闭「动画效果」即命中）。
+ * 命中时显式关掉 antd 动效（token.motion=false）而不是靠 global.css 的
+ * `animation-duration: .01ms !important` 硬压——后者会把弹层（Dropdown/Select 的下拉、
+ * Modal）的 rc-motion 生命周期掐在半路，2026-11-23 Windows 真机出现过「点了不弹出」。 */
+export function antdThemeFrom(mode: Mode, accent: ThemeAccent = DEFAULT_ACCENT, reduceMotion = false): ThemeConfig {
   const c = of(mode);
   const t = toneOf(mode, accent);
   return {
@@ -116,6 +121,7 @@ export function antdThemeFrom(mode: Mode, accent: ThemeAccent = DEFAULT_ACCENT):
       fontSize: 14, // = --bbc-font-14
       controlHeight: 32,
       fontFamily: FONT_FAMILY,
+      motion: !reduceMotion,
     },
     components: {
       Button: { borderRadius: 6 },
