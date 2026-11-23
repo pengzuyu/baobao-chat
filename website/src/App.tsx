@@ -4,7 +4,7 @@
  * 发新版自动跟进；文案初稿源=README/docs 00/EXECUTION-PLAN，业务方终审后可改。
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   loadReleaseInfo,
   groupDownloads,
@@ -104,6 +104,7 @@ function Header() {
         <nav className="site-nav">
           <a href="#features">功能特性</a>
           <a href="#roadmap">路线图</a>
+          <a href="#integrate">接入</a>
           <a href="#download" className="nav-cta">
             下载
           </a>
@@ -262,6 +263,65 @@ function DownloadSection() {
   );
 }
 
+// ── 接入外部智能体（口径=设置·Agent·外部 Agent 接入授权卡，D30）──
+const INTEGRATE_STEPS: { title: string; body: ReactNode }[] = [
+  {
+    title: '安装并登录桌面端',
+    body: (
+      <>
+        外部接入面运行在 <strong>127.0.0.1 本机回环</strong>，随 App 打开自动在线、关闭即下线——
+        不暴露到网络，无需部署任何额外服务。
+      </>
+    ),
+  },
+  {
+    title: '复制挂载命令',
+    body: (
+      <>
+        在 App 内打开 <strong>设置 → Agent → 外部 Agent 接入</strong>，复制现成命令（token 已带好）。
+        手动配置形态如下：
+        <code className="step-code">
+          claude mcp add --transport http bbc http://127.0.0.1:8791/mcp \
+          <br /> &nbsp;--header "Authorization: Bearer &lt;本机 token&gt;"
+        </code>
+      </>
+    ),
+  },
+  {
+    title: '在 Claude Code 里直接用',
+    body: (
+      <>
+        BaobaoChat 的 agent 成为你的子智能体：知识检索、记忆、公司工具
+        <strong>按你的账号权限</strong>执行；涉及写操作时审批卡会弹在 App 窗口，确认后继续。
+      </>
+    ),
+  },
+];
+
+function IntegrateSection() {
+  return (
+    <section id="integrate" className="section section-alt">
+      <div className="container">
+        <h2 className="section-title">接入 Claude Code</h2>
+        <p className="section-sub">把 BaobaoChat agent 挂成外部智能体的子智能体 · 三步即用</p>
+        <div className="integrate-grid">
+          {INTEGRATE_STEPS.map((s, i) => (
+            <div key={s.title} className="step-card">
+              <span className="step-num">{i + 1}</span>
+              <h3>{s.title}</h3>
+              <p>{s.body}</p>
+            </div>
+          ))}
+        </div>
+        <p className="integrate-note">
+          同样支持 zcode 与 bbc CLI（<code>bbc ask "帮我查一下…"</code>）；在 App 内「撤销并重发」token
+          可即刻吊销既有接入。会话与审批都在本 App 内完成，外部智能体拿不到你的登录凭证。
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function Footer() {
   return (
     <footer className="site-footer">
@@ -284,6 +344,7 @@ export function App() {
         <Features />
         <Roadmap />
         <DownloadSection />
+        <IntegrateSection />
       </main>
       <Footer />
     </>
