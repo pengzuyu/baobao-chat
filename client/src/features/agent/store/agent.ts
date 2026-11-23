@@ -155,8 +155,9 @@ interface AgentState {
   loadHistoryIfEmpty: (sessionId: string) => Promise<void>;
   startSession: (mode: PermissionMode, model?: string) => Promise<void>;
   /** 显式建会话并返回 meta（D18 内嵌卡：不切换 activeSessionId 之外还供 im 侧直接持有引用；
-   *  title 可选初始标题——IM embedded 来源名「与xxx的对话」/「xxx · 群聊」） */
-  createSession: (opts?: { workspace?: string; mode?: PermissionMode; model?: string; title?: string }) => Promise<import('../bridge/types').AgentSessionMeta>;
+   *  title 可选初始标题——IM embedded 来源名「与xxx的对话」/「xxx · 群聊」；
+   *  origin 场景来源（2026-11-23）：embedded 专用，runtime 注入场景段） */
+  createSession: (opts?: { workspace?: string; mode?: PermissionMode; model?: string; title?: string; origin?: import('../bridge/types').SessionOriginInfo }) => Promise<import('../bridge/types').AgentSessionMeta>;
   /** 定向发送（D18：embedded 会话由 im 侧显式指定 sessionId，不依赖 activeSessionId；
    *  首条用户消息自动派生标题（占位判定 + renameSession 落库）） */
   sendTextTo: (sessionId: string, text: string) => Promise<void>;
@@ -497,7 +498,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // 记忆恒用户级）；项目会话由 openProject 传入目录。
     // model=用户默认模型的直达引用（settings.ai_default 解析，0023；缺省=档位别名）
     // title 可选初始标题（IM embedded 来源名）；缺省=占位，首条消息后自动派生
-    const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? 'ask', opts?.model, opts?.title);
+    // origin 场景来源（2026-11-23）：embedded 会话带 IM 来源，runtime 注入场景段
+    const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? 'ask', opts?.model, opts?.title, opts?.origin);
     set((s) => ({
       createError: null,
       sessions: [meta, ...s.sessions],

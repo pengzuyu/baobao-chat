@@ -157,5 +157,6 @@ fn row(id: &str) -> bbrt_store::SessionRow {
         updated_at: 0,
         ended_at: None,
         summary: None,
+        conv_id: None,
     }
 }

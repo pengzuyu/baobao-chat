@@ -17,7 +17,7 @@ use bbrt_session::executor::{
     CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview,
 };
 use bbrt_session::loop_runner::{
-    ClarifyAnswer, EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse,
+    ClarifyAnswer, EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, Scene,
     SessionRunner, MAX_STEPS,
 };
 use bbrt_session::manager::{ManagerError, SessionManager, StartParams};
@@ -566,6 +566,7 @@ fn interrupt_flags_through_taken_runner_while_waiting_permission() {
             // 回归兜底：若中断失效 5s 超时收口（report.interrupted=false 断言失败
             // 而非挂死）；正常路径中断 <2s 收口
             approval_timeout_secs: Some(5),
+            scene: Default::default(),
         },
     )
     .unwrap();
@@ -669,6 +670,7 @@ fn set_mode_takes_effect_on_next_tool_gate() {
             restored: None,
             unattended: false,
             approval_timeout_secs: None,
+            scene: Default::default(),
         },
     )
     .unwrap();
@@ -847,6 +849,7 @@ fn manager_limits_three_active_sessions() {
                 restored: None,
                 unattended: false,
                 approval_timeout_secs: None,
+                scene: Default::default(),
             },
         )
         .unwrap();
@@ -863,6 +866,7 @@ fn manager_limits_three_active_sessions() {
                 restored: None,
                 unattended: false,
                 approval_timeout_secs: None,
+                scene: Default::default(),
             }
         ),
         Err(ManagerError::TooManyActive)
@@ -880,6 +884,7 @@ fn manager_limits_three_active_sessions() {
             restored: None,
             unattended: false,
             approval_timeout_secs: None,
+            scene: Default::default(),
         },
     )
     .unwrap();
@@ -1347,6 +1352,129 @@ fn system_prompt_carries_memory_guidance_and_recall() {
     assert!(sys.contains("端口 8090 约定"), "记忆索引应注入 system");
 }
 
+/// 场景段（2026-11-23 三区块）：runner.scene 决定 SYSTEM_PROMPT 末尾追加哪段；
+/// 写法口径=场景定位/上下文来源/工作流指引，无回答风格/格式/用途约定
+#[test]
+fn scene_notes_appended_by_scene() {
+    let mk = || {
+        (
+            Arc::new(CollectSink::default()),
+            ScriptedModel::new(vec!["好的。".into(); 3]),
+            Arc::new(FakeTools {
+                confirm: false,
+                executed: Mutex::new(vec![]),
+                fail: false,
+            }),
+        )
+    };
+    // ① 项目：以仓库为工作对象 + 台账指引
+    {
+        let (sink, model, tools) = mk();
+        let d = deps(model.clone(), tools, sink, None);
+        let mut runner = SessionRunner::new(
+            "s-proj".into(),
+            "/ws".into(),
+            PermissionMode::Ask,
+            ModelTier::Strong,
+            None,
+        );
+        runner.scene = Scene::Project;
+        let _ = runner.run_turn("看下这个仓库", &d, None);
+        let sys = model.seen_system.lock().unwrap()[0].clone();
+        assert!(sys.contains("[场景：项目]"), "项目场景段应追加: {sys}");
+        assert!(sys.contains("[项目进度]"));
+        assert!(!sys.contains("[场景：聊天]"));
+    }
+    // ② 日常对话：conv_id + 单聊/群聊事实 + im_history 指向（抗压缩常驻）
+    {
+        let (sink, model, tools) = mk();
+        let d = deps(model.clone(), tools, sink, None);
+        let mut runner = SessionRunner::new(
+            "s-emb".into(),
+            String::new(),
+            PermissionMode::Ask,
+            ModelTier::Strong,
+            None,
+        );
+        runner.scene = Scene::Embedded {
+            conv_id: "886".into(),
+            conv_type: "group".into(),
+        };
+        let _ = runner.run_turn("总结下讨论", &d, None);
+        let sys = model.seen_system.lock().unwrap()[0].clone();
+        assert!(sys.contains("[场景：聊天]"), "聊天场景段应追加: {sys}");
+        assert!(sys.contains("conv_id: 886"));
+        assert!(sys.contains("群聊"));
+        assert!(sys.contains("im_history"));
+        // 无回答形态约束（口径：不写风格/格式/用途约定）
+        assert!(!sys.contains("简洁"));
+    }
+    // ③ 任务：不绑定单一项目定位
+    {
+        let (sink, model, tools) = mk();
+        let d = deps(model.clone(), tools, sink, None);
+        let mut runner = SessionRunner::new(
+            "s-task".into(),
+            String::new(),
+            PermissionMode::Ask,
+            ModelTier::Strong,
+            None,
+        );
+        runner.scene = Scene::Task;
+        let _ = runner.run_turn("整理两边进展", &d, None);
+        let sys = model.seen_system.lock().unwrap()[0].clone();
+        assert!(sys.contains("[场景：任务]"), "任务场景段应追加: {sys}");
+        assert!(sys.contains("不绑定单一项目"));
+    }
+}
+
+/// 快照化（2026-11-23 前缀稳定）：memory_index/skills 目录首次 run_turn 定格，
+/// 会话中途新增的记忆不进本会话索引——system 消息跨轮字节一致，模型侧
+/// prompt cache 的 history 前缀不被打断
+#[test]
+fn memory_snapshot_frozen_across_turns() {
+    let sink = Arc::new(CollectSink::default());
+    let model = ScriptedModel::new(vec!["好的。".into(), "明白。".into()]);
+    let tools = Arc::new(FakeTools {
+        confirm: false,
+        executed: Mutex::new(vec![]),
+        fail: false,
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let mem = test_memory(tmp.path());
+    let d = deps(model.clone(), tools, sink, Some(mem.clone()));
+    let mut runner = SessionRunner::new(
+        "s-snap".into(),
+        "/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    runner.scene = Scene::Project;
+    let _ = runner.run_turn("第一轮", &d, None);
+    // 会话中途落一条新记忆（模拟 memory_save / 被动轨启发式）
+    mem.save_memory(&bbrt_memory::SaveInput {
+        title: "中途新增记忆".into(),
+        body: "这条不该出现在本会话的索引里。".into(),
+        mtype: bbrt_memory::MemoryType::Project,
+        session: "s-snap".into(),
+        links: vec![],
+    })
+    .unwrap();
+    let _ = runner.run_turn("第二轮", &d, None);
+    let systems = model.seen_system.lock().unwrap().clone();
+    assert_eq!(systems.len(), 2);
+    assert!(
+        !systems[1].contains("中途新增记忆"),
+        "第二轮 system 不应含中途新增记忆（快照应定格）: {}",
+        systems[1]
+    );
+    assert_eq!(
+        systems[0], systems[1],
+        "两轮 system 应字节一致（缓存前缀稳定）"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // model.switch 审计
 // ---------------------------------------------------------------------------
@@ -1401,6 +1529,7 @@ fn manager_switch_model_emits() {
             restored: None,
             unattended: false,
             approval_timeout_secs: None,
+            scene: Default::default(),
         },
     )
     .unwrap();
@@ -1555,6 +1684,7 @@ fn switch_model_override_persists() {
             restored: None,
             unattended: false,
             approval_timeout_secs: None,
+            scene: Default::default(),
         },
     )
     .unwrap();
@@ -2224,4 +2354,95 @@ fn unattended_blocks_ask_user_call_without_clarify_event() {
             .any(|e| matches!(e, SessionEvent::ClarifyRequest { .. })),
         "无人值守不应发 clarify.request: {evts:?}"
     );
+}
+
+/// 场景落库（2026-11-23）：embedded 场景 form=embedded + conv_id 落库；
+/// 任务/项目落 workbench（表 CHECK IN('embedded','workbench')）——复活路径
+/// 按库行还原场景，不依赖前端 IDB 映射
+#[test]
+fn manager_persists_scene_form_and_conv_id() {
+    use bbrt_session::manager::SessionManager;
+    use bbrt_store::Store;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Mutex::new(Store::open(&tmp.path().join("t.db")).unwrap()));
+    let mk_deps = |sink: Arc<CollectSink>| LoopDeps {
+        model: Arc::new(FakeModel {
+            calls: AtomicUsize::new(0),
+            tool_name: None,
+        }),
+        tools: Arc::new(FakeTools {
+            confirm: false,
+            executed: Mutex::new(vec![]),
+            fail: false,
+        }),
+        memory: None,
+        wal: Arc::new(NoopEventLog),
+        sink,
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    // embedded：form=embedded + conv_id
+    {
+        let mgr = SessionManager::new(
+            mk_deps(Arc::new(CollectSink::default())),
+            Some(store.clone()),
+        );
+        mgr.start(
+            "s-emb-db".into(),
+            StartParams {
+                workspace: String::new(),
+                mode: PermissionMode::Ask,
+                model_policy: ModelTier::Strong,
+                model_override: None,
+                title: "与张三的对话".into(),
+                restored: None,
+                unattended: false,
+                approval_timeout_secs: None,
+                scene: Scene::Embedded {
+                    conv_id: "886".into(),
+                    conv_type: "group".into(),
+                },
+            },
+        )
+        .unwrap();
+        let row = store
+            .lock()
+            .unwrap()
+            .get_session("s-emb-db")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.form, "embedded");
+        assert_eq!(row.conv_id.as_deref(), Some("886"));
+    }
+    // 任务/项目：form=workbench、无 conv_id（CHECK 约束域内）
+    for (sid, ws, scene) in [
+        ("s-task-db", String::new(), Scene::Task),
+        ("s-proj-db", "/ws".to_string(), Scene::Project),
+    ] {
+        let mgr = SessionManager::new(
+            mk_deps(Arc::new(CollectSink::default())),
+            Some(store.clone()),
+        );
+        mgr.start(
+            sid.into(),
+            StartParams {
+                workspace: ws,
+                mode: PermissionMode::Ask,
+                model_policy: ModelTier::Strong,
+                model_override: None,
+                title: "t".into(),
+                restored: None,
+                unattended: false,
+                approval_timeout_secs: None,
+                scene,
+            },
+        )
+        .unwrap();
+        let row = store.lock().unwrap().get_session(sid).unwrap().unwrap();
+        assert_eq!(row.form, "workbench");
+        assert_eq!(row.conv_id, None);
+    }
 }

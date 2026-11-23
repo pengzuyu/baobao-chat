@@ -362,6 +362,9 @@ fn dispatch(
             title,
             unattended,
             approval_timeout_secs,
+            origin,
+            conv_id,
+            conv_type,
             ..
         } => {
             let tier = match model_policy {
@@ -372,6 +375,19 @@ fn dispatch(
                 bbrt_protocol::PermissionMode::Ask => bbrt_sec::gate::PermissionMode::Ask,
                 bbrt_protocol::PermissionMode::AutoEdit => bbrt_sec::gate::PermissionMode::AutoEdit,
                 bbrt_protocol::PermissionMode::FullAuto => bbrt_sec::gate::PermissionMode::FullAuto,
+            };
+            // 场景判定（2026-11-23 三区块场景提示词）：workspace 非空=项目；
+            // origin=embedded=日常对话（带 conv_id/conv_type）；其余（含缺省+
+            // 空 workspace 的历史数据）=任务
+            let scene = if !workspace.is_empty() {
+                bbrt_session::Scene::Project
+            } else if origin.as_deref() == Some("embedded") {
+                bbrt_session::Scene::Embedded {
+                    conv_id: conv_id.unwrap_or_default(),
+                    conv_type: conv_type.unwrap_or_else(|| "single".into()),
+                }
+            } else {
+                bbrt_session::Scene::Task
             };
             // 崩溃恢复（D11 §9.2）：historyRef 指向本地事件镜像 → 先重放再启动
             let restored = history_ref.as_ref().and_then(|_| {
@@ -405,6 +421,7 @@ fn dispatch(
                     restored,
                     unattended,
                     approval_timeout_secs,
+                    scene,
                 },
             ) {
                 Ok(rep) => Some(RuntimeToHost::SessionReady {
@@ -1142,6 +1159,19 @@ fn revive_session(
     } else {
         ModelTier::Strong
     };
+    // 场景还原（2026-11-23）：form+conv_id 还原场景段——runtime 不依赖前端
+    // IDB 映射；老数据（form=workbench+空 workspace）落 Task=与改动前行为同
+    let scene = if !ws_path.is_empty() {
+        bbrt_session::Scene::Project
+    } else if row.form == "embedded" {
+        bbrt_session::Scene::Embedded {
+            conv_id: row.conv_id.clone().unwrap_or_default(),
+            // conv_type 不落库（场景文案差异小）：缺省 single，创建路径带真值
+            conv_type: "single".into(),
+        }
+    } else {
+        bbrt_session::Scene::Task
+    };
     mgr.start(
         session_id.to_string(),
         StartParams {
@@ -1154,6 +1184,7 @@ fn revive_session(
             // 恢复路径不带 unattended（WAL 未记录该标记；按普通会话恢复）
             unattended: false,
             approval_timeout_secs: None,
+            scene,
         },
     )
     .map(|_| true)

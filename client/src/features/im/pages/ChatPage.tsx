@@ -272,6 +272,9 @@ export function ChatPage() {
       workspace: '',
       mode: 'ask',
       title: embeddedTitle(activeConv?.name ?? '', activeConv?.type ?? 1),
+      // 场景来源（2026-11-23）：embedded 带 IM 来源——runtime 场景段常驻
+      // conv_id/单聊/群聊事实（compact 后仍可自愈拉 im_history）
+      origin: { kind: 'embedded', convId: convId!, convType: (activeConv?.type ?? 1) === 1 ? 'single' : 'group' },
     });
     await setEmbeddedSessionId(convId!, created.id);
     return created.id;

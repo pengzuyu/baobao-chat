@@ -491,6 +491,20 @@ pub enum HostToRuntime {
         /// D35 定时任务：权限审批等待秒数（None=默认 120s；Some(0)=不超时）
         #[serde(default, skip_serializing_if = "Option::is_none")]
         approval_timeout_secs: Option<u64>,
+        /// 会话场景来源（2026-11-23 三区块场景提示词）："embedded"=IM 私聊/群聊
+        /// 唤起（SYSTEM_PROMPT 末尾注入聊天场景段，conv_id 常驻抗压缩）；
+        /// "task"=任务区新建（不绑定单一项目段）。缺省时按 workspace 判定：
+        /// 非空=项目会话（项目段），空=任务会话（兼容历史数据）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<String>,
+        /// embedded 场景的来源聊天会话 ID（im_history 工具参数；仅 origin=embedded
+        /// 有意义，随场景段注入 system prompt）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conv_id: Option<String>,
+        /// embedded 场景的聊天类型："single"=私聊 / "group"=群聊（场景事实，
+        /// 群聊=多人发言指代更模糊）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conv_type: Option<String>,
     },
 
     /// 用户输入（REQ，回执=接受入队）

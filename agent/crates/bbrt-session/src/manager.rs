@@ -80,6 +80,10 @@ pub struct StartParams {
     pub unattended: bool,
     /// D35 定时任务：审批等待秒数（None=默认 120s；Some(0)=不超时）
     pub approval_timeout_secs: Option<u64>,
+    /// 会话场景（2026-11-23 三区块场景提示词）：创建方判定（workspace 非空=
+    /// Project / origin=embedded=Embedded{conv_id} / 其余=Task）。落库 form+
+    /// conv_id 供复活还原；注入 runner 拼 SYSTEM_PROMPT 场景段
+    pub scene: crate::loop_runner::Scene,
 }
 
 struct ManagedSession {
@@ -181,7 +185,14 @@ impl SessionManager {
                 id: session_id.clone(),
                 workspace_id: workspace_id.clone(),
                 title: p.title.clone(),
-                form: "workbench".into(),
+                // form 场景取值（2026-11-23）：embedded=日常对话（conv_id 列带
+                // IM 来源）；其余落 workbench（表 CHECK 约束 IN('embedded','workbench')，
+                // 不重建表）——复活判定：workspace 非空=项目 / form=embedded=日常 /
+                // workbench+空 workspace=任务
+                form: match &p.scene {
+                    crate::loop_runner::Scene::Embedded { .. } => "embedded".into(),
+                    _ => "workbench".into(),
+                },
                 mode: match p.mode {
                     bbrt_sec::gate::PermissionMode::Ask => "ask",
                     bbrt_sec::gate::PermissionMode::AutoEdit => "auto-edit",
@@ -196,6 +207,10 @@ impl SessionManager {
                 updated_at: now as i64,
                 ended_at: None,
                 summary: None,
+                conv_id: match &p.scene {
+                    crate::loop_runner::Scene::Embedded { conv_id, .. } => Some(conv_id.clone()),
+                    _ => None,
+                },
             };
             if is_restore {
                 // 状态已更新，跳过插入（行已存在）；恢复路径顺带回填最新归属
@@ -220,6 +235,8 @@ impl SessionManager {
         runner.bg_hub = Some(self.hub.clone());
         // D35 定时任务：无人值守 + 审批等待窗口（None=默认 120s；0=不超时）
         runner.unattended = p.unattended;
+        // 场景注入（2026-11-23）：SYSTEM_PROMPT 末尾场景段由 runner 消费
+        runner.scene = p.scene.clone();
         if let Some(secs) = p.approval_timeout_secs {
             runner.permission_timeout = if secs == 0 {
                 // recv_timeout 不支持无限：一年近似“不超时”，用户仍可「取消运行」
@@ -239,7 +256,17 @@ impl SessionManager {
         self.deps.wal.append(
             &session_id,
             "session.start",
-            &format!("{{\"workspace\":\"{}\"}}", workspace_real),
+            &format!(
+                "{{\"workspace\":\"{workspace_real}\",\"scene\":\"{}\"}}",
+                match &p.scene {
+                    crate::loop_runner::Scene::Project => "project".to_string(),
+                    crate::loop_runner::Scene::Embedded { conv_id, .. } => {
+                        // conv_id 转义（数字 ID 常态，防御性处理）
+                        format!("embedded:{conv_id}")
+                    }
+                    crate::loop_runner::Scene::Task => "task".to_string(),
+                }
+            ),
         );
         let (restored, replayed) = match &p.restored {
             Some(rep) if rep.found => (true, rep.replayed_events),

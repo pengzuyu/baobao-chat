@@ -173,7 +173,7 @@ export class TauriAgentBridge implements AgentBridge {
     return data.items.map(mapSession).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: import('./types').SessionOriginInfo): Promise<AgentSessionMeta> {
     const ack = await invoke<{ session_id: string }>('agent_start_session', {
       workspaceId: workspace,
       form: 'workbench',
@@ -182,6 +182,10 @@ export class TauriAgentBridge implements AgentBridge {
       // 0023 模型直达引用（p:<id>:<model>）；缺省=档位别名（宿主命令透传 Runtime session.start）
       model: model ?? null,
       title: title ?? null,
+      // 场景来源（2026-11-23）：embedded 会话带 IM 来源，runtime 注入场景段
+      origin: origin?.kind ?? null,
+      convId: origin?.convId ?? null,
+      convType: origin?.convType ?? null,
     });
     // 起始元信息由 session.state 事件补全；先给最小可用投影。
     // status 直接 idle：agent_start_session 同步等完 session.start→session.ready

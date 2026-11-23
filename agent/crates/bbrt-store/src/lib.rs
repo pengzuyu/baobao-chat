@@ -128,6 +128,7 @@ pub(crate) mod testutil {
             updated_at: crate::now_ms(),
             ended_at: None,
             summary: None,
+            conv_id: None,
         }
     }
 

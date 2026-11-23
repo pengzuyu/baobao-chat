@@ -27,6 +27,9 @@ pub struct SessionRow {
     pub model_override: Option<String>,
     /// D11 §3 状态机枚举
     pub status: String,
+    /// IM embedded 会话的来源聊天 ID（007 迁移增列；NULL=非 embedded）。
+    /// 场景提示词参数——im_history 工具 conv_id、场景段注入；复活还原用
+    pub conv_id: Option<String>,
     pub share_enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -36,7 +39,7 @@ pub struct SessionRow {
 
 /// SELECT 列清单（顺序与 from_row 一致）
 const COLS: &str = "id, workspace_id, title, form, mode, model_policy, model_override, status, \
-                    share_enabled, created_at, updated_at, ended_at, summary";
+                    share_enabled, conv_id, created_at, updated_at, ended_at, summary";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
     Ok(SessionRow {
@@ -49,10 +52,11 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         model_override: row.get(6)?,
         status: row.get(7)?,
         share_enabled: row.get::<_, i64>(8)? != 0,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
-        ended_at: row.get(11)?,
-        summary: row.get(12)?,
+        conv_id: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        ended_at: row.get(12)?,
+        summary: row.get(13)?,
     })
 }
 
@@ -62,8 +66,8 @@ impl Store {
         self.conn.execute(
             "INSERT INTO agent_session
                  (id, workspace_id, title, form, mode, model_policy, model_override, status,
-                  share_enabled, created_at, updated_at, ended_at, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                  share_enabled, conv_id, created_at, updated_at, ended_at, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 s.id,
                 s.workspace_id,
@@ -74,6 +78,7 @@ impl Store {
                 s.model_override,
                 s.status,
                 s.share_enabled,
+                s.conv_id,
                 s.created_at,
                 s.updated_at,
                 s.ended_at,

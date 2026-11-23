@@ -278,7 +278,8 @@ mod tests {
             conn.pragma_update(None, "user_version", 4).unwrap();
             conn.execute_batch(
                 "ALTER TABLE agent_run ADD COLUMN child_session_ref TEXT NOT NULL DEFAULT '';
-                 ALTER TABLE agent_session ADD COLUMN backend TEXT;",
+                 ALTER TABLE agent_session ADD COLUMN backend TEXT;
+                 ALTER TABLE agent_session DROP COLUMN conv_id;",
             )
             .unwrap();
         }
@@ -352,7 +353,8 @@ mod tests {
                  VALUES ('agent-p','sess-1','sess-1','','','probe','builtin.probe','done',0,0,'','',1,1),
                         ('agent-x','sess-1','sess-1','','','expert','corp.reviewer@1.0.0','done',0,0,'','',1,1),
                         ('agent-t','sess-1','sess-1','','','team','team:consult','done',0,0,'','',1,1);
-                 PRAGMA user_version = 5;",
+                 PRAGMA user_version = 5;
+                 ALTER TABLE agent_session DROP COLUMN conv_id;",
             )
             .unwrap();
         }

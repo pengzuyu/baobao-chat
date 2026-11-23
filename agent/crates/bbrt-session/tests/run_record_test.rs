@@ -36,6 +36,7 @@ fn seed_session(store: &Store, id: &str) {
             updated_at: now,
             ended_at: None,
             summary: None,
+            conv_id: None,
         })
         .expect("种子会话失败");
 }

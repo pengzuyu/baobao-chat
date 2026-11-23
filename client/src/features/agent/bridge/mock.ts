@@ -217,7 +217,7 @@ export class MockAgentBridge implements AgentBridge {
     return [...this.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, _origin?: import('./types').SessionOriginInfo): Promise<AgentSessionMeta> {
     await delay(200);
     this.sessionSeq += 1;
     // D19：项目会话自动登记（对齐 bbrt manager.start 的 realpath upsert 行为）

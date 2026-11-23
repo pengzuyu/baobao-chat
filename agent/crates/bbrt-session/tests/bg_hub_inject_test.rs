@@ -169,6 +169,7 @@ fn manager_run_cancel_unknown_run_not_found() {
             restored: None,
             unattended: false,
             approval_timeout_secs: None,
+            scene: Default::default(),
         },
     )
     .unwrap();

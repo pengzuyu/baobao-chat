@@ -327,6 +327,17 @@ pub struct SessionRunner {
     /// 测试/嵌入式用法）。manager.start 注入，生产路径恒 Some；
     /// 与 manager 共享同一实例
     pub bg_hub: Option<Arc<crate::bg_hub::BgHub>>,
+    /// 会话场景（2026-11-23 三区块场景提示词；unattended 同款 pub 注入——
+    /// manager.start 赋值，raw runner 缺省 Task）。决定 SYSTEM_PROMPT 末尾
+    /// 追加哪段场景段
+    pub scene: Scene,
+    /// 记忆索引会话级快照（前缀稳定：首次 run_turn 渲染定格，之后整会话
+    /// 复用——原按每条消息精排会让 system 消息逐轮变化，打断模型侧
+    /// prompt cache 的整个 history 缓存前缀。代价=本会话中途新存记忆
+    /// 下一会话才进索引）
+    memory_snapshot: Option<String>,
+    /// 技能目录会话级快照（同上：原每 step 重渲染，技能装卸会中途打断前缀）
+    skills_snapshot: Option<String>,
 }
 
 impl SessionRunner {
@@ -405,6 +416,9 @@ impl SessionRunner {
             unattended: false,
             subagent_wait_window: SUBAGENT_WAIT_WINDOW,
             bg_hub: None,
+            scene: Scene::default(),
+            memory_snapshot: None,
+            skills_snapshot: None,
         }
     }
 
@@ -677,13 +691,19 @@ impl SessionRunner {
             }
         }
 
-        // 记忆召回注入（D15 §2.3 按消息精排；D19 分级——项目会话注
-        // [用户记忆]+[项目记忆] 两段、日常仅用户段）
-        let memory_index = deps
-            .memory
-            .as_ref()
-            .map(|m| m.recall_scoped(self.ws_path(), user_text))
-            .unwrap_or_default();
+        // 记忆召回注入（D15 §2.3；D19 分级——项目会话注
+        // [用户记忆]+[项目记忆] 两段、日常仅用户段）。
+        // 前缀稳定（2026-11-23 快照化）：首次 run_turn 渲染定格，整会话复用——
+        // 按消息精排会让 system 消息逐轮变化，打断模型侧 prompt cache 对整个
+        // history 的缓存前缀；代价=本会话中途新存记忆下一会话才进索引
+        if self.memory_snapshot.is_none() {
+            self.memory_snapshot = Some(
+                deps.memory
+                    .as_ref()
+                    .map(|m| m.recall_scoped(self.ws_path(), user_text))
+                    .unwrap_or_default(),
+            );
+        }
 
         self.history.push(Round::User {
             content: user_text.to_string(),
@@ -771,29 +791,36 @@ impl SessionRunner {
             // 技能目录区（D33 §3.1：技能加载改显式 `skill` 工具调用——组装只放
             // 全量目录引导（name：description，正文不漏），隐式触发词注入退役；
             // 空索引=空段零成本。工具面收紧（allowedTools 并集）随显式调用阶段二
-            // 重接线——本轮恒不限制）
-            let skills_text = {
-                let idx = deps.skills.lock().unwrap_or_else(|p| p.into_inner());
-                idx.render_catalog()
-            };
+            // 重接线——本轮恒不限制。
+            // 前缀稳定（2026-11-23 快照化）：首个 step 渲染定格，整会话复用——
+            // 技能装卸中途变化同样会打断缓存前缀
+            if self.skills_snapshot.is_none() {
+                let text = {
+                    let idx = deps.skills.lock().unwrap_or_else(|p| p.into_inner());
+                    idx.render_catalog()
+                };
+                self.skills_snapshot = Some(text);
+            }
+            let skills_text = self.skills_snapshot.clone().unwrap_or_default();
             let allowed_tools: Option<Vec<String>> = None;
             // D35 无人值守：工具面剔除 ask_user（三层保障之二；分支防御在 run_tool）
             let mut tool_specs = deps.tools.tool_specs();
             if self.unattended {
                 tool_specs.retain(|s| s.name != "ask_user");
             }
-            let system_prompt = if self.unattended {
-                format!("{SYSTEM_PROMPT}{UNATTENDED_NOTE}")
-            } else {
-                SYSTEM_PROMPT.to_string()
-            };
+            // 场景段（2026-11-23 三区块）：基底共用，末尾按 scene 追加；
+            // 会话内恒定（conv_id 是会话常量）→ 不动缓存前缀
+            let mut system_prompt = format!("{SYSTEM_PROMPT}{}", self.scene.system_note());
+            if self.unattended {
+                system_prompt.push_str(UNATTENDED_NOTE);
+            }
             let assembled = assemble(
                 &deps.budget,
                 AssembleParts {
                     system: &system_prompt,
                     skills: &skills_text,
                     project: &self.project_line(),
-                    memory_index: &memory_index,
+                    memory_index: self.memory_snapshot.as_deref().unwrap_or(""),
                     history: &self.history,
                     tool_results: &self.tool_results,
                 },
@@ -1867,6 +1894,59 @@ pub(crate) const SYSTEM_PROMPT: &str = "你是 BaobaoChat 的本机 Agent，服�
 /// D35 定时任务无人值守追加段（append 在 SYSTEM_PROMPT 后）：ask_user 已从
 /// 工具面移除，此处再明确行为约束——不提问、按合理默认继续、结论说明假设。
 pub(crate) const UNATTENDED_NOTE: &str = "\n\n[无人值守定时执行] 本次运行由定时任务自动触发，用户不在旁边：禁止向用户提问（ask_user 不可用）；遇到不确定的信息按最合理默认继续，并在最终结论中明确说明所做的假设。";
+
+/// 会话场景（2026-11-23 三区块场景提示词）。三区块共用 SYSTEM_PROMPT 基底，
+/// 末尾按场景追加场景段（同 UNATTENDED_NOTE 机制）。写法口径（用户拍板）：
+/// 只写场景定位、上下文来源、工作流指引；不写回答风格、输出格式、用途约定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Scene {
+    /// 项目会话（workspace 非空）
+    Project,
+    /// 日常对话（IM 私聊/群聊唤起；conv_id=im_history 参数、conv_type 区分
+    /// 单聊/群聊——群聊=多人发言、指代更模糊，是模型理解上下文需要的事实）
+    Embedded {
+        conv_id: String,
+        conv_type: String, // "single" | "group"（缺省按 single 渲染）
+    },
+    /// 任务会话（不绑定单一项目）
+    Task,
+}
+
+impl Default for Scene {
+    /// raw runner（测试/嵌入式）缺省=Task；生产路径 manager.start 显式注入
+    fn default() -> Self {
+        Scene::Task
+    }
+}
+
+impl Scene {
+    /// 场景段渲染（拼在 SYSTEM_PROMPT 末尾）
+    pub fn system_note(&self) -> String {
+        match self {
+            Scene::Project => SCENE_PROJECT.into(),
+            Scene::Embedded { conv_id, conv_type } => {
+                let kind = if conv_type == "group" {
+                    "群聊"
+                } else {
+                    "单聊"
+                };
+                format!(
+                    "\n\n[场景：聊天] 本会话由用户在其{kind}（conv_id: {conv_id}）中唤起；\
+                     本会话的讨论上下文是该会话的聊天记录，可用 im_history 工具以该 conv_id \
+                     读取（其中【Agent】开头的行是此前你的回答）。"
+                )
+            }
+            Scene::Task => SCENE_TASK.into(),
+        }
+    }
+}
+
+/// 项目会话场景段：定位+工作流指引（project_line 已带 workspace 路径，不重复）
+const SCENE_PROJECT: &str = "\n\n[场景：项目] 本会话以 workspace 所指仓库为工作对象。动手前先读[项目记忆]与[项目进度]，了解既有决策与未完事项；改动遵循仓库既有约定，不确定时以仓库现状为准。";
+
+/// 任务会话场景段：不承诺能力面没有的东西（任务会话无读其他项目记忆分区的
+/// 工具面——跨项目落地路径=用户给路径，文件/命令工具走绝对路径）
+const SCENE_TASK: &str = "\n\n[场景：任务] 本会话不绑定单一项目，适合跨项目或综合性的工作；涉及具体项目时，以用户给出的项目路径为工作对象。";
 
 /// 组装结果 → 模型消息序列（system/记忆/项目 → history → 工具结果）
 fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {

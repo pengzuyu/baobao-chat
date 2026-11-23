@@ -24,6 +24,15 @@ export type SessionStatus =
 /** 工具风险级（09 §4.1 矩阵输入） */
 export type RiskLevel = 'low' | 'mid' | 'high';
 
+/** 会话场景来源（2026-11-23 场景提示词）：embedded=IM 私聊/群聊唤起
+ *  （convId=im_history 参数、convType 区分单聊/群聊——runtime 在 SYSTEM_PROMPT
+ *  末尾注入场景段，conv_id 常驻抗压缩）；任务/项目不传（workspace 判定） */
+export interface SessionOriginInfo {
+  kind: 'embedded';
+  convId: string;
+  convType: 'single' | 'group';
+}
+
 /** 会话历史条目（session.history 回执；WAL 摘要级投影——工作台打开会话加载
  *  聊天记录，IM embedded 与工作台同一会话跨端共用。ok/summary 旧 WAL 行可缺；
  *  args=脱敏 JSON 字符串（D33 §3.4 工具卡回放保真），旧行可缺；
@@ -257,8 +266,9 @@ export interface AgentBridge {
   /** 会话列表（session_list，按 updated_at 倒序） */
   listSessions(): Promise<AgentSessionMeta[]>;
   /** 新建会话（agent_start_session：workspace + 模式 + 模型直达引用（0023 可选）；
-   *  title 可选初始标题（IM embedded 来源名「与xxx的对话」），缺省占位由首条消息 rename 派生） */
-  startSession(workspace: string, mode: PermissionMode, model?: string, title?: string): Promise<AgentSessionMeta>;
+   *  title 可选初始标题（IM embedded 来源名「与xxx的对话」），缺省占位由首条消息 rename 派生；
+   *  origin 场景来源（2026-11-23，embedded 专用），任务/项目不传 */
+  startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: SessionOriginInfo): Promise<AgentSessionMeta>;
   /** 发送用户消息（agent_input；UI 乐观上屏，回复经 streamDelta 事件回流）；
    *  thinking 思考三档（2026-11-11 轮级生效）缺省=medium */
   sendMessage(sessionId: string, text: string, thinking?: 'low' | 'medium' | 'high'): Promise<void>;

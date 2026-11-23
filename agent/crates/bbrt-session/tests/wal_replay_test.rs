@@ -92,6 +92,7 @@ fn seed_session(store: &Store, dir: &Path, session_id: &str) {
             updated_at: 0,
             ended_at: None,
             summary: None,
+            conv_id: None,
         })
         .unwrap();
 }
@@ -298,6 +299,7 @@ fn manager_workspace_of() {
             restored: None,
             unattended: false,
             approval_timeout_secs: None,
+            scene: Default::default(),
         },
     )
     .unwrap();

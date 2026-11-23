@@ -130,7 +130,6 @@ impl ExtHub {
         }
     }
 
-
     fn upsert_sent(&self, sid: &str) {
         self.tasks.lock().unwrap().insert(
             sid.to_string(),
@@ -272,14 +271,16 @@ pub fn start(app: AppHandle, hub: Arc<ExtHub>, data_dir: PathBuf) {
         }
     }
     let Some(server) = server else {
-        eprintln!("[bbc-ext] 外部接入面端口 {base}~{} 全部占用，未启动", base + 9);
+        eprintln!(
+            "[bbc-ext] 外部接入面端口 {base}~{} 全部占用，未启动",
+            base + 9
+        );
         return;
     };
     if bound != base {
         eprintln!("[bbc-ext] 端口 {base} 被占用，回落 {bound}");
     }
-    hub.port
-        .store(bound, std::sync::atomic::Ordering::SeqCst);
+    hub.port.store(bound, std::sync::atomic::Ordering::SeqCst);
     write_status_file(&data_dir, bound);
     eprintln!("[bbc-ext] 外部智能体接入面在线: http://127.0.0.1:{bound}/");
     hub.online.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -333,7 +334,9 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
     let method = request.method().clone();
     // agent card 无鉴权（可发现性，D30 §3）；其余端点一律 Bearer
     let path = url.as_str();
-    if method == Method::Get && (path == "/.well-known/agent-card.json" || path == "/agent-card.json") {
+    if method == Method::Get
+        && (path == "/.well-known/agent-card.json" || path == "/agent-card.json")
+    {
         respond_json(
             request,
             200,
@@ -377,7 +380,11 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
         let rpc: Value = match serde_json::from_str(&body) {
             Ok(v) => v,
             Err(e) => {
-                respond_json(request, 200, rpc_error(Value::Null, -32700, &format!("parse error: {e}")));
+                respond_json(
+                    request,
+                    200,
+                    rpc_error(Value::Null, -32700, &format!("parse error: {e}")),
+                );
                 return;
             }
         };
@@ -406,7 +413,11 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
     let rpc: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(e) => {
-            respond_json(request, 200, rpc_error(Value::Null, -32700, &format!("parse error: {e}")));
+            respond_json(
+                request,
+                200,
+                rpc_error(Value::Null, -32700, &format!("parse error: {e}")),
+            );
             return;
         }
     };
@@ -480,8 +491,8 @@ fn tool_def() -> Value {
     json!({
         "name": "bbc_agent_chat",
         "description": "把打开中的 BaobaoChat agent 当子智能体调用：发起/续聊一轮完整 agent 会话\
-（知识检索/记忆/专家/公司工具，按当前登录用户权限）。返回本轮最终回答；\
-审批/澄清卡会弹在 BaobaoChat 窗口内等待人工确认，调用侧自动等待。",
+    （知识检索/记忆/专家/公司工具，按当前登录用户权限）。返回本轮最终回答；\
+    审批/澄清卡会弹在 BaobaoChat 窗口内等待人工确认，调用侧自动等待。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -497,7 +508,10 @@ fn tool_def() -> Value {
 /// bbc_agent_chat：message/send → 内联轮询 ExtHub 至终态 → content 文本
 fn mcp_tool_call(app: &AppHandle, hub: &ExtHub, params: &Value) -> Result<Value, (i64, String)> {
     if params["name"].as_str() != Some("bbc_agent_chat") {
-        return Err((-32602, format!("unknown tool: {}", params["name"].as_str().unwrap_or("?"))));
+        return Err((
+            -32602,
+            format!("unknown tool: {}", params["name"].as_str().unwrap_or("?")),
+        ));
     }
     let args = &params["arguments"];
     let prompt = args["prompt"]
@@ -521,11 +535,15 @@ fn mcp_tool_call(app: &AppHandle, hub: &ExtHub, params: &Value) -> Result<Value,
         let task = handle_get(app, hub, json!({ "id": sid }))?;
         match task["status"]["state"].as_str().unwrap_or("") {
             "completed" => {
-                let answer = task["artifacts"][0]["parts"][0]["text"].as_str().unwrap_or("");
+                let answer = task["artifacts"][0]["parts"][0]["text"]
+                    .as_str()
+                    .unwrap_or("");
                 let text = if answer.is_empty() {
                     format!(
                         "（本轮无文本回复——{}）\n[session {sid}]",
-                        task["status"]["message"]["parts"][0]["text"].as_str().unwrap_or("可能仅工具调用")
+                        task["status"]["message"]["parts"][0]["text"]
+                            .as_str()
+                            .unwrap_or("可能仅工具调用")
                     )
                 } else {
                     format!("{answer}\n[session {sid} · 传 session_id 可续聊]")
@@ -533,7 +551,9 @@ fn mcp_tool_call(app: &AppHandle, hub: &ExtHub, params: &Value) -> Result<Value,
                 return Ok(json!({ "content": [{ "type": "text", "text": text }] }));
             }
             "failed" | "canceled" => {
-                let msg = task["status"]["message"]["parts"][0]["text"].as_str().unwrap_or("");
+                let msg = task["status"]["message"]["parts"][0]["text"]
+                    .as_str()
+                    .unwrap_or("");
                 return Ok(json!({
                     "content": [{ "type": "text", "text": format!("{msg} [session {sid}]") }],
                     "isError": true
@@ -556,11 +576,7 @@ fn mcp_tool_call(app: &AppHandle, hub: &ExtHub, params: &Value) -> Result<Value,
 
 /// message/send：text parts 提取 →（metadata.sessionId/taskId 复用 | 新建）
 /// → user.message → 登记 working → 立即返回任务（异步轮询模式）
-fn handle_send(
-    app: &AppHandle,
-    hub: &ExtHub,
-    params: Value,
-) -> Result<Value, (i64, String)> {
+fn handle_send(app: &AppHandle, hub: &ExtHub, params: Value) -> Result<Value, (i64, String)> {
     let text: String = params["message"]["parts"]
         .as_array()
         .cloned()
@@ -590,14 +606,27 @@ fn handle_send(
                 Some(&format!("{EXTERNAL_TITLE_PREFIX}·{}", truncate(&text, 24))),
                 false,
                 None,
+                // A2A 外部会话（D30）：无 IM 来源，缺省场景（空 workspace=任务段）
+                None,
+                None,
+                None,
             )
             .map_err(|e| (-32603, format!("会话创建失败：{e}")))?,
     };
     let rep = host
-        .request("user.message", json!({ "sessionId": sid, "text": text, "attachments": [], "thinking": null }))
+        .request(
+            "user.message",
+            json!({ "sessionId": sid, "text": text, "attachments": [], "thinking": null }),
+        )
         .map_err(|e| (-32603, format!("消息发送失败：{e}")))?;
     if rep["type"] == "error" {
-        return Err((-32603, format!("消息被拒：{}", rep["message"].as_str().unwrap_or("runtime error"))));
+        return Err((
+            -32603,
+            format!(
+                "消息被拒：{}",
+                rep["message"].as_str().unwrap_or("runtime error")
+            ),
+        ));
     }
     hub.upsert_sent(&sid);
     let mut task = task_json(&sid, "working", None, None);
@@ -615,7 +644,12 @@ fn handle_get(app: &AppHandle, hub: &ExtHub, params: Value) -> Result<Value, (i6
         .snapshot(sid)
         .ok_or_else(|| (-32602, format!("任务不存在: {sid}")))?;
     hub.ensure_answer(&app.state::<Arc<AgentHost>>(), sid, &mut task);
-    Ok(task_json(sid, &task.state, task.answer.as_deref(), task.note.as_deref()))
+    Ok(task_json(
+        sid,
+        &task.state,
+        task.answer.as_deref(),
+        task.note.as_deref(),
+    ))
 }
 
 /// tasks/cancel：session.interrupt 中断当前轮（会话保留可续）
@@ -636,7 +670,12 @@ fn handle_cancel(app: &AppHandle, hub: &ExtHub, params: Value) -> Result<Value, 
             t.note = Some("当前轮已中断，会话可续聊".into());
         }
     }
-    Ok(task_json(sid, "canceled", None, Some("当前轮已中断，会话可续聊")))
+    Ok(task_json(
+        sid,
+        "canceled",
+        None,
+        Some("当前轮已中断，会话可续聊"),
+    ))
 }
 
 /// A2A Task 形状（宽松子集；completed 附 artifacts）
@@ -650,7 +689,8 @@ fn task_json(sid: &str, state: &str, answer: Option<&str>, note: Option<&str>) -
         "metadata": { "session_id": sid, "kind": "bbc-session" }
     });
     if state == "completed" {
-        task["artifacts"] = json!([{ "parts": [{ "kind": "text", "text": answer.unwrap_or("") }] }]);
+        task["artifacts"] =
+            json!([{ "parts": [{ "kind": "text", "text": answer.unwrap_or("") }] }]);
     }
     task
 }
@@ -724,8 +764,8 @@ fn schedule_tool_def(kind: &str) -> Value {
         "create" => json!({
             "name": "schedule_create",
             "description": "创建定时任务（到点自动以指定模式发起一轮 agent 会话执行 prompt）。\
-高风险：未来自动化行为须用户确认。触发三选一：cron 5 字段表达式 / once 一次性时间戳(ms) / \
-workday 每工作日 HH:mm。任务权限模式 mode 与审批超时同 D35 语义（full-auto 仍受权限点约束）。",
+        高风险：未来自动化行为须用户确认。触发三选一：cron 5 字段表达式 / once 一次性时间戳(ms) / \
+        workday 每工作日 HH:mm。任务权限模式 mode 与审批超时同 D35 语义（full-auto 仍受权限点约束）。",
             "inputSchema": {
                 "type": "object",
                 "properties": {

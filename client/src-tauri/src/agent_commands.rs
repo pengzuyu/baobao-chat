@@ -42,6 +42,9 @@ pub fn agent_start_session(
     model_policy: String,
     model: Option<String>,
     title: Option<String>,
+    origin: Option<String>,
+    conv_id: Option<String>,
+    conv_type: Option<String>,
 ) -> Result<Value, String> {
     let sid = host.start_session(
         &workspace_id,
@@ -51,6 +54,9 @@ pub fn agent_start_session(
         title.as_deref(),
         false,
         None,
+        origin.as_deref(),
+        conv_id.as_deref(),
+        conv_type.as_deref(),
     )?;
     Ok(json!({ "session_id": sid }))
 }

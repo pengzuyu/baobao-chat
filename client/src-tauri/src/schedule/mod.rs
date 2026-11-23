@@ -55,12 +55,7 @@ fn ms_to_local(ms: i64) -> NaiveDateTime {
         .timestamp_millis_opt(ms)
         .single()
         .map(|d| d.naive_local())
-        .unwrap_or_else(|| {
-            Local
-                .timestamp_millis_opt(0)
-                .unwrap()
-                .naive_local()
-        })
+        .unwrap_or_else(|| Local.timestamp_millis_opt(0).unwrap().naive_local())
 }
 
 fn write_atomic(path: &Path, data: &str) -> Result<(), String> {
@@ -252,7 +247,12 @@ impl Store {
     }
 
     pub fn get_task(&self, id: &str) -> Option<Task> {
-        self.tasks.lock().unwrap().iter().find(|t| t.id == id).cloned()
+        self.tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|t| t.id == id)
+            .cloned()
     }
 
     pub fn runs_of(&self, task_id: &str, limit: usize) -> Vec<Run> {
@@ -291,7 +291,12 @@ impl Store {
     }
 
     fn get_run(&self, id: &str) -> Option<Run> {
-        self.runs.lock().unwrap().iter().find(|r| r.id == id).cloned()
+        self.runs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
     }
 
     fn replace_task(&self, task: Task) -> Result<(), String> {
@@ -624,10 +629,7 @@ impl Runtime {
             let late = now - planned;
             // workday 防御：日历在 next_run_at 计算后被改（管理端同步新节假日）——到点再查一次
             if matches!(task.schedule, ScheduleType::Workday { .. })
-                && !self
-                    .store
-                    .calendar
-                    .is_workday(ms_to_local(planned).date())
+                && !self.store.calendar.is_workday(ms_to_local(planned).date())
             {
                 let _ = self.store.record_run(Run {
                     id: new_id("scr"),
@@ -733,6 +735,10 @@ impl Runtime {
             Some(&title),
             true,
             Some(task.approval_timeout_secs),
+            // 定时任务无 IM 来源；workspace 判定场景（空=任务段，非空=项目段）
+            None,
+            None,
+            None,
         ) {
             Ok(sid) => sid,
             Err(e) => {
@@ -779,7 +785,10 @@ impl Runtime {
             Ok(rep) => rep,
             Err(e) => {
                 self.sessions.lock().unwrap().remove(&sid);
-                let _ = host.fire("session.end", json!({ "sessionId": sid, "reason": "normal" }));
+                let _ = host.fire(
+                    "session.end",
+                    json!({ "sessionId": sid, "reason": "normal" }),
+                );
                 self.finish_run(&run.id, "failed", Some(e.clone()));
                 return Err(e);
             }
@@ -790,7 +799,10 @@ impl Runtime {
                 rep["message"].as_str().unwrap_or("runtime error")
             );
             self.sessions.lock().unwrap().remove(&sid);
-            let _ = host.fire("session.end", json!({ "sessionId": sid, "reason": "normal" }));
+            let _ = host.fire(
+                "session.end",
+                json!({ "sessionId": sid, "reason": "normal" }),
+            );
             self.finish_run(&run.id, "failed", Some(msg.clone()));
             return Err(msg);
         }
@@ -898,10 +910,7 @@ impl Runtime {
             }
         });
         if finished {
-            self.sessions
-                .lock()
-                .unwrap()
-                .retain(|_, rid| rid != run_id);
+            self.sessions.lock().unwrap().retain(|_, rid| rid != run_id);
             if let Some(run) = run {
                 self.emit("run_finished", json!({ "run": run }));
             }
@@ -909,7 +918,10 @@ impl Runtime {
     }
 
     pub fn cancel_run(&self, host: &AgentHost, run_id: &str) -> Result<(), String> {
-        let run = self.store.get_run(run_id).ok_or_else(|| "运行不存在".to_string())?;
+        let run = self
+            .store
+            .get_run(run_id)
+            .ok_or_else(|| "运行不存在".to_string())?;
         if let Some(sid) = &run.session_id {
             // session.interrupt 是事件回执（session.interrupted），不走 REQ→RES 等待
             let _ = host.fire("session.interrupt", json!({ "sessionId": sid }));
@@ -948,7 +960,6 @@ impl Runtime {
         json!({ "runs": self.store.runs_of(task_id, RUNS_KEEP_PER_TASK) })
     }
 }
-
 
 // ── 单实例锁（原子目录 + 心跳；无第三方依赖） ───────────────────────────────
 
@@ -1190,7 +1201,9 @@ mod tests {
     #[test]
     fn workday_next_skips_weekend_without_calendar() {
         let (store, dir) = tmp_store();
-        let task = task_with(ScheduleType::Workday { time: "09:00".into() });
+        let task = task_with(ScheduleType::Workday {
+            time: "09:00".into(),
+        });
         // 2026-11-20 周五 10:00 → 下周一 09:00（无日历缓存 → 默认规则）
         let base = local_to_ms(
             NaiveDate::from_ymd_opt(2026, 11, 20)
@@ -1226,7 +1239,9 @@ mod tests {
                 }],
             })
             .unwrap();
-        let task = task_with(ScheduleType::Workday { time: "09:00".into() });
+        let task = task_with(ScheduleType::Workday {
+            time: "09:00".into(),
+        });
         let base = local_to_ms(
             NaiveDate::from_ymd_opt(2026, 11, 20)
                 .unwrap()

@@ -39,6 +39,9 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             title: None,
             unattended: false,
             approval_timeout_secs: None,
+            origin: None,
+            conv_id: None,
+            conv_type: None,
         },
         HostToRuntime::UserMessage {
             session_id: "sess-1".into(),
@@ -393,6 +396,9 @@ fn golden_session_start() {
             title: None,
             unattended: false,
             approval_timeout_secs: None,
+            origin: None,
+            conv_id: None,
+            conv_type: None,
         },
         json!({
             "type": "session.start",
@@ -431,12 +437,61 @@ fn session_start_unattended_fields_roundtrip() {
         title: None,
         unattended: true,
         approval_timeout_secs: Some(1800),
+        origin: None,
+        conv_id: None,
+        conv_type: None,
     };
     let payload = serde_json::to_value(&msg).unwrap();
     assert_eq!(payload["unattended"], json!(true));
     assert_eq!(payload["approvalTimeoutSecs"], json!(1800));
     let back: HostToRuntime = serde_json::from_value(payload).unwrap();
     assert_eq!(back, msg);
+}
+
+#[test]
+fn session_start_origin_fields_roundtrip() {
+    // 2026-11-23 场景提示词：origin/convId/convType 双向；缺省不序列化
+    let msg = HostToRuntime::SessionStart {
+        session_id: "sess-e".into(),
+        workspace: String::new(),
+        mode: PermissionMode::Ask,
+        model_policy: ModelPolicy::Auto,
+        model: None,
+        skills: vec![],
+        history_ref: None,
+        title: Some("与张三的对话".into()),
+        unattended: false,
+        approval_timeout_secs: None,
+        origin: Some("embedded".into()),
+        conv_id: Some("886".into()),
+        conv_type: Some("group".into()),
+    };
+    let payload = serde_json::to_value(&msg).unwrap();
+    assert_eq!(payload["origin"], json!("embedded"));
+    assert_eq!(payload["convId"], json!("886"));
+    assert_eq!(payload["convType"], json!("group"));
+    let back: HostToRuntime = serde_json::from_value(payload).unwrap();
+    assert_eq!(back, msg);
+    // 缺省不序列化（旧宿主兼容）
+    let bare = HostToRuntime::SessionStart {
+        session_id: "s".into(),
+        workspace: "w".into(),
+        mode: PermissionMode::Ask,
+        model_policy: ModelPolicy::Auto,
+        model: None,
+        skills: vec![],
+        history_ref: None,
+        title: None,
+        unattended: false,
+        approval_timeout_secs: None,
+        origin: None,
+        conv_id: None,
+        conv_type: None,
+    };
+    let v = serde_json::to_value(&bare).unwrap();
+    assert!(v.get("origin").is_none());
+    assert!(v.get("convId").is_none());
+    assert!(v.get("convType").is_none());
 }
 
 #[test]
@@ -961,6 +1016,9 @@ fn unknown_fields_are_tolerated() {
             title: None,
             unattended: false,
             approval_timeout_secs: None,
+            origin: None,
+            conv_id: None,
+            conv_type: None,
         }
     );
 }
@@ -982,6 +1040,9 @@ fn envelope_wrap_unwrap_roundtrip() {
         title: None,
         unattended: false,
         approval_timeout_secs: None,
+        origin: None,
+        conv_id: None,
+        conv_type: None,
     };
     let env = Envelope::wrap(PROTOCOL_VERSION, "h-1", &msg).expect("wrap");
     assert_eq!(env.msg_type, "session.start");
@@ -1310,6 +1371,9 @@ fn golden_session_title_and_interrupt() {
             title: Some("与张三的对话".into()),
             unattended: false,
             approval_timeout_secs: None,
+            origin: None,
+            conv_id: None,
+            conv_type: None,
         },
         json!({
             "type":"session.start","sessionId":"sess-1","workspace":"","mode":"ask",

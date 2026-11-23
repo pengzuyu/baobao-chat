@@ -690,7 +690,9 @@ impl AgentHost {
     }
 
     /// 新建会话（协议口径：sessionId 由宿主生成传入）。title 可选初始标题，
-    /// 缺省=「会话 {n}」占位（前端首条用户消息后 rename 派生真标题）
+    /// 缺省=「会话 {n}」占位（前端首条用户消息后 rename 派生真标题）。
+    /// origin/conv_id/conv_type（2026-11-23 场景提示词）：embedded 会话带
+    /// "embedded"+聊天来源，runtime 按 scene 在 SYSTEM_PROMPT 末尾注入场景段
     pub fn start_session(
         &self,
         workspace: &str,
@@ -700,6 +702,9 @@ impl AgentHost {
         title: Option<&str>,
         unattended: bool,
         approval_timeout_secs: Option<u64>,
+        origin: Option<&str>,
+        conv_id: Option<&str>,
+        conv_type: Option<&str>,
     ) -> Result<String, String> {
         self.ensure_running()?;
         let n = self.seq_session.fetch_add(1, Ordering::SeqCst) + 1;
@@ -727,6 +732,11 @@ impl AgentHost {
             // D35 定时任务：无人值守 + 审批等待窗口（普通会话 false/缺省）
             "unattended": unattended,
             "approvalTimeoutSecs": approval_timeout_secs,
+            // 场景来源（2026-11-23）：embedded=IM 唤起（conv_id/conv_type 常驻
+            // 场景段）；任务/项目缺省（workspace 判定）
+            "origin": origin,
+            "convId": conv_id,
+            "convType": conv_type,
         });
         // REQ 失败（超时/握手）或 RT 错误回执（type=error，如 8001 活跃会话超限）
         // 都须回滚缓存行——否则列表留永久 starting 幽灵行且白占 RT 名额

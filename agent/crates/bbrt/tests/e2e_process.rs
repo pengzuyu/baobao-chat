@@ -241,6 +241,9 @@ fn e2e_full_runtime_process() {
             title: None,
             unattended: false,
             approval_timeout_secs: None,
+            origin: None,
+            conv_id: None,
+            conv_type: None,
         },
     );
     let _sr = until(&pump, "session.ready", &mut seen);

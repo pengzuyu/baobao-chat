@@ -23,6 +23,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/004_terminal_run.sql"),
     include_str!("migrations/005_retire_delegate.sql"),
     include_str!("migrations/006_retire_team.sql"),
+    include_str!("migrations/007_session_scene.sql"),
 ];
 
 /// 执行所有未应用的迁移。

@@ -38,7 +38,7 @@ pub use expert::{
     ExpertResult, ExpertSource, FastPicker, ManifestTools,
 };
 pub use loop_runner::{
-    EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, SessionRunner,
+    EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, Scene, SessionRunner,
     TurnReport, MAX_CONSECUTIVE_FAILURES, MAX_STEPS, PERMISSION_TIMEOUT,
 };
 pub use manager::{
