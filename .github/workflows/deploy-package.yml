@@ -48,6 +48,12 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 预热基础镜像（Docker Hub 偶发限流→带重试）
+        run: |
+          pull() { for i in 1 2 3 4; do docker pull --platform linux/amd64 "$1" && return 0; echo "[warn] $1 失败（第 $i 次），10s 后重试"; sleep 10; done; return 1; }
+          pull golang:1.26-alpine
+          pull alpine:3.20
+
       - name: 构建 bbc-app 镜像（linux/amd64）
         run: |
           docker build --platform linux/amd64 \
@@ -65,9 +71,10 @@ jobs:
         if: ${{ inputs.bundle_images }}
         run: |
           set -euo pipefail
+          pull() { for i in 1 2 3 4; do docker pull --platform linux/amd64 "$1" && return 0; echo "[warn] $1 失败（第 $i 次），10s 后重试"; sleep 10; done; return 1; }
           for img in pgvector/pgvector:pg16 redis:7.4.1-alpine3.20 \
                      nginx:1.27.4-alpine3.21 rustfs/rustfs:1.0.5 amazon/aws-cli:2.31.4; do
-            docker pull --platform linux/amd64 "$img"
+            pull "$img"
           done
           docker save pgvector/pgvector:pg16 redis:7.4.1-alpine3.20 \
             nginx:1.27.4-alpine3.21 rustfs/rustfs:1.0.5 amazon/aws-cli:2.31.4 \
