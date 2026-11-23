@@ -459,3 +459,19 @@
 | Y2 | presence 后端补齐 | gateway.HandlePresences()（presence_http.go，Snapshot 全量投影 uid 升序）+main.go authed 挂 GET /api/v1/presences；ConversationDTO.peerUid（仅 type=1，displayConvName→singlePeer 双返回，列表/详情两处装配）；service 测 TestSingleConvPeerUID+e2e 三段断言；04 篇 §6.1/§3.2 登记 | go build/vet/test 绿（service/gateway/e2e） | [x] 2026-11-17（5601d74） |
 | Y3 | presence 前端全链 | shared/ui/PresenceDot（四态点+PresenceBadge 角标+PresenceTag+usePresenceColors，token 随主题）；快照链 fetchPresences+qk.im.presence+store.applyPresences+useImWsEvents 挂 query（重连失效白拿 onResync invalidate ['im']）；MainLayout 头像下拉四档状态菜单（乐观投影+失败回滚）+导航头像自挂点；ConversationList 单聊 peerUid 点/ChatHeader 收敛 PresenceDot/ConvInfoSidebar 成员行/PersonPicker 行/ContactsPage 树·搜索·成员卡·详情 Tag 挂点；ChatPage peerStatus 优先 conv.peerUid | tsc+vite build 绿 | [x] 2026-11-17（本提交） |
 | Y4 | 真机验收 | ①通讯录 hover 无卡/点部门展开收缩/彩色头像；②两账号互看：A 切忙碌→B 侧会话列表·通讯录·成员行红点即时；离线（隐身）灰点；③重连后状态点恢复（快照重拉）；④登录即可见全员状态（首拉种子，无需等变化） | 用户真机走查 | [ ] |
+
+## 批次 D39：客户端发布管理（2026-11-23；R1-R3 编码完成待真机）
+
+> 定案（用户诉求）：告别 ssh+rsync 发布链路——管理员在桌面端管理后台上传安装包、点发布，
+> 客户端自动更新与官网下载区即刻生效。业界对标（Tauri updater / Electron / Sparkle / VS Code）
+> 后落四原则：制品与清单分离、制品不可变、私钥永不进服务端、清单动态生成（含通道）+
+> 大文件走对象存储直出（不经 Go 服务）。
+> 与脚本链路（scripts/release/gen-manifest.mjs + publish.sh）关系：管理后台为主路径；
+> 脚本保留为离线应急；两者经 nginx 404 回落自动共存（D39 无数据→回落静态清单）。
+
+| # | 事项 | 改动点 | 验收 | 状态 |
+|---|------|--------|------|------|
+| R1 | schema+服务端 | 迁移 0005 client_release（version/channel(stable\|beta)/platform/filename/size/sha256/storage_key/signature/notes/status(draft·published·revoked)/published_at/created_by；唯一约束=制品不可变，发布后 UPSERT 拒改）；internal/release 新模块七端点（presign 直传票据/register 登记/list/publish 整版本/revoke/rollback/delete 草稿），权限点 admin:release:manage；发布·撤回·回滚写 admin_audit_action；S3 增 PresignPutObject | go build/vet/test 绿；七端点冒烟 | [x] 2026-11-23（28be2b3；单测 6 例） |
+| R2 | 分发面 | /update/latest.json（Tauri 清单，仅含带签名的 updater 包）与 /update/release-info.json（官网数据含 releases 历史）改为动态裸 JSON；无数据 404 供 nginx 回落静态；RustFS 建 bbc-releases 桶+匿名只读；nginx 两形态路由（清单→app、/update/releases/→rustfs 直出长缓存、静态兜底 @update_static） | compose config+nginx -t 绿；发布后客户端可升级 | [x] 2026-11-23（28be2b3） |
+| R3 | 管理页 | /admin/client-releases：通道 Tabs、线上版本查询、发布/回滚/撤回三操作、上传 Modal（预签名直传+前端 sha256+粘贴 .sig）、记录表格（线上标记/签名/状态/草删） | tsc+vite build 绿 | [x] 2026-11-23（28be2b3） |
+| R4 | 真机验收 | ①管理页上传 macOS 包→发布→官网下载区出现→客户端检查更新可升；②回滚到旧版→客户端回落；③撤回新版本→清单消失且已装用户不受影响；④通道隔离（beta 只影响 beta 客户端）；⑤签名缺失的包被发布校验拦截 | 用户真机走查 | [ ] |
