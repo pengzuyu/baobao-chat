@@ -8,9 +8,16 @@
 #
 # 用法：
 #   bash scripts/release/build-backend-local.sh 0.1.4
+#   BUNDLE=1 bash scripts/release/build-backend-local.sh 0.1.4   # 全量离线（带齐第三方镜像）
 #   # 只出 compose 档 / 只出 K8s 档：
 #   ONLY=compose bash scripts/release/build-backend-local.sh 0.1.4
 #   ONLY=k8s     bash scripts/release/build-backend-local.sh 0.1.4
+#
+# 镜像两档（BUNDLE 环境变量）：
+#   BUNDLE=0（默认）只带自建镜像；第三方（pgvector/nginx/redis/rustfs/aws-cli）
+#                   由内网服务器经 daemon.json registry-mirrors 回源拉取
+#   BUNDLE=1        全量离线：5 个第三方镜像一并打包（包体约 +500MB）；内网无需
+#                   mirror/私服回源，docker load 即得（K8s 档仍需推一次私服 8182）
 #
 # 前置：Docker Desktop 运行中（buildx 可用）、helm、node/npm。
 # 产物：dist/baobaochat-deploy-v<ver>.tar.gz（compose）
@@ -20,6 +27,16 @@ set -euo pipefail
 
 VER="${1:?用法: bash scripts/release/build-backend-local.sh <版本号，如 0.1.4>}"
 ONLY="${ONLY:-all}"
+BUNDLE="${BUNDLE:-0}"
+
+# 第三方基础镜像（compose core 档需要全部 5 个；K8s 档用前 1/4/5——nginx 由 web 镜像自带）
+BASE_IMAGES=(
+  "pgvector/pgvector:pg16"
+  "redis:7.4.1-alpine3.20"
+  "nginx:1.27.4-alpine3.21"
+  "rustfs/rustfs:1.0.5"
+  "amazon/aws-cli:2.31.4"
+)
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
@@ -28,6 +45,22 @@ docker buildx version >/dev/null 2>&1 || { echo "[build-backend-local] Docker bu
 command -v helm >/dev/null || { echo "[build-backend-local] 缺 helm：brew install helm" >&2; exit 1; }
 
 mkdir -p dist/images
+
+# ---- 0. 基础镜像（BUNDLE=1 全量离线）----
+if [ "$BUNDLE" = "1" ] && { [ ! -f "dist/images/base-images.tar.gz" ] || [ "${FORCE:-0}" = "1" ]; }; then
+  echo "[build-backend-local] 校验/拉取基础镜像（linux/amd64 × ${#BASE_IMAGES[@]}）"
+  for img in "${BASE_IMAGES[@]}"; do
+    arch=$(docker image inspect "$img" --format '{{.Architecture}}' 2>/dev/null || echo missing)
+    if [ "$arch" != "amd64" ]; then
+      echo "[build-backend-local] $img 当前架构=$arch → 拉取 linux/amd64"
+      docker pull --platform linux/amd64 "$img"
+    else
+      echo "[build-backend-local] $img 已是 linux/amd64，跳过"
+    fi
+  done
+  docker save "${BASE_IMAGES[@]}" | gzip > dist/images/base-images.tar.gz
+  ls -lh dist/images/base-images.tar.gz
+fi
 
 # ---- 1. bbc-app 镜像（linux/amd64）----
 if [ ! -f "dist/images/bbc-app-$VER.tar.gz" ] || [ "${FORCE:-0}" = "1" ]; then
@@ -48,7 +81,7 @@ npm --prefix website run build >/dev/null
 
 # ---- 3a. compose 部署包 ----
 if [ "$ONLY" = "all" ] || [ "$ONLY" = "compose" ]; then
-  BBC_DEPLOY_VERSION="$VER" bash scripts/release/gen-deploy-package.sh
+  BBC_DEPLOY_VERSION="$VER" BBC_BUNDLE_IMAGES="$BUNDLE" bash scripts/release/gen-deploy-package.sh
 fi
 
 # ---- 3b. K8s 部署包（需接入层 web 镜像）----
@@ -63,7 +96,7 @@ if [ "$ONLY" = "all" ] || [ "$ONLY" = "k8s" ]; then
   docker save "baobaochat/web:$VER" | gzip > "dist/images/web-$VER.tar.gz"
   rm -rf "$BUILD_DIR"
 
-  BBC_K8S_VERSION="$VER" bash scripts/release/gen-k8s-package.sh
+  BBC_K8S_VERSION="$VER" BBC_BUNDLE_IMAGES="$BUNDLE" bash scripts/release/gen-k8s-package.sh
 fi
 
 echo

@@ -33,6 +33,7 @@ set -euo pipefail
 VER="${BBC_K8S_VERSION:?BBC_K8S_VERSION 必填（如 0.1.4）}"
 REGISTRY="${BBC_REGISTRY:-172.16.19.3:8182/baobaochat}"
 NODE_IP="${BBC_NODE_IP:-<NODE_IP>}"
+BUNDLE="${BBC_BUNDLE_IMAGES:-0}"
 OUT="${BBC_DEPLOY_OUT:-dist}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -56,6 +57,18 @@ CHART_NAME=$(basename "$CHART_TGZ" .tgz)
 # ---- 依赖清单（deploy/k8s/baobao-chat 的 yaml + web 入口）----
 cp "$ROOT/deploy/k8s/baobao-chat/"*.yaml "$PKG/deps/"
 cp "$ROOT/deploy/k8s/baobao-chat/web.yaml" "$PKG/deps/web.yaml"
+# 依赖清单镜像名统一指向本次目标私服（源 yaml 里是旧 Harbor 172.16.105.109:30003/pengzuyu）
+for f in "$PKG/deps/"*.yaml; do
+  sed -i.bak "s|172\.16\.105\.109:30003/pengzuyu|$REGISTRY|g" "$f" && rm -f "$f.bak"
+done
+# 全量离线：基础镜像 tar 随包（K8s 节点不能 docker load 直用，仍需推私服一次）
+if [ "$BUNDLE" = "1" ]; then
+  [ -f "$OUT/images/base-images.tar.gz" ] || {
+    echo "[gen-k8s-package] BBC_BUNDLE_IMAGES=1 但缺 $OUT/images/base-images.tar.gz" >&2
+    exit 1
+  }
+  cp "$OUT/images/base-images.tar.gz" "$PKG/images/"
+fi
 
 # ---- 预生成凭据（values 与 Secret 命令同值，减少手工）----
 PG_PW=$(openssl rand -hex 16)
@@ -126,7 +139,7 @@ helm version --short                    # helm ≥ 3.12
 kubectl get storageclass                # 有默认 StorageClass（web 更新源 PVC 用）
 \`\`\`
 
-节点需配 Docker 私服（Nexus 172.16.19.3）——每台可能调度到的节点 \`/etc/docker/daemon.json\`：
+$( if [ "$BUNDLE" = "1" ]; then echo "全量离线包：依赖镜像随包提供，节点无需 registry-mirrors（仍需 insecure-registries 允许 8182 http）。"; else echo "节点需配 Docker 私服（Nexus 172.16.19.3）——每台可能调度到的节点 \`/etc/docker/daemon.json\`："; fi )
 
 \`\`\`json
 {
@@ -153,6 +166,23 @@ docker push $REGISTRY/bbc-app:$VER
 docker push $REGISTRY/web:$VER
 \`\`\`
 
+$( if [ "$BUNDLE" = "1" ]; then cat <<'BUNDLE_STEP'
+**全量离线模式**：本包另含 3 个依赖镜像（pgvector/rustfs/aws-cli），一并入私服：
+
+```bash
+docker load -i images/base-images.tar.gz
+docker tag pgvector/pgvector:pg16  __REG__/pgvector:pg16
+docker tag rustfs/rustfs:1.0.5     __REG__/rustfs:1.0.5
+docker tag amazon/aws-cli:2.31.4   __REG__/aws-cli:2.31.4
+docker push __REG__/pgvector:pg16
+docker push __REG__/rustfs:1.0.5
+docker push __REG__/aws-cli:2.31.4
+```
+
+> deps/ 下清单的镜像名已由打包脚本替换为本包私服前缀（${REGISTRY}），无需再改。
+
+BUNDLE_STEP
+fi )
 > 私服需认证时，再建拉取凭据（否则跳过）：
 > \`kubectl -n baobao-chat create secret docker-registry regcred --docker-server=172.16.19.3:8182 --docker-username=*** --docker-password=***\`
 > 并在 \`values-k8s.example.yaml\` 的 \`global.imagePullSecrets\` 填 \`[{ name: regcred }]\`。
@@ -240,10 +270,13 @@ kubectl -n baobao-chat set image deploy/bbc-web web=$REGISTRY/web:<新ver>
 > 回滚：\`helm -n baobao-chat rollback bbc\`（超出迁移窗口需恢复数据备份）。
 EOF
 
+# INSTALL 内私服前缀占位替换（BUNDLE 段用的 __REG__，此处落实际值）
+sed -i.bak "s|__REG__|$REGISTRY|g" "$PKG/INSTALL-K8S.md" && rm -f "$PKG/INSTALL-K8S.md.bak"
+
 # ---- 校验和 ----
 ( cd "$PKG" && find . -type f ! -name SHA256SUMS -print0 | xargs -0 sha256sum > SHA256SUMS )
 
 # ---- 最终 tar ----
 ( cd "$OUT" && tar czf "baobaochat-k8s-v$VER.tar.gz" "baobaochat-k8s-v$VER" )
-echo "[gen-k8s-package] 完成：$OUT/baobaochat-k8s-v$VER.tar.gz"
+echo "[gen-k8s-package] 完成：$OUT/baobaochat-k8s-v$VER.tar.gz（镜像模式：$([ "$BUNDLE" = "1" ] && echo 全量离线 || echo 依赖内网 mirror)）"
 ( cd "$PKG" && find . -type f | sort )
