@@ -143,7 +143,7 @@ echo "$DOC_F" | jq -c '.data | {id,title,source_type,source_ref,status,ext}'
 [ "$(echo "$DOC_F" | jqget '.data.status')" = "ready" ] || { echo "❌ 文件摄入应 ready"; exit 1; }
 [ "$(echo "$DOC_F" | jqget '.data.source_ref')" = "$FILE_ID" ] || { echo "❌ source_ref=file_id"; exit 1; }
 BAD_EXT_CHECK=$(echo 'binary' > "$TMP/x.exe"; curl -sS -X POST "$BASE/files/upload" -H "Authorization: Bearer $ALICE" -F "file=@$TMP/x.exe" | jqget '.code')
-[ "$BAD_EXT_CHECK" = "4002" ] || echo "（exe 上传非 4002：$BAD_EXT_CHECK——黑名单口径，不影响 kb 断言）"
+[ "$BAD_EXT_CHECK" = "4002" ] || echo "（exe 上传非 4002：${BAD_EXT_CHECK}——黑名单口径，不影响 kb 断言）"
 echo "文件引用摄入 ✓"
 
 echo ""

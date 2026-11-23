@@ -4,7 +4,7 @@
 #
 # 单变量 BBC_PUBLIC_URL 决定全局后台地址（v0.1 统一 http，D21 口径）：
 #   前端   VITE_API_BASE = $BBC_PUBLIC_URL/api/v1（临时 .env.production，WS 自动推导）
-#   壳/Rust BBC_RT_GATEWAY 编译期缺省 = $BBC_PUBLIC_URL（build.rs 注入两级缺省链）
+#   壳/Rust BBC_RT_GATEWAY 编译期缺省 = ${BBC_PUBLIC_URL}（build.rs 注入两级缺省链）
 #   更新器 endpoints = $BBC_PUBLIC_URL/update/latest.json（--config 覆盖，域名不进库）
 #
 # 用法（各平台对应系统机上执行）：

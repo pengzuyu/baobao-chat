@@ -44,10 +44,10 @@ for plat in darwin-x86_64 darwin-aarch64 linux-x86_64 windows-x86_64; do
 done
 if [ -n "$MISSING" ] && [ "${BBC_ALLOW_PARTIAL:-0}" != 1 ]; then
   echo "[publish] ✗ 缺平台产物（无 .sig）：$MISSING" >&2
-  echo "[publish]   各平台机上跑 build-desktop 后把产物汇到 $OUT；确需部分发布加 BBC_ALLOW_PARTIAL=1" >&2
+  echo "[publish]   各平台机上跑 build-desktop 后把产物汇到 ${OUT}；确需部分发布加 BBC_ALLOW_PARTIAL=1" >&2
   exit 1
 fi
-[ -n "$MISSING" ] && echo "[publish] ⚠ BBC_ALLOW_PARTIAL=1：缺平台（$MISSING）按现状发布"
+[ -n "$MISSING" ] && echo "[publish] ⚠ BBC_ALLOW_PARTIAL=1：缺平台（${MISSING}）按现状发布"
 
 # ---- 2. rsync 发布（平台子目录随产物目录原样；清单两份置卷根）----
 echo "[publish] v$VERSION → $HOST:$UPDATES_DIR"
@@ -60,7 +60,7 @@ PUBLISHED="$(curl -fsSL --max-time 15 "$URL/update/latest.json" | python3 -c "im
 if [ "$PUBLISHED" = "$VERSION" ]; then
   echo "[publish] ✔ 回读验证通过：$URL/update/latest.json → v$VERSION"
 else
-  echo "[publish] ✗ 回读验证失败（远端=${PUBLISHED:-不可达}，期望=$VERSION）——检查 nginx-lb/update-src 与缓存" >&2
+  echo "[publish] ✗ 回读验证失败（远端=${PUBLISHED:-不可达}，期望=${VERSION}）——检查 nginx-lb/update-src 与缓存" >&2
   exit 1
 fi
 echo "[publish] 完成——客户端下次检查更新即见 v$VERSION"
