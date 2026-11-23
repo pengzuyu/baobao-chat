@@ -30,10 +30,14 @@ var usersSignatureSQL string
 //go:embed 0004_workday_calendar.sql
 var workdayCalendarSQL string
 
+//go:embed 0005_client_release.sql
+var clientReleaseSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: baselineSQL},
 	{Version: 2, Name: "0002_oidc_confirm_attempts", Probe: "", SQL: confirmAttemptsSQL},
 	{Version: 3, Name: "0003_users_signature", Probe: "", SQL: usersSignatureSQL},
 	{Version: 4, Name: "0004_workday_calendar", Probe: "public.workday_calendar", SQL: workdayCalendarSQL},
+	{Version: 5, Name: "0005_client_release", Probe: "public.client_release", SQL: clientReleaseSQL},
 }

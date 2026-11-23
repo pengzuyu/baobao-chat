@@ -21,6 +21,6 @@ COPY nginx.conf /etc/nginx/nginx.conf
 COPY --chown=nginx:nginx website-dist/ /usr/share/nginx/html/
 
 # 更新源目录（运行期由 PVC 覆盖；镜像内保留空目录防未挂载时 403）
-RUN mkdir -p /usr/share/nginx/updates && chown nginx:nginx /usr/share/nginx/updates
+RUN mkdir -p /usr/share/nginx/updates-root/update && chown -R nginx:nginx /usr/share/nginx/updates-root
 
 EXPOSE 80

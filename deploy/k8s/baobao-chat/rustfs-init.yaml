@@ -51,9 +51,13 @@ spec:
               aws s3api put-bucket-versioning --bucket bbc-data \
                 --versioning-configuration Status=Enabled || true
               aws s3api create-bucket --bucket bbc-backup || true
+              # bbc-releases：客户端安装包（D39）；匿名只读——web 入口 nginx 无凭证直出
+              aws s3api create-bucket --bucket bbc-releases || true
+              aws s3api put-bucket-policy --bucket bbc-releases --policy \
+                '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::bbc-releases/*"]}]}' || true
               aws s3api put-bucket-cors --bucket bbc-data --cors-configuration \
                 '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","POST","HEAD"],"AllowedHeaders":["content-type","x-amz-*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3600}]}' || true
-              echo "[rustfs-init] 桶初始化完成：bbc-data(版本化) / bbc-backup（CORS 已配）"
+              echo "[rustfs-init] 桶初始化完成：bbc-data(版本化) / bbc-backup / bbc-releases(匿名只读·D39)（CORS 已配）"
           resources:
             requests: {cpu: 1m, memory: 16Mi}
             limits: {cpu: 500m, memory: 256Mi}

@@ -403,6 +403,12 @@ func (s *S3) PresignPart(ctx context.Context, uploadID, s3UploadID string, no in
 	return s.presign(ctx, http.MethodPut, MpKey(uploadID), q, ttl)
 }
 
+// PresignPutObject 单对象 PUT 预签名（D39 客户端安装包直传；ttl 由调用方定，如 30min）。
+// Content-Type 不参与签名：前端 PUT 时可自由带（浏览器 fetch 默认）。
+func (s *S3) PresignPutObject(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	return s.presign(ctx, http.MethodPut, key, url.Values{}, ttl)
+}
+
 // PresignGet 下载预签名 GET（variant/任意键；120s 语义由调用方控制）
 func (s *S3) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
 	return s.presign(ctx, http.MethodGet, key, url.Values{}, ttl)

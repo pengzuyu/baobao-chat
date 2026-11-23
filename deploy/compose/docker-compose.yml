@@ -254,6 +254,11 @@ services:
         aws s3api put-bucket-versioning --bucket bbc-data \
           --versioning-configuration Status=Enabled || true
         aws s3api create-bucket --bucket bbc-backup || true
+        # bbc-releases：客户端安装包（D39 管理后台发布）；匿名只读——接入层 nginx
+        # 无凭证代理直出（内网口径；制品完整性由 minisign 签名保证）
+        aws s3api create-bucket --bucket bbc-releases || true
+        aws s3api put-bucket-policy --bucket bbc-releases --policy \
+          '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::bbc-releases/*"]}]}' || true
         # CORS（D25 预签名直传：webview fetch PUT/GET 需过预检；预签名 URL 即凭证无
         # Authorization 头，通配 origin 无泄露面——签名本身即授权）
         aws s3api put-bucket-cors --bucket bbc-data --cors-configuration \
@@ -522,9 +527,33 @@ configs:
             proxy_set_header X-Forwarded-Proto $$scheme;
           }
 
-          # 客户端更新源（latest.json / release-info.json / releases/）
+          # 客户端更新清单（D39 动态）+ 制品对象存储直出 + 静态兜底
+          location = /update/latest.json {
+            proxy_pass http://bbc_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_intercept_errors on;
+            error_page 404 = @update_static;
+          }
+          location = /update/release-info.json {
+            proxy_pass http://bbc_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_intercept_errors on;
+            error_page 404 = @update_static;
+          }
+          # 安装包制品（D39：对象存储直出，不经 app；版本路径不可变 → 长缓存）
+          location /update/releases/ {
+            proxy_pass http://rustfs:9000/bbc-releases/;
+            proxy_set_header Host $$host;
+            add_header Cache-Control "public, max-age=31536000, immutable" always;
+          }
+          # 静态更新源兜底（脚本链路 publish.sh 写 volumes/updates；app 404 时回落）
           location /update/ {
             proxy_pass http://bbc_update/;
+          }
+          location @update_static {
+            proxy_pass http://bbc_update;
           }
 
           # 官网（静态）
@@ -568,9 +597,33 @@ configs:
             proxy_send_timeout 300s;
           }
 
-          # 客户端更新源（manifest + 安装包，16 篇 §5.1）
+          # 客户端更新清单（D39 动态）+ 制品对象存储直出 + 静态兜底（443）
+          location = /update/latest.json {
+            proxy_pass http://bbc_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_intercept_errors on;
+            error_page 404 = @update_static;
+          }
+          location = /update/release-info.json {
+            proxy_pass http://bbc_app;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_intercept_errors on;
+            error_page 404 = @update_static;
+          }
+          # 安装包制品（D39：对象存储直出，不经 app；版本路径不可变 → 长缓存）
+          location /update/releases/ {
+            proxy_pass http://rustfs:9000/bbc-releases/;
+            proxy_set_header Host $$host;
+            add_header Cache-Control "public, max-age=31536000, immutable" always;
+          }
+          # 静态更新源兜底（脚本链路 publish.sh 写 volumes/updates；app 404 时回落）
           location /update/ {
             proxy_pass http://bbc_update/;
+          }
+          location @update_static {
+            proxy_pass http://bbc_update;
           }
 
           # 对象存储预签名直传（D25；与 80 块同款——strip 前缀+Host 透传；D29 后端=rustfs）

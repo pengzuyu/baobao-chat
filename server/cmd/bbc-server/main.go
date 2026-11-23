@@ -61,6 +61,7 @@ import (
 	"github.com/baobaochat/server/internal/message/repo"
 	"github.com/baobaochat/server/internal/message/service"
 	"github.com/baobaochat/server/internal/oidc"
+	"github.com/baobaochat/server/internal/release"
 	"github.com/baobaochat/server/internal/org"
 	orgacl "github.com/baobaochat/server/internal/org/acl"
 	"github.com/baobaochat/server/internal/org/api"
@@ -1261,6 +1262,21 @@ func main() {
 	mailAPI = mailMod.API() // mcpgw 闭包引用回填（前置声明处）
 	mailapi.RegisterRoutes(mux, authed, mailMod.API())
 	mailapi.RegisterAdminRoutes(mux, requirePerm("admin:mail:govern"), mailMod.API())
+
+	// 客户端发布管理（D39）：管理后台上传→发布→/update/* 动态清单（pgPool nil=内存模式不可用）
+	if pgPool != nil {
+		var releasePresigner release.Presigner
+		if s3s, ok := fileStore.(*filestore.S3); ok {
+			releasePresigner = s3s // Local 后端不支持直传票据（管理上传会提示需对象存储）
+		}
+		releaseMod := release.NewModule(pgPool, release.Options{}, releasePresigner,
+			func(ctx context.Context, action, target string) {
+				uid, _ := strconv.ParseInt(httpx.Claims(ctx).Subject, 10, 64)
+				_ = adminSvc.RecordAudit(ctx, bbcpg.DefaultTenantID, uid, action, target, nil)
+			})
+		releaseMod.RegisterPublicRoutes(mux)
+		releaseMod.RegisterAdminRoutes(mux, requirePerm("admin:release:manage"))
+	}
 
 	// 全局中间件链（D02 §6 固定顺序：trace→recovery→access-log→rate-limit→…）
 	limiter := httpx.NewLimiter(50, 100)                                                  // 阶段一按 IP；三档（租户/用户/Agent）阶段二接 Redis

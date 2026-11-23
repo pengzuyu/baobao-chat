@@ -10,7 +10,24 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Menu } from 'antd';
 import type { MenuProps } from 'antd';
-import { BookOpen, Bot, CalendarDays, Gauge, KeyRound, Megaphone, Network, Puzzle, ScrollText, ShieldCheck, SmilePlus, Sparkles, UserCog, Zap, Package } from 'lucide-react';
+import {
+  BookOpen,
+  Bot,
+  CalendarDays,
+  Download,
+  Gauge,
+  KeyRound,
+  Megaphone,
+  Network,
+  Package,
+  Puzzle,
+  ScrollText,
+  ShieldCheck,
+  SmilePlus,
+  Sparkles,
+  UserCog,
+  Zap,
+} from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
@@ -28,6 +45,7 @@ const TABS = [
   { to: '/admin/policies', icon: ShieldCheck, label: '策略' },
   { to: '/admin/stickers', icon: SmilePlus, label: '表情集' },
   { to: '/admin/eco-apps', icon: Package, label: '应用' },
+  { to: '/admin/client-releases', icon: Download, label: '客户端发布' },
   { to: '/admin/oidc-clients', icon: KeyRound, label: '登录接入' },
   { to: '/admin/skills', icon: Sparkles, label: '技能包' },
   { to: '/admin/plugins', icon: Puzzle, label: '插件' },

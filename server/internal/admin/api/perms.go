@@ -76,6 +76,7 @@ var permDictionary = []PermGroup{
 		{"admin:notice:publish", "admin", "租户公告发布（12 篇 §6.3）"},
 		{"admin:mail:govern", "admin", "邮件域治理（22 篇）"},
 		{"admin:calendar:manage", "admin", "工作日日历维护（D35）"},
+		{"admin:release:manage", "admin", "客户端发布管理（D39：上传/发布/撤回/回滚）"},
 	}},
 	{"platform", "平台运营", []PermPoint{
 		{"platform:tenant:manage", "platform", "租户生命周期"},

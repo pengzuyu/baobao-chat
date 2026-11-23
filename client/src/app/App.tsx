@@ -36,6 +36,7 @@ import { AdminLayout } from '../features/admin/pages/AdminLayout';
 import { DashboardPage } from '../features/admin/pages/DashboardPage';
 import { EcoAppsPage } from '../features/admin/pages/EcoAppsPage';
 import { OidcClientsPage } from '../features/admin/pages/OidcClientsPage';
+import { ClientReleasePage } from '../features/admin/pages/ClientReleasePage';
 import { SkillsPage } from '../features/admin/pages/SkillsPage';
 import { OrgDirectoryPage } from '../features/admin/pages/OrgDirectoryPage';
 import { RolesPage } from '../features/admin/pages/RolesPage';
@@ -360,6 +361,7 @@ export function App() {
           <Route path="stickers" element={<StickersPage />} />
           <Route path="eco-apps" element={<EcoAppsPage />} />
           <Route path="oidc-clients" element={<OidcClientsPage />} />
+          <Route path="client-releases" element={<ClientReleasePage />} />
           <Route path="skills" element={<SkillsPage />} />
           <Route path="usage" element={<UsagePage />} />
           <Route path="audit" element={<AuditPage />} />
