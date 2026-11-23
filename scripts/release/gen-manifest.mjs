@@ -22,6 +22,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ── 参数 ──
 const args = process.argv.slice(2);
@@ -30,7 +31,9 @@ function argOf(flag) {
   return i >= 0 ? args[i + 1] : undefined;
 }
 const BASE = (process.env.BBC_PUBLIC_URL || '').replace(/\/+$/, '');
-const ROOT = resolve(new URL('../..', import.meta.url).pathname);
+// 用 fileURLToPath 而非 URL.pathname：Windows 上 pathname 形如 /D:/a/...，
+// resolve 会拼成 D:\D:\a\...（同 scripts/brand/gen.mjs 的坑）
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const VER = argOf('--version') || JSON.parse(readFileSync(resolve(ROOT, 'client/src-tauri/tauri.conf.json'), 'utf8')).version;
 const notesFile =
   argOf('--notes-file') || resolve(ROOT, `out/release/v${VER}/RELEASE-NOTES.md`);

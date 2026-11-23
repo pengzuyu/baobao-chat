@@ -27,8 +27,11 @@
 
 import { readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = resolve(new URL('../../', import.meta.url).pathname);
+// 必须用 fileURLToPath 而非 URL.pathname：Windows 上 pathname 形如 /D:/a/...，
+// resolve 会拼成 D:\D:\a\...（Windows 出包时品牌 --check 门禁首个 ENOENT 的根因）
+const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const CHECK = process.argv.includes('--check');
 
 // ── 读取与校验 brand.json ──
