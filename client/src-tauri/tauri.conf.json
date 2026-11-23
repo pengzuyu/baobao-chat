@@ -50,9 +50,7 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": [
-          "bbc"
-        ]
+        "schemes": ["bbc"]
       }
     }
   }
