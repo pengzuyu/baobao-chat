@@ -1,0 +1,98 @@
+# =============================================================================
+# 后端离线部署包（GitHub Actions；2026-11-23）
+#
+# 用途：公网 runner 构建 bbc-app 镜像与「内网离线部署包」，artifact 下载后拷入内网。
+# 内网服务器只需 Docker Engine + Compose v2.20+，无需源码/编译环境/外网。
+#
+# 产物：baobaochat-deploy-v<ver>.tar.gz（组装逻辑见 scripts/release/gen-deploy-package.sh）
+#   ├── INSTALL.md                    三步安装说明（含安全项）
+#   ├── images/bbc-app-<ver>.tar.gz   服务端镜像（必带）
+#   ├── images/base-images.tar.gz     其余 5 镜像（bundle_images=true 时）
+#   └── compose/                      docker-compose.yml + .env.internal + init/ + 脚本
+#                                     + volumes/website（官网静态，构建产物）
+# 镜像来源两档：
+#   A. 内网有 Harbor（推荐）：勾 bundle_images=false，包内只带 bbc-app，
+#      .env.internal 指向内网 Harbor 拉其余 5 个（Harbor 需预置，见 docs/16）
+#   B. 完全离线：勾 bundle_images=true，包内带全部 6 镜像（~400MB，吃 artifact 配额）
+#
+# 签名：本 workflow 不接触 updater 私钥（无 Secrets）；客户端签名在 mac 本地补。
+# =============================================================================
+name: 后端离线部署包
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本标签（服务端镜像 tag，如 0.1.4）'
+        required: true
+        type: string
+      harbor_registry:
+        description: '内网 Harbor 前缀（写进 .env.internal；如 172.16.105.109:30003/pengzuyu）'
+        required: false
+        default: '172.16.105.109:30003/pengzuyu'
+        type: string
+      bundle_images:
+        description: '打包全部 6 个镜像（完全离线部署用；默认只带 bbc-app，其余走 Harbor）'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  LOCAL_TAG: baobaochat/bbc-app
+
+jobs:
+  package:
+    name: 构建部署包
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 构建 bbc-app 镜像（linux/amd64）
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg GOPROXY=https://proxy.golang.org,direct \
+            -t "${LOCAL_TAG}:${{ inputs.version }}" server/
+
+      - name: 导出 bbc-app 镜像
+        run: |
+          mkdir -p dist/images
+          docker save "${LOCAL_TAG}:${{ inputs.version }}" \
+            | gzip > "dist/images/bbc-app-${{ inputs.version }}.tar.gz"
+          ls -lh dist/images/
+
+      - name: 导出基础镜像（可选全量包）
+        if: ${{ inputs.bundle_images }}
+        run: |
+          set -euo pipefail
+          for img in pgvector/pgvector:pg16 redis:7.4.1-alpine3.20 \
+                     nginx:1.27.4-alpine3.21 rustfs/rustfs:1.0.5 amazon/aws-cli:2.31.4; do
+            docker pull --platform linux/amd64 "$img"
+          done
+          docker save pgvector/pgvector:pg16 redis:7.4.1-alpine3.20 \
+            nginx:1.27.4-alpine3.21 rustfs/rustfs:1.0.5 amazon/aws-cli:2.31.4 \
+            | gzip > dist/images/base-images.tar.gz
+          ls -lh dist/images/
+
+      - name: 构建官网静态文件（website 服务内容源）
+        run: |
+          if [ -f website/package-lock.json ]; then
+            npm --prefix website ci --no-audit --no-fund
+          else
+            npm --prefix website install --no-audit --no-fund
+          fi
+          npm --prefix website run build
+
+      - name: 组装部署包
+        env:
+          BBC_DEPLOY_VERSION: ${{ inputs.version }}
+          BBC_HARBOR: ${{ inputs.harbor_registry }}
+          BBC_BUNDLE_IMAGES: ${{ inputs.bundle_images && '1' || '0' }}
+        run: bash scripts/release/gen-deploy-package.sh
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baobaochat-deploy-v${{ inputs.version }}
+          path: dist/baobaochat-deploy-v${{ inputs.version }}.tar.gz
+          retention-days: 30

@@ -1,0 +1,88 @@
+# =============================================================================
+# Windows 客户端包（GitHub Actions；2026-11-23）
+#
+# 用途：公网 windows runner 构建 NSIS 安装包，artifact 下载后拷入内网分发。
+# 本机（mac）无需 Windows 环境；Windows 机只需装包验收，无需编译环境。
+#
+# 签名策略（无 Secrets 设计）：本 workflow 不持有 updater 私钥——BBC_ALLOW_UNSIGNED=1
+# 出未签名包；产物下载回 mac 后本地补签：
+#   npx tauri signer sign -f ~/.tauri/bbc-updater.key -p <口令> <setup.exe>
+# 再把 .sig 随包放进 out/release/v<ver>/windows-x86_64/ 供 gen-manifest 汇总。
+#
+# 前置：windows-latest runner 自带 Node/Rust(stdlib-msvc)/VS Build Tools/WebView2 SDK。
+# 产物：windows-x86_64-baobaochat-<ver>.zip
+#   └── setup.exe（NSIS，应用内更新形态）+ 可能的 nsis zip
+# =============================================================================
+name: Windows 客户端包
+
+on:
+  workflow_dispatch:
+    inputs:
+      public_url:
+        description: '服务端地址（编译期注入三链：API/WS/updater；如 http://172.16.105.109）'
+        required: true
+        type: string
+      version:
+        description: '覆盖版本号（可选；留空按 client/src-tauri/tauri.conf.json）'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  build:
+    name: 构建 NSIS 安装包
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 环境信息
+        shell: bash
+        run: |
+          node --version
+          npm --version
+          rustc -vV | head -2
+          cargo --version
+
+      - name: 安装前端依赖
+        shell: bash
+        run: npm --prefix client install --no-audit --no-fund
+
+      - name: 覆盖版本号（可选）
+        if: ${{ inputs.version != '' }}
+        shell: bash
+        run: bash scripts/release/set-version.sh "${{ inputs.version }}"
+
+      - name: 出包（未签名，签名在 mac 本地补）
+        shell: powershell
+        env:
+          BBC_PUBLIC_URL: ${{ inputs.public_url }}
+          BBC_ALLOW_UNSIGNED: '1'
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\release\build-desktop.ps1
+
+      - name: 读取产物版本
+        id: ver
+        shell: powershell
+        run: |
+          $c = Get-Content client\src-tauri\tauri.conf.json -Raw | ConvertFrom-Json
+          Write-Host "version=$($c.version)"
+          "version=$($c.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Get-ChildItem "out\release\v$($c.version)\windows-x86_64" | Format-Table Name, Length
+
+      - name: 打包产物
+        shell: powershell
+        run: |
+          $V = "${{ steps.ver.outputs.version }}"
+          $Src = "out\release\v$V\windows-x86_64"
+          $Out = "out\release\windows-x86_64-baobaochat-$V.zip"
+          # NSIS 产物：*-setup.exe（updater 形态）+ 可能的 .nsis.zip 一并带上
+          Compress-Archive -Path "$Src\*" -DestinationPath $Out -Force
+          Get-Item $Out | Format-Table Name, Length
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-client-v${{ steps.ver.outputs.version }}
+          path: out/release/windows-x86_64-baobaochat-*.zip
+          retention-days: 30

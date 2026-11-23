@@ -73,7 +73,7 @@ services:
   # 最后切换（§4.4 第 3 步）。
   # ===========================================================================
   nginx-lb:
-    image: nginx:1.27.4-alpine3.21
+    image: ${NGINX_IMAGE:-nginx:1.27.4-alpine3.21}
     profiles: [core]
     restart: unless-stopped
     logging: *default-logging
@@ -198,7 +198,7 @@ services:
   # redis 7：缓存/队列（仅缓存用途；AOF 持久化关闭优先，16 篇 §3.2）
   # ===========================================================================
   redis:
-    image: redis:7.4.1-alpine3.20
+    image: ${REDIS_IMAGE:-redis:7.4.1-alpine3.20}
     profiles: [core, deps]
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "no", "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
@@ -216,7 +216,7 @@ services:
   # D29：MinIO（AGPL+上游归档）→ RustFS（Apache-2.0）；S3 API/端口/卷语义平移
   # ===========================================================================
   rustfs:
-    image: rustfs/rustfs:1.0.5
+    image: ${RUSTFS_IMAGE:-rustfs/rustfs:1.0.5}
     profiles: [core, deps]
     restart: unless-stopped
     environment:
@@ -238,7 +238,7 @@ services:
   # 桶初始化（幂等）：bbc-data（版本化，误删恢复 §4.6）+ bbc-backup（独立备份桶）
   # D29：mc（AGPL）退役 → aws-cli（Apache-2.0）全走标准 S3 API
   rustfs-init:
-    image: amazon/aws-cli:2.31.4
+    image: ${AWS_CLI_IMAGE:-amazon/aws-cli:2.31.4}
     profiles: [core, deps]
     restart: "no"
     depends_on:
@@ -273,7 +273,7 @@ services:
   # 正式 bbc-update-src 镜像（灰度/ed25519 签名清单）后续经 BBC_UPDATE_SRC_IMAGE 替换
   # ===========================================================================
   update-src:
-    image: ${BBC_UPDATE_SRC_IMAGE:-nginx:1.27.4-alpine3.21}
+    image: ${BBC_UPDATE_SRC_IMAGE:-${NGINX_IMAGE:-nginx:1.27.4-alpine3.21}}
     profiles: [core, deps]
     restart: unless-stopped
     logging: *default-logging
@@ -295,7 +295,7 @@ services:
   # 未发布时根路径回占位提示（try_files 回落），健康探测不依赖发布物
   # ===========================================================================
   website:
-    image: nginx:1.27.4-alpine3.21
+    image: ${NGINX_IMAGE:-nginx:1.27.4-alpine3.21}
     profiles: [core]
     restart: unless-stopped
     logging: *default-logging
