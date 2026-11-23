@@ -182,6 +182,13 @@ func (g *Gateway) handleCall(r *http.Request, claims *authjwt.Claims, params jso
 	case "doc_write":
 		res, err := g.invokeDocWrite(r.Context(), tenant, uid, p.Arguments)
 		return res, err
+	// B4 严控批（2026-11-23）
+	case "group_create":
+		res, err := g.invokeGroupCreate(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "group_invite":
+		res, err := g.invokeGroupInvite(r.Context(), tenant, uid, p.Arguments)
+		return res, err
 	default:
 		return nil, rpcErr(codeUnknownTool, "工具未接线: "+p.Name)
 	}

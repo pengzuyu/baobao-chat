@@ -732,6 +732,18 @@ func main() {
 		DocWrite: func(ctx context.Context, tenantID, uid, spaceID, nodeID int64, title, format, content string) (any, error) {
 			return kbSvc.IngestDoc(ctx, tenantID, uid, spaceID, nodeID, title, format, content, 0)
 		},
+		// group_create / group_invite（B4）：建群/拉人走 message 域主干
+		//（成员校验/invite_policy/上限在域；type 固定 2 普通群——广播群不开放）
+		GroupCreate: func(ctx context.Context, uid int64, name string, memberIDs []string) (any, error) {
+			return msgMod.API().CreateConversation(ctx, uid, messageapi.ConvCreatePayload{
+				Type: 2, Name: name, MemberIDs: memberIDs,
+			})
+		},
+		GroupInvite: func(ctx context.Context, uid, convID int64, uids []string) error {
+			return msgMod.API().AddMembers(ctx, uid, messageapi.MemberAddPayload{
+				ConvID: messageapi.ConvID(strconv.FormatInt(convID, 10)), UIDs: uids,
+			})
+		},
 		// kb_spaces / kb_nodes：知识库结构浏览（可见空间按 uid 过滤在域服务）
 		KbSpaces: func(ctx context.Context, tenantID, uid int64) (any, error) {
 			return kbSvc.ListSpaces(ctx, tenantID, uid)

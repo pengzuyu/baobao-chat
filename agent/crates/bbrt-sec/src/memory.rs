@@ -28,13 +28,20 @@ pub enum GrantScope {
 }
 
 /// 永久记忆硬名单（§4.2 限制条款；**D32 修订**：触人/出域动作最多 Session 级记忆，
-/// file_upload/app_write 补齐 CorpWrite 全集；网络出站 http_fetch 可记忆故不在此列）
-const NEVER_PERMANENT_TOOLS: [&str; 5] = [
+/// file_upload/app_write 补齐 CorpWrite 全集；网络出站 http_fetch 可记忆故不在此列。
+/// B2-B4 补齐：mail_send（外发）/group_create/group_invite（触人面最大）/
+/// schedule_create/schedule_cancel（未来自动化行为——永续授权等于无人值守的自我延续）
+const NEVER_PERMANENT_TOOLS: [&str; 10] = [
     "git_push",
     "doc_write",
     "im_send",
     "file_upload",
     "app_write",
+    "mail_send",
+    "group_create",
+    "group_invite",
+    "schedule_create",
+    "schedule_cancel",
 ];
 
 /// 一条授权记忆（§5.1 agent_tool_grant 表的内存形态）

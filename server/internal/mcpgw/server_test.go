@@ -41,6 +41,8 @@ type fixture struct {
 	fileListCalls  []map[string]any
 	presenceCalls  int
 	docWrites      []map[string]any
+	groupCreates   []map[string]any
+	groupInvites   []map[string]any
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -134,6 +136,14 @@ func newFixture(t *testing.T) *fixture {
 			})
 			return map[string]any{"id": "9", "title": title, "status": "ready"}, nil
 		},
+		GroupCreate: func(_ context.Context, uid int64, name string, memberIDs []string) (any, error) {
+			f.groupCreates = append(f.groupCreates, map[string]any{"uid": uid, "name": name, "members": memberIDs})
+			return map[string]any{"id": "77", "type": 2, "name": name, "memberCount": len(memberIDs) + 1}, nil
+		},
+		GroupInvite: func(_ context.Context, uid, convID int64, uids []string) error {
+			f.groupInvites = append(f.groupInvites, map[string]any{"uid": uid, "conv_id": convID, "uids": uids})
+			return nil
+		},
 		Audit: func(_ context.Context, e AuditEntry) { f.audits = append(f.audits, e) },
 	}}
 	return f
@@ -217,8 +227,8 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 	tok := f.mint(t, "7", false)
 	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`, tok)
 	tools := decode(t, rec)["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 16 {
-		t.Fatalf("供给应为 16 工具（六件+B1 只读九件+B2 doc_write）: %d 项", len(tools))
+	if len(tools) != 18 {
+		t.Fatalf("供给应为 18 工具（六件+B1 九件+B2 doc_write+B4 群管理两件）: %d 项", len(tools))
 	}
 	// 风险级与 09 篇 §3.1 权威表逐项对齐（客户端 gate 按此分档）
 	want := map[string]string{
@@ -227,6 +237,7 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 		"org_search": "low", "im_convs": "low", "im_search": "low", "doc_read": "low",
 		"kb_spaces": "low", "kb_nodes": "low", "calendar_query": "low",
 		"file_list": "low", "presences": "low", "doc_write": "high",
+		"group_create": "high", "group_invite": "high",
 	}
 	got := map[string]string{}
 	for _, tl := range tools {
@@ -728,5 +739,46 @@ func TestCallImSendFile(t *testing.T) {
 	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"file"}}}`, tok)
 	if c := errCode(t, decode(t, rec)); c != codeInvalidParams {
 		t.Fatalf("缺 file_id 应 -32602: %v", c)
+	}
+}
+
+// ── B4 群管理两件（2026-11-23）：happy + 校验 + OBO scope ──
+
+func TestCallGroupTools(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "9", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"group_create","arguments":{"name":"项目组","member_uids":["12","15"]}}}`, tok)
+	if res := decode(t, rec)["result"].(map[string]any); res["isError"] == true {
+		t.Fatalf("group_create 应成功: %v", res)
+	}
+	if len(f.groupCreates) != 1 || f.groupCreates[0]["name"] != "项目组" || len(f.groupCreates[0]["members"].([]string)) != 2 {
+		t.Fatalf("GroupCreate 参数: %+v", f.groupCreates)
+	}
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"group_invite","arguments":{"conv_id":77,"uids":["20"]}}}`, tok)
+	if res := decode(t, rec)["result"].(map[string]any); res["isError"] == true {
+		t.Fatalf("group_invite 应成功: %v", res)
+	}
+	if len(f.groupInvites) != 1 || f.groupInvites[0]["conv_id"] != int64(77) {
+		t.Fatalf("GroupInvite 参数: %+v", f.groupInvites)
+	}
+	// 空成员 → -32602；缺 name → -32602
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"group_create","arguments":{"name":"x","member_uids":[]}}}`, tok)
+	if c := errCode(t, decode(t, rec)); c != codeInvalidParams {
+		t.Fatalf("空成员应 -32602: %v", c)
+	}
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"group_invite","arguments":{"uids":["1"]}}}`, tok)
+	if c := errCode(t, decode(t, rec)); c != codeInvalidParams {
+		t.Fatalf("缺 conv_id 应 -32602: %v", c)
+	}
+	// OBO 缺 im:conv:manage → -32002 不触域
+	f2 := newFixture(t)
+	obo := f2.mint(t, "9", true, "im:message:send")
+	body := `{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"group_create","arguments":{"name":"x","member_uids":["1"]},"_meta":{"bbcObo":"` + obo + `"}}}`
+	rec = post(t, f2.gw, body, "")
+	if c := errCode(t, decode(t, rec)); c != codeScopeDenied {
+		t.Fatalf("OBO 缺 scope 应 -32002，得到 %v", c)
+	}
+	if len(f2.groupCreates) != 0 {
+		t.Fatal("scope 拒绝不得触达域服务")
 	}
 }

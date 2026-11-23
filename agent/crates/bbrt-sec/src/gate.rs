@@ -158,12 +158,12 @@ fn static_category(tool: &str) -> Option<ActionCategory> {
     match tool {
         // 只读（A2 行 1）；公司域只读三件（im_history/mail_read=22 篇/18 篇供给，
         // mail_send 落 CorpWrite——归一化缺失时三者均落兜底档，此处补齐登记）；
-        // B1 感知面九件（2026-11-23，mcpgw 供给全 low）
+        // B1 感知面九件（2026-11-23，mcpgw 供给全 low）；
+        // B3 schedule_list（mcp.local 供给，只读）
         "read_file" | "list_dir" | "search_files" | "glob" | "git_status" | "git_diff"
         | "kb_query" | "doc_read" | "im_history" | "mail_read" | "org_search" | "im_convs"
-        | "im_search" | "kb_spaces" | "kb_nodes" | "calendar_query" | "file_list" | "presences" => {
-            Some(ActionCategory::ReadOnly)
-        }
+        | "im_search" | "kb_spaces" | "kb_nodes" | "calendar_query" | "file_list" | "presences"
+        | "schedule_list" => Some(ActionCategory::ReadOnly),
         // 记忆工具：仅写本机记忆目录（D15 §2.2 W1：风险级低，全档放行，
         // 归入只读档即"三档自动"语义；密钥特征拒写由 bbrt-memory 落盘侧兜底）
         "memory_save" | "memory.save" => Some(ActionCategory::ReadOnly),
@@ -171,10 +171,13 @@ fn static_category(tool: &str) -> Option<ActionCategory> {
         "write_file" | "edit_file" | "git_commit" => Some(ActionCategory::FileEdit),
         // 网络出站（A2 行 6）
         "http_fetch" => Some(ActionCategory::NetworkEgress),
-        // 公司域写（A2 行 7，永不全自动）；mail_send=22 篇邮件外发（高危同档补登记）
-        "doc_write" | "im_send" | "file_upload" | "app_write" | "mail_send" => {
-            Some(ActionCategory::CorpWrite)
-        }
+        // 公司域写（A2 行 7，永不全自动）；mail_send=22 篇邮件外发（高危同档补登记）；
+        // B2 doc_write/im_send file 扩展；B4 group_create/group_invite（触人面最大，
+        // 单机无租户面以三档确认兜底，租户开关=policy.disabled_tools 机制已覆盖）；
+        // B3 schedule_create/schedule_cancel（mcp.local 供给——未来自动化行为=触人语义，
+        // 到点执行仍受 D35 任务权限与 full-auto 权限点约束）
+        "doc_write" | "im_send" | "file_upload" | "app_write" | "mail_send" | "group_create"
+        | "group_invite" | "schedule_create" | "schedule_cancel" => Some(ActionCategory::CorpWrite),
         // git push（A2 行 8，永不全自动）
         "git_push" => Some(ActionCategory::GitPush),
         // 委派编码（A2 行 9）
@@ -821,6 +824,56 @@ mod tests {
             granted_at_ms: 1,
         });
         assert!(r.is_err(), "mcp.corp.im_send 永久记忆应被硬名单拒绝");
+    }
+
+    // ---- B3+B4：本地工具面（mcp.local.*）与群管理档位 ----
+
+    #[test]
+    fn schedule_and_group_tools_gate_corp_write() {
+        let f = Fixture::new();
+        // 写类：三档 🔶（schedule=未来自动化行为；group=触人面最大）；
+        // schedule_list 只读全档自动
+        for tool in [
+            "mcp.local.schedule_create",
+            "mcp.local.schedule_cancel",
+            "mcp.corp.group_create",
+            "mcp.corp.group_invite",
+        ] {
+            for mode in MODES {
+                assert!(
+                    matches!(
+                        permission_gate(mode, &call(tool, &json!({})), &f.ctx()),
+                        Decision::Confirm { .. }
+                    ),
+                    "{tool} @ {mode:?} 应按 CorpWrite 确认"
+                );
+            }
+        }
+        for mode in MODES {
+            assert!(
+                matches!(
+                    permission_gate(mode, &call("mcp.local.schedule_list", &json!({})), &f.ctx()),
+                    Decision::Allow { .. }
+                ),
+                "{mode:?} schedule_list 只读应放行"
+            );
+        }
+        // 触人硬名单：schedule/group/mail_send Permanent 一律拒
+        let store = crate::memory::GrantStore::new();
+        for tool in [
+            "schedule_create",
+            "group_create",
+            "group_invite",
+            "mail_send",
+        ] {
+            let r = store.insert(crate::memory::Grant {
+                tool: tool.into(),
+                pattern: "*".into(),
+                scope: GrantScope::Permanent,
+                granted_at_ms: 1,
+            });
+            assert!(r.is_err(), "{tool} 永久记忆应被硬名单拒绝");
+        }
     }
 
     // ---- A2 行 9/10：委派与子 Agent ----

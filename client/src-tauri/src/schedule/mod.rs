@@ -439,6 +439,11 @@ pub struct Runtime {
 }
 
 impl Runtime {
+    /// 任务列表委托（B3：/mcp/local schedule_list 消费）
+    pub fn list_tasks(&self) -> Vec<Task> {
+        self.store.tasks()
+    }
+
     pub fn new(app: AppHandle, store: Arc<Store>) -> Arc<Self> {
         Arc::new(Self {
             store,

@@ -92,6 +92,10 @@ type Options struct {
 	// DocWrite KB 新建文档（B2：kb 域注入 IngestDoc——空间可写校验在域服务；
 	// format ∈ text|markdown；高危确认在客户端管线）
 	DocWrite func(ctx context.Context, tenantID, uid, spaceID, nodeID int64, title, format, content string) (any, error)
+	// GroupCreate 建群（B4：message 域注入 CreateConversation type=2；上限/校验在域）
+	GroupCreate func(ctx context.Context, uid int64, name string, memberIDs []string) (any, error)
+	// GroupInvite 拉人（B4：message 域注入 AddMembers；invite_policy 校验在域）
+	GroupInvite func(ctx context.Context, uid, convID int64, uids []string) error
 	// KbSpaces 可见空间列表（kb 域注入）
 	KbSpaces func(ctx context.Context, tenantID, uid int64) (any, error)
 	// KbNodes 空间目录树（kb 域注入：parentID=0 空间根）

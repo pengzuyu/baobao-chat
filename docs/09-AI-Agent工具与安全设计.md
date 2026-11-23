@@ -71,12 +71,16 @@
 | file_list | 列我的云盘/会话文件元数据 | 低 | 全模式自动 | OBO `file:read` |
 | presences | 同事在线状态快照（观察者口径） | 低 | 全模式自动 | OBO `presence:read` |
 | mail_read / mail_send | 邮件读取/外发（22 篇 §4.7 供给，此处补登记） | 低 / 高 | mail_read 全模式自动；mail_send 全模式确认（永不全自动） | OBO `mail:agent_tool` |
+| group_create / group_invite | 建群/拉人（**B4 2026-11-23**；触人面最大——type=2 普通群，广播群/踢人/解散不开放；租户开关=policy.disabled_tools 机制） | 高 | 全模式确认（永不全自动） | OBO `im:conv:manage` |
+| schedule_create / schedule_cancel / schedule_list | 定时任务创建/取消/列表（**B3 2026-11-23**，`mcp.local.*` 壳本地供给——D35 纯客户端调度，创建=未来自动化行为） | 高 / 高 / 低 | create/cancel 全模式确认（永不全自动）；list 全模式自动 | —（本地回环，token 每次 spawn 轮换） |
 | file_upload | 上传文件到云盘/会话（中转 OBO） | 中 | ask 确认；auto-edit+ 确认 | OBO `file:upload` |
 | ~~coding.delegate / coding.resume / coding.cancel~~ | ~~委派编码任务给本地编码智能体（zcode/Claude Code 等）/续接/取消~~ | — | **已退役**：2026-11-19 委派域整域移除；后台任务取消由 `run.cancel`（内部 run 定向）承载 | —（子智能体零凭证，公司上下文由编排层以文本注入） |
 | a2a.call（二期预留） | 外呼外部 A2A Agent（跨系统/跨组织互操作；子 Agent 本地运行不依赖此工具，见 D14 决策记录） | 按目标 Agent Card 声明（默认高） | 默认隐藏，租户开关启用后按声明门控 | 调用者身份透传 |
 | app.* | 生态应用工具，动态注册 | 按清单（低/中/高） | 按清单风险级套用上述规则 | 按清单 OBO scope（10 篇） |
 
 > **B0 档位接线注记（2026-11-23）**：MCP 供给全名（`mcp.corp.{tool}`）在 Runtime 门控侧经 `gate::bare_tool_name` 剥前缀归一后比对本表治理属性——归一化缺失曾致 corp 工具全部落"未注册=ArbitraryCommand"兜底档（full-auto 下 im_send/mail_send 写类被静默放行、只读类被过度确认），同批补登记 im_history/mail_read（低）与 mail_send（高，CorpWrite 档）。
+>
+> **B3 第二供给源注记（2026-11-23）**：壳本地能力（不经服务端）经**壳内 `/mcp/local`** 供给（复用 D30 8791 回环监听，独立轮换 token，与外部 token 互不影响），命名空间 `mcp.local.*`——schedule_* 三件为首例；治理同本表（gate 裸名归一后按行执行）。
 >
 > 工具协议（inputSchema/结果格式）对齐 MCP tool jsonschema 概念（10 篇 §1.2）。**供给方式注记（2026-11-07 裁决，D14 §6）**：本表中公司域工具（kb_query / doc_read / doc_write / im_send / file_upload 及 app.*）经**服务端 MCP 网关动态供给**（Runtime 的 bbrt-mcp 连接期 list_tools 发现注册，D11 §2.10），不再作为 Runtime 内置工具硬编码；本地内置仅保留文件/命令/git/检索类。风险级、OBO scope 与门控要求**不变**——供给方式与治理解耦，本表仍是治理属性（风险级/scope/门控）的权威源。注册与合并规则见 10 篇 §4.6。
 

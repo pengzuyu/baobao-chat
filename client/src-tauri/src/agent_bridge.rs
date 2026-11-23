@@ -236,6 +236,9 @@ pub struct AgentHost {
     emit: EventSink,
     seq: AtomicU64,
     seq_session: AtomicU64,
+    /// B3：本地工具面 hub（attach_ext_hub 注入；push_mcp_assembly 时轮换
+    /// local token 并供给 /mcp/local——schedule_* 壳本地工具）
+    ext_hub: Mutex<Option<std::sync::Arc<crate::ext_agent::ExtHub>>>,
 }
 
 impl AgentHost {
@@ -251,6 +254,7 @@ impl AgentHost {
             .unwrap_or_else(|| "http://127.0.0.1:8090".into());
         let static_token = std::env::var("BBC_RT_TOKEN").ok().filter(|t| !t.is_empty());
         Self {
+            ext_hub: Mutex::new(None),
             shared: Arc::new(Shared {
                 proc: Mutex::new(ProcState {
                     child: None,
@@ -456,6 +460,11 @@ impl AgentHost {
         }
     }
 
+    /// B3：注入外部接入 hub（lib.rs setup 调用，hub 先于 host 构造故 setter 注入）
+    pub fn attach_ext_hub(&self, hub: std::sync::Arc<crate::ext_agent::ExtHub>) {
+        *self.ext_hub.lock().unwrap() = Some(hub);
+    }
+
     /// MCP 装配推送（对外入口：ensure_running 前置）——装配变更后调用
     /// （D26：三源全量=corp+插件+个人，插件/个人命令层共用）
     pub fn push_mcp_assembly(&self) -> Result<(), String> {
@@ -466,7 +475,20 @@ impl AgentHost {
     /// 全量装配 → mcp.config（NTF）+ tools.reload{plugin}（skills 多根重扫）
     fn push_mcp_assembly_inner(&self) -> Result<(), String> {
         let user = self.current_user();
-        let servers = assemble_mcp_servers(&self.data_dir, &self.gateway, &user);
+        // B3：本地工具面——每次装配轮换 token（旧 runtime 已死，新 runtime 独占）
+        let mut local = None;
+        if let Some(hub) = self.ext_hub.lock().unwrap().as_ref() {
+            if hub.is_online() {
+                let token = format!(
+                    "{}{}",
+                    uuid::Uuid::new_v4().simple(),
+                    uuid::Uuid::new_v4().simple()
+                );
+                hub.set_local_token(token.clone());
+                local = Some((hub.bound_port(), token));
+            }
+        }
+        let servers = assemble_mcp_servers(&self.data_dir, &self.gateway, &user, local);
         self.fire_inner("mcp.config", json!({ "servers": servers }))?;
         self.fire_inner("tools.reload", json!({ "reason": "plugin" }))
     }
@@ -931,12 +953,26 @@ fn assemble_mcp_servers(
     data_dir: &std::path::Path,
     gateway: &str,
     user: &(String, String),
+    local: Option<(u16, String)>,
 ) -> Vec<Value> {
     let mut out = vec![json!({
         "name": "corp",
         "transport": { "kind": "http", "baseUrl": format!("{}/mcp/corp", gateway.trim_end_matches('/')) }
     })];
     let mut taken: Vec<String> = vec!["corp".into()];
+    // B3：系统级第二位=壳本地工具面（/mcp/local，schedule_*）；token 每次
+    // 装配轮换，独立于 D30 外部 token——插件/个人不得顶替 local 命名空间
+    if let Some((port, token)) = local {
+        out.push(json!({
+            "name": "local",
+            "transport": {
+                "kind": "http",
+                "baseUrl": format!("http://127.0.0.1:{port}/mcp/local"),
+                "headers": { "Authorization": format!("Bearer {token}") }
+            }
+        }));
+        taken.push("local".into());
+    }
 
     let plugins_dir = data_dir.join("eco/plugins");
     let Ok(rd) = std::fs::read_dir(&plugins_dir) else {

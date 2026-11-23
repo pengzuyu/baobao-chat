@@ -49,6 +49,9 @@ struct ExtTask {
 pub struct ExtHub {
     tasks: Mutex<HashMap<String, ExtTask>>,
     token: Mutex<String>,
+    /// 本地工具面 token（B3：/mcp/local 供给 schedule_* 给 runtime sidecar；
+    /// 每次 agent_bridge spawn 轮换，与 D30 外部 token 独立互不影响）
+    local_token: Mutex<String>,
     /// 实际绑定端口（agent card url 用；冲突回落时≠DEFAULT_PORT）
     port: std::sync::atomic::AtomicU16,
     /// 监听线程是否已起（授权卡在线状态）
@@ -60,6 +63,7 @@ impl ExtHub {
         Self {
             tasks: Mutex::new(HashMap::new()),
             token: Mutex::new(String::new()), // start() 装载/生成后非空
+            local_token: Mutex::new(String::new()), // agent_bridge spawn 时轮换
             port: std::sync::atomic::AtomicU16::new(DEFAULT_PORT),
             online: std::sync::atomic::AtomicBool::new(false),
         }
@@ -150,6 +154,27 @@ impl ExtHub {
 
     fn set_token(&self, token: String) {
         *self.token.lock().unwrap() = token;
+    }
+
+    /// B3：本地工具面 token——agent_bridge 每次 spawn runtime 前轮换设置，
+    /// 与 D30 外部 token 生命周期完全独立（外部 regenerate 不影响 runtime）
+    pub fn set_local_token(&self, token: String) {
+        *self.local_token.lock().unwrap() = token;
+    }
+
+    fn check_local_token(&self, presented: &str) -> bool {
+        let tok = self.local_token.lock().unwrap();
+        !tok.is_empty() && presented == tok.as_str()
+    }
+
+    /// 当前绑定端口（agent_bridge 组 /mcp/local baseUrl 用）
+    pub fn bound_port(&self) -> u16 {
+        self.port.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 监听线程是否已起（agent_bridge 供给 /mcp/local 的前置判定）
+    pub fn is_online(&self) -> bool {
+        self.online.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// 答案惰性提取：completed 且未取过 → session.history 最后一条 assistant
@@ -331,6 +356,32 @@ fn handle(mut request: tiny_http::Request, app: AppHandle, hub: Arc<ExtHub>) {
     if path == "/mcp" && method != Method::Post {
         // streamable HTTP：server 主动 SSE 不做（stateless），GET/DELETE 一律 405
         respond_json(request, 405, json!({ "error": "method not allowed" }));
+        return;
+    }
+    // B3：本地工具面（/mcp/local）——独立 token（runtime sidecar 每次 spawn 轮换），
+    // 不走 D30 外部 token；供给 schedule_*（壳本地能力，D35 纯客户端调度）
+    if path == "/mcp/local" {
+        if method != Method::Post {
+            respond_json(request, 405, json!({ "error": "method not allowed" }));
+            return;
+        }
+        if !hub.check_local_token(&bearer_of(&request)) {
+            respond_json(request, 401, json!({ "error": "unauthorized" }));
+            return;
+        }
+        let mut body = String::new();
+        if request.as_reader().read_to_string(&mut body).is_err() {
+            respond_json(request, 400, json!({ "error": "bad request" }));
+            return;
+        }
+        let rpc: Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                respond_json(request, 200, rpc_error(Value::Null, -32700, &format!("parse error: {e}")));
+                return;
+            }
+        };
+        respond_json(request, 200, local_mcp_dispatch(&app, &rpc));
         return;
     }
     // 两张脸同端口：A2A 正身 / + MCP 方言 /mcp——此前 path != "/" 把 POST /mcp
@@ -629,4 +680,138 @@ fn respond_json(request: tiny_http::Request, status: u16, body: Value) {
 
 fn truncate(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
+}
+
+// ---------------------------------------------------------------------------
+// B3 本地工具面（/mcp/local）：壳本地能力供给给 runtime sidecar 的 MCP 端点。
+// 与服务端 mcpgw（/mcp/corp）同构——Runtime bbrt-mcp 连接期发现，工具全名
+// mcp.local.schedule_*；治理（档位/确认）在 Runtime gate 按 09 篇 §3.1 裸名
+// 归一执行（B0 归一化后生效）。供给范围 v0.1 = D35 定时任务三件。
+// ---------------------------------------------------------------------------
+
+fn local_mcp_dispatch(app: &AppHandle, rpc: &Value) -> Value {
+    let id = rpc["id"].clone();
+    let method = rpc["method"].as_str().unwrap_or("");
+    if id.is_null() {
+        return json!({ "jsonrpc": "2.0", "id": null, "result": {} }); // 通知静默收下
+    }
+    let result = match method {
+        "initialize" => Ok(json!({
+            "protocolVersion": rpc["params"]["protocolVersion"].as_str().unwrap_or("2025-03-26"),
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "bbc-local", "version": "0.1.0" }
+        })),
+        "ping" => Ok(json!({})),
+        "tools/list" => {
+            let tools = [
+                schedule_tool_def("create"),
+                schedule_tool_def("list"),
+                schedule_tool_def("cancel"),
+            ];
+            Ok(json!({ "tools": tools }))
+        }
+        "tools/call" => local_tool_call(app, &rpc["params"]),
+        other => Err((-32601, format!("method not found: {other}"))),
+    };
+    match result {
+        Ok(v) => json!({ "jsonrpc": "2.0", "id": id, "result": v }),
+        Err((code, msg)) => rpc_error(id, code, &msg),
+    }
+}
+
+fn schedule_tool_def(kind: &str) -> Value {
+    match kind {
+        "create" => json!({
+            "name": "schedule_create",
+            "description": "创建定时任务（到点自动以指定模式发起一轮 agent 会话执行 prompt）。\
+高风险：未来自动化行为须用户确认。触发三选一：cron 5 字段表达式 / once 一次性时间戳(ms) / \
+workday 每工作日 HH:mm。任务权限模式 mode 与审批超时同 D35 语义（full-auto 仍受权限点约束）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name":      { "type": "string", "description": "任务名（必填 ≤64 字）" },
+                    "prompt":    { "type": "string", "description": "到点执行的指令（必填 ≤4000 字）" },
+                    "schedule":  { "type": "object", "description": "触发定义：{type:'cron',expr} | {type:'once',at} | {type:'workday',time:'HH:mm'}（必填）" },
+                    "mode":      { "type": "string", "enum": ["ask", "auto-edit", "full-auto"], "description": "任务会话权限模式（默认 ask）" },
+                    "workspace": { "type": "string", "description": "工作目录（可选）" }
+                },
+                "required": ["name", "prompt", "schedule"]
+            },
+            "annotations": { "x-bbc-risk": "high" }
+        }),
+        "list" => json!({
+            "name": "schedule_list",
+            "description": "列当前用户的定时任务（id/名称/触发/状态/下次执行时间）。",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": { "x-bbc-risk": "low" }
+        }),
+        _ => json!({
+            "name": "schedule_cancel",
+            "description": "删除定时任务（按 id；schedule_list 查询）。高风险：影响已排定的自动化行为。",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string", "description": "任务 id（必填）" } },
+                "required": ["id"]
+            },
+            "annotations": { "x-bbc-risk": "high" }
+        }),
+    }
+}
+
+fn local_tool_call(app: &AppHandle, params: &Value) -> Result<Value, (i64, String)> {
+    let name = params["name"].as_str().unwrap_or("");
+    let args = &params["arguments"];
+    let rt = app
+        .try_state::<Arc<crate::schedule::Runtime>>()
+        .ok_or((-32003, "schedule 未装配（调度器未启动）".to_string()))?;
+    let text = |v: Value| {
+        json!({
+            "content": [{ "type": "text", "text": v.to_string() }],
+            "isError": false
+        })
+    };
+    let err_text = |msg: String| {
+        json!({
+            "content": [{ "type": "text", "text": msg }],
+            "isError": true
+        })
+    };
+    match name {
+        "schedule_create" => {
+            let input: crate::schedule::TaskInput = serde_json::from_value(args.clone())
+                .map_err(|e| (-32602, format!("arguments 非法: {e}")))?;
+            match rt.create(input) {
+                Ok(t) => Ok(text(json!({
+                    "id": t.id, "name": t.name, "status": t.status,
+                    "next_run_at": t.next_run_at
+                }))),
+                Err(e) => Ok(err_text(e)),
+            }
+        }
+        "schedule_list" => {
+            let items: Vec<Value> = rt
+                .list_tasks()
+                .into_iter()
+                .map(|t| {
+                    json!({
+                        "id": t.id, "name": t.name, "status": t.status,
+                        "schedule": t.schedule, "mode": t.mode,
+                        "next_run_at": t.next_run_at, "last_run_at": t.last_run_at
+                    })
+                })
+                .collect();
+            Ok(text(json!({ "items": items })))
+        }
+        "schedule_cancel" => {
+            let id = args["id"].as_str().unwrap_or("").to_string();
+            if id.is_empty() {
+                return Err((-32602, "id 必填".to_string()));
+            }
+            match rt.delete(&id) {
+                Ok(()) => Ok(text(json!({ "deleted": id }))),
+                Err(e) => Ok(err_text(e)),
+            }
+        }
+        other => Err((-32003, format!("未知工具: {other}"))),
+    }
 }

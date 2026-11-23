@@ -299,6 +299,39 @@ func corpTools() []ToolDef {
 			Risk:  "high",
 			Scope: "doc:file:edit",
 		},
+
+		// ── B4 严控批（2026-11-23）：群管理两件——触人面最大（拉人进共享空间），
+		// high/CorpWrite 三档确认；广播群(type=3)不开放（发布权语义另归管理面）；
+		// 踢人/解散/退群不开放（破坏性动作留人工）；租户开关=policy.disabled_tools ──
+
+		{
+			Name:        "group_create",
+			Description: "创建群聊并成为群主（以发起用户身份；成员为发起人+指定 uid 列表）。高危：拉人进共享空间触人面最大。uid 从 org_search 反查。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":       map[string]any{"type": "string", "description": "群名（必填，≤64 字）"},
+					"member_uids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "成员 uid 列表（1-499 人，发起人自动入群）"},
+				},
+				"required": []string{"name", "member_uids"},
+			},
+			Risk:  "high",
+			Scope: "im:conv:manage",
+		},
+		{
+			Name:        "group_invite",
+			Description: "向已有群聊邀请成员（需发起人为群主/管理员，invite_policy 域内校验）。高危：触人面大。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"conv_id": map[string]any{"type": "integer", "description": "群聊会话 ID（必填）"},
+					"uids":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "被邀请人 uid 列表（1-499）"},
+				},
+				"required": []string{"conv_id", "uids"},
+			},
+			Risk:  "high",
+			Scope: "im:conv:manage",
+		},
 	}
 }
 
@@ -844,6 +877,60 @@ func (g *Gateway) invokeDocWrite(ctx context.Context, tenantID, uid int64, raw j
 		return errText(err.Error()), nil
 	}
 	return okText(res)
+}
+
+// invokeGroupCreate group_create 执行：type=2 普通群（发起人=owner 域内定）；
+// 广播群/人数上限/重名校验在 message 域
+func (g *Gateway) invokeGroupCreate(ctx context.Context, _, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		Name       string   `json:"name"`
+		MemberUIDs []string `json:"member_uids"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.Name == "" || len([]rune(args.Name)) > 64 {
+		return nil, rpcErr(codeInvalidParams, "name 必填（≤64 字）")
+	}
+	if len(args.MemberUIDs) == 0 || len(args.MemberUIDs) > 499 {
+		return nil, rpcErr(codeInvalidParams, "member_uids 1-499 人")
+	}
+	if g.opts.GroupCreate == nil {
+		return nil, rpcErr(codeUnknownTool, "group_create 未装配（message 域不可用）")
+	}
+	res, err := g.opts.GroupCreate(ctx, uid, args.Name, args.MemberUIDs)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeGroupInvite group_invite 执行：invite_policy/上限/已在会话校验在 message 域
+func (g *Gateway) invokeGroupInvite(ctx context.Context, _, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		ConvID int64    `json:"conv_id"`
+		UIDs   []string `json:"uids"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.ConvID <= 0 {
+		return nil, rpcErr(codeInvalidParams, "conv_id 必填")
+	}
+	if len(args.UIDs) == 0 || len(args.UIDs) > 499 {
+		return nil, rpcErr(codeInvalidParams, "uids 1-499 人")
+	}
+	if g.opts.GroupInvite == nil {
+		return nil, rpcErr(codeUnknownTool, "group_invite 未装配（message 域不可用）")
+	}
+	if err := g.opts.GroupInvite(ctx, uid, args.ConvID, args.UIDs); err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(map[string]any{"invited": len(args.UIDs)})
 }
 
 // errText 业务失败统一 content 形态

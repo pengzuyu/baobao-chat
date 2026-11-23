@@ -133,6 +133,7 @@ pub fn run() {
                 let _ = handle.emit("agent://event", payload);
             });
             let host = Arc::new(AgentHost::new(data_dir.clone(), emit));
+            host.attach_ext_hub(hub.clone()); // B3：/mcp/local 本地工具面（schedule_*）
             app.manage(host.clone());
             app.manage(hub.clone());
             // 调度线程：抢到单实例锁才跑（双开时只有首个实例执行任务）
