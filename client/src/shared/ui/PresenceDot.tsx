@@ -28,7 +28,8 @@ export function usePresenceColors(): Record<PresenceStatus, { dot: string; ring:
     online: { dot: token.colorSuccess, ring: token.colorSuccessBg },
     away: { dot: token.colorWarning, ring: token.colorWarningBg },
     dnd: { dot: token.colorError, ring: token.colorErrorBg },
-    offline: { dot: token.colorTextQuaternary, ring: token.colorBgContainer },
+    // 离线灰点加深一档（2026-11-20 用户反馈：quaternary 在浅底上几乎不可见）
+    offline: { dot: token.colorTextTertiary, ring: token.colorBgContainer },
   };
 }
 
@@ -43,12 +44,15 @@ export function PresenceDot({ status, size = 8, title }: { status: PresenceStatu
   );
 }
 
-/** 头像角标：dot 绝对定位右下角（会话列表/成员行/通讯录叶子共用） */
+/** 头像角标：dot 压在头像右下角内侧（会话列表/成员行/通讯录叶子共用）。
+ *  2026-11-20 修订：原 right/bottom:-2 贴角范式按圆形头像设计，方形圆角头像（Avatar
+ *  shape="square" 默认 6px 圆角）的角区被弧线裁空，dot+光环悬在头像外白底上→视觉错位、
+ *  离线淡灰点尤其像贴歪；内收为 0 使 dot 主体叠在头像色块上，任意形状头像都贴合。 */
 export function PresenceBadge({ status, dotSize = 10, children }: { status: PresenceStatus; dotSize?: number; children: ReactNode }) {
   return (
     <span style={{ position: 'relative', display: 'inline-flex', flex: 'none' }}>
       {children}
-      <span style={{ position: 'absolute', right: -2, bottom: -2, display: 'inline-flex', lineHeight: 0 }}>
+      <span style={{ position: 'absolute', right: 0, bottom: 0, display: 'inline-flex', lineHeight: 0 }}>
         <PresenceDot status={status} size={dotSize} />
       </span>
     </span>

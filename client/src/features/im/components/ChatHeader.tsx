@@ -8,7 +8,7 @@
 import { ArrowLeft, Bot, Info, MoreHorizontal } from 'lucide-react';
 import { Flex, Typography, theme } from 'antd';
 import { Button } from '../../../shared/ui/Button';
-import { PresenceDot, toPresenceStatus } from '../../../shared/ui/PresenceDot';
+import { PRESENCE_LABEL, PresenceDot, toPresenceStatus, usePresenceColors } from '../../../shared/ui/PresenceDot';
 import type { Conversation } from '../model/types';
 
 interface ChatHeaderProps {
@@ -26,6 +26,8 @@ interface ChatHeaderProps {
 
 export function ChatHeader({ conv, typing, peerStatus, onBack, onOpenAgent, onToggleDetail }: ChatHeaderProps) {
   const { token } = theme.useToken();
+  const presenceColors = usePresenceColors();
+  const peerDisp = toPresenceStatus(peerStatus);
   const typeName = conv.type === 1 ? '' : conv.type === 2 ? ` (${conv.memberCount})` : ' · 广播群';
 
   return (
@@ -47,8 +49,13 @@ export function ChatHeader({ conv, typing, peerStatus, onBack, onOpenAgent, onTo
       {onBack ? (
         <Button variant="text" size="small" icon={<ArrowLeft size={18} />} onClick={onBack} title="返回会话列表" aria-label="返回会话列表" />
       ) : null}
-      {/* 在线状态点（D03 §3.2；统一走 PresenceDot：online 绿/away 黄/dnd 红/offline 灰，2026-11-17） */}
-      {conv.type === 1 ? <PresenceDot status={toPresenceStatus(peerStatus)} title={peerStatus === 'dnd' ? '忙碌（请勿打扰）' : undefined} /> : null}
+      {/* 在线状态点+文字（D03 §3.2；2026-11-20 用户反馈灰点旁补文字：online 绿/away 黄/dnd 红/offline 灰） */}
+      {conv.type === 1 ? (
+        <Flex align="center" gap={4} style={{ flexShrink: 0 }} title={peerStatus === 'dnd' ? '忙碌（请勿打扰）' : undefined}>
+          <PresenceDot status={peerDisp} />
+          <span style={{ fontSize: 12, color: presenceColors[peerDisp].dot }}>{PRESENCE_LABEL[peerDisp]}</span>
+        </Flex>
+      ) : null}
       <Flex align="baseline" gap={8} style={{ minWidth: 0 }}>
         <Typography.Text strong ellipsis style={{ fontSize: 16, minWidth: 0 }} title={conv.name}>
           {conv.name}

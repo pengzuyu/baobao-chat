@@ -22,7 +22,7 @@ import { useAuthStore } from '../features/auth/store/auth';
 import { useImStore } from '../features/im/store/im';
 import { wsClient } from '../shared/api/ws';
 import { qk } from '../shared/api/keys';
-import { PRESENCE_LABEL, PresenceBadge, PresenceDot, toPresenceStatus, type PresenceStatus } from '../shared/ui/PresenceDot';
+import { PRESENCE_LABEL, PresenceBadge, PresenceDot, toPresenceStatus, usePresenceColors, type PresenceStatus } from '../shared/ui/PresenceDot';
 import { APP_NAME } from '../shared/brand';
 import { useImWsEvents } from '../features/im/store/wsEvents';
 import { useUnreadNotificationCount } from '../features/im/api/hooks';
@@ -110,6 +110,7 @@ export function MainLayout() {
   const queryClient = useQueryClient();
   const myUid = useImStore((s) => s.myUid);
   const myPresence = toPresenceStatus(useImStore((s) => s.presence[s.myUid ?? '']) ?? 'online');
+  const presenceColors = usePresenceColors();
   const setMyStatus = (status: 'online' | 'away' | 'dnd' | 'invisible') => {
     // 乐观投影（隐身对己也按离线显示，对齐服务端广播口径）；失败重拉快照回滚
     useImStore.getState().applyPresence(myUid ?? '', status === 'invisible' ? 'offline' : status);
@@ -202,7 +203,11 @@ export function MainLayout() {
     const unread = item.to === '/im' ? totalUnread : item.to === '/notifications' ? (notifUnread.data ?? 0) : 0;
     return (
       <Flex vertical align="center" gap={2} style={{ width: '100%', lineHeight: 1 }}>
-        <Badge count={unread} overflowCount={99} size="small" style={{ boxShadow: 'none', background: token.colorError }}>
+        {/* offset 把数字收进 item 内容盒：antd inline 菜单的 .ant-menu-item/.ant-menu-title-content
+            自带 overflow:hidden（文字省略号用），Badge 默认挂在图标右上且 translate(50%,-50%) 向右上
+            各突出一半，两位数/99+ 右缘超出 47px 内容盒即被裁（2026-11-20 通知项数字显示不全根因）；
+            x=-4 左收横向余量，y=7 抵消上突使数字顶与图标顶平齐，任何位数完整可见 */}
+        <Badge count={unread} overflowCount={99} size="small" offset={[-4, 7]} style={{ boxShadow: 'none', background: token.colorError }}>
           <item.icon size={18} strokeWidth={1.8} />
         </Badge>
         <span style={{ fontSize: 12 }}>{item.label}</span>
@@ -250,11 +255,16 @@ export function MainLayout() {
             />
           </ConfigProvider>
           <Dropdown menu={avatarMenu} placement="topRight" trigger={['click']}>
-            <span title={user?.name ?? '未登录'} style={{ display: 'flex', justifyContent: 'center', padding: 8, cursor: 'pointer' }}>
+            {/* 头像+常驻状态文字（2026-11-20 用户反馈：纯灰点在圆角方形头像角上错位、
+                离线态不显眼；文字随状态着色，比单点更清晰饱满） */}
+            <Flex vertical align="center" gap={3} title={user?.name ?? '未登录'} style={{ padding: '8px 8px 6px', cursor: 'pointer' }}>
               <PresenceBadge status={myPresence}>
                 <Avatar name={user?.name ?? '?'} size={32} />
               </PresenceBadge>
-            </span>
+              <span style={{ fontSize: 11, lineHeight: 1, userSelect: 'none', color: presenceColors[myPresence].dot }}>
+                {PRESENCE_LABEL[myPresence]}
+              </span>
+            </Flex>
           </Dropdown>
         </div>
       </Layout.Sider>
