@@ -12,9 +12,9 @@
 #     bash scripts/prepare-bbrt-sidecar.sh            # 交叉/显式指定（如 universal 包前置）
 #   BBC_BBRT_PROFILE=debug bash ...                   # 默认 release
 #
-# 平台限制（bbrt-agent-unix-only）：bbrt 在 Windows 编不过（compile_error 兜底），
-# Windows 包不随带 sidecar（tauri.conf 主文件不含 externalBin），本脚本在
-# Windows 下直接报错退出。
+# 平台（2026-11-23 Windows 移植后）：macOS/Linux/Windows 三平台皆可（procgrp.rs
+# 平台层——unix 进程组 / Windows Job Object）；Windows 产物名带 .exe（externalBin
+# 约定）。MSYS/Git-Bash 下可用，或用 build-desktop.ps1 内联等价步骤。
 # 验收口径（16 篇 L370）：sidecar <30MB，超限即失败（防体积回归）。
 # =============================================================================
 set -euo pipefail
@@ -24,13 +24,6 @@ AGENT_DIR="$ROOT/agent"
 DEST_DIR="$ROOT/client/src-tauri/binaries"
 PROFILE="${BBC_BBRT_PROFILE:-release}"
 LIMIT_MB=30
-
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*)
-    echo "[prepare-bbrt-sidecar] Windows 不支持：bbrt 编不过（compile_error 兜底），Windows 包不随带 sidecar" >&2
-    exit 1
-    ;;
-esac
 
 TRIPLE="${BBC_BBRT_TRIPLE:-$(rustc -vV | sed -n 's/^host: //p')}"
 [ -n "$TRIPLE" ] || { echo "[prepare-bbrt-sidecar] 无法探测 host triple（rustc -vV）" >&2; exit 1; }
@@ -45,7 +38,10 @@ fi
 echo "[prepare-bbrt-sidecar] cargo build -p bbrt --target ${TRIPLE} --${PROFILE}"
 (cd "$AGENT_DIR" && cargo build -p bbrt --target "$TRIPLE" --"$PROFILE")
 
-BIN="$AGENT_DIR/target/$TRIPLE/$PROFILE/bbrt"
+# Windows triple 产物带 .exe（Tauri externalBin 命名约定同构）
+BIN_EXT=""
+case "$TRIPLE" in *-windows-*) BIN_EXT=".exe" ;; esac
+BIN="$AGENT_DIR/target/$TRIPLE/$PROFILE/bbrt${BIN_EXT}"
 [ -f "$BIN" ] || { echo "[prepare-bbrt-sidecar] 构建产物缺失: $BIN" >&2; exit 1; }
 
 SIZE_MB=$(du -m "$BIN" | cut -f1)
@@ -56,7 +52,7 @@ echo "[prepare-bbrt-sidecar] bbrt 大小: ${SIZE_MB}MB（验收上限 ${LIMIT_MB
 }
 
 mkdir -p "$DEST_DIR"
-DEST="$DEST_DIR/bbrt-$TRIPLE"
+DEST="$DEST_DIR/bbrt-$TRIPLE${BIN_EXT}"
 cp "$BIN" "$DEST"
 echo "[prepare-bbrt-sidecar] 落位: $DEST"
 echo "[prepare-bbrt-sidecar] 完成——随后 npm --prefix client run tauri build 即随包分发"

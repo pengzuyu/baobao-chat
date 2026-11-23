@@ -95,13 +95,31 @@ pub(crate) fn prepare_run_spec(
                 env: Vec::new(),
             }
         }
-        _ => RunSpec {
+        _ => shell_spec(cmd_text, cwd),
+    })
+}
+
+/// 命令字符串 → shell 解释形态（重定向/管道等 shell 语义由对应 shell 解释，
+/// 预检已扫过写目标）：unix=/bin/sh -c；windows=cmd /C
+fn shell_spec(cmd_text: &str, cwd: PathBuf) -> RunSpec {
+    #[cfg(unix)]
+    {
+        RunSpec {
             program: resolve_program("sh"),
             args: vec!["-c".to_string(), cmd_text.to_string()],
             cwd: Some(cwd),
             env: Vec::new(),
-        },
-    })
+        }
+    }
+    #[cfg(windows)]
+    {
+        RunSpec {
+            program: resolve_program("cmd"),
+            args: vec!["/C".to_string(), cmd_text.to_string()],
+            cwd: Some(cwd),
+            env: Vec::new(),
+        }
+    }
 }
 
 /// cmd 数组形态提取（[program, args...]；非数组返回 None）
@@ -241,6 +259,7 @@ pub(crate) fn tokenize(cmd: &str) -> Vec<String> {
 }
 
 /// program 解析为绝对路径：含 / 原样；否则按 PATH（+常见兜底目录）查存在文件
+#[cfg(unix)]
 pub(crate) fn resolve_program(program: &str) -> String {
     if program.contains('/') {
         return program.to_string();
@@ -256,6 +275,40 @@ pub(crate) fn resolve_program(program: &str) -> String {
         let candidate = dir.join(program);
         if candidate.is_file() {
             return candidate.to_string_lossy().into_owned();
+        }
+    }
+    program.to_string() // 找不到：交给 spawn 报错（不在此伪造失败码）
+}
+
+/// Windows：PATH 搜索按 PATHEXT 后缀族探测（.exe/.cmd/…；cmd 内建如 dir 无可执行
+/// 文件——返回原名交 spawn 报错，同 unix 口径）；带分隔符的（/ 或 \）视为已解析路径
+#[cfg(windows)]
+pub(crate) fn resolve_program(program: &str) -> String {
+    if program.contains('/') || program.contains('\\') {
+        return program.to_string();
+    }
+    let exts: Vec<String> = std::env::var("PATHEXT")
+        .map(|v| {
+            v.split(';')
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_else(|_| vec![".exe".into(), ".cmd".into(), ".bat".into()]);
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    for dir in dirs {
+        let candidate = dir.join(program);
+        if candidate.is_file() {
+            return candidate.to_string_lossy().into_owned();
+        }
+        for ext in &exts {
+            let with_ext = dir.join(format!("{program}{ext}"));
+            if with_ext.is_file() {
+                return with_ext.to_string_lossy().into_owned();
+            }
         }
     }
     program.to_string() // 找不到：交给 spawn 报错（不在此伪造失败码）

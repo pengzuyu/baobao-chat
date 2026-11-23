@@ -15,13 +15,8 @@
 //! 强制 → 内存上限由 **RSS 看门狗**执行（ps 轮询进程组 RSS，超限杀组记 8022），
 //! CPU 由墙钟超时兜底——对应 D13-B10 macOS 列"尽力而为 + 监控杀超限"。
 
-#![allow(unsafe_code)]
-// SAFETY 说明：本模块 unsafe 仅限 extern "C"（kill/setpgid，libc 随 std 链接）与
-// pre_exec 回调内的系统调用，均为 async-signal-safe 纯 syscall。
-
 use std::fs;
 use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,6 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{CODE_RESOURCE_LIMIT, CODE_TIMEOUT};
+use crate::sandbox::procgrp::{exit_and_signal, ProcGroup, SIGINT, SIGKILL};
 use crate::sandbox::resource::ResourceLimits;
 
 /// 输出捕获上限：1 MB（09 §4.3 管线 [6]），截断保头尾各 50%
@@ -48,20 +44,6 @@ const GRACE: Duration = Duration::from_secs(3);
 
 /// RSS 看门狗轮询间隔（macOS 监控杀超限的执行粒度）
 const WATCHDOG_INTERVAL: Duration = Duration::from_millis(200);
-
-// ---------------------------------------------------------------------------
-// libc 符号（进程组信号；不引 libc crate）
-// ---------------------------------------------------------------------------
-
-/// SIGINT 信号值（darwin/linux 一致）
-const SIGINT: i32 = 2;
-/// SIGKILL 信号值
-const SIGKILL: i32 = 9;
-
-unsafe extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
-    fn setpgid(pid: i32, pgid: i32) -> i32;
-}
 
 // ---------------------------------------------------------------------------
 // Violation 记录（09 §5.1 agent_sandbox_violation）
@@ -266,16 +248,8 @@ impl SandboxLauncher {
         }
         opts.limits.apply(&mut cmd);
 
-        // 新进程组：pre_exec setpgid(0,0)——子进程成为组长，pgid==pid，杀组即杀树
-        // SAFETY: pre_exec 回调内仅调用 async-signal-safe 的 setpgid(2)
-        unsafe {
-            cmd.pre_exec(|| {
-                if setpgid(0, 0) != 0 {
-                    // 已有组或被信号打断：进程仍在自身组，杀树退化为杀主进程（尽力）
-                }
-                Ok(())
-            });
-        }
+        // 独立进程组/Job（杀树单位；平台层语义，见 procgrp.rs）
+        ProcGroup::configure(&mut cmd);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
@@ -283,7 +257,8 @@ impl SandboxLauncher {
                 return ExitResult::spawn_fail(&temp_dir, &format!("spawn 失败: {e}"));
             }
         };
-        let pgid = child.id() as i32;
+        let grp = ProcGroup::adopt(&child, opts.limits.memory_bytes);
+        let pgid = grp.group_id();
 
         // ---- 等待/超时/看门狗循环 ----
         let deadline = started + timeout;
@@ -309,9 +284,9 @@ impl SandboxLauncher {
                         format!("进程组 {pgid} 超时（{}s）被终止", timeout.as_secs()),
                     ),
                 );
-                kill_group(pgid, SIGINT);
+                grp.signal(SIGINT);
                 if !wait_grace(&mut child, GRACE) {
-                    kill_group(pgid, SIGKILL);
+                    grp.signal(SIGKILL);
                 }
                 let _ = child.wait();
                 break;
@@ -320,9 +295,9 @@ impl SandboxLauncher {
             if let Some(cap) = opts.limits.memory_bytes {
                 if now >= next_watchdog {
                     next_watchdog = now + WATCHDOG_INTERVAL;
-                    if let Some(rss) = group_rss_bytes(pgid) {
+                    if let Some(rss) = grp.rss_bytes(&child) {
                         if rss > cap {
-                            kill_group(pgid, SIGKILL);
+                            grp.signal(SIGKILL);
                             resource_killed = true;
                             record(
                                 opts,
@@ -342,7 +317,7 @@ impl SandboxLauncher {
         }
 
         // 主进程已退出：防御性补杀组内残留（nohup/后台 & 场景，B12 行 8）
-        kill_group(pgid, SIGKILL);
+        grp.signal(SIGKILL);
         let _ = child.wait();
         std::thread::sleep(Duration::from_millis(100)); // 给内核回收时间
 
@@ -399,7 +374,9 @@ fn clamp_timeout(secs: u64) -> u64 {
 /// 无内建超时——后台任务对齐委派口径（长任务不设时长上限，仅调用方取消）。
 pub struct DetachedCommand {
     child: Child,
-    /// 进程组 id（== 主进程 pid）
+    /// 进程组/Job 句柄（杀树单位；平台层）
+    grp: ProcGroup,
+    /// 组标识（unix=pgid==pid / windows=pid；ExitResult.pgid 契约与排查用）
     pub pgid: i32,
     started: Instant,
     temp_dir: PathBuf,
@@ -408,7 +385,7 @@ pub struct DetachedCommand {
 }
 
 impl DetachedCommand {
-    /// 后台 spawn（进程组 + BBC_SANDBOX=1 + 输出重定向临时文件 + limits.apply）
+    /// 后台 spawn（独立组/Job + BBC_SANDBOX=1 + 输出重定向临时文件 + limits.apply）
     pub fn spawn(spec: &RunSpec, opts: &RunOpts) -> Result<DetachedCommand, String> {
         let temp_dir = match &opts.temp_dir {
             Some(p) => p.clone(),
@@ -437,17 +414,14 @@ impl DetachedCommand {
             cmd.env(k, v);
         }
         opts.limits.apply(&mut cmd);
-        // SAFETY: pre_exec 回调内仅调用 async-signal-safe 的 setpgid(2)（同 run()）
-        unsafe {
-            cmd.pre_exec(|| {
-                let _ = setpgid(0, 0);
-                Ok(())
-            });
-        }
+        // 独立进程组/Job（同 run()；平台层语义）
+        ProcGroup::configure(&mut cmd);
         let child = cmd.spawn().map_err(|e| format!("spawn 失败: {e}"))?;
-        let pgid = child.id() as i32;
+        let grp = ProcGroup::adopt(&child, opts.limits.memory_bytes);
+        let pgid = grp.group_id();
         Ok(DetachedCommand {
             child,
+            grp,
             pgid,
             started: Instant::now(),
             temp_dir,
@@ -461,16 +435,16 @@ impl DetachedCommand {
         self.child.try_wait()
     }
 
-    /// 对整进程组发信号（取消路径：调用方先 SIGINT 后 SIGKILL）
+    /// 对整进程组/Job 发信号（取消路径：调用方先 SIGINT 后 SIGKILL）
     pub fn signal_group(&self, sig: i32) {
-        kill_group(self.pgid, sig);
+        self.grp.signal(sig);
     }
 
     /// 收割并产出结果（退出后调用；含防御性补杀与输出读回截断）
     pub fn finish(mut self) -> ExitResult {
         let status = self.child.wait();
         // 防御性补杀组内残留（nohup/& 场景，同 run() 收尾口径）
-        kill_group(self.pgid, SIGKILL);
+        self.grp.signal(SIGKILL);
         std::thread::sleep(Duration::from_millis(100));
         let (exit_code, signal) = match status {
             Ok(s) => exit_and_signal(&s),
@@ -523,14 +497,6 @@ impl Drop for TempDirGuard {
     }
 }
 
-/// kill(-pgid, sig)：杀整组
-fn kill_group(pgid: i32, sig: i32) {
-    // SAFETY: kill(2) 对负 pid 语义为进程组；返回值无需处理（ESRCH=已死）
-    unsafe {
-        kill(-pgid, sig);
-    }
-}
-
 /// 宽限期内轮询主进程是否退出（true=已退出）
 fn wait_grace(child: &mut std::process::Child, grace: Duration) -> bool {
     let deadline = Instant::now() + grace;
@@ -541,41 +507,6 @@ fn wait_grace(child: &mut std::process::Child, grace: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(20));
     }
     false
-}
-
-/// 查询进程组总 RSS（ps -axo pgid=,rss=；单位 KB→B）。失败返回 None（尽力监控）；
-/// 个别行解析异常跳过（ps 表头/僵尸行），不影响本轮求和
-fn group_rss_bytes(pgid: i32) -> Option<u64> {
-    let out = Command::new("/bin/ps")
-        .args(["-axo", "pgid=,rss="])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut total: u64 = 0;
-    for line in text.lines() {
-        let mut it = line.split_ascii_whitespace();
-        let (Some(g), Some(rss_kb)) = (it.next(), it.next()) else {
-            continue;
-        };
-        let Ok(g) = g.parse::<i32>() else {
-            continue;
-        };
-        let rss_kb: u64 = rss_kb.parse().unwrap_or(0);
-        if g == pgid {
-            total += rss_kb * 1024;
-        }
-    }
-    Some(total)
-}
-
-/// 从 ExitStatus 提取 (code, signal)（unix）
-fn exit_and_signal(st: &std::process::ExitStatus) -> (Option<i32>, Option<i32>) {
-    use std::os::unix::process::ExitStatusExt;
-    if let Some(sig) = st.signal() {
-        (None, Some(sig))
-    } else {
-        (st.code(), None)
-    }
 }
 
 /// 读捕获文件：≤1MB 原样；超限取头 512KB + 尾 512KB + 截断标注。
@@ -720,6 +651,7 @@ mod tests {
 
     /// DetachedCommand：spawn 立即返回 → 轮询 try_wait 至退出 → finish 拿输出
     #[test]
+    #[cfg(unix)]
     fn detached_command_poll_and_finish_captures_output() {
         let dir = TempDir::new("detach");
         let spec = RunSpec {
@@ -747,6 +679,7 @@ mod tests {
 
     /// DetachedCommand：signal_group 取消长眠命令（SIGKILL 直杀）
     #[test]
+    #[cfg(unix)]
     fn detached_command_cancel_kills_group() {
         let dir = TempDir::new("detach-kill");
         let spec = RunSpec {
@@ -856,6 +789,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_echo_direct_spawn() {
         let launcher = SandboxLauncher::new();
         let spec = RunSpec {

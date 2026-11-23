@@ -4,12 +4,14 @@
 //! 分层对应 D13-B9（D32 修订）：
 //! - path.rs：L2 工具层路径校验（白名单/realpath 逃逸/敏感拒读）
 //! - network.rs：L2/L3 出站白名单纯逻辑
-//! - resource.rs：L4 资源限制（rlimit，尽力而为）
+//! - resource.rs：L4 资源限制（rlimit，尽力而为；windows no-op）
+//! - procgrp.rs：L5 的 OS 原语平台层（unix 进程组 / windows Job Object）
 //! - launcher.rs：L5 进程生命周期（超时/杀组/截断/RSS 看门狗）+ violation 记录
 
 pub mod launcher;
 pub mod network;
 pub mod path;
+pub mod procgrp;
 pub mod resource;
 
 pub use launcher::{

@@ -1,12 +1,14 @@
 # =============================================================================
 # build-desktop.ps1 —— Windows 桌面发布出包（D21；与 build-desktop.sh 同口径）
 #
-# Windows 包不随带 bbrt sidecar（既有决策：bbrt 编不过 Windows）。
+# bbrt sidecar 随包（2026-11-23 Windows 移植后；此前「编不过不随带」决策作废）：
+# 编译 x86_64-pc-windows-msvc 并按 Tauri externalBin 约定落位
+# binaries/bbrt-x86_64-pc-windows-msvc.exe（与 prepare-bbrt-sidecar.sh 等价）。
 #
 # 用法（Windows 机器，PowerShell）：
 #   $env:BBC_PUBLIC_URL = "http://bbc.example.internal"
 #   $env:TAURI_SIGNING_PRIVATE_KEY = "<minisign 私钥内容或路径>"
-#   $env:TAURI_SIGNING_PASSWORD = "<口令>"
+#   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<口令>"
 #   powershell -ExecutionPolicy Bypass -File scripts\release\build-desktop.ps1
 #
 # 产物：out\release\v<ver>\windows-x86_64\（NSIS setup.exe + .sig）
@@ -42,6 +44,24 @@ node "$Root\scripts\brand\gen.mjs" --check
 if ($LASTEXITCODE -ne 0) {
   Write-Error "[build-desktop] 品牌产物 --check 未过——改 brand/ 后先 make brand-conf 再出包"
 }
+
+# ---- bbrt sidecar 编译落位（externalBin；同 prepare-bbrt-sidecar.sh 口径）----
+$Triple = "x86_64-pc-windows-msvc"
+$BbrtSrc = "$Root\agent\target\$Triple\release\bbrt.exe"
+$BbrtDest = "$Root\client\src-tauri\binaries\bbrt-$Triple.exe"
+Write-Host "[build-desktop] cargo build -p bbrt --target $Triple --release"
+Push-Location "$Root\agent"
+& cargo build -p bbrt --target $Triple --release
+$BuildOk = $LASTEXITCODE -eq 0
+Pop-Location
+if (-not $BuildOk) { Write-Error "[build-desktop] bbrt sidecar 编译失败" }
+if (-not (Test-Path $BbrtSrc)) { Write-Error "[build-desktop] bbrt 产物缺失: $BbrtSrc" }
+$SizeMB = [math]::Round((Get-Item $BbrtSrc).Length / 1MB)
+Write-Host "[build-desktop] bbrt 大小: ${SizeMB}MB（验收上限 30MB）"
+if ($SizeMB -gt 30) { Write-Error "[build-desktop] bbrt 超出 16 篇 L370 验收上限" }
+New-Item -ItemType Directory -Force -Path (Split-Path $BbrtDest) | Out-Null
+Copy-Item $BbrtSrc $BbrtDest -Force
+Write-Host "[build-desktop] sidecar 落位: $BbrtDest"
 
 # ---- 编译期注入临时文件（finally 清理，域名不进 git）----
 $EnvProd = "$Root\client\.env.production"

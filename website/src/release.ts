@@ -87,7 +87,7 @@ export function groupDownloads(info: ReleaseInfo): PlatformGroup[] {
     {
       key: 'windows-x86_64',
       title: 'Windows · x64',
-      hint: 'NSIS 安装器，支持应用内自动更新（passive 静默装）。注：Windows 包暂不包含 AI Agent（本地智能体）功能。',
+      hint: 'NSIS 安装器，支持应用内自动更新（passive 静默装）。',
       items: by('windows-x86_64'),
       current: isPlatform('win'),
     },
