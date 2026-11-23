@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Badge, Dropdown, Flex, FloatButton, Modal, Tag, Typography, message, theme, type MenuProps } from 'antd';
-import { ArrowDown, History, MessageCircle, PanelLeftOpen, PanelRightOpen, Plus, ShieldCheck, Square } from 'lucide-react';
+import { ArrowDown, History, MessageCircle, PanelLeftOpen, PanelRightOpen, Plus, ShieldCheck } from 'lucide-react';
 import { open as openDirectory } from '@tauri-apps/plugin-dialog';
 import { Button } from '../../../shared/ui/Button';
 import { StateView, type ViewState } from '../../../shared/ui/StateView';
@@ -173,19 +173,20 @@ export function AgentWorkbenchPage() {
   const composerState = composerDisabledFor(activeSession?.status);
 
   // ---- 六态推导（列表栏）----
+  // 零会话不算 empty（2026-11-23 用户报修）：三分栏每区自带空态提示行，列表
+  // 空也照常渲染分区——此前 sessions.length===0 判 empty 走 StateView 空态，
+  // 其 empty 分支不渲染 children，左栏被「新建任务会话」居中空态整个顶掉
   const connStatus = useConnectionStore((s) => s.status);
   const degradedText = useConnectionStore((s) => s.degradedText);
   const listState: ViewState | 'ok' = sessionsLoading
     ? 'loading'
     : sessionsError
       ? 'error'
-      : sessions.length === 0
-        ? 'empty'
-        : degradedText
-          ? 'degraded'
-          : connStatus === 'offline'
-            ? 'offline'
-            : 'ok';
+      : degradedText
+        ? 'degraded'
+        : connStatus === 'offline'
+          ? 'offline'
+          : 'ok';
 
   // 中栏态：路由带 id 但会话不存在（未加载完 or 非法）→ loading；未选会话 → 空态引导
   const streamState: ViewState | 'ok' | 'none' = !activeSessionId
@@ -552,13 +553,6 @@ export function AgentWorkbenchPage() {
               skeleton={<SkeletonList count={6} />}
               error={new Error(sessionsError ?? '会话列表加载失败')}
               onRetry={() => void init()}
-              emptyText="从任务区新建，或打开一个项目目录"
-              emptyAction={
-                <Button onClick={handleNewTask}>
-                  <Square size={12} aria-hidden />
-                  新建任务会话
-                </Button>
-              }
               offlineText="离线中：Agent 会话为本地能力，不受影响"
               degradedText={degradedText ?? undefined}
             >
