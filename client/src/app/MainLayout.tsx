@@ -251,7 +251,16 @@ export function MainLayout() {
               selectedKeys={selectedKey ? [selectedKey] : []}
               onClick={({ key }) => navigate(key)}
               items={menuItems}
-              style={{ flex: 1, minWidth: 0, borderInlineEnd: 'none', background: 'transparent' }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                // 一级导航自滚动（2026-11-23 真机）：窗口矮时导航项在栏内滚，
+                // 别把底部头像顶到窗口外（minHeight:0 才允许列项被压到窗口高度内）
+                minHeight: 0,
+                overflowY: 'auto',
+                borderInlineEnd: 'none',
+                background: 'transparent',
+              }}
             />
           </ConfigProvider>
           {/* 菜单朝窗口内侧展开（2026-11-23 Windows 真机）：头像贴窗口最左缘，

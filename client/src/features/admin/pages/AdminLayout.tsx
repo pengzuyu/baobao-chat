@@ -74,7 +74,10 @@ export function AdminLayout() {
   return (
     <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
       {navResizable ? (
-        <div ref={navSplit.paneRef} style={{ width: navSplit.width, flexShrink: 0 }}>
+        /* 二级导航自滚动（2026-11-23 真机）：管理项已有 17 个，一多就溢出到页面外
+           （height:100% 的祖先不裁它，整页被撑高）；minHeight:0 让列高可被压到窗口内，
+           overflowY:auto 让菜单在这列里滚 */
+        <div ref={navSplit.paneRef} style={{ width: navSplit.width, flexShrink: 0, minHeight: 0, overflowY: 'auto' }}>
           <Menu
             mode="inline"
             style={{ width: '100%' }}

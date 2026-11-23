@@ -22,8 +22,10 @@ import { useAuthStore } from '../store/auth';
 import { apiRegister, apiSetupStatus, type UserCard } from '../api/auth';
 import { UserPicker } from '../components/UserPicker';
 
-/** 认证页居中壳 + 品牌区（D26-O3 内联化） */
-const AUTH_PAGE_STYLE: CSSProperties = { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 };
+/** 认证页居中壳 + 品牌区（D26-O3 内联化）
+ *  2026-11-23 真机：外壳不再随文档滚动，认证页改用 height:100% + 自身 overflowY，
+ *  卡片用 margin:auto 居中（窗口矮时从顶部开始、可滚到底，不会把卡片上半截裁掉） */
+const AUTH_PAGE_STYLE: CSSProperties = { height: '100%', overflowY: 'auto', display: 'flex', padding: 16 };
 
 function AuthBrand({ title, sub }: { title: string; sub: string }) {
   return (
@@ -259,7 +261,7 @@ export function LoginPage() {
 
   return (
     <div style={AUTH_PAGE_STYLE}>
-      <Card style={{ width: 360 }}>
+      <Card style={{ width: 360, margin: 'auto' }}>
         <AuthBrand title={APP_NAME} sub={TAGLINE} />
 
         <Form

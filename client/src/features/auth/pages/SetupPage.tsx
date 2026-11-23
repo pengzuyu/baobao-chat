@@ -16,7 +16,8 @@ import { useAuthStore } from '../store/auth';
 
 type SetupPhase = 'checking' | 'uninitialized' | 'initialized';
 
-const AUTH_PAGE_STYLE: CSSProperties = { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 };
+/** 认证页居中壳（与 LoginPage 同源）：height:100% + 自身滚动，卡片 margin:auto 居中 */
+const AUTH_PAGE_STYLE: CSSProperties = { height: '100%', overflowY: 'auto', display: 'flex', padding: 16 };
 
 export function SetupPage() {
   const navigate = useNavigate();
@@ -58,7 +59,7 @@ export function SetupPage() {
 
   return (
     <div style={AUTH_PAGE_STYLE}>
-      <Card style={{ width: 360 }}>
+      <Card style={{ width: 360, margin: 'auto' }}>
         <Flex vertical align="center" gap={4} style={{ textAlign: 'center', marginBottom: 20 }}>
           <Logo size={44} />
           <Typography.Title level={4} style={{ margin: '8px 0 0' }}>

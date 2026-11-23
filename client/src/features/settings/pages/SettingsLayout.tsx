@@ -50,7 +50,8 @@ export function SettingsLayout() {
   return (
     <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
       {navResizable ? (
-        <div ref={navSplit.paneRef} style={{ width: navSplit.width, flexShrink: 0 }}>
+        /* 二级导航自滚动（2026-11-23 真机，与 AdminLayout 同因）：导航项变多时在列内滚 */
+        <div ref={navSplit.paneRef} style={{ width: navSplit.width, flexShrink: 0, minHeight: 0, overflowY: 'auto' }}>
           <Menu
             mode="inline"
             style={{ width: '100%' }}

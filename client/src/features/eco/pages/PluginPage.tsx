@@ -217,7 +217,8 @@ export function PluginPage() {
   const shown = useMemo(() => entries ?? null, [entries]);
 
   return (
-    <div data-testid="bbc-plugin">
+    /* 页内自滚动（2026-11-23 真机）：外壳不再滚动，页面内容一律在自己的容器里滚 */
+    <div data-testid="bbc-plugin" style={{ height: '100%', overflowY: 'auto', padding: '16px 20px' }}>
       <Flex align="center" gap={8} style={{ marginBottom: 8 }} wrap>
         <Puzzle size={16} />
         <Typography.Title level={5} style={{ margin: 0 }}>
