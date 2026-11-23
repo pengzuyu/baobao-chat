@@ -5,15 +5,15 @@
 # 内网服务器只需 Docker Engine + Compose v2.20+，无需源码/编译环境/外网。
 #
 # 产物：baobaochat-deploy-v<ver>.tar.gz（组装逻辑见 scripts/release/gen-deploy-package.sh）
-#   ├── INSTALL.md                    三步安装说明（含安全项）
-#   ├── images/bbc-app-<ver>.tar.gz   服务端镜像（必带）
+#   ├── INSTALL.md                    三步安装说明（含内网 Nexus 私服配置）
+#   ├── images/bbc-app-<ver>.tar.gz   服务端镜像（docker load 即得）
 #   ├── images/base-images.tar.gz     其余 5 镜像（bundle_images=true 时）
 #   └── compose/                      docker-compose.yml + .env.internal + init/ + 脚本
 #                                     + volumes/website（官网静态，构建产物）
-# 镜像来源两档：
-#   A. 内网有 Harbor（推荐）：勾 bundle_images=false，包内只带 bbc-app，
-#      .env.internal 指向内网 Harbor 拉其余 5 个（Harbor 需预置，见 docs/16）
-#   B. 完全离线：勾 bundle_images=true，包内带全部 6 镜像（~400MB，吃 artifact 配额）
+# 镜像策略（依据内网 Nexus 172.16.19.3）：
+#   - bbc-app 随包 docker load（无需推私服；多机部署可用 registry_prefix 改走 8182）
+#   - 第三方 5 个走 daemon.json registry-mirrors（8181 代理 Docker Hub）自动回源
+#   - bundle_images=true：包内带全部 6 镜像（mirror 不可用时完全离线兜底，~400MB）
 #
 # 签名：本 workflow 不接触 updater 私钥（无 Secrets）；客户端签名在 mac 本地补。
 # =============================================================================
@@ -26,13 +26,13 @@ on:
         description: '版本标签（服务端镜像 tag，如 0.1.4）'
         required: true
         type: string
-      harbor_registry:
-        description: '内网 Harbor 前缀（写进 .env.internal；如 172.16.105.109:30003/pengzuyu）'
+      registry_prefix:
+        description: '可选：多机部署时 bbc-app 的私服前缀（如 172.16.19.3:8182/baobaochat）；留空=随包 load'
         required: false
-        default: '172.16.105.109:30003/pengzuyu'
+        default: ''
         type: string
       bundle_images:
-        description: '打包全部 6 个镜像（完全离线部署用；默认只带 bbc-app，其余走 Harbor）'
+        description: '打包全部 6 个镜像（mirror 不可用时完全离线兜底；默认只带 bbc-app）'
         required: false
         default: false
         type: boolean
@@ -86,7 +86,7 @@ jobs:
       - name: 组装部署包
         env:
           BBC_DEPLOY_VERSION: ${{ inputs.version }}
-          BBC_HARBOR: ${{ inputs.harbor_registry }}
+          BBC_REGISTRY_PREFIX: ${{ inputs.registry_prefix }}
           BBC_BUNDLE_IMAGES: ${{ inputs.bundle_images && '1' || '0' }}
         run: bash scripts/release/gen-deploy-package.sh
 
