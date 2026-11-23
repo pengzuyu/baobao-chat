@@ -7,9 +7,11 @@ import (
 	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 
 	jose "github.com/go-jose/go-jose/v4"
 )
@@ -33,13 +35,24 @@ func (k esPublicKey) Key() any                                     { return &k.k
 
 // loadSigningKey 解析 env 注入的 EC 私钥 PEM（EC PRIVATE KEY / PKCS8，P-256）。
 // 空串返回 (nil, nil) 由调用方决定开发态兜底；格式非法显式报错。
+//
+// 注入形态两种（2026-11-23 增补，部署便利）：
+//   - 原始多行 PEM（K8s Secret / 文件注入场景）；
+//   - **base64 包裹的单行**（compose .env 场景——.env 不支持多行值，部署包里
+//     由 scripts/release/gen-oidc-key.sh 生成即此形态）。判据=不含 PEM 头
+//     "-----BEGIN" 则尝试 base64 解码，解码失败仍按 PEM 原样尝试（报错口径不变）。
 func loadSigningKey(pemStr string) (*ecdsa.PrivateKey, error) {
 	if pemStr == "" {
 		return nil, nil
 	}
+	if !strings.Contains(pemStr, "-----BEGIN") {
+		if raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(pemStr)); err == nil {
+			pemStr = string(raw)
+		}
+	}
 	block, _ := pem.Decode([]byte(pemStr))
 	if block == nil {
-		return nil, errors.New("BBC_OIDC_SIGNING_KEY 不是合法 PEM")
+		return nil, errors.New("BBC_OIDC_SIGNING_KEY 不是合法 PEM（可传原始 PEM 或 base64 包裹单行）")
 	}
 	if k, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
 		if k.Curve != elliptic.P256() {

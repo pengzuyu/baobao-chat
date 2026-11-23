@@ -84,6 +84,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "bbc.secretName.app" . }}
                   key: kmsMasterKey
+            # OIDC Provider 签名密钥（生态应用用 BaobaoChat 账号登录；空=临时密钥仅联调）
+            - name: BBC_OIDC_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbc.secretName.app" . }}
+                  key: oidcSigningKey
           envFrom:
             - configMapRef:
                 name: {{ include "bbc.fullname" . }}-config

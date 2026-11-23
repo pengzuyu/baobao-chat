@@ -52,7 +52,9 @@ config:
   updateChannel: stable                # compose: BBC_UPDATE_CHANNEL
   seedDemo: "0"                        # compose: BBC_SEED_DEMO（alice/bob 演示种子；部署保持 0，联调置 1 免 admin bootstrap）
   otelEndpoint: http://otel-collector.observability.svc.cluster.local:4318   # compose: BBC_OTEL_EXPORTER_OTLP_ENDPOINT
-  mailDomain: bbc.io                   # compose: BBC_MAIL_DOMAIN（邮箱统一后缀：首超管+批量导入+mail 懒开户；与 brand/brand.json mail_domain 同值）
+  mailDomain: bbc.io                   # compose: BBC_MAIL_DOMAIN
+  oidcIssuer: ""                       # compose: BBC_OIDC_ISSUER（生态应用 OIDC 登录的对外 issuer；
+                                       #   空=按监听地址推导，内网 NodePort 场景须显式配 http://<node-ip>:30808）（邮箱统一后缀：首超管+批量导入+mail 懒开户；与 brand/brand.json mail_domain 同值）
 
 # ---------------------------------------------------------------------------
 # 外部组件（§3.2：PG=CNPG Operator/StatefulSet，Redis=哨兵 StatefulSet，
@@ -83,6 +85,8 @@ secrets:
   s3SecretKey: CHANGE_ME               # compose: BBC_S3_SECRET_KEY
   aiUpstreamApiKey: ""                 # compose: BBC_AI_UPSTREAM_API_KEY
   kmsMasterKey: ""                     # compose: BBC_KMS_MASTER_KEY ★aigw 供应商密钥加密必需
+  oidcSigningKey: ""                   # compose: BBC_OIDC_SIGNING_KEY（生态应用用 BaobaoChat 账号登录时必需；
+                                       #   ES256 私钥 PEM 或其 base64 单行，scripts/release/gen-oidc-key.sh 生成）
                                        # （openssl rand -base64 32；空=KMS 不初始化，AI 供应商设置不可用）
   jwtSecret: bbc_jwt_change_me_0123456789abcdef0123456789abcdef   # compose: BBC_JWT_SECRET ★上线必改（≥32 字节；空回退开发默认密钥）
 

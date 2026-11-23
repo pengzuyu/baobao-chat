@@ -212,6 +212,25 @@ docker login 172.16.19.3:8182 && docker push 172.16.19.3:8182/baobaochat/bbc-app
 # 之后出包用 BBC_REGISTRY_PREFIX=172.16.19.3:8182/baobaochat 生成 .env.internal 即可免 load
 \`\`\`
 
+## 后续启用 OIDC（生态应用用 BaobaoChat 账号登录；首次可跳过）
+
+纯内部使用（聊天/Agent/文件）不需要；要让自建的其他系统/插件「用 BaobaoChat 账号登录」时再启用。
+不启用=零影响（临时密钥，普通登录不受任何影响）。
+
+启用三步（不重建数据、不停服务）：
+```bash
+# 1. mac 或服务器上生成密钥（输出两行，直接追加进 .env）
+bash scripts/release/gen-oidc-key.sh >> compose/.env
+# 2. 把 .env 里 BBC_OIDC_ISSUER=CHANGE_ME 改成实际访问地址
+#    （与 BBC_PUBLIC_DOMAIN 同值，如 http://172.16.19.100；末尾不带斜杠）
+# 3. 只重启 app 容器
+cd compose && docker compose up -d app
+```
+
+验证：`curl http://<BBC_PUBLIC_DOMAIN>/oauth2/.well-known/openid-configuration` 返回 issuer 等元数据。
+生态应用接入用：授权 \`/oauth2/authorize\`、token \`/oauth2/token\`、公钥 \`/oauth2/keys\`，
+issuer 填 `http://<BBC_PUBLIC_DOMAIN>`（须与 .env 的 BBC_OIDC_ISSUER 完全一致）。
+
 ## 客户端分发
 - 安装包经 http://<BBC_PUBLIC_DOMAIN>/update/ 分发（latest.json + 各平台包）
 - 官网 http://<BBC_PUBLIC_DOMAIN>/ 展示下载区（自动跟 release-info.json）

@@ -68,7 +68,8 @@ BBC_JWT_SECRET=bbc_jwt_change_me_0123456789abcdef0123456789abcdef   # ★上线�
 BBC_KMS_MASTER_KEY=
 BBC_SEED_DEMO=0                              # 演示种子数据（alice/bob 口令 demo-pass-123）：联调置 1 免 admin bootstrap；部署保持 0
 # —— OIDC Provider（D28 批次 Q1：生态应用统一登录；密钥生成 openssl ecparam -name prime256v1 -genkey -noout）——
-BBC_OIDC_SIGNING_KEY=                        # ★上线必改：ES256 私钥 PEM 单行（\n 转义注入）；空=临时密钥仅联调（重启已签 token 失效）
+BBC_OIDC_SIGNING_KEY=                        # 生态应用用 BaobaoChat 账号登录（IdP）时必需；空=临时密钥仅联调（重启已签 token 失效）。
+                                             # 支持原始 PEM 或 base64 包裹单行（.env 用后者）：bash scripts/release/gen-oidc-key.sh 生成
 BBC_OIDC_ISSUER=                             # 对外 issuer（生产形如 https://你的域名/oauth2；空=按监听地址推导本地默认）
 # —— 品牌白标（D31：与构建侧 brand/brand.json 对齐；改 scheme 必须与客户端同步重出包）——
 BBC_BRAND_NAME=                              # 产品显示名（OIDC 等待页/nginx 官网占位等文案源；空=BaobaoChat）

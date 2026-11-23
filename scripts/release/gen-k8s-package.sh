@@ -118,6 +118,8 @@ externalServices:
   # redis 段不填：服务端代码无 Redis 依赖（2026-11-23 核实），compose 侧 redis 为历史预留
 
 secrets:
+  # 生态应用 OIDC 登录（可选；bash scripts/release/gen-oidc-key.sh 生成后填入）
+  # oidcSigningKey: "<base64 单行>"   # 对应 config.oidcIssuer: "http://NODE_IP:30808"
   dbDsn: postgres://bbc:$PG_PW@bbc-pg.baobao-chat.svc.cluster.local:5432/bbc?sslmode=disable
   jwtSecret: $JWT
   kmsMasterKey: $KMS
@@ -254,6 +256,25 @@ kubectl -n baobao-chat cp -r releases       \$POD:/usr/share/nginx/updates/
 
 客户端安装包须用 \`BBC_PUBLIC_URL=http://$NODE_IP:30808\` 构建，
 之后在关于页「检查更新」即可验证升级链。
+
+## 后续启用 OIDC（生态应用用 BaobaoChat 账号登录；首次可跳过）
+
+不启用=零影响（服务端走临时密钥，普通账号登录不受影响）。
+
+```bash
+# 1. 生成密钥（mac 或任意有 openssl 的机器）
+bash scripts/release/gen-oidc-key.sh    # 取输出里的 BBC_OIDC_SIGNING_KEY=<base64> 值
+# 2. helm upgrade 时注入两值
+helm -n baobao-chat upgrade bbc chart/$CHART_NAME.tgz \
+  --reuse-values \
+  --set secrets.oidcSigningKey='<base64 串>' \
+  --set config.oidcIssuer='http://$NODE_IP:30808'
+# 3. 等 app 滚动完成
+kubectl -n baobao-chat rollout status deploy/bbc-app
+```
+
+验证：`curl http://$NODE_IP:30808/oauth2/.well-known/openid-configuration` 的 issuer 应为
+`http://$NODE_IP:30808`（须与 config.oidcIssuer 完全一致）。
 
 ## 升级（后续版本）
 
