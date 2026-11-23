@@ -40,6 +40,7 @@ type fixture struct {
 	calendarCalls  []map[string]any
 	fileListCalls  []map[string]any
 	presenceCalls  int
+	docWrites      []map[string]any
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -126,6 +127,13 @@ func newFixture(t *testing.T) *fixture {
 			f.presenceCalls++
 			return map[int64]string{7: "online", 12: "offline", 3: "away"}
 		},
+		DocWrite: func(_ context.Context, tenantID, uid, spaceID, nodeID int64, title, format, content string) (any, error) {
+			f.docWrites = append(f.docWrites, map[string]any{
+				"tenant": tenantID, "uid": uid, "space_id": spaceID, "node_id": nodeID,
+				"title": title, "format": format, "content": content,
+			})
+			return map[string]any{"id": "9", "title": title, "status": "ready"}, nil
+		},
 		Audit: func(_ context.Context, e AuditEntry) { f.audits = append(f.audits, e) },
 	}}
 	return f
@@ -209,8 +217,8 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 	tok := f.mint(t, "7", false)
 	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`, tok)
 	tools := decode(t, rec)["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 15 {
-		t.Fatalf("供给应为 15 工具（六件+B1 只读九件）: %d 项", len(tools))
+	if len(tools) != 16 {
+		t.Fatalf("供给应为 16 工具（六件+B1 只读九件+B2 doc_write）: %d 项", len(tools))
 	}
 	// 风险级与 09 篇 §3.1 权威表逐项对齐（客户端 gate 按此分档）
 	want := map[string]string{
@@ -218,7 +226,7 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 		"mail_read": "low", "mail_send": "high",
 		"org_search": "low", "im_convs": "low", "im_search": "low", "doc_read": "low",
 		"kb_spaces": "low", "kb_nodes": "low", "calendar_query": "low",
-		"file_list": "low", "presences": "low",
+		"file_list": "low", "presences": "low", "doc_write": "high",
 	}
 	got := map[string]string{}
 	for _, tl := range tools {
@@ -302,9 +310,9 @@ func TestCallNoTokenRejected(t *testing.T) {
 func TestCallUnknownTool(t *testing.T) {
 	f := newFixture(t)
 	tok := f.mint(t, "7", false)
-	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"doc_write","arguments":{}}}`, tok)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"app_write","arguments":{}}}`, tok)
 	if code := errCode(t, decode(t, rec)); code != codeUnknownTool {
-		t.Fatalf("未知工具应 -32003（doc_write 高危，供给随 D05 协作升级另定），得到 %v", code)
+		t.Fatalf("未知工具应 -32003（app_write 为 09 篇类别占位名，未供给），得到 %v", code)
 	}
 }
 
@@ -648,5 +656,77 @@ func TestB1OboMissingScopeDenied(t *testing.T) {
 	}
 	if len(f.docReads) != 0 {
 		t.Fatal("scope 拒绝不得触达域服务")
+	}
+}
+
+// ── B2 写批（2026-11-23）：doc_write + im_send 扩 file ──
+
+// doc_write：happy 透传 + 校验 + OBO scope
+func TestCallDocWrite(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "9", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"doc_write","arguments":{"space_id":1,"title":"部署手册","content":"# 一\n步骤…","format":"markdown"}}}`, tok)
+	res := decode(t, rec)["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("doc_write 应成功: %v", res)
+	}
+	if len(f.docWrites) != 1 || f.docWrites[0]["space_id"] != int64(1) ||
+		f.docWrites[0]["format"] != "markdown" || f.docWrites[0]["node_id"] != int64(0) {
+		t.Fatalf("DocWrite 参数: %+v", f.docWrites)
+	}
+	// 缺 title → -32602；format 非法 → -32602
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"doc_write","arguments":{"space_id":1,"content":"x"}}}`, tok)
+	if c := errCode(t, decode(t, rec)); c != codeInvalidParams {
+		t.Fatalf("缺 title 应 -32602: %v", c)
+	}
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"doc_write","arguments":{"space_id":1,"title":"t","content":"x","format":"html"}}}`, tok)
+	if c := errCode(t, decode(t, rec)); c != codeInvalidParams {
+		t.Fatalf("format 非法应 -32602: %v", c)
+	}
+	// OBO 缺 doc:file:edit → -32002 不触域
+	f2 := newFixture(t)
+	obo := f2.mint(t, "9", true, "doc:file:view") // 无 edit
+	body := `{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"doc_write","arguments":{"space_id":1,"title":"t","content":"x"},"_meta":{"bbcObo":"` + obo + `"}}}`
+	rec = post(t, f2.gw, body, "")
+	if c := errCode(t, decode(t, rec)); c != codeScopeDenied {
+		t.Fatalf("OBO 缺 scope 应 -32002，得到 %v", c)
+	}
+	if len(f2.docWrites) != 0 {
+		t.Fatal("scope 拒绝不得触达域服务")
+	}
+}
+
+// im_send 扩 file：body={file_id,name}；缺 file_id → -32602；name 缺省 "file"
+func TestCallImSendFile(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "9", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"file","file_id":91,"name":"报告.pdf"}}}`, tok)
+	if res := decode(t, rec)["result"].(map[string]any); res["isError"] == true {
+		t.Fatalf("im_send file 应成功: %v", res)
+	}
+	if len(f.imSends) != 1 {
+		t.Fatalf("imSends: %+v", f.imSends)
+	}
+	var b struct {
+		FileID int64  `json:"file_id"`
+		Name   string `json:"name"`
+	}
+	body := f.imSends[0]["body"].(string) // fixture 以字符串记录 body
+	if err := json.Unmarshal([]byte(body), &b); err != nil || b.FileID != 91 || b.Name != "报告.pdf" {
+		t.Fatalf("file body 应含 file_id/name: %s err=%v", body, err)
+	}
+	if f.imSends[0]["msg_type"] != "file" {
+		t.Fatalf("msg_type 应透传 file: %+v", f.imSends[0])
+	}
+	// name 缺省
+	post(t, f.gw, `{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"file","file_id":91}}}`, tok)
+	body2 := f.imSends[1]["body"].(string)
+	if err := json.Unmarshal([]byte(body2), &b); err != nil || b.Name != "file" {
+		t.Fatalf("name 缺省应 file: %s err=%v", body2, err)
+	}
+	// 缺 file_id → -32602
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"im_send","arguments":{"conv_id":5,"msg_type":"file"}}}`, tok)
+	if c := errCode(t, decode(t, rec)); c != codeInvalidParams {
+		t.Fatalf("缺 file_id 应 -32602: %v", c)
 	}
 }

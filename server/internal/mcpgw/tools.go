@@ -58,15 +58,19 @@ func corpTools() []ToolDef {
 		{
 			// 09 篇 §3.2.6：外发不可撤回影响他人 → 全模式确认（永不全自动）——
 			// 门控在客户端九步管线（high→CorpWrite），服务端只做成员资格校验（域服务 3001）
+			// B2（2026-11-23）：msg_type 扩 file——云盘文件发到会话（file_share 并入
+			// 本工具，file 归属/未删校验走域 FileCheck 同链）
 			Name:        "im_send",
-			Description: "以发起用户身份发送消息到会话（text 或 agent_card）。高风险：外发影响他人且不可撤回；广播群目标会醒目提示。",
+			Description: "以发起用户身份发送消息到会话（text / agent_card / file）。file=把我的云盘文件发到会话（file_id 从 file_list 取）。高风险：外发影响他人且不可撤回；广播群目标会醒目提示。",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"conv_id":  map[string]any{"type": "integer", "description": "目标会话 ID（必填）"},
-					"msg_type": map[string]any{"type": "string", "enum": []string{"text", "agent_card"}, "description": "消息类型"},
+					"msg_type": map[string]any{"type": "string", "enum": []string{"text", "agent_card", "file"}, "description": "消息类型"},
 					"text":     map[string]any{"type": "string", "description": "msg_type=text 时的正文（≤5000 字）"},
 					"card":     map[string]any{"type": "object", "description": "msg_type=agent_card 时的卡片体（08 篇）"},
+					"file_id":  map[string]any{"type": "integer", "description": "msg_type=file 时的云盘文件 ID（必填）"},
+					"name":     map[string]any{"type": "string", "description": "msg_type=file 时的展示文件名（可选，缺省 file）"},
 				},
 				"required": []string{"conv_id", "msg_type"},
 			},
@@ -273,6 +277,28 @@ func corpTools() []ToolDef {
 			Risk:  "low",
 			Scope: "presence:read",
 		},
+
+		// ── B2 写批（2026-11-23）：agent 产出沉淀回 app；写权限校验（getSpaceFor
+		// writable）在 kb 域服务=防线三；高危确认在客户端九步管线（CorpWrite）──
+
+		{
+			// D24 拍板「页面零写入 UI（API 留给 AI）」兑现：知识库写入唯一通道
+			Name:        "doc_write",
+			Description: "新建知识库文档（文本或 markdown 正文，同步清洗分段+嵌入）。写权限=本人可写空间；高危：写入共享知识面。编辑/重摄入走文档页或后续工具扩展。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"space_id": map[string]any{"type": "integer", "description": "目标空间 ID（必填；kb_spaces 查看）"},
+					"title":    map[string]any{"type": "string", "description": "文档标题（必填，≤255 字）"},
+					"content":  map[string]any{"type": "string", "description": "正文（必填；markdown 保留标题结构供分段）"},
+					"format":   map[string]any{"type": "string", "enum": []string{"text", "markdown"}, "description": "正文格式（默认 text）"},
+					"node_id":  map[string]any{"type": "integer", "description": "目标目录（0/缺省=空间根）"},
+				},
+				"required": []string{"space_id", "title", "content"},
+			},
+			Risk:  "high",
+			Scope: "doc:file:edit",
+		},
 	}
 }
 
@@ -358,6 +384,8 @@ func (g *Gateway) invokeImSend(ctx context.Context, tenantID, uid int64, raw jso
 		MsgType string          `json:"msg_type"`
 		Text    string          `json:"text"`
 		Card    json.RawMessage `json:"card"`
+		FileID  int64           `json:"file_id"`
+		Name    string          `json:"name"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -379,8 +407,21 @@ func (g *Gateway) invokeImSend(ctx context.Context, tenantID, uid int64, raw jso
 			return nil, rpcErr(codeInvalidParams, "msg_type=agent_card 需 card")
 		}
 		body = args.Card
+	case "file":
+		// B2：云盘文件发会话——file_id 必填（owner/未删校验在域 FileCheck）；
+		// name 可选展示名（agent 从 file_list 已知），缺省 "file"
+		if args.FileID <= 0 {
+			return nil, rpcErr(codeInvalidParams, "msg_type=file 需 file_id")
+		}
+		if args.Name == "" {
+			args.Name = "file"
+		}
+		if len([]rune(args.Name)) > 255 {
+			return nil, rpcErr(codeInvalidParams, "name ≤255 字")
+		}
+		body, _ = json.Marshal(map[string]any{"file_id": args.FileID, "name": args.Name})
 	default:
-		return nil, rpcErr(codeInvalidParams, "msg_type ∈ text|agent_card")
+		return nil, rpcErr(codeInvalidParams, "msg_type ∈ text|agent_card|file")
 	}
 	if g.opts.ImSend == nil {
 		return nil, rpcErr(codeUnknownTool, "im_send 未装配（message 域不可用）")
@@ -763,6 +804,46 @@ func (g *Gateway) invokePresences(_ context.Context, _ int64, _ int64, raw json.
 		items = append(items, map[string]string{"uid": strconv.FormatInt(uid, 10), "status": snap[uid]})
 	}
 	return okText(map[string]any{"items": items})
+}
+
+// invokeDocWrite doc_write 执行：空间可写校验在 kb 域（getSpaceFor writable=防线三）
+func (g *Gateway) invokeDocWrite(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		SpaceID int64  `json:"space_id"`
+		NodeID  int64  `json:"node_id"`
+		Title   string `json:"title"`
+		Content string `json:"content"`
+		Format  string `json:"format"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.SpaceID <= 0 {
+		return nil, rpcErr(codeInvalidParams, "space_id 必填")
+	}
+	if args.Title == "" || len([]rune(args.Title)) > 255 {
+		return nil, rpcErr(codeInvalidParams, "title 必填（≤255 字）")
+	}
+	if args.Content == "" {
+		return nil, rpcErr(codeInvalidParams, "content 必填")
+	}
+	// 工具层 1MB 上限（域内 MaxDocBytes 另有上限兜底）
+	if len([]rune(args.Content)) > 1<<20 {
+		return nil, rpcErr(codeInvalidParams, "content ≤1MB")
+	}
+	if args.Format != "" && args.Format != "text" && args.Format != "markdown" {
+		return nil, rpcErr(codeInvalidParams, "format ∈ text|markdown")
+	}
+	if g.opts.DocWrite == nil {
+		return nil, rpcErr(codeUnknownTool, "doc_write 未装配（kb 域不可用）")
+	}
+	res, err := g.opts.DocWrite(ctx, tenantID, uid, args.SpaceID, args.NodeID, args.Title, args.Format, args.Content)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
 }
 
 // errText 业务失败统一 content 形态

@@ -60,8 +60,8 @@
 | http_fetch | HTTP GET，仅内网白名单（§3.2.4） | 中 | ask 确认；auto-edit+ 确认 | — |
 | kb_query | 知识库混合检索 | 低 | 全模式自动 | OBO `kb:query:use` |
 | doc_read | 读知识库文档详情与全文分块（**B1 2026-11-23** 以 kb 域供给；旧文档中心域版本已随瘦身移除） | 低 | 全模式自动 | OBO `doc:file:view` |
-| doc_write | 创建/修改在线文档 | 高 | 全模式确认（永不全自动，§7.3） | OBO `doc:file:edit` |
-| im_send | 发送消息/Agent 卡片到会话 | 高 | 全模式确认（永不全自动） | OBO `im:message:send` |
+| doc_write | 新建知识库文档（text/markdown 正文；**B2 2026-11-23 供给**，D24「API 留给 AI」兑现；编辑/重摄入后续扩展） | 高 | 全模式确认（永不全自动，§7.3） | OBO `doc:file:edit` |
+| im_send | 发送消息到会话（text/agent_card/**file**——B2 扩云盘文件发会话，file_share 并入） | 高 | 全模式确认（永不全自动） | OBO `im:message:send` |
 | im_history | 读会话最近消息（agent 上下文自读，D18 §3.5） | 低 | 全模式自动 | — |
 | im_convs | 列我的会话（人名→conv_id 反查入口） | 低 | 全模式自动 | OBO `im:conv:read` |
 | im_search | 跨会话搜索我可见的历史消息 | 低 | 全模式自动 | OBO `im:message:search` |

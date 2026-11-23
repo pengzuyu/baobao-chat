@@ -727,6 +727,11 @@ func main() {
 			}
 			return map[string]any{"doc": doc, "chunks": chunks}, nil
 		},
+		// doc_write（B2，D24「API 留给 AI」兑现）：新建文档直入 kb 域 ingest
+		// 管线（空间可写校验 getSpaceFor writable=防线三）
+		DocWrite: func(ctx context.Context, tenantID, uid, spaceID, nodeID int64, title, format, content string) (any, error) {
+			return kbSvc.IngestDoc(ctx, tenantID, uid, spaceID, nodeID, title, format, content, 0)
+		},
 		// kb_spaces / kb_nodes：知识库结构浏览（可见空间按 uid 过滤在域服务）
 		KbSpaces: func(ctx context.Context, tenantID, uid int64) (any, error) {
 			return kbSvc.ListSpaces(ctx, tenantID, uid)

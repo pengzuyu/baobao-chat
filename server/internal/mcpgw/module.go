@@ -89,6 +89,9 @@ type Options struct {
 	ImSearch func(ctx context.Context, uid int64, p ImSearchParams) (any, error)
 	// DocRead KB 文档详情+全文分块（kb 域注入：meta 与 chunks 合并；空间可见性在域服务）
 	DocRead func(ctx context.Context, tenantID, uid, docID int64) (any, error)
+	// DocWrite KB 新建文档（B2：kb 域注入 IngestDoc——空间可写校验在域服务；
+	// format ∈ text|markdown；高危确认在客户端管线）
+	DocWrite func(ctx context.Context, tenantID, uid, spaceID, nodeID int64, title, format, content string) (any, error)
 	// KbSpaces 可见空间列表（kb 域注入）
 	KbSpaces func(ctx context.Context, tenantID, uid int64) (any, error)
 	// KbNodes 空间目录树（kb 域注入：parentID=0 空间根）
