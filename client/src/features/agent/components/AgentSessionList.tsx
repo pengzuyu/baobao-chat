@@ -1,6 +1,7 @@
 /**
  * 工作台左栏：项目/日常对话/任务三分区（2026-11-11 在 D19 两分区上增任务区，ZCode 同款形态）：
- * - 项目区：登记表（workspace.list）∪ 会话中出现的目录兜底；项目行（名称+路径+会话数）
+ * - 项目区：登记表（workspace.list）∪ 会话中出现的目录兜底；项目行（仅名称，
+ *   不带会话数——2026-11-20 用户口径；路径不占行内位、hover title 查看全路径）
  *   可折叠内嵌该项目会话；行内动作=新会话/移除登记
  * - 日常对话区：workspace='' 且 IM 来源（embeddedIds 命中，💬 徽标，标题=「与xxx的对话」/
  *   「xxx · 群聊」）的会话平铺；2026-11-17 收窄——工作台建的空目录会话改落任务区
@@ -63,13 +64,6 @@ function statusTagColor(status: AgentSessionMeta['status']): string | undefined 
     default:
       return undefined; // paused/ended 默认灰
   }
-}
-
-/** 路径短显（家目录前缀折叠 + 只留尾两段） */
-function shortPath(path: string): string {
-  const p = path.replace(/^\/Users\/[^/]+/, '~');
-  const segs = p.split('/').filter(Boolean);
-  return segs.length <= 2 ? p : `…/${segs.slice(-2).join('/')}`;
 }
 
 /** 项目展示行（登记表行 ∪ 会话路径兜底行的统一形状） */
@@ -287,12 +281,17 @@ export const AgentSessionList = memo(function AgentSessionList({
               key: projKey(g.path),
               title: g.path,
               label: (
-                <span style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 6, minWidth: 0, width: '100%', lineHeight: 1.4 }} title={g.path}>
+                // 路径不占行内位（hover title 查看全路径）；paddingInlineEnd 让出
+                // antd 折叠箭头占位（绝对定位 insetInlineEnd 16px + 宽 10px），防与行尾动作钮重叠
+                <span
+                  style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 6, minWidth: 0, width: '100%', paddingInlineEnd: 30, lineHeight: 1.4 }}
+                  title={g.path}
+                >
                   <span
                     style={{
                       fontWeight: 600,
-                      flexShrink: 0,
-                      maxWidth: '40%',
+                      flex: '0 1 auto',
+                      minWidth: 0,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
@@ -301,13 +300,9 @@ export const AgentSessionList = memo(function AgentSessionList({
                   >
                     {g.name}
                   </span>
-                  <Typography.Text type="secondary" ellipsis style={{ fontSize: 11, flex: 1, minWidth: 0 }}>
-                    {shortPath(g.path)}
-                  </Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: 11, flexShrink: 0 }}>
-                    {g.sessions.length}
-                  </Typography.Text>
-                  {/* 行内动作：新会话/移除登记（原 hover 显隐，改常显小图标钮） */}
+                  <span style={{ flex: 1 }} />
+                  {/* 行内动作：新会话/移除登记（原 hover 显隐，改常显小图标钮）；
+                      会话数不显示在项目行（2026-11-20 用户口径） */}
                   <span style={{ display: 'inline-flex', gap: 2, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
                     <Button
                       variant="text"
@@ -414,6 +409,10 @@ export const AgentSessionList = memo(function AgentSessionList({
         <Menu
           mode="inline"
           style={{ borderInlineEnd: 'none' }}
+          // 子项缩进（2026-11-20 用户口径「项目里的会话离左边太远」）：rc-menu inline 模式
+          // 每层缩进 = level × inlineIndent，默认 24——项目分组下的会话是二级（level 1）
+          // 即 24px，观感离左缘过远；一级项恒为 0 不受影响，收 12 对齐 zcode 树形缩进
+          inlineIndent={12}
           items={items}
           selectedKeys={activeId ? [sessionKey(activeId)] : []}
           openKeys={openKeys}
