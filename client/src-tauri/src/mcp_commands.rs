@@ -11,9 +11,9 @@
 //! 注入全走生产代码路径）。
 
 use serde_json::{json, Value};
-use std::sync::Arc;
 use std::collections::HashMap;
 use std::fs;
+use std::sync::Arc;
 use tauri::State;
 
 use crate::agent_bridge::AgentHost;
@@ -248,12 +248,10 @@ pub fn mcp_personal_upsert(
         }
     }
     entry["usesIdentity"] = json!(uses_identity);
-    entry["updatedAt"] = json!(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-    );
+    entry["updatedAt"] = json!(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0));
 
     let arr = doc["servers"].as_array_mut().ok_or("personal.json 损坏")?;
     match arr
@@ -331,8 +329,9 @@ pub fn mcp_test_connection(host: Host, name: String) -> Result<Value, String> {
         .ok_or("server 不存在")?;
     let (_, def) = entry_to_def(&entry).ok_or("条目缺 name")?;
     let user = host.current_user();
-    let wire = crate::agent_bridge::mcp_server_wire(&name, &def, "", &user, &serde_json::Map::new())
-        .ok_or("定义非法（缺 command/url）")?;
+    let wire =
+        crate::agent_bridge::mcp_server_wire(&name, &def, "", &user, &serde_json::Map::new())
+            .ok_or("定义非法（缺 command/url）")?;
     host.request("mcp.test", json!({ "server": wire }))
 }
 

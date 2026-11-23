@@ -23,8 +23,7 @@ impl CronExpr {
             return false;
         }
         let dom_ok = self.dom_star || self.days[date.day() as usize];
-        let dow_ok = self.dow_star
-            || self.dows[date.weekday().num_days_from_sunday() as usize];
+        let dow_ok = self.dow_star || self.dows[date.weekday().num_days_from_sunday() as usize];
         if !self.dom_star && !self.dow_star {
             dom_ok || dow_ok // 双受限：OR
         } else {
@@ -39,7 +38,11 @@ impl CronExpr {
         let mut date = start.date();
         for _ in 0..(366 * 5) {
             if self.date_matches(date) {
-                let from_h = if date == start.date() { start.hour() } else { 0 };
+                let from_h = if date == start.date() {
+                    start.hour()
+                } else {
+                    0
+                };
                 for h in from_h..24 {
                     if !self.hours[h as usize] {
                         continue;
@@ -61,7 +64,8 @@ impl CronExpr {
                 }
             }
             date = date.succ_opt()?;
-            start = NaiveDate::from_ymd_opt(date.year(), date.month(), date.day())?.and_hms_opt(0, 0, 0)?;
+            start = NaiveDate::from_ymd_opt(date.year(), date.month(), date.day())?
+                .and_hms_opt(0, 0, 0)?;
         }
         None
     }

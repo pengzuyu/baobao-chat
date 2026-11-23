@@ -10,8 +10,8 @@ pub mod agent_commands;
 pub mod auth_commands;
 pub mod brand;
 pub mod ext_agent;
-pub mod plugin_commands;
 pub mod mcp_commands;
+pub mod plugin_commands;
 pub mod schedule;
 
 use std::sync::Arc;
@@ -97,7 +97,8 @@ pub fn run() {
                                 .map(|(_, v)| v.to_string())
                                 .unwrap_or_default();
                             if !req.is_empty() {
-                                let _ = emit_handle.emit("oidc://confirm-req", serde_json::json!({ "req": req }));
+                                let _ = emit_handle
+                                    .emit("oidc://confirm-req", serde_json::json!({ "req": req }));
                             }
                         } else {
                             eprintln!("[bbc-deeplink] 未识别的 {}:// 路径: {u}", brand::SCHEME);
@@ -107,7 +108,8 @@ pub fn run() {
                 if let Ok(Some(urls)) = app.deep_link().get_current() {
                     forward(urls);
                 }
-                app.deep_link().on_open_url(move |event| forward(event.urls()));
+                app.deep_link()
+                    .on_open_url(move |event| forward(event.urls()));
             }
             // Agent 宿主桥：数据目录={appData}/agent-runtime；事件泵→WebView（agent://event）
             let handle = app.handle().clone();
