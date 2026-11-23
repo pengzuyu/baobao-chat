@@ -93,6 +93,11 @@ struct Shared {
     /// 当前登录用户（工号/姓名）——插件装配器静态替换 ${BBC_USER_ID}/${BBC_USER_NAME}
     /// 用（D22 §6.1/L4；换账号=set_user 后重推装配，stdio env 是 spawn 快照）
     user: Mutex<(String, String)>,
+    /// 初始化互斥（2026-11-23 命令并发化修复）：命令声明 (async) 后不再被主线程
+    /// 天然串行——auth_set_token 与 session_list 可同时 ensure_running，原 TOCTOU
+    /// 检查会双 spawn 且后者覆盖 stdin 令前者泄漏成孤儿；持锁全程初始化，
+    /// 并发方排队等握手完成后走双检查直接返回。锁序恒 spawn_lock→proc，无反向
+    spawn_lock: Mutex<()>,
     /// 紧急停止后抑制惰性重启（下一次显式命令重新拉起）
     halted: AtomicBool,
 }
@@ -246,12 +251,13 @@ impl AgentHost {
         let bin = resolve_bbrt_bin();
         // 网关缺省链（D21）：进程 env BBC_RT_GATEWAY（dev/手工覆盖）>
         // 编译期注入 BBC_DEFAULT_GATEWAY（发布打包由 BBC_PUBLIC_URL 带 build.rs 注入，
-        // 打包应用无 env 可设）> 本地裸跑服务端 127.0.0.1:8090（联调兜底）。
+        // 打包应用无 env 可设）> 本地服务端默认口 127.0.0.1:8080（与 config.go
+        // HTTPAddr 同源；旧 8090 是「独立网关进程」时代口径，网关并入单体后失配）。
         let gateway = std::env::var("BBC_RT_GATEWAY")
             .ok()
             .filter(|g| !g.is_empty())
             .or_else(|| option_env!("BBC_DEFAULT_GATEWAY").map(str::to_string))
-            .unwrap_or_else(|| "http://127.0.0.1:8090".into());
+            .unwrap_or_else(|| "http://127.0.0.1:8080".into());
         let static_token = std::env::var("BBC_RT_TOKEN").ok().filter(|t| !t.is_empty());
         Self {
             ext_hub: Mutex::new(None),
@@ -268,6 +274,7 @@ impl AgentHost {
                 obo_scopes: Mutex::new(Vec::new()),
                 gateway: gateway.clone(),
                 user: Mutex::new((String::new(), String::new())),
+                spawn_lock: Mutex::new(()),
                 halted: AtomicBool::new(false),
             }),
             bin,
@@ -416,9 +423,18 @@ impl AgentHost {
     // ---- 生命周期 ----
 
     /// 惰性拉起：清理上次半死进程 → spawn → initialize（必须首条）→ runtime.ready → 置位；
-    /// 紧急停止后由下一次显式命令重新拉起
+    /// 紧急停止后由下一次显式命令重新拉起。快路径无锁读 ready；初始化全程持
+    /// spawn_lock（双检查防重入——命令并发化后登录/列表可同瞬到达，见 Shared 注释）
     pub fn ensure_running(&self) -> Result<(), String> {
         {
+            let p = self.shared.proc.lock().unwrap();
+            if p.ready && p.child.is_some() {
+                return Ok(());
+            }
+        }
+        let _guard = self.shared.spawn_lock.lock().unwrap();
+        {
+            // 双检查：排队等锁期间别的线程已完成初始化
             let p = self.shared.proc.lock().unwrap();
             if p.ready && p.child.is_some() {
                 return Ok(());
@@ -507,10 +523,21 @@ impl AgentHost {
         }
         // stderr 落盘（append）：Runtime 告警/panic 可观测（2026-11-10 内嵌卡
         // 卡死排查——inherit 在桌面形态无处可看；stdout 是协议通道不能动）
-        let err_log = std::fs::OpenOptions::new()
+        let mut err_log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.data_dir.join("bbrt.log"));
+        // 落一行装配快照：网关打错口这类失配桌面形态无处可看（2026-11-23
+        // 8090/8080 失配排查的根因就是看不到实际注入值），bbrt.log 即观测点
+        if let Ok(ref mut f) = err_log {
+            use std::io::Write as _;
+            let _ = writeln!(
+                f,
+                "── spawn: gateway={} bin={}",
+                self.gateway,
+                self.bin.display()
+            );
+        }
         let mut child = Command::new(&self.bin)
             .env("BBC_RT_DATA_DIR", &self.data_dir)
             .env("BBC_RT_GATEWAY", &self.gateway)
@@ -635,7 +662,8 @@ impl AgentHost {
         Ok(ready_rx) // runtime.ready 由 ensure_running 在 initialize 发出后等待
     }
 
-    /// REQ：ensure 运行 + 写 stdin + 等 reply_to 回执（同步阻塞；Tauri 同步命令跑独立线程池）
+    /// REQ：ensure 运行 + 写 stdin + 等 reply_to 回执（同步阻塞——调用方均为
+    /// 声明 (async) 的 Tauri 命令，跑在 async_runtime 线程池，不占主线程）
     pub fn request(&self, msg_type: &str, payload: Value) -> Result<Value, String> {
         self.ensure_running()?;
         self.request_inner(msg_type, payload)
@@ -712,13 +740,25 @@ impl AgentHost {
         // 已引入的 uuid 依赖）；进程内 seq 只留给默认标题「会话 {n}」占位编号
         let sid = format!("sess_{}", uuid::Uuid::new_v4());
         let now = now_ms();
+        // workspace 与 RT 同口径归一（std::fs::canonicalize + 失败回落原串，
+        // 对齐 bbrt-session manager::start）：缓存行若存对话框原始路径，而
+        // session.list「缓存行优先」，FE 会拿到原始串 ≠ workspace.list 的
+        // realpath → 左栏同项目裂成「目录名+绝对路径」两组（2026-11-23
+        // 用户报修）。RT 端幂等 canonicalize，改传归一串不改变其行为。
+        let workspace_norm = if workspace.is_empty() {
+            workspace.to_string()
+        } else {
+            std::fs::canonicalize(workspace)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| workspace.to_string())
+        };
         self.shared.sessions.lock().unwrap().push(SessionCache {
             id: sid.clone(),
             title: title
                 .filter(|t| !t.trim().is_empty())
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("会话 {n}")),
-            workspace: workspace.to_string(),
+            workspace: workspace_norm.clone(),
             mode: mode.to_string(),
             model_policy: model_policy.to_string(),
             model_override: model.map(str::to_string),
@@ -728,7 +768,7 @@ impl AgentHost {
             approval_timeout_secs,
         });
         let payload = json!({
-            "sessionId": sid, "workspace": workspace, "mode": mode,
+            "sessionId": sid, "workspace": workspace_norm, "mode": mode,
             "modelPolicy": model_policy, "model": model, "skills": [],
             "title": title,
             // D35 定时任务：无人值守 + 审批等待窗口（普通会话 false/缺省）
@@ -871,29 +911,36 @@ fn resolve_bbrt_bin() -> PathBuf {
     if let Ok(p) = std::env::var("BBC_RT_BIN") {
         return PathBuf::from(p);
     }
-    // 生产：Tauri externalBin 把 sidecar 随 main exe 同目录分发（macOS/Linux 包；
-    // Windows 侧 bbrt 编不过不随包，走 dev 路径后由 exists 检查给出引导）
+    // 生产：Tauri externalBin 把 sidecar 随 main exe 同目录分发。NSIS 安装落名
+    // 剥 triple（实测 E:\BaobaoChat\bbrt.exe），带 triple 名兜底（.app bundle 等）；
+    // 都没有再走 dev 路径，由 exists 检查给出引导
     if let Ok(exe) = std::env::current_exe() {
-        let sidecar = exe
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(sidecar_file_name());
+        let exe_ext = if cfg!(windows) { ".exe" } else { "" };
+        let dir = exe.parent().unwrap_or(Path::new("."));
+        let plain = dir.join(format!("bbrt{exe_ext}"));
+        if plain.exists() {
+            return plain;
+        }
+        let sidecar = dir.join(sidecar_file_name());
         if sidecar.exists() {
             return sidecar;
         }
     }
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")); // client/src-tauri
+    // Windows 产物带 .exe（与 sidecar_file_name 同规则）；不补后缀 exists 恒 false，
+    // Windows 移植后 dev 路径实际可用，漏后缀会误报「二进制不存在」
+    let exe_ext = if cfg!(windows) { ".exe" } else { "" };
     for rel in [
         "../../agent/target/debug/bbrt",
         "../../agent/target/release/bbrt",
         "binaries/bbrt",
     ] {
-        let p = manifest.join(rel);
+        let p = manifest.join(format!("{rel}{exe_ext}"));
         if p.exists() {
             return p;
         }
     }
-    manifest.join("../../agent/target/debug/bbrt")
+    manifest.join(format!("../../agent/target/debug/bbrt{exe_ext}"))
 }
 
 /// externalBin 打包产物名（build.rs 注入 triple；Windows 再补 .exe 后缀）
@@ -1251,12 +1298,14 @@ mod tests {
                 approval_timeout_secs: None,
             }]),
             token: Mutex::new(None),
+            // 并发防重入锁（ensure_running 双检查用；测试不经并发路径，空锁即可）
+            spawn_lock: Mutex::new(()),
             // D22 L4：Shared.user（换账号重推装配）——测试补齐缺省空身份
             user: Mutex::new((String::new(), String::new())),
             // D28 Q0：设备号/OBO 权限集/网关基址（测试缺省空 + 本地兜底）
             did: Mutex::new(String::new()),
             obo_scopes: Mutex::new(Vec::new()),
-            gateway: "http://127.0.0.1:8090".into(),
+            gateway: "http://127.0.0.1:8080".into(),
             halted: AtomicBool::new(false),
         });
         (shared, "s1".into())

@@ -143,7 +143,9 @@ export const AgentSessionList = memo(function AgentSessionList({
         daily.push(s);
         continue;
       }
-      const group = byPath.get(s.workspace) ?? { name: s.workspace.split('/').filter(Boolean).pop() ?? '项目', path: s.workspace, sessions: [] };
+      // 兜底组名按 / 与 \ 双切（Windows 反斜杠路径 split('/') 切不开，
+      // 整条绝对路径会被当组名显示——2026-11-23 用户报修「同项目出现两个」的伴生症状）
+      const group = byPath.get(s.workspace) ?? { name: s.workspace.split(/[\\/]/).filter(Boolean).pop() ?? '项目', path: s.workspace, sessions: [] };
       group.sessions.push(s);
       byPath.set(s.workspace, group);
     }

@@ -384,9 +384,12 @@ export function AgentWorkbenchPage() {
   openProjectSessionRef.current = async (path: string) => {
     const currentMode = useAgentStore.getState().sessions.find((s) => s.id === useAgentStore.getState().activeSessionId)?.mode ?? 'ask';
     try {
-      await registerProject(path);
+      // workspace 必须用登记行回传的 realpath（与 workspace.list 同串）：
+      // 传对话框原始路径会让会话与登记表在左栏按路径分组时字符串不等，
+      // 同项目裂成「目录名+绝对路径」两组（2026-11-23 用户报修）
+      const item = await registerProject(path);
       const model = await resolveDefaultModel();
-      const meta = await createSession({ workspace: path, mode: currentMode as PermissionMode, model });
+      const meta = await createSession({ workspace: item.path, mode: currentMode as PermissionMode, model });
       navigate(`/agent/s/${meta.id}`);
     } catch (err: unknown) {
       useAgentStore.setState({ createError: err instanceof Error ? err.message : String(err) });
