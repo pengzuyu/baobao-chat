@@ -41,7 +41,9 @@ jobs:
         run: |
           node --version
           npm --version
-          rustc -vV | head -2
+          # 勿写成 `rustc -vV | head -2`：head 提前关管道，rustc 写 EPIPE
+          # （Windows 上 os error 232）panic exit 101，-o pipefail 下整步即红
+          rustc -vV
           cargo --version
 
       - name: 安装前端依赖
