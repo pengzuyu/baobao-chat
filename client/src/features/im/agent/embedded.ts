@@ -209,10 +209,14 @@ export function agentCardClientMsgId(sessionId: string, round: number): string {
   return `agc-${sessionId}-r${round}`;
 }
 
-/** 轮次落流 token（2026-11-11 修重启撞号）：前缀+盐。轮内稳定（生成一次存 ref，
- *  轮内重试/ack 丢失重发同键幂等回原卡）、跨轮/跨重启唯一（永不与历史轮撞号） */
-export function agentCardRoundToken(sessionId: string, round: number): string {
-  return `${agentCardClientMsgId(sessionId, round)}-${Date.now().toString(36)}`;
+/** 轮次落流 token（2026-11-20 修重复落卡写放大）：前缀+本轮 user 时间戳盐。
+ *  盐绑**轮身份**而非调用时刻——旧 Date.now() 盐让同一轮每次重落都是新键，服务端
+ *  client_msg_id 幂等永不命中，「重进聊天页重落旧轮」每次 INSERT 一行 agent_card
+ *  （刷新 N 次历史多 N 张重复结果卡）。现口径：轮内稳定（重试/重复落流同键 → 幂等
+ *  回原卡，只 PATCH 不写新行）、跨轮唯一（user ts 必不同）、跨重启 WAL 回填 ts 与
+ *  内存 ts 有毫秒差则不同键（不撞 2026-11-11 事故的历史旧轮号） */
+export function agentCardRoundToken(sessionId: string, round: number, userTs: number): string {
+  return `${agentCardClientMsgId(sessionId, round)}-u${userTs.toString(36)}`;
 }
 
 /** embedded 会话初始标题（2026-11-11）：以来源会话命名——单聊「与xxx的对话」、

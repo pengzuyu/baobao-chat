@@ -5,7 +5,8 @@
  *   （0 阶段也落——消息流即时出现反馈，不等首个 LLM 事件；clientMsgId 用
  *   agentCardRoundToken：轮内稳定（重试幂等）/跨轮跨重启唯一——旧 agc-{sid}-r{N}
  *   确定性键壳重启后撞历史轮号，被幂等去重回旧卡致回答气泡跑到最新消息上方）
- * - 重挂重同步：不再重新落流，只认领流内本会话 running 卡续 PATCH（见 effect 注）
+ * - 重挂重同步：不再重新落流，只认领流内本会话 running 卡续 PATCH；无 running 卡
+ *   的旧轮整段封口（sealedRound——依赖变化不再落卡，新回合自然解封；见 effect 注）
  * - 阶段边界 PATCH：粗粒度签名+互斥锁（防落流风暴口径不变，不含结论文本长度）；
  *   终态/idle 最后一次 PATCH 收口后静默（新回合自然落新卡）
  * - 审批弹框（antd Modal）：本组件**常驻挂载**（会话映射存在即挂，不随回合退场）
@@ -45,6 +46,8 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
   const roundTokenRef = useRef<string | null>(null);
   const lastSigRef = useRef('');
   const retiredRef = useRef(false);
+  /** 当前轮已封口（挂载时无 running 卡可认领的旧轮）：不再落流/更新，直到新回合 */
+  const sealedRoundRef = useRef(false);
   /** 本回合起点（最后一条 user 的 ts；卡头已用时显示） */
   const roundStartRef = useRef(Date.now());
   const syncLockRef = useRef(false);
@@ -114,15 +117,24 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
           break;
         }
       }
-      if (!landedMsgRef.current) return;
+      if (!landedMsgRef.current) {
+        // 无 running 卡：历史轮均已收口（或本轮在工作台发起）→ 封口。2026-11-20 修
+        // 「重进聊天页一次多一张重复结果卡」：此前只 return 一次，之后流事件/终态翻转
+        // 触发 effect 再跑会走「无目标→落新卡」分支，把旧轮结果用新盐 token 重复落流
+        // （服务端 client_msg_id 幂等永不命中，每次重进 INSERT 一行 agent_card）
+        sealedRoundRef.current = true;
+        return;
+      }
     } else if (landedRoundRef.current !== userCount) {
       // 新回合：唯一 token 落新卡（0 阶段 running 也落）+ 重置落流目标（一轮一卡）
       const lastUser = [...stream].reverse().find((it) => it.kind === 'user');
+      const roundTs = lastUser && lastUser.kind === 'user' ? lastUser.ts : Date.now();
       landedRoundRef.current = userCount;
       landedMsgRef.current = null;
-      roundTokenRef.current = agentCardRoundToken(sessionId, userCount);
+      roundTokenRef.current = agentCardRoundToken(sessionId, userCount, roundTs);
       retiredRef.current = false;
-      roundStartRef.current = lastUser && lastUser.kind === 'user' ? lastUser.ts : Date.now();
+      sealedRoundRef.current = false;
+      roundStartRef.current = roundTs;
       lastSigRef.current = '';
     }
     if (syncLockRef.current) {
@@ -138,6 +150,9 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
     // 带进 IM 消息流）。已认领 running 卡（landedMsgRef 有值）不受限，PATCH 照常
     const lastUserItem = [...stream].reverse().find((it) => it.kind === 'user');
     if (!landedMsgRef.current && lastUserItem?.origin !== 'im') return;
+    // 旧轮封口（2026-11-20）：挂载时未认领 running 卡的旧回合不落流——sessions 异步
+    // 到达/终态翻转等依赖变化会反复进此段，不封口则每次都重复落卡
+    if (sealedRoundRef.current && !landedMsgRef.current) return;
     // 只投影当前轮（最后一条 user 之后）——喂全会话流会让新卡在模型响应前
     // 顶着上一轮的 conclusion（2026-11-11「新卡带旧答案」修复）
     const { stages, sources, rounds } = stagesFromStream(currentRoundItems(stream));
@@ -161,7 +176,8 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
     void (async () => {
       try {
         if (!landedMsgRef.current) {
-          landedMsgRef.current = await landAgentCard(convId, roundTokenRef.current ?? agentCardRoundToken(sessionId, userCount), body);
+          // token 兜底同绑本轮 user ts（正常路径轮 token 已在新回合分支生成存 ref）
+          landedMsgRef.current = await landAgentCard(convId, roundTokenRef.current ?? agentCardRoundToken(sessionId, userCount, lastUserItem?.ts ?? Date.now()), body);
         } else if (status !== 'running' && !retiredRef.current) {
           retiredRef.current = true;
           await patchAgentCard(landedMsgRef.current, body);
