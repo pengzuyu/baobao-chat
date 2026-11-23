@@ -73,6 +73,7 @@ PW=$(openssl rand -hex 16)
 JWT=$(openssl rand -hex 32)
 S3AK=$(openssl rand -hex 8)
 S3SK=$(openssl rand -hex 16)
+KMS=$(openssl rand -base64 32)   # base64(32B)：AI 供应商密钥信封加密主密钥（空则无法保存供应商 key）
 
 # bbc-app 定位：本地 load 模式（默认）或私服前缀模式（多机部署）
 if [ -n "$PREFIX" ]; then
@@ -111,6 +112,9 @@ BBC_DB_DSN=postgres://bbc:$PW@pg:5432/bbc?sslmode=disable
 BBC_JWT_SECRET=$JWT
 BBC_S3_ACCESS_KEY=$S3AK
 BBC_S3_SECRET_KEY=$S3SK
+# KMS 主密钥（base64 32 字节）：AI 供应商 API Key 的信封加密主密钥。
+# 留空=无法创建/装配带密钥的供应商（智谱等）→ Agent 不可用；已随机生成，建议沿用
+BBC_KMS_MASTER_KEY=$KMS
 
 # 对象存储（栈内 RustFS；PUBLIC_ENDPOINT 空=客户端经 nginx /oss/ 代理）
 BBC_S3_ENDPOINT=http://rustfs:9000
@@ -182,10 +186,12 @@ vi compose/.env
 cd compose && docker compose --profile core up -d
 \`\`\`
 
-## 首次初始化
-- app-init 自动等 pg 就绪并应用 schema 迁移（内嵌 bbc-app 镜像）
-- 完成后浏览器开 http://<BBC_PUBLIC_DOMAIN>/ → /setup 创建首超管
-- 建管理员时填 AI 供应商（如智谱）与模型——Agent 功能依赖
+## 首次初始化（三步）
+1. app-init 自动等 pg 就绪并应用 schema 迁移（内嵌 bbc-app 镜像，62 表）
+2. 浏览器开 http://<BBC_PUBLIC_DOMAIN>/ → /setup 创建首超管（只建管理员账号）
+3. 登录后进「管理后台 → AI 供应商」新增供应商并填 API Key（如智谱 GLM），
+   再配模型路由 —— **Agent 功能依赖此步**。供应商 Key 由 BBC_KMS_MASTER_KEY
+   信封加密后存库（该主密钥已随 .env 预生成，勿删；删除=已存供应商密钥无法解密）
 
 ## 安全
 - POSTGRES_PASSWORD / BBC_JWT_SECRET / S3 凭据为随机生成，建议沿用
