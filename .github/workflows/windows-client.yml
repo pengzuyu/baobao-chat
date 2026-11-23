@@ -72,7 +72,8 @@ jobs:
         run: |
           $c = Get-Content client\src-tauri\tauri.conf.json -Raw | ConvertFrom-Json
           Write-Host "version=$($c.version)"
-          "version=$($c.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$($c.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          # 勿用 -Encoding utf8：PS 5.1 会写 BOM，首行键名被污染致 output 取空
           Get-ChildItem "out\release\v$($c.version)\windows-x86_64" | Format-Table Name, Length
 
       - name: 打包产物

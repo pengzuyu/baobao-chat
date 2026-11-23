@@ -107,8 +107,13 @@ for TRIPLE in $TRIPLES_STR; do
 
   BBC_BBRT_TRIPLE="$TRIPLE" bash "$ROOT/scripts/prepare-bbrt-sidecar.sh"
 
+  # 无签名私钥时必须显式 --no-sign：updater pubkey 已配且 createUpdaterArtifacts=true
+  # 时，缺 TAURI_SIGNING_PRIVATE_KEY 对 tauri build 是硬错误（不是警告）
+  NO_SIGN=""
+  [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || NO_SIGN="--no-sign"
+
   (cd "$ROOT/client" && ./node_modules/.bin/tauri build \
-      --target "$TRIPLE" --config "$REL_CONF")
+      --target "$TRIPLE" --config "$REL_CONF" $NO_SIGN)
 
   # 收集 bundle 产物（tauri build --target 落 target/<triple>/release/bundle/）。
   # 精准按文件模式收（整目录 cp 会卷入 icon.icns/bundle_dmg.sh 等中间产物）；
