@@ -8,6 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"time"
 )
 
 // JSON-RPC 服务器错误码（-32000~-32099 规范保留段；-32700/-32601/-32602 规范码）
@@ -141,6 +144,134 @@ func corpTools() []ToolDef {
 			},
 			Risk:  "medium",
 			Scope: "file:upload",
+		},
+
+		// ── B1 只读扩展（2026-11-23）：九件全 low 全档自动——把 app 感知面
+		//（通讯录/会话/消息检索/KB 全文/日历/文件/在线状态）开给 Agent；
+		// 数据可见性与 REST 同权（防线三在域服务按 uid 过滤）──
+
+		{
+			Name:        "org_search",
+			Description: "通讯录搜人（工号/姓名/拼音全拼/首字母模糊匹配）。返回 uid、姓名、工号、部门路径——发消息前反查同事身份用。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string", "description": "检索词（必填，≤64 字）"},
+					"limit": map[string]any{"type": "integer", "description": "条数（默认 20，≤50）"},
+				},
+				"required": []string{"query"},
+			},
+			Risk:  "low",
+			Scope: "org:directory:read",
+		},
+		{
+			Name:        "im_convs",
+			Description: "列出我的会话（单聊含对端 uid 与姓名，群聊含成员数与最近消息摘要）。query 可选按会话名/对端名过滤——把『发给张三』解析成 conv_id 的入口。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string", "description": "按会话名/单聊对端姓名过滤（可选，≤64 字）"},
+				},
+			},
+			Risk:  "low",
+			Scope: "im:conv:read",
+		},
+		{
+			Name:        "im_search",
+			Description: "跨会话搜索我可见的历史消息（关键词 AND 过滤器）。返回命中消息摘要与所在会话。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"keyword": map[string]any{"type": "string", "description": "关键词（必填，≤64 字）"},
+					"conv_id": map[string]any{"type": "integer", "description": "限定会话（可选）"},
+					"from_uid": map[string]any{"type": "integer", "description": "限定发送人（可选）"},
+					"type":     map[string]any{"type": "string", "description": "限定消息类型（可选，如 text）"},
+					"from_ts":  map[string]any{"type": "integer", "description": "起始时间 ms 含边界（可选）"},
+					"to_ts":    map[string]any{"type": "integer", "description": "截止时间 ms 含边界（可选）"},
+					"cursor":   map[string]any{"type": "integer", "description": "翻页游标=上页最后一条 msg_id（可选）"},
+					"limit":    map[string]any{"type": "integer", "description": "条数（默认 20，≤100）"},
+				},
+				"required": []string{"keyword"},
+			},
+			Risk:  "low",
+			Scope: "im:message:search",
+		},
+		{
+			// 09 篇 §3.1 原条目（OBO doc:file:view）兑现：旧文档中心域移除后
+			// 以 kb 域文档（D24）供给——kb_query 命中后的全文读取通道
+			Name:        "doc_read",
+			Description: "读取知识库文档详情与全文分块（kb_query 命中后按 doc_id 取全文；空间可见性与本人一致）。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"doc_id": map[string]any{"type": "integer", "description": "文档 ID（必填）"},
+				},
+				"required": []string{"doc_id"},
+			},
+			Risk:  "low",
+			Scope: "doc:file:view",
+		},
+		{
+			Name:        "kb_spaces",
+			Description: "列出我可见的知识库空间（公司库+个人库，含文档数与用量）。kb_query 定向检索前先看有哪些空间。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties":          map[string]any{},
+				"additionalProperties": false,
+			},
+			Risk:  "low",
+			Scope: "kb:read",
+		},
+		{
+			Name:        "kb_nodes",
+			Description: "列空间目录树（子目录+目录下文档；parent_id=0 为空间根）。浏览知识库结构定位文档。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"space_id":  map[string]any{"type": "integer", "description": "空间 ID（必填）"},
+					"parent_id": map[string]any{"type": "integer", "description": "父目录 ID（0=空间根，默认 0）"},
+				},
+				"required": []string{"space_id"},
+			},
+			Risk:  "low",
+			Scope: "kb:read",
+		},
+		{
+			Name:        "calendar_query",
+			Description: "查工作日历（每日工作日/休息日/节假日三态）。判断某天是否上班、安排定时任务用。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"year":  map[string]any{"type": "integer", "description": "年份（默认当前年）"},
+					"month": map[string]any{"type": "integer", "description": "月份 1-12（可选，0=全年）"},
+				},
+			},
+			Risk:  "low",
+			Scope: "calendar:read",
+		},
+		{
+			Name:        "file_list",
+			Description: "列我的云盘文件或某会话的文件（名称/大小/类型/上传时间元数据；不含内容——下载走 file_upload 反向通道或前端）。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"conv_id": map[string]any{"type": "integer", "description": "会话文件（>0 生效；0/缺省=我的云盘）"},
+				},
+			},
+			Risk:  "low",
+			Scope: "file:read",
+		},
+		{
+			Name:        "presences",
+			Description: "查同事在线状态快照（online/away/busy/offline；隐身对观察者呈现 offline）。uids 可选过滤指定同事。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"uids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "指定 uid 过滤（空=全量）"},
+				},
+			},
+			Risk:  "low",
+			Scope: "presence:read",
 		},
 	}
 }
@@ -389,6 +520,249 @@ func (g *Gateway) invokeMailSend(ctx context.Context, tenantID, uid int64, raw j
 		return errText(err.Error()), nil
 	}
 	return okText(res)
+}
+
+// ── B1 只读九件 invoke：参数校验 → 闭包透传（防线三在域服务）──
+
+// invokeOrgSearch org_search 执行
+func (g *Gateway) invokeOrgSearch(ctx context.Context, tenantID, _ int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.Query == "" {
+		return nil, rpcErr(codeInvalidParams, "query 必填")
+	}
+	if len([]rune(args.Query)) > 64 {
+		return nil, rpcErr(codeInvalidParams, "query ≤64 字")
+	}
+	if args.Limit <= 0 {
+		args.Limit = 20
+	}
+	if args.Limit > 50 {
+		return nil, rpcErr(codeInvalidParams, "limit ≤50")
+	}
+	if g.opts.OrgSearch == nil {
+		return nil, rpcErr(codeUnknownTool, "org_search 未装配（org 域不可用）")
+	}
+	res, err := g.opts.OrgSearch(ctx, tenantID, args.Query, args.Limit)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeImConvs im_convs 执行：query 过滤在闭包内（服务端无对应参数）
+func (g *Gateway) invokeImConvs(ctx context.Context, _, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		Query string `json:"query"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if len([]rune(args.Query)) > 64 {
+		return nil, rpcErr(codeInvalidParams, "query ≤64 字")
+	}
+	if g.opts.ImConvs == nil {
+		return nil, rpcErr(codeUnknownTool, "im_convs 未装配（message 域不可用）")
+	}
+	res, err := g.opts.ImConvs(ctx, uid, args.Query)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeImSearch im_search 执行：SearchParams 投影透传
+func (g *Gateway) invokeImSearch(ctx context.Context, _, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		Keyword string `json:"keyword"`
+		ConvID  int64  `json:"conv_id"`
+		FromUID int64  `json:"from_uid"`
+		Type    string `json:"type"`
+		FromTS  int64  `json:"from_ts"`
+		ToTS    int64  `json:"to_ts"`
+		Cursor  int64  `json:"cursor"`
+		Limit   int    `json:"limit"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.Keyword == "" {
+		return nil, rpcErr(codeInvalidParams, "keyword 必填")
+	}
+	if len([]rune(args.Keyword)) > 64 {
+		return nil, rpcErr(codeInvalidParams, "keyword ≤64 字")
+	}
+	if args.Limit > 100 {
+		return nil, rpcErr(codeInvalidParams, "limit ≤100")
+	}
+	if g.opts.ImSearch == nil {
+		return nil, rpcErr(codeUnknownTool, "im_search 未装配（message 域不可用）")
+	}
+	res, err := g.opts.ImSearch(ctx, uid, ImSearchParams{
+		Keyword: args.Keyword, ConvID: args.ConvID, FromUID: args.FromUID, Type: args.Type,
+		FromTS: args.FromTS, ToTS: args.ToTS, Cursor: args.Cursor, Limit: args.Limit,
+	})
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeDocRead doc_read 执行：meta+chunks 合并在闭包（kb 域）
+func (g *Gateway) invokeDocRead(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		DocID int64 `json:"doc_id"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.DocID <= 0 {
+		return nil, rpcErr(codeInvalidParams, "doc_id 必填")
+	}
+	if g.opts.DocRead == nil {
+		return nil, rpcErr(codeUnknownTool, "doc_read 未装配（kb 域不可用）")
+	}
+	res, err := g.opts.DocRead(ctx, tenantID, uid, args.DocID)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeKbSpaces kb_spaces 执行
+func (g *Gateway) invokeKbSpaces(ctx context.Context, tenantID, uid int64, _ json.RawMessage) (any, *rpcError) {
+	if g.opts.KbSpaces == nil {
+		return nil, rpcErr(codeUnknownTool, "kb_spaces 未装配（kb 域不可用）")
+	}
+	res, err := g.opts.KbSpaces(ctx, tenantID, uid)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeKbNodes kb_nodes 执行
+func (g *Gateway) invokeKbNodes(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		SpaceID  int64 `json:"space_id"`
+		ParentID int64 `json:"parent_id"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.SpaceID <= 0 {
+		return nil, rpcErr(codeInvalidParams, "space_id 必填")
+	}
+	if g.opts.KbNodes == nil {
+		return nil, rpcErr(codeUnknownTool, "kb_nodes 未装配（kb 域不可用）")
+	}
+	res, err := g.opts.KbNodes(ctx, tenantID, uid, args.SpaceID, args.ParentID)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeCalendarQuery calendar_query 执行：year 缺省当前年，month 0=全年
+func (g *Gateway) invokeCalendarQuery(ctx context.Context, tenantID int64, _ int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		Year  int `json:"year"`
+		Month int `json:"month"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.Year <= 0 {
+		args.Year = time.Now().Year()
+	}
+	if args.Month < 0 || args.Month > 12 {
+		return nil, rpcErr(codeInvalidParams, "month ∈ 0-12")
+	}
+	if g.opts.CalendarQuery == nil {
+		return nil, rpcErr(codeUnknownTool, "calendar_query 未装配（workday 域不可用）")
+	}
+	res, err := g.opts.CalendarQuery(ctx, tenantID, args.Year, args.Month)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokeFileList file_list 执行：convID=0 我的云盘
+func (g *Gateway) invokeFileList(ctx context.Context, tenantID, uid int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		ConvID int64 `json:"conv_id"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if args.ConvID < 0 {
+		return nil, rpcErr(codeInvalidParams, "conv_id ≥0")
+	}
+	if g.opts.FileList == nil {
+		return nil, rpcErr(codeUnknownTool, "file_list 未装配（file 域不可用）")
+	}
+	res, err := g.opts.FileList(ctx, tenantID, uid, args.ConvID)
+	if err != nil {
+		return errText(err.Error()), nil
+	}
+	return okText(res)
+}
+
+// invokePresences presences 执行：uids 可选过滤；快照→观察者口径条目
+func (g *Gateway) invokePresences(_ context.Context, _ int64, _ int64, raw json.RawMessage) (any, *rpcError) {
+	var args struct {
+		IDs []int64 `json:"uids"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, rpcErr(codeInvalidParams, "arguments 非法: "+err.Error())
+		}
+	}
+	if len(args.IDs) > 200 {
+		return nil, rpcErr(codeInvalidParams, "uids ≤200")
+	}
+	if g.opts.PresenceSnapshot == nil {
+		return nil, rpcErr(codeUnknownTool, "presences 未装配（gateway 域不可用）")
+	}
+	snap := g.opts.PresenceSnapshot()
+	filter := make(map[int64]bool, len(args.IDs))
+	for _, id := range args.IDs {
+		filter[id] = true
+	}
+	// 观察者口径条目（invisible→offline 在 Tracker.Snapshot 内）；uid 数值升序
+	uids := make([]int64, 0, len(snap))
+	for uid := range snap {
+		if len(filter) > 0 && !filter[uid] {
+			continue
+		}
+		uids = append(uids, uid)
+	}
+	sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] })
+	items := make([]map[string]string, 0, len(uids))
+	for _, uid := range uids {
+		items = append(items, map[string]string{"uid": strconv.FormatInt(uid, 10), "status": snap[uid]})
+	}
+	return okText(map[string]any{"items": items})
 }
 
 // errText 业务失败统一 content 形态

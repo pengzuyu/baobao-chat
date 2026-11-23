@@ -139,11 +139,31 @@ pub struct GateCtx<'a> {
 }
 
 /// 工具名 → 动作类别的静态映射（run_command 等依赖 args 的工具单独分类）
+/// 工具名归一化：MCP 供给工具（D14 §6.1 服务端网关动态发现）注册与调用均为
+/// 全名 `mcp.{server}.{tool}`，而治理属性（档位/永久记忆硬名单）按 09 篇 §3.1
+/// 裸名登记——此处剥命名空间前缀对齐。缺口背景：归一化缺失时 corp 工具全部
+/// 落"未注册=ArbitraryCommand"兜底档，full-auto 下 im_send 等写类被静默放行
+/// （CorpWrite 三档硬闸失效），kb_query 等只读反被过度确认。
+pub fn bare_tool_name(tool: &str) -> &str {
+    match tool.strip_prefix("mcp.") {
+        // 工具名本身按约定不含点（09 篇 §3.1）；万一含点取末段，错名自然落
+        // 未注册兜底档（最严），不影响安全性
+        Some(rest) => rest.rsplit('.').next().unwrap_or(rest),
+        None => tool,
+    }
+}
+
 fn static_category(tool: &str) -> Option<ActionCategory> {
+    let tool = bare_tool_name(tool);
     match tool {
-        // 只读（A2 行 1）
+        // 只读（A2 行 1）；公司域只读三件（im_history/mail_read=22 篇/18 篇供给，
+        // mail_send 落 CorpWrite——归一化缺失时三者均落兜底档，此处补齐登记）；
+        // B1 感知面九件（2026-11-23，mcpgw 供给全 low）
         "read_file" | "list_dir" | "search_files" | "glob" | "git_status" | "git_diff"
-        | "kb_query" | "doc_read" => Some(ActionCategory::ReadOnly),
+        | "kb_query" | "doc_read" | "im_history" | "mail_read" | "org_search" | "im_convs"
+        | "im_search" | "kb_spaces" | "kb_nodes" | "calendar_query" | "file_list" | "presences" => {
+            Some(ActionCategory::ReadOnly)
+        }
         // 记忆工具：仅写本机记忆目录（D15 §2.2 W1：风险级低，全档放行，
         // 归入只读档即"三档自动"语义；密钥特征拒写由 bbrt-memory 落盘侧兜底）
         "memory_save" | "memory.save" => Some(ActionCategory::ReadOnly),
@@ -151,8 +171,10 @@ fn static_category(tool: &str) -> Option<ActionCategory> {
         "write_file" | "edit_file" | "git_commit" => Some(ActionCategory::FileEdit),
         // 网络出站（A2 行 6）
         "http_fetch" => Some(ActionCategory::NetworkEgress),
-        // 公司域写（A2 行 7，永不全自动）
-        "doc_write" | "im_send" | "file_upload" | "app_write" => Some(ActionCategory::CorpWrite),
+        // 公司域写（A2 行 7，永不全自动）；mail_send=22 篇邮件外发（高危同档补登记）
+        "doc_write" | "im_send" | "file_upload" | "app_write" | "mail_send" => {
+            Some(ActionCategory::CorpWrite)
+        }
         // git push（A2 行 8，永不全自动）
         "git_push" => Some(ActionCategory::GitPush),
         // 委派编码（A2 行 9）
@@ -744,6 +766,61 @@ mod tests {
             ),
             Decision::Allow { .. }
         ));
+    }
+
+    // ---- B0：MCP 全名归一（mcp.corp.* 治理档位对齐） ----
+
+    #[test]
+    fn mcp_fullname_tools_gate_by_bare_name() {
+        let f = Fixture::new();
+        // 写类全名：三档 🔶（CorpWrite 硬闸不因命名空间前缀穿透——归一化缺失时
+        // 落"未注册=ArbitraryCommand"兜底档，full-auto 下 im_send 等曾被静默放行）
+        for tool in [
+            "mcp.corp.im_send",
+            "mcp.corp.doc_write",
+            "mcp.corp.file_upload",
+            "mcp.corp.mail_send",
+        ] {
+            let args = json!({"conv_id":"c1"});
+            for mode in MODES {
+                assert!(
+                    matches!(
+                        permission_gate(mode, &call(tool, &args), &f.ctx()),
+                        Decision::Confirm { .. }
+                    ),
+                    "{tool} @ {mode:?} 应按 CorpWrite 确认"
+                );
+            }
+        }
+        // 只读全名：全档自动（归一化缺失时 ask 档曾被过度确认）
+        for tool in [
+            "mcp.corp.kb_query",
+            "mcp.corp.im_history",
+            "mcp.corp.mail_read",
+        ] {
+            for mode in MODES {
+                assert!(
+                    matches!(
+                        permission_gate(mode, &call(tool, &json!({})), &f.ctx()),
+                        Decision::Allow { .. }
+                    ),
+                    "{tool} @ {mode:?} 只读应放行"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mcp_fullname_permanent_grant_hard_denied() {
+        // 触人硬名单双保险：全名归一后 Permanent 仍拒（不因网关命名空间穿透）
+        let store = crate::memory::GrantStore::new();
+        let r = store.insert(crate::memory::Grant {
+            tool: "mcp.corp.im_send".into(),
+            pattern: "*".into(),
+            scope: GrantScope::Permanent,
+            granted_at_ms: 1,
+        });
+        assert!(r.is_err(), "mcp.corp.im_send 永久记忆应被硬名单拒绝");
     }
 
     // ---- A2 行 9/10：委派与子 Agent ----

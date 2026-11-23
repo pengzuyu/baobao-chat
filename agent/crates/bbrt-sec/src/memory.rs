@@ -86,9 +86,11 @@ impl GrantStore {
         Self::default()
     }
 
-    /// 工具是否允许永久记忆（硬名单外允许；租户总开关策略在上层收敛后仍走此硬名单）
+    /// 工具是否允许永久记忆（硬名单外允许；租户总开关策略在上层收敛后仍走此硬名单）。
+    /// MCP 全名（mcp.corp.im_send）经 gate::bare_tool_name 归一后比对——触人硬名单
+    /// 不因网关供给的命名空间前缀而穿透
     pub fn permanent_allowed(tool: &str) -> bool {
-        !NEVER_PERMANENT_TOOLS.contains(&tool)
+        !NEVER_PERMANENT_TOOLS.contains(&crate::gate::bare_tool_name(tool))
     }
 
     /// 写入一条授权。校验：pattern 非空；permanent + 高危工具 → 拒绝（硬规则）。

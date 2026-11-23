@@ -150,6 +150,34 @@ func (g *Gateway) handleCall(r *http.Request, claims *authjwt.Claims, params jso
 	case "mail_send":
 		res, err := g.invokeMailSend(r.Context(), tenant, uid, p.Arguments)
 		return res, err
+	// B1 只读九件（2026-11-23）
+	case "org_search":
+		res, err := g.invokeOrgSearch(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "im_convs":
+		res, err := g.invokeImConvs(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "im_search":
+		res, err := g.invokeImSearch(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "doc_read":
+		res, err := g.invokeDocRead(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "kb_spaces":
+		res, err := g.invokeKbSpaces(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "kb_nodes":
+		res, err := g.invokeKbNodes(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "calendar_query":
+		res, err := g.invokeCalendarQuery(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "file_list":
+		res, err := g.invokeFileList(r.Context(), tenant, uid, p.Arguments)
+		return res, err
+	case "presences":
+		res, err := g.invokePresences(r.Context(), tenant, uid, p.Arguments)
+		return res, err
 	default:
 		return nil, rpcErr(codeUnknownTool, "工具未接线: "+p.Name)
 	}

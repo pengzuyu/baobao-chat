@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -597,6 +598,8 @@ func main() {
 
 	// mailAPI 前置声明（mcpgw 闭包捕获引用；mail 模块装配于后段，调用在运行期完成）
 	var mailAPI *mailservice.Service
+	// calendarQuery 前置声明（同款：workday 模块装配于 mcpgw 之后，运行期回填）
+	var calendarQuery func(ctx context.Context, tenantID int64, year, month int) (any, error)
 
 	// ── MCP 网关供给层（D14 §6 裁决 2026-11-07）：公司域工具包成 MCP server
 	// 暴露，Runtime bbrt-mcp 连接期 initialize+tools/list 发现（mcp.corp.* 命名
@@ -675,6 +678,76 @@ func main() {
 			return mailAPI.SendMessage(ctx, tenantID, uid, mailservice.SendReq{
 				To: to, Cc: cc, Subject: subject, Body: body, InReplyTo: inReplyTo,
 			})
+		},
+		// ── B1 只读九件（2026-11-23）：感知面开给 Agent；可见性与 REST 同权 ──
+		// org_search：通讯录搜人（全员可见口径同 /org/users）
+		OrgSearch: func(ctx context.Context, tenantID int64, q string, limit int) (any, error) {
+			rows, _, err := orgMod.DirectoryAPI().DirectoryUsers(ctx, tenantID, orgservice.DirectoryFilter{
+				Q: q, Limit: limit,
+			})
+			return rows, err
+		},
+		// im_convs：会话列表（agent 反查 conv_id 的入口；query 在此过滤——
+		// 服务端无对应参数，单聊对端名经 PeerUID 无名，暂按会话名+摘要包含匹配）
+		ImConvs: func(ctx context.Context, uid int64, query string) (any, error) {
+			convs, err := msgMod.API().ListUserConversations(ctx, uid)
+			if err != nil {
+				return nil, err
+			}
+			if query != "" {
+				q := strings.ToLower(query)
+				out := convs[:0]
+				for _, c := range convs {
+					if strings.Contains(strings.ToLower(c.Name), q) ||
+						strings.Contains(strings.ToLower(c.LastMsgDigest), q) ||
+						strings.Contains(c.PeerUID, query) {
+						out = append(out, c)
+					}
+				}
+				convs = out
+			}
+			return map[string]any{"items": convs}, nil
+		},
+		// im_search：全局消息检索（仅本人可见会话；直映射 SearchParams）
+		ImSearch: func(ctx context.Context, uid int64, p mcpgw.ImSearchParams) (any, error) {
+			return msgMod.API().SearchMessages(ctx, uid, messageapi.SearchParams{
+				Keyword: p.Keyword, FromUID: p.FromUID, ConvID: p.ConvID, Type: p.Type,
+				FromTS: p.FromTS, ToTS: p.ToTS, Cursor: p.Cursor, Limit: p.Limit,
+			})
+		},
+		// doc_read：kb 文档详情+全文分块（kb_query 命中后的全文通道）
+		DocRead: func(ctx context.Context, tenantID, uid, docID int64) (any, error) {
+			doc, err := kbSvc.GetDoc(ctx, tenantID, uid, docID)
+			if err != nil {
+				return nil, err
+			}
+			chunks, err := kbSvc.ListChunks(ctx, tenantID, uid, docID)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"doc": doc, "chunks": chunks}, nil
+		},
+		// kb_spaces / kb_nodes：知识库结构浏览（可见空间按 uid 过滤在域服务）
+		KbSpaces: func(ctx context.Context, tenantID, uid int64) (any, error) {
+			return kbSvc.ListSpaces(ctx, tenantID, uid)
+		},
+		KbNodes: func(ctx context.Context, tenantID, uid, spaceID, parentID int64) (any, error) {
+			return kbSvc.ListNodes(ctx, tenantID, uid, spaceID, parentID)
+		},
+		// calendar_query：工作日历（month>0 裁单月；workdaySvc 后装配走回填闭包）
+		CalendarQuery: func(ctx context.Context, tenantID int64, year, month int) (any, error) {
+			return calendarQuery(ctx, tenantID, year, month)
+		},
+		// file_list：conv_id=0 我的云盘，>0 会话文件（成员校验在域服务）
+		FileList: func(ctx context.Context, tenantID, uid, convID int64) (any, error) {
+			if convID > 0 {
+				return fileSvc.ListByConv(ctx, tenantID, uid, convID)
+			}
+			return fileSvc.ListMine(ctx, tenantID, uid)
+		},
+		// presences：在线状态快照（观察者口径；gw 先于本网关装配）
+		PresenceSnapshot: func() map[int64]string {
+			return gw.PresenceSnapshot()
 		},
 		Audit: func(_ context.Context, e mcpgw.AuditEntry) {
 			log.Printf("[mcpgw] tool=%s tenant=%d subject=%d obo=%v act=%s ok=%v err=%s %dms",
@@ -911,6 +984,24 @@ func main() {
 	workdaySvc := workday.NewModule(workdayservice.Options{
 		Audit: adminSvc.RecordAudit, // 管理端写操作入 admin_audit_action
 	}, workdayStore).API()
+	// mcpgw calendar_query 回填（前置声明于网关装配处；month>0 裁单月）
+	calendarQuery = func(ctx context.Context, tenantID int64, year, month int) (any, error) {
+		dto, err := workdaySvc.Year(ctx, tenantID, year)
+		if err != nil {
+			return nil, err
+		}
+		if month > 0 {
+			prefix := fmt.Sprintf("%04d-%02d", year, month)
+			days := make([]workdayapi.DayDTO, 0, 31)
+			for _, d := range dto.Days {
+				if strings.HasPrefix(d.Date, prefix) {
+					days = append(days, d)
+				}
+			}
+			dto.Days = days
+		}
+		return dto, nil
+	}
 	mux.Handle("GET /api/v1/workday-calendar", authed(handleWorkdayYear(workdaySvc)))
 	mux.Handle("GET /api/v1/admin/workday-calendar", requirePerm("admin:calendar:manage")(handleWorkdayYear(workdaySvc)))
 	mux.Handle("PUT /api/v1/admin/workday-calendar/days", requirePerm("admin:calendar:manage")(handleWorkdayUpsert(workdaySvc)))

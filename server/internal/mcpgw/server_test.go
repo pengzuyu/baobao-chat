@@ -6,6 +6,7 @@ package mcpgw
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -29,6 +30,16 @@ type fixture struct {
 	audits    []AuditEntry
 	mailReads []map[string]any
 	mailSends []map[string]any
+	// B1 只读九件的调用记录
+	orgSearches    []map[string]any
+	imConvsCalls   []map[string]any
+	imSearchCalls  []map[string]any
+	docReads       []map[string]any
+	kbSpacesCalls  []map[string]any
+	kbNodesCalls   []map[string]any
+	calendarCalls  []map[string]any
+	fileListCalls  []map[string]any
+	presenceCalls  int
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -78,6 +89,42 @@ func newFixture(t *testing.T) *fixture {
 				"subject": subject, "body": body, "in_reply_to": inReplyTo,
 			})
 			return map[string]any{"message_id": "m-1", "delivered": to, "undelivered": []any{}}, nil
+		},
+		OrgSearch: func(_ context.Context, tenantID int64, q string, limit int) (any, error) {
+			f.orgSearches = append(f.orgSearches, map[string]any{"tenant": tenantID, "q": q, "limit": limit})
+			return []map[string]any{{"uid": "12", "display_name": "张三", "employee_no": "E001", "org_path": "/公司/研发部"}}, nil
+		},
+		ImConvs: func(_ context.Context, uid int64, query string) (any, error) {
+			f.imConvsCalls = append(f.imConvsCalls, map[string]any{"uid": uid, "query": query})
+			return map[string]any{"items": []map[string]any{{"id": "5", "type": 1, "name": "张三", "peerUid": "12", "lastMsgDigest": "明天见"}}}, nil
+		},
+		ImSearch: func(_ context.Context, uid int64, p ImSearchParams) (any, error) {
+			f.imSearchCalls = append(f.imSearchCalls, map[string]any{"uid": uid, "keyword": p.Keyword, "conv_id": p.ConvID, "limit": p.Limit})
+			return map[string]any{"items": []map[string]any{{"msg_id": 77, "conv_id": 5, "snippet": "报销流程…"}}}, nil
+		},
+		DocRead: func(_ context.Context, tenantID, uid, docID int64) (any, error) {
+			f.docReads = append(f.docReads, map[string]any{"tenant": tenantID, "uid": uid, "doc_id": docID})
+			return map[string]any{"doc": map[string]any{"id": "3", "title": "部署手册", "status": "ready"}, "chunks": []map[string]any{{"seq": 1, "content": "第一章…"}}}, nil
+		},
+		KbSpaces: func(_ context.Context, tenantID, uid int64) (any, error) {
+			f.kbSpacesCalls = append(f.kbSpacesCalls, map[string]any{"tenant": tenantID, "uid": uid})
+			return []map[string]any{{"id": "1", "name": "公司知识库", "space_type": "company"}}, nil
+		},
+		KbNodes: func(_ context.Context, tenantID, uid, spaceID, parentID int64) (any, error) {
+			f.kbNodesCalls = append(f.kbNodesCalls, map[string]any{"tenant": tenantID, "uid": uid, "space_id": spaceID, "parent_id": parentID})
+			return map[string]any{"dirs": []map[string]any{{"id": "2", "name": "运维"}}, "docs": []map[string]any{}}, nil
+		},
+		CalendarQuery: func(_ context.Context, tenantID int64, year, month int) (any, error) {
+			f.calendarCalls = append(f.calendarCalls, map[string]any{"tenant": tenantID, "year": year, "month": month})
+			return map[string]any{"year": year, "days": []map[string]any{{"date": fmt.Sprintf("%04d-01-01", year), "type": "holiday"}}}, nil
+		},
+		FileList: func(_ context.Context, tenantID, uid, convID int64) (any, error) {
+			f.fileListCalls = append(f.fileListCalls, map[string]any{"tenant": tenantID, "uid": uid, "conv_id": convID})
+			return []map[string]any{{"id": "91", "name": "报告.pdf", "size": 1024}}, nil
+		},
+		PresenceSnapshot: func() map[int64]string {
+			f.presenceCalls++
+			return map[int64]string{7: "online", 12: "offline", 3: "away"}
 		},
 		Audit: func(_ context.Context, e AuditEntry) { f.audits = append(f.audits, e) },
 	}}
@@ -162,13 +209,16 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 	tok := f.mint(t, "7", false)
 	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`, tok)
 	tools := decode(t, rec)["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 6 {
-		t.Fatalf("供给应为 6 工具（kb_query/im_send/im_history/file_upload/mail_read/mail_send）: %d 项", len(tools))
+	if len(tools) != 15 {
+		t.Fatalf("供给应为 15 工具（六件+B1 只读九件）: %d 项", len(tools))
 	}
 	// 风险级与 09 篇 §3.1 权威表逐项对齐（客户端 gate 按此分档）
 	want := map[string]string{
 		"kb_query": "low", "im_send": "high", "im_history": "low", "file_upload": "medium",
 		"mail_read": "low", "mail_send": "high",
+		"org_search": "low", "im_convs": "low", "im_search": "low", "doc_read": "low",
+		"kb_spaces": "low", "kb_nodes": "low", "calendar_query": "low",
+		"file_list": "low", "presences": "low",
 	}
 	got := map[string]string{}
 	for _, tl := range tools {
@@ -479,5 +529,124 @@ func TestCallImHistory(t *testing.T) {
 	}
 	if len(f.imHistoryCalls) != 1 || f.imHistoryCalls[0]["limit"] != 50 || f.imHistoryCalls[0]["conv_id"] != int64(7) {
 		t.Fatalf("ImHistory 参数（默认 limit=50）: %+v", f.imHistoryCalls)
+	}
+}
+
+// ── B1 只读九件（2026-11-23）：happy path + 默认值 + OBO scope + uids 过滤 ──
+
+// org_search：happy path 透传 tenant/uid，默认 limit=20
+func TestCallOrgSearch(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "9", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"org_search","arguments":{"query":"zhangsan"}}}`, tok)
+	res := decode(t, rec)["result"].(map[string]any)
+	if res["isError"] == true {
+		t.Fatalf("应成功: %v", res)
+	}
+	if text := res["content"].([]any)[0].(map[string]any)["text"].(string); !strings.Contains(text, "张三") {
+		t.Fatalf("org_search 结果缺失: %s", text)
+	}
+	if len(f.orgSearches) != 1 || f.orgSearches[0]["limit"] != 20 || f.orgSearches[0]["q"] != "zhangsan" {
+		t.Fatalf("OrgSearch 参数（默认 limit=20）: %+v", f.orgSearches)
+	}
+	// 空关键词 → -32602
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"org_search","arguments":{}}}`, tok)
+	if c := errCode(t, decode(t, rec)); c != codeInvalidParams {
+		t.Fatalf("缺 query 应 -32602: %v", c)
+	}
+}
+
+// im_convs + im_search：人名→conv_id 反查入口 + 全局检索投影
+func TestCallImConvsAndSearch(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "9", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"im_convs","arguments":{"query":"张三"}}}`, tok)
+	if res := decode(t, rec)["result"].(map[string]any); res["isError"] == true {
+		t.Fatalf("im_convs 应成功: %v", res)
+	}
+	if len(f.imConvsCalls) != 1 || f.imConvsCalls[0]["query"] != "张三" {
+		t.Fatalf("ImConvs 参数: %+v", f.imConvsCalls)
+	}
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"im_search","arguments":{"keyword":"报销","conv_id":5,"limit":30}}}`, tok)
+	if res := decode(t, rec)["result"].(map[string]any); res["isError"] == true {
+		t.Fatalf("im_search 应成功: %v", res)
+	}
+	if len(f.imSearchCalls) != 1 || f.imSearchCalls[0]["keyword"] != "报销" || f.imSearchCalls[0]["conv_id"] != int64(5) {
+		t.Fatalf("ImSearch 参数: %+v", f.imSearchCalls)
+	}
+}
+
+// doc_read/kb_spaces/kb_nodes：KB 全文通道与结构浏览
+func TestCallKbReadTools(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "9", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"doc_read","arguments":{"doc_id":3}}}`, tok)
+	res := decode(t, rec)["result"].(map[string]any)
+	if text := res["content"].([]any)[0].(map[string]any)["text"].(string); !strings.Contains(text, "部署手册") || !strings.Contains(text, "chunks") {
+		t.Fatalf("doc_read 应含 meta+chunks: %s", text)
+	}
+	post(t, f.gw, `{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"kb_spaces","arguments":{}}}`, tok)
+	post(t, f.gw, `{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"kb_nodes","arguments":{"space_id":1}}}`, tok)
+	if len(f.kbSpacesCalls) != 1 || len(f.kbNodesCalls) != 1 || f.kbNodesCalls[0]["parent_id"] != int64(0) {
+		t.Fatalf("kb_spaces/kb_nodes 参数: %+v %+v", f.kbSpacesCalls, f.kbNodesCalls)
+	}
+	// 缺 space_id → -32602
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"kb_nodes","arguments":{}}}`, tok)
+	if c := errCode(t, decode(t, rec)); c != codeInvalidParams {
+		t.Fatalf("缺 space_id 应 -32602: %v", c)
+	}
+}
+
+// calendar_query：默认当前年；file_list：conv_id=0 我的云盘
+func TestCallCalendarAndFileList(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "9", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"calendar_query","arguments":{}}}`, tok)
+	if res := decode(t, rec)["result"].(map[string]any); res["isError"] == true {
+		t.Fatalf("calendar_query 应成功: %v", res)
+	}
+	if len(f.calendarCalls) != 1 || f.calendarCalls[0]["year"] != time.Now().Year() {
+		t.Fatalf("CalendarQuery 默认年: %+v", f.calendarCalls)
+	}
+	post(t, f.gw, `{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"file_list","arguments":{"conv_id":5}}}`, tok)
+	if len(f.fileListCalls) != 1 || f.fileListCalls[0]["conv_id"] != int64(5) {
+		t.Fatalf("FileList 参数: %+v", f.fileListCalls)
+	}
+}
+
+// presences：全量快照 uid 升序；uids 过滤
+func TestCallPresences(t *testing.T) {
+	f := newFixture(t)
+	tok := f.mint(t, "9", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"presences","arguments":{}}}`, tok)
+	res := decode(t, rec)["result"].(map[string]any)
+	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
+	var v struct {
+		Items []map[string]string `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(text), &v); err != nil {
+		t.Fatalf("presences 结果非法: %v", err)
+	}
+	if len(v.Items) != 3 || v.Items[0]["uid"] != "3" || v.Items[2]["uid"] != "12" {
+		t.Fatalf("presences 全量应 3 条 uid 升序: %+v", v.Items)
+	}
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"presences","arguments":{"uids":[7]}}}`, tok)
+	text = decode(t, rec)["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if err := json.Unmarshal([]byte(text), &v); err != nil || len(v.Items) != 1 || v.Items[0]["uid"] != "7" {
+		t.Fatalf("presences uids 过滤应仅 1 条: %+v err=%v", v.Items, err)
+	}
+}
+
+// B1 工具 OBO scope 防线二：doc_read 缺 doc:file:view → -32002 不触域
+func TestB1OboMissingScopeDenied(t *testing.T) {
+	f := newFixture(t)
+	obo := f.mint(t, "9", true, "kb:query:use") // 无 doc:file:view
+	body := `{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"doc_read","arguments":{"doc_id":3},"_meta":{"bbcObo":"` + obo + `"}}}`
+	rec := post(t, f.gw, body, "")
+	if c := errCode(t, decode(t, rec)); c != codeScopeDenied {
+		t.Fatalf("OBO 缺 scope 应 -32002，得到 %v", c)
+	}
+	if len(f.docReads) != 0 {
+		t.Fatal("scope 拒绝不得触达域服务")
 	}
 }

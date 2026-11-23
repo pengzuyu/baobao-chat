@@ -59,14 +59,25 @@
 | git_push / git 远端操作 | 推送远端 | 高 | 全模式确认；默认策略可禁用 | 凭据走钥匙串 §7.2 |
 | http_fetch | HTTP GET，仅内网白名单（§3.2.4） | 中 | ask 确认；auto-edit+ 确认 | — |
 | kb_query | 知识库混合检索 | 低 | 全模式自动 | OBO `kb:query:use` |
-| doc_read | 读在线文档元数据与内容 | 低 | 全模式自动 | OBO `doc:file:view` |
+| doc_read | 读知识库文档详情与全文分块（**B1 2026-11-23** 以 kb 域供给；旧文档中心域版本已随瘦身移除） | 低 | 全模式自动 | OBO `doc:file:view` |
 | doc_write | 创建/修改在线文档 | 高 | 全模式确认（永不全自动，§7.3） | OBO `doc:file:edit` |
 | im_send | 发送消息/Agent 卡片到会话 | 高 | 全模式确认（永不全自动） | OBO `im:message:send` |
+| im_history | 读会话最近消息（agent 上下文自读，D18 §3.5） | 低 | 全模式自动 | — |
+| im_convs | 列我的会话（人名→conv_id 反查入口） | 低 | 全模式自动 | OBO `im:conv:read` |
+| im_search | 跨会话搜索我可见的历史消息 | 低 | 全模式自动 | OBO `im:message:search` |
+| org_search | 通讯录搜人（工号/姓名/拼音） | 低 | 全模式自动 | OBO `org:directory:read` |
+| kb_spaces / kb_nodes | 知识库空间与目录树浏览 | 低 | 全模式自动 | OBO `kb:read` |
+| calendar_query | 查工作日历（工作日/休息日/节假日三态） | 低 | 全模式自动 | OBO `calendar:read` |
+| file_list | 列我的云盘/会话文件元数据 | 低 | 全模式自动 | OBO `file:read` |
+| presences | 同事在线状态快照（观察者口径） | 低 | 全模式自动 | OBO `presence:read` |
+| mail_read / mail_send | 邮件读取/外发（22 篇 §4.7 供给，此处补登记） | 低 / 高 | mail_read 全模式自动；mail_send 全模式确认（永不全自动） | OBO `mail:agent_tool` |
 | file_upload | 上传文件到云盘/会话（中转 OBO） | 中 | ask 确认；auto-edit+ 确认 | OBO `file:upload` |
 | ~~coding.delegate / coding.resume / coding.cancel~~ | ~~委派编码任务给本地编码智能体（zcode/Claude Code 等）/续接/取消~~ | — | **已退役**：2026-11-19 委派域整域移除；后台任务取消由 `run.cancel`（内部 run 定向）承载 | —（子智能体零凭证，公司上下文由编排层以文本注入） |
 | a2a.call（二期预留） | 外呼外部 A2A Agent（跨系统/跨组织互操作；子 Agent 本地运行不依赖此工具，见 D14 决策记录） | 按目标 Agent Card 声明（默认高） | 默认隐藏，租户开关启用后按声明门控 | 调用者身份透传 |
 | app.* | 生态应用工具，动态注册 | 按清单（低/中/高） | 按清单风险级套用上述规则 | 按清单 OBO scope（10 篇） |
 
+> **B0 档位接线注记（2026-11-23）**：MCP 供给全名（`mcp.corp.{tool}`）在 Runtime 门控侧经 `gate::bare_tool_name` 剥前缀归一后比对本表治理属性——归一化缺失曾致 corp 工具全部落"未注册=ArbitraryCommand"兜底档（full-auto 下 im_send/mail_send 写类被静默放行、只读类被过度确认），同批补登记 im_history/mail_read（低）与 mail_send（高，CorpWrite 档）。
+>
 > 工具协议（inputSchema/结果格式）对齐 MCP tool jsonschema 概念（10 篇 §1.2）。**供给方式注记（2026-11-07 裁决，D14 §6）**：本表中公司域工具（kb_query / doc_read / doc_write / im_send / file_upload 及 app.*）经**服务端 MCP 网关动态供给**（Runtime 的 bbrt-mcp 连接期 list_tools 发现注册，D11 §2.10），不再作为 Runtime 内置工具硬编码；本地内置仅保留文件/命令/git/检索类。风险级、OBO scope 与门控要求**不变**——供给方式与治理解耦，本表仍是治理属性（风险级/scope/门控）的权威源。注册与合并规则见 10 篇 §4.6。
 
 ### 3.2 高危/重点工具详述
