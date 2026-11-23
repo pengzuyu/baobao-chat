@@ -465,8 +465,9 @@ pub enum HostToRuntime {
     #[serde(rename = "session.start", rename_all = "camelCase")]
     SessionStart {
         session_id: String,
-        /// 工作目录。D19：空串=日常对话（无目录——文件/命令/git/search/委派类工具
-        /// 不可用、记忆恒用户作用域）；非空=项目会话（realpath 归一，自动 upsert
+        /// 工作目录。D19：空串=日常/任务对话（2026-11-12 改口径：文件/命令类
+        /// 工具可用，沙箱根=用户工作空间 ~/.baobaochat/workspace，记忆恒用户
+        /// 作用域）；非空=项目会话（realpath 归一，自动 upsert
         /// agent_workspace 并回填 session.workspace_id，工具沙箱根=该目录）
         workspace: String,
         mode: PermissionMode,

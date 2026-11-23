@@ -140,11 +140,8 @@ fn probe_system(ctx: &ProbeCtx, task: &str) -> String {
         .map(|m| m.recall_scoped(ws, task))
         .unwrap_or_default();
     let project_line = if ctx.workspace.is_empty() {
-        // 2026-11-12 日常口径：用户工作空间（与主会话 project_line 同步改）
-        format!(
-            "日常对话（用户工作空间 {}）",
-            bbrt_sec::sandbox::default_user_workspace().display()
-        )
+        // 2026-11-23 三规范文案与主会话 project_line 共用单源（防漂移）
+        crate::loop_runner::user_workspace_line(&bbrt_sec::sandbox::default_user_workspace())
     } else {
         format!("workspace: {}", ctx.workspace)
     };

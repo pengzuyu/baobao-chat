@@ -361,14 +361,29 @@ impl SessionRunner {
         }
     }
 
-    /// D19 [项目] 行：项目会话=目录；日常=用户工作空间标注（2026-11-12 改口径）
+    /// D19 [项目] 行：项目会话=目录；空 workspace=用户工作空间三规范文案
+    /// （2026-11-23 拍板：跨任务共享+统一「用户工作空间」措辞，不区分场景）
     fn project_line(&self) -> String {
         if self.workspace.is_empty() {
-            format!("日常对话（用户工作空间 {}）", self.exec_ws().display())
+            user_workspace_line(&self.exec_ws())
         } else {
             format!("workspace: {}", self.workspace)
         }
     }
+}
+
+/// 用户工作空间 [项目] 行文案（2026-11-23 拍板落码；主会话 project_line 与
+/// 子代理 probe_system 共用单源防漂移）。三规范=操作约束/目录规范/命名规范，
+/// 每轮随 system 重拼注入（compact 不丢）；PathPolicy 越根 8020 是文案对应的
+/// 硬拦截层。
+pub(crate) fn user_workspace_line(ws: &std::path::Path) -> String {
+    format!(
+        "用户工作空间 {}（本机跨任务共享，产物统一存放于此）\n\
+         - 操作约束：仅可在此空间内读写——read_file/list_dir 读列，write_file/edit_file 写改（新文件直接 write_file 创建）；建目录、删除文件/目录走 run_command。空间外不可写（越界会被拒绝）。\n\
+         - 目录规范：按主题建子目录组织产物（如 reports/、data/），不在根目录堆散文件；一次性中间产物放 tmp/。\n\
+         - 命名规范：语义化文件名，允许中文，禁空格与特殊字符（分隔用连字符）；同主题迭代不覆盖已有文件，追加 -v2 类后缀。",
+        ws.display()
+    )
 }
 
 /// 一轮 turn 的产物（manager 记账用）
