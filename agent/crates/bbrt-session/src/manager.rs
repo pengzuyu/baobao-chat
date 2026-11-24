@@ -390,6 +390,12 @@ impl SessionManager {
         Err(ManagerError::NotFound(format!("后台 run {run_id}")))
     }
 
+    /// 后台任务中枢句柄（测试装配/宿主诊断用；模型侧与宿主取消一律走
+    /// respond_run_cancel 定向路由，不直接操作中枢）
+    pub fn bg_hub(&self) -> Arc<crate::bg_hub::BgHub> {
+        Arc::clone(&self.hub)
+    }
+
     /// model.switch（D11 §4 ModelSwitched 产生方）：空闲会话档位切换 →
     /// 事件 + WAL。turn 进行中（runner 被取走）返回 Busy——排队切换随
     /// 阶段二登记（切换通常发生在空闲的设置面板场景，v0.1 空闲即切）。
@@ -558,13 +564,18 @@ impl SessionManager {
 
     /// 暂停/紧急停止旗标（循环在事件/步间检查；未决审批作废由等待循环轮询旗收口）。
     /// 对 entry.interrupt_flag 置旗而非 runner——回合进行中 runner 被 turn 线程
-    /// 取走（旧实现静默跳过=点停止全链路回执成功却无效果）
+    /// 取走（旧实现静默跳过=点停止全链路回执成功却无效果）。
+    /// 同时对本会话全部后台 run 优雅取消（2026-11-24 修复：旧实现只置主旗，
+    /// probe/expert/terminal 后台 run 继续跑完=「主停子不停」；与 session.end
+    /// 同口径，线程自注销不阻塞）
     pub fn interrupt(&self, session_id: &str) -> Result<(), ManagerError> {
         let guard = self.sessions.lock().unwrap();
         let entry = guard
             .get(session_id)
             .ok_or_else(|| ManagerError::NotFound(session_id.into()))?;
         entry.interrupt_flag.store(true, Ordering::Relaxed);
+        drop(guard);
+        self.hub.cancel_session(session_id);
         Ok(())
     }
 

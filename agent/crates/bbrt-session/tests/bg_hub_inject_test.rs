@@ -178,3 +178,49 @@ fn manager_run_cancel_unknown_run_not_found() {
         .is_err());
     mgr.end("s-c1", "").unwrap();
 }
+
+/// interrupt 传导后台任务（2026-11-24 修复「主停子不停」）：点停止=主旗 +
+/// 本会话全部后台 run 优雅取消；其他会话的后台 run 不受影响（会话隔离）。
+/// 旧实现只置主旗，probe/expert/terminal 后台 run 继续跑完。
+#[test]
+fn interrupt_cancels_session_background_runs_only() {
+    let sink = Arc::new(CollectSink::default());
+    let model = Arc::new(CaptureModel {
+        calls: AtomicUsize::new(0),
+        seen: Mutex::new(vec![]),
+    });
+    let mgr = SessionManager::new(deps(model, sink), None);
+    let params = |title: &str| StartParams {
+        workspace: "/ws".into(),
+        mode: PermissionMode::AutoEdit,
+        model_policy: ModelTier::Strong,
+        model_override: None,
+        title: title.into(),
+        restored: None,
+        unattended: false,
+        approval_timeout_secs: None,
+        scene: Default::default(),
+    };
+    mgr.start("s-i1".into(), params("中断传导")).unwrap();
+    mgr.start("s-i2".into(), params("旁观会话")).unwrap();
+    // 直注两个后台 run（生产由 runner 在执行前注册；此处只验中枢传导语义）
+    let (tx1, rx1) = std::sync::mpsc::channel();
+    let (tx2, rx2) = std::sync::mpsc::channel();
+    mgr.bg_hub().register("agent-aaa1", "s-i1", tx1);
+    mgr.bg_hub().register("agent-aaa2", "s-i2", tx2);
+
+    mgr.interrupt("s-i1").unwrap();
+    assert!(
+        matches!(
+            rx1.recv_timeout(std::time::Duration::from_millis(500)),
+            Ok(BgHostMsg::Cancel { graceful: true })
+        ),
+        "本会话后台 run 应收到优雅取消"
+    );
+    assert!(
+        rx2.recv_timeout(std::time::Duration::from_millis(200)).is_err(),
+        "其他会话的后台 run 不受影响"
+    );
+    mgr.end("s-i1", "").unwrap();
+    mgr.end("s-i2", "").unwrap();
+}

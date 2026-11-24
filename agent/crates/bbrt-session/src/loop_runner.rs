@@ -1395,7 +1395,8 @@ impl SessionRunner {
     /// 等待子 Agent/委派 run 终态并取回结果（B 批 2026-11-18）：异步委派/
     /// 后台子任务发起后，模型需要其输出才能继续时主动等待——已完成立即
     /// 返回结果摘要；超时返回「仍在运行」（非错误，可再次调用或先做别的）。
-    /// 等待期响应 interrupt（紧急停止收口等待，run 本身不受影响）。
+    /// 等待期响应 interrupt（紧急停止收口等待；主会话中断已联动取消
+    /// 本会话后台 run，见 manager::interrupt）。
     fn run_subagent_wait(&mut self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
         let v: serde_json::Value =
             serde_json::from_str(&call.args_json).unwrap_or(serde_json::json!({}));
@@ -1451,7 +1452,7 @@ impl SessionRunner {
             if self.interrupted.load(Ordering::Relaxed) {
                 return ToolOutcome::Blocked {
                     code: 8002,
-                    summary: format!("等待被中断（{run_id} 仍在后台运行，不受影响）"),
+                    summary: format!("等待被中断（已请求取消后台任务 {run_id}）"),
                 };
             }
             if std::time::Instant::now() >= deadline {
