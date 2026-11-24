@@ -55,6 +55,21 @@ pub enum ActionCategory {
     Subagent,
 }
 
+impl ActionCategory {
+    /// 事件/UI 风险级（wire 词汇 low|medium|high；壳侧 normalize_event 归一
+    /// medium→mid 供前端 RISK_LABELS）。逐调用判定（P0 显示层对齐）：此前
+    /// loop_runner 按工具名静态映射，run_command 一律标高危，与 gate 分类脱节
+    /// ——`ls`/`cargo test` 的卡片也挂红标。映射口径与矩阵档一致：
+    /// 全档自动=low；跟档/逐次确认=medium；永不全自动=high。
+    pub fn risk_level(self) -> &'static str {
+        match self {
+            Self::ReadOnly | Self::Subagent | Self::WhitelistCommand => "low",
+            Self::FileEdit | Self::ArbitraryCommand | Self::NetworkEgress => "medium",
+            Self::DangerousCommand | Self::CorpWrite | Self::GitPush => "high",
+        }
+    }
+}
+
 /// 门控放行来源（审计 decision_source）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1132,6 +1147,52 @@ mod tests {
         assert_eq!(
             classify_action(&call("mystery_tool", &json!({})), &f.ctx()),
             ActionCategory::ArbitraryCommand
+        );
+    }
+
+    // ---- P0：逐调用风险级（事件 risk 对齐 gate 分类） ----
+
+    #[test]
+    fn risk_level_maps_by_category_not_tool_name() {
+        // 全档自动=low（只读/子代理/白名单直调）
+        for cat in [
+            ActionCategory::ReadOnly,
+            ActionCategory::Subagent,
+            ActionCategory::WhitelistCommand,
+        ] {
+            assert_eq!(cat.risk_level(), "low", "{cat:?}");
+        }
+        // 跟档=medium（文件编辑/任意命令/网络出站）
+        for cat in [
+            ActionCategory::FileEdit,
+            ActionCategory::ArbitraryCommand,
+            ActionCategory::NetworkEgress,
+        ] {
+            assert_eq!(cat.risk_level(), "medium", "{cat:?}");
+        }
+        // 永不全自动=high（规则命中/公司域写/git push）
+        for cat in [
+            ActionCategory::DangerousCommand,
+            ActionCategory::CorpWrite,
+            ActionCategory::GitPush,
+        ] {
+            assert_eq!(cat.risk_level(), "high", "{cat:?}");
+        }
+        // 端到端：run_command 按命令内容分级（旧口径按工具名一律 high）
+        let f = Fixture::new();
+        let cargo_args = json!({"command": "cargo test --lib"});
+        let cargo = call("run_command", &cargo_args);
+        assert_eq!(classify_action(&cargo, &f.ctx()).risk_level(), "low");
+        let gen_args = json!({"command": "python3 gen.py"});
+        let gen = call("run_command", &gen_args);
+        assert_eq!(classify_action(&gen, &f.ctx()).risk_level(), "medium");
+        let rm_args = json!({"command": "rm -rf /etc/x"});
+        let rm = call("run_command", &rm_args);
+        assert_eq!(classify_action(&rm, &f.ctx()).risk_level(), "high");
+        // git_status 在 gate 是只读档，风险级应同步 low（旧静态表标 medium）
+        assert_eq!(
+            classify_action(&call("git_status", &json!({})), &f.ctx()).risk_level(),
+            "low"
         );
     }
 }

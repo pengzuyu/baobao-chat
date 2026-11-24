@@ -66,6 +66,18 @@ pub enum CommandHandoff {
 pub trait ToolExecutor: Send + Sync {
     /// 门控判定（不执行、不发审批；mode 来自会话当前档位）
     fn check(&self, mode: PermissionMode, call: &ToolInvocation) -> CheckOutcome;
+    /// 逐调用风险级（tool.call / permission.request 事件的 risk 字段）。
+    /// P0 显示层对齐：真实执行器按 gate 分类逐调用判定（bbrt-sec
+    /// ActionCategory::risk_level），旧「按工具名静态表」（run_command 一律
+    /// 高危、git_status 标中危）退役。default=旧静态表口径（测试桩/非管线
+    /// 实现方兜底，行为与退役前一致）。
+    fn risk_of_call(&self, call: &ToolInvocation) -> &'static str {
+        match call.name.as_str() {
+            "read_file" | "list_dir" | "search_files" | "glob" => "low",
+            "write_file" | "edit_file" | "git_status" | "git_diff" => "medium",
+            _ => "high",
+        }
+    }
     /// 执行（调用方已保证权限路径走通）
     fn execute(&self, mode: PermissionMode, call: &ToolInvocation) -> ToolOutcome;
     /// 后台 spawn run_command（统一后台任务体系 2026-11-18）：校验/spec 组装

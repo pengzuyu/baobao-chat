@@ -1051,7 +1051,8 @@ impl SessionRunner {
                     session_id: self.session_id.clone(),
                 };
                 let (masked, _) = bbrt_sec::masking::mask_and_digest(&call.args_json);
-                let risk = risk_of(&tc.name);
+                // P0 显示层对齐：风险级按 gate 逐调用分类（命令内容），旧静态表退役
+                let risk = deps.tools.risk_of_call(&call);
                 emit(deps, &self.session_id, |id| SessionEvent::ToolCall {
                     session_id: id,
                     call_id: tc.id.clone(),
@@ -2041,16 +2042,6 @@ fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {
         }
     }
     msgs
-}
-
-/// 简化风险映射（bbrt-tools 注册表携带精确级；此处兜底展示）。
-/// pub(crate)：subagent.rs 的 trace 发射复用同口径（D33 §3.2）
-pub(crate) fn risk_of(tool: &str) -> &'static str {
-    match tool {
-        "read_file" | "list_dir" | "search_files" | "glob" => "low",
-        "write_file" | "edit_file" | "git_status" | "git_diff" => "medium",
-        _ => "high",
-    }
 }
 
 /// WAL/事件内嵌 JSON 字符串转义（避免手拼破坏 JSON 结构）

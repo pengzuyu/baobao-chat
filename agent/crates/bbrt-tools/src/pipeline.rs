@@ -23,7 +23,9 @@ use std::sync::Arc;
 
 use bbrt_sec::danger_rules::DangerRuleSet;
 use bbrt_sec::errors::{CODE_NO_PERMISSION_POINT, CODE_TOOL_PANIC};
-use bbrt_sec::gate::{permission_gate, AllowSource, Decision, GateCtx, ToolCall as GateCall};
+use bbrt_sec::gate::{
+    classify_action, permission_gate, AllowSource, Decision, GateCtx, ToolCall as GateCall,
+};
 use bbrt_sec::masking::mask;
 use bbrt_sec::memory::{Grant, GrantScope, GrantStore};
 use bbrt_sec::sandbox::launcher::MemoryViolationSink;
@@ -356,6 +358,32 @@ impl ToolExecutor for PipelineExecutor {
                 message: reason,
             },
         }
+    }
+
+    /// 逐调用风险级（P0 显示层对齐；ToolExecutor trait 覆写）：按 gate 分类
+    /// 映射（ActionCategory::risk_level），run_command 以命令内容为准——只读/
+    /// 白名单直调 low、任意命令 medium、规则命中 high；旧「按工具名静态表」
+    /// （run_command 一律 high）退役。参数非法/未注册等异常 → medium（中性，
+    /// 不放大也不掩盖；8002 语义由 check 负责）
+    fn risk_of_call(&self, call: &ToolInvocation) -> &'static str {
+        let args = match Self::parse_args(call) {
+            Ok(v) => Self::gate_args(&call.name, &v),
+            Err(_) => return "medium",
+        };
+        let permission_points: Vec<&str> = Vec::new();
+        let ctx = GateCtx {
+            policy: None,
+            permission_points: &permission_points,
+            memory: None,
+            rules: &self.rules,
+            whitelist_prefixes: &self.config.whitelist_prefixes,
+            untrusted: false,
+        };
+        let gate_call = GateCall {
+            tool: &call.name,
+            args: &args,
+        };
+        classify_action(&gate_call, &ctx).risk_level()
     }
 
     /// 执行（§6 步骤 5-7：沙箱校验 + 执行 + 脱敏；权限路径由调用方保证）。

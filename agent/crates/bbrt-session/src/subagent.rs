@@ -314,9 +314,16 @@ pub fn run_probe(
             };
         }
         for tc in tool_calls {
-            // 过程明细外发：工具发起（脱敏参数 + 兜底风险级）
+            // 过程明细外发：工具发起（脱敏参数 + 风险级；P0 对齐=按 gate 逐调用
+            // 分类，与主会话 tool.call 同口径，旧按工具名静态表退役）
             let (masked, _) = bbrt_sec::masking::mask_and_digest(&tc.arguments);
-            let risk = match crate::loop_runner::risk_of(&tc.name) {
+            let call = ToolInvocation {
+                call_id: tc.id.clone(),
+                name: tc.name.clone(),
+                args_json: tc.arguments.clone(),
+                session_id: session_id.to_string(),
+            };
+            let risk = match ctx.tools.risk_of_call(&call) {
                 "low" => bbrt_protocol::RiskLevel::Low,
                 "medium" => bbrt_protocol::RiskLevel::Medium,
                 _ => bbrt_protocol::RiskLevel::High,
@@ -334,12 +341,6 @@ pub fn run_probe(
                 },
             );
             let exec_started = std::time::Instant::now();
-            let call = ToolInvocation {
-                call_id: tc.id.clone(),
-                name: tc.name.clone(),
-                args_json: tc.arguments.clone(),
-                session_id: session_id.to_string(),
-            };
             let (ok, summary) = match ctx.tools.execute(ctx.mode, &call) {
                 ToolOutcome::Ok { summary, .. } => (true, summary),
                 ToolOutcome::Blocked { summary, .. } => (false, format!("[被拦] {summary}")),
