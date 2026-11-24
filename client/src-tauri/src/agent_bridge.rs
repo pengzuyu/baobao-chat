@@ -204,36 +204,49 @@ impl Shared {
             "{}/api/v1/auth/obo/token",
             self.gateway.trim_end_matches('/')
         );
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .map_err(|e| e.to_string())?;
-        let resp: Value = client
-            .post(&url)
-            .bearer_auth(access)
-            .json(&json!({
-                "agent_session_id": format!("desktop-{did}"),
-                "audiences": audiences,
-            }))
-            .send()
-            .map_err(|e| format!("agent 票端点不可达: {e}"))?
-            .json()
-            .map_err(|e| format!("agent 票响应解析失败: {e}"))?;
-        if resp["code"].as_i64() != Some(0) {
-            return Err(format!(
-                "agent 票签发被拒 (code={} message={})",
-                resp["code"], resp["message"]
-            ));
-        }
-        let tickets = resp["data"]["tokens"]
-            .as_array()
-            .ok_or_else(|| "agent 票响应缺 tokens".to_string())?
-            .clone();
-        let exp = tickets
-            .first()
-            .and_then(|t| t["exp"].as_u64())
-            .unwrap_or_else(|| now_secs() + OBO_EXP_MARGIN);
-        Ok((json!(tickets), exp))
+        // reqwest::blocking 的内部 runtime 不能在 tokio async 上下文创建/销毁
+        // （6408f71 命令 async 化后 auth_set_token 等跑在 async_runtime 线程池——
+        // 直接调会 panic "Cannot drop a runtime in a context where blocking is
+        // not allowed"）→ 独立 OS 线程执行 + mpsc 回传（answer_renew 的
+        // spawn 线程同享此路径；命令线程最多阻塞 5s 超时窗）
+        let access = access.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| -> Result<(Value, u64), String> {
+                let client = reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                let resp: Value = client
+                    .post(&url)
+                    .bearer_auth(&access)
+                    .json(&json!({
+                        "agent_session_id": format!("desktop-{did}"),
+                        "audiences": audiences,
+                    }))
+                    .send()
+                    .map_err(|e| format!("agent 票端点不可达: {e}"))?
+                    .json()
+                    .map_err(|e| format!("agent 票响应解析失败: {e}"))?;
+                if resp["code"].as_i64() != Some(0) {
+                    return Err(format!(
+                        "agent 票签发被拒 (code={} message={})",
+                        resp["code"], resp["message"]
+                    ));
+                }
+                let tickets = resp["data"]["tokens"]
+                    .as_array()
+                    .ok_or_else(|| "agent 票响应缺 tokens".to_string())?
+                    .clone();
+                let exp = tickets
+                    .first()
+                    .and_then(|t| t["exp"].as_u64())
+                    .unwrap_or_else(|| now_secs() + OBO_EXP_MARGIN);
+                Ok((json!(tickets), exp))
+            })();
+            let _ = tx.send(result);
+        });
+        rx.recv().map_err(|_| "agent 票换签线程异常退出".to_string())?
     }
 
     /// UNT 事件喂会话缓存（camel 原始 payload 取字段；pre=转换前，post=转换后）
