@@ -11,6 +11,7 @@ import (
 	"github.com/baobaochat/server/internal/auth/repo"
 	"github.com/baobaochat/server/internal/org/api"
 	"github.com/baobaochat/server/internal/org/repo"
+	"github.com/baobaochat/server/internal/platform/agentjwt"
 	"github.com/baobaochat/server/internal/platform/authjwt"
 	errx "github.com/baobaochat/server/internal/platform/errors"
 )
@@ -64,11 +65,13 @@ func TestPasswordHashVerify(t *testing.T) {
 // ---- 测试脚手架 ----
 
 type fixture struct {
-	svc    *Service
-	signer *authjwt.Signer
-	org    *orgrepo.Memory
-	tokens *authrepo.Memory
-	now    func() time.Time
+	svc           *Service
+	signer        *authjwt.Signer
+	agentSigner   *agentjwt.Issuer   // agent 票签发（D38 批2：ES256）
+	agentVerifier *agentjwt.Verifier // agent 票验签（测试断言用）
+	org           *orgrepo.Memory
+	tokens        *authrepo.Memory
+	now           func() time.Time
 }
 
 func newFixture(t *testing.T, mutate func(o *Options)) *fixture {
@@ -102,15 +105,27 @@ func newFixture(t *testing.T, mutate func(o *Options)) *fixture {
 	signer.SetClock(now) // 签发与校验共用同一假时钟
 	tokMem := authrepo.NewMemory()
 
-	opts := Options{Now: now, UserSetPassword: func(ctx context.Context, tenantID, userID int64, hash string) error {
-		return orgMem.SetPassword(ctx, tenantID, userID, hash)
-	}}
+	// agent 票签发/验签（D38 批2）：随机 P-256 + 同一假时钟；测试 issuer 固定测试域
+	agentKey, err := agentjwt.GenDevKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentSigner := agentjwt.NewIssuerWithKey("https://bbc.test/oauth2", agentKey)
+	agentSigner.SetClock(now)
+	agentVerifier := agentjwt.NewVerifierWithKey("https://bbc.test/oauth2", agentKey)
+	agentVerifier.SetClock(now)
+
+	opts := Options{Now: now, AgentSigner: agentSigner,
+		UserSetPassword: func(ctx context.Context, tenantID, userID int64, hash string) error {
+			return orgMem.SetPassword(ctx, tenantID, userID, hash)
+		}}
 	if mutate != nil {
 		mutate(&opts)
 	}
 	opts.fillDefaults()
 	svc := New(opts, orgMem, tokMem, tokMem, tokMem, signer)
-	return &fixture{svc: svc, signer: signer, org: orgMem, tokens: tokMem, now: now}
+	return &fixture{svc: svc, signer: signer, agentSigner: agentSigner, agentVerifier: agentVerifier,
+		org: orgMem, tokens: tokMem, now: now}
 }
 
 func loginReq() authapi.LoginReq {
@@ -254,30 +269,55 @@ func TestLogout(t *testing.T) {
 	}
 }
 
-// OBO：scope 子集放行 + act 声明；超集 1006（03 篇 §6.2）
+// OBO 批量签发（D38 §3.3）：act 声明/子集放行/缺省全量/保留名受众/票据代同 TTL
 func TestIssueOBO(t *testing.T) {
 	f := newFixture(t, nil)
 	ctx := context.Background()
 
-	tok, err := f.svc.IssueOBO(ctx, 10001, authapi.OBOReq{
+	tickets, err := f.svc.IssueOBO(ctx, 10001, authapi.OBOReq{
 		AgentSessionID: "as-77",
-		Scope:          []string{"im:message:send"},
+		Audiences: []authapi.OBOTarget{
+			{Audience: "https://oa.company.internal/mcp", Scope: []string{"im:message:send"}},
+			{Audience: agentjwt.AudCorp}, // scope 缺省=用户权限全量（拍板 4）
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	claims, err := f.signer.Parse(tok)
+	if len(tickets) != 2 {
+		t.Fatalf("应逐受众两张票: %d", len(tickets))
+	}
+
+	// 票1（生态受众）：验签→act/子集/sub；audience 字段保真
+	c1, err := f.agentVerifier.Verify(tickets[0].Token, "https://oa.company.internal/mcp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !claims.IsOBO() || claims.Actor.AgentSessionID != "as-77" {
-		t.Fatalf("act 声明缺失: %+v", claims)
+	if !c1.IsOBO() || c1.Actor.AgentSessionID != "as-77" {
+		t.Fatalf("act 声明缺失: %+v", c1)
 	}
-	if len(claims.Scope) != 1 || claims.Scope[0] != "im:message:send" {
-		t.Fatalf("OBO scope 应为申请子集: %v", claims.Scope)
+	if len(c1.Scope) != 1 || c1.Scope[0] != "im:message:send" {
+		t.Fatalf("OBO scope 应为申请子集: %v", c1.Scope)
 	}
-	if claims.Subject != "10001" {
-		t.Fatalf("sub 必须是用户本人: %s", claims.Subject)
+	if c1.Subject != "10001" {
+		t.Fatalf("sub 必须是用户本人: %s", c1.Subject)
+	}
+	if tickets[0].Audience != "https://oa.company.internal/mcp" || tickets[0].Exp != c1.ExpiresAt {
+		t.Fatalf("票元数据失真: %+v", tickets[0])
+	}
+
+	// 票2（保留名受众）：缺省全量（alice=3 权限点）
+	c2, err := f.agentVerifier.Verify(tickets[1].Token, agentjwt.AudCorp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c2.Scope) != 3 {
+		t.Fatalf("缺省 scope 应为用户全量(3): %v", c2.Scope)
+	}
+
+	// 票据代：同批同 TTL（齐进齐出，D38 拍板 9）
+	if tickets[0].Exp != tickets[1].Exp {
+		t.Fatalf("同批票应同 TTL: %d vs %d", tickets[0].Exp, tickets[1].Exp)
 	}
 }
 
@@ -285,16 +325,29 @@ func TestIssueOBOFailures(t *testing.T) {
 	f := newFixture(t, nil)
 	ctx := context.Background()
 
+	many := make([]authapi.OBOTarget, agentjwt.MaxAudiences+1)
+	for i := range many {
+		many[i] = authapi.OBOTarget{Audience: "https://x" + itoa(i) + ".internal/mcp"}
+	}
 	cases := []struct {
 		name     string
 		uid      int64
 		req      authapi.OBOReq
 		wantCode errx.Code
 	}{
-		{"scope 超集", 10001, authapi.OBOReq{AgentSessionID: "a", Scope: []string{"admin:org:manage"}}, errx.CodeAuthOBOScopeExceeded},
-		{"缺会话 ID", 10001, authapi.OBOReq{Scope: []string{"im:message:send"}}, errx.CodeBadRequest},
-		{"用户不存在", 99999, authapi.OBOReq{AgentSessionID: "a"}, errx.CodeNotFound},
-		{"用户禁用", 10002, authapi.OBOReq{AgentSessionID: "a"}, errx.CodeUserDisabled},
+		{"scope 超集", 10001, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{
+			{Audience: "https://oa.internal/mcp", Scope: []string{"admin:org:manage"}}}}, errx.CodeAuthOBOScopeExceeded},
+		{"缺会话 ID", 10001, authapi.OBOReq{Audiences: []authapi.OBOTarget{{Audience: agentjwt.AudCorp}}}, errx.CodeBadRequest},
+		{"缺 audiences", 10001, authapi.OBOReq{AgentSessionID: "a"}, errx.CodeBadRequest},
+		{"audience http 拒", 10001, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{
+			{Audience: "http://oa.internal/mcp"}}}, errx.CodeAuthAudienceInvalid},
+		{"audience 非保留名字串拒", 10001, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{
+			{Audience: "corp"}}}, errx.CodeAuthAudienceInvalid},
+		{"audience 重复拒", 10001, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{
+			{Audience: agentjwt.AudCorp}, {Audience: agentjwt.AudCorp}}}, errx.CodeAuthAudienceInvalid},
+		{"audience 超上限拒", 10001, authapi.OBOReq{AgentSessionID: "a", Audiences: many}, errx.CodeAuthAudienceInvalid},
+		{"用户不存在", 99999, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{{Audience: agentjwt.AudCorp}}}, errx.CodeNotFound},
+		{"用户禁用", 10002, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{{Audience: agentjwt.AudCorp}}}, errx.CodeUserDisabled},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -326,13 +379,30 @@ func TestIssueOBOKillswitch(t *testing.T) {
 	ctx := context.Background()
 
 	kill = true
-	if _, err := f.svc.IssueOBO(ctx, 10001, authapi.OBOReq{AgentSessionID: "as-k"}); errx.From(err).Code != errx.CodeAuthOBOKillswitch {
+	if _, err := f.svc.IssueOBO(ctx, 10001, authapi.OBOReq{AgentSessionID: "as-k",
+		Audiences: []authapi.OBOTarget{{Audience: agentjwt.AudCorp}}}); errx.From(err).Code != errx.CodeAuthOBOKillswitch {
 		t.Fatalf("总闸 on 应 1013: %v", err)
 	}
 	kill = false
-	if _, err := f.svc.IssueOBO(ctx, 10001, authapi.OBOReq{AgentSessionID: "as-k", Scope: []string{}}); err != nil {
+	if _, err := f.svc.IssueOBO(ctx, 10001, authapi.OBOReq{AgentSessionID: "as-k",
+		Audiences: []authapi.OBOTarget{{Audience: agentjwt.AudCorp}}}); err != nil {
 		t.Fatalf("总闸 off 应正常签发: %v", err)
 	}
+}
+
+// itoa 测试辅助（fmt 足够但避免为它引入；n<1000）
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [8]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
 }
 
 // TestChangePassword D11：旧密码错 1001/规则校验/成功清 must_change

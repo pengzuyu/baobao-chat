@@ -7,7 +7,6 @@ package oidc
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -24,6 +23,7 @@ import (
 	"golang.org/x/text/language"
 
 	authservice "github.com/baobaochat/server/internal/auth/service"
+	"github.com/baobaochat/server/internal/platform/agentjwt"
 	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
 
@@ -38,33 +38,27 @@ type Module struct {
 	deepLinkScheme string // 深链 scheme（D31；与客户端 brand.json 对齐，默认 bbc）
 }
 
-// New 装配 OIDC 模块。signingKeyPEM 为空时生成临时密钥并打警告（重启即换，
-// 已签 token 失效——仅限本地联调；生产必须配 BBC_OIDC_SIGNING_KEY）。
+// New 装配 OIDC 模块。signingKey 为单源装载的签名私钥（D38 批2：main 经
+// agentjwt.LoadKey 注入，未配置=开发态临时密钥+警告——agent 票与 OIDC 登录票
+// 同一把密钥，生态应用经 jwks 验 agent 票，双密钥即验签失配，不再各自兜底）。
 // brandName/deepLinkScheme 为 D31 白标参数（空回落 BaobaoChat/bbc）。
-func New(db *pgxpool.Pool, auth *authservice.Service, issuer, signingKeyPEM, brandName, deepLinkScheme string, defaultTenant int64) (*Module, error) {
+func New(db *pgxpool.Pool, auth *authservice.Service, issuer string, signingKey *ecdsa.PrivateKey, brandName, deepLinkScheme string, defaultTenant int64) (*Module, error) {
 	if brandName == "" {
 		brandName = "BaobaoChat"
 	}
 	if deepLinkScheme == "" {
 		deepLinkScheme = "bbc"
 	}
-	key, err := loadSigningKey(signingKeyPEM)
-	if err != nil {
-		return nil, err
+	if signingKey == nil {
+		return nil, errors.New("oidc: 签名密钥未装载（单源入口 agentjwt.LoadKey）")
 	}
+	key := signingKey
 	insecure := strings.HasPrefix(issuer, "http://")
-	if key == nil {
-		fmt.Println("[oidc] 警告：BBC_OIDC_SIGNING_KEY 未配置，使用临时密钥（重启后已签 token 失效；生产必须配置）")
-		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return nil, fmt.Errorf("oidc: 生成临时密钥: %w", err)
-		}
-	}
 	stor := newStorage(db, auth, key, defaultTenant)
 
 	cfg := &op.Config{
-		CryptoKey:                deriveCryptoKey(signingKeyPEM),
-		CryptoKeyId:              keyID,
+		CryptoKey:                deriveCryptoKey(key),
+		CryptoKeyId:              agentjwt.KidFor(&key.PublicKey),
 		CodeMethodS256:           true, // PKCE S256 强制（public client）
 		AuthMethodPost:           true,
 		GrantTypeRefreshToken:    true,

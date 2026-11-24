@@ -44,10 +44,25 @@ type RefreshReq struct {
 	DID          string `json:"did"`
 }
 
-// OBOReq OBO 签发请求（scope 必须是用户权限子集）
+// OBOTarget 单受众签发目标（D38 §3.3）：Audience=https:// URL（生态应用）或
+// 保留逻辑名（bbc-corp/bbc-aigw）；Scope 缺省（空）=用户权限全量（D38 拍板 4）
+type OBOTarget struct {
+	Audience string   `json:"aud"`
+	Scope    []string `json:"scope,omitempty"`
+}
+
+// AgentTicket 单张 agent 票（ES256，D38 §2 契约）：每受众一张、同批同 TTL（票据代）
+type AgentTicket struct {
+	Audience string   `json:"audience"`
+	Token    string   `json:"token"`
+	Exp      int64    `json:"exp"`
+	Scopes   []string `json:"scopes"`
+}
+
+// OBOReq agent 票批量签发请求（D38 §3.3；旧单票 scope 字段随单票制退役）
 type OBOReq struct {
-	AgentSessionID string   `json:"agent_session_id"`
-	Scope          []string `json:"scope"`
+	AgentSessionID string      `json:"agent_session_id"`
+	Audiences      []OBOTarget `json:"audiences"`
 }
 
 // TokenPair access + refresh（refresh 仅登录/刷新响应出现，其余接口只收 access）
@@ -64,7 +79,7 @@ type AuthService interface {
 	Login(ctx context.Context, req LoginReq) (*TokenPair, error)
 	Refresh(ctx context.Context, req RefreshReq) (*TokenPair, error)
 	Logout(ctx context.Context, userID int64, did string, all bool) error
-	IssueOBO(ctx context.Context, actorUserID int64, req OBOReq) (string, error)
+	IssueOBO(ctx context.Context, actorUserID int64, req OBOReq) ([]AgentTicket, error)
 	Verify(ctx context.Context, token string) (*authjwt.Claims, error) // gateway/httpx 装配用
 	// ChangePassword 改密（D11：旧密码校验→更新 hash→清 must_change）
 	ChangePassword(ctx context.Context, tenantID, userID int64, oldPwd, newPwd string) error

@@ -27,6 +27,7 @@ const (
 	CodeAuthOBOKillswitch    Code = 1013 // Agent 平台总闸（killswitch：OBO 签发/网关请求拒）
 	CodeAuthCodeInvalidDevice   Code = 1013 // code 已使用或非发起设备
 	CodeAuthSetupDone           Code = 1014 // 系统已初始化（setup 引导已关闭）
+	CodeAuthAudienceInvalid     Code = 1015 // agent 票受众非法（D38 §3.3 格式闸：非 https URL 且非保留名/重复/超上限/缺 audiences）
 )
 
 // ───────────────────────── 2xxx 组织/权限/租户（03 篇） ─────────────────────────

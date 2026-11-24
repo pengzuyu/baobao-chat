@@ -15,6 +15,7 @@ import (
 	"github.com/baobaochat/server/internal/auth/api"
 	"github.com/baobaochat/server/internal/auth/repo"
 	"github.com/baobaochat/server/internal/org/api"
+	"github.com/baobaochat/server/internal/platform/agentjwt"
 	"github.com/baobaochat/server/internal/platform/authjwt"
 	errx "github.com/baobaochat/server/internal/platform/errors"
 	"unicode"
@@ -42,6 +43,9 @@ type Options struct {
 	// OnPasswordChanged 改密成功后回调（D28 批3/Q3：oidc 模块挂全吊销——浏览器会话
 	// +全部应用 refresh/access/grant；main 经闭包注入，auth 不反向依赖 oidc）
 	OnPasswordChanged func(ctx context.Context, userID int64)
+	// AgentSigner agent 票签发器（D38 批2：ES256 单票制——platform/agentjwt 装配注入，
+	// 与 OIDC 登录票同一把签名密钥；nil=未装配 → IssueOBO 报内部错误）
+	AgentSigner *agentjwt.Issuer
 }
 
 func (o *Options) fillDefaults() {
@@ -292,44 +296,86 @@ func (s *Service) Logout(ctx context.Context, userID int64, did string, all bool
 	return s.tokens.RevokeForUser(ctx, userID, dev.ID, false)
 }
 
-// IssueOBO 签发 OBO：scope 必须为用户权限子集，超出即拒（不静默降级，03 篇 §6.2）
-func (s *Service) IssueOBO(ctx context.Context, actorUserID int64, req authapi.OBOReq) (string, error) {
+// IssueOBO 批量签发 agent 票（D38 §3.3，ES256 单票制）：每受众一张、同批同 TTL
+//（票据代齐进齐出）。aud 格式闸 1015（仅 https:// URL 或保留逻辑名）；target.Scope
+// 缺省 = 用户权限全量（D38 拍板 4），声明时必须为用户权限子集，超出即拒（1006，
+// 不静默降级，03 篇 §6.2 原则 2）。
+func (s *Service) IssueOBO(ctx context.Context, actorUserID int64, req authapi.OBOReq) ([]authapi.AgentTicket, error) {
 	if req.AgentSessionID == "" {
-		return "", errx.New(errx.CodeBadRequest, "agent_session_id 必填")
+		return nil, errx.New(errx.CodeBadRequest, "agent_session_id 必填")
+	}
+	if len(req.Audiences) == 0 {
+		return nil, errx.New(errx.CodeBadRequest, "audiences 必填")
+	}
+	if len(req.Audiences) > agentjwt.MaxAudiences {
+		return nil, errx.New(errx.CodeAuthAudienceInvalid, "audiences 超上限（≤32）")
+	}
+	// 格式闸 + 去重（D38 §3.3；签发方对 aud 只做格式校验，不查任何登记表）
+	seen := make(map[string]struct{}, len(req.Audiences))
+	for _, t := range req.Audiences {
+		if !agentjwt.ValidAudience(t.Audience) {
+			return nil, errx.NewWithDetails(errx.CodeAuthAudienceInvalid,
+				"audience 非法（仅 https:// URL 或保留逻辑名 bbc-corp/bbc-aigw）",
+				map[string]any{"aud": t.Audience})
+		}
+		if _, dup := seen[t.Audience]; dup {
+			return nil, errx.NewWithDetails(errx.CodeAuthAudienceInvalid, "audience 重复",
+				map[string]any{"aud": t.Audience})
+		}
+		seen[t.Audience] = struct{}{}
 	}
 	// 平台总闸（D9）：killswitch on → 拒新签发（1013；网关侧对存量 OBO 同拦）
 	if s.opts.AgentKillOn != nil && s.opts.AgentKillOn() {
-		return "", errx.New(errx.CodeAuthOBOKillswitch, "Agent 平台总闸已拉下（紧急停止）")
+		return nil, errx.New(errx.CodeAuthOBOKillswitch, "Agent 平台总闸已拉下（紧急停止）")
 	}
 	u, err := s.users.GetUser(ctx, actorUserID)
 	if err != nil {
-		return "", errx.New(errx.CodeNotFound, "用户不存在")
+		return nil, errx.New(errx.CodeNotFound, "用户不存在")
 	}
 	if u.Status != orgapi.UserStatusActive {
-		return "", errx.New(errx.CodeUserDisabled, "用户已禁用")
+		return nil, errx.New(errx.CodeUserDisabled, "用户已禁用")
 	}
-	eff := s.effectiveScopes(ctx, u) // OBO 子集校验同用有效权限点口径（角色授权同样生效）
+	eff := s.effectiveScopes(ctx, u) // 子集校验与全量默认同用有效权限点口径（角色授权同样生效）
 	owned := make(map[string]struct{}, len(eff))
 	for _, sc := range eff {
 		owned[sc] = struct{}{}
 	}
-	for _, sc := range req.Scope {
-		if _, ok := owned[sc]; !ok {
-			// 1006：申请权限 > 用户权限 → 签发失败（03 篇 §6.2 原则 2）
-			return "", errx.NewWithDetails(errx.CodeAuthOBOScopeExceeded, "OBO scope 超出用户权限",
-				map[string]any{"scope": sc})
-		}
+	if s.opts.AgentSigner == nil {
+		return nil, errx.New(errx.CodeInternal, "agent 票签发器未装配")
 	}
 	now := s.opts.Now()
-	return s.signer.Sign(authjwt.Claims{
-		Subject:   strconv.FormatInt(u.ID, 10),
-		TenantID:  u.TenantID,
-		Scope:     req.Scope,
-		JWTID:     authjwt.NewJTI(),
-		Actor:     &authjwt.Actor{AgentSessionID: req.AgentSessionID}, // act：动作可归因
-		IssuedAt:  now.Unix(),
-		ExpiresAt: now.Add(s.opts.OBOTTL).Unix(),
-	})
+	exp := now.Add(s.opts.OBOTTL)
+	tickets := make([]authapi.AgentTicket, 0, len(req.Audiences))
+	for _, t := range req.Audiences {
+		scope := t.Scope
+		if len(scope) == 0 {
+			scope = eff // D38 拍板 4：缺省全量（生态应用权限以 sub 为准，scope 仅可选收窄）
+		}
+		for _, sc := range scope {
+			if _, ok := owned[sc]; !ok {
+				// 1006：申请权限 > 用户权限 → 签发失败（03 篇 §6.2 原则 2）
+				return nil, errx.NewWithDetails(errx.CodeAuthOBOScopeExceeded, "OBO scope 超出用户权限",
+					map[string]any{"aud": t.Audience, "scope": sc})
+			}
+		}
+		tok, err := s.opts.AgentSigner.Sign(agentjwt.Claims{
+			Subject:   strconv.FormatInt(u.ID, 10),
+			TenantID:  u.TenantID,
+			Audience:  []string{t.Audience},
+			Scope:     scope,
+			Actor:     &agentjwt.Act{Sub: req.AgentSessionID}, // act：动作可归因（设备级，D38 拍板 11）
+			JWTID:     authjwt.NewJTI(),
+			IssuedAt:  now.Unix(),
+			ExpiresAt: exp.Unix(),
+		})
+		if err != nil {
+			return nil, errx.From(err)
+		}
+		tickets = append(tickets, authapi.AgentTicket{
+			Audience: t.Audience, Token: tok, Exp: exp.Unix(), Scopes: scope,
+		})
+	}
+	return tickets, nil
 }
 
 // Verify 令牌校验（gateway/中间件装配）

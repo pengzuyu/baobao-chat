@@ -67,6 +67,7 @@ import (
 	"github.com/baobaochat/server/internal/org/api"
 	"github.com/baobaochat/server/internal/org/repo"
 	orgservice "github.com/baobaochat/server/internal/org/service"
+	"github.com/baobaochat/server/internal/platform/agentjwt"
 	"github.com/baobaochat/server/internal/platform/authjwt"
 	"github.com/baobaochat/server/internal/platform/config"
 	errx "github.com/baobaochat/server/internal/platform/errors"
@@ -164,6 +165,22 @@ func main() {
 	orgMod := org.NewModule(orgRepo)
 	orgDeptScope := orgMod.DeptScopeAPI()
 	_ = orgDeptScope // D24：kb 部门通道已随两维度收口移除；保留 API 引用位（mail/后续域可复用）
+
+	// agent 票与 OIDC 单源签名密钥（D38 批2 拍板 1/7）：BBC_OIDC_SIGNING_KEY；
+	// 未配置 = 开发态临时密钥 + 警告（重启已签票失效）。单票制后生态应用经 jwks
+	// 验 agent 票，两把密钥即验签失配——不再允许 oidc/agentjwt 各自兜底
+	agentKey, agentKeyErr := agentjwt.LoadKey(cfg.OIDCSigningKey)
+	if agentKeyErr != nil {
+		log.Fatalf("签名密钥解析失败: %v", agentKeyErr)
+	}
+	if agentKey == nil {
+		agentKey, agentKeyErr = agentjwt.GenDevKey()
+		if agentKeyErr != nil {
+			log.Fatalf("开发态临时签名密钥生成失败: %v", agentKeyErr)
+		}
+		log.Println("[agentjwt] 警告：BBC_OIDC_SIGNING_KEY 未配置，使用临时密钥（重启后已签票失效；生产必须配置）")
+	}
+	agentSigner := agentjwt.NewIssuerWithKey(cfg.OIDCIssuer, agentKey)
 	// agentKillOn 平台总闸（D9）：adminSvc 装配于后段——var 前置声明，auth/aigw
 	// 两处闭包捕获引用，adminSvc 就绪后回填即双点生效（OBO 签发 + 网关每请求）
 	var agentKillOn func() bool
@@ -173,6 +190,8 @@ func main() {
 	authMod := auth.NewModule(orgMod.API(), signer, cfg, tokenRepo, deviceRepo, attemptRepo,
 		func(o *authservice.Options) {
 			o.ScopesOf = scopesOf
+			// agent 票签发器（D38 批2：ES256 单票制，与 OIDC 同一把密钥）
+			o.AgentSigner = agentSigner
 			// OBO 签发总闸（D9）：killswitch on → 1013 拒签（闭包捕获 var，adminSvc 装配后回填）
 			o.AgentKillOn = func() bool { return agentKillOn != nil && agentKillOn() }
 			// 改密落库（D11：orgRepo 直调——users 只读通道外的写路径经闭包）
@@ -363,7 +382,7 @@ func main() {
 	var oidcMod *oidc.Module
 	if pgPool != nil {
 		var oidcErr error
-		oidcMod, oidcErr = oidc.New(pgPool, authMod.Service(), cfg.OIDCIssuer, cfg.OIDCSigningKey, cfg.BrandName, cfg.DeepLinkScheme, bbcpg.DefaultTenantID)
+		oidcMod, oidcErr = oidc.New(pgPool, authMod.Service(), cfg.OIDCIssuer, agentKey, cfg.BrandName, cfg.DeepLinkScheme, bbcpg.DefaultTenantID)
 		if oidcErr != nil {
 			log.Fatalf("OIDC 模块装配失败: %v", oidcErr)
 		}
@@ -1612,12 +1631,12 @@ func handleOBO(svc authapi.AuthService) http.HandlerFunc {
 			httpx.Fail(w, r, errx.New(errx.CodeAuthTokenRevoked, "sub 非法"))
 			return
 		}
-		token, err := svc.IssueOBO(r.Context(), uid, req)
+		tickets, err := svc.IssueOBO(r.Context(), uid, req)
 		if err != nil {
 			httpx.Fail(w, r, err)
 			return
 		}
-		httpx.OK(w, r, map[string]string{"obo_token": token})
+		httpx.OK(w, r, map[string]any{"tokens": tickets})
 	}
 }
 

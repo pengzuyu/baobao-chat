@@ -1,78 +1,41 @@
 // Package oidc 实现 D28：bbc auth 对外的标准 OIDC Provider（zitadel/oidc v3 嵌入）。
-// keys.go：ES256 签名密钥装载（env PEM 单密钥，手工轮换=拍板 10①；kid 静态）。
+// keys.go：ES256 签名密钥适配（op.SigningKey 接口）。
+// 密钥装载已单源迁移 platform/agentjwt.LoadKey（D38 批2：agent 票与 OIDC 登录票
+// 同一把私钥——生态应用经 jwks 验 agent 票，双密钥即验签失配）；kid=公钥指纹
+// （拍板 7：轮换即换 kid，验证方缓存 miss → 重拉 jwks 自愈；旧固定串口径作废）。
 package oidc
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/pem"
-	"errors"
-	"fmt"
-	"strings"
 
 	jose "github.com/go-jose/go-jose/v4"
-)
 
-// keyID 静态 kid：手工轮换口径下换 env 私钥即换内容，kid 不需要区分新旧
-// （旧 token ≤15min 自然过期后 jwks 无需双密钥窗口——D28 §10 收缩候选①落定）。
-const keyID = "bbc-oidc-es256-1"
+	"github.com/baobaochat/server/internal/platform/agentjwt"
+)
 
 type esSigningKey struct{ key *ecdsa.PrivateKey }
 
 func (k esSigningKey) SignatureAlgorithm() jose.SignatureAlgorithm { return jose.ES256 }
-func (k esSigningKey) Key() any                                     { return k.key }
-func (k esSigningKey) ID() string                                   { return keyID }
+func (k esSigningKey) Key() any                                    { return k.key }
+func (k esSigningKey) ID() string                                  { return agentjwt.KidFor(&k.key.PublicKey) }
 
 type esPublicKey struct{ key *ecdsa.PrivateKey }
 
-func (k esPublicKey) ID() string                                   { return keyID }
-func (k esPublicKey) Algorithm() jose.SignatureAlgorithm           { return jose.ES256 }
-func (k esPublicKey) Use() string                                  { return "sig" }
-func (k esPublicKey) Key() any                                     { return &k.key.PublicKey }
+func (k esPublicKey) ID() string                         { return agentjwt.KidFor(&k.key.PublicKey) }
+func (k esPublicKey) Algorithm() jose.SignatureAlgorithm { return jose.ES256 }
+func (k esPublicKey) Use() string                        { return "sig" }
+func (k esPublicKey) Key() any                           { return &k.key.PublicKey }
 
-// loadSigningKey 解析 env 注入的 EC 私钥 PEM（EC PRIVATE KEY / PKCS8，P-256）。
-// 空串返回 (nil, nil) 由调用方决定开发态兜底；格式非法显式报错。
-//
-// 注入形态两种（2026-11-23 增补，部署便利）：
-//   - 原始多行 PEM（K8s Secret / 文件注入场景）；
-//   - **base64 包裹的单行**（compose .env 场景——.env 不支持多行值，部署包里
-//     由 scripts/release/gen-oidc-key.sh 生成即此形态）。判据=不含 PEM 头
-//     "-----BEGIN" 则尝试 base64 解码，解码失败仍按 PEM 原样尝试（报错口径不变）。
-func loadSigningKey(pemStr string) (*ecdsa.PrivateKey, error) {
-	if pemStr == "" {
-		return nil, nil
-	}
-	if !strings.Contains(pemStr, "-----BEGIN") {
-		if raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(pemStr)); err == nil {
-			pemStr = string(raw)
-		}
-	}
-	block, _ := pem.Decode([]byte(pemStr))
-	if block == nil {
-		return nil, errors.New("BBC_OIDC_SIGNING_KEY 不是合法 PEM（可传原始 PEM 或 base64 包裹单行）")
-	}
-	if k, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
-		if k.Curve != elliptic.P256() {
-			return nil, errors.New("OIDC 签名密钥须为 P-256（ES256）")
-		}
-		return k, nil
-	}
-	anyKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+// deriveCryptoKey op 库加密密钥（auth code 等对称加密用）：从签名私钥派生
+// sha256——单 key 双用途，轮换签名密钥即同步轮换加密密钥（code 60s 一次性，无兼容负担）。
+// （D38 批2：入参由 PEM 原文改为私钥对象——装载单源 agentjwt.LoadKey 后 module 不再持 PEM）
+func deriveCryptoKey(key *ecdsa.PrivateKey) [32]byte {
+	der, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("OIDC 签名密钥解析失败: %w", err)
+		// 私钥来自已解析对象，序列化不可能失败；失败即装配错误早暴露
+		panic("oidc: crypto key 派生: " + err.Error())
 	}
-	k, ok := anyKey.(*ecdsa.PrivateKey)
-	if !ok || k.Curve != elliptic.P256() {
-		return nil, errors.New("OIDC 签名密钥须为 P-256 EC 私钥（ES256）")
-	}
-	return k, nil
-}
-
-// deriveCryptoKey op 库加密密钥（auth code 等对称加密用）：从签名密钥 PEM 派生
-// sha256——单 env 双用途，轮换签名密钥即同步轮换加密密钥（code 60s 一次性，无兼容负担）。
-func deriveCryptoKey(pemStr string) [32]byte {
-	return sha256.Sum256([]byte("bbc-oidc-crypto|" + pemStr))
+	return sha256.Sum256(append([]byte("bbc-oidc-crypto|"), der...))
 }
