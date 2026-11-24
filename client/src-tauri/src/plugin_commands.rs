@@ -87,7 +87,7 @@ fn write_state(root: &PathBuf, state: &Value) -> Result<(), String> {
 /// 写入一个版本的全部文件并激活（D22 §5.2 安装/更新：先落版本目录、
 /// 全部成功才切 activeVersion——中途失败 state 不动，旧版不受影响）。
 /// finalize=false 只写文件（大批次分传的中间批）；缺省 true=写完切版。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn plugin_write_files(
     host: Host,
     plugin_id: String,
@@ -151,7 +151,7 @@ pub fn plugin_write_files(
 }
 
 /// 卸载：删插件整目录（keep_config=true 保留 config.json 与 state 骨架）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn plugin_remove_local(host: Host, plugin_id: String, keep_config: bool) -> Result<(), String> {
     let root = plugin_root(&host, &plugin_id)?;
     if !root.exists() {
@@ -175,7 +175,7 @@ pub fn plugin_remove_local(host: Host, plugin_id: String, keep_config: bool) -> 
 }
 
 /// 启用/禁用（禁用=装配剔除与专家翻译移除；目录与配置不动）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Result<(), String> {
     let root = plugin_root(&host, &plugin_id)?;
     if !root.exists() {
@@ -196,7 +196,7 @@ pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Resul
 }
 
 /// 本地态（已安装页对照：版本线/激活版/启禁/config 值——secret 经钥匙串回读）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn plugin_local_state(host: Host, plugin_id: String) -> Result<Value, String> {
     let root = plugin_root(&host, &plugin_id)?;
     if !root.exists() {
@@ -261,7 +261,7 @@ pub fn read_plugin_config(root: &std::path::Path) -> serde_json::Map<String, Val
 
 /// 写用户配置（D22 §6.1/L4：secret_keys 分流钥匙串——config.json 只存空串
 /// 占位，真值不落盘；非 secret 直写 config.json）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn plugin_write_config(
     host: Host,
     plugin_id: String,
@@ -322,7 +322,7 @@ fn fm_get<'a>(kvs: &'a [(String, String)], key: &str) -> Option<&'a str> {
 
 /// 命令清单（已启用插件 activeVersion 的 commands/*.md：name/description/
 /// 模板正文——前端 `/` 渲染 $ARGUMENTS/$1..$9）。非 Tauri 宿主返回空。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn plugin_commands_list(host: Host) -> Result<Value, String> {
     let plugins_dir = host.data_dir().join("eco/plugins");
     let Ok(rd) = fs::read_dir(&plugins_dir) else {

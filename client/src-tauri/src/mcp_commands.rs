@@ -179,7 +179,7 @@ pub fn read_personal_servers(data_dir: &std::path::Path) -> Vec<(String, Value)>
 }
 
 /// 清单（secret 值文件本就空串占位——不回显真值；usesIdentity 供 UI 警示）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_personal_list(host: Host) -> Result<Value, String> {
     Ok(read_doc(&host)["servers"].clone())
 }
@@ -187,7 +187,7 @@ pub fn mcp_personal_list(host: Host) -> Result<Value, String> {
 /// 新增/更新（name 为身份键——改名=新条目，前端编辑禁改 name）。
 /// secret_values：secretKeys 对应真值，空串=保持旧值不覆盖（同 plugin config 语义）。
 /// 不再 secret / 已删除的旧键 → 钥匙串条目清理。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_personal_upsert(
     host: Host,
     server: Value,
@@ -270,7 +270,7 @@ pub fn mcp_personal_upsert(
 }
 
 /// 删除（文件条目 + 该 server 全部钥匙串条目）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_personal_remove(host: Host, name: String) -> Result<(), String> {
     let mut doc = read_doc(&host);
     let arr = doc["servers"].as_array_mut().ok_or("personal.json 损坏")?;
@@ -297,7 +297,7 @@ pub fn mcp_personal_remove(host: Host, name: String) -> Result<(), String> {
 }
 
 /// 启用/禁用（定义不动；禁用=装配剔除，同插件启禁语义）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_personal_set_enabled(host: Host, name: String, enabled: bool) -> Result<(), String> {
     let mut doc = read_doc(&host);
     let arr = doc["servers"].as_array_mut().ok_or("personal.json 损坏")?;
@@ -317,7 +317,7 @@ pub fn mcp_personal_set_enabled(host: Host, name: String, enabled: bool) -> Resu
 /// REQ mcp.test 由 RT 一次性 McpConnection 执行，TLS/TOKEN 动态注入全走
 /// 生产路径；stdio 冷启动（node ~1s）由 REQ_TIMEOUT 15s 兜底）。
 /// 禁用条目也可测（先验证再启用的用法）。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn mcp_test_connection(host: Host, name: String) -> Result<Value, String> {
     let entry = read_doc(&host)["servers"]
         .as_array()

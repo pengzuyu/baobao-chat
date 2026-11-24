@@ -1088,23 +1088,23 @@ pub fn save_calendar(store: &Store, cache: CalendarCache) -> Result<(), String> 
 
 // ── Tauri 命令 ──────────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_list(rt: State<'_, Arc<Runtime>>) -> Result<Value, String> {
     Ok(rt.list())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_runs(rt: State<'_, Arc<Runtime>>, task_id: String) -> Result<Value, String> {
     Ok(rt.runs(&task_id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_create(rt: State<'_, Arc<Runtime>>, input: TaskInput) -> Result<Value, String> {
     let task = rt.create(input)?;
     Ok(json!({ "task": task }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_update(
     rt: State<'_, Arc<Runtime>>,
     id: String,
@@ -1114,13 +1114,13 @@ pub fn schedule_update(
     Ok(json!({ "task": task }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_delete(rt: State<'_, Arc<Runtime>>, id: String) -> Result<Value, String> {
     rt.delete(&id)?;
     Ok(json!({ "ok": true }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_set_enabled(
     rt: State<'_, Arc<Runtime>>,
     id: String,
@@ -1130,7 +1130,7 @@ pub fn schedule_set_enabled(
     Ok(json!({ "task": task }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_run_now(
     rt: State<'_, Arc<Runtime>>,
     host: State<'_, Arc<AgentHost>>,
@@ -1140,7 +1140,7 @@ pub fn schedule_run_now(
     Ok(json!({ "run": run }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_cancel_run(
     rt: State<'_, Arc<Runtime>>,
     host: State<'_, Arc<AgentHost>>,
@@ -1150,7 +1150,7 @@ pub fn schedule_cancel_run(
     Ok(json!({ "ok": true }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_sync_calendar(
     rt: State<'_, Arc<Runtime>>,
     host: State<'_, Arc<AgentHost>>,
@@ -1164,7 +1164,7 @@ pub fn schedule_sync_calendar(
     Ok(json!({ "year": year, "fetchedAt": fetched_at }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn schedule_calendar_status(rt: State<'_, Arc<Runtime>>) -> Result<Value, String> {
     Ok(json!({ "years": rt.store.calendar.status() }))
 }

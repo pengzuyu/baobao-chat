@@ -298,7 +298,7 @@ pub fn start(app: AppHandle, hub: Arc<ExtHub>, data_dir: PathBuf) {
 // ---------------------------------------------------------------------------
 
 /// 接入面状态（设置页「外部 Agent 接入」卡数据源）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ext_agent_status(hub: tauri::State<'_, Arc<ExtHub>>) -> Result<Value, String> {
     Ok(json!({
         "online": hub.online.load(std::sync::atomic::Ordering::SeqCst),
@@ -308,7 +308,7 @@ pub fn ext_agent_status(hub: tauri::State<'_, Arc<ExtHub>>) -> Result<Value, Str
 }
 
 /// 重新生成本机 token（=撤销既有授权：旧 token 立即 401；0600 重落盘）
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ext_agent_token_regen(
     hub: tauri::State<'_, Arc<ExtHub>>,
     host: tauri::State<'_, Arc<AgentHost>>,
