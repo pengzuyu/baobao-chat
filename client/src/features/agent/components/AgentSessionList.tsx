@@ -9,14 +9,18 @@
  *   （2026-11-19：**run 记录整块移出左栏**——子 agent 过程归右栏内容坞，按主会话
  *   归属/隔离；左栏只留会话本身）
  * - 顶部双入口：[+ 新建任务会话（任务区头）] [打开项目目录（项目区头，plugin-dialog 目录选择）]
- * - 会话项（2026-11-24 单行化）：状态点 + 跑马灯标题（超宽滚动）+ 状态 chip +
- *   行末相对时间——悬停时时间位切换为 重命名/删除 动作（行内编辑改名、删除弹危险确认）
+ * - 会话项（2026-11-24 单行化）：状态点 + 跑马灯标题（超宽悬停滚动——同日二修「不是
+ *   超宽就滚，鼠标放上去才滚」）+ 状态 chip + 行末相对时间——悬停时时间位切换为
+ *   重命名/删除 动作（行内编辑改名、删除弹危险确认）
  * - 六态由父层推导后传入（loading/empty/error/offline 走 StateView）
  * D26-O4：列表体→antd Menu（分组标签=分区头、SubMenu=项目分组、选中态=活跃会话），
  * 状态点→Badge、chip→Tag、失败条→Alert、底部链接内联化（agent-session-item/agent-proj-*
  * /agent-task-item/agent-sublink 等自研样式退役）。
  * 行高（2026-11-24 单行化改版）：此前双行 label（标题+时间上下两行）撑高整列表
- * （用户报修「列表高度太大」）——时间挪行末、悬停让位动作钮后单行收进 40px 定高项；
+ * （用户报修「列表高度太大」）——时间挪行末、悬停让位动作钮后单行化；同日二修
+ * 「40px 还是太高」：Menu token 会话项/加载更多/提示行收 28 定高 + 行距
+ * itemMarginBlock 2（antd 默认 4，40+4×2 实际行距 48）；项目行（SubMenu 标题）
+ * 单独 32（global.css .bbc-agent-menu 差分——600 字重项目名+行内双钮略高留呼吸）；
  * 各 label 统一 inline-flex + verticalAlign:middle + lineHeight 1.4 自管行高。
  * 会话折叠（2026-11-19 用户口径，历史会话长期占位）：项目分组/任务区默认只列最近
  * INITIAL_SESSION_LIMIT(5) 条，其余收成「加载更多（还有 N 条）」，每次点击再放
@@ -26,7 +30,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Badge, Flex, Input, Menu, Tag, Typography, theme } from 'antd';
+import { Alert, Badge, ConfigProvider, Flex, Input, Menu, Tag, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import { Bot, ChevronDown, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { AgentSessionMeta, AgentWorkspaceInfo } from '../bridge/types';
@@ -68,35 +72,46 @@ function statusTagColor(status: AgentSessionMeta['status']): string | undefined 
   }
 }
 
-/** 超宽标题跑马灯（2026-11-24 用户口径「超出宽度就滚动显示」）：溢出即循环滚动
- *  ——WAAPI transform（GPU 合成零重排），两端各驻留 12%；左栏拖宽经 ResizeObserver
- *  重测。未溢出=纯静态零开销。标题长度另有派生上限（store SESSION_TITLE_MAX），
+/** 超宽标题悬停滚动（2026-11-24 用户口径二修「不是超宽就滚，鼠标放上去才滚」）：
+ *  悬停且溢出才滚动——WAAPI transform（GPU 合成零重排），移出即 cancel 回起点；
+ *  两端各驻留 12%；左栏拖宽经 ResizeObserver 重测（悬停中拖宽也复测）。
+ *  未悬停/未溢出=纯静态零开销。标题长度另有派生上限（store SESSION_TITLE_MAX），
  *  跑马灯兜展示而非无限长文 */
 function MarqueeTitle({ text }: { text: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const animRef = useRef<Animation | null>(null);
+  const hoverRef = useRef(false);
+
+  /** 停动画并回起点（cancel 即移除 transform 效果） */
+  const stop = () => {
+    animRef.current?.cancel();
+    animRef.current = null;
+  };
+
+  /** 复测：仅「悬停中且溢出」起动画（鼠标进出与左栏拖宽都走这里） */
+  const setup = () => {
+    stop();
+    const el = ref.current;
+    if (!el || !hoverRef.current) return;
+    const overflow = el.scrollWidth - el.clientWidth;
+    if (overflow <= 2) return; // 未溢出：静态展示
+    // ~28px/s，钳 2.6~12s（超长标题滚得完，短溢出不闪卷）
+    const duration = Math.min(12_000, Math.max(2_600, (overflow / 28) * 1000));
+    animRef.current = el.animate(
+      [
+        { transform: 'translateX(0)', offset: 0 },
+        { transform: 'translateX(0)', offset: 0.12 }, // 起点驻留
+        { transform: `translateX(-${overflow}px)`, offset: 0.88 },
+        { transform: `translateX(-${overflow}px)`, offset: 1 }, // 终点驻留后回卷
+      ],
+      { duration, iterations: Infinity, easing: 'linear' },
+    );
+  };
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     let disposed = false;
-    const setup = () => {
-      animRef.current?.cancel();
-      animRef.current = null;
-      const overflow = el.scrollWidth - el.clientWidth;
-      if (overflow <= 2) return; // 未溢出：静态展示
-      // ~28px/s，钳 2.6~12s（超长标题滚得完，短溢出不闪卷）
-      const duration = Math.min(12_000, Math.max(2_600, (overflow / 28) * 1000));
-      animRef.current = el.animate(
-        [
-          { transform: 'translateX(0)', offset: 0 },
-          { transform: 'translateX(0)', offset: 0.12 }, // 起点驻留
-          { transform: `translateX(-${overflow}px)`, offset: 0.88 },
-          { transform: `translateX(-${overflow}px)`, offset: 1 }, // 终点驻留后回卷
-        ],
-        { duration, iterations: Infinity, easing: 'linear' },
-      );
-    };
-    setup();
     const ro = new ResizeObserver(() => {
       if (!disposed) setup();
     });
@@ -104,11 +119,23 @@ function MarqueeTitle({ text }: { text: string }) {
     return () => {
       disposed = true;
       ro.disconnect();
-      animRef.current?.cancel();
+      stop();
     };
   }, [text]);
+
   return (
-    <span ref={ref} style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}>
+    <span
+      ref={ref}
+      onMouseEnter={() => {
+        hoverRef.current = true;
+        setup();
+      }}
+      onMouseLeave={() => {
+        hoverRef.current = false;
+        stop();
+      }}
+      style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}
+    >
       {text}
     </span>
   );
@@ -556,19 +583,34 @@ export const AgentSessionList = memo(function AgentSessionList({
       </Flex>
       {createError ? <Alert type="error" showIcon message={createError} style={{ margin: '8px 12px 0' }} /> : null}
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '4px 0' }}>
-        <Menu
-          mode="inline"
-          style={{ borderInlineEnd: 'none' }}
-          // 子项缩进（2026-11-20 用户口径「项目里的会话离左边太远」）：rc-menu inline 模式
-          // 每层缩进 = level × inlineIndent，默认 24——项目分组下的会话是二级（level 1）
-          // 即 24px，观感离左缘过远；一级项恒为 0 不受影响，收 12 对齐 zcode 树形缩进
-          inlineIndent={12}
-          items={items}
-          selectedKeys={activeId ? [sessionKey(activeId)] : []}
-          openKeys={openKeys}
-          onOpenChange={onOpenChange}
-          onClick={onMenuClick}
-        />
+        <ConfigProvider
+          theme={{
+            components: {
+              Menu: {
+                // 行高（2026-11-24 用户口径「40px 太高」）：会话项/加载更多/提示行收
+                // 28 定高、行距 2（antd 默认 4——此前实际行距 40+4×2=48）；项目行
+                // （SubMenu 标题）共用此 token，global.css .bbc-agent-menu 单独差分 32
+                itemHeight: 28,
+                itemMarginBlock: 2,
+              },
+            },
+          }}
+        >
+          <Menu
+            mode="inline"
+            className="bbc-agent-menu"
+            style={{ borderInlineEnd: 'none' }}
+            // 子项缩进（2026-11-20 用户口径「项目里的会话离左边太远」）：rc-menu inline 模式
+            // 每层缩进 = level × inlineIndent，默认 24——项目分组下的会话是二级（level 1）
+            // 即 24px，观感离左缘过远；一级项恒为 0 不受影响，收 12 对齐 zcode 树形缩进
+            inlineIndent={12}
+            items={items}
+            selectedKeys={activeId ? [sessionKey(activeId)] : []}
+            openKeys={openKeys}
+            onOpenChange={onOpenChange}
+            onClick={onMenuClick}
+          />
+        </ConfigProvider>
       </div>
       <div
         style={{

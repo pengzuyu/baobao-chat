@@ -1110,3 +1110,13 @@ body.bbc-col-resizing {
   height: 100%;
   padding: 10px 12px 12px;
 }
+
+/* ─── 2026-11-24：工作台左栏会话菜单行高差分（AgentSessionList）───
+   ConfigProvider Menu token 已把会话项/加载更多/提示行收 28（itemHeight）+ 行距 2；
+   项目行是 SubMenu 标题、与会话项共用同一 token——单独回抬 32（600 字重项目名 +
+   行内双动作钮，28 会挤；用户口径「略微调小」）。选择器带元素限定压过 antd 同权
+   token 样式（inline 标题是 li.ant-menu-submenu > div.ant-menu-submenu-title） */
+.bbc-agent-menu li.ant-menu-submenu > div.ant-menu-submenu-title {
+  height: 32px;
+  line-height: 32px;
+}
