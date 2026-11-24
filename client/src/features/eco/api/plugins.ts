@@ -41,6 +41,8 @@ export interface PluginManifest {
   category?: string;
   netAllow?: string[];
   usesIdentity: boolean;
+  /** D38：统一身份受众清单（x-bbc-auth 声明的 server url——安装确认页目的地语料） */
+  authAudiences?: string[];
   configKeys?: string[];
   /** secret 型配置键（L4：客户端据此分流钥匙串） */
   configSecrets?: string[];
@@ -272,6 +274,25 @@ export async function installLocal(
   const ver = String(found.manifest.version ?? '');
   if (name !== pluginId || ver !== version) {
     throw new Error(`插件包对账失败：包内 ${name}@${ver} ≠ 请求 ${pluginId}@${version}`);
+  }
+  // D38 复跑安全校验（与 Go 发布校验器同口径——防中间篡改/旧服务端漏网）：
+  // url 只许打包写死（禁任何变量）；stdio 不可声明 x-bbc-auth
+  for (const [p, bytes] of Object.entries(files)) {
+    if (!p.endsWith('.mcp.json')) continue;
+    try {
+      const doc = JSON.parse(strFromU8(bytes)) as { mcpServers?: Record<string, { command?: string; url?: string; 'x-bbc-auth'?: unknown }> };
+      for (const [sn, srv] of Object.entries(doc.mcpServers ?? {})) {
+        if (srv.url?.includes('${')) {
+          throw new Error(`插件包被拒（D38）：MCP server ${sn} url 禁止引用变量（只许打包写死）`);
+        }
+        if (srv.command && srv['x-bbc-auth']) {
+          throw new Error(`插件包被拒（D38）：MCP server ${sn} 为 stdio 形态不可声明 x-bbc-auth`);
+        }
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('插件包被拒')) throw e;
+      // .mcp.json 非法 JSON 由服务端发布校验负责——复跑跳过（轻校验不重复报错形态）
+    }
   }
   // 组装传输清单（剥离顶层目录前缀；目录条目 unzipSync 已不含——只出文件）
   const payload = Object.entries(files)

@@ -631,7 +631,7 @@ export function AgentWorkbenchPage() {
               <Button variant="text" icon={<PanelLeftOpen size={16} aria-hidden />} onClick={() => setSessionsCollapsed(false)} title="展开会话列表" />
               <Button variant="text" icon={<Plus size={16} aria-hidden />} onClick={handleNewTask} title="新建任务会话" />
             </>
-          ) : listState === 'ok' || listState === 'empty' ? (
+          ) : listState === 'ok' ? ( // 空库也属 ok——三分区各自空提示（listState 无 'empty' 值，死比较清偿）
             /* 0 会话也直接给三分区列表（2026-11-23 用户口径「不应该是分项目/日常对话/任务
                三个栏吗」）：三分区各自带空提示（还没有项目→打开项目 / 日常对话来源说明 /
                任务区点 + 新建），此前空库走 StateView 空态卡，只留一个「新建任务会话」

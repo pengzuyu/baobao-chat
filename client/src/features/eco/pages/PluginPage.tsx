@@ -120,6 +120,8 @@ export function PluginPage() {
   const doInstall = (e: PluginEntry) => {
     // 权限确认（D22 §6.3：身份使用显著提示；force 免确认由服务端策略面控制，此处统一提示）
     const usesIdentity = e.manifest?.usesIdentity;
+    // D38：统一身份明示目的地（受众=生态应用端点）——「将以你的身份访问 X」
+    const audiences = e.manifest?.authAudiences ?? [];
     const net = e.manifest?.netAllow?.length ? `将访问：${e.manifest.netAllow.join('、')}` : '';
     const proceed = () => {
       setBusyId(e.plugin_id);
@@ -137,7 +139,12 @@ export function PluginPage() {
         title: `安装 ${e.name}？`,
         content: (
           <div>
-            {usesIdentity ? <div>⚠️ 该插件将以你的身份调用系统（自动注入登录凭证）</div> : null}
+            {usesIdentity ? (
+              <div>
+                ⚠️ 该插件将以你的身份调用系统（自动注入登录凭证）
+                {audiences.length ? <div style={{ marginTop: 4 }}>目的地：{audiences.join('、')}</div> : null}
+              </div>
+            ) : null}
             {net ? <div>{net}</div> : null}
           </div>
         ),

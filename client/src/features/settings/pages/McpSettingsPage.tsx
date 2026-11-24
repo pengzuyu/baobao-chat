@@ -238,6 +238,8 @@ function McpEditForm({ initial, onDone, onCancel }: { initial: PersonalMcpServer
   const [url, setUrl] = useState(initial.url ?? '');
   const [envRows, setEnvRows] = useState<KvRow[]>(rowsOf(initial.env, initial.secretKeys));
   const [headerRows, setHeaderRows] = useState<KvRow[]>(rowsOf(initial.headers, initial.secretKeys));
+  // D38：统一身份（HTTP 形态可选——以我的身份调用，宿主自动注入 agent 票，无需任何 key）
+  const [useIdentity, setUseIdentity] = useState(initial['x-bbc-auth']?.type === 'obo');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -291,6 +293,8 @@ function McpEditForm({ initial, onDone, onCancel }: { initial: PersonalMcpServer
           env: kind === 'stdio' ? kv : undefined,
           url: kind === 'http' ? url.trim() : undefined,
           headers: kind === 'http' ? kv : undefined,
+          'x-bbc-auth':
+            kind === 'http' && useIdentity ? { type: 'obo' as const } : undefined,
           secretKeys,
           note: note.trim() || undefined,
         },
@@ -327,7 +331,12 @@ function McpEditForm({ initial, onDone, onCancel }: { initial: PersonalMcpServer
         <Input style={{ width: 200 }} value={note} placeholder="备注（可选）" onChange={(e) => setNote(e.target.value)} />
       </Space>
       {kind === 'http' ? (
-        <Input style={{ width: 420 }} value={url} placeholder="https://mcp.example.com/mcp（或内网 http://…）" onChange={(e) => setUrl(e.target.value)} />
+        <>
+          <Input style={{ width: 420 }} value={url} placeholder="https://mcp.example.com/mcp（或内网 http://…）" onChange={(e) => setUrl(e.target.value)} />
+          <Checkbox checked={useIdentity} onChange={(e) => setUseIdentity(e.target.checked)}>
+            以我的身份调用（统一认证——自动注入登录凭证，应用无需发放任何 key/token）
+          </Checkbox>
+        </>
       ) : (
         <Space size={8} wrap>
           <Input style={{ width: 200 }} value={command} placeholder="命令（如 node / npx -y …）" onChange={(e) => setCommand(e.target.value)} />
@@ -341,7 +350,10 @@ function McpEditForm({ initial, onDone, onCancel }: { initial: PersonalMcpServer
         </Space>
       )}
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {kind === 'http' ? '请求头（鉴权如 Authorization / X-Api-Key；值支持 ${BBC_USER_TOKEN} 动态注入）' : '环境变量（值支持 ${BBC_USER_ID}/${BBC_USER_NAME}；TOKEN 不进子进程环境——HTTP-only）'}——勾选「密文」的值存钥匙串不落盘，留空=保持旧值
+        {kind === 'http'
+          ? '请求头（外部系统自带鉴权如 Authorization / X-Api-Key；${BBC_USER_TOKEN} 为旧写法仍兼容——推荐上方「以我的身份调用」；${CONFIG:key} 引插件/个人密钥）'
+          : '环境变量（值支持 ${BBC_USER_ID}/${BBC_USER_NAME}；TOKEN 不进子进程环境——stdio 无需任何令牌）'}
+        ——勾选「密文」的值存钥匙串不落盘，留空=保持旧值
       </Typography.Text>
       {rows.map((r, i) => (
         <Space key={i} size={8} align="center" wrap={false}>

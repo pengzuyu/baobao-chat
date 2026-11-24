@@ -20,8 +20,10 @@ export interface PersonalMcpServer {
   headers?: Record<string, string>;
   /** secret 值键名（文件存空串占位；真值钥匙串 account={name}/{key}） */
   secretKeys?: string[];
-  /** 任一值引用 ${BBC_USER_TOKEN}（壳侧保存时探测；UI 警示「将以你的身份调用」） */
+  /** 任一值引用 ${BBC_USER_TOKEN} 或声明 x-bbc-auth（D38；UI 警示「将以你的身份调用」） */
   usesIdentity?: boolean;
+  /** 统一身份声明（D38：HTTP 形态可选——以我的身份调用，宿主自动注入 agent 票） */
+  'x-bbc-auth'?: { type: 'obo' };
   note?: string;
   updatedAt?: number;
 }

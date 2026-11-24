@@ -47,7 +47,10 @@ type PluginManifest struct {
 	Risk        string   `json:"risk,omitempty"`      // low|medium|high（bbc.risk）
 	Category    string   `json:"category,omitempty"`   // bbc.category（pkg 元数据同步）
 	NetAllow    []string `json:"netAllow,omitempty"`   // v0.1 仅展示
-	UsesIdentity bool   `json:"usesIdentity"`          // .mcp.json 出现 ${BBC_USER_TOKEN}
+	UsesIdentity bool   `json:"usesIdentity"`          // .mcp.json 出现 ${BBC_USER_TOKEN} 或声明 x-bbc-auth（D38）
+	// AuthAudiences 统一身份受众清单（D38 §5：x-bbc-auth 声明的 server url——
+	// 安装确认页明示「将以你的身份访问…」的目的地）
+	AuthAudiences []string `json:"authAudiences,omitempty"`
 	ConfigKeys  []string `json:"configKeys,omitempty"` // bbc.config 声明（详情页配置表单）
 	// ConfigSecrets secret 型配置键（L4：客户端分流钥匙串存储的判定依据）
 	ConfigSecrets []string `json:"configSecrets,omitempty"`
@@ -88,6 +91,8 @@ type mcpServerRaw struct {
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env"`
 	Headers map[string]string `json:"headers"`
+	// XBbcAuth 统一身份声明（D38 §5：{"type":"obo","scope":[...]}；仅 HTTP 可声明）
+	XBbcAuth json.RawMessage `json:"x-bbc-auth"`
 }
 
 var (
@@ -252,6 +257,7 @@ func validatePluginPackage(pkg []byte) (*PluginManifest, []string, error) {
 	}
 
 	// MCP：内联对象或路径（缺省 .mcp.json）
+	authAudiences := []string{} // D38：x-bbc-auth 受众收集（确认页目的地语料）
 	mcpRaw := raw.McpServers
 	if s := rawString(mcpRaw); s != "" {
 		data, ok := files[join(s)]
@@ -291,10 +297,37 @@ func validatePluginPackage(pkg []byte) (*PluginManifest, []string, error) {
 			if srv.URL != "" && !strings.HasPrefix(srv.URL, "http://") && !strings.HasPrefix(srv.URL, "https://") {
 				return nil, nil, errx.New(errx.CodeBadRequest, "MCP server "+name+" url 须 http(s)://")
 			}
+			// D38 拍板 5：url 只许打包写死——禁止引用任何变量（票不可被引到用户可控地址）
+			if srv.URL != "" && strings.Contains(srv.URL, "${") {
+				return nil, nil, errx.New(errx.CodeBadRequest,
+					"MCP server "+name+" url 禁止引用变量（只许打包写死——D38 拍板 5）")
+			}
+			// x-bbc-auth 结构校验（D38 §5）：type=obo；stdio 不可声明（拍板 8）
+			if len(srv.XBbcAuth) > 0 && string(srv.XBbcAuth) != "null" {
+				if srv.Command != "" {
+					return nil, nil, errx.New(errx.CodeBadRequest,
+						"MCP server "+name+" 为 stdio 形态不可声明 x-bbc-auth（D38：stdio 永不需要令牌）")
+				}
+				var auth struct {
+					Type  string   `json:"type"`
+					Scope []string `json:"scope"`
+				}
+				if err := json.Unmarshal(srv.XBbcAuth, &auth); err != nil {
+					return nil, nil, errx.New(errx.CodeBadRequest, "MCP server "+name+" x-bbc-auth 解析失败: "+err.Error())
+				}
+				if auth.Type != "obo" {
+					return nil, nil, errx.New(errx.CodeBadRequest, "MCP server "+name+" x-bbc-auth.type 仅支持 obo")
+				}
+				if srv.URL != "" {
+					authAudiences = append(authAudiences, srv.URL)
+				}
+			}
 		}
 		m.Components.McpServers = len(servers)
 	}
-	m.UsesIdentity = reIdentityVar.MatchString(mcpText)
+	// 身份使用探测（D38 批6）：旧 ${BBC_USER_TOKEN} 占位 或 x-bbc-auth 声明
+	m.UsesIdentity = reIdentityVar.MatchString(mcpText) || len(authAudiences) > 0
+	m.AuthAudiences = authAudiences
 
 	// hooks：可解析即过（不执行）
 	if s := rawString(raw.Hooks); s != "" {

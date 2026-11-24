@@ -128,6 +128,28 @@ func TestValidatePluginPackage_Rejects(t *testing.T) {
 			m[".mcp.json"] = `{"mcpServers":{"x":{"args":["a"]}}}`
 			return m
 		}(), "command（stdio）或 url（HTTP）"},
+		// D38 拍板 5：url 只许打包写死——变量一律拒
+		{"url引用CONFIG", func() map[string]string {
+			m := fullPlugin(".bbc-plugin")
+			m[".mcp.json"] = `{"mcpServers":{"oa":{"url":"https://${CONFIG:oa_host}/mcp"}}}`
+			return m
+		}(), "url 禁止引用变量"},
+		{"url引用SERVER变量", func() map[string]string {
+			m := fullPlugin(".bbc-plugin")
+			m[".mcp.json"] = `{"mcpServers":{"oa":{"url":"https://${BBC_SERVER_URL}/mcp/oa"}}}`
+			return m
+		}(), "url 禁止引用变量"},
+		// D38 拍板 8：stdio 不可声明 x-bbc-auth
+		{"stdio声明auth", func() map[string]string {
+			m := fullPlugin(".bbc-plugin")
+			m[".mcp.json"] = `{"mcpServers":{"x":{"command":"node","x-bbc-auth":{"type":"obo"}}}}`
+			return m
+		}(), "stdio 形态不可声明 x-bbc-auth"},
+		{"auth类型非法", func() map[string]string {
+			m := fullPlugin(".bbc-plugin")
+			m[".mcp.json"] = `{"mcpServers":{"oa":{"url":"https://oa.internal/mcp","x-bbc-auth":{"type":"jwt"}}}}`
+			return m
+		}(), "x-bbc-auth.type 仅支持 obo"},
 		{"server名非法", func() map[string]string {
 			m := fullPlugin(".bbc-plugin")
 			m[".mcp.json"] = `{"mcpServers":{"bad name":{"command":"x"}}}`
@@ -187,6 +209,29 @@ func TestValidatePluginPackage_InlineMcp(t *testing.T) {
 	}
 	if m.Components.McpServers != 1 {
 		t.Fatalf("内联 server 计数错: %+v", m.Components)
+	}
+	if m.UsesIdentity {
+		t.Fatal("无身份声明不应标 usesIdentity")
+	}
+}
+
+// D38 §5：x-bbc-auth → 受众收集 + usesIdentity；URL 受众=目的地（确认页语料）
+func TestValidatePluginPackage_XBbcAuth(t *testing.T) {
+	pkg := map[string]string{
+		".bbc-plugin/plugin.json": `{"name":"oa-helper","version":"0.1.0","description":"OA",
+			"mcpServers":{"oa":{"url":"https://oa.company.internal/mcp","x-bbc-auth":{"type":"obo","scope":["oa:read"]}},
+			"ro":{"url":"https://hr.company.internal/mcp","x-bbc-auth":{"type":"obo"}}}}`,
+	}
+	m, _, err := validatePluginPackage(zipOf(t, pkg))
+	if err != nil {
+		t.Fatalf("x-bbc-auth 合法声明应通过: %v", err)
+	}
+	if !m.UsesIdentity {
+		t.Fatal("x-bbc-auth 应标 usesIdentity")
+	}
+	if len(m.AuthAudiences) != 2 || m.AuthAudiences[0] != "https://oa.company.internal/mcp" ||
+		m.AuthAudiences[1] != "https://hr.company.internal/mcp" {
+		t.Fatalf("受众收集错: %v", m.AuthAudiences)
 	}
 }
 
