@@ -1,7 +1,8 @@
 /**
  * 运行中打点动画（D08 §3.2 shimmer 行的会话流版：running 时加载指示 + 文案）。
- * D19 增 300ms tick 已用时计时（对齐 change-my-life Elapsed；计时起点=本段运行指示
- * 出现时刻，暂停/等待审批等状态切换会重挂载自然重置）。
+ * D19 增 300ms tick 已用时计时（对齐 change-my-life Elapsed）。
+ * 2026-11-24 修计时重置：起点改外传锚点 startedAt（回合起点=user.ts，store 持久）——
+ * 原实现起点=挂载时刻，切会话/切页面回来重挂载即归零；无锚点时回落挂载时刻（瞬态兜底）。
  * D26-O6：自研 typing-state 类退役——内联 token 容器 + antd Spin（动画由 antd 承载）。
  */
 
@@ -10,6 +11,8 @@ import { Spin, Typography } from 'antd';
 
 interface TypingStateProps {
   text?: string;
+  /** 计时锚点（ms 纪元）：传回合起点 user.ts——重挂载从锚点重算，不归零 */
+  startedAt?: number;
 }
 
 /** 毫秒 → 「12.3s」/「1分05秒」 */
@@ -20,8 +23,8 @@ function formatElapsed(ms: number): string {
   return `${m}分${String(s).padStart(2, '0')}秒`;
 }
 
-export const TypingState = memo(function TypingState({ text = 'Agent 正在处理' }: TypingStateProps) {
-  const [startedAt] = useState(() => Date.now());
+export const TypingState = memo(function TypingState({ text = 'Agent 正在处理', startedAt }: TypingStateProps) {
+  const [startedAtMs] = useState(() => (startedAt && startedAt > 0 ? startedAt : Date.now()));
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 300);
@@ -46,7 +49,7 @@ export const TypingState = memo(function TypingState({ text = 'Agent 正在处�
         {text}…
       </Typography.Text>
       <Typography.Text code style={{ fontSize: 11, flexShrink: 0 }}>
-        {formatElapsed(now - startedAt)}
+        {formatElapsed(now - startedAtMs)}
       </Typography.Text>
     </div>
   );

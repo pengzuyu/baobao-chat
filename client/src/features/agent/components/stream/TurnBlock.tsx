@@ -1,6 +1,8 @@
 /**
  * 回合容器（D33 §3.5 zcode 式平铺流）：
- * - 运行中：过程条目平铺全显示（思考/工具/技能/审批/子任务/中间正文），正文流式光标收尾
+ * - 运行中：过程条目平铺全显示（思考/工具/技能/审批/子任务/中间正文），正文流式光标收尾；
+ *   左下角实时总时长走秒（2026-11-24，锚 user.ts 重挂不归零）
+ * - 首段等待（无过程无正文）：TypingState 打点+已用时（同锚点）
  * - 收口：过程完整折叠为一行统计（✓ 用时 · N次LLM调用 · N次工具 · N个子agent——
  *   复用 stagesFromStream+agentStatsText 两端口径单一来源），正文常开；点击折叠行展开
  * - 未决审批/提问与 error 行强制展开（不可折叠藏起——口径延续自回合气泡时代）
@@ -8,10 +10,10 @@
  */
 
 import { memo, useMemo, useState, type ReactNode } from 'react';
-import { Typography, theme } from 'antd';
+import { Spin, Typography, theme } from 'antd';
 import { CheckCircle2, ChevronRight, Send } from 'lucide-react';
 import { MarkdownText } from '../../../../shared/components/MarkdownText';
-import { agentStatsText } from '../../../../shared/components/AgentProcessCard';
+import { agentStatsText, Elapsed } from '../../../../shared/components/AgentProcessCard';
 import { stagesFromStream } from '../../../im/agent/embedded';
 import { useAgentStore, type StreamItem } from '../../store/agent';
 import { ToolBlock } from './ToolBlock';
@@ -193,6 +195,9 @@ export const TurnBlock = memo(
      *  props 引用稳定时保留；切会话重挂即复位=可再发一条） */
     const [shared, setShared] = useState(false);
     const showProcess = active || expanded || hasBlocking;
+    // 运行计时锚点=回合起点 user.ts（store 持久，切会话/切页面重挂不归零；
+    // 旧行缺 ts=0 兜底挂载时刻，每回合只算一次防父级重渲漂移）
+    const turnStartedAt = useMemo(() => (user.ts > 0 ? user.ts : Date.now()), [user.ts]);
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
@@ -256,7 +261,15 @@ export const TurnBlock = memo(
             ) : null}
           </div>
         ) : null}
-        {active && processItems.length === 0 && !lastAnswer ? <TypingState text="Agent 正在处理" /> : null}
+        {active && processItems.length === 0 && !lastAnswer ? <TypingState text="Agent 正在处理" startedAt={turnStartedAt} /> : null}
+        {/* 运行总时长（2026-11-24，zcode 口径）：回合最左下角实时走秒——首段等待期
+            由 TypingState 兼带（有内容后它退场，本行顶上）；收口后由折叠行冻结用时接管 */}
+        {active && (lastAnswer !== null || processItems.length > 0) ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12, paddingInline: 4 }}>
+            <Spin size="small" aria-hidden style={{ marginInlineEnd: 6 }} />
+            用时 <Elapsed startedAt={turnStartedAt} />
+          </Typography.Text>
+        ) : null}
         {/* 发送到聊天（2026-11-20 修订：固定发到本会话对应的来源私聊/群聊，无选择）：
             回合收口且有最终回答才出现——右对齐轻量文字按钮；已发态翻文案禁用
             （组件态不持久化，刷新后可再发=有意再发一条） */}

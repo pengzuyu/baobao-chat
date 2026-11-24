@@ -182,8 +182,10 @@ function formatDuration(sec: number): string {
   return `${pad(Math.floor(s / 3600))}时${pad(Math.floor((s % 3600) / 60))}分${pad(s % 60)}秒`;
 }
 
-/** 实时已用时计时（300ms tick；仅运行中渲染） */
-function Elapsed({ startedAt }: { startedAt: number }) {
+/** 实时已用时计时（300ms tick；仅运行中渲染）。
+ *  2026-11-24 导出共享：工作台回合左下角运行总时长同款复用（锚点外传，
+ *  重挂载从锚点重算不归零） */
+export function Elapsed({ startedAt }: { startedAt: number }) {
   const [, force] = useState(0);
   useEffect(() => {
     const t = setInterval(() => force((v) => v + 1), 300);
