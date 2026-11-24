@@ -1,0 +1,60 @@
+diff --git a/agent/crates/bbrt-session/src/loop_runner.rs b/agent/crates/bbrt-session/src/loop_runner.rs
+index 4da463c..3f50552 100644
+--- a/agent/crates/bbrt-session/src/loop_runner.rs
++++ b/agent/crates/bbrt-session/src/loop_runner.rs
+@@ -32,8 +32,9 @@ pub const MAX_CONSECUTIVE_FAILURES: usize = 3;
+ /// 审批等待窗口（09 §4.1 ⑥；测试可注入更短值）
+ pub const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
+ 
+-/// 子任务同步等待窗（D16 决策④：探查/专家 120s 超窗转后台）
+-pub const SUBAGENT_WAIT_WINDOW: Duration = Duration::from_secs(120);
++/// 子任务同步等待窗（D16 决策④：探查/专家超窗转后台；2026-11-24 用户拍板
++/// 默认 120s→600s——真实调查任务 120s 普遍超窗转后台，本轮内看不到结果）
++pub const SUBAGENT_WAIT_WINDOW: Duration = Duration::from_secs(600);
+ 
+ /// run_command 同步等待阈值（hybrid：到点未完不杀，自动转后台返回任务 id
+ /// 保住执行进度——对齐 Claude Code「超时转后台」；用户拍板 300s 保持现状口径）
+@@ -319,7 +320,7 @@ pub struct SessionRunner {
+     pub permission_timeout: Duration,
+     /// D35 定时任务：无人值守——工具面剔除 ask_user + SYSTEM_PROMPT 追加约束
+     pub unattended: bool,
+-    /// 子任务同步等待窗（D16 决策④：探查/专家 spawn 后同步等 120s，
++    /// 子任务同步等待窗（D16 决策④：探查/专家 spawn 后同步等窗内 join，
+     /// 超窗转后台继续跑——摘要经 hub park 下一轮回填；测试注入更短值）
+     pub subagent_wait_window: Duration,
+     /// 后台任务中枢（D16 §5 后台化推广：探查/专家超窗与终端后台命令
+@@ -1411,7 +1413,7 @@ impl SessionRunner {
+                 summary: "缺少 run_id 参数".into(),
+             };
+         }
+-        // 默认 120s（对齐 SUBAGENT_WAIT_WINDOW），上限 3600s 防呆
++        // 缺省对齐 SUBAGENT_WAIT_WINDOW（600s），上限 3600s 防呆
+         let timeout_secs = v
+             .get("timeout_secs")
+             .and_then(|x| x.as_u64())
+diff --git a/agent/crates/bbrt-session/src/subagent.rs b/agent/crates/bbrt-session/src/subagent.rs
+index 62a9750..788bc3b 100644
+--- a/agent/crates/bbrt-session/src/subagent.rs
++++ b/agent/crates/bbrt-session/src/subagent.rs
+@@ -460,7 +461,7 @@ pub fn fanout_probes(
+             });
+     }
+     drop(tx); // 发送端全在子线程：全部结果到齐后 rx 自然 EOF
+-              // 等待窗（缺省 120s，SessionRunner.subagent_wait_window 注入）
++              // 等待窗（缺省 SUBAGENT_WAIT_WINDOW=600s，SessionRunner.subagent_wait_window 注入）
+     let deadline = std::time::Instant::now() + env.wait_window;
+     let mut results: Vec<ProbeResult> = Vec::with_capacity(total);
+     while results.len() < total {
+diff --git a/agent/crates/bbrt-tools/src/builtin/memory.rs b/agent/crates/bbrt-tools/src/builtin/memory.rs
+index 50355c6..ec77612 100644
+--- a/agent/crates/bbrt-tools/src/builtin/memory.rs
++++ b/agent/crates/bbrt-tools/src/builtin/memory.rs
+@@ -359,7 +359,7 @@ pub fn task_wait_def() -> ToolDef {
+             "type": "object",
+             "properties": {
+                 "run_id": {"type": "string", "description": "目标任务 id（agent-/terminal- 前缀）"},
+-                "timeout_secs": {"type": "integer", "description": "最长等待秒数（默认 120，上限 3600）"}
++                "timeout_secs": {"type": "integer", "description": "最长等待秒数（默认 600，上限 3600）"}
+             },
+             "required": ["run_id"]
+         }),
