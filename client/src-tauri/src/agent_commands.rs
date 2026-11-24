@@ -129,6 +129,14 @@ pub fn agent_stop(host: Host, session_id: String, reason: String) -> Result<Valu
     Ok(json!({ "ok": true }))
 }
 
+/// 会话删除（2026-11-24 工作台需求）：回合运行中 RT 拒 8002（先停止）；
+/// 整体清除运行态+持久层（事件 WAL/上下文/授权/审计/run 子表与审计文件），不可恢复
+#[tauri::command(async)]
+pub fn agent_delete_session(host: Host, session_id: String) -> Result<Value, String> {
+    host.delete_session(&session_id)?;
+    Ok(json!({ "ok": true }))
+}
+
 /// 紧急停止：杀 Runtime 进程组（D09 §4.6；killed/cancelled 由宿主拼装）
 #[tauri::command(async)]
 pub fn agent_emergency_stop(host: Host) -> Result<Value, String> {

@@ -647,6 +647,12 @@ pub enum HostToRuntime {
         reason: EndReason,
     },
 
+    /// 会话删除（2026-11-24 工作台需求；REQ→session.deleted）。回合进行中拒绝；
+    /// 删除=运行态收口 + 持久层整体清除（agent_session 及事件 WAL/上下文/会话级
+    /// 授权/审计索引/沙箱违规/run 子表 + 审计 JSONL 文件），不可恢复
+    #[serde(rename = "session.delete", rename_all = "camelCase")]
+    SessionDelete { session_id: String },
+
     /// agent 票发放/续签（NTF；D38 §3.5 票据代——全受众同批下发，齐进齐出；
     /// token 仅此通道，不过 WebView/不下发子进程）
     #[serde(rename = "obo.token", rename_all = "camelCase")]
@@ -1062,6 +1068,10 @@ pub enum RuntimeToHost {
     /// session.rename 回执（2026-11-11；落库后的最终标题）
     #[serde(rename = "session.renamed", rename_all = "camelCase")]
     SessionRenamed { session_id: String, title: String },
+
+    /// session.delete 回执（会话不存在回 Error 8001、回合进行中回 8002）
+    #[serde(rename = "session.deleted", rename_all = "camelCase")]
+    SessionDeleted { session_id: String },
 
     /// session.history 回执（seq 升序；空=无历史或会话不存在）。
     /// D36：lastUsage=WAL 最后一条 assistant.done 的用量（重启后输入框状态条恢复；

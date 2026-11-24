@@ -609,6 +609,31 @@ fn dispatch(
                 summary: String::new(),
             })
         }
+        // 会话删除（2026-11-24 工作台需求）：回合进行中拒绝；运行态收口 + 持久层
+        // 整体清除（manager.delete：子表/主表/审计文件）
+        HostToRuntime::SessionDelete { session_id } => match mgr.delete(&session_id) {
+            Ok(()) => Some(RuntimeToHost::SessionDeleted { session_id }),
+            Err(bbrt_session::manager::ManagerError::Busy(sid)) => Some(RuntimeToHost::Error {
+                code: 8002,
+                message: format!("会话回合进行中，请先停止后再删除: {sid}"),
+                fatal: false,
+                session_id: Some(sid),
+            }),
+            Err(bbrt_session::manager::ManagerError::NotFound(sid)) => {
+                Some(RuntimeToHost::Error {
+                    code: 8001,
+                    message: format!("会话不存在: {sid}"),
+                    fatal: false,
+                    session_id: Some(sid),
+                })
+            }
+            Err(e) => Some(RuntimeToHost::Error {
+                code: 9001,
+                message: e.to_string(),
+                fatal: false,
+                session_id: Some(session_id),
+            }),
+        },
         // 会话历史（工作台打开会话加载聊天记录）：直读 WAL——会话不须在运行态，
         // 历史/结束会话同样可查（与 rename 直落库同口径）
         HostToRuntime::SessionHistory { session_id } => {

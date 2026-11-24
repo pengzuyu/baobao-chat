@@ -271,6 +271,58 @@ impl Store {
         )?;
         Ok(())
     }
+
+    /// 会话整体删除（2026-11-24 session.delete）：单事务先清全部子表再删主表
+    /// （外键 NO ACTION 无级联，顺序反了会被 FK 拒）；agent_tool_grant 只清
+    /// scope=session 的行（permanent 是用户级资产，session_id 为 NULL 不受影响）。
+    /// 返回 agent_audit_meta 的审计 JSONL 路径供调用方删文件；
+    /// **None=会话不存在**（幂等判据，不报错）
+    pub fn delete_session(&self, session_id: &str) -> Result<Option<String>, StoreError> {
+        let audit_path: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT file_path FROM agent_audit_meta WHERE session_id = ?1",
+                params![session_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let existed = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM agent_session WHERE id = ?1",
+                params![session_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !existed {
+            return Ok(None);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM agent_event WHERE session_id = ?1", params![session_id])?;
+        tx.execute("DELETE FROM agent_context WHERE session_id = ?1", params![session_id])?;
+        tx.execute(
+            "DELETE FROM agent_tool_grant WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM agent_audit_meta WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM agent_sandbox_violation WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        // run 双挂（session_id=归属 / root_session_id=调用链根）两侧都清，
+        // 防根会话删除后残留指向已删会话的 run 行
+        tx.execute(
+            "DELETE FROM agent_run WHERE session_id = ?1 OR root_session_id = ?1",
+            params![session_id],
+        )?;
+        tx.execute("DELETE FROM agent_session WHERE id = ?1", params![session_id])?;
+        tx.commit()?;
+        Ok(audit_path)
+    }
 }
 
 /// session.list 协议行（D19；agent_session JOIN agent_workspace 投影，
@@ -295,6 +347,31 @@ pub struct SessionListRow {
 #[cfg(test)]
 mod tests {
     use crate::testutil;
+
+    /// 会话整体删除（2026-11-24 session.delete）：子表（事件 WAL）随删——外键
+    /// NO ACTION 下验证清除顺序不撞 FK；邻居会话行不受波及；再删幂等（不存在
+    /// 不报错，返回 None）
+    #[test]
+    fn delete_session_cascades_and_is_idempotent() {
+        let (_dir, store) = testutil::open_store();
+        testutil::seed_session(&store, "sess-d1");
+        store.append_event("sess-d1", 1, "turn.start", "{}").unwrap();
+        store
+            .append_event("sess-d1", 2, "user.text", r#"{"text":"hi"}"#)
+            .unwrap();
+        // 邻居：另一会话带自己的事件，删除不得波及
+        testutil::seed_session(&store, "sess-d2");
+        store.append_event("sess-d2", 1, "turn.start", "{}").unwrap();
+
+        store.delete_session("sess-d1").unwrap();
+        assert!(store.get_session("sess-d1").unwrap().is_none());
+        assert!(store.events_after("sess-d1", 0, 100).unwrap().is_empty());
+        // 幂等：会话已不存在，再删返回 None 不报错
+        assert_eq!(store.delete_session("sess-d1").unwrap(), None);
+        // 邻居完好（行与事件俱在）
+        assert!(store.get_session("sess-d2").unwrap().is_some());
+        assert_eq!(store.events_after("sess-d2", 0, 100).unwrap().len(), 1);
+    }
 
     /// 重命名：正常改名 / 截断超长 / 空白拒绝 / 不存在返回 0（2026-11-11）
     #[test]

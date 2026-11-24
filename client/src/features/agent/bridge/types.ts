@@ -284,6 +284,9 @@ export interface AgentBridge {
   interrupt(sessionId: string): Promise<void>;
   /** 会话重命名（agent_rename：RT 落库 + 宿主缓存同步；返回截断后的最终标题） */
   renameSession(sessionId: string, title: string): Promise<string>;
+  /** 删除会话（agent_delete_session→RT session.delete：回合运行中拒绝 8002；
+   *  整体清除运行态+持久层——聊天历史/运行记录/上下文等不可恢复，宿主缓存行同步移除） */
+  deleteSession(sessionId: string): Promise<void>;
   /** 结束会话（agent_stop，reason=user） */
   endSession(sessionId: string): Promise<void>;
   /** 会话历史（session.history 直读 WAL：打开会话加载聊天记录；空=无历史；

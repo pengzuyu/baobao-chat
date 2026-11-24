@@ -38,7 +38,7 @@ import { AgentStreamView } from '../components/stream/AgentStreamView';
 import type { PermissionDecision } from '../components/PermissionCard';
 import { ModelThinkPicker } from '../components/ModelThinkPicker';
 import { ContextUsageMeter } from '../components/ContextUsageMeter';
-import { convIdOfSession } from '../../im/agent/embedded';
+import { clearEmbeddedSessionId, convIdOfSession } from '../../im/agent/embedded';
 import { sendBotText } from '../../im/api/im';
 import { useImStore } from '../../im/store/im';
 import { Composer } from '../components/Composer';
@@ -396,6 +396,41 @@ export function AgentWorkbenchPage() {
     [respondPermission],
   );
 
+  /** 会话重命名（2026-11-24 行内编辑提交；store 落库+列表同步，失败 toast） */
+  const handleRenameSession = useCallback((id: string, title: string) => {
+    void useAgentStore.getState().renameSessionTitle(id, title).catch((err: unknown) => {
+      message.error(err instanceof Error ? err.message : '重命名失败');
+    });
+  }, []);
+
+  /** 会话删除（2026-11-24）：危险确认 → RT 整体清除（回合运行中会被拒）→ 本地
+   *  全清；embedded 来源同步解除 IM 映射（下次 @Agent 重建新会话）；删的是当前
+   *  打开的会话则回工作台空态 */
+  const handleDeleteSession = useCallback(
+    (id: string) => {
+      Modal.confirm({
+        title: '删除会话？',
+        content: '会话及其聊天记录、运行历史将整体删除，不可恢复。',
+        okText: '删除',
+        okButtonProps: { danger: true },
+        cancelText: '取消',
+        onOk: async () => {
+          try {
+            await useAgentStore.getState().deleteSession(id);
+          } catch (err: unknown) {
+            message.error(err instanceof Error ? err.message : '删除失败');
+            return;
+          }
+          void convIdOfSession(id)
+            .then((cid) => (cid ? clearEmbeddedSessionId(cid) : undefined))
+            .catch(() => undefined);
+          if (routeSessionId === id) navigate('/agent');
+        },
+      });
+    },
+    [routeSessionId, navigate],
+  );
+
   const status = activeSession?.status;
   // 停止=中断当前轮（2026-11-11）：有在跑的流/工具才显示（唯一入口=发送旁
   // Composer，2026-11-18 头部重复按钮退役）；paused=内部自动暂停
@@ -460,6 +495,8 @@ export function AgentWorkbenchPage() {
       createError={createError}
       onSelect={handleSelect}
       onNewTask={handleNewTask}
+      onRenameSession={handleRenameSession}
+      onDeleteSession={handleDeleteSession}
       onOpenProject={handleOpenProject}
       onNewProjectSession={openProjectSession}
       onForgetProject={forgetProjectById}

@@ -161,8 +161,14 @@ interface AgentState {
   /** 显式建会话并返回 meta（D18 内嵌卡：不切换 activeSessionId 之外还供 im 侧直接持有引用；
    *  title 可选初始标题——IM embedded 来源名「与xxx的对话」/「xxx · 群聊」；
    *  origin 场景来源（2026-11-23）：embedded 专用，runtime 注入场景段；
-   *  modelPolicy 档位（新建会话页草稿态，缺省 auto）） */
+   *  modelPolicy 档位（新建会话页草稿态，缺省 auto） */
   createSession: (opts?: { workspace?: string; mode?: PermissionMode; model?: string; modelPolicy?: 'fast' | 'strong' | 'auto'; title?: string; origin?: import('../bridge/types').SessionOriginInfo }) => Promise<import('../bridge/types').AgentSessionMeta>;
+  /** 手动重命名（2026-11-24 行内编辑提交；RT 落库回最终标题——显式名不受
+   *  首条消息占位派生覆盖） */
+  renameSessionTitle: (sessionId: string, title: string) => Promise<void>;
+  /** 删除会话（2026-11-24 agent_delete_session）：RT 整体清除 + 本地会话行/
+   *  流/模型表/右坞 tab 全清；activeSessionId 命中删除对象置 null（页面导航离开） */
+  deleteSession: (sessionId: string) => Promise<void>;
   /** 定向发送（D18：embedded 会话由 im 侧显式指定 sessionId，不依赖 activeSessionId；
    *  首条用户消息自动派生标题（占位判定 + renameSession 落库）） */
   sendTextTo: (sessionId: string, text: string) => Promise<void>;
@@ -317,12 +323,32 @@ function flushDeltaBuffer(): void {
   });
 }
 
-/** 标题派生（2026-11-11）：首行 trim、≤20 字截断加省略号；空白返回 null 不派生 */
+/** 标题上限（2026-11-24 用户口径：标题要有最大长度；左栏有跑马灯，30 字兼顾
+ *  信息量与列表整洁；重命名输入同限 60（RRT rename 回执口径）） */
+export const SESSION_TITLE_MAX = 30;
+
+/** 标题派生（2026-11-11 起；2026-11-24 智能化）：首个非空行 → 剥行首结构噪声
+ *  （markdown 标题/列表/引用/序号——「## 修复登录」「1. 先做X」这类起头不该进
+ *  标题）→ 超限时在后半窗找句读/空白边界收口（比硬切更可读），找不到才硬切加
+ *  省略号；空白返回 null 不派生 */
 export function deriveSessionTitle(text: string): string | null {
   const firstLine = text.split('\n').map((l) => l.trim()).find((l) => l.length > 0);
   if (!firstLine) return null;
-  const chars = [...firstLine];
-  return chars.length > 20 ? `${chars.slice(0, 20).join('')}…` : firstLine;
+  const cleaned =
+    firstLine
+      .replace(/^#{1,6}\s+/, '')
+      .replace(/^[-*+>•·]\s+/, '')
+      .replace(/^\d{1,3}[.、)]\s*/, '')
+      .trim() || firstLine;
+  const chars = [...cleaned];
+  if (chars.length <= SESSION_TITLE_MAX) return cleaned;
+  const window = chars.slice(0, SESSION_TITLE_MAX);
+  for (let i = window.length - 1; i >= Math.floor(SESSION_TITLE_MAX / 2); i -= 1) {
+    if ('。！？；，、．,.!?;: '.includes(window[i])) {
+      return chars.slice(0, i + 1).join('').trimEnd();
+    }
+  }
+  return `${window.join('')}…`;
 }
 
 /** 占位标题判定：'新会话'（DDL/前端缺省）/「会话 n」（宿主缓存）/title===id
@@ -522,6 +548,40 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       historyLoadedBySession: { ...s.historyLoadedBySession, [meta.id]: true },
     }));
     return meta;
+  },
+
+  renameSessionTitle: async (sid, title) => {
+    const t = title.trim();
+    if (!t) return;
+    try {
+      const finalTitle = await bridge.renameSession(sid, t);
+      set((s) => ({ sessions: touchSession(s.sessions, sid, { title: finalTitle || t }) }));
+    } catch {
+      // 桥失败本地先行（同标题派生口径：下次 listSessions 由库内真值校正）
+      set((s) => ({ sessions: touchSession(s.sessions, sid, { title: t }) }));
+    }
+  },
+
+  deleteSession: async (sid) => {
+    await bridge.deleteSession(sid);
+    set((s) => {
+      const prune = <T extends Record<string, unknown>>(rec: T): T => {
+        const next = { ...rec };
+        delete next[sid];
+        return next;
+      };
+      return {
+        sessions: s.sessions.filter((x) => x.id !== sid),
+        streams: prune(s.streams),
+        modelBySession: prune(s.modelBySession),
+        usageBySession: prune(s.usageBySession),
+        runsBySession: prune(s.runsBySession),
+        historyLoadedBySession: prune(s.historyLoadedBySession),
+        dockActiveBySession: prune(s.dockActiveBySession),
+        dockTabs: s.dockTabs.filter((t) => t.sessionId !== sid),
+        activeSessionId: s.activeSessionId === sid ? null : s.activeSessionId,
+      };
+    });
   },
 
   startSession: async (mode, model) => {

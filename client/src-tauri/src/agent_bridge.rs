@@ -908,6 +908,22 @@ impl AgentHost {
         Ok(json!({ "ok": true, "title": final_title }))
     }
 
+    /// 会话删除（2026-11-24 工作台需求）：session.delete REQ + 宿主缓存行移除
+    /// （list_sessions 缓存行优先于持久列表——不清则重启前列表仍见该行）
+    pub fn delete_session(&self, session_id: &str) -> Result<(), String> {
+        let rep = self.request("session.delete", json!({ "sessionId": session_id }))?;
+        if rep["type"] == "error" {
+            let msg = rep["message"].as_str().unwrap_or("runtime error");
+            return Err(format!("删除失败：{msg}"));
+        }
+        self.shared
+            .sessions
+            .lock()
+            .unwrap()
+            .retain(|s| s.id != session_id);
+        Ok(())
+    }
+
     /// 权限模式切换：本地会话行即时更新（UI 一致性）+ session.set_mode 下发
     /// runtime（补协议缺口——此前只本地记录，门控恒按 session.start 时的模式，
     /// 中途切档不生效）。mode 先校验，非法值不落本地也不下发

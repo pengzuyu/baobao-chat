@@ -342,6 +342,12 @@ export class MockAgentBridge implements AgentBridge {
     return t;
   }
 
+  async deleteSession(sessionId: string): Promise<void> {
+    await delay(120);
+    const i = this.sessions.findIndex((s) => s.id === sessionId);
+    if (i >= 0) this.sessions.splice(i, 1);
+  }
+
   async endSession(sessionId: string): Promise<void> {
     this.finishSession(sessionId, '会话已结束（用户主动结束）');
   }

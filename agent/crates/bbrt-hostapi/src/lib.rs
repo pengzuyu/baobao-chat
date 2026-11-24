@@ -95,6 +95,7 @@ const KNOWN_HOST_TYPES: &[&str] = &[
     "session.pause",
     "session.resume",
     "session.end",
+    "session.delete",
     "obo.token",
     "tools.reload",
     "ping",

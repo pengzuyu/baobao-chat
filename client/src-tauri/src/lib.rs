@@ -220,6 +220,7 @@ pub fn run() {
             agent_commands::agent_interrupt,
             agent_commands::agent_rename,
             agent_commands::agent_stop,
+            agent_commands::agent_delete_session,
             agent_commands::agent_emergency_stop,
             agent_commands::agent_approve,
             agent_commands::agent_reject,

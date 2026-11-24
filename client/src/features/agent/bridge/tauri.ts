@@ -221,6 +221,10 @@ export class TauriAgentBridge implements AgentBridge {
     return rep.title;
   }
 
+  async deleteSession(sessionId: string): Promise<void> {
+    await invoke('agent_delete_session', { sessionId });
+  }
+
   async endSession(sessionId: string): Promise<void> {
     await invoke('agent_stop', { sessionId, reason: 'user' });
   }

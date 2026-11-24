@@ -9,25 +9,26 @@
  *   （2026-11-19：**run 记录整块移出左栏**——子 agent 过程归右栏内容坞，按主会话
  *   归属/隔离；左栏只留会话本身）
  * - 顶部双入口：[+ 新建任务会话（任务区头）] [打开项目目录（项目区头，plugin-dialog 目录选择）]
- * - 会话项：状态点（●运行/◐等待/○暂停/✕错误/▪结束）+ 标题 + 相对时间 + 状态 chip
+ * - 会话项（2026-11-24 单行化）：状态点 + 跑马灯标题（超宽滚动）+ 状态 chip +
+ *   行末相对时间——悬停时时间位切换为 重命名/删除 动作（行内编辑改名、删除弹危险确认）
  * - 六态由父层推导后传入（loading/empty/error/offline 走 StateView）
  * D26-O4：列表体→antd Menu（分组标签=分区头、SubMenu=项目分组、选中态=活跃会话），
  * 状态点→Badge、chip→Tag、失败条→Alert、底部链接内联化（agent-session-item/agent-proj-*
  * /agent-task-item/agent-sublink 等自研样式退役）。
- * 行高（2026-11-17 高度重叠报修）：antd Menu 项定高 40px 且行高 40px 会向内层继承，
- * 双行 label（标题+时间）按 40px/行撑破定高项→裁切串行——各 label 统一 inline-flex +
- * verticalAlign:middle + lineHeight 1.4 自管行高，双行内容 ~36px 收进 40px 项内。
+ * 行高（2026-11-24 单行化改版）：此前双行 label（标题+时间上下两行）撑高整列表
+ * （用户报修「列表高度太大」）——时间挪行末、悬停让位动作钮后单行收进 40px 定高项；
+ * 各 label 统一 inline-flex + verticalAlign:middle + lineHeight 1.4 自管行高。
  * 会话折叠（2026-11-19 用户口径，历史会话长期占位）：项目分组/任务区默认只列最近
  * INITIAL_SESSION_LIMIT(5) 条，其余收成「加载更多（还有 N 条）」，每次点击再放
  * LOAD_MORE_STEP(10) 条；项目分组收起→展开重置回 5 条，左栏整体收起会卸载本组件、
  * 重新展开同样回到初始态（日常对话区不在本次折叠口径内）。
  */
 
-import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Badge, Flex, Menu, Tag, Typography, theme } from 'antd';
+import { Alert, Badge, Flex, Input, Menu, Tag, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
-import { Bot, ChevronDown, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Plus, Trash2 } from 'lucide-react';
+import { Bot, ChevronDown, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { AgentSessionMeta, AgentWorkspaceInfo } from '../bridge/types';
 import { SESSION_STATUS_LABELS } from '../bridge/types';
 import { Button } from '../../../shared/ui/Button';
@@ -66,6 +67,149 @@ function statusTagColor(status: AgentSessionMeta['status']): string | undefined 
   }
 }
 
+/** 超宽标题跑马灯（2026-11-24 用户口径「超出宽度就滚动显示」）：溢出即循环滚动
+ *  ——WAAPI transform（GPU 合成零重排），两端各驻留 12%；左栏拖宽经 ResizeObserver
+ *  重测。未溢出=纯静态零开销。标题长度另有派生上限（store SESSION_TITLE_MAX），
+ *  跑马灯兜展示而非无限长文 */
+function MarqueeTitle({ text }: { text: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const animRef = useRef<Animation | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let disposed = false;
+    const setup = () => {
+      animRef.current?.cancel();
+      animRef.current = null;
+      const overflow = el.scrollWidth - el.clientWidth;
+      if (overflow <= 2) return; // 未溢出：静态展示
+      // ~28px/s，钳 2.6~12s（超长标题滚得完，短溢出不闪卷）
+      const duration = Math.min(12_000, Math.max(2_600, (overflow / 28) * 1000));
+      animRef.current = el.animate(
+        [
+          { transform: 'translateX(0)', offset: 0 },
+          { transform: 'translateX(0)', offset: 0.12 }, // 起点驻留
+          { transform: `translateX(-${overflow}px)`, offset: 0.88 },
+          { transform: `translateX(-${overflow}px)`, offset: 1 }, // 终点驻留后回卷
+        ],
+        { duration, iterations: Infinity, easing: 'linear' },
+      );
+    };
+    setup();
+    const ro = new ResizeObserver(() => {
+      if (!disposed) setup();
+    });
+    ro.observe(el);
+    return () => {
+      disposed = true;
+      ro.disconnect();
+      animRef.current?.cancel();
+    };
+  }, [text]);
+  return (
+    <span ref={ref} style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}>
+      {text}
+    </span>
+  );
+}
+
+/** 会话行 label（2026-11-24 单行化）：状态点 + 💬来源标 + 跑马灯标题 + 状态 chip +
+ *  行末时间（悬停切换为 重命名/删除 动作位——WeChat 同款位复用，不额外占宽）。
+ *  重命名=行内编辑（Enter 提交/Esc 取消/失焦提交，限长 60 对齐 RT rename 截断）；
+ *  删除只触发回调，危险确认弹窗在页面层。origin=无 workspace 时的来源文案 */
+function SessionRowLabel({
+  s,
+  embedded,
+  origin,
+  onRename,
+  onDelete,
+}: {
+  s: AgentSessionMeta;
+  embedded: boolean;
+  origin: string;
+  onRename: (id: string, title: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const { token } = theme.useToken();
+  const [hover, setHover] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const commit = () => {
+    const t = draft.trim();
+    setEditing(false);
+    if (t && t !== s.title) onRename(s.id, t);
+  };
+
+  if (editing) {
+    return (
+      <span
+        onClick={(e) => e.stopPropagation()}
+        style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', width: '100%', lineHeight: 1.4 }}
+      >
+        <Input
+          size="small"
+          autoFocus
+          value={draft}
+          maxLength={60}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={(e) => e.target.select()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commit();
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              setEditing(false);
+            }
+          }}
+          onBlur={commit}
+          aria-label="重命名会话"
+        />
+      </span>
+    );
+  }
+  return (
+    <span
+      style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 8, minWidth: 0, width: '100%', lineHeight: 1.4 }}
+      title={`${s.title} · ${SESSION_STATUS_LABELS[s.status]} · ${s.workspace || origin}`}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <Badge status={statusBadge(s.status)} />
+      {embedded ? (
+        <span title="来自聊天会话（IM @Agent）" style={{ color: token.colorPrimary, display: 'inline-flex', flexShrink: 0 }}>
+          <Bot size={11} aria-hidden />
+        </span>
+      ) : null}
+      <MarqueeTitle text={s.title} />
+      <Tag color={statusTagColor(s.status)} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 4, flexShrink: 0 }}>
+        {SESSION_STATUS_LABELS[s.status]}
+      </Tag>
+      {hover ? (
+        <span style={{ display: 'inline-flex', gap: 2, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+          <Button
+            variant="text"
+            size="small"
+            icon={<Pencil size={12} aria-hidden />}
+            title="重命名"
+            onClick={() => {
+              setDraft(s.title);
+              setEditing(true);
+            }}
+          />
+          <Button variant="text" size="small" danger icon={<Trash2 size={12} aria-hidden />} title="删除会话（不可恢复）" onClick={() => onDelete(s.id)} />
+        </span>
+      ) : (
+        <Typography.Text type="secondary" style={{ fontSize: 11, flexShrink: 0, whiteSpace: 'nowrap' }}>
+          {formatListTime(s.updatedAt)}
+        </Typography.Text>
+      )}
+    </span>
+  );
+}
+
 /** 项目展示行（登记表行 ∪ 会话路径兜底行的统一形状） */
 interface ProjectGroup {
   /** 登记表 id（有则可移除；兜底行 undefined） */
@@ -91,6 +235,10 @@ interface AgentSessionListProps {
   onSelect: (id: string) => void;
   /** 新建任务会话（2026-11-11：任务区 + 按钮——不绑定目录的独立任务对话） */
   onNewTask: () => void;
+  /** 会话重命名（2026-11-24 行内编辑提交；store 落库+列表同步） */
+  onRenameSession: (id: string, title: string) => void;
+  /** 会话删除（2026-11-24；危险确认弹窗在页面层） */
+  onDeleteSession: (id: string) => void;
   /** 打开项目目录（项目区 + 按钮；页面层弹系统目录选择框，选完登记+建会话） */
   onOpenProject?: () => void;
   /** 在既有项目里新建会话 */
@@ -111,6 +259,8 @@ export const AgentSessionList = memo(function AgentSessionList({
   createError,
   onSelect,
   onNewTask,
+  onRenameSession,
+  onDeleteSession,
   onOpenProject,
   onNewProjectSession,
   onForgetProject,
@@ -208,33 +358,6 @@ export const AgentSessionList = memo(function AgentSessionList({
       <Button variant="text" size="small" icon={<Plus size={12} aria-hidden />} title={title} onClick={onClick} />
     ) : null;
 
-  /** 会话行 label（状态点 + 标题/时间两行 + 状态 chip）。origin=无 workspace 时的
-   *  来源文案（日常区=IM 来源 / 任务区=任务会话）；inline-flex 自管行高见文件头注 */
-  const sessionLabel = (s: AgentSessionMeta, origin = '日常对话（无工作目录）') => (
-    <span
-      style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 8, minWidth: 0, width: '100%', lineHeight: 1.4 }}
-      title={`${s.title} · ${SESSION_STATUS_LABELS[s.status]} · ${s.workspace || origin}`}
-    >
-      <Badge status={statusBadge(s.status)} />
-      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <span style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {embeddedIds.has(s.id) ? (
-            <span title="来自聊天会话（IM @Agent）" style={{ color: token.colorPrimary, display: 'inline-flex', marginRight: 3, verticalAlign: -1 }}>
-              <Bot size={11} aria-hidden />
-            </span>
-          ) : null}
-          {s.title}
-        </span>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {formatListTime(s.updatedAt)}
-        </Typography.Text>
-      </span>
-      <Tag color={statusTagColor(s.status)} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 4, flexShrink: 0 }}>
-        {SESSION_STATUS_LABELS[s.status]}
-      </Tag>
-    </span>
-  );
-
   /** 分区空态提示行（disabled 项承载次要文字） */
   const hintItem = (key: string, text: string): NonNullable<MenuProps['items']>[number] => ({
     key,
@@ -265,7 +388,19 @@ export const AgentSessionList = memo(function AgentSessionList({
   /** 会话子项折叠：只列前 N 条（初始 5 / 点过「加载更多」逐次 +10），其余收进「加载更多」 */
   const foldedSessionItems = (groupKey: string, list: AgentSessionMeta[], origin?: string): NonNullable<MenuProps['items']> => {
     const shown = list.slice(0, limitOf(groupKey));
-    const children: NonNullable<MenuProps['items']> = shown.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s, origin) }));
+    const children: NonNullable<MenuProps['items']> = shown.map((s) => ({
+      key: sessionKey(s.id),
+      title: s.title,
+      label: (
+        <SessionRowLabel
+          s={s}
+          embedded={embeddedIds.has(s.id)}
+          origin={origin ?? '日常对话（无工作目录）'}
+          onRename={onRenameSession}
+          onDelete={onDeleteSession}
+        />
+      ),
+    }));
     const remaining = list.length - shown.length;
     if (remaining > 0) children.push(moreItem(groupKey, remaining));
     return children;
@@ -345,7 +480,19 @@ export const AgentSessionList = memo(function AgentSessionList({
       children:
         chatSessions.length === 0
           ? [hintItem('hint:no-daily', '在私聊/群聊里 @Agent 或点聊天头 🤖 即产生对应会话')]
-          : chatSessions.map((s) => ({ key: sessionKey(s.id), title: s.title, label: sessionLabel(s, 'IM 来源 · 无工作目录') })),
+          : chatSessions.map((s) => ({
+              key: sessionKey(s.id),
+              title: s.title,
+              label: (
+                <SessionRowLabel
+                  s={s}
+                  embedded={embeddedIds.has(s.id)}
+                  origin="IM 来源 · 无工作目录"
+                  onRename={onRenameSession}
+                  onDelete={onDeleteSession}
+                />
+              ),
+            })),
     },
     {
       key: 'grp:tasks',

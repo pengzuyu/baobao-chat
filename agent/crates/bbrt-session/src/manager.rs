@@ -509,6 +509,35 @@ impl SessionManager {
         Ok(())
     }
 
+    /// session.delete（2026-11-24 工作台需求）：删除会话。回合进行中（runner 被
+    /// 回合线程借走=None）拒绝 Busy——硬删会丢未收口的轮；活跃空闲会话先按
+    /// end() 口径收口（runner 存档+路由清理），再整体清除持久层：子表行 +
+    /// agent_session 行 + 审计 JSONL 文件（路径出自 agent_audit_meta，文件删除
+    /// 失败忽略——行已删，残留文件无害）。会话不存在回 NotFound
+    pub fn delete(&self, session_id: &str) -> Result<(), ManagerError> {
+        if let Some(entry) = self.sessions.lock().unwrap().get(session_id).cloned() {
+            if entry.runner.lock().unwrap().is_none() {
+                return Err(ManagerError::Busy(session_id.into()));
+            }
+            self.end(session_id, "")?;
+        }
+        let Some(store) = &self.store else {
+            return Ok(()); // 无持久层（测试装配）：运行态已清即毕
+        };
+        match store
+            .lock()
+            .unwrap()
+            .delete_session(session_id)
+            .map_err(|e| ManagerError::Store(e.to_string()))?
+        {
+            Some(audit_file) => {
+                let _ = std::fs::remove_file(&audit_file);
+                Ok(())
+            }
+            None => Err(ManagerError::NotFound(session_id.into())),
+        }
+    }
+
     /// run 清单（D16 §3.1：runs.list REQ 数据源；None=全部会话）。
     /// agent_run 行 camelCase 序列化直出（协议 payload 口径）
     pub fn list_runs(&self, session_id: Option<&str>) -> Vec<serde_json::Value> {
