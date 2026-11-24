@@ -1581,20 +1581,10 @@ impl SessionRunner {
             }
             return self.run_ask_user(deps, call);
         }
-        // run_command 后台执行拦截（统一后台任务体系）：gate 放行后、execute 前
-        // ——审批流（NeedConfirm→Allow）天然汇入此处（exec_call 同参数）
-        if call.name == "run_command"
-            && serde_json::from_str::<serde_json::Value>(&call.args_json)
-                .ok()
-                .and_then(|v| v.get("background").and_then(|b| b.as_bool()))
-                .unwrap_or(false)
-        {
-            return self.run_command_background(deps, call);
-        }
         match deps.tools.check(self.cur_mode(), call) {
             CheckOutcome::Allow { source } => {
                 let _ = source;
-                self.execute_maybe_handoff(deps, call)
+                self.execute_allowed(deps, call)
             }
             CheckOutcome::Deny { code, message } => ToolOutcome::Blocked {
                 code,
@@ -1734,7 +1724,9 @@ impl SessionRunner {
                     }
                 };
                 match decision {
-                    Some(exec_call) => self.execute_maybe_handoff(deps, &exec_call),
+                    // 审批通过后同样走 execute_allowed：用户批准的命令若带
+                    // background:true 同样转后台（审批语义与同步路径一致）
+                    Some(exec_call) => self.execute_allowed(deps, &exec_call),
                     None => ToolOutcome::Blocked {
                         code: 8002,
                         summary: "用户拒绝或审批超时".into(),
@@ -1742,6 +1734,17 @@ impl SessionRunner {
                 }
             }
         }
+    }
+
+    /// gate 放行后的执行分派（缺口修复 2026-11-24）：run_command 带
+    /// background:true 转后台 spawn（统一后台任务体系），其余同步/hybrid。
+    /// 后台拦截原在 check 之前=后台命令免审直跑（ask 档 rm 也能 spawn）——
+    /// 现矩阵放行或用户批准后才 spawn，审批语义与同步路径完全一致
+    fn execute_allowed(&mut self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
+        if run_command_is_background(call) {
+            return self.run_command_background(deps, call);
+        }
+        self.execute_maybe_handoff(deps, call)
     }
 
     /// D20 ask_user：阻塞式提问。args={question 必填, header?, options:[{label,
@@ -2042,6 +2045,16 @@ fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {
         }
     }
     msgs
+}
+
+/// run_command 的 args.background 读取（非 run_command/解析失败 = false）。
+/// 仅执行分派用——门控判定不感知 background（同一命令同档位同结论）
+fn run_command_is_background(call: &ToolInvocation) -> bool {
+    call.name == "run_command"
+        && serde_json::from_str::<serde_json::Value>(&call.args_json)
+            .ok()
+            .and_then(|v| v.get("background").and_then(|b| b.as_bool()))
+            .unwrap_or(false)
 }
 
 /// WAL/事件内嵌 JSON 字符串转义（避免手拼破坏 JSON 结构）

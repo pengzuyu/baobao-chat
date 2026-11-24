@@ -2204,6 +2204,148 @@ fn run_command_sync_times_out_into_background() {
     assert!(done, "后台线程应落 done 终态含输出");
 }
 
+/// 缺口修复回归（2026-11-24）：run_command background:true 必须先过 gate——
+/// 原实现后台拦截在 check 之前=后台命令免审直跑（ask 档 rm 也能 spawn）。
+/// Deny 执行器下：命令被拒、无 terminal- 任务落库、spawn 不发生
+#[test]
+fn run_command_background_must_pass_gate() {
+    use std::sync::atomic::AtomicUsize;
+    let sink = Arc::new(CollectSink::default());
+    struct DenyTools {
+        checks: AtomicUsize,
+    }
+    impl ToolExecutor for DenyTools {
+        fn check(&self, _mode: PermissionMode, _call: &ToolInvocation) -> CheckOutcome {
+            self.checks.fetch_add(1, Ordering::SeqCst);
+            CheckOutcome::Deny {
+                code: 8002,
+                message: "缺少权限点 agent:tool:run_command".into(),
+            }
+        }
+        fn execute(&self, _mode: PermissionMode, _call: &ToolInvocation) -> ToolOutcome {
+            ToolOutcome::Ok {
+                summary: "不应走到同步执行".into(),
+                truncated: false,
+                exit_code: Some(0),
+                duration_ms: 0,
+            }
+        }
+        fn record_grant(
+            &self,
+            _m: PermissionMode,
+            _c: &ToolInvocation,
+            _s: GrantScope,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn tool_specs(&self) -> Vec<ToolSpec> {
+            vec![]
+        }
+        fn spawn_background(
+            &self,
+            _call: &ToolInvocation,
+        ) -> Result<bbrt_sec::sandbox::DetachedCommand, String> {
+            panic!("gate 拒绝后不得 spawn 后台命令");
+        }
+    }
+    struct BgDenyModel {
+        calls: AtomicUsize,
+    }
+    impl ChatClient for BgDenyModel {
+        fn chat(
+            &self,
+            _req: &ChatRequest,
+        ) -> Result<
+            Box<dyn Iterator<Item = Result<StreamEvent, bbrt_aigw::AigwError>> + Send>,
+            bbrt_aigw::AigwError,
+        > {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if n == 0 {
+                vec![
+                    Ok(StreamEvent::ToolCallBegin {
+                        index: 0,
+                        id: "call-bgd1".into(),
+                        name: "run_command".into(),
+                    }),
+                    Ok(StreamEvent::ToolCallDelta {
+                        index: 0,
+                        args_delta: r#"{"command":"rm -rf /tmp/x","background":true}"#.into(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish: FinishReason::ToolCalls,
+                        usage: Usage {
+                            prompt_tokens: 10,
+                            completion_tokens: 4,
+                            cached_tokens: None,
+                        },
+                        model: None,
+                    }),
+                ]
+            } else {
+                vec![Ok(StreamEvent::Done {
+                    finish: FinishReason::Stop,
+                    usage: Usage {
+                        prompt_tokens: 10,
+                        completion_tokens: 4,
+                        cached_tokens: None,
+                    },
+                    model: None,
+                })]
+            };
+            Ok(Box::new(events.into_iter()))
+        }
+    }
+    let tools = Arc::new(DenyTools {
+        checks: AtomicUsize::new(0),
+    });
+    let wal = Arc::new(BgStoreLog {
+        rows: Mutex::new(std::collections::HashMap::new()),
+        seq: AtomicUsize::new(0),
+    });
+    let d = LoopDeps {
+        model: Arc::new(BgDenyModel {
+            calls: AtomicUsize::new(0),
+        }),
+        tools: Arc::clone(&tools) as Arc<dyn ToolExecutor>,
+        memory: None,
+        wal: wal.clone(),
+        sink: sink.clone(),
+        skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
+        fanout: None,
+        experts: None,
+        budget: BudgetConfig::default(),
+    };
+    let mut runner = SessionRunner::new(
+        "s-bgd1".into(),
+        "/tmp/ws".into(),
+        PermissionMode::Ask,
+        ModelTier::Strong,
+        None,
+    );
+    let report = runner.run_turn("后台跑个删除", &d, None);
+    // gate 必须被咨询（原实现后台路径零 check）
+    assert!(
+        tools.checks.load(Ordering::SeqCst) >= 1,
+        "后台命令必须先过 gate"
+    );
+    // 无 terminal- 任务落库（spawn 未发生）
+    assert!(
+        !wal.rows
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|k| k.starts_with("terminal-")),
+        "gate 拒绝后不得 spawn 后台任务"
+    );
+    // 工具结果为拒（模型可感知并转告用户）
+    let evs = events_of(sink.as_ref());
+    assert!(
+        evs.iter()
+            .any(|e| matches!(e, SessionEvent::ToolResult { ok: false, .. })),
+        "应回工具失败结果: {report:?}"
+    );
+}
+
 /// task.wait 对 terminal 任务：已完成立即返回 [命令完成·done] + 输出
 #[test]
 fn task_wait_terminal_task_returns_output() {
