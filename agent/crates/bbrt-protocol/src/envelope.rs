@@ -353,6 +353,14 @@ pub enum HistoryItem {
     /// 同一词。D33 思考回放批次：纯聊天轮过程区不再重开即丢）
     #[serde(rename = "reasoning")]
     Reasoning { text: String },
+    /// 回合错误（turn.error WAL 行投影：8011 模型不可用/流中断、8010 超限等——
+    /// 重开回放保留错误卡，用户能看到 agent 为何没回复；旧 WAL 行无此类型）
+    #[serde(rename = "error", rename_all = "camelCase")]
+    Error {
+        code: u32,
+        message: String,
+        fatal: bool,
+    },
     #[serde(rename = "tool", rename_all = "camelCase")]
     // 变体级：enum 级 rename_all 只管变体名不管字段
     Tool {

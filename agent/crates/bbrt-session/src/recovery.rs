@@ -231,7 +231,8 @@ pub fn ready_event(session_id: &str, report: &ReplayReport) -> SessionEvent {
 /// user.text/assistant.done 落原文；tool.call+tool.result 按 call_id 配对
 /// （ok/summary 旧行可缺 → name-only）。审批/澄清卡是即时交互不入历史。
 /// turn.start/end 行的 created_at 配对盖 user 条目 ts/turnDoneAt——折叠统计行
-/// 冻结用时回放还原；assistant.thinking → Reasoning（D33 思考回放批次）。
+/// 冻结用时回放还原；assistant.thinking → Reasoning（D33 思考回放批次）；
+/// turn.error → Error（2026-11-23：错误卡重开保留）。
 pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
     let mut items: Vec<HistoryItem> = Vec::new();
     let mut turn_started_at: Option<i64> = None;
@@ -272,6 +273,15 @@ pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
                         items.push(HistoryItem::Assistant { text });
                     }
                 }
+            }
+            // 回合错误（2026-11-23 修「错误信息不保留」）：重开回放错误卡，
+            // 用户能看到 agent 为何没回复（模型不可用/流中断/超限等）
+            "turn.error" => {
+                items.push(HistoryItem::Error {
+                    code: payload.get("code").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                    message: str_field("message").unwrap_or_default(),
+                    fatal: payload.get("fatal").and_then(|x| x.as_bool()).unwrap_or(false),
+                });
             }
             "tool.call" => items.push(HistoryItem::Tool {
                 call_id: str_field("call_id").unwrap_or_default(),
@@ -553,6 +563,51 @@ mod history_tests {
                     text: "结论如下".into()
                 },
             ]
+        );
+    }
+
+    /// 2026-11-23 修「错误信息不保留」：turn.error → Error——错误轮重开回放
+    /// 错误卡（用户能看到 agent 为何没回复）；旧行缺 code/fatal 字段降级
+    #[test]
+    fn wal_history_projects_turn_error() {
+        let events = vec![
+            ev_at(1, 1_000, "turn.start", r#"{"text_len":6}"#),
+            ev(2, "user.text", r#"{"text":"帮我查下"}"#),
+            ev(
+                3,
+                "turn.error",
+                r#"{"code":8011,"message":"模型不可用: 网关连接失败","fatal":false}"#,
+            ),
+            ev_at(
+                4,
+                4_000,
+                "turn.end",
+                r#"{"steps":1,"paused":false,"interrupted":false}"#,
+            ),
+        ];
+        assert_eq!(
+            wal_history(&events),
+            vec![
+                HistoryItem::User {
+                    text: "帮我查下".into(),
+                    ts: Some(1_000),
+                    turn_done_at: Some(4_000),
+                },
+                HistoryItem::Error {
+                    code: 8011,
+                    message: "模型不可用: 网关连接失败".into(),
+                    fatal: false,
+                },
+            ]
+        );
+        // 旧行缺 code/fatal → 0/false 降级不 panic
+        assert_eq!(
+            wal_history(&[ev(1, "turn.error", r#"{"message":"legacy 行"}"#)]),
+            vec![HistoryItem::Error {
+                code: 0,
+                message: "legacy 行".into(),
+                fatal: false,
+            }]
         );
     }
 

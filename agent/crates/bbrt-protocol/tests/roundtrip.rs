@@ -1293,6 +1293,11 @@ fn golden_session_history_messages() {
                 HistoryItem::Assistant {
                     text: "已修复".into(),
                 },
+                HistoryItem::Error {
+                    code: 8011,
+                    message: "模型不可用: 网关连接失败".into(),
+                    fatal: false,
+                },
             ],
             last_usage: None,
         },
@@ -1303,7 +1308,8 @@ fn golden_session_history_messages() {
                 {"kind":"user","text":"修复登录超时","ts":1000,"turnDoneAt":8000},
                 {"kind":"reasoning","text":"先看超时阈值再查连接池"},
                 {"kind":"tool","callId":"c1","tool":"read_file","ok":true,"summary":"42 行"},
-                {"kind":"assistant","text":"已修复"}
+                {"kind":"assistant","text":"已修复"},
+                {"kind":"error","code":8011,"message":"模型不可用: 网关连接失败","fatal":false}
             ]
         }),
     );

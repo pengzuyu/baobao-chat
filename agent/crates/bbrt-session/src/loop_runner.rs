@@ -794,6 +794,7 @@ impl SessionRunner {
                             message: "压缩后仍超上下文上限".into(),
                             fatal: true,
                         });
+                        wal_turn_error(deps, &self.session_id, 8010, "压缩后仍超上下文上限", true);
                         // 2026-11-11：错误收口 idle（时间线已留 Error 卡）——旧口径
                         // 转 paused 会卡死（resume 通道已随「停止」口径移除），用户无法重试
                         break;
@@ -881,6 +882,7 @@ impl SessionRunner {
                         message: format!("模型不可用: {e}"),
                         fatal: false,
                     });
+                    wal_turn_error(deps, &self.session_id, 8011, &format!("模型不可用: {e}"), false);
                     // 模型失败收口 idle：时间线留错误卡，会话可换模型/重发即重试
                     break;
                 }
@@ -958,6 +960,13 @@ impl SessionRunner {
                     message: format!("流中断（{detail}），已产出内容不重放（08 §4.6）"),
                     fatal: false,
                 });
+                wal_turn_error(
+                    deps,
+                    &self.session_id,
+                    8011,
+                    &format!("流中断（{detail}），已产出内容不重放（08 §4.6）"),
+                    false,
+                );
                 // 同 8011：错误收口 idle 可重试（旧 paused 卡死）
                 break;
             }
@@ -1151,6 +1160,7 @@ impl SessionRunner {
                         message: "连续工具失败超限，本轮终止".into(),
                         fatal: false,
                     });
+                    wal_turn_error(deps, &self.session_id, 8021, "连续工具失败超限，本轮终止", false);
                     // 错误收口 idle（同 8010/8011 口径，避免 paused 卡死）
                     break;
                 }
@@ -2070,6 +2080,18 @@ fn pick_tools(
 
 fn emit(deps: &LoopDeps, session_id: &str, f: impl FnOnce(String) -> SessionEvent) {
     deps.sink.emit(f(session_id.to_string()));
+}
+
+/// 回合错误落 WAL（turn.error 行：8011 模型不可用/流中断、8010 超限、8021 等）。
+/// 与 emit 的实时 NTF 并行——错误卡重开回放保留（session.history 投影
+/// HistoryItem::Error），用户重进会话能看到 agent 为何没回复；
+/// recover() 重放忽略该行（错误给用户看，不进模型上下文）。
+fn wal_turn_error(deps: &LoopDeps, session_id: &str, code: u32, message: &str, fatal: bool) {
+    deps.wal.append(
+        session_id,
+        "turn.error",
+        &serde_json::json!({ "code": code, "message": message, "fatal": fatal }).to_string(),
+    );
 }
 
 // ---------------------------------------------------------------------------

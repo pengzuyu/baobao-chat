@@ -79,8 +79,9 @@ export type StreamItem =
       summary?: string;
     }
   | { kind: 'system'; key: string; text: string }
-  /** 错误卡（error NTF 投影：8011 模型不可用/流中断、8010 超限等；不进 WAL——
-   *  刷新/重开后消失，仅当轮提示重发/换模型可重试） */
+  /** 错误卡（error NTF 投影：8011 模型不可用/流中断、8010 超限等；2026-11-23 起
+   *  随 turn.error WAL 行持久化——重开会话回放保留，用户能看到 agent 为何没回复；
+   *  旧 WAL 行无此类型，历史错误轮照旧只剩用户消息） */
   | { kind: 'error'; key: string; code: number; message: string; fatal: boolean };
 
 /**
@@ -343,6 +344,8 @@ function historyToStreamItem(sid: string, it: HistoryItem, i: number): StreamIte
       return { kind: 'agentText', key: `h-a${i}`, text: it.text, streaming: false };
     case 'reasoning':
       return { kind: 'reasoning', key: `h-r${i}`, text: it.text, streaming: false };
+    case 'error':
+      return { kind: 'error', key: `h-e${i}`, code: it.code, message: it.message, fatal: it.fatal };
     case 'tool':
       return {
         kind: 'tool',
