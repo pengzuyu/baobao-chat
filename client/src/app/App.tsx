@@ -359,6 +359,8 @@ export function App() {
         <Route path="/apps" element={<AppStorePage />} />
         {/* Agent 工作台域（D08）：PAG-01/02/03 工作台（记忆/日报页已退役——平台后台组织，不做用户浏览面） */}
         <Route path="/agent" element={<AgentWorkbenchPage />} />
+        {/* 新建会话页（2026-11-23 懒创建）：?workspace=项目路径=项目新建，缺省=任务新建 */}
+        <Route path="/agent/new" element={<AgentWorkbenchPage />} />
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />
         <Route path="/agent/schedules" element={<SchedulesPage />} />
         <Route path="/agent/plugins" element={<PluginPage />} />

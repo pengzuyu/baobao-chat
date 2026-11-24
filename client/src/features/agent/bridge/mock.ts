@@ -216,7 +216,7 @@ export class MockAgentBridge implements AgentBridge {
     return [...this.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, _origin?: import('./types').SessionOriginInfo): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, _origin?: import('./types').SessionOriginInfo, modelPolicy: 'fast' | 'strong' | 'auto' = 'auto'): Promise<AgentSessionMeta> {
     await delay(200);
     // D19：项目会话自动登记（对齐 bbrt manager.start 的 realpath upsert 行为）
     if (workspace) {
@@ -242,7 +242,7 @@ export class MockAgentBridge implements AgentBridge {
       title: title?.trim() || '新会话',
       workspace,
       mode,
-      modelPolicy: 'auto',
+      modelPolicy,
       modelOverride: model,
       status: 'idle',
       createdAt: Date.now(),

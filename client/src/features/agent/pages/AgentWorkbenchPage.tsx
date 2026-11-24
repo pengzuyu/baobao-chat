@@ -1,7 +1,9 @@
 /**
  * PAG-01/02/03 Agent 工作台（/agent[/s/:sessionId]，D08 §3.1/§3.3）：
  * - 左：会话列表（窄栏 + 新建 + 二级导航入口；2026-11-19 起 run 记录不再进左栏）
- * - 中：会话视图（头部状态徽标 + 会话流 + 输入区；停止唯一入口=发送旁）
+ * - 中：会话视图（头部状态徽标 + 会话流 + 输入区；停止唯一入口=发送旁）；
+ *   /agent/new=新建会话页（2026-11-23 懒创建裁决：点 + 只进页不建会话，首条
+ *   消息发送时才 createSession——zcode 同款居中输入；空会话同居中口径）
  * - 右：**内容坞**（D33 2026-11-19 修订）：无固定 tab，按需打开子 agent 过程
  *   （多子 agent=多 tab，按主会话归属/隔离）；可拖宽、右上角完全收起/展开；
  *   未来 browser/文件等内容同坞扩展
@@ -13,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Badge, Dropdown, Flex, FloatButton, Modal, Tag, Typography, message, theme, type MenuProps } from 'antd';
 import { ArrowDown, History, MessageCircle, PanelLeftOpen, PanelRightOpen, Plus, ShieldCheck } from 'lucide-react';
 import { open as openDirectory } from '@tauri-apps/plugin-dialog';
@@ -26,10 +28,11 @@ import { useConnectionStore } from '../../../shared/store/connection';
 import { useAgentStore, selectActiveSession, composerDisabledFor, type StreamItem } from '../store/agent';
 import { AGENT_MODE_OPTIONS, RUN_KIND_LABELS, RUN_STATUS_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
 import type { PermissionMode, RunInfo } from '../bridge/types';
-import { fetchMeSettings, fetchMyProviders, fetchSharedProviders, type AIDefaultSetting } from '../../settings/api/ai';
+import { fetchMyProviders, fetchSharedProviders } from '../../settings/api/ai';
 import type { AIProvider } from '../../admin/model/types';
 import { AgentSubNav } from '../components/AgentSubNav';
 import { AgentSessionList } from '../components/AgentSessionList';
+import { AgentComposeView } from '../components/AgentComposeView';
 import { AgentRightDock } from '../components/AgentRightDock';
 import { AgentStreamView } from '../components/stream/AgentStreamView';
 import type { PermissionDecision } from '../components/PermissionCard';
@@ -40,18 +43,6 @@ import { sendBotText } from '../../im/api/im';
 import { useImStore } from '../../im/store/im';
 import { Composer } from '../components/Composer';
 import { fetchPluginCommands, type PluginCommand } from '../../eco/api/plugins';
-
-/** ai_default → 会话 model 直达引用（mode=org/解析失败 → undefined=档位别名） */
-async function resolveDefaultModel(): Promise<string | undefined> {
-  try {
-    const settings = await fetchMeSettings();
-    const ai = settings.ai_default as AIDefaultSetting | undefined;
-    if (ai?.mode === 'provider' && ai.providerId && ai.model) return `p:${ai.providerId}:${ai.model}`;
-  } catch {
-    /* mock 桥/未登录：回落档位 */
-  }
-  return undefined;
-}
 
 /** 回合进行中的会话状态集（回合气泡 active 判定） */
 const TURN_ACTIVE_STATUSES = new Set<string>(['running', 'waiting_permission', 'waiting_clarify', 'subagent_fanout']);
@@ -72,7 +63,13 @@ function statusTagColor(status: string): string | undefined {
 export function AgentWorkbenchPage() {
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { token } = theme.useToken();
+  // 新建会话页（2026-11-23 懒创建裁决）：/agent/new 只渲染居中输入框（项目上下文
+  // 经 ?workspace= 携带），不建会话；首条消息发送时才 createSession
+  const isCompose = location.pathname === '/agent/new';
+  const composeWorkspace = isCompose ? searchParams.get('workspace') ?? '' : null;
   // 插件斜杠命令表（D22/L5：/ 渲染；失败降级空=功能关闭）
   const [pluginCommands, setPluginCommands] = useState<PluginCommand[]>([]);
   useEffect(() => {
@@ -119,8 +116,6 @@ export function AgentWorkbenchPage() {
   const dockCollapsed = useAgentStore((s) => s.dockCollapsed);
   const setDockCollapsed = useAgentStore((s) => s.setDockCollapsed);
   const openRunTab = useAgentStore((s) => s.openRunTab);
-  const startSession = useAgentStore((s) => s.startSession);
-  const createSession = useAgentStore((s) => s.createSession);
   const workspaces = useAgentStore((s) => s.workspaces);
   const registerProject = useAgentStore((s) => s.registerProject);
   const sendText = useAgentStore((s) => s.sendText);
@@ -147,17 +142,21 @@ export function AgentWorkbenchPage() {
     void init();
   }, [init]);
 
-  // 路由 → store（/agent/s/:id 与列表点击双向同步）
+  // 路由 → store（/agent/s/:id 与列表点击双向同步；/agent/new 无选中——清残留高亮）
   useEffect(() => {
     if (routeSessionId) selectSession(routeSessionId);
+    else if (isCompose) useAgentStore.setState({ activeSessionId: null });
     return () => undefined;
-  }, [routeSessionId, selectSession]);
+  }, [routeSessionId, isCompose, selectSession]);
 
   const activeSession = useAgentStore(selectActiveSession);
   // 只订当前会话的流数组（2026-11-11 卡顿修复）：此前订阅整个 streams record，
   // 任何会话（含后台 embedded）每个 delta 都整页重渲；selector 现仅取本会话数组
   // 引用（O(1)），其它会话的更新不再波及本页
   const items = useAgentStore((s) => (s.activeSessionId ? s.streams[s.activeSessionId] : undefined)) ?? EMPTY_ITEMS;
+  // 历史是否已回填完（2026-11-23 懒创建）：无条目时据此区分「真空会话」（居中输入）
+  // 与「历史还没加载完」（仍沉底，避免先居中再跳底的抖动）
+  const historyLoaded = useAgentStore((s) => (activeSessionId ? s.historyLoadedBySession[activeSessionId] === true : true));
   // D33：右栏内容坞——只取当前会话的 tab（按主会话归属/隔离；切会话整条换）
   const dockTabs = useMemo(
     () => (activeSessionId ? dockTabsAll.filter((t) => t.sessionId === activeSessionId) : []),
@@ -188,13 +187,16 @@ export function AgentWorkbenchPage() {
           ? 'offline'
           : 'ok';
 
-  // 中栏态：路由带 id 但会话不存在（未加载完 or 非法）→ loading；未选会话 → 空态引导
+  // 中栏态：路由带 id 但会话不存在（未加载完 or 非法）→ loading；未选会话 → 空态引导；
+  // 无条目：历史已回填完=真空会话 → empty（居中输入）；未回填完 → loading（沉底）
   const streamState: ViewState | 'ok' | 'none' = !activeSessionId
     ? 'none'
     : routeSessionId && !activeSession
       ? 'loading'
       : items.length === 0
-        ? 'empty'
+        ? historyLoaded
+          ? 'empty'
+          : 'loading'
         : degradedText
           ? 'degraded'
           : connStatus === 'offline'
@@ -344,21 +346,11 @@ export function AgentWorkbenchPage() {
     },
     [selectSession, navigate],
   );
-  /** 新建任务会话（无工作目录；文件/命令类工具在该会话不可用）。workspace='' 且
-   *  非 IM 来源——左栏落「任务」区（2026-11-17 分区口径，此前误落日常对话区） */
+  /** 新建任务会话入口 → 新建会话页（2026-11-23 懒创建裁决：点击不建会话，首条
+   *  消息发送时才 createSession；重复点击=同一路由幂等，不再堆积占位空会话） */
   const handleNewTask = useCallback(() => {
-    const currentMode = activeSession?.mode ?? 'ask';
-    void resolveDefaultModel()
-      .then((model) => startSession(currentMode, model))
-      .then(() => {
-        const sid = useAgentStore.getState().activeSessionId;
-        if (sid) navigate(`/agent/s/${sid}`);
-      })
-      .catch((err: unknown) => {
-        // bbrt 缺失/握手超时/RT 错误回执（如 8001 活跃会话超限）——列表顶部提示
-        useAgentStore.setState({ createError: err instanceof Error ? err.message : String(err) });
-      });
-  }, [activeSession?.mode, startSession, navigate]);
+    navigate('/agent/new');
+  }, [navigate]);
 
   /** D19 打开项目目录：系统目录选择 → workspace.register → 项目会话 */
   const handleOpenProject = useCallback(() => {
@@ -379,18 +371,16 @@ export function AgentWorkbenchPage() {
     })();
   }, [bridgeKind]);
 
-  /** 登记 + 在项目目录开会话（打开项目/项目行 + 共用；经 ref 解循环依赖） */
+  /** 登记项目 + 进项目新建会话页（打开项目/项目行 + 共用；经 ref 解循环依赖）。
+   *  2026-11-23 懒创建：登记即时进左栏项目区，会话待首条消息发送时才建 */
   const openProjectSessionRef = useRef<(path: string) => Promise<void>>(async () => undefined);
   openProjectSessionRef.current = async (path: string) => {
-    const currentMode = useAgentStore.getState().sessions.find((s) => s.id === useAgentStore.getState().activeSessionId)?.mode ?? 'ask';
     try {
       // workspace 必须用登记行回传的 realpath（与 workspace.list 同串）：
       // 传对话框原始路径会让会话与登记表在左栏按路径分组时字符串不等，
       // 同项目裂成「目录名+绝对路径」两组（2026-11-23 用户报修）
       const item = await registerProject(path);
-      const model = await resolveDefaultModel();
-      const meta = await createSession({ workspace: item.path, mode: currentMode as PermissionMode, model });
-      navigate(`/agent/s/${meta.id}`);
+      navigate(`/agent/new?workspace=${encodeURIComponent(item.path)}`);
     } catch (err: unknown) {
       useAgentStore.setState({ createError: err instanceof Error ? err.message : String(err) });
     }
@@ -524,6 +514,61 @@ export function AgentWorkbenchPage() {
     </div>
   );
 
+  // 会话输入区共用 props（底部横条 / 空会话居中浮卡同套：会话已存在，发送走
+  // sendText；空会话居中=2026-11-23 用户口径「无聊天历史不沉底」，zcode 同款）
+  const composerProps = {
+    disabled: composerState.disabled,
+    disabledHint: composerState.hint,
+    canStop,
+    onSend: (text: string) => void sendText(text),
+    onStop: stopActive,
+    commands: pluginCommands,
+    statusInfo: (
+      <ContextUsageMeter
+        usage={activeSessionId ? usageBySession[activeSessionId] : undefined}
+        modelHint={modelChoice.override}
+      />
+    ),
+    modePicker: (
+      <Dropdown menu={modeMenu} trigger={['click']}>
+        <Button
+          variant="secondary"
+          size="small"
+          icon={<ShieldCheck size={13} aria-hidden />}
+          title="切换权限模式（本会话即时生效）"
+        >
+          {modeOption?.label ?? activeSession?.mode}
+        </Button>
+      </Dropdown>
+    ),
+    modelPicker: (
+      <ModelThinkPicker providers={aiProviders} policy={modelTier} override={modelChoice.override} onSelect={onSelectModel} />
+    ),
+  };
+  // 空会话居中输入（头部保留：标题/状态/回到聊天等照常可用）
+  const emptyComposeNode = (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 14,
+        padding: 24,
+        overflowY: 'auto',
+      }}
+    >
+      <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+        向 Agent 描述一个任务试试（支持文件定位、命令执行与审批）
+      </Typography.Text>
+      <div style={{ width: '100%', maxWidth: 760 }}>
+        <Composer {...composerProps} centered autoFocus />
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <AgentSubNav />
@@ -565,9 +610,13 @@ export function AgentWorkbenchPage() {
         </section>
         {sessionsResizable ? <SplitHandle bind={sessionsSplit.bind} /> : null}
 
-        {/* 中：会话视图 */}
+        {/* 中：会话视图 / 新建会话页（/agent/new 懒创建——居中输入，无会话头/右坞） */}
         <section style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          {activeSession ? (
+          {/* key=workspace：任务⇄项目/换项目即重挂——草稿文本与模式/模型选择不跨上下文
+              带入；同上下文重复点 + URL 不变，草稿保留 */}
+          {isCompose && composeWorkspace !== null ? (
+            <AgentComposeView key={composeWorkspace} workspace={composeWorkspace} aiProviders={aiProviders} pluginCommands={pluginCommands} />
+          ) : activeSession ? (
             <>
               <header
                 style={{
@@ -635,51 +684,27 @@ export function AgentWorkbenchPage() {
                 </Flex>
               </header>
 
-              {streamState === 'ok' ? (
-                streamNode
-              ) : streamState === 'empty' ? (
-                <StateView state="empty" emptyText="向 Agent 描述一个任务试试（支持文件定位、命令执行与审批）" />
+              {streamState === 'empty' ? (
+                emptyComposeNode
               ) : (
-                <StateView
-                  state={streamState === 'none' ? 'empty' : streamState}
-                  skeleton={<SkeletonStream count={5} />}
-                  emptyText="从左侧选择或新建一个会话"
-                  offlineText="离线中：Agent 会话为本地能力，不受影响"
-                  degradedText={degradedText ?? undefined}
-                >
-                  {streamNode}
-                </StateView>
-              )}
-
-              <Composer
-                disabled={composerState.disabled}
-                disabledHint={composerState.hint}
-                canStop={canStop}
-                onSend={(text) => void sendText(text)}
-                onStop={stopActive}
-                commands={pluginCommands}
-                statusInfo={
-                  <ContextUsageMeter
-                    usage={activeSessionId ? usageBySession[activeSessionId] : undefined}
-                    modelHint={modelChoice.override}
-                  />
-                }
-                modePicker={
-                  <Dropdown menu={modeMenu} trigger={['click']}>
-                    <Button
-                      variant="secondary"
-                      size="small"
-                      icon={<ShieldCheck size={13} aria-hidden />}
-                      title="切换权限模式（本会话即时生效）"
+                <>
+                  {streamState === 'ok' ? (
+                    streamNode
+                  ) : (
+                    <StateView
+                      state={streamState === 'none' ? 'empty' : streamState}
+                      skeleton={<SkeletonStream count={5} />}
+                      emptyText="从左侧选择或新建一个会话"
+                      offlineText="离线中：Agent 会话为本地能力，不受影响"
+                      degradedText={degradedText ?? undefined}
                     >
-                      {modeOption?.label ?? activeSession.mode}
-                    </Button>
-                  </Dropdown>
-                }
-                modelPicker={
-                  <ModelThinkPicker providers={aiProviders} policy={modelTier} override={modelChoice.override} onSelect={onSelectModel} />
-                }
-              />
+                      {streamNode}
+                    </StateView>
+                  )}
+
+                  <Composer {...composerProps} />
+                </>
+              )}
             </>
           ) : streamState === 'loading' ? (
             <StateView state="loading" skeleton={<SkeletonStream count={5} />} />

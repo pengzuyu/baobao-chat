@@ -116,6 +116,9 @@ interface AgentState {
 
   /** sessionId → 事件流（按序追加） */
   streams: Record<string, StreamItem[]>;
+  /** sessionId → 历史已回填完毕（新建会话即置；loadHistoryIfEmpty 结束置，成败都置）。
+   *  区分「真空会话」与「历史还没加载完」——工作台据此决定输入框居中（空）还是沉底 */
+  historyLoadedBySession: Record<string, boolean>;
   /** sessionId → 当前模型选择（model.switched 维护；override=直达引用 p:<id>:<model>） */
   modelBySession: Record<string, { policy: 'fast' | 'strong' | 'auto'; override?: string }>;
   /** sessionId → 最近一轮 LLM 用量（stream.done；D36 增 cached/model——输入框状态条） */
@@ -157,8 +160,9 @@ interface AgentState {
   startSession: (mode: PermissionMode, model?: string) => Promise<void>;
   /** 显式建会话并返回 meta（D18 内嵌卡：不切换 activeSessionId 之外还供 im 侧直接持有引用；
    *  title 可选初始标题——IM embedded 来源名「与xxx的对话」/「xxx · 群聊」；
-   *  origin 场景来源（2026-11-23）：embedded 专用，runtime 注入场景段） */
-  createSession: (opts?: { workspace?: string; mode?: PermissionMode; model?: string; title?: string; origin?: import('../bridge/types').SessionOriginInfo }) => Promise<import('../bridge/types').AgentSessionMeta>;
+   *  origin 场景来源（2026-11-23）：embedded 专用，runtime 注入场景段；
+   *  modelPolicy 档位（新建会话页草稿态，缺省 auto）） */
+  createSession: (opts?: { workspace?: string; mode?: PermissionMode; model?: string; modelPolicy?: 'fast' | 'strong' | 'auto'; title?: string; origin?: import('../bridge/types').SessionOriginInfo }) => Promise<import('../bridge/types').AgentSessionMeta>;
   /** 定向发送（D18：embedded 会话由 im 侧显式指定 sessionId，不依赖 activeSessionId；
    *  首条用户消息自动派生标题（占位判定 + renameSession 落库）） */
   sendTextTo: (sessionId: string, text: string) => Promise<void>;
@@ -426,6 +430,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   activeSessionId: null,
 
   streams: {},
+  historyLoadedBySession: {},
   modelBySession: {},
   usageBySession: {},
   runsBySession: {},
@@ -468,18 +473,22 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     try {
       res = await bridge.loadHistory(sid);
     } catch {
-      return; // 历史加载失败不阻断（直播照常；空态=无历史）
+      // 历史加载失败不阻断（直播照常；空态=无历史）——同样置「已回填」，
+      // 工作台据此出居中输入框可继续输入，而非一直停在加载态
+      set((s) => ({ historyLoadedBySession: { ...s.historyLoadedBySession, [sid]: true } }));
+      return;
     }
     // 拉取期间可能已有新事件（乐观上屏/直播）→ 仅在仍为空时回填；
     // D36：WAL 最后一条用量一并回填（重启后输入框状态条恢复）
-    set((s) =>
-      (s.streams[sid] ?? []).length > 0
-        ? s
+    set((s) => ({
+      historyLoadedBySession: { ...s.historyLoadedBySession, [sid]: true },
+      ...((s.streams[sid] ?? []).length > 0
+        ? {}
         : {
             streams: { ...s.streams, [sid]: res.items.map((it, i) => historyToStreamItem(sid, it, i)) },
             ...(res.usage ? { usageBySession: { ...s.usageBySession, [sid]: res.usage } } : {}),
-          },
-    );
+          }),
+    }));
   },
 
   setThinkLevel: (level) => set({ thinkLevel: level }),
@@ -502,12 +511,15 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // model=用户默认模型的直达引用（settings.ai_default 解析，0023；缺省=档位别名）
     // title 可选初始标题（IM embedded 来源名）；缺省=占位，首条消息后自动派生
     // origin 场景来源（2026-11-23）：embedded 会话带 IM 来源，runtime 注入场景段
-    const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? 'ask', opts?.model, opts?.title, opts?.origin);
+    // modelPolicy 档位（新建会话页草稿态；缺省 auto=此前口径）
+    const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? 'ask', opts?.model, opts?.title, opts?.origin, opts?.modelPolicy);
     set((s) => ({
       createError: null,
       sessions: [meta, ...s.sessions],
       activeSessionId: meta.id,
       modelBySession: { ...s.modelBySession, [meta.id]: { policy: meta.modelPolicy, override: meta.modelOverride } },
+      // 新建即无历史：直接置已回填（工作台进会话首帧即居中输入框，不经加载态）
+      historyLoadedBySession: { ...s.historyLoadedBySession, [meta.id]: true },
     }));
     return meta;
   },

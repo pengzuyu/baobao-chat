@@ -7,6 +7,9 @@
  * - 斜杠命令（D22 §2/L5）：`/` 开头弹插件命令下拉（↑↓ 导航/Enter 选中/Esc 关）；
  *   发送时 `/name args` 命中→模板渲染（$ARGUMENTS=全部参数、$1..$9=位置参数）
  *   作为用户消息发进会话；未命中原样发送
+ * - centered（2026-11-23 懒创建）：居中浮卡形态——新建会话页/空会话无聊天历史时
+ *   输入框居中（zcode 同款）；缺省=底部横条。onSend 可回 Promise<boolean>，
+ *   resolve false=未发出（如建会话失败）→ 还原输入原文
  * D26-O4：textarea→Input.TextArea(autoSize)、壳类 agent-composer* 退役（内联布局）；
  * 自动聚焦/快捷键/IME 防误发/禁言态行为原样保留。
  */
@@ -21,10 +24,17 @@ import { renderCommand, type PluginCommand } from '../../eco/api/plugins';
 interface ComposerProps {
   disabled: boolean;
   disabledHint?: string;
+  /** 居中浮卡形态（2026-11-23 新建会话页/空会话）：无聊天历史时输入框居中展示
+   *  （zcode 同款）——去顶部横线改圆角描边+投影；缺省=底部横条原样 */
+  centered?: boolean;
+  /** 挂载即聚焦输入框（新建会话页；底部横条态保持不动焦） */
+  autoFocus?: boolean;
   /** 运行/等待审批/子任务中展示红色停止（中断当前轮；唯一入口——
    *  2026-11-18 走查：工作台头部同款重复按钮退役） */
   canStop: boolean;
-  onSend: (text: string) => void;
+  /** 发送。可返回 Promise<boolean>：resolve false=未发出（如懒创建建会话失败）→
+   *  还原输入原文供改写/重试；返回 void/true/其它=已发出，照常清空 */
+  onSend: (text: string) => void | Promise<boolean | void>;
   /** 停止当前会话正在生成的回答（interrupt；会话保留可继续追问） */
   onStop: () => void;
   /** 权限模式选择（2026-11-11 挪入输入框：页面注入 Dropdown 节点） */
@@ -37,7 +47,7 @@ interface ComposerProps {
   commands?: PluginCommand[];
 }
 
-export function Composer({ disabled, disabledHint, canStop, onSend, onStop, modePicker, modelPicker, statusInfo, commands = [] }: ComposerProps) {
+export function Composer({ disabled, disabledHint, centered = false, autoFocus = false, canStop, onSend, onStop, modePicker, modelPicker, statusInfo, commands = [] }: ComposerProps) {
   const { token } = theme.useToken();
   const [text, setText] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -69,10 +79,19 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
       const cmd = commands.find((c) => c.name === head.slice(1));
       if (cmd) outgoing = renderCommand(cmd, args);
     }
-    onSend(outgoing);
+    const pending = onSend(outgoing);
     setText('');
     setSlashOpen(false);
     taRef.current?.focus();
+    if (pending && typeof pending.then === 'function') {
+      // 未发出（resolve false / 抛错）→ 还原用户所输原文（非斜杠渲染后的模板）
+      void pending.then(
+        (sent) => {
+          if (sent === false) setText(text);
+        },
+        () => setText(text),
+      );
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -122,15 +141,30 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
 
   return (
     <div
-      style={{
-        flexShrink: 0,
-        borderTop: `1px solid ${token.colorBorderSecondary}`,
-        padding: '8px 12px 12px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 4,
-        background: token.colorBgContainer,
-      }}
+      style={
+        centered
+          ? {
+              // 居中浮卡（无历史时的欢迎输入框）：圆角描边+投影，不带横条分隔线
+              flexShrink: 0,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: 12,
+              boxShadow: token.boxShadowSecondary,
+              padding: '8px 12px 12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              background: token.colorBgContainer,
+            }
+          : {
+              flexShrink: 0,
+              borderTop: `1px solid ${token.colorBorderSecondary}`,
+              padding: '8px 12px 12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              background: token.colorBgContainer,
+            }
+      }
     >
       {slashCandidates.length > 0 ? (
         <div
@@ -189,6 +223,7 @@ export function Composer({ disabled, disabledHint, canStop, onSend, onStop, mode
       <Input.TextArea
         ref={taRef}
         value={text}
+        autoFocus={autoFocus}
         autoSize={{ minRows: 2, maxRows: 8 }}
         placeholder={disabled ? (disabledHint ?? '当前状态不可输入') : '输入任务，Enter 发送（Shift+Enter 换行）；/ 唤起插件命令'}
         disabled={disabled}

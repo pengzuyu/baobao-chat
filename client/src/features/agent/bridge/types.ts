@@ -270,8 +270,9 @@ export interface AgentBridge {
   listSessions(): Promise<AgentSessionMeta[]>;
   /** 新建会话（agent_start_session：workspace + 模式 + 模型直达引用（0023 可选）；
    *  title 可选初始标题（IM embedded 来源名「与xxx的对话」），缺省占位由首条消息 rename 派生；
-   *  origin 场景来源（2026-11-23，embedded 专用），任务/项目不传 */
-  startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: SessionOriginInfo): Promise<AgentSessionMeta>;
+   *  origin 场景来源（2026-11-23，embedded 专用），任务/项目不传；
+   *  modelPolicy 档位 fast/strong/auto（缺省 auto——新建会话页的档位草稿，此前写死 auto） */
+  startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: SessionOriginInfo, modelPolicy?: 'fast' | 'strong' | 'auto'): Promise<AgentSessionMeta>;
   /** 发送用户消息（agent_input；UI 乐观上屏，回复经 streamDelta 事件回流）；
    *  thinking 思考三档（2026-11-11 轮级生效）缺省=medium */
   sendMessage(sessionId: string, text: string, thinking?: 'low' | 'medium' | 'high'): Promise<void>;

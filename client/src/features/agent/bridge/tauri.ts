@@ -173,12 +173,12 @@ export class TauriAgentBridge implements AgentBridge {
     return data.items.map(mapSession).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: import('./types').SessionOriginInfo): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: import('./types').SessionOriginInfo, modelPolicy: 'fast' | 'strong' | 'auto' = 'auto'): Promise<AgentSessionMeta> {
     const ack = await invoke<{ session_id: string }>('agent_start_session', {
       workspaceId: workspace,
       form: 'workbench',
       mode,
-      modelPolicy: 'auto',
+      modelPolicy,
       // 0023 模型直达引用（p:<id>:<model>）；缺省=档位别名（宿主命令透传 Runtime session.start）
       model: model ?? null,
       title: title ?? null,
@@ -195,7 +195,7 @@ export class TauriAgentBridge implements AgentBridge {
       title: title?.trim() || '新会话',
       workspace,
       mode,
-      modelPolicy: 'auto',
+      modelPolicy,
       modelOverride: model,
       status: 'idle',
       createdAt: Date.now(),
