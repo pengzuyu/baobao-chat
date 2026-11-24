@@ -15,6 +15,8 @@
 | 5 | 变量族 | 复用 D22 §6.1 子集：`${BBC_USER_ID}`/`${BBC_USER_NAME}` 装配静态替换；`${BBC_USER_TOKEN}` HTTP headers 留 RT 调用层动态替换、stdio env 置空（HTTP-only 约定不变）；个人面**无** `${PLUGIN_ROOT}`/`${CONFIG:*}` |
 | 6 | 测试连接 | **走 RT 真实链路**：协议 `McpTest`/`McpTestResult`，一次性 McpClient 即弃——TLS、TOKEN 动态注入、懒连接全走生产代码，测的就是真实路径 |
 
+> **★追记（2026-11-24，D38 落稿）**：个人面 HTTP server 新增鉴权方式「统一身份」（`x-bbc-auth {type:obo, scope?}`，aud=该 server url，agent 票 ES256——详见 [D38](D38-统一身份票据与生态MCP验签设计.md)），与「自定义请求头」（`${CONFIG:key}`/钥匙串）并列二选一；headers `${BBC_USER_TOKEN}` 旧写法装配器自动归一。url 用户可自填任意 `http(s)://`（个人面风险归属用户自身，声明统一身份时确认弹窗明示目的地）；stdio 一律无令牌（拍板：管道内无验证方）。
+
 ## 1. 范围与不做
 
 **做**：设置页「MCP 服务」；壳侧五命令；`assemble_mcp_servers` 第三源；bbrt-mcp https；测试连接链路。

@@ -20,7 +20,7 @@
 | 6 | 推翻记录 | 前轮讨论中的「路线甲：自研薄协议面（自定义 6 端点）」被拍板 1/2 取代，勿再按其设计 |
 | 7 | **web 兜底 = 正式 IdP 浏览器会话**（v0.2 修订，2026-11-16 用户质询后） | 弃 v0.1「一次性 10min cookie」口径：HttpOnly+Secure+SameSite=Lax cookie + `oidc_web_session` 表；**默认 7 天滑动**（租户可配 1-30 天；关「记住此浏览器」= 浏览器会话 cookie 关窗即失效）；设备列表可见、可远端下线；改密/禁用全吊销；高敏 scope 或 `prompt=login`/`max_age` 越界强制重输口令。**SSO 免密由此会话承载** |
 | 8 | **不独立服务：单体内新增 `internal/oidc` 模块**（2026-11-16 拍板） | zitadel/oidc 以子路由挂现有 bbc-server 的 `/oauth2/*`，与 internal/auth 同进程；不拆独立部署单元。理由与未来拆分触发条件见 §3.2 |
-| 9 | **aud 多应用适配暂不处理**（2026-11-16 拍板，开工裁决） | A 类 MCP 网关一期宽松 aud（接受自身或 bbc-agent 通用受众），单一全局 `${BBC_USER_TOKEN}` 注入零改动；按 server 独立签发与 RFC 8693 换票**整体挂起**，生态规模化后再议（§6.5 三档表仅存档） |
+| 9 | ~~aud 多应用适配暂不处理~~（2026-11-16 拍板 → **2026-11-24 被 D38 推翻**，见 §6.5 追记） | 原口径：宽松 aud + 单一全局 `${BBC_USER_TOKEN}`、按 server 独立签发整体挂起。**现行口径：agent 票 ES256 单票制、aud=端点 URL 精确绑定、corp/aigw 逻辑受众收编（[D38](D38-统一身份票据与生态MCP验签设计.md)），勿再按挂起口径设计** |
 | 10 | **收缩候选落定**（2026-11-16 开工裁决） | ①密钥双 key 轮换窗口→**手工轮换文档**；②per-client TTL 列→**v1 写死默认值**；③introspection **保留**；④Q2 深链确认链**保持批次序不后置**（按现行批次顺序执行） |
 
 ---
@@ -249,6 +249,8 @@ oidc_web_session(                 -- IdP 浏览器会话（web 兜底登录态�
 **对 A 类的 aud 细节**：多 server 是装配**常态**而非异常——三源装配（`assemble_mcp_servers`）在登录/配置期把 corp 网关+全部已装插件+个人 MCP 的整套清单一次推给 RT，装 N 个生态插件即同时挂 N 个 A 类 MCP，且一条 agent 指令可交叉调用多应用工具。问题不在「能否同时连」而在**一份全局 token（OboCache 单值 → `${BBC_USER_TOKEN}` 注入所有 server）无法同时对多个受众有效**：若各 A 类网关严格校验 aud=自身 client_id，同一 token 必然顾此失彼。解法三档：一期宽松 aud（网关接受 `aud=自身或 bbc-agent 通用受众`，注入机制零改动，OBO ≤15min+scope 子集下边际风险小）；中期按 server 独立签发（注入协议升级）；终态 RFC 8693 换票（基础 OBO 换 aud=目标应用窄票，微软 OBO 同款）——编码期与 Storage 适配一并定档位。B 类无此矛盾：corp 网关是「一个 server 挂多个内部系统」，受众天然单一。
 
 **两车道结论**：生态原生应用（A/B）= bbc token 直达（OIDC RP + MCP 验 bbc jwks + OBO 归因）；第三方包装（C）= 用它们的凭证（keyring/OAuth client/服务端代持）。车道判断发生在插件装配期（manifest 声明），不在运行时。
+
+> **★追记（2026-11-24，D38 落稿）**：A 类 MCP 票据形态已由 **[D38](D38-统一身份票据与生态MCP验签设计.md)** 定稿并推翻本篇拍板 9 的挂起——agent 票统一 ES256 单票制（复用本篇 OIDC issuer 与签名密钥），aud=端点 URL（零登记、公开 jwks 本地验签），corp/aigw 逻辑受众 `bbc-corp`/`bbc-aigw` 收编；不引入 RFC 8693 token exchange grant（壳批量直签，无换票环节）；kid 改公钥指纹（kid miss 重拉 jwks 自愈）。登录接入（RP）与 MCP 验签两条线独立并存：应用只用「agent 调 MCP」不注册 client；要「用户用 bbc 登录其页面」才走本篇 client 注册。
 
 
 
