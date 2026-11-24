@@ -16,7 +16,7 @@ import (
 )
 
 // GatewayEmbedFn 构造指向本服务 AI 网关的嵌入函数。
-// baseURL 形如 http://127.0.0.1:8090（不带路径）；token 为网关开发令牌
+// baseURL 形如 http://127.0.0.1:8080（不带路径）；token 为网关开发令牌
 // （BBC_AIGW_DEV_TOKEN）；hc 可空（默认 30s 超时客户端）
 func GatewayEmbedFn(baseURL, token string, hc *http.Client) EmbedFn {
 	client := hc

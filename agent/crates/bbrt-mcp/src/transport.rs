@@ -35,7 +35,7 @@ pub enum TransportConfig {
         args: Vec<String>,
         env: Vec<(String, String)>,
     },
-    /// 远程网关（公司域 MCP 网关，如 http://127.0.0.1:8090/mcp/corp；
+    /// 远程网关（公司域 MCP 网关，如 http://127.0.0.1:8080/mcp/corp；
     /// 主体令牌经 TokenProvider 逐请求注入——装配时与 McpClient 同源）。
     /// headers：插件外部系统自定义头（D22 §6.1/L4）——值中 `${BBC_USER_TOKEN}`
     /// 调用层动态替换；自定义 Authorization 覆盖自动 Bearer

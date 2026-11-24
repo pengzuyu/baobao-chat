@@ -35,7 +35,7 @@ pub trait ChatClient: Send + Sync {
     ) -> Result<Box<dyn Iterator<Item = Result<StreamEvent, AigwError>> + Send>, AigwError>;
 }
 
-/// AI 网关客户端（默认指向本机网关/本地代理，如 `http://127.0.0.1:8091`）。
+/// AI 网关客户端（默认指向本机网关/本地代理，如 `http://127.0.0.1:8080`）。
 pub struct AigwClient {
     base: String,
     /// OBO token 提供者：每次请求（含重试）现取，token 过期由 hostapi 侧续签后自然生效。

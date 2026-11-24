@@ -55,8 +55,8 @@ func Load() *Config {
 	if v := os.Getenv("BBC_SEED_DEMO"); v == "0" || v == "false" {
 		c.SeedDemoData = false
 	}
-	// OIDC（D28 批次 Q1）：issuer 缺省按 HTTPAddr 推导本地联调地址（:8090 →
-	// http://127.0.0.1:8090/oauth2）；签名密钥未配走模块内临时密钥口径（仅联调）
+	// OIDC（D28 批次 Q1）：issuer 缺省按 HTTPAddr 推导本地联调地址（:8080 →
+	// http://127.0.0.1:8080/oauth2）；签名密钥未配走模块内临时密钥口径（仅联调）
 	c.OIDCIssuer = os.Getenv("BBC_OIDC_ISSUER")
 	if c.OIDCIssuer == "" {
 		c.OIDCIssuer = "http://127.0.0.1" + strings.TrimPrefix(c.HTTPAddr, "") + "/oauth2"

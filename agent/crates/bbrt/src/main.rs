@@ -9,7 +9,8 @@
 //!
 //! 环境变量（宿主拉起时注入）：
 //! - BBC_RT_DATA_DIR   数据目录（默认 {TMPDIR}/bbrt）
-//! - BBC_RT_GATEWAY    AI 网关 base（默认 http://127.0.0.1:8091）
+//! - BBC_RT_GATEWAY    AI 网关 base（默认 http://127.0.0.1:8080，与服务端
+//!                     config.go HTTPAddr 同源；宿主拉起时恒被注入覆盖）
 //! - BBC_RT_TOKEN      网关令牌（v0.1 静态；OBO 通道阶段二接 hostapi::OboCache）
 
 mod bridge;
@@ -77,7 +78,7 @@ fn run() -> Result<(), String> {
             .into_owned()
     }));
     let gateway =
-        std::env::var("BBC_RT_GATEWAY").unwrap_or_else(|_| "http://127.0.0.1:8091".into());
+        std::env::var("BBC_RT_GATEWAY").unwrap_or_else(|_| "http://127.0.0.1:8080".into());
     let token = std::env::var("BBC_RT_TOKEN").unwrap_or_default();
 
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("数据目录不可建: {e}"))?;
