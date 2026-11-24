@@ -20,10 +20,12 @@ pub mod builtin;
 pub mod config;
 pub mod pipeline;
 pub mod registry;
+pub mod whitelist;
 
 pub use config::{StoreViolationSink, ToolsConfig};
 pub use pipeline::PipelineExecutor;
 pub use registry::{RiskLevel, ToolDef, ToolRegistry};
+pub use whitelist::parse_agents_whitelist;
 
 // bbrt-protocol 目前为预登记依赖（wire 层消息由 session/hostapi 使用；
 // 本 crate 的 stdio 事件经由 session sink 发射）。

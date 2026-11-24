@@ -55,6 +55,11 @@ pub struct PipelineExecutor {
     policies: std::sync::Mutex<
         std::collections::HashMap<std::path::PathBuf, bbrt_sec::sandbox::path::PathPolicy>,
     >,
+    /// AGENTS.md 白名单缓存（缺口修复 2026-11-24：AGENTS.md→mtime→前缀清单；
+    /// 编辑 AGENTS.md 会话内即时生效免重启）
+    whitelist_cache: std::sync::Mutex<
+        std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, Vec<String>)>,
+    >,
 }
 
 /// D19 workspace 类工具（依赖会话工作目录做沙箱根；项目会话=项目目录，
@@ -127,6 +132,7 @@ impl PipelineExecutor {
             env,
             mcp,
             policies: std::sync::Mutex::new(std::collections::HashMap::new()),
+            whitelist_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -180,6 +186,53 @@ impl PipelineExecutor {
             .as_ref()
             .and_then(|reg| reg.get(session_id))
             .flatten()
+    }
+
+    /// 白名单前缀（缺口修复 2026-11-24：AGENTS.md 白名单拍板后从未接上，
+    /// config 通道 v0.1 恒空=免确认通道空转）。按会话工作区解析：
+    /// - 项目会话 → 项目根 AGENTS.md 的 ` ```bbc-whitelist ` 围栏块；
+    /// - 日常会话 → 默认用户工作区 AGENTS.md（用户级通道）；
+    /// - 未登记/未装配表 → 仅 config 全局通道（单测/嵌入式）。
+    /// 与 config.whitelist_prefixes 合并去重；命中后仍受 gate 守卫
+    /// （is_plain_direct_invocation + 危险规则扫描）——白名单只免确认不免规则。
+    fn whitelist_for_session(&self, session_id: &str) -> Vec<String> {
+        let mut out = self.config.whitelist_prefixes.clone();
+        let Some(reg) = &self.config.session_workspaces else {
+            return out;
+        };
+        let dir = match reg.get(session_id) {
+            None => return out,
+            Some(None) => self
+                .config
+                .default_workspace
+                .clone()
+                .unwrap_or_else(bbrt_sec::sandbox::default_user_workspace),
+            Some(Some(ws)) => ws.clone(),
+        };
+        if let Some(entries) = self.agents_whitelist_cached(&dir) {
+            for e in entries {
+                if !out.contains(&e) {
+                    out.push(e);
+                }
+            }
+        }
+        out
+    }
+
+    /// 读目录下 AGENTS.md 白名单（mtime 缓存：未变命中缓存，变了重解析）
+    fn agents_whitelist_cached(&self, dir: &std::path::Path) -> Option<Vec<String>> {
+        let md_path = dir.join("AGENTS.md");
+        let mtime = std::fs::metadata(&md_path).ok()?.modified().ok()?;
+        let mut cache = self.whitelist_cache.lock().ok()?;
+        if let Some((cached_at, entries)) = cache.get(&md_path) {
+            if *cached_at == mtime {
+                return Some(entries.clone());
+            }
+        }
+        let text = std::fs::read_to_string(&md_path).ok()?;
+        let entries = crate::whitelist::parse_agents_whitelist(&text);
+        cache.insert(md_path, (mtime, entries.clone()));
+        Some(entries)
     }
 
     /// 替换注册表（bin 注入 app.*/技能合并后的注册表；10 篇 §4.6）
@@ -322,7 +375,7 @@ impl ToolExecutor for PipelineExecutor {
             .iter()
             .map(|s| s.as_str())
             .collect();
-        let whitelist: Vec<String> = self.config.whitelist_prefixes.clone();
+        let whitelist: Vec<String> = self.whitelist_for_session(&call.session_id);
         let ctx = GateCtx {
             policy: self.config.policy.as_ref(),
             permission_points: &permission_points,
@@ -371,12 +424,13 @@ impl ToolExecutor for PipelineExecutor {
             Err(_) => return "medium",
         };
         let permission_points: Vec<&str> = Vec::new();
+        let whitelist = self.whitelist_for_session(&call.session_id);
         let ctx = GateCtx {
             policy: None,
             permission_points: &permission_points,
             memory: None,
             rules: &self.rules,
-            whitelist_prefixes: &self.config.whitelist_prefixes,
+            whitelist_prefixes: &whitelist,
             untrusted: false,
         };
         let gate_call = GateCall {

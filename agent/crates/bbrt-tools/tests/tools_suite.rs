@@ -1341,3 +1341,84 @@ fn d19_项目会话cwd越界8020() {
     assert_eq!(code, 8020);
     assert!(msg.contains("cwd"), "应指明 cwd 越界: {msg}");
 }
+
+// ---------------------------------------------------------------------------
+// AGENTS.md 白名单装配（缺口修复 2026-11-24：v0.1 通道恒空从未接上）
+// ---------------------------------------------------------------------------
+
+/// 项目会话 AGENTS.md `bbc-whitelist` 块生效：cargo test 命中白名单档
+/// （risk=low、ask 确认卡 reason=白名单通道）；复合形态仍被守卫拦回任意命令档；
+/// 未登记会话不误命中
+#[test]
+fn agents_md_whitelist_resolves_per_session_workspace() {
+    let proj = tempfile::tempdir().expect("proj");
+    let daily = tempfile::tempdir().expect("daily");
+    fs::write(
+        proj.path().join("AGENTS.md"),
+        "# 项目约定\n\n```bbc-whitelist\ncargo test\ngo build ./...\n```\n",
+    )
+    .expect("写 AGENTS.md");
+    let mut cfg = ToolsConfig::new(proj.path());
+    cfg.policy = Some(ToolPolicy::default());
+    let reg = bbrt_session::SessionWorkspaces::new();
+    reg.set("sess-a", Some(proj.path().to_path_buf()));
+    reg.set("sess-daily", None);
+    cfg.session_workspaces = Some(reg);
+    cfg.default_workspace = Some(daily.path().to_path_buf()); // 隔离真实 HOME
+    let ex = PipelineExecutor::new(Arc::new(cfg));
+
+    // ① 项目会话：白名单命中 → WhitelistCommand（risk=low）
+    let c = call_in("run_command", serde_json::json!({"command": "cargo test --lib"}), "sess-a");
+    assert_eq!(ex.risk_of_call(&c), "low", "白名单命中应为 low");
+    // ask 档确认卡走白名单通道（区别于任意命令文案）
+    match ex.check(PermissionMode::Ask, &c) {
+        CheckOutcome::NeedConfirm { reason, .. } => {
+            assert!(reason.contains("白名单"), "应走白名单通道: {reason}")
+        }
+        other => panic!("ask 档白名单命令应确认: {other:?}"),
+    }
+    // ② 复合形态守卫：前缀命中但 && 落任意命令档（risk=medium）
+    let compound = call_in(
+        "run_command",
+        serde_json::json!({"command": "cargo test && ls /"}),
+        "sess-a",
+    );
+    assert_eq!(ex.risk_of_call(&compound), "medium", "复合形态应守卫回任意命令");
+    // ③ 只读命令不依赖白名单（P1 分类器优先）：ls 仍 low
+    let ls = call_in("run_command", serde_json::json!({"command": "ls -la"}), "sess-a");
+    assert_eq!(ex.risk_of_call(&ls), "low", "只读分类器应先行");
+    // ④ 日常会话无 AGENTS.md：cargo test 不误命中（任意命令档）
+    let daily_call = call_in(
+        "run_command",
+        serde_json::json!({"command": "cargo test --lib"}),
+        "sess-daily",
+    );
+    assert_eq!(ex.risk_of_call(&daily_call), "medium", "日常会话不应命中项目白名单");
+}
+
+/// AGENTS.md 编辑后（mtime 变化）会话内即时生效：新增条目马上命中
+#[test]
+fn agents_md_whitelist_reloads_on_change() {
+    let proj = tempfile::tempdir().expect("proj");
+    fs::write(
+        proj.path().join("AGENTS.md"),
+        "```bbc-whitelist\ncargo test\n```\n",
+    )
+    .expect("初版");
+    let mut cfg = ToolsConfig::new(proj.path());
+    cfg.policy = Some(ToolPolicy::default());
+    let reg = bbrt_session::SessionWorkspaces::new();
+    reg.set("sess-a", Some(proj.path().to_path_buf()));
+    cfg.session_workspaces = Some(reg);
+    let ex = PipelineExecutor::new(Arc::new(cfg));
+    let go = call_in("run_command", serde_json::json!({"command": "go vet ./..."}), "sess-a");
+    assert_eq!(ex.risk_of_call(&go), "medium", "未声明前不应命中");
+    // mtime 粒度秒级——确保 mtime 变化再重写（有的文件系统 mtime 精度 1s）
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    fs::write(
+        proj.path().join("AGENTS.md"),
+        "```bbc-whitelist\ncargo test\ngo vet\n```\n",
+    )
+    .expect("追加 go vet");
+    assert_eq!(ex.risk_of_call(&go), "low", "编辑 AGENTS.md 后应即时生效");
+}

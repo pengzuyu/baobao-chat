@@ -40,7 +40,9 @@ pub struct ToolsConfig {
     pub policy: Option<ToolPolicy>,
     /// 用户权限点（gate ②；默认含 run_command + full-auto，bin 按实际用户裁剪）
     pub permission_points: Vec<String>,
-    /// 白名单命令前缀（项目 AGENTS.md 声明，如 "cargo test"；v0.1 暂空）
+    /// 白名单命令前缀（全局手工通道；生产主通道=按会话工作区解析的
+    /// AGENTS.md ` ```bbc-whitelist ` 围栏块，见 PipelineExecutor::whitelist_for_session；
+    /// 2026-11-24 缺口修复前本通道恒空=免确认白名单空转）
     pub whitelist_prefixes: Vec<String>,
     /// 参数是否含 untrusted 来源子串（gate ⑤；session 层指纹匹配后置位）
     pub untrusted: bool,
