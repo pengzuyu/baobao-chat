@@ -80,7 +80,9 @@ fn valid_server_name(name: &str) -> bool {
 
 /// 条目校验（D26 §2）：stdio 须 command；http 须 http(s):// url；
 /// env/header 键非空、值为字符串。返回 usesIdentity（任一值引用
-/// ${BBC_USER_TOKEN}——UI 警示「将以你的身份调用」）
+/// ${BBC_USER_TOKEN}，或声明 x-bbc-auth 统一身份——D38 批5；UI 警示
+/// 「将以你的身份调用」并附目的地）。stdio 声明 x-bbc-auth 直接拒绝
+/// （D38 拍板 8：stdio 永不需要令牌）
 fn validate_entry(entry: &Value) -> Result<bool, String> {
     let name = entry["name"].as_str().unwrap_or("");
     if !valid_server_name(name) {
@@ -102,6 +104,13 @@ fn validate_entry(entry: &Value) -> Result<bool, String> {
                     uses_identity = true;
                 }
             }
+        }
+    }
+    // D38 批5：x-bbc-auth 声明也算身份使用（UI 警示同口径）；stdio 声明直接拒
+    if entry["x-bbc-auth"].is_object() {
+        uses_identity = true;
+        if entry["kind"].as_str() == Some("stdio") {
+            return Err("stdio 形态不可声明 x-bbc-auth（D38：stdio 永不需要令牌）".into());
         }
     }
     match entry["kind"].as_str().unwrap_or("") {

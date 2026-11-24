@@ -100,6 +100,9 @@ struct Shared {
     spawn_lock: Mutex<()>,
     /// 紧急停止后抑制惰性重启（下一次显式命令重新拉起）
     halted: AtomicBool,
+    /// 统一身份受众集合（D38 批5）：最近一次装配的全部 (audience, scope)——
+    /// 批量换票请求源；装配重推时更新（没装就没受众，票根本不存在）
+    audiences: Mutex<Vec<(String, Vec<String>)>>,
 }
 
 impl Shared {
@@ -129,9 +132,9 @@ impl Shared {
         }
     }
 
-    /// RT 侧 obo.renew 应答（D28 批0/Q0-2 真换签）：用缓存 access 重走 /auth/obo/token
-    /// 换新 OBO；失败回落重发缓存 access（≤15min 内仍可用）。HTTP 走独立线程——
-    /// 事件泵绝不被 5s 超时卡住
+    /// RT 侧 obo.renew 应答（D38 拍板 9/6：票据代整代全量重签；失败**不发票不回落**——
+    /// 主令牌绝不进 MCP 请求头，续签失败 → 票自然过期 → 调用 401 诚实降级）。
+    /// HTTP 走独立线程——事件泵绝不被 5s 超时卡住
     fn answer_renew(self: &Arc<Self>, reply_to: String) {
         let token = self.token.lock().unwrap().clone();
         let Some((access, _)) = token else {
@@ -139,17 +142,18 @@ impl Shared {
         };
         let shared = Arc::clone(self);
         std::thread::spawn(move || {
-            let (payload_token, exp) = match shared.issue_obo(&access) {
-                Ok(obo) => (obo, now_secs() + OBO_EXP_MARGIN),
+            let (tokens, exp) = match shared.issue_agent_tickets(&access) {
+                Ok(t) => t,
                 Err(e) => {
-                    eprintln!("[bbc-bridge] OBO 续签失败，回落重发缓存 access: {e}");
-                    (access, now_secs() + OBO_EXP_MARGIN)
+                    // D38 拍板 6：降级为不发票（旧「回落主 access」是凭证外泄通道，已删）
+                    eprintln!("[bbc-bridge] agent 票续签失败，降级不发票（调用将 401）: {e}");
+                    return;
                 }
             };
-            let scopes = shared.obo_scopes.lock().unwrap().clone();
+            let _ = exp;
             let mut env = json!({
                 "v": 1, "id": "h-renew", "type": "obo.token",
-                "payload": { "token": payload_token, "exp": exp, "scopes": scopes }
+                "payload": { "tokens": tokens }
             });
             env["reply_to"] = Value::String(reply_to);
             let mut p = shared.proc.lock().unwrap();
@@ -161,11 +165,23 @@ impl Shared {
         });
     }
 
-    /// 签发 OBO（D28 批0/Q0-2）：POST /api/v1/auth/obo/token（agent_session_id=
-    /// desktop-{did} 归因前缀；scope=用户权限集）→ {code:0,data:{obo_token}}
-    fn issue_obo(&self, access: &str) -> Result<String, String> {
+    /// 批量签发 agent 票（D38 §3.3）：POST /api/v1/auth/obo/token——
+    /// agent_session_id=desktop-{did} 归因前缀；audiences=当前装配受众集合
+    /// （{aud, scope}——scope 空数组=服务端按用户全量签）；一次往返换整代
+    /// → 返回 obo.token 载荷 tokens 数组与统一 exp（unix 秒）
+    fn issue_agent_tickets(&self, access: &str) -> Result<(Value, u64), String> {
         let did = self.did.lock().unwrap().clone();
-        let scopes = self.obo_scopes.lock().unwrap().clone();
+        let audiences: Vec<Value> = {
+            let a = self.audiences.lock().unwrap();
+            a.iter()
+                .map(|(aud, scope)| {
+                    json!({ "aud": aud, "scope": scope })
+                })
+                .collect()
+        };
+        if audiences.is_empty() {
+            return Err("无统一身份受众（装配未含任何声明）".into());
+        }
         let url = format!(
             "{}/api/v1/auth/obo/token",
             self.gateway.trim_end_matches('/')
@@ -177,21 +193,29 @@ impl Shared {
         let resp: Value = client
             .post(&url)
             .bearer_auth(access)
-            .json(&json!({ "agent_session_id": format!("desktop-{did}"), "scope": scopes }))
+            .json(&json!({
+                "agent_session_id": format!("desktop-{did}"),
+                "audiences": audiences,
+            }))
             .send()
-            .map_err(|e| format!("OBO 端点不可达: {e}"))?
+            .map_err(|e| format!("agent 票端点不可达: {e}"))?
             .json()
-            .map_err(|e| format!("OBO 响应解析失败: {e}"))?;
+            .map_err(|e| format!("agent 票响应解析失败: {e}"))?;
         if resp["code"].as_i64() != Some(0) {
             return Err(format!(
-                "OBO 签发被拒 (code={} message={})",
+                "agent 票签发被拒 (code={} message={})",
                 resp["code"], resp["message"]
             ));
         }
-        resp["data"]["obo_token"]
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| "OBO 响应缺 obo_token".to_string())
+        let tickets = resp["data"]["tokens"]
+            .as_array()
+            .ok_or_else(|| "agent 票响应缺 tokens".to_string())?
+            .clone();
+        let exp = tickets
+            .first()
+            .and_then(|t| t["exp"].as_u64())
+            .unwrap_or_else(|| now_secs() + OBO_EXP_MARGIN);
+        Ok((json!(tickets), exp))
     }
 
     /// UNT 事件喂会话缓存（camel 原始 payload 取字段；pre=转换前，post=转换后）
@@ -276,6 +300,7 @@ impl AgentHost {
                 user: Mutex::new((String::new(), String::new())),
                 spawn_lock: Mutex::new(()),
                 halted: AtomicBool::new(false),
+            audiences: Mutex::new(Vec::new()),
             }),
             bin,
             data_dir,
@@ -363,25 +388,36 @@ impl AgentHost {
         Ok(rep["ok"].as_bool().unwrap_or(false))
     }
 
-    /// 登录/刷新成功后下发 token（D28 批0/Q0-2 OBO 优先）：缓存主 access（续签源）→
-    /// 试签 OBO（act 归因+权限集）下发；失败回落主 token（可用性优先，归因降级告警）
+    /// 登录/刷新成功后下发 agent 票（D38 批5）：缓存主 access（续签源）→
+    /// 按当前装配受众集合批量换票 → obo.token{tokens[]} 整代下发。
+    /// **失败降级为不发票**（D38 拍板 6：主令牌绝不进 MCP 请求头；RT 侧票缓存
+    /// 空/过期 → 调用 401 诚实反馈，等下次登录/装配重推/续签窗口重试）
     pub fn set_access_token(&self, token: String, exp_ms: i64) -> Result<(), String> {
         *self.shared.token.lock().unwrap() = Some((token.clone(), (exp_ms / 1000).max(0) as u64));
-        let obo = match self.shared.issue_obo(&token) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("[bbc-bridge] OBO 签发失败，回落主 token 下发: {e}");
-                return self.fire(
-                    "obo.token",
-                    json!({ "token": token, "exp": exp_ms / 1000, "scopes": [] }),
-                );
-            }
+        self.refresh_agent_tickets();
+        Ok(())
+    }
+
+    /// 按受众集合批量换票并下发整代（D38 §3.2 触发点 1/2/4 共用）：
+    /// 未登录/无受众静默跳过；失败仅告警不发票（拍板 6）
+    fn refresh_agent_tickets(&self) {
+        let Some((access, _)) = self.shared.token.lock().unwrap().clone() else {
+            return;
         };
-        let scopes = self.shared.obo_scopes.lock().unwrap().clone();
-        self.fire(
-            "obo.token",
-            json!({ "token": obo, "exp": now_secs() + OBO_EXP_MARGIN, "scopes": scopes }),
-        )
+        let has_aud = !self.shared.audiences.lock().unwrap().is_empty();
+        if !has_aud {
+            return; // 装配未含统一身份声明——无受众即无票（D38 §3.1）
+        }
+        match self.shared.issue_agent_tickets(&access) {
+            Ok((tokens, _exp)) => {
+                if let Err(e) = self.fire("obo.token", json!({ "tokens": tokens })) {
+                    eprintln!("[bbc-bridge] agent 票下发失败（RT 未起？ready 重推兜底）: {e}");
+                }
+            }
+            Err(e) => {
+                eprintln!("[bbc-bridge] agent 票换签失败，降级不发票（调用将 401）: {e}");
+            }
+        }
     }
 
     /// OBO 签发上下文注入（did=归因前缀，perms=权限集）——须先于 set_access_token
@@ -505,8 +541,32 @@ impl AgentHost {
             }
         }
         let servers = assemble_mcp_servers(&self.data_dir, &self.gateway, &user, local);
+        // 受众集合随装配更新（D38 §3.1：没装就没受众；卸载/禁用即消失）
+        {
+            let mut auds = Vec::new();
+            for srv in &servers {
+                if let (Some(aud), scope) = (
+                    srv["transport"]["auth"]["audience"].as_str(),
+                    srv["transport"]["auth"]["scope"].as_array(),
+                ) {
+                    let sc: Vec<String> = scope
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    auds.push((aud.to_string(), sc));
+                }
+            }
+            *self.shared.audiences.lock().unwrap() = auds;
+        }
         self.fire_inner("mcp.config", json!({ "servers": servers }))?;
-        self.fire_inner("tools.reload", json!({ "reason": "plugin" }))
+        self.fire_inner("tools.reload", json!({ "reason": "plugin" }))?;
+        // D38 §3.2 触发点 2/4：装配变更/RT 重启 ready 兜底——已登录即换票下发
+        // （登录先于 RT 起的时序由此补票）；未登录跳过（无票 → 调用 401）
+        self.refresh_agent_tickets();
+        Ok(())
     }
 
     fn spawn_child(&self) -> Result<mpsc::Receiver<()>, String> {
@@ -1016,7 +1076,12 @@ fn assemble_mcp_servers(
 ) -> Vec<Value> {
     let mut out = vec![json!({
         "name": "corp",
-        "transport": { "kind": "http", "baseUrl": format!("{}/mcp/corp", gateway.trim_end_matches('/')) }
+        "transport": {
+            "kind": "http",
+            "baseUrl": format!("{}/mcp/corp", gateway.trim_end_matches('/')),
+            // D38 单票制：corp 收编保留逻辑受众（与服务端 platform/agentjwt 同值）
+            "auth": { "type": "obo", "audience": "bbc-corp", "scope": [] }
+        }
     })];
     let mut taken: Vec<String> = vec!["corp".into()];
     // B3：系统级第二位=壳本地工具面（/mcp/local，schedule_*）；token 每次
@@ -1146,11 +1211,13 @@ fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
 
 /// 单 server 定义 → wire（D22 §6.1/L4 变量族——装配层静态替换：
 /// `${PLUGIN_ROOT}` 版本目录 / `${BBC_USER_ID}`·`${BBC_USER_NAME}` 当前登录
-/// 用户 / `${CONFIG:key}` 插件配置（config.json+钥匙串合并）；**`${BBC_USER_TOKEN}`
-/// 仅 HTTP headers 保留给 RT 调用层动态替换**（token 15min 轮换不静态化），
-/// stdio env 遇 TOKEN 置空（HTTP-only 约定——env 是 spawn 快照，D22 决策④）。
-/// 个人面（D26 §6）复用：plugin_root 传空串、config 传空表——USER_ID/NAME
-/// 照常替换、TOKEN 照常留给 RT）
+/// 用户 / `${CONFIG:key}` 插件配置（config.json+钥匙串合并）。
+/// **统一身份（D38 §5）**：`x-bbc-auth:{type:"obo"[,scope]}` 声明 → wire 带
+/// auth（audience=该 server url，宿主显式填、RT 不推导）；**旧写法归一**（拍板 12）：
+/// headers 含 `${BBC_USER_TOKEN}` 等价统一身份（headers 原样保留——RT 调用层
+/// 按受众票替换该占位，效果与自动 Bearer 等价）。**stdio 声明统一身份 → 拒装**
+/// （拍板 8：管道内无验证方，令牌不进子进程）。个人面（D26 §6）复用：
+/// plugin_root 传空串、config 传空表）
 pub(crate) fn mcp_server_wire(
     name: &str,
     def: &Value,
@@ -1176,6 +1243,14 @@ pub(crate) fn mcp_server_wire(
         // stdio 约定：TOKEN 不进子进程 env（HTTP-only）
         out.replace("${BBC_USER_TOKEN}", "")
     };
+    // D38 拍板 8：stdio 永不需要令牌——声明统一身份直接拒装（发布校验双保险，
+    // 装配器为最后一道）
+    if def.get("command").is_some() && def.get("x-bbc-auth").is_some() {
+        eprintln!(
+            "[bbc-bridge] MCP server '{name}' 为 stdio 形态却声明 x-bbc-auth（D38：stdio 永不需要令牌），拒装"
+        );
+        return None;
+    }
     if let Some(cmd) = def.get("command").and_then(Value::as_str) {
         let args: Vec<String> = def
             .get("args")
@@ -1221,9 +1296,38 @@ pub(crate) fn mcp_server_wire(
                 .collect::<serde_json::Map<String, Value>>(),
             None => serde_json::Map::new(),
         };
+        // 统一身份（D38 §5）：显式 x-bbc-auth 优先；旧 headers TOKEN 写法归一（拍板 12）。
+        // 受众=该 server url（目的地即受众）；scope 声明透传（空=服务端按用户全量签）
+        let legacy = headers
+            .values()
+            .any(|v| v.as_str().map_or(false, |s| s.contains("${BBC_USER_TOKEN}")));
+        let auth = def.get("x-bbc-auth").map(|a| {
+            let scope = a
+                .get("scope")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            json!({ "type": "obo", "audience": url, "scope": scope })
+        });
+        let auth = match auth {
+            Some(a) => Some(a),
+            None if legacy => {
+                // 拍板 12 归一：旧插件零修改升级（headers 原样保留——RT 按受众票替换占位）
+                Some(json!({ "type": "obo", "audience": url, "scope": [] }))
+            }
+            None => None,
+        };
+        let mut transport = json!({ "kind": "http", "baseUrl": url, "headers": headers });
+        if let Some(a) = auth {
+            transport["auth"] = a;
+        }
         return Some(json!({
             "name": name,
-            "transport": { "kind": "http", "baseUrl": url, "headers": headers }
+            "transport": transport
         }));
     }
     None
@@ -1307,6 +1411,8 @@ mod tests {
             obo_scopes: Mutex::new(Vec::new()),
             gateway: "http://127.0.0.1:8080".into(),
             halted: AtomicBool::new(false),
+            // D38 批5：统一身份受众集合（测试缺省空——无受众即无票）
+            audiences: Mutex::new(Vec::new()),
         });
         (shared, "s1".into())
     }
@@ -1330,5 +1436,99 @@ mod tests {
             &json!({ "sessionId": "ghost", "restored": false }),
         );
         assert_eq!(shared.sessions.lock().unwrap()[0].status, "starting");
+    }
+
+    // ── D38 批5：统一身份装配（x-bbc-auth 解析/旧写法归一/stdio 拒装/受众=目的地）──
+
+    #[test]
+    fn wire_explicit_auth_audience_is_url() {
+        let def = json!({
+            "url": "https://oa.company.internal/mcp",
+            "x-bbc-auth": { "type": "obo", "scope": ["oa:read"] }
+        });
+        let w = mcp_server_wire("oa", &def, "", &(String::new(), String::new()), &Default::default())
+            .expect("声明统一身份应出 wire");
+        let auth = &w["transport"]["auth"];
+        assert_eq!(auth["type"], "obo");
+        assert_eq!(auth["audience"], "https://oa.company.internal/mcp", "受众=目的地");
+        assert_eq!(auth["scope"][0], "oa:read");
+    }
+
+    #[test]
+    fn wire_legacy_token_header_normalized() {
+        // 拍板 12：旧 headers ${BBC_USER_TOKEN} 写法归一为统一身份（headers 原样保留给 RT）
+        let def = json!({
+            "url": "https://hr.company.internal/mcp",
+            "headers": { "Authorization": "Bearer ${BBC_USER_TOKEN}" }
+        });
+        let w = mcp_server_wire("hr", &def, "", &(String::new(), String::new()), &Default::default())
+            .expect("旧写法应归一出 wire");
+        assert_eq!(w["transport"]["auth"]["audience"], "https://hr.company.internal/mcp");
+        assert_eq!(
+            w["transport"]["headers"]["Authorization"],
+            "Bearer ${BBC_USER_TOKEN}",
+            "headers 占位保留——RT 按受众票替换"
+        );
+    }
+
+    #[test]
+    fn wire_plain_http_has_no_auth() {
+        let def = json!({
+            "url": "https://gitlab.company.com/api/mcp",
+            "headers": { "Private-Token": "${CONFIG:gitlab_token}" }
+        });
+        let w = mcp_server_wire(
+            "gitlab",
+            &def,
+            "",
+            &(String::new(), String::new()),
+            &serde_json::Map::from_iter([("gitlab_token".into(), json!("secret-x"))]),
+        )
+        .expect("普通外部系统应出 wire");
+        assert!(w["transport"]["auth"].is_null(), "无声明=匿名不注入");
+        assert_eq!(w["transport"]["headers"]["Private-Token"], "secret-x");
+    }
+
+    #[test]
+    fn wire_stdio_with_auth_rejected() {
+        // 拍板 8：stdio 永不需要令牌——声明 x-bbc-auth 拒装
+        let def = json!({
+            "command": "node",
+            "args": ["server.mjs"],
+            "x-bbc-auth": { "type": "obo" }
+        });
+        assert!(
+            mcp_server_wire("local", &def, "", &(String::new(), String::new()), &Default::default())
+                .is_none(),
+            "stdio + x-bbc-auth 应拒装"
+        );
+    }
+
+    #[test]
+    fn audiences_extracted_from_assembly() {
+        // 受众集合提取： corp 恒在 + 插件声明者入集（没装就没受众——D38 §3.1）
+        let assembly = vec![
+            json!({ "name": "corp", "transport": { "kind": "http", "baseUrl": "http://x/mcp/corp",
+                "auth": { "type": "obo", "audience": "bbc-corp", "scope": [] } } }),
+            json!({ "name": "oa", "transport": { "kind": "http", "baseUrl": "https://oa.internal/mcp",
+                "auth": { "type": "obo", "audience": "https://oa.internal/mcp", "scope": ["oa:read"] } } }),
+            json!({ "name": "gitlab", "transport": { "kind": "http", "baseUrl": "https://gl/api" } }),
+        ];
+        let mut auds = Vec::new();
+        for srv in &assembly {
+            if let (Some(aud), scope) = (
+                srv["transport"]["auth"]["audience"].as_str(),
+                srv["transport"]["auth"]["scope"].as_array(),
+            ) {
+                let sc: Vec<String> = scope
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                auds.push((aud.to_string(), sc));
+            }
+        }
+        assert_eq!(auds.len(), 2, "无 auth 的 server 不进受众集合");
+        assert_eq!(auds[0].0, "bbc-corp");
+        assert_eq!(auds[1].0, "https://oa.internal/mcp");
+        assert_eq!(auds[1].1, vec!["oa:read".to_string()]);
     }
 }
