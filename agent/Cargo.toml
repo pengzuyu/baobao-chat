@@ -5,7 +5,7 @@ resolver = "2"
 members = ["crates/bbrt-protocol", "crates/bbrt-session", "crates/bbrt-sec", "crates/bbrt-memory", "crates/bbrt-store", "crates/bbrt-context", "crates/bbrt-aigw", "crates/bbrt-hostapi", "crates/bbrt-mcp", "crates/bbrt-tools", "crates/bbrt"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 
 # 版本统一在此管理，crate 内只写 workspace = true，禁止散落版本号
