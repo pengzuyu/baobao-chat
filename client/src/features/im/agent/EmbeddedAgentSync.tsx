@@ -118,12 +118,21 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
         }
       }
       if (!landedMsgRef.current) {
-        // 无 running 卡：历史轮均已收口（或本轮在工作台发起）→ 封口。2026-11-20 修
+        // 无 running 卡且本轮已收口（roundClosed）→ 历史旧轮封口。2026-11-20 修
         // 「重进聊天页一次多一张重复结果卡」：此前只 return 一次，之后流事件/终态翻转
         // 触发 effect 再跑会走「无目标→落新卡」分支，把旧轮结果用新盐 token 重复落流
         // （服务端 client_msg_id 幂等永不命中，每次重进 INSERT 一行 agent_card）
-        sealedRoundRef.current = true;
-        return;
+        // 2026-11-24 修「聊天页提问回复只在工作台展示」（封口误伤在途回合回归）：
+        // 聊天页刚发起的回合此刻必然还没有卡——落卡正是本组件职责，无条件封口会把
+        // 整轮永久吞掉（过程与回复只在会话流里可见，IM 消息流无卡）。未收口轮不封口
+        // 放行到下方 origin 闸门（workbench 发起/历史未知照旧静默不落）；WAL 回填的
+        // 旧轮 turnDoneAt 必打点（终态收口含 interrupt），收口旧轮照旧封口防重复落流
+        if (roundClosed) {
+          sealedRoundRef.current = true;
+          return;
+        }
+        // 在途回合放行落卡：计时起点对齐本轮 user ts（卡头「已用时」口径不被挂载时刻覆盖）
+        if (lastUser) roundStartRef.current = lastUser.ts;
       }
     } else if (landedRoundRef.current !== userCount) {
       // 新回合：唯一 token 落新卡（0 阶段 running 也落）+ 重置落流目标（一轮一卡）
