@@ -598,7 +598,8 @@ impl AgentHost {
                 self.bin.display()
             );
         }
-        let mut child = Command::new(&self.bin)
+        let mut child = Command::new(&self.bin);
+        child
             .env("BBC_RT_DATA_DIR", &self.data_dir)
             .env("BBC_RT_GATEWAY", &self.gateway)
             // 公司域 MCP 网关（D18 §3.5：agent 经 im_history 自读会话上下文等
@@ -612,7 +613,18 @@ impl AgentHost {
             .stderr(match err_log {
                 Ok(f) => Stdio::from(f),
                 Err(_) => Stdio::inherit(),
-            })
+            });
+        // Windows：GUI 父进程（windows_subsystem）启动控制台子进程，系统默认给
+        // 子进程新开一个控制台窗口——登录即拉起 RT 后桌面会弹「bbrt.exe shell」
+        // （2026-11-24 用户报修）。bbrt 三路 IO 全接管（stdin/stdout JSONL 管道 +
+        // stderr 落 bbrt.log），窗口纯属多余——CREATE_NO_WINDOW 显式压掉
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            child.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = child
             .spawn()
             .map_err(|e| format!("bbrt 启动失败: {e}"))?;
         let stdin = child.stdin.take().ok_or("stdin 不可用")?;
