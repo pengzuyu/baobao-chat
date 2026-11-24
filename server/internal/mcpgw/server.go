@@ -95,7 +95,7 @@ func (g *Gateway) HandleMCP(w http.ResponseWriter, r *http.Request) {
 				bizFail = true
 			}
 		}
-		g.audit(r.Context(), claims, frame.Params, actOf(frame.Params, r.Header.Get("X-BBC-Act")), err, bizFail, time.Since(start))
+		g.audit(r.Context(), claims, frame.Params, actOf(claims), err, bizFail, time.Since(start))
 	}
 
 	if err != nil {
@@ -259,12 +259,14 @@ func (g *Gateway) writeRPCError(w http.ResponseWriter, id json.RawMessage, e *rp
 	})
 }
 
-// actOf 归因身份（③）：_meta.bbcAct 优先，X-BBC-Act 头兜底（10 篇 §5）
-func actOf(params json.RawMessage, headerAct string) string {
-	if v := metaString(params, "bbcAct"); v != "" {
-		return v
+// actOf 归因身份（③，D38 批3）：票内 act 为权威源——agent 票 ES256 携带
+// act.sub（现口径 desktop-{did} 设备级）；params._meta.bbcAct / X-BBC-Act 头
+// 通道随 HS256 内部票一并退役（验签失败根本进不到这里）。
+func actOf(claims *authjwt.Claims) string {
+	if claims.Actor != nil {
+		return claims.Actor.AgentSessionID
 	}
-	return headerAct
+	return ""
 }
 
 // metaString params._meta.{key} 字符串取值

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baobaochat/server/internal/platform/agentjwt"
 	"github.com/baobaochat/server/internal/platform/authjwt"
 )
 
@@ -22,7 +23,7 @@ const testSecret = "test-secret-0123456789abcdef0123456789abcdef"
 
 type fixture struct {
 	gw        *Gateway
-	signer    *authjwt.Signer
+	agentSigner *agentjwt.Issuer
 	kbArgs    []map[string]any // KBQuery 闭包收到的调用参数
 	imSends   []map[string]any // ImSend 闭包收到的参数
 	imHistoryCalls []map[string]any // ImHistory 闭包收到的调用参数
@@ -47,10 +48,17 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{signer: authjwt.NewSigner([]byte(testSecret))}
+	// D38 批3：agent 票 ES256 验签（aud 包含 bbc-corp），HS256 内部票退役
+	key, err := agentjwt.GenDevKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentSigner := agentjwt.NewIssuerWithKey("https://bbc.test/oauth2", key)
+	agentVerifier := agentjwt.NewVerifierWithKey("https://bbc.test/oauth2", key)
+	f := &fixture{agentSigner: agentSigner}
 	f.gw = &Gateway{opts: Options{
 		Verify: func(_ context.Context, token string) (*authjwt.Claims, error) {
-			return f.signer.Parse(token)
+			return agentVerifier.Verify(token, agentjwt.AudCorp)
 		},
 		KBQuery: func(_ context.Context, tenantID, uid int64, spaceIDs []string, keyword string, topK int) (any, error) {
 			f.kbArgs = append(f.kbArgs, map[string]any{
@@ -149,18 +157,18 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
-// mint 签发测试令牌（OBO 时携带 Actor 与 scope）
+// mint 签发测试 agent 票（D38 批3 ES256；OBO 时携带 act 与 scope；aud=bbc-corp）
 func (f *fixture) mint(t *testing.T, subject string, obo bool, scopes ...string) string {
 	t.Helper()
 	now := time.Now().Unix()
-	c := authjwt.Claims{
-		Subject: subject, TenantID: 1, Scope: scopes,
+	c := agentjwt.Claims{
+		Subject: subject, TenantID: 1, Audience: []string{agentjwt.AudCorp}, Scope: scopes,
 		JWTID: authjwt.NewJTI(), IssuedAt: now, ExpiresAt: now + 600,
 	}
 	if obo {
-		c.Actor = &authjwt.Actor{AgentSessionID: "sess-1"}
+		c.Actor = &agentjwt.Act{Sub: "sess-1"}
 	}
-	tok, err := f.signer.Sign(c)
+	tok, err := f.agentSigner.Sign(c)
 	if err != nil {
 		t.Fatalf("签发令牌失败: %v", err)
 	}
@@ -270,8 +278,9 @@ func TestCallKbQueryHappyPathBearer(t *testing.T) {
 	if len(f.kbArgs) != 1 || f.kbArgs[0]["uid"] != int64(7) || f.kbArgs[0]["top_k"] != 5 {
 		t.Fatalf("KBQuery 参数: %v", f.kbArgs)
 	}
-	// 审计（③ 归因）
-	if len(f.audits) != 1 || !f.audits[0].OK || f.audits[0].Subject != 7 || f.audits[0].Tool != "kb_query" || f.audits[0].Act != "agent:sess-1" {
+	// 审计（③ 归因，D38 批3：act 权威源=票内 act；请求 _meta.bbcAct 已退役被忽略，
+	// 非 OBO 用户票无 act → 审计 Act 空）
+	if len(f.audits) != 1 || !f.audits[0].OK || f.audits[0].Subject != 7 || f.audits[0].Tool != "kb_query" || f.audits[0].Act != "" {
 		t.Fatalf("审计行: %+v", f.audits)
 	}
 }
@@ -289,8 +298,9 @@ func TestCallKbQueryMetaOboFallback(t *testing.T) {
 	if f.kbArgs[0]["uid"] != int64(9) {
 		t.Fatalf("主体应取 OBO sub=9: %v", f.kbArgs)
 	}
-	if f.audits[0].OBO != true || f.audits[0].Act != "expert:ppt:a1" {
-		t.Fatalf("审计应记 OBO 与专家归因: %+v", f.audits)
+	// D38 批3：act=票内 act.sub（sess-1）；meta bbcAct 已退役被忽略；bbcObo meta 主体兜底仍生效
+	if f.audits[0].OBO != true || f.audits[0].Act != "sess-1" {
+		t.Fatalf("审计应记 OBO 与票内归因: %+v", f.audits)
 	}
 }
 
@@ -514,7 +524,8 @@ func TestMailSendSupply(t *testing.T) {
 	if len(f.mailSends) != 1 || f.mailSends[0]["uid"] != int64(7) || len(f.mailSends[0]["cc"].([]string)) != 1 {
 		t.Fatalf("发送链路: %v", f.mailSends)
 	}
-	if len(f.audits) != 1 || f.audits[0].Tool != "mail_send" || f.audits[0].Act != "agent:sess-m" {
+	// D38 批3：act 权威源=票内（非 OBO 用户票无 act → 空；meta bbcAct 忽略）
+	if len(f.audits) != 1 || f.audits[0].Tool != "mail_send" || f.audits[0].Act != "" {
 		t.Fatalf("审计: %+v", f.audits)
 	}
 	// to 缺失

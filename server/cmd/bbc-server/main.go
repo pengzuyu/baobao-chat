@@ -181,6 +181,7 @@ func main() {
 		log.Println("[agentjwt] 警告：BBC_OIDC_SIGNING_KEY 未配置，使用临时密钥（重启后已签票失效；生产必须配置）")
 	}
 	agentSigner := agentjwt.NewIssuerWithKey(cfg.OIDCIssuer, agentKey)
+	agentVerifier := agentjwt.NewVerifierWithKey(cfg.OIDCIssuer, agentKey)
 	// agentKillOn 平台总闸（D9）：adminSvc 装配于后段——var 前置声明，auth/aigw
 	// 两处闭包捕获引用，adminSvc 就绪后回填即双点生效（OBO 签发 + 网关每请求）
 	var agentKillOn func() bool
@@ -503,8 +504,10 @@ func main() {
 	mux.HandleFunc("GET /api/v1/files/dl", handleFileDownload(fileSvc))
 
 	// AI 网关（docs/19 §6：OpenAI 兼容入口；独立鉴权链——JWT/OBO/开发令牌，不走 /api/v1 authed）
+	// agent 票验签（D38 批3）：aigw/corp 的 agent 票统一 ES256（aud=各自保留逻辑名）；
+	// 内部 HS256 agent 票退役——主 access（用户 WS/REST）仍走 authAPI.Verify 不变
 	aigwMod := aigw.NewModule(pgPool, func(token string) (*authjwt.Claims, error) {
-		return authAPI.Verify(context.Background(), token)
+		return agentVerifier.Verify(token, agentjwt.AudAigw)
 	}, func() bool { return agentKillOn != nil && agentKillOn() })
 	mux.HandleFunc("POST /v1/chat/completions", aigwMod.Gateway.HandleChat)
 	mux.HandleFunc("POST /v1/embeddings", aigwMod.Gateway.HandleEmbeddings)
@@ -627,8 +630,9 @@ func main() {
 	// kb_query（OQ-B26 试点）+ im_send/file_upload（09 篇 §3.1 全量）；doc_read 已随 doc 域移除。
 	// 独立鉴权链（Bearer=用户 JWT/OBO，同 aigw 口径），不走 /api/v1 authed ──
 	mcpgwMod := mcpgw.NewModule(mcpgw.Options{
+		// agent 票验签（D38 批3）：ES256 + aud 包含 bbc-corp（保留逻辑名）
 		Verify: func(_ context.Context, token string) (*authjwt.Claims, error) {
-			return authAPI.Verify(context.Background(), token)
+			return agentVerifier.Verify(token, agentjwt.AudCorp)
 		},
 		// 跨域闭包（D02 §4：mcpgw 不横向依赖 kb/doc 包；数据过滤在域服务=防线三）
 		KBQuery: func(ctx context.Context, tenantID, uid int64, spaceIDs []string, keyword string, topK int) (any, error) {
