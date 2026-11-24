@@ -33,6 +33,7 @@ import type { AgentSessionMeta, AgentWorkspaceInfo } from '../bridge/types';
 import { SESSION_STATUS_LABELS } from '../bridge/types';
 import { Button } from '../../../shared/ui/Button';
 import { formatListTime } from '../../../shared/utils/time';
+import { displayPath } from '../utils/displayPath';
 import { embeddedSessionIds } from '../../im/agent/embedded';
 
 /** 状态点形态（D08 §3.1：●运行 / ◐等待审批 / ○暂停 / ✕错误 / ▪已结束）→ antd Badge 状态 */
@@ -173,7 +174,7 @@ function SessionRowLabel({
   return (
     <span
       style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 8, minWidth: 0, width: '100%', lineHeight: 1.4 }}
-      title={`${s.title} · ${SESSION_STATUS_LABELS[s.status]} · ${s.workspace || origin}`}
+      title={`${s.title} · ${SESSION_STATUS_LABELS[s.status]} · ${s.workspace ? displayPath(s.workspace) : origin}`}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
@@ -422,7 +423,7 @@ export const AgentSessionList = memo(function AgentSessionList({
                 // antd 折叠箭头占位（绝对定位 insetInlineEnd 16px + 宽 10px），防与行尾动作钮重叠
                 <span
                   style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 6, minWidth: 0, width: '100%', paddingInlineEnd: 30, lineHeight: 1.4 }}
-                  title={g.path}
+                  title={displayPath(g.path)}
                 >
                   <span
                     style={{

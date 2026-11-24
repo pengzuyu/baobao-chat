@@ -42,6 +42,7 @@ import { clearEmbeddedSessionId, convIdOfSession } from '../../im/agent/embedded
 import { sendBotText } from '../../im/api/im';
 import { useImStore } from '../../im/store/im';
 import { Composer } from '../components/Composer';
+import { displayPath } from '../utils/displayPath';
 import { fetchPluginCommands, type PluginCommand } from '../../eco/api/plugins';
 
 /** 回合进行中的会话状态集（回合气泡 active 判定） */
@@ -673,14 +674,14 @@ export function AgentWorkbenchPage() {
               >
                 <div
                   style={{ minWidth: 0, marginRight: 8 }}
-                  title={activeSession.workspace || (embeddedConvId ? '聊天会话（IM 来源）· 无工作目录' : '任务会话 · 无工作目录')}
+                  title={activeSession.workspace ? displayPath(activeSession.workspace) : embeddedConvId ? '聊天会话（IM 来源）· 无工作目录' : '任务会话 · 无工作目录'}
                 >
                   <Typography.Text strong ellipsis style={{ display: 'block', maxWidth: 220, fontSize: 14 }}>
                     {activeSession.title}
                   </Typography.Text>
                   <Typography.Text type="secondary" ellipsis style={{ display: 'block', maxWidth: 220, fontSize: 12 }}>
                     {activeSession.workspace
-                      ? `${workspaces.find((w) => w.path === activeSession.workspace)?.name ?? activeSession.workspace.split('/').filter(Boolean).pop()} · ${activeSession.workspace}`
+                      ? `${workspaces.find((w) => w.path === activeSession.workspace)?.name ?? activeSession.workspace.split(/[\\/]/).filter(Boolean).pop()} · ${displayPath(activeSession.workspace)}`
                       : embeddedConvId
                         ? '聊天会话 · 无工作目录'
                         : '任务会话 · 无工作目录'}

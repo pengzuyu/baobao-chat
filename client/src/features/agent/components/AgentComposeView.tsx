@@ -23,6 +23,7 @@ import type { PermissionMode } from '../bridge/types';
 import { ModelThinkPicker } from './ModelThinkPicker';
 import { Composer } from './Composer';
 import { resolveDefaultModel } from '../utils/resolveModel';
+import { displayPath } from '../utils/displayPath';
 import type { PluginCommand } from '../../eco/api/plugins';
 import type { AIProvider } from '../../admin/model/types';
 
@@ -146,7 +147,7 @@ export function AgentComposeView({ workspace, aiProviders, pluginCommands }: Age
       }}
     >
       {workspace && projectName ? (
-        <Flex align="center" gap={6} title={workspace} style={{ color: token.colorTextSecondary, fontSize: 13, maxWidth: '100%' }}>
+        <Flex align="center" gap={6} title={displayPath(workspace)} style={{ color: token.colorTextSecondary, fontSize: 13, maxWidth: '100%' }}>
           <FolderOpen size={14} aria-hidden />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>所属项目 · {projectName}</span>
         </Flex>
