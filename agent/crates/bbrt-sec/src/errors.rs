@@ -31,3 +31,7 @@ pub const CODE_NETWORK_NOT_ALLOWED: u32 = 8025;
 
 /// 8026：敏感文件读取被拒绝（默认拒读清单：.env* / *.pem / id_rsa* 等）
 pub const CODE_SENSITIVE_READ: u32 = 8026;
+
+/// 8027：工具实现 panic（catch_unwind 兜底转工具错误——不杀会话循环线程，
+/// 否则 tool.result/turn.end 永不发出，UI 永久「执行中」且无法停止）
+pub const CODE_TOOL_PANIC: u32 = 8027;

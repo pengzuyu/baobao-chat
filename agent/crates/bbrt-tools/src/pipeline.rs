@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use bbrt_sec::danger_rules::DangerRuleSet;
-use bbrt_sec::errors::CODE_NO_PERMISSION_POINT;
+use bbrt_sec::errors::{CODE_NO_PERMISSION_POINT, CODE_TOOL_PANIC};
 use bbrt_sec::gate::{permission_gate, AllowSource, Decision, GateCtx, ToolCall as GateCall};
 use bbrt_sec::masking::mask;
 use bbrt_sec::memory::{Grant, GrantScope, GrantStore};
@@ -373,8 +373,12 @@ impl ToolExecutor for PipelineExecutor {
         } else {
             self.env.clone()
         };
-        // ⑥ 分发执行（未注册兜底 8002）
-        let result: Result<ExecOutput, ToolBlock> = match call.name.as_str() {
+        // ⑥ 分发执行（未注册兜底 8002）。catch_unwind 兜底（8027，2026-11-23）：
+        // builtin 实现 panic（现场：search_files 行截断落在多字节字符中间）裸穿会
+        // 杀掉会话循环线程——tool.result/turn.end 永不发出，UI 永久「执行中」且
+        // 「停止」旗标无人读取＝无法停止。panic 就地转工具错误，本轮继续收口。
+        let result: Result<ExecOutput, ToolBlock> = match std::panic::catch_unwind(
+            std::panic::AssertUnwindSafe(|| match call.name.as_str() {
             "read_file" => builtin::fs::read_file(&env, &args),
             "list_dir" => builtin::fs::list_dir(&env, &args),
             "write_file" => builtin::fs::write_file(&env, &args),
@@ -424,6 +428,22 @@ impl ToolExecutor for PipelineExecutor {
                 code: CODE_NO_PERMISSION_POINT,
                 message: format!("工具 {} 未注册（8002）", call.name),
             }),
+            }),
+        ) {
+            Ok(r) => r,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "未知 panic".into());
+                // 宿主把 stderr 汇入 bbrt.log——留现场第一手 panic 原文便于归因
+                eprintln!("[tools] 工具 {} panic（8027）: {msg}", call.name);
+                Err(ToolBlock {
+                    code: CODE_TOOL_PANIC,
+                    message: format!("工具 {} 内部崩溃（8027）: {msg}", call.name),
+                })
+            }
         };
         match result {
             // ⑦ 结果脱敏（先打码再回填上下文/UI；09 §7.2）

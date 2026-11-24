@@ -427,6 +427,32 @@ fn search_files_200条上限截断标注() {
     assert_eq!(summary.lines().count(), 201); // 200 行 + 标注行
 }
 
+/// 2026-11-23 修「search_files 卡死」回归：命中行超 200 字节且第 200 字节
+/// 落在多字节字符中间（现场 panic 原文：'为' bytes 198..201）——旧实现
+/// &line[..200] 直接 panic 杀会话循环线程（UI 永久执行中且无法停止），
+/// 现回退最近字符边界截断。67 个'为'（201 字节）+needle：截断点=198。
+#[test]
+fn search_files_多字节截断不panic() {
+    let f = Fixture::new();
+    fs::write(
+        f.ws.path().join("a2a-doc.md"),
+        format!("{}needle\n", "为".repeat(67)),
+    )
+    .unwrap();
+    let ex = f.executor();
+    // 修复前本调用 panic（测试进程直接失败）
+    let (summary, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("search_files", serde_json::json!({"pattern": "needle"})),
+    ));
+    assert!(summary.contains("a2a-doc.md"), "命中文件应在结果中: {summary}");
+    // 展示行按字符边界截到 66 个'为'（198 字节）——不 panic 且不切半字符
+    assert!(
+        summary.contains(&"为".repeat(66)),
+        "截断应落在字符边界: {summary}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // run_command（真实沙箱）
 // ---------------------------------------------------------------------------

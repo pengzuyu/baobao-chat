@@ -186,7 +186,19 @@ fn read_head(path: &Path) -> Option<String> {
 /// 内容命中 → 展示行 "path:首个命中行"（行截 200 字）
 fn content_line(path: &Path, text: &str, pattern: &str) -> Option<String> {
     let line = text.lines().find(|l| l.contains(pattern))?;
-    let line = if line.len() > 200 { &line[..200] } else { line };
+    // 2026-11-23 修「search_files 卡死」：line.len() 是字节数，中文等多字节
+    // 字符下 200 落在字符中间时 &line[..200] 直接 panic（现场：'为' 198..201）——
+    // 工具线程一死 tool.result/turn.end 全断，会话永久执行中且无法停止。
+    // 回退到 ≤200 的最近字符边界再切。
+    let line = if line.len() > 200 {
+        let mut end = 200;
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        &line[..end]
+    } else {
+        line
+    };
     Some(format!("{}:{}", path.display(), line.trim()))
 }
 
