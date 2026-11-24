@@ -11,7 +11,7 @@
  * - 扩展点：DockTab.type 未来增 browser/文件等内容类型，本坞即通用内容区
  */
 
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Button, Tabs, Tag, Typography, theme } from 'antd';
 import { PanelRightClose } from 'lucide-react';
 import { useAgentStore, type StreamItem } from '../store/agent';
@@ -48,6 +48,53 @@ function RunProcessPanel({ runId, run }: { runId: string; run?: RunInfo }) {
   const running = run?.status === 'running';
   const taskText = items[0]?.kind === 'user' ? items[0].text : (run?.summary ?? '');
 
+  // ---- 滚动跟随（2026-11-24 对齐中栏口径：贴底跟随新输出，用户上滚即停跟）----
+  // RO 观察内容层增高吸底（内容层恒挂载，观察器一次注册即稳）+ 运行中 300ms 兜底
+  // 轮询（对齐聊天页 agentRunning 口径，cleanup 补滚一次兜收口）；切 tab 重置贴底首跳
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
+  const onDockScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  }, []);
+  useEffect(() => {
+    stickRef.current = true;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [runId]);
+  useEffect(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      if (!stickRef.current) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (stickRef.current) el.scrollTop = el.scrollHeight;
+      });
+    });
+    ro.observe(content);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+  useEffect(() => {
+    if (!running) return;
+    const follow = () => {
+      const el = scrollRef.current;
+      if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+    };
+    const timer = window.setInterval(follow, 300);
+    return () => {
+      window.clearInterval(timer);
+      follow();
+    };
+  }, [running]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: 8 }}>
       <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
@@ -70,14 +117,17 @@ function RunProcessPanel({ runId, run }: { runId: string; run?: RunInfo }) {
           {run && run.etaActualMs > 0 ? ` ${formatDuration(run.etaActualMs)}` : ''}
         </span>
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', borderTop: `1px solid ${token.colorBorderSecondary}`, paddingTop: 8 }}>
-        {items.length === 0 ? (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {running ? '正在执行，过程即将出现…' : '暂无过程记录（该类型子任务不记录过程明细）'}
-          </Typography.Text>
-        ) : (
-          <AgentStreamView items={items} onRespond={() => undefined} active={running} />
-        )}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', borderTop: `1px solid ${token.colorBorderSecondary}`, paddingTop: 8 }} ref={scrollRef} onScroll={onDockScroll}>
+        {/* 内容层恒挂载（RO 观察本层高度，空提示↔流渲染互切不换观察目标）；gap/块间距对齐中栏内容层 */}
+        <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {items.length === 0 ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {running ? '正在执行，过程即将出现…' : '暂无过程记录（该类型子任务不记录过程明细）'}
+            </Typography.Text>
+          ) : (
+            <AgentStreamView items={items} onRespond={() => undefined} active={running} />
+          )}
+        </div>
       </div>
     </div>
   );

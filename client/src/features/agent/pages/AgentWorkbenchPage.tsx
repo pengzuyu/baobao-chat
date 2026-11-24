@@ -281,10 +281,10 @@ export function AgentWorkbenchPage() {
     [embeddedConvId],
   );
   const prevLenRef = useRef(items.length);
-  // 容器挂载标记（loading/empty/none 分支不渲染 streamNode）：跨分支切换时
-  // contentRef 指向新元素，RO 须随挂载重 observe——依赖 [] 的旧写法在「首载
-  // loading→ok」路径空跑后再也不 observe，吸底整体失效
-  const streamMounted = streamState === 'ok' || streamState === 'degraded' || streamState === 'offline';
+  // RO 挂载/重挂（2026-11-24 修「输出不跟底」）：依赖 streamState 本值而非派生布尔——
+  // ok↔degraded/offline/empty/loading 任一分支翻转都可能整段重建 DOM（StateView 包裹
+  // 层/居中输入分支换树），旧依赖 streamMounted 在「true 期间换树」路径不重跑，留下
+  // 观察已卸载元素的死 RO（rAF 仍在滚 detached 节点），吸底自此永久失效；按值重挂零成本
   useEffect(() => {
     const el = streamRef.current;
     const content = streamContentRef.current;
@@ -305,7 +305,24 @@ export function AgentWorkbenchPage() {
       ro.disconnect();
       cancelAnimationFrame(raf);
     };
-  }, [streamMounted]);
+  }, [streamState]);
+  // 回合进行中 300ms 周期跟随兜底（对齐聊天页 agentRunning 口径）：流式 delta 原地
+  // 长高/收口前最后一次增高不依赖 RO 也能跟住——RO 失联（分支重建 DOM 等边角）期间
+  // 输出不丢跟随；内部判贴底才滚，用户上滚即自然停跟（不抢滚动条），滚回底部恢复；
+  // cleanup 补滚一次兜住收口最后一次增高
+  const followDuringTurn = !!activeSession && TURN_ACTIVE_STATUSES.has(activeSession.status);
+  useEffect(() => {
+    if (!followDuringTurn) return;
+    const follow = () => {
+      const el = streamRef.current;
+      if (el && stickBottomRef.current) el.scrollTop = el.scrollHeight;
+    };
+    const timer = window.setInterval(follow, 300);
+    return () => {
+      window.clearInterval(timer);
+      follow();
+    };
+  }, [followDuringTurn]);
   // 切会话重置跟随态 + 首跳兜底：新会话历史全量在 DOM（无上翻分页），进入即
   // 底部；rAF 直跳兜「两会话内容等高、RO 无变化不触发」的极端情况
   useEffect(() => {
