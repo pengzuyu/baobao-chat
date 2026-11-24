@@ -1,6 +1,8 @@
 //! 多会话管理（D11 §2.2 manager.rs）：
-//! 活跃会话 ≤3（超出拒绝）；session.start/end 的存储生命周期；
-//! 宿主消息分发入口（bin 装配调用；turn 在独立线程跑，
+//! session.start/end 的存储生命周期（2026-11-24 用户裁决：≤3 活跃名额护栏解除——
+//! 「会话不死」后名额只进不出（end 无 UI 入口、idle 复活再占位），把「用过」当
+//! 「活跃中」误伤正常使用；资源护栏如需恢复，按「回合进行中」口径重设而非进程内
+//! 会话数）；宿主消息分发入口（bin 装配调用；turn 在独立线程跑，
 //! 审批回执经 permission_tx 路由表注入——sender 在 start 时克隆入表，
 //! receiver 随 runner 被 turn 线程取走，二者互不阻塞）。
 
@@ -48,8 +50,6 @@ impl SessionWorkspaces {
 /// 管理错误（bin 映射为 error 协议消息）
 #[derive(Debug, thiserror::Error)]
 pub enum ManagerError {
-    #[error("活跃会话已达上限（3），请先结束旧会话")]
-    TooManyActive,
     #[error("会话不存在: {0}")]
     NotFound(String),
     #[error("会话 {0} 正在处理上一条输入")]
@@ -141,9 +141,6 @@ impl SessionManager {
         p: StartParams,
     ) -> Result<RestoredSummary, ManagerError> {
         let mut guard = self.sessions.lock().unwrap();
-        if guard.len() >= 3 && !guard.contains_key(&session_id) {
-            return Err(ManagerError::TooManyActive);
-        }
         let now = now_ms();
         // D19 workspace realpath 归一（runner/沙箱/记忆分区/WAL 全链同一规范路径；
         // 空串=日常对话原样保留）

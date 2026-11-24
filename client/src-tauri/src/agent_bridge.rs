@@ -71,6 +71,24 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// REQ 回执载荷（读泵投递给等待方前调用）：信封层 type 回填进 payload 副本。
+/// 等待方只拿 payload，而 `Envelope::wrap` 把 type 提升到信封层（payload 内无
+/// type）——不回填则各调用点 `rep["type"] == "error"` 恒假：RT 的拒绝回执（如
+/// 8001 活跃会话超限）被当成功，宿主留下库里不存在的幽灵会话，之后每条消息都
+/// 被异步 8001「会话不存在（库中无行）」拒（2026-11-24 用户报修根因）
+fn reply_payload(env: &Value) -> Value {
+    let mut payload = env["payload"].clone();
+    if let Some(msg_type) = env["type"].as_str() {
+        if payload.is_null() {
+            payload = json!({});
+        }
+        if let Some(map) = payload.as_object_mut() {
+            map.insert("type".into(), Value::String(msg_type.to_string()));
+        }
+    }
+    payload
+}
+
 struct ProcState {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
@@ -694,7 +712,8 @@ impl AgentHost {
                     continue;
                 }
                 if let Some(reply_to) = env["reply_to"].as_str() {
-                    if shared.complete_req(reply_to, env["payload"].clone()) {
+                    // type 在信封层——回填后等待方才判得出 RT 拒绝（见 reply_payload）
+                    if shared.complete_req(reply_to, reply_payload(&env)) {
                         continue; // REQ 回执已投递
                     }
                 }
@@ -1558,5 +1577,55 @@ mod tests {
         assert_eq!(auds[0].0, "bbc-corp");
         assert_eq!(auds[1].0, "https://oa.internal/mcp");
         assert_eq!(auds[1].1, vec!["oa:read".to_string()]);
+    }
+
+    /// 回执载荷须携带信封层 type（2026-11-24 幽灵会话根因：Envelope::wrap 把 type
+    /// 提升出 payload，等待方只拿 payload → 调用点 `rep["type"] == "error"` 恒假，
+    /// RT 拒绝建会话被当成功）。样例=真机抓包（彼时活跃上限 3 的第 4 个
+    /// session.start；上限已于同日解除，样例仅作信封格式回归）
+    #[test]
+    fn reply_payload_carries_envelope_type() {
+        let env = json!({
+            "v": 1, "id": "r-7", "reply_to": "h-5", "type": "error",
+            "payload": { "code": 8001, "fatal": false,
+                         "message": "活跃会话已达上限（3），请先结束旧会话", "sessionId": "diag-4" }
+        });
+        assert!(
+            env["payload"].get("type").is_none(),
+            "前提：线上回执 payload 本身不带 type"
+        );
+        let rep = reply_payload(&env);
+        assert_eq!(rep["type"], "error");
+        assert_eq!(rep["code"], 8001);
+        assert_eq!(rep["message"], "活跃会话已达上限（3），请先结束旧会话");
+        assert_eq!(rep["sessionId"], "diag-4", "其余字段原样保留");
+
+        // 正常回执同理；原信封不被改动
+        let ok = json!({ "type": "session.ready", "reply_to": "h-2", "payload": { "sessionId": "s1" } });
+        let rep = reply_payload(&ok);
+        assert_eq!(rep["type"], "session.ready");
+        assert_eq!(rep["sessionId"], "s1");
+        assert!(ok["payload"].get("type").is_none());
+
+        // 无字段回执（payload 缺省=Null）不得 panic
+        assert_eq!(reply_payload(&json!({ "type": "pong" }))["type"], "pong");
+    }
+
+    /// 读泵投递路径：经 complete_req 送达等待方的回执带 type（等待方据此判 RT 拒绝）；
+    /// 无等待方（超时后迟到）返回 false 不投递
+    #[test]
+    fn complete_req_delivers_typed_reply() {
+        let (shared, _) = shared_with_starting_session();
+        let (tx, rx) = mpsc::channel();
+        shared.proc.lock().unwrap().pending.insert("h-5".into(), tx);
+        let env = json!({ "reply_to": "h-5", "type": "error", "payload": { "code": 8001, "message": "拒" } });
+        assert!(shared.complete_req("h-5", reply_payload(&env)));
+        let rep = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(rep["type"], "error");
+        assert_eq!(rep["message"], "拒");
+        assert!(
+            !shared.complete_req("h-late", reply_payload(&env)),
+            "无等待方=不投递"
+        );
     }
 }

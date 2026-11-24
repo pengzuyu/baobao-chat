@@ -20,7 +20,7 @@ use bbrt_session::loop_runner::{
     ClarifyAnswer, EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, Scene,
     SessionRunner, MAX_STEPS,
 };
-use bbrt_session::manager::{ManagerError, SessionManager, StartParams};
+use bbrt_session::manager::{SessionManager, StartParams};
 
 /// 收集 sink
 #[derive(Default)]
@@ -825,7 +825,10 @@ fn wal_records_monotonic_events() {
 }
 
 #[test]
-fn manager_limits_three_active_sessions() {
+fn manager_unlimited_sessions_guard_removed() {
+    // 2026-11-24 用户裁决：≤3 活跃名额护栏解除——「会话不死」后名额只进不出
+    // （end 无 UI 入口、idle 复活再占位），把「用过」当「活跃中」误伤正常使用；
+    // 资源护栏如需恢复按「回合进行中」口径重设。回归：超出旧上限照常可建
     let sink = Arc::new(CollectSink::default());
     let model = Arc::new(FakeModel {
         calls: AtomicUsize::new(0),
@@ -837,7 +840,7 @@ fn manager_limits_three_active_sessions() {
         fail: false,
     });
     let mgr = SessionManager::new(deps(model, tools, sink, None), None);
-    for i in 0..3 {
+    for i in 0..4 {
         mgr.start(
             format!("s-{i}"),
             StartParams {
@@ -854,25 +857,9 @@ fn manager_limits_three_active_sessions() {
         )
         .unwrap();
     }
-    assert!(matches!(
-        mgr.start(
-            "s-4".into(),
-            StartParams {
-                workspace: "/w".into(),
-                mode: PermissionMode::Ask,
-                model_policy: ModelTier::Fast,
-                model_override: None,
-                title: "t".into(),
-                restored: None,
-                unattended: false,
-                approval_timeout_secs: None,
-                scene: Default::default(),
-            }
-        ),
-        Err(ManagerError::TooManyActive)
-    ));
+    assert_eq!(mgr.active_count(), 4, "旧上限 3 已解除");
     mgr.end("s-1", "done").unwrap();
-    assert_eq!(mgr.active_count(), 2);
+    assert_eq!(mgr.active_count(), 3);
     mgr.start(
         "s-4".into(),
         StartParams {
@@ -888,6 +875,7 @@ fn manager_limits_three_active_sessions() {
         },
     )
     .unwrap();
+    assert_eq!(mgr.active_count(), 4);
 }
 
 #[test]

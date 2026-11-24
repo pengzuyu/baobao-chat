@@ -1,0 +1,35 @@
+# 实验台本地覆盖（不入 git）。2026-11-23：加 PG 切全量路由（内存模式下 AI 供应商/
+# me/settings 等路由不挂，客户端弹「服务器开小差」）；文件存储 ./data 走 tmpfs。
+# pgvector 必需：迁移 0001 硬依赖 CREATE EXTENSION vector（官方 postgres 镜像无此扩展）。
+services:
+  pg:
+    # 1ms.run 的 pgvector/pgvector 命名空间拉不动（library/ 路径正常）：
+    # 用 postgres:latest + apt 装 postgresql-19-pgvector 的本机派生镜像
+    image: pgvector-pg19:lab
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bbc
+      POSTGRES_PASSWORD: bbc_change_me
+      POSTGRES_DB: bbc
+    volumes:
+      # postgres 18+ 镜像要求单挂载在 /var/lib/postgresql（数据落版本子目录，勿挂 data 子路径）
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bbc -d bbc"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  bbc:
+    tmpfs: [/data]
+    environment:
+      # PG 模式：DSN 非空即切换（启动自动跑内嵌迁移 main.go:133）
+      BBC_DB_DSN: postgres://bbc:bbc_change_me@pg:5432/bbc?sslmode=disable
+      # KMS 主密钥 base64(32B)：AI 供应商 BYOK 密钥信封加密用，空则带密钥供应商无法创建
+      BBC_KMS_MASTER_KEY: dZzsq6zdiTTLIg3A35PK2oE1BUx7k3jr9ZIBDOlPY0A=
+    depends_on:
+      pg:
+        condition: service_healthy
+
+volumes:
+  pgdata:
