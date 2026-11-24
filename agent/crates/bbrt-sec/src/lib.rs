@@ -27,6 +27,7 @@ pub mod gate;
 pub mod masking;
 pub mod memory;
 pub mod sandbox;
+pub mod shell_readonly;
 
 pub use danger_rules::{DangerRuleSet, Rule, RuleCategory, RuleHit};
 pub use errors::{
@@ -39,6 +40,7 @@ pub use gate::{
 };
 pub use masking::{args_digest, mask, mask_and_digest};
 pub use memory::{Grant, GrantMatch, GrantScope, GrantStore, MemoryError};
+pub use shell_readonly::is_readonly_command;
 pub use sandbox::{
     Cidr, ExitResult, JsonlViolationSink, MemoryViolationSink, NetPolicy, NetworkError, PathError,
     PathIntent, PathPolicy, ResourceLimits, RunOpts, RunSpec, SandboxLauncher, Violation,

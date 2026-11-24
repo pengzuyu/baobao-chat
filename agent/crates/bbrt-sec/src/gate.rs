@@ -221,6 +221,13 @@ pub fn classify_action(call: &ToolCall, ctx: &GateCtx) -> ActionCategory {
         if ctx.rules.scan(cmd).is_some() {
             return ActionCategory::DangerousCommand;
         }
+        // 2026-11-24 拍板（zcode 对齐）：纯只读命令（引号感知切段+程序白名单+
+        // 反面形态否决，见 shell_readonly）→ 只读档全档自动——ask/auto-edit 不再
+        // 为 ls/grep/git status 弹卡。规则扫描在前：cat .env 等凭据访问仍走高危。
+        // 与白名单前缀正交（白名单=构建工具直调，cargo test 等不在只读清单）。
+        if crate::shell_readonly::is_readonly_command(cmd) {
+            return ActionCategory::ReadOnly;
+        }
         // D32 拍板 #4：白名单=「系统构建工具直调」专属——复合运算符/执行文件形态
         // 即使前缀命中也落 ArbitraryCommand（文件内容绕过词法，边界在模式信任）
         if ctx.whitelist_prefixes.iter().any(|p| prefix_match(p, cmd))
@@ -633,6 +640,70 @@ mod tests {
         let c = call("run_command", &args);
         assert_eq!(
             classify_action(&c, &f.ctx()),
+            ActionCategory::WhitelistCommand
+        );
+    }
+
+    // ---- 2026-11-24：只读命令分类器接入（zcode 对齐，ask 档零弹卡） ----
+
+    #[test]
+    fn readonly_shell_commands_allow_in_all_modes() {
+        let f = Fixture::new();
+        for cmd in [
+            "ls -la",
+            "grep -rn 'todo' src/",
+            "git status",
+            "git log --oneline -5",
+            "cat src/main.rs | head -20",
+            "find . -name '*.rs' -maxdepth 2",
+        ] {
+            for mode in MODES {
+                assert!(
+                    matches!(
+                        permission_gate(
+                            mode,
+                            &call("run_command", &json!({"command": cmd})),
+                            &f.ctx()
+                        ),
+                        Decision::Allow { .. }
+                    ),
+                    "{cmd} @ {mode:?} 只读命令应全档放行"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn readonly_classifier_does_not_weaken_danger_and_write_forms() {
+        let f = Fixture::new();
+        // 危险规则优先于只读判定：cat 在只读清单，但凭据文件仍高危双确认
+        let args = json!({"command": "cat .env"});
+        for mode in MODES {
+            match permission_gate(mode, &call("run_command", &args), &f.ctx()) {
+                Decision::Confirm { double_prompt, .. } => assert!(double_prompt, "{mode:?}"),
+                other => panic!("cat .env @ {mode:?} 应高危双确认，实际 {other:?}"),
+            }
+        }
+        // 重定向写/删除形态不属只读：ask 档确认（任意命令档）
+        for cmd in ["ls > /tmp/out.txt", "find . -delete", "rm notes.txt"] {
+            let d = permission_gate(
+                PermissionMode::Ask,
+                &call("run_command", &json!({"command": cmd})),
+                &f.ctx(),
+            );
+            assert!(matches!(d, Decision::Confirm { .. }), "{cmd} 应确认");
+            assert_eq!(
+                classify_action(&call("run_command", &json!({"command": cmd})), &f.ctx()),
+                ActionCategory::ArbitraryCommand,
+                "{cmd} 应落任意命令档"
+            );
+        }
+        // 白名单通道不受影响：cargo test 非只读程序，仍走白名单档
+        assert_eq!(
+            classify_action(
+                &call("run_command", &json!({"command": "cargo test"})),
+                &f.ctx()
+            ),
             ActionCategory::WhitelistCommand
         );
     }

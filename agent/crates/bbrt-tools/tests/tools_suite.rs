@@ -544,11 +544,12 @@ fn run_command_非零退出码回传() {
 fn gate_ask档run_command需确认_预览含命令原文() {
     let f = Fixture::new();
     let ex = f.executor();
+    // 2026-11-24 只读分类器接入：echo 归只读档全档放行，改用写语义样本
     match ex.check(
         PermissionMode::Ask,
         &call(
             "run_command",
-            serde_json::json!({"command": "echo confirm-me"}),
+            serde_json::json!({"command": "touch confirm-me.tmp"}),
         ),
     ) {
         CheckOutcome::NeedConfirm {
@@ -558,7 +559,7 @@ fn gate_ask档run_command需确认_预览含命令原文() {
         } => {
             assert!(!reason.is_empty());
             assert_eq!(preview.kind, "command");
-            assert_eq!(preview.content, "echo confirm-me");
+            assert_eq!(preview.content, "touch confirm-me.tmp");
             // ask 档任意命令：once/session（无 permanent——非 full-auto 首确认场景）
             assert!(options.contains(&"once".to_string()));
             assert!(options.contains(&"session".to_string()));
@@ -646,9 +647,10 @@ fn gate_权限点缺失拒绝8002() {
 fn record_grant_session级记忆后同调用放行() {
     let f = Fixture::new();
     let ex = f.executor();
+    // 2026-11-24 只读分类器接入：echo 归只读档全档放行，改用写语义样本
     let c = call(
         "run_command",
-        serde_json::json!({"command": "echo grant-me"}),
+        serde_json::json!({"command": "touch grant-me.tmp"}),
     );
     // ask 档：先确认
     assert!(matches!(
@@ -667,7 +669,10 @@ fn record_grant_session级记忆后同调用放行() {
         other => panic!("记忆命中应放行: {other:?}"),
     }
     // 不同命令不命中
-    let other_call = call("run_command", serde_json::json!({"command": "echo other"}));
+    let other_call = call(
+        "run_command",
+        serde_json::json!({"command": "touch other.tmp"}),
+    );
     assert!(matches!(
         ex.check(PermissionMode::Ask, &other_call),
         CheckOutcome::NeedConfirm { .. }
