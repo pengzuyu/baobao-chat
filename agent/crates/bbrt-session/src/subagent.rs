@@ -460,7 +460,7 @@ pub fn fanout_probes(
             });
     }
     drop(tx); // 发送端全在子线程：全部结果到齐后 rx 自然 EOF
-              // 等待窗（缺省 120s，SessionRunner.subagent_wait_window 注入）
+              // 等待窗（缺省 SUBAGENT_WAIT_WINDOW=600s，SessionRunner.subagent_wait_window 注入）
     let deadline = std::time::Instant::now() + env.wait_window;
     let mut results: Vec<ProbeResult> = Vec::with_capacity(total);
     while results.len() < total {

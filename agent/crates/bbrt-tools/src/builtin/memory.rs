@@ -359,7 +359,7 @@ pub fn task_wait_def() -> ToolDef {
             "type": "object",
             "properties": {
                 "run_id": {"type": "string", "description": "目标任务 id（agent-/terminal- 前缀）"},
-                "timeout_secs": {"type": "integer", "description": "最长等待秒数（默认 120，上限 3600）"}
+                "timeout_secs": {"type": "integer", "description": "最长等待秒数（默认 600，上限 3600）"}
             },
             "required": ["run_id"]
         }),
