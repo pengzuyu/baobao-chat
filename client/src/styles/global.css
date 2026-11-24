@@ -60,13 +60,18 @@ body {
 }
 
 /* D26-O6b：原「动效」段已随 antd 全量收口退役（2026-11-14） */
-/* 尊重系统"减少动态效果"偏好（D01 §10） */
+/* 尊重系统「减少动态效果」偏好（D01 §10）。
+   2026-11-24 真机（VDI 组策略关动画）根因修复：原来这里是
+   `*, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important }`，
+   属于"全局硬压动效"——antd 的弹层/抽屉动效依赖 CSS 动画 + animation-fill-mode:both +
+   animation-play-state:paused→running 的两段式生命周期，被 !important 强改后 rc-motion 会
+   停在初始帧（弹层 opacity:0 / 抽屉停在位移动画中），表现为「点了完全没出现」「抽屉里的
+   输入框点不进去」。动效偏好改由 antd 侧 token.motion 开关承接
+   （shared/ui/themeConstants.antdThemeFrom(reduceMotion)），这里只关我们自己的装饰动画。 */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+  .bbc-skeleton::after,
+  .msg-row--flash {
+    animation: none !important;
   }
 }
 
