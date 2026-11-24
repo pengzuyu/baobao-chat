@@ -334,15 +334,18 @@ fn ntf_gets_no_reply_but_loop_stays_alive() {
     host.recv();
     host.recv();
 
-    // obo.token 是 NTF：无回复
+    // obo.token 是 NTF：无回复（D38 票据代：整代 tokens[] 下发）
     host.send(
         &Envelope::wrap(
             PROTOCOL_VERSION,
             "h-t1",
             &HostToRuntime::OboToken {
-                token: "tok-xyz".into(),
-                exp: 1_790_000_000,
-                scopes: vec!["kb:read".into()],
+                tokens: vec![bbrt_protocol::OboTokenEntry {
+                    audience: "bbc-corp".into(),
+                    token: "tok-xyz".into(),
+                    exp: 1_790_000_000,
+                    scopes: vec!["kb:read".into()],
+                }],
             },
         )
         .unwrap(),

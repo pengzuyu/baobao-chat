@@ -118,6 +118,15 @@ impl McpClient {
         }
     }
 
+    /// 按名取该 server 的统一身份受众（D38 单票制：call 层据此查票；
+    /// 快照缺该 server → None=匿名）
+    fn audience_of(&self, server: &str) -> Option<String> {
+        self.active
+            .lock()
+            .ok()
+            .and_then(|a| a.get(server).and_then(|c| c.audience.clone()))
+    }
+
     /// 懒补连（2026-11-10 真机事故修复）：启动时 corp 常因用户未登录（无 OBO）
     /// 而 tools/list 401 降级——此前降级即永久标灰。登录后 tokens 现取有值，
     /// 在 list_tools/call 入口先补连缺失 server，自愈无需重启。
@@ -175,6 +184,7 @@ impl McpClient {
         match (it.next(), it.next(), it.next()) {
             (Some("mcp"), Some(server), Some(tool)) => {
                 self.ensure_connected();
+                let audience = self.audience_of(server);
                 let mut conns = self
                     .conns
                     .lock()
@@ -182,7 +192,10 @@ impl McpClient {
                 let conn = conns.get_mut(server).ok_or_else(|| {
                     McpError::Call(format!("MCP server 未连接: {server}（标灰）"))
                 })?;
-                let obo = (self.tokens)().unwrap_or_default();
+                let obo = audience
+                    .as_deref()
+                    .and_then(|a| (self.tokens)(a))
+                    .unwrap_or_default();
                 call_tool(conn, tool, args, &obo, "agent")
             }
             _ => Err(McpError::Call(format!("非法 MCP 工具名: {full_name}"))),
@@ -200,6 +213,7 @@ impl McpClient {
         match (it.next(), it.next(), it.next()) {
             (Some("mcp"), Some(server), Some(tool)) => {
                 self.ensure_connected();
+                let audience = self.audience_of(server);
                 let mut conns = self
                     .conns
                     .lock()
@@ -207,7 +221,10 @@ impl McpClient {
                 let conn = conns.get_mut(server).ok_or_else(|| {
                     McpError::Call(format!("MCP server 未连接: {server}（标灰）"))
                 })?;
-                let obo = (self.tokens)().unwrap_or_default();
+                let obo = audience
+                    .as_deref()
+                    .and_then(|a| (self.tokens)(a))
+                    .unwrap_or_default();
                 call_tool(conn, tool, args, &obo, act)
             }
             _ => Err(McpError::Call(format!("非法 MCP 工具名: {full_name}"))),
@@ -215,7 +232,7 @@ impl McpClient {
     }
 }
 
-/// 默认空令牌提供者（无 OBO 环境的本地 server 用）
+/// 默认空令牌提供者（无票环境的本地 server 用；D38：按受众查恒 None）
 pub fn no_token() -> TokenProvider {
-    Arc::new(|| None)
+    Arc::new(|_: &str| None)
 }

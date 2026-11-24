@@ -8,9 +8,9 @@ use std::io::Cursor;
 use bbrt_protocol::{
     read_message, write_message, Blocked, ClarifyOption, CodecError, CompactionPhase, Decision,
     EndReason, Envelope, GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy,
-    ModelSwitchReason, PermissionMode, Preview, ProtocolError, RenewReason, RiskLevel,
-    RuntimeToHost, SessionState, StreamChannel, SubagentPhase, SubagentResult, ThinkingLevel,
-    ToolSource, ToolsReloadReason, Usage, PROTOCOL_VERSION,
+    ModelSwitchReason, OboTokenEntry, PermissionMode, Preview, ProtocolError, RenewReason,
+    RiskLevel, RuntimeToHost, SessionState, StreamChannel, SubagentPhase, SubagentResult,
+    ThinkingLevel, ToolSource, ToolsReloadReason, Usage, PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -84,9 +84,12 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             reason: EndReason::Logout,
         },
         HostToRuntime::OboToken {
-            token: "tok-xyz".into(),
-            exp: 1_730_000_000,
-            scopes: vec!["kb:read".into()],
+            tokens: vec![OboTokenEntry {
+                audience: "bbc-corp".into(),
+                token: "tok-xyz".into(),
+                exp: 1_730_000_000,
+                scopes: vec!["kb:read".into()],
+            }],
         },
         HostToRuntime::ToolsReload {
             reason: ToolsReloadReason::Skill,
@@ -284,7 +287,6 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             title: "修复登录超时".into(),
         },
         RuntimeToHost::OboRenew {
-            scopes: vec!["kb:read".into()],
             reason: RenewReason::Expiring,
         },
         RuntimeToHost::Ping,

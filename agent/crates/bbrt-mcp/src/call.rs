@@ -11,8 +11,10 @@ use std::sync::Arc;
 use crate::conn::McpConnection;
 use crate::McpError;
 
-/// 主体令牌提供者（bin 装配闭包：OboCache 现取——逐请求传播，不缓存到连接）
-pub type TokenProvider = Arc<dyn Fn() -> Option<String> + Send + Sync>;
+/// 主体令牌提供者（bin 装配闭包：OboCache 按受众现取——逐请求传播，不缓存到连接；
+/// D38 单票制：受众=该 server 的 audience（生态应用=url / 内部=保留逻辑名），
+/// 纯内存查取，调用路径零网络）
+pub type TokenProvider = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// tools/call 结果（MCP 语义：isError=true 是**结果**而非 JSON-RPC error——
 /// 工具业务失败照样回传给模型自行处置）

@@ -23,7 +23,7 @@ use bbrt_aigw::AigwClient;
 use bbrt_hostapi::handshake;
 use bbrt_hostapi::{IdGen, RuntimeHandler, StdioTransport};
 use bbrt_memory::MemoryEngine;
-use bbrt_protocol::{Envelope, HostToRuntime, RuntimeToHost};
+use bbrt_protocol::{Envelope, HostToRuntime, RuntimeToHost, AUD_AIGW, AUD_CORP};
 use bbrt_session::events::ModelTier;
 use bbrt_session::{LoopDeps, SessionManager, StartParams, ToolExecutor};
 use bbrt_store::Store;
@@ -116,7 +116,7 @@ fn run() -> Result<(), String> {
     // OboCache（D14 §6.2 三层身份）；单 server 连接失败降级不阻塞
     let mcp_configs = parse_mcp_servers(&std::env::var("BBC_RT_MCP_SERVERS").unwrap_or_default());
     let obo_for_mcp = Arc::clone(&obo);
-    let mcp_tokens: bbrt_mcp::TokenProvider = Arc::new(move || {
+    let mcp_tokens: bbrt_mcp::TokenProvider = Arc::new(move |aud: &str| {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -124,7 +124,7 @@ fn run() -> Result<(), String> {
         obo_for_mcp
             .lock()
             .ok()
-            .and_then(|c| c.get(now).map(str::to_string))
+            .and_then(|c| c.get(aud, now).map(str::to_string))
     });
     let (mcp_client, mcp_results) = bbrt_mcp::McpClient::connect(&mcp_configs, mcp_tokens);
     let mcp_client = Arc::new(mcp_client); // dispatch（mcp.config 重配）与工具管线共享
@@ -174,10 +174,12 @@ fn run() -> Result<(), String> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        // D38 单票制：aigw 票受众=bbc-aigw；static_token 仅开发态兜底（拍板 6：
+        // 正式链路换票失败不回落主 access，缓存空=AigwClient 侧 401 降级）
         obo_for_model
             .lock()
             .ok()
-            .and_then(|c| c.get(now).map(str::to_string))
+            .and_then(|c| c.get(AUD_AIGW, now).map(str::to_string))
             .unwrap_or_else(|| static_token.clone())
     }));
     // D23/M2：公共层压实器接线（USER.md 超 3000 字时仅软条目进 bbc-fast 凝缩，
@@ -261,11 +263,11 @@ fn run() -> Result<(), String> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            // 仅"已有令牌且进入到期窗口"才续签：无缓存不请求——宿主在首个需要 OBO 的
-            // 调用前主动发放（D11 §10.1 会话启动行），空缓存轮询会刷屏
+            // 仅"已有票且任一受众进入到期窗口"才续签：无缓存不请求——宿主在首个需要
+            // 票的调用前主动发放（D11 §10.1），空缓存轮询会刷屏。票据代：整代重签
             let needs = obo_watch
                 .lock()
-                .map(|c| c.get(0).is_some() && c.needs_renew(now))
+                .map(|c| c.needs_renew(now))
                 .unwrap_or(false);
             if !needs {
                 continue;
@@ -276,7 +278,6 @@ fn run() -> Result<(), String> {
                 1,
                 format!("r-obo-{n}"),
                 &RuntimeToHost::OboRenew {
-                    scopes: vec![],
                     reason: bbrt_protocol::RenewReason::Expiring,
                 },
             ) {
@@ -341,10 +342,20 @@ fn dispatch(
     };
     match msg {
         HostToRuntime::Ping => Some(RuntimeToHost::Pong),
-        // 宿主发放/续签 OBO 令牌（NTF；缓存后模型通道自动切换，D11 §10.1）
-        HostToRuntime::OboToken { token, exp, scopes } => {
+        // 宿主发放/续签 agent 票（NTF；D38 票据代——整代覆盖落地，模型通道自动切换）
+        HostToRuntime::OboToken { tokens } => {
             if let Ok(mut c) = obo.lock() {
-                c.set(token, exp, scopes);
+                c.set_generation(
+                    tokens
+                        .into_iter()
+                        .map(|t| bbrt_hostapi::Ticket {
+                            audience: t.audience,
+                            token: t.token,
+                            exp_unix: t.exp,
+                            scopes: t.scopes,
+                        })
+                        .collect(),
+                );
             }
             None
         }
@@ -857,12 +868,12 @@ fn dispatch(
         HostToRuntime::McpTest { server } => {
             let tokens: bbrt_mcp::TokenProvider = {
                 let obo = Arc::clone(obo);
-                Arc::new(move || {
+                Arc::new(move |aud: &str| {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
-                    obo.lock().ok().and_then(|c| c.get(now).map(str::to_string))
+                    obo.lock().ok().and_then(|c| c.get(aud, now).map(str::to_string))
                 })
             };
             let cfg = wire_to_mcp_config(&server);
@@ -988,17 +999,29 @@ fn wire_to_mcp_config(w: &bbrt_protocol::McpServerWire) -> bbrt_mcp::McpServerCo
             args: args.clone(),
             env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         },
-        McpTransportWire::Http { base_url, headers } => bbrt_mcp::TransportConfig::Http {
+        // D38：wire.auth.audience 由宿主装配期显式填（RT 不推导）
+        McpTransportWire::Http { base_url, headers, auth } => bbrt_mcp::TransportConfig::Http {
             base_url: base_url.clone(),
             headers: headers
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            audience: auth.as_ref().map(|a| a.audience.clone()),
         },
     };
+    let audience = transport_audience(&transport);
     bbrt_mcp::McpServerConfig {
         name: w.name.clone(),
         transport,
+        audience,
+    }
+}
+
+/// 传输配置中的统一身份受众提取（Http 才有；std 恒 None——令牌不进子进程）
+fn transport_audience(t: &bbrt_mcp::TransportConfig) -> Option<String> {
+    match t {
+        bbrt_mcp::TransportConfig::Http { audience, .. } => audience.clone(),
+        bbrt_mcp::TransportConfig::Stdio { .. } => None,
     }
 }
 
@@ -1022,6 +1045,8 @@ fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
                 bbrt_mcp::TransportConfig::Http {
                     base_url: target.trim().to_string(),
                     headers: vec![], // env 通道无自定义头（插件级经 mcp.config wire 携带）
+                    // env 兜底的 corp 走单票制保留受众（宿主 mcp.config 覆盖同值）
+                    audience: (name == "corp").then(|| AUD_CORP.to_string()),
                 }
             } else {
                 let mut parts = target.split_whitespace();
@@ -1032,7 +1057,8 @@ fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
                     env: vec![],
                 }
             };
-            Some(bbrt_mcp::McpServerConfig { name, transport })
+            let audience = transport_audience(&transport);
+            Some(bbrt_mcp::McpServerConfig { name, transport, audience })
         })
         .collect()
 }

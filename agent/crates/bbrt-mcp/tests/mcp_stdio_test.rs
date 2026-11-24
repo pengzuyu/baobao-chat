@@ -13,6 +13,7 @@ fn fake_server_cfg() -> McpServerConfig {
             args: vec![],
             env: vec![],
         },
+        audience: None,
     }
 }
 
@@ -41,16 +42,19 @@ fn initialize_and_discover_namespaced_tools() {
     );
 }
 
-/// 主体身份逐请求注入：echo 回显 _meta.bbcObo（D14 §6.2 验证点）。
+/// stdio 传输恒匿名（D38 拍板 8：stdio 无跨网络边界，永不需要令牌——
+/// audience 恒 None，_meta.bbcObo 不再注入；HTTP 统一身份注入见 mcp_http_test）。
 #[test]
-fn obo_token_propagates_per_call() {
-    let tokens: Arc<dyn Fn() -> Option<String> + Send + Sync> = Arc::new(|| Some("tok-42".into()));
+fn stdio_call_has_no_identity_injection() {
+    let tokens: Arc<dyn Fn(&str) -> Option<String> + Send + Sync> =
+        Arc::new(|_: &str| Some("tok-42".into()));
     let (client, _) = McpClient::connect(&[fake_server_cfg()], tokens);
 
     let out = client
         .call("mcp.fake.echo", serde_json::json!({"text": "你好"}))
         .unwrap();
-    assert_eq!(out.text, "echo:你好 obo:tok-42");
+    // 即便令牌提供者有票：stdio 无受众声明 → 不注入（echo 回显 obo:none）
+    assert_eq!(out.text, "echo:你好 obo:none");
     assert!(!out.is_error);
 }
 
@@ -113,6 +117,7 @@ fn connect_failures_degrade() {
             args: vec![],
             env: vec![],
         },
+        audience: None,
     };
     let (client, results) = McpClient::connect(&[bad], no_token());
     assert!(matches!(results[0].1, Err(McpError::Connect(_))));
@@ -124,7 +129,9 @@ fn connect_failures_degrade() {
         transport: TransportConfig::Http {
             base_url: "http://127.0.0.1:1/mcp".into(), // 端口 1 无监听
             headers: vec![],
+            audience: None,
         },
+        audience: None,
     };
     let (_, results) = McpClient::connect(&[http], no_token());
     assert!(matches!(results[0].1, Err(McpError::Connect(_))));

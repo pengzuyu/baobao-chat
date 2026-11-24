@@ -122,7 +122,39 @@ pub enum McpTransportWire {
         /// 宿主装配时已替换。自定义 Authorization 覆盖自动 Bearer。D22 §6.1/L4）
         #[serde(default)]
         headers: std::collections::HashMap<String, String>,
+        /// 统一身份声明（D38：`x-bbc-auth` 归一后的 wire 形态）——声明即由
+        /// Runtime 按受众取 agent 票逐请求注入 Bearer；None=匿名调用不注入
+        #[serde(default)]
+        auth: Option<McpAuthWire>,
     },
+}
+
+/// 统一身份 wire（D38 §3.5）：type 固定 "obo"；audience 由宿主装配期显式填
+/// （生态应用=该 server url、corp=bbc-corp），Runtime 不做任何推导；scope=
+/// 可选权限收窄（缺省空=票按用户全量签，见宿主换票请求）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAuthWire {
+    pub r#type: String,
+    pub audience: String,
+    #[serde(default)]
+    pub scope: Vec<String>,
+}
+
+/// D38 保留逻辑受众（与服务端 platform/agentjwt 常量同值——内部端点收编单票制）
+pub const AUD_CORP: &str = "bbc-corp";
+pub const AUD_AIGW: &str = "bbc-aigw";
+
+/// 单张 agent 票（obo.token 载荷元素；D38 §3.5——audience 为该票唯一预期消费方）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OboTokenEntry {
+    pub audience: String,
+    pub token: String,
+    /// 过期时刻（unix 秒；宿主按 OBO_EXP_MARGIN 预留缓冲后交付）
+    pub exp: u64,
+    #[serde(default)]
+    pub scopes: Vec<String>,
 }
 
 /// OBO 续签原因（obo.renew）
@@ -615,14 +647,10 @@ pub enum HostToRuntime {
         reason: EndReason,
     },
 
-    /// OBO 令牌发放/续签（NTF；token 仅此通道，不过 WebView/不下发子进程）
+    /// agent 票发放/续签（NTF；D38 §3.5 票据代——全受众同批下发，齐进齐出；
+    /// token 仅此通道，不过 WebView/不下发子进程）
     #[serde(rename = "obo.token", rename_all = "camelCase")]
-    OboToken {
-        token: String,
-        exp: u64,
-        #[serde(default)]
-        scopes: Vec<String>,
-    },
+    OboToken { tokens: Vec<OboTokenEntry> },
 
     /// 工具热重载（10 篇通道/策略变更）
     #[serde(rename = "tools.reload", rename_all = "camelCase")]
@@ -921,13 +949,9 @@ pub enum RuntimeToHost {
     #[serde(rename = "session.ended", rename_all = "camelCase")]
     SessionEnded { session_id: String, summary: String },
 
-    /// 请求 OBO 续签（REQ；到期前 2min / scope 不足）
+    /// 请求 agent 票续签（REQ；D38 拍板 9 票据代——不带受众，整代全量重签）
     #[serde(rename = "obo.renew", rename_all = "camelCase")]
-    OboRenew {
-        #[serde(default)]
-        scopes: Vec<String>,
-        reason: RenewReason,
-    },
+    OboRenew { reason: RenewReason },
 
     /// 健康（标注"双向"故两枚举都保留）
     #[serde(rename = "ping")]

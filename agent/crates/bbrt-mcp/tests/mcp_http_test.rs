@@ -180,14 +180,17 @@ fn error_frame(id: serde_json::Value, code: i32, msg: &str) -> String {
 #[test]
 fn http_gateway_discover_and_call_with_bearer() {
     let (base, seen) = spawn_fake_gateway(false);
+    // D38 单票制：audience=bbc-corp → call 层按受众查票注入（Bearer + _meta 双通道）
     let cfg = McpServerConfig {
         name: "corp".into(),
         transport: TransportConfig::Http {
             base_url: base,
             headers: vec![],
+            audience: Some("bbc-corp".into()),
         },
+        audience: Some("bbc-corp".into()),
     };
-    let tokens: bbrt_mcp::TokenProvider = Arc::new(|| Some("obo-token-7".into()));
+    let tokens: bbrt_mcp::TokenProvider = Arc::new(|_: &str| Some("obo-token-7".into()));
     let (client, results) = McpClient::connect(&[cfg], tokens);
     assert!(results[0].1.is_ok(), "握手应成功: {:?}", results);
 
@@ -231,7 +234,9 @@ fn http_gateway_no_token_degrades_to_call_error() {
         transport: TransportConfig::Http {
             base_url: base,
             headers: vec![],
+            audience: None,
         },
+        audience: None,
     };
     let (_, results) = McpClient::connect(&[cfg], bbrt_mcp::no_token());
     assert!(
@@ -250,9 +255,11 @@ fn http_gateway_chunked_response_decodes() {
         transport: TransportConfig::Http {
             base_url: base,
             headers: vec![],
+            audience: Some("bbc-corp".into()),
         },
+        audience: Some("bbc-corp".into()),
     };
-    let tokens: bbrt_mcp::TokenProvider = Arc::new(|| Some("t".into()));
+    let tokens: bbrt_mcp::TokenProvider = Arc::new(|_: &str| Some("t".into()));
     let (client, results) = McpClient::connect(&[cfg], tokens);
     assert!(results[0].1.is_ok(), "chunked 下握手应成功: {:?}", results);
     let tools = client.list_tools(&PolicyFilter::default());

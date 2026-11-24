@@ -22,7 +22,7 @@ use std::io::{Read, Write};
 use bbrt_protocol::{Envelope, HostToRuntime, ProtocolError, RuntimeToHost, PROTOCOL_VERSION};
 
 pub use handshake::{HandshakeOutcome, HANDSHAKE_TIMEOUT};
-pub use obo::{OboCache, RENEW_WINDOW};
+pub use obo::{OboCache, Ticket, RENEW_WINDOW};
 pub use transport::{RecvError, StdioTransport, MAX_PENDING_WRITE_BYTES};
 
 /// 传输层错误（serve 返回 Err 时进程应退出；fatal=true 的 error NTF 已尽力发出）

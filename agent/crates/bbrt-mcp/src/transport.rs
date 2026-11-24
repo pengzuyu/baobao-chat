@@ -25,6 +25,10 @@ pub struct McpServerConfig {
     /// 命名空间段：工具全名 mcp.{name}.{tool}
     pub name: String,
     pub transport: TransportConfig,
+    /// 统一身份受众（D38 单票制）：该 server 的 agent 票 audience（宿主装配期
+    /// 从 x-bbc-auth/旧 TOKEN 归一显式填入；std 传输恒 None——令牌不进子进程）。
+    /// call 层按它查 OboCache；None=匿名调用不注入身份
+    pub audience: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,12 +40,14 @@ pub enum TransportConfig {
         env: Vec<(String, String)>,
     },
     /// 远程网关（公司域 MCP 网关，如 http://127.0.0.1:8080/mcp/corp；
-    /// 主体令牌经 TokenProvider 逐请求注入——装配时与 McpClient 同源）。
+    /// 主体令牌经 TokenProvider 按受众逐请求注入——装配时与 McpClient 同源）。
     /// headers：插件外部系统自定义头（D22 §6.1/L4）——值中 `${BBC_USER_TOKEN}`
     /// 调用层动态替换；自定义 Authorization 覆盖自动 Bearer
     Http {
         base_url: String,
         headers: Vec<(String, String)>,
+        /// 统一身份受众（None=无声明不注入 Bearer——匿名调用）
+        audience: Option<String>,
     },
 }
 
@@ -212,33 +218,41 @@ impl Transport for StdioTransport {
 }
 
 /// 远程 HTTP 传输（公司域 MCP 网关 / 插件 HTTP server）：单请求单连接，
-/// OBO 逐请求注入 Bearer；插件自定义头（D22 §6.1/L4）值中
-/// `${BBC_USER_TOKEN}` 逐请求动态替换（token 轮换不静态化），
+/// agent 票按受众逐请求注入 Bearer（D38 单票制）；插件自定义头（D22 §6.1/L4）
+/// 值中 `${BBC_USER_TOKEN}` 逐请求动态替换（token 轮换不静态化），
 /// 自带 Authorization 时覆盖自动 Bearer。
 pub struct HttpTransport {
     url: ParsedUrl,
     tokens: TokenProvider,
+    audience: Option<String>,
     headers: Vec<(String, String)>,
 }
 
 impl HttpTransport {
-    /// base_url 为网关端点全路径（含 /mcp/corp 等）；令牌提供者与 McpClient 同源。
+    /// base_url 为网关端点全路径（含 /mcp/corp 等）；令牌提供者与 McpClient 同源，
+    /// audience=该 server 的统一身份受众（None=匿名不注入）
     pub fn new(
         base_url: &str,
         headers: Vec<(String, String)>,
+        audience: Option<String>,
         tokens: TokenProvider,
     ) -> Result<Self, McpError> {
         Ok(Self {
             url: parse_url(base_url)?,
             tokens,
+            audience,
             headers,
         })
     }
 
-    /// 最终头表：自定义头值替换 ${BBC_USER_TOKEN}（当前 token 现取）；
+    /// 最终头表：自定义头值替换 ${BBC_USER_TOKEN}（当前票现取——按受众查）；
     /// 自带 authorization → 自动 Bearer 压掉（覆盖语义）
     fn effective(&self) -> (Option<String>, Vec<(String, String)>) {
-        let token = (self.tokens)().filter(|t| !t.is_empty());
+        let token = self
+            .audience
+            .as_deref()
+            .and_then(|aud| (self.tokens)(aud))
+            .filter(|t| !t.is_empty());
         let mut extra = Vec::with_capacity(self.headers.len());
         let mut custom_auth = false;
         for (k, v) in &self.headers {
@@ -319,19 +333,43 @@ mod http_header_tests {
     use std::sync::{Arc, Mutex};
 
     fn transport(headers: Vec<(String, String)>, token: Option<&str>) -> HttpTransport {
+        transport_aud(headers, Some("aud-1".into()), token)
+    }
+
+    fn transport_aud(
+        headers: Vec<(String, String)>,
+        audience: Option<String>,
+        token: Option<&str>,
+    ) -> HttpTransport {
         let t = token.map(str::to_string);
         let counter = Arc::new(AtomicUsize::new(0));
         let _ = counter; // 闭包按需构造，不计数
-        let provider: TokenProvider = Arc::new(move || t.clone());
-        HttpTransport::new("http://127.0.0.1:1/mcp", headers, provider).unwrap()
+        let provider: TokenProvider = Arc::new(move |aud: &str| {
+            // 受众匹配：只有声明受众的票可取（键控缓存语义）
+            if aud == "aud-1" {
+                t.clone()
+            } else {
+                None
+            }
+        });
+        HttpTransport::new("http://127.0.0.1:1/mcp", headers, audience, provider).unwrap()
     }
 
-    /// 无自定义头：自动 Bearer（生态服务缺省链路）
+    /// 无自定义头：自动 Bearer（统一身份缺省链路）
     #[test]
     fn effective_default_bearer() {
         let tr = transport(vec![], Some("tok-1"));
         let (bearer, extra) = tr.effective();
         assert_eq!(bearer.as_deref(), Some("tok-1"));
+        assert!(extra.is_empty());
+    }
+
+    /// 无受众声明（None）→ 不注入 Bearer（匿名调用——D38 个人/插件未声明统一身份）
+    #[test]
+    fn effective_no_audience_no_bearer() {
+        let tr = transport_aud(vec![], None, Some("tok-1"));
+        let (bearer, extra) = tr.effective();
+        assert!(bearer.is_none(), "无受众不应注入任何票");
         assert!(extra.is_empty());
     }
 
@@ -347,15 +385,16 @@ mod http_header_tests {
         assert_eq!(extra[0].1, "Private-Token abc");
     }
 
-    /// ${BBC_USER_TOKEN} 动态替换（token 现取——轮换后无需重配）
+    /// ${BBC_USER_TOKEN} 动态替换（票按受众现取——轮换后无需重配）
     #[test]
     fn effective_replaces_user_token() {
         let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let c = captured.clone();
-        let provider: TokenProvider = Arc::new(move || c.lock().unwrap().clone());
+        let provider: TokenProvider = Arc::new(move |_: &str| c.lock().unwrap().clone());
         let tr = HttpTransport::new(
             "http://127.0.0.1:1/mcp",
             vec![("Authorization".into(), "Bearer ${BBC_USER_TOKEN}".into())],
+            Some("aud-1".into()),
             provider,
         )
         .unwrap();
@@ -363,7 +402,7 @@ mod http_header_tests {
         let (bearer, extra) = tr.effective();
         assert!(bearer.is_none());
         assert_eq!(extra[0].1, "Bearer fresh-tok");
-        // token 过期/未登录 → 空值（外部系统 401 诚实反馈）
+        // 票过期/未登录 → 空值（外部系统 401 诚实反馈）
         *captured.lock().unwrap() = None;
         let (_, extra) = tr.effective();
         assert_eq!(extra[0].1, "Bearer ");

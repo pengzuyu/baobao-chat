@@ -23,9 +23,11 @@ fn live_go_gateway_handshake_discover_call() {
         transport: TransportConfig::Http {
             base_url: base,
             headers: vec![],
+            audience: None,
         },
+        audience: None,
     };
-    let tokens: bbrt_mcp::TokenProvider = Arc::new(move || Some(token.clone()));
+    let tokens: bbrt_mcp::TokenProvider = Arc::new(move |_: &str| Some(token.clone()));
     let (client, results) = McpClient::connect(&[cfg], tokens);
     let r = results[0].1.as_ref().err().map(|e| e.to_string());
     assert!(r.is_none(), "真实网关握手应成功: {r:?}");
