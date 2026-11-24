@@ -184,12 +184,15 @@ impl Shared {
     }
 
     /// 批量签发 agent 票（D38 §3.3）：POST /api/v1/auth/obo/token——
-    /// agent_session_id=desktop-{did} 归因前缀；audiences=当前装配受众集合
-    /// （{aud, scope}——scope 空数组=服务端按用户全量签）；一次往返换整代
+    /// agent_session_id=desktop-{did} 归因前缀；audiences=系统级常驻
+    /// （bbc-corp/bbc-aigw，设计稿「受众集合=系统级常驻」——aigw 是模型
+    /// 网关不走 MCP 装配，漏常驻则 bbrt 按受众取票 miss → 回退静态 token
+    /// 被 401）∪ 装配受众集合（{aud, scope}——scope 空数组=服务端按用户
+    /// 全量签）；一次往返换整代
     /// → 返回 obo.token 载荷 tokens 数组与统一 exp（unix 秒）
     fn issue_agent_tickets(&self, access: &str) -> Result<(Value, u64), String> {
         let did = self.did.lock().unwrap().clone();
-        let audiences: Vec<Value> = {
+        let mut audiences: Vec<Value> = {
             let a = self.audiences.lock().unwrap();
             a.iter()
                 .map(|(aud, scope)| {
@@ -197,8 +200,11 @@ impl Shared {
                 })
                 .collect()
         };
-        if audiences.is_empty() {
-            return Err("无统一身份受众（装配未含任何声明）".into());
+        // 常驻兜底（服务端对重复 audience 1015 拒签 → 先去重再入）
+        for resident in ["bbc-corp", "bbc-aigw"] {
+            if !audiences.iter().any(|a| a["aud"].as_str() == Some(resident)) {
+                audiences.push(json!({ "aud": resident, "scope": [] }));
+            }
         }
         let url = format!(
             "{}/api/v1/auth/obo/token",
@@ -430,15 +436,13 @@ impl AgentHost {
     }
 
     /// 按受众集合批量换票并下发整代（D38 §3.2 触发点 1/2/4 共用）：
-    /// 未登录/无受众静默跳过；失败仅告警不发票（拍板 6）
+    /// 未登录静默跳过；失败仅告警不发票（拍板 6）。
+    /// 无「装配空即跳过」——bbc-aigw 常驻受众保证纯对话场景也有票可换
+    /// （2026-11-24 真机 1004 修复：原跳过使 aigw 永远拿不到票）
     fn refresh_agent_tickets(&self) {
         let Some((access, _)) = self.shared.token.lock().unwrap().clone() else {
             return;
         };
-        let has_aud = !self.shared.audiences.lock().unwrap().is_empty();
-        if !has_aud {
-            return; // 装配未含统一身份声明——无受众即无票（D38 §3.1）
-        }
         match self.shared.issue_agent_tickets(&access) {
             Ok((tokens, _exp)) => {
                 if let Err(e) = self.fire("obo.token", json!({ "tokens": tokens })) {
