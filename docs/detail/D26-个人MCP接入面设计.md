@@ -142,7 +142,7 @@
 |----|------|------|
 | OQ-1 | 管理端公共 MCP server 下发（zcode workspace 层对位） | 本期拍板不做；需服务端新表+管理页 |
 | OQ-2 | SSE / streamable HTTP transport | 现单请求单连接 POST；长连接 server 不兼容 |
-| OQ-3 | 工具注册表热重建（mcp.config 后免重启进模型 tools 列表） | 插件同样受益；改 PipelineExecutor 构造快照 |
+| OQ-3 | ~~工具注册表热重建（mcp.config 后免重启进模型 tools 列表）~~ **已收口（2026-11-25）**：PipelineExecutor.registry 改 RwLock + `reload_mcp()` 热重建，宿主 McpConfig 分支后台线程触发；新增 `list_plugins` 自省工具（来源/版本/连接态）与插件专家热重扫 | 已收口 |
 | OQ-4 | 跨设备同步/服务端漫游 | KMS 加密存储候选；本期客户端本地 |
 | OQ-5 | ToolCard `mcp.{server}.{tool}` 展示美化（server 徽章） | 现直渲染全名 |
 | OQ-6 | 租户策略对个人 server 的治理入口 | 0028 `mcp.{server}` 通配已可禁用（RT PolicyFilter），管理 UI 未做 |
