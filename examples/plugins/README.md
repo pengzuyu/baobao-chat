@@ -87,7 +87,7 @@ risk: medium               # 可省，缺省 low
     // 形态一：stdio 子进程（自包含，推荐）
     "my-plugin": {
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/server.mjs"],   // ${PLUGIN_ROOT} = 安装后的版本目录绝对路径
+      "args": ["${PLUGIN_ROOT}/server.mjs"],   // ${PLUGIN_ROOT} = 安装后的版本目录绝对路径（生态别名 ${CLAUDE_PLUGIN_ROOT} 同义）
       "env": { "MY_TOKEN": "${CONFIG:api_token}" }  // 配置项注入（见变量族）
     },
     // 形态二：远程 HTTP（内网服务/网关；secret 型鉴权头走这里）
@@ -132,9 +132,39 @@ model: fast                                     # fast|strong（缺省 strong）
 | 变量 | 值 | 替换时机 |
 |---|---|---|
 | `${PLUGIN_ROOT}` | 安装后的版本目录绝对路径 | 宿主装配时（静态） |
+| `${CLAUDE_PLUGIN_ROOT}` | **同上（生态别名）**：Claude Code / zcode 插件规范的标准变量名，与 `${PLUGIN_ROOT}` 完全同义、可混用 | 宿主装配时（静态） |
 | `${BBC_USER_TOKEN}` | 当前登录用户 JWT | **仅 HTTP headers**，Runtime 每次请求动态替换（15 分钟轮换不失效）；stdio env 中会置空——**同生态身份一律走 HTTP 形态** |
 | `${BBC_USER_ID}` / `${BBC_USER_NAME}` | 工号 / 姓名 | 宿主装配时（换账号自动重推） |
 | `${CONFIG:<key>}` | 用户在详情页配置的值（secret 型存系统钥匙串，不落盘） | 宿主装配时；未配置保留占位符（外部系统 401 比伪值诚实），**保存配置即自动重推装配** |
+
+> 后四个变量（`BBC_*`/`CONFIG:*`）是 BaobaoChat 特有能力，Claude Code / zcode 没有对应机制——
+> 用了它们的包就只在 bbc 内完整工作（见下节「生态互通」）。
+
+## 生态互通（Claude Code / zcode）
+
+ bbc 是 Claude 插件格式的**超集**，兼容主动权在包的写法上：
+
+**进的方向（生态包 → bbc）**：`.claude-plugin/` 或 `.zcode-plugin/` 清单的包**零修改直装**——
+组件目录（skills/commands/agents）、`.mcp.json` 格式同源；stdio server 用生态标准变量
+`${CLAUDE_PLUGIN_ROOT}` 定位脚本**已支持展开**；两家的扩展字段（zcode 的 `type`/`cwd`/
+`isolation`/`ui.surfaces` 等）安全忽略；hooks 合法即过（bbc 不执行 hooks）。
+
+**出的方向（一份包三家用）**：按 Claude 兼容形态写即可 bbc / Claude Code / zcode 通装——
+
+| 写法项 | 三家通吃的写法 | 说明 |
+|---|---|---|
+| 清单目录 | `.claude-plugin/` + `.zcode-plugin/` **各放一份同内容 plugin.json** | bbc 按优先级读先命中的 `.claude-plugin`；Claude Code 只认 `.claude-plugin`；zcode 规范用 `.zcode-plugin`（`.claude-plugin` 在 zcode 未实证，双清单目录是稳妥解，成本只是多复制一个文件） |
+| 根路径变量 | `${CLAUDE_PLUGIN_ROOT}` | bbc 与两家都展开 |
+| 占位符 | **不用** `${CONFIG:*}`/`${BBC_USER_*}` | 两家无对应机制（未配置值会原样透传）；配置改走用户自设环境变量 |
+| `bbc` 扩展块 | 可留可不留 | 两家忽略未知字段，无副作用 |
+| 专家 `tools:` 白名单 | 建议**不写**（=继承全量） | 工具命名空间三家不同（bbc `mcp.名.工具` / Claude Code `mcp__名__工具` / zcode 四段 `mcp__插件__名__工具`），写了白名单在另外两家匹配不上 → 专家失工具 |
+| 专家 `model:` | 建议不写 | `fast`/`strong` 是 bbc 档位，两家模型名体系不同 |
+| hooks | 不带 | bbc 不执行；Claude Code/zcode 会**真执行**（bbc 上架不审 hooks 内容，出生态包带 hooks = 把执行权交给内容） |
+
+> `hello-baobao` 示例故意保持 bbc 原生写法（`.bbc-plugin/` + `${PLUGIN_ROOT}` +
+> `${CONFIG:}`/`${BBC_USER_ID}` 全用上）——它示范的是 bbc 全能力；要出生态的包照上表
+> 换写法即可，参考形态=把清单目录换成 `.claude-plugin/`、变量换
+> `${CLAUDE_PLUGIN_ROOT}`、删掉 `.mcp.json` env 里的 bbc 占位。
 
 ## 发布校验清单（过审要点）
 
