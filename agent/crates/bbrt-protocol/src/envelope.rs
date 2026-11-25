@@ -102,6 +102,27 @@ pub struct McpServerWire {
     /// 命名空间段：工具全名 mcp.{name}.{tool}
     pub name: String,
     pub transport: McpTransportWire,
+    /// 来源元数据（D26 OQ-3 同批自省面：list_plugins 工具据此回答
+    /// "装了哪些插件"——corp/local/plugin/personal 四源标注）。
+    /// Option 缺省=旧宿主 wire 零兼容负担
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<McpServerMetaWire>,
+}
+
+/// server 来源元数据 wire（list_plugins 自省面；宿主装配期填）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerMetaWire {
+    /// 来源：corp（公司域网关）/ local（壳本地工具面）/ plugin / personal
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// 展示名（plugin.json name，缺省回落 plugin_id）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_name: Option<String>,
+    /// 插件 activeVersion（非插件源为 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// 传输配置 wire（stdio 子进程 / 远程 HTTP；env 为 map 形态，Runtime 侧转 Vec 对）

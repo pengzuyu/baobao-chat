@@ -870,7 +870,9 @@ pub struct FastPicker<F>
 where
     F: Fn(&ExpertManifest) -> AssembledExpert + Send + Sync,
 {
-    pub index: ExpertIndex,
+    /// 专家索引（Arc<Mutex> 共享：tools.reload 热重扫即时生效——插件
+    /// agents/*.md 翻译落盘后无需重启；D26 OQ-3 收口）
+    pub index: Arc<std::sync::Mutex<ExpertIndex>>,
     /// manifest → 装配产物（assemble() 的绑定封装，含 dropped 标灰信息）
     pub assemble_for: F,
 }
@@ -886,16 +888,17 @@ where
     F: Fn(&ExpertManifest) -> AssembledExpert + Send + Sync,
 {
     fn pick(&self, model: &dyn ChatClient, user_text: &str) -> Option<ExpertPick> {
-        if self.index.manifests.is_empty() {
+        let index = self.index.lock().unwrap_or_else(|p| p.into_inner());
+        if index.manifests.is_empty() {
             return None;
         }
-        let system = PICKER_SYSTEM.replacen("ROSTER", &self.index.roster(), 1);
+        let system = PICKER_SYSTEM.replacen("ROSTER", &index.roster(), 1);
         let out = crate::loop_runner::chat_text(model, &system, user_text).ok()?;
         let v: serde_json::Value =
             serde_json::from_str(crate::subagent::strip_fence(&out).trim()).ok()?;
         let id = v.get("expert")?.as_str()?;
         // 幻觉 id 防线：只认清单内专家（声明式——不在库=不存在）
-        let m = self.index.get(id)?;
+        let m = index.get(id)?;
         Some(ExpertPick {
             label: m.display.clone(),
             expert: Arc::new((self.assemble_for)(m)),

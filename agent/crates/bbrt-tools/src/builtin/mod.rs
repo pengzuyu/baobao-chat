@@ -18,6 +18,7 @@ pub mod fs;
 pub mod git;
 pub mod http;
 pub mod memory;
+pub mod plugins;
 pub mod search;
 pub mod skill;
 
@@ -170,4 +171,6 @@ pub(crate) fn register_all(registry: &mut ToolRegistry) {
     registry.register(ask_user::ask_user_def());
     // D33：技能显式加载（执行体在 pipeline dispatch——SkillIndex 经 ToolsConfig 注入）
     registry.register(skill::skill_def());
+    // D22/D26 自省面收口：已装插件与 MCP server 清单（执行体在 pipeline dispatch）
+    registry.register(plugins::list_plugins_def());
 }

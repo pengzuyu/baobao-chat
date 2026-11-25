@@ -98,6 +98,10 @@ fn ok_of(out: ToolOutcome) -> (String, bool, Option<i32>, u64) {
         ToolOutcome::Blocked { code, summary } => {
             panic!("期望 Ok，实际 Blocked({code}): {summary}")
         }
+        // 2a69bd4 新增变体（用户拒绝=流程控制非执行失败）；套件断言面不消费
+        ToolOutcome::Rejected { code, summary } => {
+            panic!("期望 Ok，实际 Rejected({code}): {summary}")
+        }
     }
 }
 
@@ -105,6 +109,9 @@ fn blocked_code(out: ToolOutcome) -> (u32, String) {
     match out {
         ToolOutcome::Blocked { code, summary } => (code, summary),
         ToolOutcome::Ok { summary, .. } => panic!("期望 Blocked，实际 Ok: {summary}"),
+        ToolOutcome::Rejected { code, summary } => {
+            panic!("期望 Blocked，实际 Rejected({code}): {summary}")
+        }
     }
 }
 

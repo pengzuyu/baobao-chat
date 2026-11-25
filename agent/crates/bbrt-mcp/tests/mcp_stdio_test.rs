@@ -14,6 +14,7 @@ fn fake_server_cfg() -> McpServerConfig {
             env: vec![],
         },
         audience: None,
+        meta: None,
     }
 }
 
@@ -106,6 +107,39 @@ fn policy_disables_server() {
     assert_eq!(client.list_tools(&PolicyFilter::default()).len(), 3);
 }
 
+/// 动态重配（D22 §5.3 / D26 OQ-3 收口）：connect 空表 → reconfigure 追加
+/// fake → list_tools 懒补连发现工具；再 reconfigure 移除 → 断开不可见。
+/// 这是"装插件后 agent 看得见工具"的连接层前提（注册表热重建在 bbrt-tools）。
+#[test]
+fn reconfigure_adds_and_removes_servers() {
+    let (client, results) = McpClient::connect(&[], no_token());
+    assert!(results.is_empty());
+
+    // 追加：reconfigure 只更新配置表（不连接），list_tools 入口懒补连
+    client.reconfigure(vec![fake_server_cfg()]);
+    let tools = client.list_tools(&PolicyFilter::default());
+    let names: Vec<&str> = tools.iter().map(|t| t.full_name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["mcp.fake.echo", "mcp.fake.risky_op", "mcp.fake.fail_probe"],
+        "懒补连后应可发现新 server 工具"
+    );
+
+    // 追加的 server 可直接调用
+    let out = client
+        .call("mcp.fake.echo", serde_json::json!({"text": "热"}))
+        .unwrap();
+    assert_eq!(out.text, "echo:热 obo:none");
+
+    // 移除：配置表清空 → 连接断开 → 不可见不可调
+    client.reconfigure(vec![]);
+    assert!(client.list_tools(&PolicyFilter::default()).is_empty());
+    let err = client
+        .call("mcp.fake.echo", serde_json::json!({"text": "x"}))
+        .unwrap_err();
+    assert!(matches!(err, McpError::Call(_)), "移除后应拒绝: {err}");
+}
+
 /// 连接失败与不支持传输：单 server 失败不阻塞（降级语义）。
 #[test]
 fn connect_failures_degrade() {
@@ -118,6 +152,7 @@ fn connect_failures_degrade() {
             env: vec![],
         },
         audience: None,
+        meta: None,
     };
     let (client, results) = McpClient::connect(&[bad], no_token());
     assert!(matches!(results[0].1, Err(McpError::Connect(_))));
@@ -132,6 +167,7 @@ fn connect_failures_degrade() {
             audience: None,
         },
         audience: None,
+        meta: None,
     };
     let (_, results) = McpClient::connect(&[http], no_token());
     assert!(matches!(results[0].1, Err(McpError::Connect(_))));

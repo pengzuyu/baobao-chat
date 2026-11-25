@@ -26,6 +26,7 @@ fn live_go_gateway_handshake_discover_call() {
             audience: None,
         },
         audience: None,
+        meta: None,
     };
     let tokens: bbrt_mcp::TokenProvider = Arc::new(move |_: &str| Some(token.clone()));
     let (client, results) = McpClient::connect(&[cfg], tokens);

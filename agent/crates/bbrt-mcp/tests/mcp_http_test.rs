@@ -189,6 +189,7 @@ fn http_gateway_discover_and_call_with_bearer() {
             audience: Some("bbc-corp".into()),
         },
         audience: Some("bbc-corp".into()),
+        meta: None,
     };
     let tokens: bbrt_mcp::TokenProvider = Arc::new(|_: &str| Some("obo-token-7".into()));
     let (client, results) = McpClient::connect(&[cfg], tokens);
@@ -237,6 +238,7 @@ fn http_gateway_no_token_degrades_to_call_error() {
             audience: None,
         },
         audience: None,
+        meta: None,
     };
     let (_, results) = McpClient::connect(&[cfg], bbrt_mcp::no_token());
     assert!(
@@ -258,6 +260,7 @@ fn http_gateway_chunked_response_decodes() {
             audience: Some("bbc-corp".into()),
         },
         audience: Some("bbc-corp".into()),
+        meta: None,
     };
     let tokens: bbrt_mcp::TokenProvider = Arc::new(|_: &str| Some("t".into()));
     let (client, results) = McpClient::connect(&[cfg], tokens);

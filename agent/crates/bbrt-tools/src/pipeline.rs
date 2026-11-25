@@ -38,8 +38,9 @@ use crate::registry::ToolRegistry;
 
 /// 管线执行器（实现 session 的 ToolExecutor trait；bin 经 Arc<dyn ToolExecutor> 装配 LoopDeps）
 pub struct PipelineExecutor {
-    /// 工具注册表（§6 步骤 1）
-    registry: ToolRegistry,
+    /// 工具注册表（§6 步骤 1；D26 OQ-3 收口：RwLock 支撑 mcp.config 热重建——
+    /// 宿主装配推送后 bin 后台重建，进行中 turn 用旧表跑完，下轮 tool_specs 即新面）
+    registry: std::sync::RwLock<ToolRegistry>,
     /// 配置（工作区/白名单/记忆引擎/journal 回调/门控上下文）
     config: Arc<ToolsConfig>,
     /// 三级授权记忆（gate ④ 与 record_grant 共享；bin 可经 grants() 持有同源实例）
@@ -97,32 +98,9 @@ impl PipelineExecutor {
             journal_hook: config.journal_hook.clone(),
             sink,
         };
-        // MCP 来源注入（D14 §6.1 连接期发现）：风险级沿用 server 清单声明
-        // （缺失默认 Medium）；动作类别按风险粗映射——Low→ReadOnly（矩阵放行）、
-        // Medium→NetworkEgress（远程调用语义，ask/确认档）、High→CorpWrite
-        // （公司域写全模式确认；09 §3.1 治理属性权威源不变）
-        let mut registry = ToolRegistry::builtin();
-        if let Some(client) = &config.mcp {
-            for t in client.list_tools(&config.mcp_policy) {
-                registry.register(crate::registry::ToolDef {
-                    name: t.full_name.clone(),
-                    description: t.description.clone(),
-                    input_schema: t.input_schema.clone(),
-                    risk: match t.risk {
-                        bbrt_protocol::RiskLevel::Low => crate::registry::RiskLevel::Low,
-                        bbrt_protocol::RiskLevel::Medium => crate::registry::RiskLevel::Medium,
-                        bbrt_protocol::RiskLevel::High => crate::registry::RiskLevel::High,
-                    },
-                    category: match t.risk {
-                        bbrt_protocol::RiskLevel::Low => bbrt_sec::gate::ActionCategory::ReadOnly,
-                        bbrt_protocol::RiskLevel::Medium => {
-                            bbrt_sec::gate::ActionCategory::NetworkEgress
-                        }
-                        bbrt_protocol::RiskLevel::High => bbrt_sec::gate::ActionCategory::CorpWrite,
-                    },
-                });
-            }
-        }
+        // MCP 来源注入（连接期发现 → register_mcp_tools；D26 OQ-3 收口：构造
+        // 与 reload_mcp 热重建共用同一注册函数）
+        let registry = std::sync::RwLock::new(build_registry(&config));
         let mcp = config.mcp.clone();
         Self {
             registry,
@@ -236,14 +214,26 @@ impl PipelineExecutor {
     }
 
     /// 替换注册表（bin 注入 app.*/技能合并后的注册表；10 篇 §4.6）
-    pub fn with_registry(mut self, registry: ToolRegistry) -> Self {
-        self.registry = registry;
+    pub fn with_registry(self, registry: ToolRegistry) -> Self {
+        *self.registry.write().unwrap_or_else(|p| p.into_inner()) = registry;
         self
     }
 
-    /// 注册表只读访问
-    pub fn registry(&self) -> &ToolRegistry {
-        &self.registry
+    /// 注册表快照（只读访问；热重建下返回克隆避免调用方持锁跨步）
+    pub fn registry(&self) -> ToolRegistry {
+        self.registry
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// MCP 注册表热重建（D26 OQ-3 / D22 §5.3 收口）：宿主 mcp.config 下发后由
+    /// bin 在后台线程调用——懒连新 server + 全量工具发现是慢操作，不阻塞宿主
+    /// 消息循环；进行中 turn 用旧注册表跑完，下轮 tool_specs() 即新面。重建
+    /// 语义=全量（内建 + 当前 MCP 发现），卸载/禁用 server 的工具随之移除。
+    pub fn reload_mcp(&self) {
+        let reg = build_registry(&self.config);
+        *self.registry.write().unwrap_or_else(|p| p.into_inner()) = reg;
     }
 
     /// 授权记忆同源句柄（bin 侧会话结束 clear_session / 持久化导出）
@@ -350,13 +340,19 @@ impl ToolExecutor for PipelineExecutor {
 
     /// 门控判定（§6 步骤 1-4 浓缩；不执行、不发审批）
     fn check(&self, mode: bbrt_sec::gate::PermissionMode, call: &ToolInvocation) -> CheckOutcome {
-        // ① ToolDef 查询（§6 步骤 1：未注册 → 8002）
-        let Some(_def) = self.registry.get(&call.name) else {
+        // ① ToolDef 查询（§6 步骤 1：未注册 → 8002；读锁快照——热重建下不持锁跨步）
+        let registered = self
+            .registry
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&call.name)
+            .is_some();
+        if !registered {
             return CheckOutcome::Deny {
                 code: CODE_NO_PERMISSION_POINT,
                 message: format!("工具 {} 未注册（8002）", call.name),
             };
-        };
+        }
         // 参数解析（非法 JSON → 8002）
         let args = match Self::parse_args(call) {
             Ok(v) => v,
@@ -486,6 +482,8 @@ impl ToolExecutor for PipelineExecutor {
             // D33 §3.1：技能显式加载（结果=SKILL.md 正文，天然注入下轮上下文；
             // 未装配索引/未命中走 Ok 降级引导，见 builtin/skill.rs）
             "skill" => builtin::skill::load(self.config.skills.as_ref(), &args),
+            // D22/D26 自省面：已装插件与 MCP server 清单（inventory 内存快照）
+            "list_plugins" => builtin::plugins::list_plugins(self.mcp.as_ref(), &args),
             // mcp.{server}.{tool}（D11 §2.10 dispatch_by_source：网关/外部 MCP 工具；
             // OBO 由 McpClient 令牌闭包逐请求注入；断连/未注册 → 8002 标灰语义）
             _ if call.name.starts_with("mcp.") => match &self.mcp {
@@ -573,13 +571,56 @@ impl ToolExecutor for PipelineExecutor {
 
     /// 工具清单（assemble 注入模型 tools 参数）
     fn tool_specs(&self) -> Vec<bbrt_aigw::ToolSpec> {
-        self.registry.specs()
+        self.registry
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .specs()
     }
 }
 
 // ---------------------------------------------------------------------------
 // 辅助
 // ---------------------------------------------------------------------------
+
+/// 内建 + MCP 发现合并出注册表（构造期与 reload_mcp 热重建共用；D26 OQ-3）
+fn build_registry(config: &ToolsConfig) -> ToolRegistry {
+    let mut registry = ToolRegistry::builtin();
+    register_mcp_tools(&mut registry, config);
+    registry
+}
+
+/// MCP 发现条目 → ToolDef（纯映射；D14 §6.1）：风险级沿用 server 清单声明
+/// （缺失默认 Medium）；动作类别按风险粗映射——Low→ReadOnly（矩阵放行）、
+/// Medium→NetworkEgress（远程调用语义，ask/确认档）、High→CorpWrite
+/// （公司域写全模式确认；09 §3.1 治理属性权威源不变）
+fn mcp_tool_def(t: bbrt_mcp::ToolEntry) -> crate::registry::ToolDef {
+    crate::registry::ToolDef {
+        name: t.full_name.clone(),
+        description: t.description.clone(),
+        input_schema: t.input_schema.clone(),
+        risk: match t.risk {
+            bbrt_protocol::RiskLevel::Low => crate::registry::RiskLevel::Low,
+            bbrt_protocol::RiskLevel::Medium => crate::registry::RiskLevel::Medium,
+            bbrt_protocol::RiskLevel::High => crate::registry::RiskLevel::High,
+        },
+        category: match t.risk {
+            bbrt_protocol::RiskLevel::Low => bbrt_sec::gate::ActionCategory::ReadOnly,
+            bbrt_protocol::RiskLevel::Medium => bbrt_sec::gate::ActionCategory::NetworkEgress,
+            bbrt_protocol::RiskLevel::High => bbrt_sec::gate::ActionCategory::CorpWrite,
+        },
+    }
+}
+
+/// MCP 来源注入（连接期发现 → mcp_tool_def；同名覆盖——MCP 工具全名自带
+/// server 命名空间，与内建不冲突）
+fn register_mcp_tools(registry: &mut ToolRegistry, config: &ToolsConfig) {
+    let Some(client) = &config.mcp else {
+        return;
+    };
+    for t in client.list_tools(&config.mcp_policy) {
+        registry.register(mcp_tool_def(t));
+    }
+}
 
 /// blocked 映射
 fn blocked(b: &ToolBlock) -> ToolOutcome {
@@ -662,5 +703,101 @@ fn grant_pattern(name: &str, args: &Value) -> String {
         builtin::cmd::command_text(args).unwrap_or_else(|| "*".to_string())
     } else {
         "*".to_string()
+    }
+}
+
+#[cfg(test)]
+mod registry_reload_tests {
+    //! D26 OQ-3 收口单测：MCP 发现→ToolDef 映射 + 注册表热重建语义。
+    //! （含真连接的懒连路径由 bbrt-mcp tests/mcp_stdio_test.rs reconfigure 用例覆盖）
+
+    use super::{build_registry, mcp_tool_def, register_mcp_tools};
+    use crate::config::ToolsConfig;
+    use crate::registry::RiskLevel;
+    use bbrt_mcp::{McpClient, ToolEntry};
+    use bbrt_sec::gate::ActionCategory;
+    use bbrt_session::ToolExecutor;
+
+    fn entry(name: &str, risk: bbrt_protocol::RiskLevel) -> ToolEntry {
+        ToolEntry {
+            full_name: format!("mcp.fake.{name}"),
+            server: "fake".into(),
+            name: name.into(),
+            description: format!("{name} desc"),
+            input_schema: serde_json::json!({"type": "object"}),
+            risk,
+        }
+    }
+
+    /// mcp_tool_def 纯映射（打真函数）：Low→ReadOnly / Medium→NetworkEgress /
+    /// High→CorpWrite；全名/描述/schema 保真
+    #[test]
+    fn mcp_tool_def_maps_risk_to_category() {
+        let low = mcp_tool_def(entry("low_op", bbrt_protocol::RiskLevel::Low));
+        assert_eq!(low.risk, RiskLevel::Low);
+        assert_eq!(low.category, ActionCategory::ReadOnly);
+
+        let mid = mcp_tool_def(entry("mid_op", bbrt_protocol::RiskLevel::Medium));
+        assert_eq!(mid.risk, RiskLevel::Medium);
+        assert_eq!(mid.category, ActionCategory::NetworkEgress);
+
+        let high = mcp_tool_def(entry("high_op", bbrt_protocol::RiskLevel::High));
+        assert_eq!(high.name, "mcp.fake.high_op");
+        assert_eq!(high.risk, RiskLevel::High);
+        assert_eq!(high.category, ActionCategory::CorpWrite);
+        assert_eq!(high.input_schema, serde_json::json!({"type": "object"}));
+    }
+
+    /// mcp 未装配：reload_mcp 幂等无 panic，注册表=纯内建
+    #[test]
+    fn reload_without_mcp_keeps_builtin() {
+        let ex = crate::PipelineExecutor::new(ToolsConfig::new("."));
+        let before = ex.registry();
+        ex.reload_mcp();
+        assert_eq!(
+            ToolExecutor::tool_specs(&ex).len(),
+            before.specs().len(),
+            "无 MCP 时重建=内建不变"
+        );
+        assert!(before.get("read_file").is_some(), "内建工具应在册");
+    }
+
+    /// 空 client（无 server 配置）：reload_mcp 后仍=内建（list_tools 空）
+    #[test]
+    fn reload_with_empty_client_keeps_builtin() {
+        let (client, _) = McpClient::connect(&[], bbrt_mcp::no_token());
+        let mut cfg = ToolsConfig::new(".");
+        cfg.mcp = Some(std::sync::Arc::new(client));
+        let ex = crate::PipelineExecutor::new(cfg);
+        ex.reload_mcp();
+        assert!(
+            ex.registry()
+                .names()
+                .iter()
+                .all(|n| !n.starts_with("mcp.")),
+            "空连接表不应有 mcp.* 工具"
+        );
+    }
+
+    /// register_mcp_tools 空 config（mcp=None）早退不 panic
+    #[test]
+    fn register_mcp_tools_without_client_is_noop() {
+        let cfg = ToolsConfig::new(".");
+        let mut reg = crate::registry::ToolRegistry::builtin();
+        register_mcp_tools(&mut reg, &cfg);
+        assert!(reg.names().iter().all(|n| !n.starts_with("mcp.")));
+    }
+
+    /// build_registry 与构造期一致（同一来源函数——回归护栏）
+    #[test]
+    fn build_registry_matches_builtin_when_no_mcp() {
+        let cfg = ToolsConfig::new(".");
+        let reg = build_registry(&cfg);
+        let via_new = crate::PipelineExecutor::new(ToolsConfig::new("."));
+        let mut a = reg.names().into_iter().map(str::to_string).collect::<Vec<_>>();
+        let mut b = via_new.registry().names().into_iter().map(str::to_string).collect::<Vec<_>>();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b);
     }
 }

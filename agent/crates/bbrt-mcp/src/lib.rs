@@ -28,7 +28,9 @@ pub use call::{call_tool, McpCallResult, TokenProvider};
 pub use conn::McpConnection;
 pub use discovery::ToolEntry;
 pub use policy::PolicyFilter;
-pub use transport::{HttpTransport, McpServerConfig, StdioTransport, Transport, TransportConfig};
+pub use transport::{
+    HttpTransport, McpServerConfig, ServerMeta, StdioTransport, Transport, TransportConfig,
+};
 
 /// MCP client 错误（调用方映射协议错误码：未注册/断连标灰 → 8002；
 /// 连接失败 → 8047 语义位，暂由调用方文案承载）
@@ -48,6 +50,18 @@ pub enum McpError {
 
 /// 各 server 连接结果（单条失败不阻塞其余）
 pub type ConnectResults = Vec<(String, Result<(), McpError>)>;
+
+/// server 清单条目（`McpClient::inventory` 产出；list_plugins 自省面）
+#[derive(Debug, Clone)]
+pub struct McpServerInfo {
+    pub name: String,
+    /// "stdio" | "http"
+    pub transport: String,
+    /// 连接表在册=已连接（懒补连前/降级=false）
+    pub connected: bool,
+    /// 来源元数据（None=env 兜底启动）
+    pub meta: Option<ServerMeta>,
+}
 
 /// 多 server 聚合客户端（bin 装配持有；连接生命周期与进程一致）
 pub struct McpClient {
@@ -172,6 +186,32 @@ impl McpClient {
             }
         }
         policy.filter_tools(all)
+    }
+
+    /// server 清单快照（list_plugins 自省面；D26 OQ-3 同批）：配置表 × 连接态
+    /// 求交，纯内存零网络——工具清单不在此列（模型 tools 数组已可见全量工具，
+    /// 再发现一轮是无谓的调用期 roundtrip）。降级/未连 server 照列（connected=false）
+    pub fn inventory(&self) -> Vec<McpServerInfo> {
+        let configs = match self.configs.lock() {
+            Ok(c) => c.clone(),
+            Err(_) => return vec![],
+        };
+        let conns = match self.conns.lock() {
+            Ok(c) => c,
+            Err(_) => return vec![],
+        };
+        configs
+            .iter()
+            .map(|cfg| McpServerInfo {
+                name: cfg.name.clone(),
+                transport: match cfg.transport {
+                    TransportConfig::Stdio { .. } => "stdio".into(),
+                    TransportConfig::Http { .. } => "http".into(),
+                },
+                connected: conns.contains_key(&cfg.name),
+                meta: cfg.meta.clone(),
+            })
+            .collect()
     }
 
     /// 受控调用（full_name = mcp.{server}.{tool}；OBO 从 tokens 现取注入 _meta）

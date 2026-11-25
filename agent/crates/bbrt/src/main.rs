@@ -159,8 +159,9 @@ fn run() -> Result<(), String> {
         workspace: PathBuf::new(),
         launcher: None, // D32 起 launcher 无探测/等级概念（None=default 进程执行器）
         memory: Some(memory.clone()),
-        // 恒 Some（D22/L3）：空配置零成本（连接表空），插件 mcp.config 动态
-        // 下发后无需重启即注入工具面
+        // 恒 Some（D22/L3）：空配置零成本（连接表空）。D26 OQ-3 收口：构造期
+        // 注册表此刻只有 env 注入的 corp，插件/个人/local 面经 mcp.config 下发
+        // 后台 reload_mcp 热重建注入（McpConfig 分支）——无需重启
         mcp: Some(mcp_client.clone()),
         session_workspaces: Some(session_workspaces.clone()),
         // D33 §3.1：skill 工具与组装/tools.reload 热重扫共用同一索引实例
@@ -190,12 +191,15 @@ fn run() -> Result<(), String> {
 
     // 专家调用启用（D14 §3.3 / D16 P1-5）：本地专家库扫描（含 .override.yaml
     // 覆写合并——D16 §6 三层配置）→ FastPicker 快模型单专家选角（判定优先于探查）。
-    // 空库零成本（空索引直接不调用）；选角是优化不是依赖，降级语义同探查
-    let expert_index = bbrt_session::expert::ExpertIndex::scan(&data_dir.join("eco/experts"));
+    // 空库零成本（空索引直接不调用）；选角是优化不是依赖，降级语义同探查。
+    // Arc<Mutex> 共享：tools.reload 热重扫（插件 agents/*.md 翻译落盘后即时生效）
+    let expert_shared = Arc::new(Mutex::new(bbrt_session::expert::ExpertIndex::scan(
+        &data_dir.join("eco/experts"),
+    )));
     let skills_for_pick = skills_index.clone();
     let tools_for_pick: Arc<dyn ToolExecutor> = tools.clone();
     let picker = Arc::new(bbrt_session::expert::FastPicker {
-        index: expert_index,
+        index: expert_shared.clone(),
         // 装配闭包：manifest ∩ 工具注册表（含 MCP）∩ 技能库；租户策略
         // （AssemblePolicy.deny_tools）随策略面接线注入，v0.1 空策略
         assemble_for: move |m| {
@@ -214,7 +218,7 @@ fn run() -> Result<(), String> {
     });
     let deps = LoopDeps {
         model,
-        tools,
+        tools: tools.clone(), // 本体留一份给 dispatch（mcp.config 后台热重建）
         memory: Some(memory.clone()),
         wal: store.clone(),
         sink: sink.clone(),
@@ -300,6 +304,8 @@ fn run() -> Result<(), String> {
             &store,
             &obo,
             &skills_index,
+            &expert_shared,
+            &tools,
             &mcp_client,
             &data_dir,
             &mut ids,
@@ -324,6 +330,8 @@ fn dispatch(
     store: &Arc<Mutex<Store>>,
     obo: &Arc<std::sync::Mutex<bbrt_hostapi::OboCache>>,
     skills: &Arc<Mutex<bbrt_session::SkillIndex>>,
+    experts: &Arc<Mutex<bbrt_session::expert::ExpertIndex>>,
+    tools: &Arc<bbrt_tools::PipelineExecutor>,
     mcp: &Arc<bbrt_mcp::McpClient>,
     data_dir: &std::path::Path,
     ids: &mut IdGen,
@@ -870,19 +878,31 @@ fn dispatch(
             items: mgr.list_runs(session_id.as_deref()),
         }),
         // 工具/技能热重载（10 篇 §4.5：宿主安装/更新/卸载技能包后 tools.reload
-        // {reason:skill}；App/Policy/Plugin 亦触发技能重扫——生态内容变更的
-        // 统一失效信号。D22/L3：扫描多根=生态根+各启用插件版本目录）
+        // {reason:skill}；App/Policy/Plugin 亦触发——生态内容变更的统一失效信号。
+        // D22/L3：扫描多根=生态根+各启用插件版本目录。专家索引同口径热重扫
+        // （D26 OQ-3 收口：插件 agents/*.md 翻译落盘后即时生效，不再需要重启）
         HostToRuntime::ToolsReload { .. } => {
             if let Ok(mut idx) = skills.lock() {
                 *idx = bbrt_session::SkillIndex::scan_roots(&skill_roots(data_dir));
             }
+            if let Ok(mut idx) = experts.lock() {
+                *idx = bbrt_session::expert::ExpertIndex::scan(&data_dir.join("eco/experts"));
+            }
             None // 效果经后续轮次注入体现（协议无独立回执变体）
         }
         // MCP 装配动态下发（NTF；D22 §5.3/L3：宿主推全量——系统级+插件级合并、
-        // PLUGIN_ROOT 已替换；按名重配=未变保留/变了断开/新增懒连/移除断开）
+        // PLUGIN_ROOT 已替换；按名重配=未变保留/变了断开/新增懒连/移除断开）。
+        // D26 OQ-3 收口：注册表随后台线程热重建（懒连新 server + 全量工具发现
+        // 是慢操作，不阻塞宿主消息循环）——进行中 turn 用旧注册表跑完，下一轮
+        // tool_specs() 即新面；卸载/禁用 server 的工具随之移除
         HostToRuntime::McpConfig { servers } => {
             let configs = servers.iter().map(wire_to_mcp_config).collect();
             mcp.reconfigure(configs);
+            let tools_bg = Arc::clone(tools);
+            std::thread::Builder::new()
+                .name("mcp-registry-reload".into())
+                .spawn(move || tools_bg.reload_mcp())
+                .ok();
             None
         }
         // 个人 MCP server 连接测试（REQ；D26 §6）：一次性 McpConnection 即弃
@@ -1037,6 +1057,13 @@ fn wire_to_mcp_config(w: &bbrt_protocol::McpServerWire) -> bbrt_mcp::McpServerCo
         name: w.name.clone(),
         transport,
         audience,
+        // 来源元数据透传（list_plugins 自省面；宿主装配期已填）
+        meta: w.meta.as_ref().map(|m| bbrt_mcp::ServerMeta {
+            source: m.source.clone(),
+            plugin_id: m.plugin_id.clone(),
+            plugin_name: m.plugin_name.clone(),
+            version: m.version.clone(),
+        }),
     }
 }
 
@@ -1081,7 +1108,12 @@ fn parse_mcp_servers(raw: &str) -> Vec<bbrt_mcp::McpServerConfig> {
                 }
             };
             let audience = transport_audience(&transport);
-            Some(bbrt_mcp::McpServerConfig { name, transport, audience })
+            Some(bbrt_mcp::McpServerConfig {
+                name,
+                transport,
+                audience,
+                meta: None, // env 兜底通道无来源元数据（corp 由 mcp.config 覆盖补齐）
+            })
         })
         .collect()
 }

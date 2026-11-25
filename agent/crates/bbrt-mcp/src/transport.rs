@@ -25,6 +25,17 @@ use crate::call::TokenProvider;
 use crate::http::{parse_url, post_json, HttpResponse, ParsedUrl};
 use crate::McpError;
 
+/// server 来源元数据（list_plugins 自省面；wire.meta 透传——装配层填，
+/// Runtime 只透传不解释）
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerMeta {
+    /// corp / local / plugin / personal
+    pub source: String,
+    pub plugin_id: Option<String>,
+    pub plugin_name: Option<String>,
+    pub version: Option<String>,
+}
+
 /// server 配置（bin 从环境/eco 通道装载）
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -35,6 +46,8 @@ pub struct McpServerConfig {
     /// 从 x-bbc-auth/旧 TOKEN 归一显式填入；std 传输恒 None——令牌不进子进程）。
     /// call 层按它查 OboCache；None=匿名调用不注入身份
     pub audience: Option<String>,
+    /// 来源元数据（list_plugins 自省面；None=env 兜底启动的 server）
+    pub meta: Option<ServerMeta>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
