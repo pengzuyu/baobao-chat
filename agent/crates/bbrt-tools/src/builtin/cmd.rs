@@ -437,19 +437,21 @@ fn path_error_code(e: &PathError) -> u32 {
 pub fn run_command_def() -> ToolDef {
     ToolDef {
         name: "run_command".into(),
-        description: "在沙箱中执行 shell 命令（工作区可写、默认断网、输出 1MB 截断）。\
-                      command 传命令文本（兼容 cmd 字符串/数组形态）；cwd 默认工作区。\
-                      默认同步执行：超过 300s 未完成会自动转后台（不中断），返回任务 id\
-                      由 task.wait 取结果——无需预判时长，正常直接调用即可"
+        description: "Run a shell command in the sandbox (workspace writable, network denied by \
+                      default, output truncated at 1MB). Pass the command text in command \
+                      (cmd string/array forms also accepted); cwd defaults to the workspace. \
+                      Runs synchronously by default: past 300s it automatically moves to the \
+                      background (without interruption) and returns a task id — fetch the \
+                      result later via task.wait. No need to predict duration; just call it"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "命令文本（首选字段）"},
+                "command": {"type": "string", "description": "Command text (preferred field)"},
                 "cmd": {"type": ["string", "array"],
-                        "description": "命令别名：字符串或 [program, args...] 数组"},
-                "cwd": {"type": "string", "description": "工作目录（须在工作区内，默认工作区根）"},
-                "background": {"type": "boolean", "description": "低优先级选项：仅当明确预知任务远超 300s 且不想占用当前轮等待时才设 true（立即返回任务 id）；一般不用设——超时会自动转后台"}
+                        "description": "Command alias: a string or a [program, args...] array"},
+                "cwd": {"type": "string", "description": "Working directory (must be inside the workspace; defaults to the workspace root)"},
+                "background": {"type": "boolean", "description": "Low-priority option: set true only when you clearly expect the task to far exceed 300s and don't want to hold up the current turn (returns a task id immediately); usually leave unset — long-running commands auto-move to the background"}
             },
             "required": ["command"]
         }),

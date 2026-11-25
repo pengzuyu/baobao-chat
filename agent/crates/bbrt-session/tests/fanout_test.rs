@@ -262,10 +262,10 @@ fn fanout_two_probes_join_into_history() {
     assert!(seen.len() >= 4, "2 子任务 × ≥2 轮");
     assert!(seen
         .iter()
-        .all(|(s, _)| s.contains("BaobaoChat 的本机 Agent")));
+        .all(|(s, _)| s.contains("local agent of BaobaoChat")));
     assert!(seen
         .iter()
-        .all(|(s, _)| s.contains("[项目]") && s.contains("/ws")));
+        .all(|(s, _)| s.contains("[Project]") && s.contains("/ws")));
     assert!(seen.iter().any(|(_, u)| u.contains("认证模块")));
     assert!(seen.iter().any(|(_, u)| u.contains("配置加载")));
 

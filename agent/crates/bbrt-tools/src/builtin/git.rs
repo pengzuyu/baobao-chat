@@ -100,7 +100,7 @@ pub(crate) fn git_push(_env: &ExecEnv, _args: &Value) -> Result<ExecOutput, Tool
 pub fn git_status_def() -> ToolDef {
     ToolDef {
         name: "git_status".into(),
-        description: "查看工作区 git 状态（porcelain v1 + 分支头；沙箱内执行）".into(),
+        description: "Show the workspace git status (porcelain v1 + branch head; runs inside the sandbox)".into(),
         input_schema: json!({"type": "object", "properties": {}}),
         risk: RiskLevel::Low,
         category: bbrt_sec::gate::ActionCategory::ReadOnly,
@@ -111,11 +111,11 @@ pub fn git_status_def() -> ToolDef {
 pub fn git_diff_def() -> ToolDef {
     ToolDef {
         name: "git_diff".into(),
-        description: "查看工作区 git 差异（--stat 摘要 + 全量 diff；可传 path 限定范围）".into(),
+        description: "Show the workspace git diff (--stat summary + full diff; pass path to narrow the scope)".into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "限定差异范围的路径（可选）"}
+                "path": {"type": "string", "description": "Path to narrow the diff scope (optional)"}
             }
         }),
         risk: RiskLevel::Low,
@@ -127,11 +127,11 @@ pub fn git_diff_def() -> ToolDef {
 pub fn git_commit_def() -> ToolDef {
     ToolDef {
         name: "git_commit".into(),
-        description: "提交暂存区（v0.1 未接钥匙串，暂返回 8028 不可用）".into(),
+        description: "Commit the staged area (v0.1 has no keychain wired; returns 8028 unavailable for now)".into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "message": {"type": "string", "description": "提交信息"}
+                "message": {"type": "string", "description": "Commit message"}
             },
             "required": ["message"]
         }),
@@ -144,12 +144,12 @@ pub fn git_commit_def() -> ToolDef {
 pub fn git_push_def() -> ToolDef {
     ToolDef {
         name: "git_push".into(),
-        description: "推送远端（v0.1 未接钥匙串，暂返回 8028 不可用）".into(),
+        description: "Push to the remote (v0.1 has no keychain wired; returns 8028 unavailable for now)".into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "remote": {"type": "string", "description": "远端名（默认 origin）"},
-                "branch": {"type": "string", "description": "分支（默认当前分支）"}
+                "remote": {"type": "string", "description": "Remote name (default origin)"},
+                "branch": {"type": "string", "description": "Branch (default: the current branch)"}
             }
         }),
         risk: RiskLevel::High,

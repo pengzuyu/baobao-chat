@@ -14,15 +14,17 @@ use crate::registry::{RiskLevel, ToolDef};
 pub fn ask_user_def() -> ToolDef {
     ToolDef {
         name: "ask_user".into(),
-        description: "向用户提问以澄清关键决策（选项卡点选作答）：仅在方案取舍、\
-                      破坏性操作确认、意图实质歧义等影响后续大量工作的关键点使用；\
-                      一次一个问题，选项 2-4 个；能合理自决的不要问"
+        description: "Ask the user to clarify a pivotal decision (answered via option-card \
+                      selection): use only at key points that shape substantial downstream work \
+                      — choosing between approaches, confirming destructive operations, or \
+                      resolving genuinely ambiguous intent; one question at a time, 2-4 \
+                      options; decide on your own whenever reasonable"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "question": {"type": "string", "description": "完整问题（一句）"},
-                "header": {"type": "string", "description": "短标签 ≤12 字（界面 chip 展示，可选）"},
+                "question": {"type": "string", "description": "The full question (one sentence)"},
+                "header": {"type": "string", "description": "Short label, max 12 chars (shown as a UI chip, optional)"},
                 "options": {
                     "type": "array",
                     "minItems": 2,
@@ -30,14 +32,14 @@ pub fn ask_user_def() -> ToolDef {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "label": {"type": "string", "description": "选项短文案"},
-                            "description": {"type": "string", "description": "取舍说明（可选）"}
+                            "label": {"type": "string", "description": "Short option text"},
+                            "description": {"type": "string", "description": "Trade-off explanation (optional)"}
                         },
                         "required": ["label"]
                     },
-                    "description": "选项列表（2-4 个）"
+                    "description": "Option list (2-4 items)"
                 },
-                "multi_select": {"type": "boolean", "description": "允许多选（默认 false）"}
+                "multi_select": {"type": "boolean", "description": "Allow multi-select (default false)"}
             },
             "required": ["question", "options"]
         }),

@@ -575,8 +575,10 @@ impl MemoryEngine {
         match (&user_part, &project) {
             (u, None) if u.is_empty() => String::new(),
             (u, None) => u.clone(),
-            (u, Some((key, p))) if u.is_empty() => format!("[项目记忆·{key}]\n{p}"),
-            (u, Some((key, p))) => format!("[用户记忆]\n{u}\n\n[项目记忆·{key}]\n{p}"),
+            (u, Some((key, p))) if u.is_empty() => format!("[Project Memory · {key}]\n{p}"),
+            (u, Some((key, p))) => {
+                format!("[User Memory]\n{u}\n\n[Project Memory · {key}]\n{p}")
+            }
         }
     }
 
@@ -589,9 +591,9 @@ impl MemoryEngine {
             let real = fs::canonicalize(ws).unwrap_or_else(|_| ws.to_path_buf());
             if let Some(body) = self.status_body(&real) {
                 if out.is_empty() {
-                    out = format!("[项目进度]\n{body}");
+                    out = format!("[Project Progress]\n{body}");
                 } else {
-                    out.push_str("\n\n[项目进度]\n");
+                    out.push_str("\n\n[Project Progress]\n");
                     out.push_str(&body);
                 }
             }
@@ -830,8 +832,8 @@ mod scoped_tests {
         assert!(!daily.contains("端口约定"));
 
         let proj = eng.recall_scoped(Some(&ws), "端口");
-        assert!(proj.contains("[用户记忆]"), "项目会话应含用户段头");
-        assert!(proj.contains("[项目记忆·"), "项目会话应含项目段头");
+        assert!(proj.contains("[User Memory]"), "项目会话应含用户段头");
+        assert!(proj.contains("[Project Memory ·"), "项目会话应含项目段头");
         assert!(proj.contains("端口约定"));
         assert!(proj.contains("用户偏好"));
     }

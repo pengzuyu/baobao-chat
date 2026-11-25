@@ -82,13 +82,13 @@ pub(crate) fn fetch(env: &ExecEnv, args: &Value) -> Result<ExecOutput, ToolBlock
 pub fn http_fetch_def() -> ToolDef {
     ToolDef {
         name: "http_fetch".into(),
-        description: "HTTP GET 抓取（仅内网白名单域/网段；沙箱内经系统 curl 执行，30s 超时，\
-                      响应 1MB 截断）"
+        description: "HTTP GET fetch (intranet allowlisted domains/CIDRs only; runs via the \
+                      system curl inside the sandbox, 30s timeout, response truncated at 1MB)"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "目标 URL（主机须在出站白名单内）"}
+                "url": {"type": "string", "description": "Target URL (host must be in the egress allowlist)"}
             },
             "required": ["url"]
         }),

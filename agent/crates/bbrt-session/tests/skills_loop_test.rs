@@ -148,7 +148,7 @@ fn skill_catalog_listed_in_system_only() {
     assert_eq!(systems.len(), 2, "两轮各一次模型调用");
     for sys in &systems {
         assert!(
-            sys.contains("[技能]") && sys.contains("skill 工具") && sys.contains("报销助手"),
+            sys.contains("[Skills]") && sys.contains("skill tool") && sys.contains("报销助手"),
             "目录区应含引导句与技能名: {sys}"
         );
         assert!(

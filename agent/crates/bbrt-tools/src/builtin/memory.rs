@@ -147,28 +147,33 @@ pub(crate) fn save(
 pub fn memory_save_def() -> ToolDef {
     ToolDef {
         name: "memory_save".into(),
-        description: "保存长期记忆。写前自问：换个项目还成立吗？明天还成立吗？\
-                      任一否→不记公共层（改记项目知识或不记）。公共层（用户全局，\
-                      USER.md ≤3000 字）：画像=我是谁的稳定事实/偏好=内容与流程取舍\
-                      /风格=呈现形式/习惯=周期性行为/禁止=硬否定（仅显式解除）\
-                      /授权=硬肯定许可/人际=对具体他人的协作事实/术语=私有词汇\
-                      /目标=阶段性方向（带截止日期到期自清）/教训=泛化失败规律。\
-                      项目知识（项目会话）：project=项目事实/feedback=教训\
-                      /reference=外部指针（一文件一事实+MEMORY.md 索引，\
-                      同题更新不重复；日常会话自动回落公共层）。单条凝练一句一线。"
+        description: "Save a long-term memory. Ask yourself before writing: does it still hold \
+                      in a different project? Will it still hold tomorrow? Either no → do not \
+                      write to the global layer (write project knowledge instead, or skip). \
+                      Global layer (user-wide USER.md, ≤3000 chars) — pass the enum value \
+                      verbatim: 画像=stable facts about who the user is / 偏好=content & \
+                      process choices / 风格=presentation form / 习惯=periodic behavior / \
+                      禁止=hard prohibition (lifted only explicitly) / 授权=standing \
+                      permission / 人际=collaboration facts about a specific person / 术语=\
+                      private vocabulary / 目标=phase-scoped direction (auto-expires past \
+                      its deadline) / 教训=generalized failure patterns. Project knowledge \
+                      (project sessions): project=project facts / feedback=lessons / \
+                      reference=external pointers (one fact per file + MEMORY.md index, \
+                      same-topic writes update in place; casual sessions fall back to the \
+                      global layer automatically). Keep each item to one crisp line."
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "一句话标题（公共层=条目主句；≤40 字）"},
+                "title": {"type": "string", "description": "One-line title (global layer: the item's main sentence; ≤40 chars)"},
                 "type": {"type": "string",
                          "enum": ["画像", "偏好", "风格", "习惯", "禁止", "授权",
                                   "人际", "术语", "目标", "教训",
                                   "user", "project", "feedback", "reference"],
-                         "description": "十类→公共层 USER.md（单条 ≤80 字）；四类→项目知识/回落（默认 user）"},
-                "body": {"type": "string", "description": "补充正文（公共层取首行并入单条；知识记忆 ≤4KB）"},
+                         "description": "Pick the value verbatim from the enum. Ten Chinese types → global USER.md (≤80 chars per item); four English types → project knowledge / fallback (default user)"},
+                "body": {"type": "string", "description": "Supplementary body (global layer: first line merges into the single line; knowledge memories ≤4KB)"},
                 "links": {"type": "array", "items": {"type": "string"},
-                          "description": "关联记忆 slug（仅项目知识；可选）"}
+                          "description": "Related memory slugs (project knowledge only; optional)"}
             },
             "required": ["title", "body"]
         }),
@@ -279,11 +284,13 @@ pub(crate) fn read(
 pub fn memory_forget_def() -> ToolDef {
     ToolDef {
         name: "memory_forget".into(),
-        description: "移除公共记忆（USER.md）中匹配的条目——更正两步的第一步：\
-                      先 forget 旧事实，再用 memory_save 写入新事实（如改名：\
-                      forget(画像,旧名)+save(画像,新名)）。硬约束的解除（禁止/授权）\
-                      也走这里。条目粒度匹配（同类型+包含串）防同名误伤；\
-                      返回移除清单，误删可立即重写。"
+        description: "Remove matching entries from the global memory (USER.md) — step one of the \
+                      two-step correction flow: first forget the old fact, then write the new \
+                      one with memory_save (e.g. a rename: forget(画像, old-name) + \
+                      save(画像, new-name)). Lifting hard constraints (禁止/授权) also goes \
+                      through here. Entry-granular matching (same type + substring) prevents \
+                      same-name collateral damage; returns the removed list so a wrong \
+                      removal can be rewritten immediately."
             .into(),
         input_schema: json!({
             "type": "object",
@@ -291,8 +298,8 @@ pub fn memory_forget_def() -> ToolDef {
                 "type": {"type": "string",
                          "enum": ["画像", "偏好", "风格", "习惯", "禁止", "授权",
                                   "人际", "术语", "目标", "教训"],
-                         "description": "条目类型"},
-                "contains": {"type": "string", "description": "匹配串（该类型下文本包含此串的条目全部移除）"}
+                         "description": "Entry type (pick the enum value verbatim)"},
+                "contains": {"type": "string", "description": "Match substring (all entries of that type containing it are removed)"}
             },
             "required": ["type", "contains"]
         }),
@@ -305,14 +312,16 @@ pub fn memory_forget_def() -> ToolDef {
 pub fn memory_read_def() -> ToolDef {
     ToolDef {
         name: "memory_read".into(),
-        description: "读取项目记忆单条正文（slug 见注入的项目记忆索引 MEMORY.md；\
-                      索引行只是路由信息，正文经本工具按需拉取）。\
-                      公共层 USER.md 已全文注入无需读取；日常会话无项目记忆。"
+        description: "Read one project-memory entry body (slugs are listed in the injected \
+                      project memory index MEMORY.md; index lines are routing info only — \
+                      fetch bodies on demand via this tool). The global USER.md is already \
+                      injected in full and needs no reading; casual sessions have no \
+                      project memory."
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "记忆 slug（索引行括号内的文件名主干）"}
+                "name": {"type": "string", "description": "Memory slug (the file-name stem in the index line's parentheses)"}
             },
             "required": ["name"]
         }),
@@ -326,15 +335,16 @@ pub fn memory_read_def() -> ToolDef {
 pub fn subagent_adjust_def() -> ToolDef {
     ToolDef {
         name: "subagent.adjust".into(),
-        description: "向正在运行的子任务（探查/专家/后台命令，run_id 见会话内子任务卡或\
-                      运行记录）下发补充指令调整方向；下一轮即生效。\
-                      已结束的 run 不可调整（重新派发即可）"
+        description: "Send a follow-up instruction to a running subtask (probe/expert/background \
+                      command; run_id is shown on the in-session subtask card or in the run \
+                      log) to adjust its direction; takes effect on its next round. Finished \
+                      runs cannot be adjusted (just dispatch a new one)"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "run_id": {"type": "string", "description": "目标任务 id（agent-/terminal- 前缀）"},
-                "instruction": {"type": "string", "description": "补充/调整指令（一句话）"}
+                "run_id": {"type": "string", "description": "Target task id (agent-/terminal- prefixed)"},
+                "instruction": {"type": "string", "description": "Follow-up/adjustment instruction (one sentence)"}
             },
             "required": ["run_id", "instruction"]
         }),
@@ -349,17 +359,18 @@ pub fn subagent_adjust_def() -> ToolDef {
 pub fn task_wait_def() -> ToolDef {
     ToolDef {
         name: "task.wait".into(),
-        description: "等待指定的后台任务完成并返回其结果摘要——适用于子 agent\
-                      （agent- 前缀 id）、后台命令（terminal-）。\
-                      异步发起任何后台任务后，需要其输出才能继续下一步时调用；\
-                      已完成的任务立即返回结果；超时则返回「仍在运行」\
-                      （可再次调用继续等待，或先处理其他事务）"
+        description: "Wait for a background task to finish and return its result summary — works \
+                      for subagents (agent- prefixed ids) and background commands (terminal-). \
+                      After starting any background task asynchronously, call this when you \
+                      need its output to proceed; finished tasks return immediately; on \
+                      timeout it returns 'still running' (call again to keep waiting, or \
+                      handle other matters first)"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "run_id": {"type": "string", "description": "目标任务 id（agent-/terminal- 前缀）"},
-                "timeout_secs": {"type": "integer", "description": "最长等待秒数（默认 600，上限 3600）"}
+                "timeout_secs": {"type": "integer", "description": "Max wait in seconds (default 600, cap 3600)"}
             },
             "required": ["run_id"]
         }),
@@ -372,8 +383,8 @@ pub fn task_wait_def() -> ToolDef {
 pub fn subagent_cancel_def() -> ToolDef {
     ToolDef {
         name: "subagent.cancel".into(),
-        description: "取消正在运行的后台任务（子 agent/后台命令通用；\
-                      优雅取消，已产出部分结果会保留。）"
+        description: "Cancel a running background task (subagents/background commands alike; \
+                      graceful cancel — partial results already produced are kept)"
             .into(),
         input_schema: json!({
             "type": "object",

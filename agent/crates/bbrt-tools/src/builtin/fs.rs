@@ -319,15 +319,16 @@ fn path_error_code(e: &PathError) -> u32 {
 pub fn read_file_def() -> ToolDef {
     ToolDef {
         name: "read_file".into(),
-        description: "读取工作区文本文件：返回带行号摘录（默认 400 行或 32KB 先到为准），\
-                      truncated 时可用 offset/limit 分页续读；敏感文件（.env/密钥等）默认拒读"
+        description: "Read a text file in the workspace: returns a numbered excerpt (default 400 lines \
+                      or 32KB, whichever comes first); when truncated, continue paging with \
+                      offset/limit; sensitive files (.env/secrets) are denied by default"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "文件路径（工作区内）"},
-                "offset": {"type": "integer", "description": "起始行（1 起，默认 1）"},
-                "limit": {"type": "integer", "description": "读取行数（默认 400）"}
+                "path": {"type": "string", "description": "File path (inside the workspace)"},
+                "offset": {"type": "integer", "description": "Starting line (1-based, default 1)"},
+                "limit": {"type": "integer", "description": "Number of lines to read (default 400)"}
             },
             "required": ["path"]
         }),
@@ -340,11 +341,11 @@ pub fn read_file_def() -> ToolDef {
 pub fn list_dir_def() -> ToolDef {
     ToolDef {
         name: "list_dir".into(),
-        description: "列出目录内容（d/f 前缀标注类型，最多 500 条，超出截断标注）".into(),
+        description: "List directory contents (d/f prefixes mark types; at most 500 entries, truncated with a marker beyond that)".into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "目录路径（工作区内，默认工作区根）"}
+                "path": {"type": "string", "description": "Directory path (inside the workspace; defaults to the workspace root)"}
             },
             "required": ["path"]
         }),
@@ -357,12 +358,12 @@ pub fn list_dir_def() -> ToolDef {
 pub fn write_file_def() -> ToolDef {
     ToolDef {
         name: "write_file".into(),
-        description: "写入文件（整文件覆盖；仅工作区白名单内可写，修改前记录变更事件）".into(),
+        description: "Write a file (full-file overwrite; writable only inside the workspace allowlist; a change event is recorded before modifying)".into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "目标路径（工作区内）"},
-                "content": {"type": "string", "description": "完整文件内容"}
+                "path": {"type": "string", "description": "Target path (inside the workspace)"},
+                "content": {"type": "string", "description": "Full file content"}
             },
             "required": ["path", "content"]
         }),
@@ -375,14 +376,14 @@ pub fn write_file_def() -> ToolDef {
 pub fn edit_file_def() -> ToolDef {
     ToolDef {
         name: "edit_file".into(),
-        description: "编辑文件：精确替换 old 为 new（默认首处，all=true 全量替换）".into(),
+        description: "Edit a file: exact replacement of old with new (first occurrence by default; all=true replaces every occurrence)".into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "目标文件（工作区内）"},
-                "old": {"type": "string", "description": "被替换文本（非空）"},
-                "new": {"type": "string", "description": "替换文本"},
-                "all": {"type": "boolean", "description": "true=替换全部命中（默认仅首处）"}
+                "path": {"type": "string", "description": "Target file (inside the workspace)"},
+                "old": {"type": "string", "description": "Text to be replaced (non-empty)"},
+                "new": {"type": "string", "description": "Replacement text"},
+                "all": {"type": "boolean", "description": "true = replace every occurrence (default: first occurrence only)"}
             },
             "required": ["path", "old", "new"]
         }),

@@ -101,7 +101,7 @@ impl SkillIndex {
                     format!("- {}", e.name)
                 } else {
                     let desc: String = e.description.chars().take(INDEX_DESC_MAX).collect();
-                    format!("- {}：{}", e.name, desc)
+                    format!("- {}: {}", e.name, desc)
                 }
             })
             .collect();
@@ -109,7 +109,7 @@ impl SkillIndex {
             String::new()
         } else {
             format!(
-                "（可用技能目录，调用 skill 工具加载对应技能的完整规范）\n{}",
+                "(Available skills catalog; call the skill tool to load a skill's full spec)\n{}",
                 lines.join("\n")
             )
         }
@@ -133,7 +133,7 @@ impl SkillIndex {
                     format!("- {}", e.name)
                 } else {
                     let desc: String = e.description.chars().take(INDEX_DESC_MAX).collect();
-                    format!("- {}：{}", e.name, desc)
+                    format!("- {}: {}", e.name, desc)
                 }
             })
             .collect();
@@ -141,7 +141,7 @@ impl SkillIndex {
             String::new()
         } else {
             format!(
-                "（可用技能目录，提及名称或关键词即可加载对应技能）\n{}",
+                "(Available skills catalog; mention a name or keyword to load the skill)\n{}",
                 lines.join("\n")
             )
         }
@@ -169,9 +169,9 @@ impl SkillIndex {
                 let tools = if e.allowed_tools.is_empty() {
                     String::new()
                 } else {
-                    format!("\n（本技能允许工具: {}）", e.allowed_tools.join(", "))
+                    format!("\n(Tools allowed for this skill: {})", e.allowed_tools.join(", "))
                 };
-                format!("# 技能: {}（risk: {}）{tools}\n{}", e.name, e.risk, e.body)
+                format!("# Skill: {} (risk: {}){tools}\n{}", e.name, e.risk, e.body)
             })
             .collect::<Vec<_>>()
             .join("\n\n---\n\n")
@@ -194,9 +194,9 @@ impl SkillIndex {
             let tools = if e.allowed_tools.is_empty() {
                 String::new()
             } else {
-                format!("\n（本技能允许工具: {}）", e.allowed_tools.join(", "))
+                format!("\n(Tools allowed for this skill: {})", e.allowed_tools.join(", "))
             };
-            format!("# 技能: {}（risk: {}）{tools}\n{}", e.name, e.risk, e.body)
+            format!("# Skill: {} (risk: {}){tools}\n{}", e.name, e.risk, e.body)
         })
     }
 
@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].name, "A");
         let text = idx.render(&m);
-        assert!(text.contains("[技能]") || text.contains("# 技能: A"));
+        assert!(text.contains("[Skills]") || text.contains("# Skill: A"));
         assert!(text.contains("制作幻灯片的规范。"));
 
         assert!(idx.match_for("今天天气不错").is_empty());
@@ -438,7 +438,7 @@ mod tests {
 
         let matched = idx.match_for("甲任务");
         let text = idx.render_index(&matched);
-        assert!(text.contains("技能目录"), "索引区有引导句");
+        assert!(text.contains("skills catalog"), "索引区有引导句");
         assert!(text.contains("乙"), "未命中技能列名");
         assert!(!text.contains("乙正文"), "无 description 不漏正文");
         assert!(!text.contains("甲"), "命中技能不进索引");

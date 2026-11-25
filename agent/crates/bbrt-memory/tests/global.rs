@@ -344,8 +344,8 @@ fn 引擎路由_日常回落与user恒公共层() {
     assert!(daily.contains("[教训] 8020 教训"), "{daily}");
     assert!(!daily.contains("端口约定"));
     let proj = eng.recall_scoped(Some(&ws), "");
-    assert!(proj.contains("[用户记忆]"));
-    assert!(proj.contains("[项目记忆·"));
+    assert!(proj.contains("[User Memory]"));
+    assert!(proj.contains("[Project Memory ·"));
     assert!(proj.contains("端口约定"));
 }
 

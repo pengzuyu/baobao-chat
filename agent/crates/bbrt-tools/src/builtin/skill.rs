@@ -15,14 +15,14 @@ use crate::registry::{RiskLevel, ToolDef};
 pub fn skill_def() -> ToolDef {
     ToolDef {
         name: "skill".into(),
-        description: "加载技能：按名获取一项技能的完整执行规范（正文即指令，\
-                      获取后按规范执行任务）。当任务与技能目录中某项匹配时，\
-                      先调用本工具再动手"
+        description: "Load a skill: fetch a skill's full execution spec by name (the body IS \
+                      the instruction — follow it once loaded). When the task matches an entry \
+                      in the skills catalog, call this tool before starting the work"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "技能名（技能目录中列出）"}
+                "name": {"type": "string", "description": "Skill name (as listed in the skills catalog)"}
             },
             "required": ["name"]
         }),
@@ -40,12 +40,12 @@ pub(crate) fn load(
     let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
         return Err(crate::builtin::ToolBlock {
             code: bbrt_sec::errors::CODE_NO_PERMISSION_POINT,
-            message: "缺少参数 name（8002）".into(),
+            message: "Missing parameter name (8002)".into(),
         });
     };
     let Some(shared) = skills else {
         return Ok(crate::builtin::ExecOutput {
-            summary: "技能索引未装配（嵌入式模式），技能不可用".into(),
+            summary: "Skill index not assembled (embedded mode); skills unavailable".into(),
             truncated: false,
             exit_code: Some(1),
             duration_ms: 0,
@@ -62,7 +62,7 @@ pub(crate) fn load(
         None => {
             let names = idx.names().join("、");
             Ok(crate::builtin::ExecOutput {
-                summary: format!("技能 {name} 不存在。可用技能：{names}"),
+                summary: format!("Skill {name} does not exist. Available skills: {names}"),
                 truncated: false,
                 exit_code: Some(1),
                 duration_ms: 0,
@@ -100,7 +100,7 @@ mod tests {
     fn load_returns_body() {
         let shared = idx_with("报销");
         let out = load(Some(&shared), &json!({"name": "报销"})).unwrap();
-        assert!(out.summary.contains("# 技能: 报销"));
+        assert!(out.summary.contains("# Skill: 报销"));
         assert!(out.summary.contains("执行规范正文。"));
         assert_eq!(out.exit_code, None);
     }

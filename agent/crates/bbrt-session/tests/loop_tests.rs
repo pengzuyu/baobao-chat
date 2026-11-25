@@ -1335,8 +1335,8 @@ fn system_prompt_carries_memory_guidance_and_recall() {
     let systems = model.seen_system.lock().unwrap().clone();
     let sys = systems.first().expect("应捕获 system 消息");
     assert!(sys.contains("memory_save"), "W1 工具引导应在 system 提示中");
-    assert!(sys.contains("长期记忆"));
-    assert!(sys.contains("[记忆]"));
+    assert!(sys.contains("Long-term memory"));
+    assert!(sys.contains("[Memory]"));
     assert!(sys.contains("端口 8090 约定"), "记忆索引应注入 system");
 }
 
@@ -1369,9 +1369,9 @@ fn scene_notes_appended_by_scene() {
         runner.scene = Scene::Project;
         let _ = runner.run_turn("看下这个仓库", &d, None);
         let sys = model.seen_system.lock().unwrap()[0].clone();
-        assert!(sys.contains("[场景：项目]"), "项目场景段应追加: {sys}");
-        assert!(sys.contains("[项目进度]"));
-        assert!(!sys.contains("[场景：聊天]"));
+        assert!(sys.contains("[Scene: Project]"), "项目场景段应追加: {sys}");
+        assert!(sys.contains("[Project Progress]"));
+        assert!(!sys.contains("[Scene: Chat]"));
     }
     // ② 日常对话：conv_id + 单聊/群聊事实 + im_history 指向（抗压缩常驻）
     {
@@ -1390,9 +1390,9 @@ fn scene_notes_appended_by_scene() {
         };
         let _ = runner.run_turn("总结下讨论", &d, None);
         let sys = model.seen_system.lock().unwrap()[0].clone();
-        assert!(sys.contains("[场景：聊天]"), "聊天场景段应追加: {sys}");
+        assert!(sys.contains("[Scene: Chat]"), "聊天场景段应追加: {sys}");
         assert!(sys.contains("conv_id: 886"));
-        assert!(sys.contains("群聊"));
+        assert!(sys.contains("group chat"));
         assert!(sys.contains("im_history"));
         // 无回答形态约束（口径：不写风格/格式/用途约定）
         assert!(!sys.contains("简洁"));
@@ -1411,8 +1411,8 @@ fn scene_notes_appended_by_scene() {
         runner.scene = Scene::Task;
         let _ = runner.run_turn("整理两边进展", &d, None);
         let sys = model.seen_system.lock().unwrap()[0].clone();
-        assert!(sys.contains("[场景：任务]"), "任务场景段应追加: {sys}");
-        assert!(sys.contains("不绑定单一项目"));
+        assert!(sys.contains("[Scene: Task]"), "任务场景段应追加: {sys}");
+        assert!(sys.contains("not bound to a single project"));
     }
 }
 

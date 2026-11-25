@@ -146,7 +146,7 @@ fn probe_system(ctx: &ProbeCtx, task: &str) -> String {
         format!("workspace: {}", ctx.workspace)
     };
     format!(
-        "{}\n\n[技能]\n{}\n\n[项目]\n{}\n\n[记忆]\n{}",
+        "{}\n\n[Skills]\n{}\n\n[Project]\n{}\n\n[Memory]\n{}",
         ctx.system, skills_text, project_line, memory_index
     )
 }

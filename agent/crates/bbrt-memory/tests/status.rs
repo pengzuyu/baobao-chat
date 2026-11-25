@@ -68,9 +68,12 @@ fn merge_creates_entry_and_recall_injects_progress() {
 
     // 召回：项目会话三段（含 [项目进度]）
     let recalled = eng.recall_scoped(Some(&ws), "进度");
-    assert!(recalled.contains("[项目进度]"), "{recalled}");
+    assert!(recalled.contains("[Project Progress]"), "{recalled}");
     assert!(recalled.contains("批0-4 已推 697707c"));
-    assert!(recalled.contains("[项目记忆·"), "记忆两段仍在：{recalled}");
+    assert!(
+        recalled.contains("[Project Memory ·"),
+        "记忆两段仍在：{recalled}"
+    );
 
     // 二次合并：去重不重复落；新条目插段首
     let (_, stats2) = eng
@@ -100,7 +103,7 @@ fn status_rejected_for_daily_sessions() {
         "日常会话应拒绝 status：{err}"
     );
     // 日常召回无进度段
-    assert!(!eng.recall_scoped(None, "").contains("[项目进度]"));
+    assert!(!eng.recall_scoped(None, "").contains("[Project Progress]"));
 }
 
 #[test]

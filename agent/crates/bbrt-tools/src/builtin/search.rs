@@ -252,14 +252,16 @@ fn ensure_inside_roots(env: &ExecEnv, resolved: &Path) -> Result<(), ToolBlock> 
 pub fn search_files_def() -> ToolDef {
     ToolDef {
         name: "search_files".into(),
-        description: "递归搜索：pattern 含 * 或 ? 时按文件名 glob 匹配，否则文件名+文件内容\
-                      子串双重匹配（内容命中显示首个命中行）；最多返回 200 条，超出截断标注"
+        description: "Recursive search: if pattern contains * or ?, match file names by glob; \
+                      otherwise match both file names and file contents by substring (content \
+                      hits show the first matching line); returns at most 200 entries, \
+                      truncated with a marker beyond that"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "搜索模式（glob 或子串）"},
-                "path": {"type": "string", "description": "搜索根目录（默认工作区）"}
+                "pattern": {"type": "string", "description": "Search pattern (glob or substring)"},
+                "path": {"type": "string", "description": "Search root directory (defaults to the workspace)"}
             },
             "required": ["pattern"]
         }),
