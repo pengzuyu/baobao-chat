@@ -1,0 +1,14 @@
+{
+  "name": "hello-eco",
+  "version": "1.0.0",
+  "description": "生态形态示例插件：Claude Code / zcode 兼容写法（双清单目录 + CLAUDE_PLUGIN_ROOT）， bbc / Claude Code / zcode 三家通装",
+  "author": { "name": "BaobaoChat" },
+  "skills": "skills",
+  "commands": "commands",
+  "agents": "agents",
+  "mcpServers": ".mcp.json",
+  "bbc": {
+    "risk": "low",
+    "category": "other"
+  }
+}

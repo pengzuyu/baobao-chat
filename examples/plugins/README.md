@@ -162,9 +162,10 @@ model: fast                                     # fast|strong（缺省 strong）
 | hooks | 不带 | bbc 不执行；Claude Code/zcode 会**真执行**（bbc 上架不审 hooks 内容，出生态包带 hooks = 把执行权交给内容） |
 
 > `hello-baobao` 示例故意保持 bbc 原生写法（`.bbc-plugin/` + `${PLUGIN_ROOT}` +
-> `${CONFIG:}`/`${BBC_USER_ID}` 全用上）——它示范的是 bbc 全能力；要出生态的包照上表
-> 换写法即可，参考形态=把清单目录换成 `.claude-plugin/`、变量换
-> `${CLAUDE_PLUGIN_ROOT}`、删掉 `.mcp.json` env 里的 bbc 占位。
+> `${CONFIG:}`/`${BBC_USER_ID}` 全用上）——它示范的是 bbc 全能力；**出生态参考
+> [`hello-eco/`](hello-eco/)**：按上表写的三家通装示例包（双清单目录 +
+> `${CLAUDE_PLUGIN_ROOT}`，含三家的安装指引），本目录根的 `marketplace.json`
+> 即为 Claude Code / zcode 添加本地市场用的测试清单。
 
 ## 发布校验清单（过审要点）
 

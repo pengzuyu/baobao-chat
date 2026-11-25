@@ -1,0 +1,14 @@
+{
+  "name": "baobao-examples",
+  "plugins": [
+    {
+      "name": "hello-eco",
+      "source": "./hello-eco",
+      "version": "1.0.0",
+      "description": "生态形态示例插件：Claude Code / zcode 兼容写法（双清单目录 + CLAUDE_PLUGIN_ROOT），三家通装",
+      "displayName": "Hello Eco",
+      "displayName_i18n": { "zh-CN": "生态示例" },
+      "description_i18n": { "zh-CN": "生态形态示例插件：Claude Code / zcode 兼容写法（双清单目录 + CLAUDE_PLUGIN_ROOT），三家通装" }
+    }
+  ]
+}
