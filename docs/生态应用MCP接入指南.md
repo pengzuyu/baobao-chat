@@ -10,7 +10,7 @@
 
 | # | 事项 | 性质 |
 |---|---|---|
-| 1 | 在自己的部署配置里写上 bbc 的 **issuer 地址**（如 `https://bbc.example.com/oauth2`） | 部署事实（与配数据库地址同性质） |
+| 1 | 在自己的部署配置里写上 bbc 的 **issuer 地址**（如 `https://bbc.example.com/oauth2`；内网无 TLS 部署直接配 `http://<内网IP>:<端口>/oauth2`，明文全链支持） | 部署事实（与配数据库地址同性质） |
 | 2 | 启动时拉一次 **jwks 公钥**（`GET {issuer}/.well-known/openid-configuration` → `jwks_uri`；公开端点无鉴权） | 公开信息 |
 | 3 | MCP 端点套一个 **30 行验签中间件**（本文 §3） | 一次性代码 |
 
@@ -18,7 +18,9 @@
 
 > 辨析：如果你的应用**另外**想让人类用户用 bbc 账号登录它的 Web 界面，那走的是
 > OIDC 登录接入（[D28](detail/D28-OIDC统一认证与生态接入面设计.md)，需要注册
-> client）——与本文的 MCP 验签**两条独立线**，可只占其一。
+> client）——与本文的 MCP 验签**两条独立线**，可只占其一。内网明文部署下该线同样
+> 可用：issuer 配 `http://` 地址，RP 回调直接注册 `http://` 回调（web 类型 + code
+> 流放行，未注册回调仍精确匹配拒绝）。
 
 ## 2. agent 发来的票长什么样
 
