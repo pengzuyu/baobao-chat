@@ -14,8 +14,10 @@ function safeHref(url: string): string | null {
 
 /** 行内标记渲染：`code` → <code>，**bold** → <strong>，*em* → <em>，
  * ~~del~~ → <del>，[text](url) → <a target=_blank>，![alt](url) → <img>（D24）。
- * em 的环视断言（lookbehind）拒绝 `2*3*4` 类运算式误判：开/闭星号紧邻单词字符不匹配。 */
-export function renderInline(text: string, keyPrefix: string): ReactNode[] {
+ * em 的环视断言（lookbehind）拒绝 `2*3*4` 类运算式误判：开/闭星号紧邻单词字符不匹配。
+ * blockImages=true 时图片渲染为占位块不加载（D39：插件 readme 防 beacon——
+ * 不可信内容的远程图片一拉即回拨第三方，安装意愿/IP 泄露）。 */
+export function renderInline(text: string, keyPrefix: string, blockImages = false): ReactNode[] {
   const out: ReactNode[] = [];
   const re = /(`[^`]+`|\*\*[^*]+\*\*|~~[^~]+~~|(?<![\w*])\*(?!\s)([^*]+?)(?<!\s)\*(?![\w*])|!?\[[^\]]*\]\([^)\s]+\))/g;
   let last = 0;
@@ -37,9 +39,11 @@ export function renderInline(text: string, keyPrefix: string): ReactNode[] {
       const im = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
       if (im) {
         const href = safeHref(im[2]);
-        out.push(href
-          ? <img key={`${keyPrefix}-img${i}`} className="agent-md__img" src={href} alt={im[1]} loading="lazy" />
-          : token);
+        out.push(blockImages && href
+          ? <span key={`${keyPrefix}-imgb${i}`} className="agent-md__img-blocked" title={href}>图片已屏蔽</span>
+          : href
+            ? <img key={`${keyPrefix}-img${i}`} className="agent-md__img" src={href} alt={im[1]} loading="lazy" />
+            : token);
       } else {
         out.push(token);
       }

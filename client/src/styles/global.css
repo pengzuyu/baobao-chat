@@ -1057,6 +1057,18 @@ body.bbc-col-resizing {
   margin: 6px 0;
 }
 
+/* D39：插件 readme 远程图片占位（防 beacon——不可信内容不加载远程图） */
+.agent-md__img-blocked {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px dashed var(--bbc-gray-5);
+  border-radius: 6px;
+  color: var(--bbc-gray-7);
+  font-size: var(--bbc-font-12);
+  margin: 2px 0;
+  user-select: none;
+}
+
 .agent-md__a {
   color: var(--bbc-primary);
   text-decoration: none;

@@ -19,6 +19,7 @@ import {
 import { Button } from '../../../shared/ui/Button';
 import { Empty } from '../../../shared/ui/Empty';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
+import { MarkdownText } from '../../../shared/components/MarkdownText';
 import {
   fetchLocalState, fetchMyPlugins, fetchPluginCatalog, fetchPluginDetail,
   installPlugin, setPluginEnabled, uninstallPlugin, uploadMyPlugin, writePluginConfig,
@@ -39,6 +40,13 @@ const POLICY_META: Record<number, { label: string; color: string }> = {
   2: { label: '推荐', color: 'gold' },
   3: { label: '', color: '' },
 };
+
+/** D39：最近更新（YYYY-MM-DD，本地时区） */
+function fmtDate(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 function componentBadges(e: PluginEntry): { label: string; icon: typeof Wrench }[] {
   const out: { label: string; icon: typeof Wrench }[] = [];
@@ -368,6 +376,8 @@ export function PluginPage() {
                 <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
                   {e.plugin_id} · v{e.current_version}
                   {e.installed && e.version ? `（本地 v${e.version}）` : ''}
+                  {/* D39：装机数（个人插件不展示——仅本人可装无参考意义） */}
+                  {!e.owner_user_id && e.installs > 0 ? ` · ${e.installs} 人安装` : ''}
                 </Typography.Text>
                 {e.description ? (
                   <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
@@ -439,6 +449,24 @@ export function PluginPage() {
             <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
               {detail.plugin.manifest?.description || detail.plugin.description}
             </Typography.Paragraph>
+
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {/* D39：最近更新 + 装机数（个人插件不展示装机数） */}
+              {detail.plugin.updated_at ? `最近更新 ${fmtDate(detail.plugin.updated_at)}` : ''}
+              {!detail.plugin.owner_user_id && detail.plugin.installs > 0
+                ? `${detail.plugin.updated_at ? ' · ' : ''}${detail.plugin.installs} 人安装`
+                : ''}
+            </Typography.Text>
+
+            {/* D39：README 说明区块（MarkdownText 渲染；远程图片占位防 beacon） */}
+            {detail.plugin.readme ? (
+              <div>
+                <Typography.Text strong>说明</Typography.Text>
+                <div style={{ marginTop: 8, fontSize: 13 }}>
+                  <MarkdownText text={detail.plugin.readme} blockRemoteImages />
+                </div>
+              </div>
+            ) : null}
 
             {detail.plugin.installed && local ? (
               <div>

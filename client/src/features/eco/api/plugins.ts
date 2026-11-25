@@ -58,6 +58,12 @@ export interface PluginEntry {
   status: string;
   current_version: string;
   manifest?: PluginManifest;
+  /** 说明全文（D39：仅 detail 口返回——列表不背长文；有才渲染「说明」区块） */
+  readme?: string;
+  /** 当前装机人数（D39：每用户一行去重、卸载即减；个人插件不展示） */
+  installs: number;
+  /** 最近更新（D39） */
+  updated_at: number;
   /** >0=个人插件归属（方案 A：仅本人与管理员可见；0=公共） */
   owner_user_id?: number;
   created_at: number;
@@ -136,12 +142,14 @@ export async function fetchPluginCatalog(query: CatalogQuery = {}): Promise<Plug
         id: '1', plugin_id: 'deploy-helper', name: 'deploy-helper', description: '发布助手（mock）：技能+工具+专家一包',
         category: 'devops', policy: 2, status: 'published', current_version: '1.2.0', created_at: Date.now(),
         manifest: { name: 'deploy-helper', version: '1.2.0', description: '', components: { skills: 1, mcpServers: 2, commands: 1, agents: 1, hooks: false }, category: 'devops', usesIdentity: true, configKeys: ['gitlab_token'] },
+        installs: 12, updated_at: Date.now(),
         installed: false, has_update: false,
       },
       {
         id: '2', plugin_id: 'kb-boost', name: 'kb-boost', description: '知识库增强技能（mock）',
         category: 'kb', policy: 3, status: 'published', current_version: '0.3.0', created_at: Date.now(),
         manifest: { name: 'kb-boost', version: '0.3.0', description: '', components: { skills: 2, mcpServers: 0, commands: 0, agents: 0, hooks: false }, usesIdentity: false },
+        installs: 3, updated_at: Date.now() - 86400_000 * 6,
         installed: true, version: '0.2.0', has_update: true,
       },
     ];
@@ -158,8 +166,28 @@ export async function fetchPluginCatalog(query: CatalogQuery = {}): Promise<Plug
 export async function fetchPluginDetail(pluginId: string): Promise<{ plugin: PluginEntry; versions: PluginVersion[] }> {
   if (USE_MOCK) {
     await delay(150);
+    const base = (await fetchPluginCatalog()).find((p) => p.plugin_id === pluginId)
+      ?? (await fetchPluginCatalog())[0];
+    // D39 mock：detail 口补 readme（远程图片演示占位效果）
     return {
-      plugin: (await fetchPluginCatalog()).find((p) => p.plugin_id === pluginId) ?? (await fetchPluginCatalog())[0],
+      plugin: {
+        ...base,
+        readme: [
+          `# ${base.name}`,
+          '',
+          `${base.description}。`,
+          '',
+          '## 功能',
+          '',
+          '- 发版清单自动生成（技能）',
+          '- GitLab 流水线状态查询（工具）',
+          '- ![示意图](https://example.com/preview.png)（远程图片已屏蔽）',
+          '',
+          '## 配置',
+          '',
+          '安装后在详情页填 `gitlab_token`（secret，存系统钥匙串）。',
+        ].join('\n'),
+      },
       versions: [{ id: '1', version: '1.2.0', notes: '首版', created_at: Date.now() }],
     };
   }
@@ -181,7 +209,8 @@ export async function uploadMyPlugin(file: File, notes: string): Promise<PluginE
     return {
       id: '99', plugin_id: file.name.replace(/\.zip$/, ''), name: file.name.replace(/\.zip$/, ''),
       description: notes || '（个人上传 mock）', category: '', policy: 3, status: 'draft',
-      current_version: '0.1.0', created_at: Date.now(), installed: false, has_update: false, owner_user_id: 1,
+      current_version: '0.1.0', created_at: Date.now(), installs: 0, updated_at: Date.now(),
+      installed: false, has_update: false, owner_user_id: 1,
     };
   }
   const fd = new FormData();

@@ -12,10 +12,12 @@ import { renderInline } from './mdInline';
 
 export type MdAlign = 'left' | 'center' | 'right';
 
-export function MdTable({ head, rows, aligns }: {
+export function MdTable({ head, rows, aligns, blockImages }: {
   head: string[];
   rows: string[][];
   aligns?: MdAlign[] | null;
+  /** D39：透传 renderInline——插件 readme 场景表格内图片同样占位不加载 */
+  blockImages?: boolean;
 }) {
   const [sortCol, setSortCol] = useState(-1);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -70,7 +72,7 @@ export function MdTable({ head, rows, aligns }: {
                 aria-sort={ci === sortCol ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
               >
                 <button type="button" className="agent-md__th-btn" onClick={() => onSort(ci)}>
-                  <span className="agent-md__th-label">{renderInline(c, `th${ci}`)}</span>
+                  <span className="agent-md__th-label">{renderInline(c, `th${ci}`, blockImages)}</span>
                   <span className="agent-md__th-ind">{ci === sortCol ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
                 </button>
               </th>
@@ -81,7 +83,7 @@ export function MdTable({ head, rows, aligns }: {
           {visibleRows.map((cells, r) => (
             <tr key={r}>
               {cells.map((c, ci) => (
-                <td key={ci} style={{ textAlign: aligns?.[ci] }}>{renderInline(c, `td${r}-${ci}`)}</td>
+                <td key={ci} style={{ textAlign: aligns?.[ci] }}>{renderInline(c, `td${r}-${ci}`, blockImages)}</td>
               ))}
             </tr>
           ))}

@@ -25,6 +25,8 @@ interface PluginRow {
   policy: number;
   status: string;
   current_version: string;
+  /** D39：当前装机人数（治理信号——哪些插件没人用） */
+  installs: number;
   owner_user_id?: number;
   manifest?: {
     components: { skills: number; mcpServers: number; commands: number; agents: number; hooks: boolean };
@@ -224,6 +226,8 @@ export function PluginGovernancePage() {
       ),
     },
     { title: '版本', dataIndex: 'current_version', width: 90, render: (v: string) => `v${v || '—'}` },
+    // D39：装机数（当前装机口径：每用户一行去重、卸载即减；个人插件通常 ≤1）
+    { title: '装机', dataIndex: 'installs', width: 80, render: (v: number) => String(v ?? 0) },
     {
       title: '操作',
       key: 'ops',

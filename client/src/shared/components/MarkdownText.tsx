@@ -45,7 +45,9 @@ function parseTaskItem(text: string): ListItem {
 
 /** 列表项渲染（任务项 checkbox + 文本；flex 容器内文本须独立 span，防匿名 flex item
  * 拆散行内流；children 供嵌套子列表挂载） */
-function TaskLi({ item, keyPrefix, children }: { item: ListItem; keyPrefix: string; children?: ReactNode }) {
+function TaskLi({ item, keyPrefix, blockImages, children }: {
+  item: ListItem; keyPrefix: string; blockImages?: boolean; children?: ReactNode;
+}) {
   const cls = item.task
     ? `agent-md__task${item.done ? ' agent-md__task--done' : ''}`
     : undefined;
@@ -56,13 +58,13 @@ function TaskLi({ item, keyPrefix, children }: { item: ListItem; keyPrefix: stri
           {item.done ? '✓' : ''}
         </span>
       )}
-      <span className="agent-md__task-text">{renderInline(item.text, keyPrefix)}</span>
+      <span className="agent-md__task-text">{renderInline(item.text, keyPrefix, blockImages)}</span>
       {children}
     </li>
   );
 }
 
-function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
+function renderBlocks(lines: string[], keyPrefix: string, blockImages = false): ReactNode[] {
   const blocks: ReactNode[] = [];
   let i = 0;
   let key = 0;
@@ -99,7 +101,7 @@ function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
         i += 1;
       }
       const [head = [], ...body] = raw;
-      blocks.push(<MdTable key={key++} head={head} rows={body} aligns={aligns} />);
+      blocks.push(<MdTable key={key++} head={head} rows={body} aligns={aligns} blockImages={blockImages} />);
       continue;
     }
 
@@ -108,7 +110,7 @@ function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
     if (heading) {
       const level = heading[1].length;
       const Tag = (level === 1 ? 'h4' : level === 2 ? 'h5' : 'h6') as 'h4' | 'h5' | 'h6';
-      blocks.push(<Tag key={key++} className={`agent-md__h agent-md__h--${level}`}>{renderInline(heading[2], `${keyPrefix}-h${key}`)}</Tag>);
+      blocks.push(<Tag key={key++} className={`agent-md__h agent-md__h--${level}`}>{renderInline(heading[2], `${keyPrefix}-h${key}`, blockImages)}</Tag>);
       i += 1; // 根因修复（2026-11-13 真机「打开文章整页卡死」）：漏此行则 # 开头行 continue 后 i 永不推进 → 无限 push 主线程死循环
       continue;
     }
@@ -122,7 +124,7 @@ function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
       }
       blocks.push(
         <blockquote key={key++} className="agent-md__quote">
-          <div className="agent-md agent-md--inner">{renderBlocks(buf, `${keyPrefix}-q${key}`)}</div>
+          <div className="agent-md agent-md--inner">{renderBlocks(buf, `${keyPrefix}-q${key}`, blockImages)}</div>
         </blockquote>,
       );
       continue;
@@ -158,11 +160,11 @@ function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
       blocks.push(
         <Tag key={key++} className={`agent-md__list${firstOrdered ? ' agent-md__list--ordered' : ''}`}>
           {items.map((it, li) => (
-            <TaskLi key={li} item={it} keyPrefix={`${keyPrefix}-l${key}-${li}`}>
+            <TaskLi key={li} item={it} keyPrefix={`${keyPrefix}-l${key}-${li}`} blockImages={blockImages}>
               {it.children.length > 0 && (
                 <ul className="agent-md__list agent-md__list--nested">
                   {it.children.map((ch, ci) => (
-                    <TaskLi key={ci} item={ch} keyPrefix={`${keyPrefix}-ln${key}-${li}-${ci}`} />
+                    <TaskLi key={ci} item={ch} keyPrefix={`${keyPrefix}-ln${key}-${li}-${ci}`} blockImages={blockImages} />
                   ))}
                 </ul>
               )}
@@ -196,7 +198,7 @@ function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
     }
     blocks.push(
       <p key={key++} className="agent-md__p">
-        {renderInline(para.join('\n'), `${keyPrefix}-p${key}`)}
+        {renderInline(para.join('\n'), `${keyPrefix}-p${key}`, blockImages)}
       </p>,
     );
   }
@@ -205,6 +207,11 @@ function renderBlocks(lines: string[], keyPrefix: string): ReactNode[] {
 
 /** memo（2026-11-11 卡顿修复）：流式期间只有正在生长的那条消息 text 变化，
  * 历史消息 text 引用稳定 → 跳过全量 markdown 重解析（O(全列表×每token) 主线程杀手） */
-export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
-  return <div className="agent-md">{renderBlocks(text.split('\n'), 'md')}</div>;
+export const MarkdownText = memo(function MarkdownText({ text, blockRemoteImages }: {
+  text: string;
+  /** D39：插件 readme 专用——远程图片渲染占位块不加载（防 beacon）；
+   * 默认 false，agent 流/im 卡/知识库文章零影响 */
+  blockRemoteImages?: boolean;
+}) {
+  return <div className="agent-md">{renderBlocks(text.split('\n'), 'md', blockRemoteImages ?? false)}</div>;
 });
