@@ -54,6 +54,13 @@ pub enum ToolOutcome {
         code: u32,
         summary: String,
     },
+    /// 用户拒绝/审批超时（2026-11-25 拍板）：流程控制结果而非执行失败——
+    /// 不进 W2② 错误教训连击、不计 tool_failures；事件/WAL/历史与 Blocked
+    /// 同形（ToolResult ok=false + blocked_code 照发，前端零改动）
+    Rejected {
+        code: u32,
+        summary: String,
+    },
 }
 
 /// 工具执行器：bbrt-tools 的 ToolRegistry 实现本 trait

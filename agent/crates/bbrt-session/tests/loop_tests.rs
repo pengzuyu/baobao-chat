@@ -719,8 +719,10 @@ fn memory_heuristic_and_daily_report() {
 }
 
 #[test]
-fn consecutive_failures_pause_loop() {
-    // 模型每轮都要求工具、工具全部 Blocked：连续失败>3 → 暂停
+fn consecutive_failures_no_circuit_break() {
+    // 2026-11-25 熔断退役（用户拍板：不自动杀会话）：模型每轮都要工具、全部
+    // Blocked 也不得提前终止——继续跑满步数上限由 MAX_STEPS 收口 paused；
+    // 防失控=步数上限+用户中断，不再有连续失败熔断路径
     let sink = Arc::new(CollectSink::default());
     let model = Arc::new(AlwaysToolModel);
     let tools = Arc::new(FakeTools {
@@ -737,13 +739,19 @@ fn consecutive_failures_pause_loop() {
         None,
     );
     let report = runner.run_turn("反复失败", &d, None);
+    // 旧熔断在第 4 次失败即终止；现在必须远超熔断阈值、由步数上限收口
+    assert!(report.tool_calls >= 10, "tool_calls={} 应跑满步数上限而非熔断提前终止", report.tool_calls);
     assert!(report.paused);
     assert!(events_of(sink.as_ref())
         .iter()
         .any(|e| matches!(e, SessionEvent::StateChanged { state, .. } if state == "paused")));
+    // 熔断错误不再产生
+    assert!(!events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::Error { code, .. } if *code == 8021)));
 }
 
-/// 每次调用都返回工具调用（驱动失败熔断）
+/// 每次调用都返回工具调用（驱动长循环）
 struct AlwaysToolModel;
 impl ChatClient for AlwaysToolModel {
     fn chat(

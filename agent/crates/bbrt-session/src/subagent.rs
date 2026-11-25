@@ -344,6 +344,7 @@ pub fn run_probe(
             let (ok, summary) = match ctx.tools.execute(ctx.mode, &call) {
                 ToolOutcome::Ok { summary, .. } => (true, summary),
                 ToolOutcome::Blocked { summary, .. } => (false, format!("[被拦] {summary}")),
+                ToolOutcome::Rejected { summary, .. } => (false, format!("[被拦] {summary}")),
             };
             // 过程明细外发：工具落定（含耗时）
             trace_out(

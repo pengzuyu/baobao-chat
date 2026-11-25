@@ -26,9 +26,10 @@ use crate::events::{ModelTier, SessionEvent, SessionSink, StreamChannel};
 use crate::executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome};
 use crate::state::{self, SessionState};
 
-/// 循环上限与失败熔断（D11 §3 表：步数>50、连续工具失败>3）
+/// 循环上限（D11 §3 表：步数>50）。连续工具失败熔断已退役（2026-11-25
+/// 用户拍板：不自动杀会话——用户拒绝/连续失败都不终止本轮，防失控由
+/// 步数上限 + 用户中断兜底；8021 码位随之彻底无生产者）
 pub const MAX_STEPS: usize = 50;
-pub const MAX_CONSECUTIVE_FAILURES: usize = 3;
 /// 审批等待窗口（09 §4.1 ⑥；测试可注入更短值）
 pub const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -1044,7 +1045,6 @@ impl SessionRunner {
             }
 
             // ⑤ 工具轮（严格串行；D11 §6 不变量）
-            let mut consecutive_failures = 0usize;
             for tc in tool_calls {
                 if self.interrupted.load(Ordering::Relaxed) {
                     report.interrupted = true; // 用户中断（收口 idle，可继续）
@@ -1080,9 +1080,11 @@ impl SessionRunner {
                 );
 
                 let outcome = self.run_tool(deps, &call, &masked, risk);
-                // W2② 连续错误教训（D15 §2.2：同工具同错 ≥2 次 → 自动记 feedback）
+                // W2② 连续错误教训（D15 §2.2：同工具同错 ≥2 次 → 自动记 feedback）。
+                // Rejected（用户拒绝/审批超时）不喂——流程控制结果非执行失败
                 match &outcome {
                     ToolOutcome::Ok { .. } => self.err_tracker.record_success(&tc.name),
+                    ToolOutcome::Rejected { .. } => {}
                     ToolOutcome::Blocked { summary, .. } => {
                         if let Some(lesson) = self.err_tracker.record_failure(&tc.name, summary) {
                             if let Some(m) = deps.memory.as_ref() {
@@ -1121,10 +1123,25 @@ impl SessionRunner {
                         });
                         format!("{summary}{}", if *truncated { " [截断]" } else { "" })
                     }
+                    ToolOutcome::Rejected { code, summary } => {
+                        // 只计调用数不计失败数（拒绝≠失败）；事件/前缀口径与
+                        // Blocked 一致，前端零改动
+                        report.tool_calls += 1;
+                        emit(deps, &self.session_id, |id| SessionEvent::ToolResult {
+                            session_id: id,
+                            call_id: tc.id.clone(),
+                            ok: false,
+                            summary: summary.clone(),
+                            truncated: false,
+                            exit_code: None,
+                            duration_ms: 0,
+                            blocked_code: Some(*code),
+                        });
+                        format!("[被阻止 {code}] {summary}")
+                    }
                     ToolOutcome::Blocked { code, summary } => {
                         report.tool_calls += 1;
                         report.tool_failures += 1;
-                        consecutive_failures += 1;
                         emit(deps, &self.session_id, |id| SessionEvent::ToolResult {
                             session_id: id,
                             call_id: tc.id.clone(),
@@ -1161,17 +1178,6 @@ impl SessionRunner {
                     name: tc.name.clone(),
                     summary,
                 });
-                if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
-                    emit(deps, &self.session_id, |id| SessionEvent::Error {
-                        session_id: id,
-                        code: 8021,
-                        message: "连续工具失败超限，本轮终止".into(),
-                        fatal: false,
-                    });
-                    wal_turn_error(deps, &self.session_id, 8021, "连续工具失败超限，本轮终止", false);
-                    // 错误收口 idle（同 8010/8011 口径，避免 paused 卡死）
-                    break;
-                }
             }
             if report.paused || report.interrupted {
                 break;
@@ -1733,7 +1739,7 @@ impl SessionRunner {
                     // 审批通过后同样走 execute_allowed：用户批准的命令若带
                     // background:true 同样转后台（审批语义与同步路径一致）
                     Some(exec_call) => self.execute_allowed(deps, &exec_call),
-                    None => ToolOutcome::Blocked {
+                    None => ToolOutcome::Rejected {
                         code: 8002,
                         summary: "用户拒绝或审批超时".into(),
                     },

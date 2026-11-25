@@ -703,6 +703,7 @@ pub fn run_expert(
             let summary = match ctx.tools.execute(ctx.mode, &call) {
                 ToolOutcome::Ok { summary, .. } => summary,
                 ToolOutcome::Blocked { summary, .. } => format!("[被拦] {summary}"),
+                ToolOutcome::Rejected { summary, .. } => format!("[被拦] {summary}"),
             };
             history.push(Round::Tool {
                 call_id: tc.id.clone(),

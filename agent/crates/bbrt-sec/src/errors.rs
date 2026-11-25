@@ -14,8 +14,8 @@ pub const CODE_TOOL_DISABLED: u32 = 8006;
 pub const CODE_SANDBOX_DENIED: u32 = 8020;
 
 // 8021 已退役（2026-11-23 用户拍板：危险规则库"拒绝类"降级统一双确认，
-// 不再有不经确认的直接拦截路径；码位保留不复用。loop_runner 的
-// SessionEvent::Error 复用 8021 数字表「连续工具失败超限」为历史遗留）
+// 不再有不经确认的直接拦截路径；码位保留不复用。2026-11-25 连续工具失败
+// 熔断亦退役（不自动杀会话），8021「连续工具失败超限」最后一个生产者删除）
 
 /// 8022：进程资源超限被终止（CPU/内存；macOS 为 rlimit 尽力 + 监控杀超限）
 pub const CODE_RESOURCE_LIMIT: u32 = 8022;
