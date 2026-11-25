@@ -315,8 +315,7 @@ func TestValidatePluginPackage_Readme(t *testing.T) {
 
 func newPluginSvc(t *testing.T) *Service {
 	t.Helper()
-	return New(ecorepo.NewMemory(), ecorepo.NewAppMemory(), ecorepo.NewRolloutMemory(),
-		ecorepo.NewSkillMemory(), ecorepo.NewPluginMemory())
+	return New(ecorepo.NewMemory(), ecorepo.NewSkillMemory(), ecorepo.NewPluginMemory())
 }
 
 func TestPluginLifecycle(t *testing.T) {

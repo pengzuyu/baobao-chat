@@ -20,7 +20,7 @@ source: personal
 `
 
 func newSvc() *Service {
-	return New(ecorepo.NewMemory(), ecorepo.NewAppMemory(), ecorepo.NewRolloutMemory(), ecorepo.NewSkillMemory(), ecorepo.NewPluginMemory())
+	return New(ecorepo.NewMemory(), ecorepo.NewSkillMemory(), ecorepo.NewPluginMemory())
 }
 
 // 发布→清单瘦身→下载原文

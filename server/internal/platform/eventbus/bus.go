@@ -24,8 +24,6 @@ const (
 	TopicFileScanDone    = "file.scan.completed" // file → gateway/message
 	TopicDocVersion      = "doc.version.created" // doc → gateway/kb
 	TopicKBDocReady      = "kb.doc.ready"        // kb → gateway
-	TopicAppPublished    = "app.version.published"
-	TopicAppRevoked      = "app.revoked"
 	TopicAuditEvent      = "audit.event"           // 全部 → audit（落库失败必须死信告警，15 篇）
 	TopicPolicyUpdated   = "policy.updated"        // admin → gateway
 	TopicUserUpdated     = "user.updated"          // org → gateway/message

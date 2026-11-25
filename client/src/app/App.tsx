@@ -23,7 +23,6 @@ import { SearchPage } from '../features/kb/pages/SearchPage';
 import { SpaceBrowsePage } from '../features/kb/pages/SpaceBrowsePage';
 import { MailPage } from '../features/mail/pages/MailPage';
 import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
-import { AppStorePage } from '../features/eco/pages/AppStorePage';
 import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { SchedulesPage } from '../features/agent/pages/SchedulesPage';
@@ -34,7 +33,6 @@ import { scheduleSyncCalendar } from '../features/agent/bridge/schedule';
 import { isTauriAvailable } from '../features/agent/bridge/tauri';
 import { AdminLayout } from '../features/admin/pages/AdminLayout';
 import { DashboardPage } from '../features/admin/pages/DashboardPage';
-import { EcoAppsPage } from '../features/admin/pages/EcoAppsPage';
 import { OidcClientsPage } from '../features/admin/pages/OidcClientsPage';
 import { ClientReleasePage } from '../features/admin/pages/ClientReleasePage';
 import { SkillsPage } from '../features/admin/pages/SkillsPage';
@@ -355,8 +353,6 @@ export function App() {
         <Route path="/mail" element={<MailPage />} />
         {/* 专家库（D14 PAG-13~15：公司/个人库/编辑器） */}
         <Route path="/experts" element={<ExpertLibraryPage />} />
-        {/* 应用商店（E1/D09 PEC-07：catalog 差异+安装） */}
-        <Route path="/apps" element={<AppStorePage />} />
         {/* Agent 工作台域（D08）：PAG-01/02/03 工作台（记忆/日报页已退役——平台后台组织，不做用户浏览面） */}
         <Route path="/agent" element={<AgentWorkbenchPage />} />
         {/* 新建会话页（2026-11-23 懒创建）：?workspace=项目路径=项目新建，缺省=任务新建 */}
@@ -382,7 +378,6 @@ export function App() {
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="ai-providers" element={<AiProvidersPage />} />
           <Route path="stickers" element={<StickersPage />} />
-          <Route path="eco-apps" element={<EcoAppsPage />} />
           <Route path="oidc-clients" element={<OidcClientsPage />} />
           <Route path="client-releases" element={<ClientReleasePage />} />
           <Route path="skills" element={<SkillsPage />} />

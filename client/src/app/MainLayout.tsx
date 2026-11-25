@@ -53,7 +53,7 @@ function useNavItems(): NavItem[] {
   { to: '/agent', icon: Bot, label: t('nav.agent') },
   // 2026-11-12 用户指示先隐藏，恢复时取消注释即可（路由保留可直接深链访问）
   // { to: '/experts', icon: Sparkles, label: t('nav.experts') },
-  // { to: '/apps', icon: Boxes, label: '应用' },
+  // 应用入口已随 D09 应用域整体退役删除（2026-11-25）
   ];
 }
 

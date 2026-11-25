@@ -1211,18 +1211,6 @@ func main() {
 	} else {
 		ecoRepoInst = ecorepo.NewMemory()
 	}
-	var ecoAppStore ecorepo.AppRepo
-	if pgPool != nil {
-		ecoAppStore = ecorepo.NewPostgresApps(pgPool)
-	} else {
-		ecoAppStore = ecorepo.NewAppMemory()
-	}
-	var ecoRollouts ecorepo.RolloutRepo
-	if pgPool != nil {
-		ecoRollouts = ecorepo.NewPostgresRollout(pgPool)
-	} else {
-		ecoRollouts = ecorepo.NewRolloutMemory()
-	}
 	var ecoSkills ecorepo.SkillRepo
 	if pgPool != nil {
 		ecoSkills = ecorepo.NewPostgresSkills(pgPool)
@@ -1235,7 +1223,8 @@ func main() {
 	} else {
 		ecoPlugins = ecorepo.NewPluginMemory()
 	}
-	ecoMod := eco.NewModule(ecoRepoInst, ecoAppStore, ecoRollouts, ecoSkills, ecoPlugins)
+	// D09 应用子域（apps/rollouts）2026-11-25 整域退役：路由/页面/四表全删
+	ecoMod := eco.NewModule(ecoRepoInst, ecoSkills, ecoPlugins)
 	ecoapi.RegisterUserRoutes(mux, authed, ecoMod.API())
 	ecoapi.RegisterPublicRoutes(mux, ecoMod.API())
 	ecoapi.RegisterAdminRoutes(mux, requirePerm("admin:app:publish"), ecoMod.API())

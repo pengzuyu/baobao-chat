@@ -3,14 +3,24 @@ package ecoservice
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	ecorepo "github.com/baobaochat/server/internal/eco/repo"
 	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
+// mustRowID DTO string id → int64 行号（原定义在 app_test，应用子域退役后迁此）
+func mustRowID(t *testing.T, id string) int64 {
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || n <= 0 {
+		t.Fatalf("非法 row id: %q", id)
+	}
+	return n
+}
+
 func TestSkillMarket(t *testing.T) {
-	svc := New(ecorepo.NewMemory(), ecorepo.NewAppMemory(), ecorepo.NewRolloutMemory(), ecorepo.NewSkillMemory(), ecorepo.NewPluginMemory())
+	svc := New(ecorepo.NewMemory(), ecorepo.NewSkillMemory(), ecorepo.NewPluginMemory())
 	ctx := context.Background()
 	manifest := "skills:\n  - name: weekly-report\n    steps: [...]\n"
 

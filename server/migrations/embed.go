@@ -36,6 +36,9 @@ var clientReleaseSQL string
 //go:embed 0006_plugin_readme.sql
 var pluginReadmeSQL string
 
+//go:embed 0007_drop_eco_apps.sql
+var dropEcoAppsSQL string
+
 // List 全量迁移（顺序 = 切片序 = 版本序）；新增迁移向后追加，禁止插入/修改已发布项。
 var List = []Migration{
 	{Version: 1, Name: "0001_init", Probe: "public.users", SQL: baselineSQL},
@@ -44,4 +47,5 @@ var List = []Migration{
 	{Version: 4, Name: "0004_workday_calendar", Probe: "public.workday_calendar", SQL: workdayCalendarSQL},
 	{Version: 5, Name: "0005_client_release", Probe: "public.client_release", SQL: clientReleaseSQL},
 	{Version: 6, Name: "0006_plugin_readme", Probe: "public.idx_eco_plugin_install_pkg", SQL: pluginReadmeSQL},
+	{Version: 7, Name: "0007_drop_eco_apps", Probe: "", SQL: dropEcoAppsSQL},
 }

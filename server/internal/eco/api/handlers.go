@@ -19,11 +19,6 @@ func RegisterUserRoutes(mux *http.ServeMux, authed func(http.HandlerFunc) http.H
 	mux.Handle("GET /api/v1/eco/experts/mine", authed(handleList(svc)))
 	mux.Handle("DELETE /api/v1/eco/experts/{id}", authed(handleDelete(svc)))
 	mux.Handle("POST /api/v1/eco/experts/{id}/unpublish", authed(handleUnpublish(svc)))
-	// 生态应用用户面（E1/10 §4.3：catalog 差异同步 + 安装）
-	mux.Handle("GET /api/v1/eco/apps/catalog", authed(handleAppCatalog(svc)))
-	mux.Handle("POST /api/v1/eco/apps/{id}/install", authed(handleAppInstall(svc)))
-	mux.Handle("DELETE /api/v1/eco/apps/{id}/install", authed(handleAppUninstall(svc)))
-	mux.Handle("GET /api/v1/eco/apps/installed", authed(handleMyInstalls(svc)))
 	// 技能市场用户面（E4/10 篇：catalog+安装/卸载/我的）
 	mux.Handle("GET /api/v1/eco/skills/catalog", authed(handleSkillCatalog(svc)))
 	mux.Handle("POST /api/v1/eco/skills/{id}/install", authed(handleSkillInstall(svc)))
@@ -75,16 +70,6 @@ func RegisterAdminRoutes(mux *http.ServeMux, adminOnly func(http.HandlerFunc) ht
 		list, err := svc.List(r.Context(), tenantOf(r), actorOf(r), "company")
 		respond(w, r, list, err)
 	}))
-	// 生态应用管理面（E1/D09 PEC-01..03；守卫=admin:app:publish）
-	mux.Handle("POST /api/v1/admin/eco/apps", adminOnly(handleAppRegister(svc)))
-	mux.Handle("GET /api/v1/admin/eco/apps", adminOnly(handleAppList(svc)))
-	mux.Handle("POST /api/v1/admin/eco/apps/{id}/versions", adminOnly(handleAppAddVersion(svc)))
-	mux.Handle("GET /api/v1/admin/eco/apps/{id}/versions", adminOnly(handleAppVersions(svc)))
-	mux.Handle("POST /api/v1/admin/eco/apps/{id}/versions/{vid}/publish", adminOnly(handleAppPublish(svc)))
-	mux.Handle("POST /api/v1/admin/eco/apps/{id}/delist", adminOnly(handleAppDelist(svc)))
-	// 灰度（E2/OQ-B13：canary %+白名单 100% 豁免）
-	mux.Handle("PUT /api/v1/admin/eco/apps/{id}/rollout", adminOnly(handleAppSetRollout(svc)))
-	mux.Handle("GET /api/v1/admin/eco/apps/{id}/rollout", adminOnly(handleAppGetRollout(svc)))
 	// 技能市场管理面（E4/D09 PEC-04；admin:skill:publish 字典未建前同组守卫，登记）
 	mux.Handle("POST /api/v1/admin/eco/skills", adminOnly(handleSkillPublish(svc)))
 	mux.Handle("GET /api/v1/admin/eco/skills", adminOnly(handleSkillList(svc)))
@@ -179,141 +164,6 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
-}
-
-// ── 生态应用 REST 壳（E1）──
-
-func handleAppRegister(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req ecoservice.AppSvcReq
-		if !decode(w, r, &req) {
-			return
-		}
-		dto, err := svc.RegisterApp(r.Context(), tenantOf(r), actorOf(r), req)
-		respond(w, r, dto, err)
-	}
-}
-
-func handleAppList(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		list, err := svc.ListApps(r.Context(), tenantOf(r))
-		respond(w, r, map[string]any{"items": list}, err)
-	}
-}
-
-func handleAppAddVersion(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r, "id")
-		if !ok {
-			return
-		}
-		var req struct {
-			Version  string `json:"version"`
-			Manifest string `json:"manifest"`
-			HighRisk bool   `json:"high_risk"`
-		}
-		if !decode(w, r, &req) {
-			return
-		}
-		dto, err := svc.AddAppVersion(r.Context(), tenantOf(r), id, req.Version, req.Manifest, req.HighRisk)
-		respond(w, r, dto, err)
-	}
-}
-
-func handleAppVersions(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r, "id")
-		if !ok {
-			return
-		}
-		list, err := svc.ListAppVersions(r.Context(), tenantOf(r), id)
-		respond(w, r, map[string]any{"items": list}, err)
-	}
-}
-
-func handleAppPublish(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r, "id")
-		if !ok {
-			return
-		}
-		vid, ok := pathID(w, r, "vid")
-		if !ok {
-			return
-		}
-		respond(w, r, map[string]bool{"ok": true}, svc.PublishAppVersion(r.Context(), tenantOf(r), actorOf(r), id, vid))
-	}
-}
-
-func handleAppDelist(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r, "id")
-		if !ok {
-			return
-		}
-		respond(w, r, map[string]bool{"ok": true}, svc.DelistApp(r.Context(), tenantOf(r), id))
-	}
-}
-
-func handleAppCatalog(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		list, err := svc.Catalog(r.Context(), tenantOf(r), actorOf(r))
-		respond(w, r, map[string]any{"items": list}, err)
-	}
-}
-
-func handleAppInstall(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r, "id")
-		if !ok {
-			return
-		}
-		dto, err := svc.InstallApp(r.Context(), tenantOf(r), actorOf(r), id)
-		respond(w, r, dto, err)
-	}
-}
-
-func handleAppUninstall(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r, "id")
-		if !ok {
-			return
-		}
-		respond(w, r, map[string]bool{"ok": true}, svc.UninstallApp(r.Context(), tenantOf(r), actorOf(r), id))
-	}
-}
-
-func handleMyInstalls(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		list, err := svc.MyInstalls(r.Context(), tenantOf(r), actorOf(r))
-		respond(w, r, map[string]any{"items": list}, err)
-	}
-}
-
-func handleAppSetRollout(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r, "id")
-		if !ok {
-			return
-		}
-		var req ecoservice.RolloutReq
-		if !decode(w, r, &req) {
-			return
-		}
-		dto, err := svc.SetRollout(r.Context(), tenantOf(r), actorOf(r), id, req)
-		respond(w, r, dto, err)
-	}
-}
-
-func handleAppGetRollout(svc *ecoservice.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r, "id")
-		if !ok {
-			return
-		}
-		dto, err := svc.GetRollout(r.Context(), tenantOf(r), id)
-		respond(w, r, dto, err)
-	}
 }
 
 // ── 技能市场 REST 壳（E4）──
