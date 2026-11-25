@@ -166,7 +166,7 @@ impl McpClient {
                     }
                     conns.insert(cfg.name.clone(), c);
                 }
-                Err(_) => return, // 仍无令牌/不可达：保持降级，下次入口再试
+                Err(_) => continue, // 仍无令牌/不可达：保持降级，不阻断后续 server（降级语义 D11 §2.10）
             }
         }
     }

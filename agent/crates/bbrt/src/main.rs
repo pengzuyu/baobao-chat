@@ -350,7 +350,12 @@ fn dispatch(
     };
     match msg {
         HostToRuntime::Ping => Some(RuntimeToHost::Pong),
-        // 宿主发放/续签 agent 票（NTF；D38 票据代——整代覆盖落地，模型通道自动切换）
+        // 宿主发放/续签 agent 票（NTF；D38 票据代——整代覆盖落地，模型通道自动切换）。
+        // 票到齐后同口径热重建注册表（后台线程，模式同 McpConfig 分支）——RT 启动期
+        // 连 corp 必无票（OboCache 随进程而生，票据只能由宿主在 ready 后下发），
+        // 网关全帧验票拒 → corp 降级；若仅在 McpConfig 时重发现，壳侧 mcp.config
+        // 又恒先于 obo.token 发出，重发现仍无票白跑。票据落地是 corp 工具面可见
+        // 的唯一可靠时点（续签期重发现顺带自愈启动期网络抖动的降级源）
         HostToRuntime::OboToken { tokens } => {
             if let Ok(mut c) = obo.lock() {
                 c.set_generation(
@@ -365,6 +370,11 @@ fn dispatch(
                         .collect(),
                 );
             }
+            let tools_bg = Arc::clone(tools);
+            std::thread::Builder::new()
+                .name("mcp-registry-reload-obo".into())
+                .spawn(move || tools_bg.reload_mcp())
+                .ok();
             None
         }
         HostToRuntime::Initialize { .. } => Some(RuntimeToHost::InitializeResult {

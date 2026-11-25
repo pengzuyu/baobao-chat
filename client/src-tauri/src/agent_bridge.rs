@@ -592,11 +592,13 @@ impl AgentHost {
             }
             *self.shared.audiences.lock().unwrap() = auds;
         }
+        // 票据先于装配下发（D38 §3.2 触发点 2/4）：RT 的 OboToken 分支收到票即
+        // 后台热重建注册表（corp 启动期无票降级，票到齐的重发现是其工具面唯一
+        // 可靠时点）；若 mcp.config 先发，RT 重发现跑在换票前，corp 仍无票白跑。
+        // 未登录跳过（无票 → 调用 401，重发现空手而回无害）
+        self.refresh_agent_tickets();
         self.fire_inner("mcp.config", json!({ "servers": servers }))?;
         self.fire_inner("tools.reload", json!({ "reason": "plugin" }))?;
-        // D38 §3.2 触发点 2/4：装配变更/RT 重启 ready 兜底——已登录即换票下发
-        // （登录先于 RT 起的时序由此补票）；未登录跳过（无票 → 调用 401）
-        self.refresh_agent_tickets();
         Ok(())
     }
 
