@@ -624,17 +624,32 @@ export class MockAgentBridge implements AgentBridge {
           durationMs: Date.now() - startedAt,
         });
         await this.streamOut(ctx, sid, '测试全部通过（12/12）。修复已验证，我把这次的结论沉淀进记忆。', 'text');
+        // memory_save 走正常工具调用块（2026-11-25 口径：不再发 memorySaved 灰条）
+        const memCall = `call-${sid}-m1`;
+        this.emit({
+          type: 'toolCall',
+          sessionId: sid,
+          callId: memCall,
+          tool: 'memory_save',
+          args: { title: '登录超时根因：token 时钟偏移', type: 'project', body: 'JWT 校验拒绝±30s 外的 token；机器时钟漂移时表现为间歇性登录超时。修复=claims 校验加 ±60s 漂移窗口。' },
+          risk: 'low',
+          parallel: false,
+          source: 'self',
+        });
+        ctx.inFlightCalls.add(memCall);
+        await ctx.wait(300);
+        this.emit({
+          type: 'toolResult',
+          sessionId: sid,
+          callId: memCall,
+          ok: true,
+          summary: '记忆已写入：登录超时根因：token 时钟偏移（name=login-timeout-drift，type=project，项目分区=baobao-work）',
+          truncated: false,
+          exitCode: 0,
+          durationMs: 42,
+        });
         this.emit({ type: 'streamDone', sessionId: sid, finishReason: 'stop', usage: { in: 2510, out: 518 } });
         this.setStatus(sid, 'idle', 'finish');
-        await ctx.wait(500);
-        this.emit({
-          type: 'memorySaved',
-          sessionId: sid,
-          name: 'login-timeout-drift',
-          title: '登录超时根因：token 时钟偏移',
-          memoryType: 'project',
-          updated: false,
-        });
       } else {
         // ---- 阻止分支（用户拒绝 / 120s 超时=拒绝）----
         this.setStatus(sid, 'running', 'permission.deny');
@@ -650,17 +665,32 @@ export class MockAgentBridge implements AgentBridge {
           durationMs: 0,
         });
         await this.streamOut(ctx, sid, '好的，已取消执行该命令。你可以稍后在本地自行运行全量测试。', 'text');
+        // 同上：feedback 教训走 memory_save 工具块（无灰条回执）
+        const memCall = `call-${sid}-m1`;
+        this.emit({
+          type: 'toolCall',
+          sessionId: sid,
+          callId: memCall,
+          tool: 'memory_save',
+          args: { title: '本会话不执行 cargo test', type: 'feedback', body: '**Why:** 用户拒绝在会话内跑全量测试。\n**How to apply:** 验证改用只读命令或请用户本地自跑。' },
+          risk: 'low',
+          parallel: false,
+          source: 'self',
+        });
+        ctx.inFlightCalls.add(memCall);
+        await ctx.wait(300);
+        this.emit({
+          type: 'toolResult',
+          sessionId: sid,
+          callId: memCall,
+          ok: true,
+          summary: '记忆已写入：本会话不执行 cargo test（name=no-cargo-test-in-session，type=feedback，项目分区=baobao-work）',
+          truncated: false,
+          exitCode: 0,
+          durationMs: 38,
+        });
         this.emit({ type: 'streamDone', sessionId: sid, finishReason: 'stop', usage: { in: 2210, out: 296 } });
         this.setStatus(sid, 'idle', 'finish');
-        await ctx.wait(500);
-        this.emit({
-          type: 'memorySaved',
-          sessionId: sid,
-          name: 'no-cargo-test-in-session',
-          title: '本会话不执行 cargo test',
-          memoryType: 'feedback',
-          updated: false,
-        });
       }
       // 收尾：会话结束
       await ctx.wait(400);

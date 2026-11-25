@@ -2,7 +2,7 @@
  * Agent feature store（模块 UI 态，D01 §12.2-5 / D08 §8）：
  * - 会话列表 / 当前会话事件流（按序追加的端内投影）/ 状态机投影（session.state 驱动）
  * - 未决审批（requestId → 倒计时/结果；120s 到点置灰=拒绝）
- * - 记忆回执（memorySaved → 会话流系统消息；记忆/日报浏览面均已退役）
+ * - 记忆回执（memorySaved 静默消费不出 UI——模型调用走工具块、自动轨静默落库；记忆/日报浏览面均已退役）
  * - handleEvent() 为唯一事件入口（reducer 式分发；数据源 = bridge.onEvent）
  */
 
@@ -938,17 +938,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           };
         }
         case 'memorySaved': {
-          // D15 §2.4：知识记忆写入/更新——仅会话流回执（记忆浏览面已退役，列表不再维护）
-          const list = s.streams[event.sessionId] ?? [];
-          return {
-            streams: {
-              ...s.streams,
-              [event.sessionId]: [
-                ...list,
-                { kind: 'system', key: nextKey('sys'), text: `${event.updated ? '更新' : '沉淀'}记忆：${event.title}` },
-              ],
-            },
-          };
+          // 记忆回执不出灰条（2026-11-25 真机反馈拍板）：模型调用 memory_save
+          // 本就有工具调用块（ToolCall/ToolResult 展示写入参数与结果），灰条是
+          // 叠在工具块上的冗余结果通知；自动轨（W1 启发式/W2 错误教训/W3 收尾）
+          // 是系统行为，静默落库不打扰。协议事件保留（后端照发），仅不产生 UI。
+          return {};
         }
         case 'sessionEnded': {
           const list = s.streams[event.sessionId] ?? [];
