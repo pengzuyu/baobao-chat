@@ -100,9 +100,13 @@ export async function sendTextMessage(
  * body.bot 标记（markdown 原文随 text 落库，渲染端 isBotTextMsg 判定后按 AI 名义
  * markdown 渲染）。服务端零改动：text 内容策略只解析 text 字段（额外字段忽略）、
  * body 原文透传落库。幂等键每次新生成（用户手动分享，重复点击=有意再发一条）。
+ * 2026-11-25 引用式：提问不落会话流后，接收方需要上下文——question 非空时
+ * 拼为 markdown 引用置顶（`> **问：** …`+空行+正文），一条消息发完。
  */
-export async function sendBotText(convId: string, markdown: string): Promise<void> {
-  await sendTextMessage(convId, `bot-${crypto.randomUUID()}`, markdown, undefined, undefined, { bot: true });
+export async function sendBotText(convId: string, markdown: string, question?: string): Promise<void> {
+  const q = question?.trim();
+  const text = q ? `> **问：** ${q}\n\n${markdown}` : markdown;
+  await sendTextMessage(convId, `bot-${crypto.randomUUID()}`, text, undefined, undefined, { bot: true });
 }
 
 /**

@@ -259,7 +259,7 @@ export function AgentWorkbenchPage() {
    *  「{发起人}的BOT」+markdown 渲染，非本人样式）；非 embedded 会话无来源
    *  （embeddedConvId=null）→ 回调 undefined=按钮不渲染；返回是否成功（按钮翻已发态） */
   const shareTurnToConv = useCallback(
-    async (_user: Extract<StreamItem, { kind: 'user' }>, items: StreamItem[]): Promise<boolean> => {
+    async (user: Extract<StreamItem, { kind: 'user' }>, items: StreamItem[]): Promise<boolean> => {
       if (!embeddedConvId) return false;
       let text = '';
       for (let i = items.length - 1; i >= 0; i -= 1) {
@@ -272,7 +272,9 @@ export function AgentWorkbenchPage() {
       if (!text.trim()) return false;
       const name = useImStore.getState().convs.find((c) => c.id === embeddedConvId)?.name;
       try {
-        await sendBotText(embeddedConvId, text);
+        // 2026-11-25 引用式：提问全文随分享置顶（回合 user 条目即问题原文），
+        // 与聊天页卡分享同格式——提问不落会话流后，接收方需要上下文
+        await sendBotText(embeddedConvId, text, user.text.trim() || undefined);
         message.success(`已发送到${name ? ` ${name}` : '对应聊天'}`);
         return true;
       } catch {

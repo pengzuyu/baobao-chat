@@ -37,7 +37,7 @@ function voiceExtOf(mime: string): string {
 
 /** 斜杠命令表（2026-11-11：/agent 进入/退出机器人对话模式；@Agent 触发已下线留作他用） */
 const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
-  { cmd: '/agent', desc: '进入与机器人对话模式（再次执行取消）' },
+  { cmd: '/agent', desc: '进入与机器人对话模式（消息仅本机交 AI 处理不发送，再次执行取消）' },
 ];
 
 /**
@@ -461,7 +461,7 @@ export function MessageInput({
 
       <Flex gap={4} align="center">
         {onToggleAgentMode ? (
-          <Tooltip title={agentMode ? 'Agent 模式已开启（点击关闭）' : 'Agent 模式：本条消息交给 AI 处理'}>
+          <Tooltip title={agentMode ? 'Agent 模式已开启（点击关闭）' : 'Agent 模式：消息仅本机交 AI 处理，不发送到会话'}>
             <Button
               variant="text"
               size="small"
@@ -542,7 +542,7 @@ export function MessageInput({
           <Button
             size="small"
             data-testid="agent-mode-badge"
-            title="机器人对话模式中，点击退出"
+            title="机器人对话模式：消息仅本机交 AI 处理不发送到会话，点击退出"
             style={{
               marginInlineStart: 'auto',
               display: 'inline-flex',

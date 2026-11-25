@@ -1,22 +1,20 @@
 /**
  * IM 内嵌 Agent 卡控制器（D18 §2/§4，非 UI 纯逻辑）：
  * - (user, conv) → sessionId 映射（IndexedDB meta 持久；D01 §12.2-5 禁 localStorage）
- * - 落流：WS msg.send type=agent_card（服务端透传）
- * - 分阶段更新：REST PATCH /messages/{id}/agent-card（msg.updated 扇出）
+ * - 落卡（2026-11-25 本地化拍板）：提问与过程卡仅本机可见——不再 msg.send type=agent_card
+ *   /REST PATCH 服务端（对方与群友全程无感知），改落 im store 纯本地消息
+ *   （localState='local'）+ IndexedDB meta KV 轮次记录持久化（登出随 localClearAll 清除）
  * - 卡片 body 组装：agent store StreamItems → stages 投影
  */
 
 import { localMetaGet, localMetaSet } from '../../../shared/api/localdb';
-import { http } from '../../../shared/api/http';
-import { wsClient } from '../../../shared/api/ws';
 import { getAgentBridge } from '../../agent/bridge';
 import { toolCallCommand, type AgentCardBody, type AgentStage } from '../../../shared/components/AgentProcessCard';
 import type { StreamItem } from '../../agent/store/agent';
 import { useImStore } from '../store/im';
+import type { Message } from '../model/types';
 
 const MAP_KEY = 'agent_embedded_map'; // { [convId]: sessionId }
-
-const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 export async function getEmbeddedSessionId(convId: string): Promise<string | null> {
   const map = (await localMetaGet<Record<string, string>>(MAP_KEY)) ?? {};
@@ -54,55 +52,132 @@ export async function setEmbeddedSessionId(convId: string, sessionId: string): P
   await localMetaSet(MAP_KEY, map);
 }
 
-/** 落流 agent_card（新回合立即调用——0 阶段 running 卡也落；ack 回 msgId 供后续 PATCH）。
- *  mock（浏览器演示）：WS 不在演示环境内，本地 im store 直接落卡——活动卡已取消
- *  （2026-11-11），落流卡是唯一界面，无 mock 通道则演示无反馈 */
-export async function landAgentCard(convId: string, clientMsgId: string, body: AgentCardBody): Promise<string | null> {
-  if (USE_MOCK) {
-    const im = useImStore.getState();
-    const list = im.messagesByConv[convId] ?? [];
-    const existed = list.find((m) => m.clientMsgId === clientMsgId);
-    if (existed) return existed.msgId; // 幂等（同 clientMsgId 重落回原卡）
-    let maxSeq = 0;
-    for (const m of list) if (m.seq > maxSeq) maxSeq = m.seq;
-    const msgId = `m-mock-agc-${maxSeq + 1}`;
-    im.appendIncoming({
-      msgId,
-      convId,
-      seq: maxSeq + 1,
-      clientMsgId,
-      senderId: im.myUid,
-      senderName: '我',
-      type: 'agent_card',
-      body,
-      status: 1,
-      ts: Date.now(),
-      localState: 'sent',
-    });
-    return msgId;
-  }
-  const ack = await wsClient.request<{ msgId: string; seq: number }>('msg.send', {
-    conv_id: convId,
-    client_msg_id: clientMsgId,
-    type: 'agent_card',
-    body,
-  });
-  return ack?.msgId ?? null;
+/** ── 本地轮次持久化（2026-11-25 拍板）：落流卡退役后，历史提问与过程卡改存本机
+ *  IndexedDB meta KV——仅本设备可见，登出随 localClearAll 一并清除 ── */
+
+/** 单轮记录：question 全文（恢复气泡与分享引用）/终态卡 body/轮 token（幂等键） */
+export interface AgentRoundRecord {
+  /** 轮 token（agentCardRoundToken）——本地卡幂等键（轮内稳定/跨轮唯一） */
+  clientMsgId: string;
+  /** 本轮提问全文（roundQuestionFullOf 口径；纯指令轮为空串） */
+  question: string;
+  /** 卡 body（落卡时 running 初态，终态 PATCH 回写快照） */
+  body: AgentCardBody;
+  /** 轮起点 ts（本轮最后一条 user 的 ts） */
+  ts: number;
 }
 
-/** 分阶段更新已落流卡片（D18 §4.2：body 原样透传；mock 本地更新 body） */
-export async function patchAgentCard(msgId: string, body: AgentCardBody): Promise<void> {
-  if (USE_MOCK) {
-    useImStore.setState((s) => {
-      for (const [cid, list] of Object.entries(s.messagesByConv)) {
-        if (!list || !list.some((m) => m.msgId === msgId)) continue;
-        return { messagesByConv: { ...s.messagesByConv, [cid]: list.map((m) => (m.msgId === msgId ? { ...m, body } : m)) } };
-      }
-      return s;
-    });
-    return;
+const ROUNDS_KEY_PREFIX = 'agent_rounds:';
+const MAX_ROUNDS_PER_CONV = 50; // 每会话保留最近 50 轮（KV 截断，防无限膨胀）
+
+export async function loadAgentRounds(convId: string): Promise<AgentRoundRecord[]> {
+  return (await localMetaGet<AgentRoundRecord[]>(ROUNDS_KEY_PREFIX + convId)) ?? [];
+}
+
+async function saveAgentRounds(convId: string, rounds: AgentRoundRecord[]): Promise<void> {
+  await localMetaSet(ROUNDS_KEY_PREFIX + convId, rounds.slice(-MAX_ROUNDS_PER_CONV));
+}
+
+/** 轮 token → 提问全文（内存注册表）：分享「发送到聊天」引用式拼装数据源；
+ *  落卡时注册、恢复时重建。存量服务端旧卡无本机记录 → 分享回落卡头 question（30 字截断） */
+const roundQuestions = new Map<string, string>();
+
+function registerRoundQuestion(clientMsgId: string, question: string): void {
+  if (question) roundQuestions.set(clientMsgId, question);
+}
+
+/** 分享取提问全文：无本机注册（存量旧卡）返回 undefined */
+export function roundQuestionFull(clientMsgId: string): string | undefined {
+  return roundQuestions.get(clientMsgId);
+}
+
+/** 本轮问题全文提取（roundQuestionOf 同口径**不截断**；KV 记录/恢复气泡/分享引用共用）：
+ *  「在我端继续」指令场景取【补充说明】后段；纯指令（上下文自读）返回空串 */
+export function roundQuestionFullOf(items: StreamItem[]): string {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const it = items[i];
+    if (it.kind !== 'user') continue;
+    let t = it.text.trim();
+    const m = t.match(/【补充说明】([\s\S]*)/);
+    if (m) t = m[1].trim();
+    else if (t.startsWith('【上下文】')) return '';
+    return t;
   }
-  await http.patch(`/messages/${encodeURIComponent(msgId)}/agent-card`, body);
+  return '';
+}
+
+/** KV 轮次记录 → 本地消息序列（每轮=提问气泡（question 非空时）+ 过程卡）；
+ *  seq 置 0 由 restoreLocalMessages 按序重分配负序 */
+function roundRecordsToMessages(records: AgentRoundRecord[], convId: string, myUid: string): Message[] {
+  const msgs: Message[] = [];
+  for (const r of records) {
+    if (r.question) {
+      msgs.push({
+        msgId: '',
+        convId,
+        seq: 0,
+        clientMsgId: `${r.clientMsgId}-q`,
+        senderId: myUid,
+        senderName: '我',
+        type: 'text',
+        body: { text: r.question },
+        status: 1,
+        ts: r.ts,
+        localState: 'local',
+      });
+    }
+    msgs.push({
+      msgId: '',
+      convId,
+      seq: 0,
+      clientMsgId: r.clientMsgId,
+      senderId: myUid,
+      senderName: '我',
+      type: 'agent_card',
+      body: r.body,
+      status: 1,
+      ts: r.ts,
+      localState: 'local',
+    });
+  }
+  return msgs;
+}
+
+/** 挂载恢复（ChatPage 会话映射就绪后、EmbeddedAgentSync 挂载前调用）：KV 轮次重建
+ *  本地提问气泡与卡灌回消息流 + 问题注册表重建。幂等——已在流内的 token 自动跳过。
+ *  进行中轮的 running 卡可被 EmbeddedAgentSync 认领，WAL 回填流投影补终态 */
+export async function restoreAgentRounds(convId: string, myUid: string): Promise<void> {
+  const records = await loadAgentRounds(convId);
+  if (records.length === 0) return;
+  for (const r of records) registerRoundQuestion(r.clientMsgId, r.question);
+  useImStore.getState().restoreLocalMessages(convId, roundRecordsToMessages(records, convId, myUid));
+}
+
+/**
+ * 落卡（新回合立即调用——0 阶段 running 也落；2026-11-25 本地化）：不再走 WS
+ * msg.send——落 im store 本地消息 + KV 轮次记录。幂等：同 token 重落回原卡。
+ * @param clientMsgId 轮 token（agentCardRoundToken：轮内稳定/跨轮唯一）
+ * @param question 本轮提问全文（注册表与 KV 记录；纯指令轮传空串）
+ */
+export async function landAgentCard(convId: string, clientMsgId: string, body: AgentCardBody, question: string): Promise<void> {
+  registerRoundQuestion(clientMsgId, question);
+  useImStore.getState().upsertLocalAgentCard(convId, clientMsgId, body);
+  const records = await loadAgentRounds(convId);
+  if (records.some((r) => r.clientMsgId === clientMsgId)) return;
+  await saveAgentRounds(convId, [...records, { clientMsgId, question, body, ts: body.started_at ?? Date.now() }]);
+}
+
+/** 分阶段更新本地卡（原 REST PATCH /messages/{id}/agent-card 退役）：只更新本机
+ *  im store 副本；终态回写 KV 轮次记录，进行中态不写穿（防流式风暴） */
+export async function patchAgentCard(convId: string, clientMsgId: string, body: AgentCardBody): Promise<void> {
+  useImStore.getState().patchLocalAgentCard(convId, clientMsgId, body);
+  if (body.status === 'running') return;
+  const records = await loadAgentRounds(convId);
+  const idx = records.findIndex((r) => r.clientMsgId === clientMsgId);
+  if (idx < 0) return;
+  const next = [...records];
+  next[idx] = { ...next[idx], body };
+  await saveAgentRounds(convId, next);
 }
 
 /**

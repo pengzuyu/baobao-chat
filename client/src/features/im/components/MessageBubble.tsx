@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Flex, Image, Popover, Tag, Typography, message as antdMessage, theme } from 'antd';
 import { useAgentStore } from '../../agent/store/agent';
 import { getAgentBridge } from '../../agent/bridge';
-import { currentRoundItems, roundQuestionOf, stagesFromStream } from '../agent/embedded';
+import { currentRoundItems, roundQuestionFull, roundQuestionOf, stagesFromStream } from '../agent/embedded';
 import { sendBotText } from '../api/im';
 import { MarkdownText } from '../../../shared/components/MarkdownText';
 import {
@@ -181,6 +181,7 @@ function StateTag({
 }) {
   const { token } = theme.useToken();
   if (!message.localState) return null;
+  if (message.localState === 'local') return null; // 纯本地消息（2026-11-25 'local'）：无收发尾标
   if (message.localState === 'sending')
     return (
       <span title="发送中" style={{ fontSize: 12, color: token.colorTextTertiary, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
@@ -1043,8 +1044,11 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
       }
     }
     if (!md.trim()) return false;
+    // 引用式拼装（2026-11-25）：提问全文优先取本机注册表（本地轮）；存量服务端旧卡
+    // 无注册回落卡头 question（30 字截断）；纯指令轮无问题=只发正文
+    const q = roundQuestionFull(message.clientMsgId) ?? (b.question?.trim() ? b.question : undefined);
     try {
-      await sendBotText(message.convId, md);
+      await sendBotText(message.convId, md, q);
       return true;
     } catch {
       antdMessage.error('发送失败，请重试');
@@ -1056,6 +1060,9 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
   const selecting = multiSelect?.active === true;
   const selected = multiSelect?.selected === true;
   const doToggle = () => onSelectToggle?.(message);
+  /** 纯本地消息（'local'，2026-11-25）：悬浮条只留 agent 卡「发送」入口——
+   *  表情回应/回复/⋯菜单对未发送内容均无意义（服务端必拒或引用无效） */
+  const localNoBar = message.localState === 'local' && !agentCardShareable;
 
   /** 气泡壳内联样式（己方/对方灰阶气泡；卡片型同底、内边距收紧） */
   const bubbleStyle = (card: boolean): React.CSSProperties => ({
@@ -1188,8 +1195,9 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
 
           {/* 悬浮操作条（瘦身，INT-IM-25）：快捷 emoji + 回复 + ⋯（开统一菜单；
               编辑/撤回/转发/收藏/多选移入菜单，减少重复入口——快捷表情区无菜单语义，保留原样）。
-              agent 卡位置例外（2026-11-20 拍板）：气泡外围**右下角**（其余消息仍右上方） */}
-          {actions && !selecting && (hovered || emojiPickerOpen) ? (
+              agent 卡位置例外（2026-11-20 拍板）：气泡外围**右下角**（其余消息仍右上方）。
+              纯本地消息（'local'）只留 agent 卡「发送」入口 */}
+          {actions && !selecting && !localNoBar && (hovered || emojiPickerOpen) ? (
             <Flex
               align="center"
               gap={2}
@@ -1205,54 +1213,61 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
                 zIndex: 5,
               }}
             >
-              {QUICK_EMOJIS.slice(0, 3).map((e) => (
-                <Button
-                  key={e}
-                  variant="text"
-                  size="small"
-                  style={{ fontSize: 14, padding: '2px 3px', height: 'auto', lineHeight: 1 }}
-                  onClick={(ev) => {
-                    ev.stopPropagation();
-                    doReact(e);
-                  }}
+              {message.localState !== 'local'
+                ? QUICK_EMOJIS.slice(0, 3).map((e) => (
+                    <Button
+                      key={e}
+                      variant="text"
+                      size="small"
+                      style={{ fontSize: 14, padding: '2px 3px', height: 'auto', lineHeight: 1 }}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        doReact(e);
+                      }}
+                    >
+                      {e}
+                    </Button>
+                  ))
+                : null}
+              {message.localState !== 'local' ? (
+                <Popover
+                  open={emojiPickerOpen}
+                  onOpenChange={setEmojiPickerOpen}
+                  trigger="click"
+                  placement={message.type === 'agent_card' ? 'bottomRight' : 'topRight'}
+                  content={
+                    <EmojiPicker
+                      onPick={(e) => {
+                        doReact(e);
+                        setEmojiPickerOpen(false);
+                      }}
+                    />
+                  }
                 >
-                  {e}
-                </Button>
-              ))}
-              <Popover
-                open={emojiPickerOpen}
-                onOpenChange={setEmojiPickerOpen}
-                trigger="click"
-                placement={message.type === 'agent_card' ? 'bottomRight' : 'topRight'}
-                content={
-                  <EmojiPicker
-                    onPick={(e) => {
-                      doReact(e);
-                      setEmojiPickerOpen(false);
-                    }}
+                  <Button
+                    variant="text"
+                    size="small"
+                    title="更多表情"
+                    style={{ padding: 2, height: 'auto' }}
+                    icon={<SmilePlus size={14} />}
+                    onClick={(ev) => ev.stopPropagation()}
                   />
-                }
-              >
+                </Popover>
+              ) : null}
+              {message.localState !== 'local' ? (
                 <Button
                   variant="text"
                   size="small"
-                  title="更多表情"
-                  style={{ padding: 2, height: 'auto' }}
-                  icon={<SmilePlus size={14} />}
-                  onClick={(ev) => ev.stopPropagation()}
-                />
-              </Popover>
-              <Button
-                variant="text"
-                size="small"
-                title="回复"
-                style={{ fontSize: 12, color: token.colorTextSecondary }}
-                onClick={() => actions.onReply(message)}
-              >
-                回复
-              </Button>
+                  title="回复"
+                  style={{ fontSize: 12, color: token.colorTextSecondary }}
+                  onClick={() => actions.onReply(message)}
+                >
+                  回复
+                </Button>
+              ) : null}
               {/* agent 卡专属「发送到本会话」（2026-11-20 修订：气泡外操作条——
-                  卡内按钮与折叠态结论重叠；agent 卡无转发，此为唯一分享出口）。
+                  卡内按钮与折叠态结论重叠；agent 卡无转发，此为唯一分享出口。
+                  2026-11-25：引用式一条消息带提问（问+正文），纯本地卡同入口）。
                   已发态翻「已发送到聊天」并禁用（组件态，重复发有意为之可刷新后再发） */}
               {agentCardShareable ? (
                 <Button
@@ -1260,7 +1275,7 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
                   size="small"
                   data-testid="agent-card-send"
                   disabled={botSent}
-                  title="把结论以 AI 名义（BOT）消息发送到本会话"
+                  title="把提问+结论以 AI 名义（BOT）引用式消息发送到本会话"
                   style={{ fontSize: 12, color: token.colorTextSecondary }}
                   onClick={(ev) => {
                     ev.stopPropagation();
@@ -1274,7 +1289,7 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
                 </Button>
               ) : null}
               {/* ⋯ 打开统一右键菜单（锚定按钮左下角；菜单内动作复用同一套 handlers） */}
-              {onOpenMsgMenu ? (
+              {message.localState !== 'local' && onOpenMsgMenu ? (
                 <Button
                   variant="text"
                   size="small"

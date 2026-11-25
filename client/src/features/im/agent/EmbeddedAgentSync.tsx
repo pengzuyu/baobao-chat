@@ -1,17 +1,19 @@
 /**
  * IM 内嵌 Agent 同步控制器（2026-11-11 改版：无头化——输入框上方活动卡取消，
- * 回复落流卡承载全部交互，本组件只负责「写路径」与审批弹框）：
- * - 一轮一卡：流内 user 条目数变化=新回合 → **立即** msg.send 落流 running 卡
- *   （0 阶段也落——消息流即时出现反馈，不等首个 LLM 事件；clientMsgId 用
- *   agentCardRoundToken：轮内稳定（重试幂等）/跨轮跨重启唯一——旧 agc-{sid}-r{N}
- *   确定性键壳重启后撞历史轮号，被幂等去重回旧卡致回答气泡跑到最新消息上方）
- * - 重挂重同步：不再重新落流，只认领流内本会话 running 卡续 PATCH；无 running 卡
- *   的旧轮整段封口（sealedRound——依赖变化不再落卡，新回合自然解封；见 effect 注）
- * - 阶段边界 PATCH：粗粒度签名+互斥锁（防落流风暴口径不变，不含结论文本长度）；
+ * 回复卡承载全部交互，本组件只负责「写路径」与审批弹框）：
+ * - 一轮一卡：流内 user 条目数变化=新回合 → **立即**落本地 running 卡（2026-11-25
+ *   本地化拍板：提问与过程卡仅本机可见——不再 msg.send/PATCH 服务端，落 im store
+ *   'local' 消息 + KV 轮次记录，对方与群友全程无感知；0 阶段也落——消息流即时出现
+ *   反馈，不等首个 LLM 事件；clientMsgId 用 agentCardRoundToken：轮内稳定（重试
+ *   幂等）/跨轮跨重启唯一——旧 agc-{sid}-r{N} 确定性键壳重启后撞历史轮号）
+ * - 重挂重同步：不再重新落卡，只认领消息流内本会话 running 卡（含 KV 恢复出的）
+ *   续 PATCH；无 running 卡的旧轮整段封口（sealedRound——依赖变化不再落卡，新回合
+ *   自然解封；见 effect 注）
+ * - 阶段边界 PATCH：粗粒度签名+互斥锁（防更新风暴口径不变，不含结论文本长度）；
  *   终态/idle 最后一次 PATCH 收口后静默（新回合自然落新卡）
  * - 审批弹框（antd Modal）：本组件**常驻挂载**（会话映射存在即挂，不随回合退场）
  *   ——修「审批弹框没显示」：旧活动卡 idle 退休卸载后 permissionRequest 无宿主
- * - 流式实时显示由落流卡 AgentCardMsg 订阅 store 直渲（读路径与写路径解耦，
+ * - 流式实时显示由卡 AgentCardMsg 订阅 store 直渲（读路径与写路径解耦，
  *   此前共用粗签名导致文本不随 delta 刷新、「一下子全输出」）
  */
 
@@ -23,7 +25,7 @@ import { getAgentBridge } from '../../agent/bridge';
 import type { GrantScope } from '../../agent/bridge/types';
 import { ClarifyForm, type ClarifySubmit } from '../../agent/components/ClarifyCard';
 import { useImStore } from '../store/im';
-import { agentCardRoundToken, currentRoundItems, landAgentCard, patchAgentCard, roundQuestionOf, stagesFromStream, stagesSignature } from './embedded';
+import { agentCardRoundToken, currentRoundItems, landAgentCard, patchAgentCard, roundQuestionFullOf, roundQuestionOf, stagesFromStream, stagesSignature } from './embedded';
 
 const TERMINAL_STATES = new Set(['error', 'ended']);
 
@@ -39,9 +41,10 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
   const session = useAgentStore((s) => s.sessions.find((m) => m.id === sessionId));
   const respondPermission = useAgentStore((s) => s.respondPermission);
 
-  /** 已落流回合号（流内 user 条目数）；≠当前值=新回合 → 重置落流目标 */
+  /** 已落卡回合号（流内 user 条目数）；≠当前值=新回合 → 重置落卡目标 */
   const landedRoundRef = useRef<number | null>(null);
-  const landedMsgRef = useRef<string | null>(null);
+  /** 已落卡轮 token（=卡消息 clientMsgId，PATCH 目标键；新回合落卡/挂载认领两条路赋值） */
+  const landedTokenRef = useRef<string | null>(null);
   /** 本回合落流 token（轮内稳定/跨轮唯一；见 embedded.ts agentCardRoundToken） */
   const roundTokenRef = useRef<string | null>(null);
   const lastSigRef = useRef('');
@@ -98,12 +101,12 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
     const userCount = stream.filter((it) => it.kind === 'user').length;
     if (userCount === 0) return; // 空流（未提问）不落卡
     if (landedRoundRef.current === null) {
-      // 挂载重同步（2026-11-11 口径变更）：不再按确定性键重新落流——旧口径
-      // agc-{sid}-r{N} 的 N 取内存流 user 条数，壳重启后计数归零，重新落流会与
-      // 历史轮撞号、被 client_msg_id 幂等去重回旧轮卡（回答气泡跑到最新消息上方）。
-      // 现只认领流内本会话仍在 running 的最新卡为 PATCH 目标：自愈「失宿主期间
-      // 轮次收口、终态 PATCH 丢失」卡停 running；无 running 卡（历史轮均已收口，
-      // 或本轮在工作台发起本就不落卡）静默等新回合
+      // 挂载重同步（2026-11-11 口径变更）：不再按确定性键重新落卡——旧口径
+      // agc-{sid}-r{N} 的 N 取内存流 user 条数，壳重启后计数归零，重新落卡会与
+      // 历史轮撞号。现只认领消息流内本会话仍在 running 的最新卡为 PATCH 目标
+      // （含 ChatPage 挂载时 KV 恢复出的本地卡）：自愈「失宿主期间轮次收口、终态
+      // PATCH 丢失」卡停 running；无 running 卡（历史轮均已收口，或本轮在工作台
+      // 发起本就不落卡）静默等新回合
       landedRoundRef.current = userCount;
       const list = useImStore.getState().messagesByConv[convId] ?? [];
       for (let i = list.length - 1; i >= 0; i -= 1) {
@@ -111,22 +114,19 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
         if (m.type !== 'agent_card') continue;
         const b = m.body as AgentCardBody | undefined;
         if (b && b.session_id === sessionId && b.status === 'running') {
-          landedMsgRef.current = m.msgId;
+          landedTokenRef.current = m.clientMsgId;
           // 回合起点对齐卡身（补终态 PATCH 的用时口径不被挂载时刻覆盖）
           if (typeof b.started_at === 'number') roundStartRef.current = b.started_at;
           break;
         }
       }
-      if (!landedMsgRef.current) {
+      if (!landedTokenRef.current) {
         // 无 running 卡且本轮已收口（roundClosed）→ 历史旧轮封口。2026-11-20 修
         // 「重进聊天页一次多一张重复结果卡」：此前只 return 一次，之后流事件/终态翻转
-        // 触发 effect 再跑会走「无目标→落新卡」分支，把旧轮结果用新盐 token 重复落流
-        // （服务端 client_msg_id 幂等永不命中，每次重进 INSERT 一行 agent_card）
-        // 2026-11-24 修「聊天页提问回复只在工作台展示」（封口误伤在途回合回归）：
-        // 聊天页刚发起的回合此刻必然还没有卡——落卡正是本组件职责，无条件封口会把
-        // 整轮永久吞掉（过程与回复只在会话流里可见，IM 消息流无卡）。未收口轮不封口
-        // 放行到下方 origin 闸门（workbench 发起/历史未知照旧静默不落）；WAL 回填的
-        // 旧轮 turnDoneAt 必打点（终态收口含 interrupt），收口旧轮照旧封口防重复落流
+        // 触发 effect 再跑会走「无目标→落新卡」分支，把旧轮结果重复落流。2026-11-24
+        // 修「聊天页提问回复只在工作台展示」（封口误伤在途回合回归）：未收口轮不封口
+        // 放行到下方 origin 闸门；WAL 回填的旧轮 turnDoneAt 必打点（终态收口含
+        // interrupt），收口旧轮照旧封口防重复落卡
         if (roundClosed) {
           sealedRoundRef.current = true;
           return;
@@ -135,11 +135,11 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
         if (lastUser) roundStartRef.current = lastUser.ts;
       }
     } else if (landedRoundRef.current !== userCount) {
-      // 新回合：唯一 token 落新卡（0 阶段 running 也落）+ 重置落流目标（一轮一卡）
+      // 新回合：唯一 token 落新卡（0 阶段 running 也落）+ 重置落卡目标（一轮一卡）
       const lastUser = [...stream].reverse().find((it) => it.kind === 'user');
       const roundTs = lastUser && lastUser.kind === 'user' ? lastUser.ts : Date.now();
       landedRoundRef.current = userCount;
-      landedMsgRef.current = null;
+      landedTokenRef.current = null;
       roundTokenRef.current = agentCardRoundToken(sessionId, userCount, roundTs);
       retiredRef.current = false;
       sealedRoundRef.current = false;
@@ -153,15 +153,14 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
       retrySyncRef.current = true;
       return;
     }
-    // 回合发起方闸门（2026-11-20 修「工作台回合泄漏进 IM」）：未持有落流目标时，
+    // 回合发起方闸门（2026-11-20 修「工作台回合泄漏进 IM」）：未持有落卡目标时，
     // 只有聊天页发起（origin=im）的回合才落新卡——工作台发起/历史未知回合在此
-    // 静默返回（此前挂载后流事件一触发就走「无目标→落新卡」分支，把工作台整轮
-    // 带进 IM 消息流）。已认领 running 卡（landedMsgRef 有值）不受限，PATCH 照常
+    // 静默返回。已认领 running 卡（landedTokenRef 有值）不受限，PATCH 照常
     const lastUserItem = [...stream].reverse().find((it) => it.kind === 'user');
-    if (!landedMsgRef.current && lastUserItem?.origin !== 'im') return;
-    // 旧轮封口（2026-11-20）：挂载时未认领 running 卡的旧回合不落流——sessions 异步
+    if (!landedTokenRef.current && lastUserItem?.origin !== 'im') return;
+    // 旧轮封口（2026-11-20）：挂载时未认领 running 卡的旧回合不落卡——sessions 异步
     // 到达/终态翻转等依赖变化会反复进此段，不封口则每次都重复落卡
-    if (sealedRoundRef.current && !landedMsgRef.current) return;
+    if (sealedRoundRef.current && !landedTokenRef.current) return;
     // 只投影当前轮（最后一条 user 之后）——喂全会话流会让新卡在模型响应前
     // 顶着上一轮的 conclusion（2026-11-11「新卡带旧答案」修复）
     const { stages, sources, rounds } = stagesFromStream(currentRoundItems(stream));
@@ -184,17 +183,19 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
     };
     void (async () => {
       try {
-        if (!landedMsgRef.current) {
-          // token 兜底同绑本轮 user ts（正常路径轮 token 已在新回合分支生成存 ref）
-          landedMsgRef.current = await landAgentCard(convId, roundTokenRef.current ?? agentCardRoundToken(sessionId, userCount, lastUserItem?.ts ?? Date.now()), body);
+        if (!landedTokenRef.current) {
+          // 落卡（2026-11-25 本地化）：token 兜底同绑本轮 user ts（正常路径轮 token 已在
+          // 新回合分支生成存 ref）；提问全文随卡注册（KV 记录+分享引用数据源）
+          landedTokenRef.current = roundTokenRef.current ?? agentCardRoundToken(sessionId, userCount, lastUserItem?.ts ?? Date.now());
+          await landAgentCard(convId, landedTokenRef.current, body, roundQuestionFullOf(stream));
         } else if (status !== 'running' && !retiredRef.current) {
           retiredRef.current = true;
-          await patchAgentCard(landedMsgRef.current, body);
+          await patchAgentCard(convId, landedTokenRef.current, body);
         } else if (status === 'running') {
-          await patchAgentCard(landedMsgRef.current, body);
+          await patchAgentCard(convId, landedTokenRef.current, body);
         }
       } catch {
-        lastSigRef.current = ''; // 落流为辅链路：失败不阻断，下个阶段边界重试
+        lastSigRef.current = ''; // 本地写失败不阻断（IDB 异常下个阶段边界重试）
       } finally {
         syncLockRef.current = false;
         if (retrySyncRef.current) {

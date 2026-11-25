@@ -59,6 +59,9 @@ export function msgActionsVisible(msg: Message, myUid: string, now: number = Dat
   if (msg.status === 2) return NONE;
   // 系统消息：仅「复制」模板文案
   if (msg.type === 'system') return { ...NONE, copy: true };
+  // 纯本地消息（2026-11-25 'local'：agent 提问气泡等未发送内容）——回复/引用携带
+  // 本地负 seq 服务端必拒，服务端类动作更是无从谈起，只留复制
+  if (msg.localState === 'local') return { ...NONE, copy: true };
   const serverReachable = !!msg.msgId; // sending/failed 本地乐观消息无服务端 msg_id
   const mine = msg.senderId === myUid;
   return {

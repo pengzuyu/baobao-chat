@@ -15,7 +15,10 @@ export type MsgType =
   | 'merge_forward'
   | 'system';
 
-export type MsgLocalState = 'sending' | 'sent' | 'failed'; // 乐观更新本地态（S1 状态机）
+/** 乐观更新本地态（S1 状态机）。'local'=纯本地消息（2026-11-25）：永不发送——
+ *  IM 内嵌 Agent 的提问气泡与过程卡仅本机可见（复用负序置底排序与
+ *  replaceMessages 保留分支两份现有保护，天然不入 outbox/本地消息表） */
+export type MsgLocalState = 'sending' | 'sent' | 'failed' | 'local';
 
 export interface Mention {
   uid: string;

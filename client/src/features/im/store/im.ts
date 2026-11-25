@@ -27,7 +27,7 @@ interface ImState {
   activeConvId: string | null;
   setActiveConv: (convId: string | null) => void;
 
-  /** 消息流端内投影：convId → 升序消息（含本端 sending/failed） */
+  /** 消息流端内投影：convId → 升序消息（含本端 sending/failed 与纯本地 'local'） */
   messagesByConv: Record<string, Message[] | undefined>;
   /** Query 拉取成功后整体写入（替换式，保留本端未决消息） */
   replaceMessages: (convId: string, items: Message[]) => void;
@@ -90,6 +90,14 @@ interface ImState {
   enqueueOutbox: (clientMsgId: string, convId: string, text: string) => void;
   /** 本地恢复后的重放（重连/启动 resendOutbox 用） */
   replayOutbox: (clientMsgId: string, convId: string, text: string) => Promise<void>;
+
+  /** 纯本地消息（'local'，永不发送，2026-11-25）：IM 内嵌 Agent 提问气泡与过程卡
+   *  仅本机可见——不走 outbox/本地消息表/会话摘要，对方与群友全程无感知 */
+  appendLocalQuestion: (convId: string, text: string) => void;
+  upsertLocalAgentCard: (convId: string, clientMsgId: string, body: MessageBody) => void;
+  patchLocalAgentCard: (convId: string, clientMsgId: string, body: MessageBody) => void;
+  /** EmbeddedAgentSync 挂载恢复：KV 轮次记录重建为本地消息灌回（幂等） */
+  restoreLocalMessages: (convId: string, msgs: Message[]) => void;
 
   /** 收藏标记（msgId → true，PIM-08）：气泡/收藏页操作即时回显；
    * 收藏列表主缓存在 Query（['im','favorites']），此处仅端内标记投影 */
@@ -550,6 +558,85 @@ export const useImStore = create<ImState>((set, get) => ({
     }
     void myUid;
     await settle(set, get, convId, clientMsgId);
+  },
+
+  /** ── 纯本地消息（localState='local'，2026-11-25）：IM 内嵌 Agent 提问气泡与
+   *  过程卡仅本机可见，永不发送——不走 outbox/本地消息表/会话摘要（对方/群友
+   *  无感知），复用负序置底排序与 replaceMessages 保留分支两份现有保护 ── */
+
+  /** 提问气泡：普通本人 text 样式上屏（不落服务端） */
+  appendLocalQuestion: (convId, text) => {
+    const { myUid } = get();
+    const optimistic: Message = {
+      msgId: '',
+      convId,
+      seq: nextLocalSeq(),
+      clientMsgId: `local-q-${crypto.randomUUID()}`,
+      senderId: myUid,
+      senderName: '我',
+      type: 'text',
+      body: { text },
+      status: 1,
+      ts: Date.now(),
+      localState: 'local',
+    };
+    set((s) => ({
+      // 不 touchConv：会话列表摘要不出现 agent 交互内容（列表预览只反映双方共同可见的消息）
+      messagesByConv: { ...s.messagesByConv, [convId]: sortMessages([...(s.messagesByConv[convId] ?? []), optimistic]) },
+    }));
+  },
+
+  /** 本地 agent 卡落卡：按 clientMsgId 幂等（轮内重落回原卡，跨轮唯一） */
+  upsertLocalAgentCard: (convId, clientMsgId, body) => {
+    const seq = nextLocalSeq();
+    const ts = Date.now();
+    set((s) => {
+      const list = s.messagesByConv[convId] ?? [];
+      if (list.some((m) => m.clientMsgId === clientMsgId)) return s;
+      const card: Message = {
+        msgId: '',
+        convId,
+        seq,
+        clientMsgId,
+        senderId: s.myUid,
+        senderName: '我',
+        type: 'agent_card',
+        body,
+        status: 1,
+        ts,
+        localState: 'local',
+      };
+      return { messagesByConv: { ...s.messagesByConv, [convId]: sortMessages([...list, card]) } };
+    });
+  },
+
+  /** 本地 agent 卡就地更新 body（不重排——body 变化不影响排序不变量） */
+  patchLocalAgentCard: (convId, clientMsgId, body) => {
+    set((s) => {
+      const list = s.messagesByConv[convId];
+      if (!list) return s;
+      let hit = false;
+      const next = list.map((m) => {
+        if (m.clientMsgId !== clientMsgId || m.localState !== 'local') return m;
+        hit = true;
+        return { ...m, body };
+      });
+      if (!hit) return s;
+      return { messagesByConv: { ...s.messagesByConv, [convId]: next } };
+    });
+  },
+
+  /** 恢复本地 agent 轮次（EmbeddedAgentSync 挂载时灌回）：已存在的 clientMsgId
+   *  跳过（幂等）；其余按传入顺序重新分配负序——越后越负=越靠底，保证恢复段
+   *  内部时序正确且整体排在新交互之前 */
+  restoreLocalMessages: (convId, msgs) => {
+    const list = get().messagesByConv[convId] ?? [];
+    const known = new Set(list.map((m) => m.clientMsgId));
+    const fresh = msgs.filter((m) => !known.has(m.clientMsgId)).map((m) => ({ ...m, seq: nextLocalSeq() }));
+    if (fresh.length === 0) return;
+    set((s) => ({
+      messagesByConv: { ...s.messagesByConv, [convId]: sortMessages([...(s.messagesByConv[convId] ?? []), ...fresh]) },
+    }));
   },
 
   favoriteIds: {},

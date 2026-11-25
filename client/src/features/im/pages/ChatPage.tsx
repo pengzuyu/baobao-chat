@@ -50,7 +50,7 @@ import { ingestFromIm } from '../../kb/api/kb';
 import { MessageInput } from '../components/MessageInput';
 import { EmbeddedAgentSync } from '../agent/EmbeddedAgentSync';
 import type { AgentCardBody } from '../../../shared/components/AgentProcessCard';
-import { embeddedTitle, getEmbeddedSessionId, setEmbeddedSessionId, validEmbeddedSessionId } from '../agent/embedded';
+import { embeddedTitle, getEmbeddedSessionId, restoreAgentRounds, setEmbeddedSessionId, validEmbeddedSessionId } from '../agent/embedded';
 import { useAgentStore } from '../../agent/store/agent';
 import { ForwardModal } from '../components/ForwardModal';
 import { ReadReceiptModal } from '../components/ReadReceiptModal';
@@ -210,7 +210,9 @@ export function ChatPage() {
   useEffect(() => {
     if (!convId) return;
     const msgs = useImStore.getState().messagesByConv[convId] ?? [];
-    const lastSeq = msgs.length > 0 ? msgs[msgs.length - 1].seq : 0;
+    // 取最大正 seq（2026-11-25：本地 'local' 消息负序恒置底，取末元素会恒负导致
+    // 已读上报被永久跳过、进会话不清未读；本地消息不参与已读游标）
+    const lastSeq = msgs.reduce((mx, m) => (m.seq > mx ? m.seq : mx), 0);
     if (lastSeq > 0) markRead(convId, lastSeq);
   }, [convId, msgQuery.data, markRead]);
 
@@ -245,10 +247,24 @@ export function ChatPage() {
     setAgentMode(false);
     setEmbeddedActive(null);
     if (!convId) return;
-    void getEmbeddedSessionId(convId).then((sid) => {
+    let stale = false;
+    void (async () => {
+      const sid = await getEmbeddedSessionId(convId);
+      if (!sid || stale) return;
+      // 历史 WAL 回填并行不 await（bbrt 冷启含进程拉起+MCP 超时，勿阻塞挂载——
+      // 发送路径曾被串行卡住数百 ms~秒级）：回填到达后 EmbeddedAgentSync 认领
+      // KV 恢复出的 running 卡，对已收口轮投影补终态（KV 快照随终态 PATCH 回写）
+      void useAgentStore.getState().loadHistoryIfEmpty(sid).catch(() => undefined);
+      // 先恢复本地轮次（2026-11-25 本地化：IndexedDB KV→提问气泡+卡灌回消息流）
+      // 再挂 Sync——认领扫描必须能看见恢复出的 running 卡（幂等，重复切会话安全）
+      await restoreAgentRounds(convId, useImStore.getState().myUid).catch(() => undefined);
+      if (stale) return;
       // 任意状态均挂载：idle 静默，新一轮自然出实时卡；审批弹框恒有宿主
-      if (sid) setEmbeddedActive(sid);
-    });
+      setEmbeddedActive(sid);
+    })();
+    return () => {
+      stale = true;
+    };
   }, [convId]);
 
   /** 取/建本会话 embedded Agent 会话。2026-11-11「会话不死」裁决：会话=上下文，
@@ -766,6 +782,19 @@ export function ChatPage() {
 
   const doSend = (text: string) => {
     if (!convId) return;
+    // Agent 模式 / /agent 前缀（2026-11-11 命令口径；@Agent 触发已下线留作他用）
+    const toAgent = agentMode || /^\/agent([\s　]|$)/.test(text);
+    if (toAgent) {
+      // 2026-11-25 拍板：提问不落会话流——本地气泡（localState='local' 仅本人可见）
+      // + 交 embedded Agent，对方/群友全程无感知；最终结论经卡上「发送」以 bot 名义
+      // 发引用式消息（问+正文），未点发送前会话零痕迹
+      const question = text.replace(/^\/agent\s*/, '').trim() || text;
+      useImStore.getState().appendLocalQuestion(convId, question);
+      pendingMentionsRef.current = []; // @面板选择作废（提问不发送，提及无从谈起）
+      setReplyTo(null);
+      void agentFlow(question);
+      return;
+    }
     // @全体：文本包含「@全体」即携带 all mention（服务端按 mention_all_policy 校验 3014）
     const mentions: Mention[] = [];
     const at = text.indexOf('@全体');
@@ -784,12 +813,10 @@ export function ChatPage() {
       if (idx < 0) continue; // 用户已删掉 @文本：视为放弃提及
       mentions.push({ uid: p.uid, all: false, range: [idx, idx + p.name.length + 1] });
     }
-    // Agent 模式 / /agent 前缀（2026-11-11 命令口径；@Agent 触发已下线留作他用）：
-    // 问题照常作为文本消息落流，另交 embedded Agent
-    const toAgent = agentMode || /^\/agent([\s　]|$)/.test(text);
+    // Agent 模式已在函数头部提前分流（2026-11-25：提问不落会话流，走本地气泡）；
+    // 此处只剩普通发送
     void sendText(convId, text, replyTo?.seq, mentions.length > 0 ? mentions : undefined);
     setReplyTo(null);
-    if (toAgent) void agentFlow(text);
   };
   const doEditSubmit = (text: string) => {
     if (!editing) return;
