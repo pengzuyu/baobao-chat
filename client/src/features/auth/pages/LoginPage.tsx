@@ -17,7 +17,7 @@ import { Alert, Button, Card, Flex, Form, Input, Typography } from 'antd';
 import { Navigate } from 'react-router-dom';
 import { errText, getErrorText } from '../../../shared/api/http';
 import { Logo } from '../../../shared/ui/Logo';
-import { APP_NAME, COPYRIGHT, TAGLINE } from '../../../shared/brand';
+import { APP_NAME, COPYRIGHT, MAIL_DOMAIN, TAGLINE } from '../../../shared/brand';
 import { useAuthStore } from '../store/auth';
 import { apiRegister, apiSetupStatus, type UserCard } from '../api/auth';
 import { UserPicker } from '../components/UserPicker';
@@ -81,6 +81,7 @@ export function LoginPage() {
   const [regBusy, setRegBusy] = useState(false);
   const [regError, setRegError] = useState('');
   const [registeredEmpno, setRegisteredEmpno] = useState('');
+  const [registeredEmail, setRegisteredEmail] = useState('');
 
   const submitRegister = async () => {
     if (regBusy) return;
@@ -100,8 +101,9 @@ export function LoginPage() {
     setRegBusy(true);
     setRegError('');
     try {
-      const empno = await apiRegister(name, regPwd);
-      setRegisteredEmpno(empno);
+      const result = await apiRegister(name, regPwd);
+      setRegisteredEmpno(result.employee_no);
+      setRegisteredEmail(result.email);
       setMode('registered');
     } catch (e) {
       setRegError(errText(e, '注册失败，请稍后重试'));
@@ -192,8 +194,11 @@ export function LoginPage() {
       <div style={AUTH_PAGE_STYLE}>
         <Card style={{ width: 360 }}>
           <AuthBrand title="注册成功" sub="请牢记你的工号（登录账号）" />
-          <Typography.Text code data-testid="register-empno" style={{ display: 'block', textAlign: 'center', fontSize: 22, marginBottom: 8 }}>
+          <Typography.Text code data-testid="register-empno" style={{ display: 'block', textAlign: 'center', fontSize: 22, marginBottom: 4 }}>
             {registeredEmpno}
+          </Typography.Text>
+          <Typography.Text code data-testid="register-email" type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 8 }}>
+            {registeredEmail}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 16 }}>
             你已加入「未分组」，所属组织可由管理员后续调整
@@ -213,7 +218,7 @@ export function LoginPage() {
         <Card style={{ width: 360 }}>
           <AuthBrand title="注册账号" sub="姓名 + 口令即可，工号将自动分配" />
           <Form layout="vertical">
-            <Form.Item label="姓名">
+            <Form.Item label="姓名" extra={`邮箱将自动生成为 工号@${MAIL_DOMAIN}（与工号一并展示）`}>
               <Input
                 placeholder="真实姓名（用于通讯录与搜索）"
                 value={regName}

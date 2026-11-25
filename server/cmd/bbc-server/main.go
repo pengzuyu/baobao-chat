@@ -982,7 +982,7 @@ func main() {
 	// 自助注册（2026-11-12 用户裁决）：姓名+自设口令 → 工号自动生成（拼音基名+重名
 	// 递增，复用管理端 SuggestEmpno 口径）；不挂部门=虚拟「未分组」（管理员后续调整）；
 	// 注册成功回登录页自行登录（不自动签发——用户拍板）；单租户 v0.1=tenant 1
-	mux.HandleFunc("POST /api/v1/auth/register", handleAuthRegister(orgRepo, adminSvc.SuggestEmpno))
+	mux.HandleFunc("POST /api/v1/auth/register", handleAuthRegister(orgRepo, adminSvc.SuggestEmpno, cfg.MailDomain))
 	// D9 回填：平台总闸双点（auth OBO 签发 + aigw 每请求）
 	agentKillOn = adminSvc.AgentKillOn
 	// 管理路由守卫（RBAC 阶段二）：auth → tenant → per-route 权限点判定。
@@ -1374,8 +1374,10 @@ func handleOrgDirectoryUsers(svc *orgservice.Service) http.HandlerFunc {
 
 // handleAuthRegister 自助注册（预登录公开）：姓名+口令 → 工号自动生成后落库；
 // 口令规则与改密一致（≥8 位且含字母与数字，03 篇 §5）；自设口令不置首登强制改密；
-// 成功返回工号（前端展示后回登录页，不签发 token——用户拍板）
-func handleAuthRegister(users orgrepo.Repo, suggest func(ctx context.Context, tenantID int64, name string) (string, error)) http.HandlerFunc {
+// 邮箱=工号@BBC_MAIL_DOMAIN 自动生成（与批量导入/单建同口径；OIDC email claim 依赖非空邮箱——
+// 空邮箱用户过不了 phebs 类 RP 的 verified email 校验）；成功返回工号+邮箱（前端展示后回登录页，
+// 不签发 token——用户拍板）
+func handleAuthRegister(users orgrepo.Repo, suggest func(ctx context.Context, tenantID int64, name string) (string, error), mailDomain string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// 空系统防占位：首个用户必须走 /setup 向导建管理员——否则自助注册会占住
 		// 「租户内已有用户」条件，把 bootstrap 永久关闭（1014）锁死管理面
@@ -1418,6 +1420,7 @@ func handleAuthRegister(users orgrepo.Repo, suggest func(ctx context.Context, te
 			httpx.Fail(w, r, err)
 			return
 		}
+		email := empno + "@" + mailDomain
 		hash, err := authservice.HashPassword(req.Password)
 		if err != nil {
 			httpx.Fail(w, r, errx.New(errx.CodeInternal, "密码哈希失败"))
@@ -1425,14 +1428,14 @@ func handleAuthRegister(users orgrepo.Repo, suggest func(ctx context.Context, te
 		}
 		if _, err := users.CreateUser(r.Context(), orgapi.User{
 			TenantID: 1, Type: orgapi.UserTypeHuman, EmployeeNo: empno, DisplayName: name,
-			PasswordHash: hash, Status: orgapi.UserStatusActive,
+			Email: email, PasswordHash: hash, Status: orgapi.UserStatusActive,
 			Scopes: []string{"im:message:send"}, // 与管理端建用户同口径（内存态；PG 角色化随 RBAC 收口）
 		}); err != nil {
 			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "注册失败："+err.Error()))
 			return
 		}
-		log.Printf("auth register: 自助注册成功（工号=%s 租户=1，未分组待管理员调整）", empno)
-		httpx.OK(w, r, map[string]any{"employee_no": empno})
+		log.Printf("auth register: 自助注册成功（工号=%s 邮箱=%s 租户=1，未分组待管理员调整）", empno, email)
+		httpx.OK(w, r, map[string]any{"employee_no": empno, "email": email})
 	}
 }
 

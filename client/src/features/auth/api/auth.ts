@@ -4,7 +4,7 @@
  */
 
 import { ApiError, getErrorText, http } from '../../../shared/api/http';
-import { DEVICE_NAME } from '../../../shared/brand';
+import { DEVICE_NAME, MAIL_DOMAIN } from '../../../shared/brand';
 
 /** 是否使用内置桩数据（默认连真实后端；显式 VITE_USE_MOCK=1 才走桩——D18 翻转） */
 export const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
@@ -135,16 +135,22 @@ export async function apiSearchUsers(q: string, cursor?: string, limit = 20): Pr
  * 自助注册：姓名+自设口令 → 服务端自动生成工号（拼音基名+重名递增）；
  * 注册用户不挂部门=虚拟「未分组」（管理员后续调整）。返回分配的工号（登录账号）。
  */
-export async function apiRegister(displayName: string, password: string): Promise<string> {
+export interface RegisterResult {
+  employee_no: string;
+  /** 邮箱=工号@BBC_MAIL_DOMAIN（服务端自动生成，与批量导入/单建同口径） */
+  email: string;
+}
+
+export async function apiRegister(displayName: string, password: string): Promise<RegisterResult> {
   if (USE_MOCK) {
     await delay(400);
-    return `mock-${displayName.toLowerCase()}`;
+    const empno = `mock-${displayName.toLowerCase()}`;
+    return { employee_no: empno, email: `${empno}@${MAIL_DOMAIN}` };
   }
-  const data = await http.post<{ employee_no: string }>('/auth/register', {
+  return http.post<RegisterResult>('/auth/register', {
     display_name: displayName,
     password,
   });
-  return data.employee_no;
 }
 
 /** ── setup 初始化向导（16 篇 §2.2 Web 化：空系统引导首个管理员） ── */
