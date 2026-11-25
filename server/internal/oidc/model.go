@@ -100,7 +100,11 @@ func (c *client) IsScopeAllowed(scope string) bool {
 	}
 	return false
 }
-func (c *client) IDTokenUserinfoClaimsAssertion() bool { return false }
+// IDTokenUserinfoClaimsAssertion true：授权码换发时 ID token 内嵌 email/email_verified/
+// name/preferred_username（fillUserinfo 填充）——phebs 等 RP 只读 ID token 不调 userinfo，
+// 依赖 email+email_verified 建立本地账号。当前无其它 RP，全局开启；出现不想要 PII 的
+// 第三方 RP 时再升级为 oidc_client 表 per-client 开关。
+func (c *client) IDTokenUserinfoClaimsAssertion() bool { return true }
 func (c *client) ClockSkew() time.Duration             { return 0 }
 
 // refreshReq op.RefreshTokenRequest 实现（oidc_refresh_token.claims 快照还原）。

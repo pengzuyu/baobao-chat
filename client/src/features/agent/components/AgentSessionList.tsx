@@ -76,9 +76,13 @@ function statusTagColor(status: AgentSessionMeta['status']): string | undefined 
  *  悬停且溢出才滚动——WAAPI transform（GPU 合成零重排），移出即 cancel 回起点；
  *  两端各驻留 12%；左栏拖宽经 ResizeObserver 重测（悬停中拖宽也复测）。
  *  未悬停/未溢出=纯静态零开销。标题长度另有派生上限（store SESSION_TITLE_MAX），
- *  跑马灯兜展示而非无限长文 */
+ *  跑马灯兜展示而非无限长文。
+ *  三修（窗口平移 bug）：此前 transform 直接加在外层——外层自身是 overflow:hidden
+ *  裁剪窗，位移会把整个窗口（含裁剪框）平移过去（左侧盖住状态点、右侧露空白），
+ *  文字并未在固定窗口内滚。现外层只做裁剪，内层 inline-block 承载文字做位移 */
 function MarqueeTitle({ text }: { text: string }) {
   const ref = useRef<HTMLSpanElement>(null);
+  const innerRef = useRef<HTMLSpanElement>(null);
   const animRef = useRef<Animation | null>(null);
   const hoverRef = useRef(false);
 
@@ -93,11 +97,14 @@ function MarqueeTitle({ text }: { text: string }) {
     stop();
     const el = ref.current;
     if (!el || !hoverRef.current) return;
+    const inner = innerRef.current;
+    if (!inner) return;
     const overflow = el.scrollWidth - el.clientWidth;
     if (overflow <= 2) return; // 未溢出：静态展示
     // ~28px/s，钳 2.6~12s（超长标题滚得完，短溢出不闪卷）
     const duration = Math.min(12_000, Math.max(2_600, (overflow / 28) * 1000));
-    animRef.current = el.animate(
+    // 位移只加在内层文字（外层是裁剪窗，位移外层=整个窗口平移=本次 bug）
+    animRef.current = inner.animate(
       [
         { transform: 'translateX(0)', offset: 0 },
         { transform: 'translateX(0)', offset: 0.12 }, // 起点驻留
@@ -136,7 +143,9 @@ function MarqueeTitle({ text }: { text: string }) {
       }}
       style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}
     >
-      {text}
+      <span ref={innerRef} style={{ display: 'inline-block', whiteSpace: 'nowrap', willChange: 'transform' }}>
+        {text}
+      </span>
     </span>
   );
 }

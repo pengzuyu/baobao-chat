@@ -115,7 +115,9 @@ export function ThinkingCollapse({ text, streaming }: { text: string; streaming:
 }
 
 /** 工具行（2026-11-12 终端行口径）：run_command 显示「终端」+ 命令（单行截断），
- *  其他工具=name+关键参数；有命令/结果可点开查看完整命令与执行结果（等宽块） */
+ *  其他工具=name+关键参数；展开体=命令条+结果区同一连续整体（2026-11-25 整卡化，
+ *  与工作台 ToolBlock 同口径——命令浅底条+下边线，结果同卡白底，不再分段）；
+ *  负左右边距抵 antd Collapse 内容 padding，命令条横贯卡片全宽 */
 function ToolRow({ s }: { s: AgentStage }) {
   const { token } = theme.useToken();
   const running = s.status === 'running';
@@ -155,15 +157,26 @@ function ToolRow({ s }: { s: AgentStage }) {
             </span>
           ),
           children: expandable ? (
-            <div style={{ display: 'grid', gap: 4 }}>
+            <div style={{ ...mono, margin: '0 -12px' }}>
               {s.command ? (
-                <pre style={{ ...mono, margin: 0, whiteSpace: 'pre-wrap', color: token.colorText }}>{isTerm ? `$ ${s.command}` : s.command}</pre>
+                <div
+                  style={{
+                    padding: '6px 12px',
+                    background: token.colorFillQuaternary,
+                    borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    color: token.colorText,
+                  }}
+                >
+                  {isTerm ? `$ ${s.command}` : s.command}
+                </div>
               ) : null}
               {s.result ? (
-                <pre style={{ ...mono, margin: 0, whiteSpace: 'pre-wrap', color: token.colorTextSecondary }}>{s.result}</pre>
+                <pre style={{ margin: 0, padding: '6px 12px', whiteSpace: 'pre-wrap', color: token.colorTextSecondary, maxHeight: 260, overflowY: 'auto' }}>{s.result}</pre>
               ) : null}
               {!s.command && !s.result && !isTerm && s.summary ? (
-                <pre style={{ ...mono, margin: 0, whiteSpace: 'pre-wrap', color: token.colorTextSecondary }}>{s.summary}</pre>
+                <pre style={{ margin: 0, padding: '6px 12px', whiteSpace: 'pre-wrap', color: token.colorTextSecondary }}>{s.summary}</pre>
               ) : null}
             </div>
           ) : null,

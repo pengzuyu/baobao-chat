@@ -89,7 +89,10 @@ const defaultRespondClarify = (questionId: string, s: ClarifySubmit) => {
  *  requestId="pr-{callId}" / questionId="q-{callId}"（toolCall 先落流、
  *  门控请求后到），先扫一遍建 callId 映射把 permission/clarify 挂到
  *  对应工具卡；配对成功的独立门控条目消融（不渲染——避免同命令双卡），
- *  配对失败（时序异常防御）回落原独立卡 */
+ *  配对失败（时序异常防御）回落原独立卡
+ *  2026-11-25 弹窗化：未决审批/提问控件一律不在流内渲染（GateDock 浮于
+ *  输入框上方）；流内仅保留已落定终态——配对成功挂工具卡 settledRow，
+ *  未配对已决（时序异常防御）回落独立终态卡 */
 export function renderStreamItems(
   items: StreamItem[],
   onRespond: (d: PermissionDecision) => void,
@@ -118,8 +121,6 @@ export function renderStreamItems(
             item={item}
             permission={permByCallId.get(item.call.callId)}
             clarify={clarifyByCallId.get(item.call.callId)}
-            onRespond={onRespond}
-            onClarify={onRespondClarify}
           />
         );
       case 'agentText':
@@ -129,9 +130,11 @@ export function renderStreamItems(
           </MidText>
         );
       case 'permission':
-        return gateMatched(item.request.requestId, 'pr-') ? null : <PermissionCard key={item.key} item={item} onRespond={onRespond} />;
+        return gateMatched(item.request.requestId, 'pr-') || item.outcome === null ? null : (
+          <PermissionCard key={item.key} item={item} onRespond={onRespond} />
+        );
       case 'clarify':
-        return gateMatched(item.request.questionId, 'q-') ? null : (
+        return gateMatched(item.request.questionId, 'q-') || item.answer === null ? null : (
           <ClarifyCard key={item.key} item={item} onRespond={(qid, s) => onRespondClarify(qid, s)} />
         );
       case 'subagent':

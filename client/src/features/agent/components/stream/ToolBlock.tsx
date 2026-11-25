@@ -13,6 +13,14 @@
  * 独立开框，经 renderStreamItems 按 requestId="pr-{callId}" / questionId="q-{callId}"
  * 配对挂到本卡——等待审批=黄条+头行「等待审批」+展开体审批控件（PermissionControls）；
  * 等待回答=主色条+展开体 ClarifyForm；落定后恢复常规工具形态（展开体顶部留终态标记行）。
+ *
+ * 2026-11-25 整卡化（用户口径：标题+命令+结果展开呈一个整体，不再三段分离）：
+ * 外框=随状态淡色边框+左侧实色状态条；展开体内命令/参数条（浅底+下边线）与
+ * 输出区连续同卡，独立灰块（monoBlockStyle）退役。
+ *
+ * 2026-11-25 弹窗化（用户口径推翻 11-18 内嵌）：未决审批/提问控件移出输出流，
+ * 由 GateDock 浮于输入框上方（本卡头行只保留「等待审批/等待回答」状态+提示行）；
+ * 落定后流内只保留终态结果（gateSettledRow：审批决定/所选答案）。
  */
 
 import { memo, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
@@ -20,8 +28,7 @@ import { Spin, Tag, Typography, theme } from 'antd';
 import { ChevronRight } from 'lucide-react';
 import { RISK_LABELS } from '../../bridge/types';
 import type { StreamItem } from '../../store/agent';
-import { PermissionControls, PermissionSettled, scopeLabel, type PermissionDecision, type PermissionItem } from '../PermissionCard';
-import { ClarifyForm, type ClarifySubmit } from '../ClarifyCard';
+import { PermissionSettled, scopeLabel, type PermissionItem } from '../PermissionCard';
 import { classifyTool, contentScale, editDiffArgs, splitMcpName, toolHeadParam } from './toolFamilies';
 
 type ToolItem = Extract<StreamItem, { kind: 'tool' }>;
@@ -61,18 +68,35 @@ function summarizeArgs(args: Record<string, unknown>): string {
     .join('　');
 }
 
-const monoBlockStyle: CSSProperties = {
-  fontFamily: 'var(--bbc-font-mono)',
-  fontSize: 12,
-  background: 'rgba(127, 134, 145, 0.14)',
-  borderRadius: 4,
-  padding: '8px 12px',
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-all',
-  maxHeight: 260,
-  overflowY: 'auto',
-  margin: 0,
-};
+/** 展开体同卡区块样式（组件内定义——依赖 token 随主题联动）：
+ *  命令/参数条=浅底+下边线；输出区=白底连续同卡（2026-11-25 整卡化，
+ *  原独立灰块 monoBlockStyle 退役） */
+function useMonoRows() {
+  const { token } = theme.useToken();
+  const cmdRow: CSSProperties = {
+    fontFamily: 'var(--bbc-font-mono)',
+    fontSize: 12,
+    padding: '6px 10px',
+    background: token.colorFillQuaternary,
+    borderBottom: `1px solid ${token.colorBorderSecondary}`,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-all',
+    color: token.colorText,
+    margin: 0,
+  };
+  const outRow: CSSProperties = {
+    fontFamily: 'var(--bbc-font-mono)',
+    fontSize: 12,
+    padding: '6px 10px',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-all',
+    maxHeight: 260,
+    overflowY: 'auto',
+    color: token.colorTextSecondary,
+    margin: 0,
+  };
+  return { cmdRow, outRow };
+}
 
 /** 澄清终态详情：问题 + 所选/自由作答（解析「label、label；补充：t」拼接串，
  *  两端同格式：真机 run_ask_user / 宿主 clarify.response / mock 均此拼接） */
@@ -127,11 +151,12 @@ function ClarifySettled({ answer, question, multiSelect }: { answer: NonNullable
   );
 }
 
-/** 编辑 diff 行（红删/绿增；精确替换语义=old 全红 new 全绿） */
+/** 编辑 diff 行（红删/绿增；精确替换语义=old 全红 new 全绿；
+ *  2026-11-25 去自带边框/圆角——红绿行直接贴整卡边缘融入） */
 function DiffBody({ oldText, newText }: { oldText?: string; newText?: string }) {
   const { token } = theme.useToken();
   const row = (prefix: '-' | '+', text: string, bg: string, fg: string) => (
-    <div key={`${prefix}-${text}`} style={{ background: bg, color: fg, padding: '1px 8px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+    <div key={`${prefix}-${text}`} style={{ background: bg, color: fg, padding: '1px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
       {prefix} {text}
     </div>
   );
@@ -141,9 +166,7 @@ function DiffBody({ oldText, newText }: { oldText?: string; newText?: string }) 
         fontFamily: 'var(--bbc-font-mono)',
         fontSize: 12,
         lineHeight: 1.6,
-        borderRadius: 4,
         overflow: 'hidden',
-        border: `1px solid ${token.colorBorderSecondary}`,
         maxHeight: 320,
         overflowY: 'auto',
       }}
@@ -157,17 +180,14 @@ function DiffBody({ oldText, newText }: { oldText?: string; newText?: string }) 
 
 export interface ToolBlockProps {
   item: ToolItem;
-  /** 配对挂载的门控审批（renderStreamItems 按 requestId 前缀配对） */
+  /** 配对挂载的门控审批（renderStreamItems 按 requestId 前缀配对）——头行状态
+   *  与落定终态详情用；未决控件由 GateDock 弹层渲染（2026-11-25 弹窗化） */
   permission?: PermissionItem;
-  /** 配对挂载的澄清提问（ask_user 工具卡） */
+  /** 配对挂载的澄清提问（ask_user 工具卡）——同上，控件在 GateDock */
   clarify?: ClarifyItem;
-  /** 审批决策回调（PermissionControls） */
-  onRespond?: (d: PermissionDecision) => void;
-  /** 澄清作答回调（ClarifyForm） */
-  onClarify?: (questionId: string, s: ClarifySubmit) => void;
 }
 
-export const ToolBlock = memo(function ToolBlock({ item, permission, clarify, onRespond, onClarify }: ToolBlockProps) {
+export const ToolBlock = memo(function ToolBlock({ item, permission, clarify }: ToolBlockProps) {
   const { token } = theme.useToken();
   const { call, result } = item;
   const running = !result;
@@ -248,9 +268,31 @@ export const ToolBlock = memo(function ToolBlock({ item, permission, clarify, on
     }
     return null;
   };
+  const settledRow = gateSettledRow();
+
+  // 整卡化（2026-11-25）：外框随状态淡色；左侧实色条=edgeColor 保留状态语义
+  const outerBorder = gatePending
+    ? permPending
+      ? token.colorWarningBorder
+      : token.colorPrimaryBorder
+    : running
+      ? token.colorPrimaryBorder
+      : failed || blocked
+        ? token.colorErrorBorder
+        : token.colorBorderSecondary;
+  const { cmdRow, outRow } = useMonoRows();
 
   return (
-    <div style={{ alignSelf: 'stretch', borderLeft: `2px solid ${edgeColor}`, paddingLeft: 10, margin: '2px 0' }}>
+    <div
+      style={{
+        alignSelf: 'stretch',
+        border: `1px solid ${outerBorder}`,
+        borderLeft: `3px solid ${edgeColor}`,
+        borderRadius: 6,
+        overflow: 'hidden',
+        margin: '2px 0',
+      }}
+    >
       <button
         type="button"
         style={{
@@ -258,7 +300,7 @@ export const ToolBlock = memo(function ToolBlock({ item, permission, clarify, on
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          padding: '4px 0',
+          padding: '5px 10px',
           border: 'none',
           background: 'transparent',
           cursor: 'pointer',
@@ -307,42 +349,47 @@ export const ToolBlock = memo(function ToolBlock({ item, permission, clarify, on
         </span>
       </button>
       {blocked ? (
-        <div style={{ background: token.colorErrorBg, color: token.colorError, fontSize: 12, padding: '2px 8px', borderRadius: 4 }}>
+        <div
+          style={{
+            background: token.colorErrorBg,
+            color: token.colorError,
+            fontSize: 12,
+            padding: '3px 10px',
+            borderTop: `1px solid ${token.colorErrorBorder}`,
+          }}
+        >
           {blocked.code} · {BLOCK_LABELS[blocked.code] ?? '已拦截'} · {blocked.rule}
         </div>
       ) : null}
       {open ? (
-        <div style={{ padding: '6px 0 6px 18px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
-          {permPending && permission ? (
-            <PermissionControls item={permission} onRespond={onRespond ?? (() => {})} />
-          ) : clarifyPending && clarify ? (
-            <ClarifyForm
-              question={clarify.request.question}
-              header={clarify.request.header}
-              options={clarify.request.options}
-              multiSelect={clarify.request.multiSelect}
-              onSubmit={(s) => onClarify?.(clarify.request.questionId, s)}
-            />
+        <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          {gatePending ? (
+            /* 弹窗化：控件在输入框上方 GateDock；流内只留指引行 */
+            <Typography.Text type="secondary" style={{ fontSize: 12, padding: '8px 10px' }}>
+              {permPending ? '等待审批——请在输入框上方的弹窗中操作' : '等待回答——请在输入框上方的弹窗中作答'}
+            </Typography.Text>
           ) : (
             <>
-              {gateSettledRow()}
+              {settledRow ? (
+                <div style={{ padding: '8px 10px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>{settledRow}</div>
+              ) : null}
               {isTerm ? (
                 <>
-                  <pre style={monoBlockStyle}>{`$ ${param ?? ''}`}</pre>
-                  <pre style={monoBlockStyle}>{result?.summary ?? '（执行中…）'}</pre>
+                  <pre style={cmdRow}>{`$ ${param ?? ''}`}</pre>
+                  <pre style={outRow}>{result?.summary ?? '（执行中…）'}</pre>
                 </>
               ) : meta.family === 'fileEdit' ? (
                 <DiffBody oldText={diff?.oldText} newText={diff?.newText} />
               ) : meta.family === 'fileWrite' && typeof call.args.content === 'string' ? (
-                <pre style={monoBlockStyle}>{call.args.content}</pre>
+                <pre style={outRow}>{call.args.content}</pre>
               ) : meta.family === 'ask' && clarify ? null : (
                 <>
-                  <pre style={monoBlockStyle}>{summarizeArgs(call.args) || '（无参数）'}</pre>
-                  <pre style={monoBlockStyle}>{result?.summary ?? '（执行中…）'}</pre>
+                  <pre style={cmdRow}>{summarizeArgs(call.args) || '（无参数）'}</pre>
+                  <pre style={outRow}>{result?.summary ?? '（执行中…）'}</pre>
                 </>
               )}
               {result?.truncated ? (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12, padding: '4px 10px 6px' }}>
                   输出已截断
                 </Typography.Text>
               ) : null}

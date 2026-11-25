@@ -35,7 +35,9 @@ import { AgentSessionList } from '../components/AgentSessionList';
 import { AgentComposeView } from '../components/AgentComposeView';
 import { AgentRightDock } from '../components/AgentRightDock';
 import { AgentStreamView } from '../components/stream/AgentStreamView';
+import { GateDock, type GateItem } from '../components/GateDock';
 import type { PermissionDecision } from '../components/PermissionCard';
+import type { ClarifySubmit } from '../components/ClarifyCard';
 import { ModelThinkPicker } from '../components/ModelThinkPicker';
 import { ContextUsageMeter } from '../components/ContextUsageMeter';
 import { clearEmbeddedSessionId, convIdOfSession } from '../../im/agent/embedded';
@@ -414,6 +416,35 @@ export function AgentWorkbenchPage() {
     [respondPermission],
   );
 
+  // ---- 门控弹层（2026-11-25 弹窗化：未决审批/提问浮于输入框上方，流内只留结果）----
+  /** 当前会话全部未决门控条目（顺序保持流内出现序；常态至多 1 项） */
+  const pendingGates = useMemo<GateItem[]>(
+    () =>
+      items.filter((it): it is GateItem => (it.kind === 'permission' && it.outcome === null) || (it.kind === 'clarify' && it.answer === null)),
+    [items],
+  );
+  /** 澄清作答（与 TurnBlock defaultRespondClarify 同款：直调 store，引用稳定） */
+  const handleGateClarify = useCallback((questionId: string, s: ClarifySubmit) => {
+    void useAgentStore.getState().respondClarify(questionId, s.answers, s.freeText || undefined);
+  }, []);
+  /** 弹层实测高度 → 垫高流内容层 padding（底部保持：吸底下最新输出顶到弹层上方
+   *  不被遮挡；padding 变化经既有内容层 RO 自然触发跟底）。dock 空时渲染 null
+   *  （ref 置空），出现/消失（布尔依赖）与流区分支重建时重挂重测 */
+  const gateDockInnerRef = useRef<HTMLDivElement | null>(null);
+  const [gatePad, setGatePad] = useState(0);
+  const gateDockMounted = pendingGates.length > 0;
+  useEffect(() => {
+    const el = gateDockInnerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') {
+      setGatePad(0);
+      return;
+    }
+    const ro = new ResizeObserver(() => setGatePad(el.getBoundingClientRect().height));
+    ro.observe(el);
+    setGatePad(el.getBoundingClientRect().height);
+    return () => ro.disconnect();
+  }, [streamState, gateDockMounted]);
+
   /** 会话重命名（2026-11-24 行内编辑提交；store 落库+列表同步，失败 toast） */
   const handleRenameSession = useCallback((id: string, title: string) => {
     void useAgentStore.getState().renameSessionTitle(id, title).catch((err: unknown) => {
@@ -525,7 +556,8 @@ export function AgentWorkbenchPage() {
   // ---- 会话流渲染（D33 平铺流：AgentStreamView 分组分发；active=末回合运行中）----
   const turnActive = status !== undefined && TURN_ACTIVE_STATUSES.has(status);
   // 回到底部浮标：离底即常显；三态=离底新增计数 Badge/回合运行中红点/回底。
-  // 样式=水平居中吸输入框上缘 + 扁平方形（用户口径 2026-11-18，非聊天页右下圆钮）
+  // 样式=水平居中吸输入框上缘 + 扁平方形（用户口径 2026-11-18，非聊天页右下圆钮）。
+  // 门控弹层在位时 bottom 随垫高上移（浮标不叠进弹层）
   const scrollFab = !atBottom ? (
     <FloatButton
       shape="square"
@@ -551,21 +583,27 @@ export function AgentWorkbenchPage() {
         setAwayCount(0);
         if (el) el.scrollTop = el.scrollHeight;
       }}
-      style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 12, zIndex: 10 }}
+      style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: 12 + (gatePad > 0 ? gatePad + 8 : 0), zIndex: 10 }}
     />
   ) : null;
   const streamNode = (
-    // 相对定位包裹层（聊天页 messageStream-wrap 同构）：浮标以此为定位祖先，恒浮
-    // 于输入框正上方；ok 与 degraded/offline 两分支共用（内联于 streamNode）
+    // 相对定位包裹层（聊天页 messageStream-wrap 同构）：浮标/门控弹层以此为定位
+    // 祖先，恒浮于输入框正上方；ok 与 degraded/offline 两分支共用（内联于 streamNode）
     <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }} ref={streamRef} onScroll={onStreamScroll}>
         {/* 内容层：padding/gap 自滚动容器移入（RO 观察本层高度，运行提示挂载等
-            非 items 驱动的高度变化也能触发吸底）；视觉口径不变（padding 16/gap 14） */}
-        <div ref={streamContentRef} style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            非 items 驱动的高度变化也能触发吸底）；视觉口径不变（padding 16/gap 14）；
+            门控弹层在位时底部垫高（bottom 保持：吸底下最新输出顶到弹层上方不被遮挡） */}
+        <div
+          ref={streamContentRef}
+          style={{ padding: gatePad > 0 ? `16px 16px ${16 + gatePad + 8}px` : 16, display: 'flex', flexDirection: 'column', gap: 14 }}
+        >
           <AgentStreamView items={items} onRespond={handleRespond} active={turnActive} onShareTurn={embeddedConvId ? shareTurnToConv : undefined} />
         </div>
       </div>
       {scrollFab}
+      {/* 门控弹层（2026-11-25）：未决审批/提问浮于输入框上方；流内只留落定结果 */}
+      <GateDock items={pendingGates} onRespond={handleRespond} onClarify={handleGateClarify} dockRef={gateDockInnerRef} />
     </div>
   );
 
