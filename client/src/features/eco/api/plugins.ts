@@ -124,6 +124,12 @@ export interface PluginLocalState {
   activeVersion: string;
   versions: string[];
   config: Record<string, string>;
+  /** 配置项自动发现（2026-11-25）：mcp 定义实际引用的 ${CONFIG:key}（headers 引用=secret） */
+  discoveredConfigKeys?: { key: string; secret: boolean }[];
+  /** MCP server 概览（身份开关可见性判定 + 目的地展示） */
+  mcpServers?: { name: string; kind: 'stdio' | 'http'; url: string | null }[];
+  /** 用户侧身份开关（plugin-state.json useIdentity） */
+  useIdentity?: boolean;
 }
 
 // ---- 服务端调用 ----
@@ -369,6 +375,12 @@ export async function fetchLocalState(pluginId: string): Promise<PluginLocalStat
 export async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
   if (!isTauriAvailable()) throw new Error('需要桌面端');
   await invoke('plugin_set_enabled', { pluginId, enabled });
+}
+
+/** 用户侧身份开关（HTTP MCP 注入统一身份；装配即时重推） */
+export async function setPluginUseIdentity(pluginId: string, enabled: boolean): Promise<void> {
+  if (!isTauriAvailable()) throw new Error('需要桌面端');
+  await invoke('plugin_set_use_identity', { pluginId, enabled });
 }
 
 export async function writePluginConfig(

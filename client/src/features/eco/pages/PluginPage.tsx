@@ -22,9 +22,11 @@ import { SkeletonList } from '../../../shared/ui/Skeleton';
 import { MarkdownText } from '../../../shared/components/MarkdownText';
 import {
   fetchLocalState, fetchMyPlugins, fetchPluginCatalog, fetchPluginDetail,
-  installPlugin, setPluginEnabled, uninstallPlugin, uploadMyPlugin, writePluginConfig,
+  installPlugin, setPluginEnabled, setPluginUseIdentity, uninstallPlugin, uploadMyPlugin,
+  writePluginConfig,
   type CatalogQuery, type PluginEntry, type PluginLocalState, type PluginVersion,
 } from '../api/plugins';
+import { AgentSubNav } from '../../agent/components/AgentSubNav';
 
 const CATEGORIES = ['', 'devops', 'kb', 'im', 'office', 'other'];
 const COMPONENTS: { value: NonNullable<CatalogQuery['component']>; label: string }[] = [
@@ -95,9 +97,11 @@ export function PluginPage() {
   const [configDraft, setConfigDraft] = useState<Record<string, string>>({});
   const searchTimer = useRef<number | null>(null);
 
-  const reload = useCallback(() => {
+  // keepMsg：调用方刚 setNotice 的场景（上传成功）跳过清空——reload 同步
+  // setNotice('') 会在渲染前把提示吃掉（2026-11-25 真机反馈修复）
+  const reload = useCallback((opts?: { keepMsg?: boolean }) => {
     setError('');
-    setNotice('');
+    if (!opts?.keepMsg) setNotice('');
     const query: CatalogQuery = {};
     if (q.trim()) query.q = q.trim();
     if (category) query.category = category;
@@ -118,9 +122,8 @@ export function PluginPage() {
     fetchLocalState(detail.plugin.plugin_id)
       .then((s) => {
         setLocal(s);
-        if (detail.plugin.manifest?.configKeys?.length) {
-          setConfigDraft(s?.config ?? {});
-        }
+        // 无条件回填：自动发现的 ${CONFIG:key}（清单未声明 configKeys）同样要回显
+        setConfigDraft(s?.config ?? {});
       })
       .catch(() => setLocal(null));
   }, [detail]);
@@ -174,7 +177,7 @@ export function PluginPage() {
         setUploadOpen(false);
         setUploadFile(null);
         setUploadNotes('');
-        reload();
+        reload({ keepMsg: true });
       })
       .catch((err) => setError(`上传失败：${err instanceof Error ? err.message : '未知错误'}`))
       .finally(() => setUploading(false));
@@ -218,8 +221,8 @@ export function PluginPage() {
 
   const saveConfig = (pluginId: string) => {
     setBusyId(pluginId);
-    void writePluginConfig(pluginId, configDraft, detail?.plugin.manifest?.configSecrets ?? [])
-      .then(() => setNotice('配置已保存'))
+    void writePluginConfig(pluginId, configDraft, configSecretKeys)
+      .then(() => setNotice('配置已保存（工具面即时刷新）'))
       .catch((err) => setError(`保存失败：${err instanceof Error ? err.message : '未知错误'}`))
       .finally(() => setBusyId(null));
   };
@@ -231,15 +234,93 @@ export function PluginPage() {
 
   const shown = useMemo(() => entries ?? null, [entries]);
 
+  // 配置表单 keys（2026-11-25 拍板自动发现）：清单声明 configKeys ∪ mcp 定义
+  // 实际引用的 ${CONFIG:key}；secret = 清单 configSecrets ∪ headers 引用发现
+  const configFormKeys = useMemo(() => {
+    const declared = detail?.plugin.manifest?.configKeys ?? [];
+    const declaredSecrets = detail?.plugin.manifest?.configSecrets ?? [];
+    const out: { key: string; secret: boolean }[] = declared.map((key) => ({
+      key,
+      secret: declaredSecrets.includes(key),
+    }));
+    for (const d of local?.discoveredConfigKeys ?? []) {
+      if (!declared.includes(d.key)) out.push(d);
+    }
+    return out;
+  }, [detail, local]);
+
+  const configSecretKeys = useMemo(
+    () => configFormKeys.filter((k) => k.secret).map((k) => k.key),
+    [configFormKeys],
+  );
+
+  // HTTP server 目的地（身份开关可见性判定 + 确认弹窗展示）
+  const identityTargets = useMemo(
+    () => (local?.mcpServers ?? []).filter((sv) => sv.kind === 'http').map((sv) => sv.url ?? ''),
+    [local],
+  );
+
+  const toggleIdentity = (pluginId: string, enabled: boolean) => {
+    if (!enabled) {
+      // 关闭=撤回身份（插件恢复匿名调用；作者声明的除外——见抽屉只读态）
+      setBusyId(pluginId);
+      void setPluginUseIdentity(pluginId, false)
+        .then(() => {
+          setLocal((prev) => (prev ? { ...prev, useIdentity: false } : prev));
+          setNotice('已关闭「以我的身份调用」');
+        })
+        .catch((err) => setError(`操作失败：${err instanceof Error ? err.message : '未知错误'}`))
+        .finally(() => setBusyId(null));
+      return;
+    }
+    // 开启=授权：身份确认弹窗（同安装确认口径——D22 §6.3 / D38 目的地明示）
+    Modal.confirm({
+      title: '以你的身份调用？',
+      content: (
+        <div>
+          <div>⚠️ 该插件的 HTTP MCP 将以你的身份调用系统（自动注入登录凭证，签发全量权限票据）</div>
+          {identityTargets.length ? (
+            <div style={{ marginTop: 4 }}>目的地：{identityTargets.join('、')}</div>
+          ) : null}
+          <div style={{ marginTop: 4 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              随时可在此关闭；禁用/卸载插件即停止注入
+            </Typography.Text>
+          </div>
+        </div>
+      ),
+      okText: '开启',
+      cancelText: '取消',
+      onOk: () => {
+        setBusyId(pluginId);
+        return setPluginUseIdentity(pluginId, true)
+          .then(() => {
+            setLocal((prev) => (prev ? { ...prev, useIdentity: true } : prev));
+            setNotice('已开启「以我的身份调用」（即时生效）');
+          })
+          .catch((err) => setError(`操作失败：${err instanceof Error ? err.message : '未知错误'}`))
+          .finally(() => setBusyId(null));
+      },
+    });
+  };
+
   return (
-    /* 页内自滚动（2026-11-23 真机）：外壳不再滚动，页面内容一律在自己的容器里滚 */
-    <div data-testid="bbc-plugin" style={{ height: '100%', overflowY: 'auto', padding: '16px 20px' }}>
+    /* Agent 域三页签常驻（2026-11-25 真机反馈：插件页此前无 SubNav 回不去工作台）；
+       页内自滚动（2026-11-23 真机）：外壳不再滚动，内容在自己的容器里滚 */
+    <div
+      data-testid="bbc-plugin"
+      style={{ height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 }}
+    >
+      <AgentSubNav />
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 20px' }}>
       <Flex align="center" gap={8} style={{ marginBottom: 8 }} wrap>
         <Puzzle size={16} />
         <Typography.Title level={5} style={{ margin: 0 }}>
           插件
         </Typography.Title>
-        <Typography.Text type="secondary">安装即得 Agent 新能力：技能 / 工具 / 命令 / 专家一包携带（生效随新会话）</Typography.Text>
+        <Typography.Text type="secondary">
+          安装即得 Agent 新能力：工具 / 命令 / 专家即时生效，技能随新会话
+        </Typography.Text>
       </Flex>
 
       <Tabs
@@ -296,43 +377,49 @@ export function PluginPage() {
         </Flex>
       ) : null}
 
-      {uploadOpen ? (
-        <Card size="small" title="上传个人插件（zip ≤10MB）" style={{ marginBottom: 12 }}>
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              上传后进入个人区：仅自己可见可装；进公共市场需管理员审核发布
-            </Typography.Text>
-            <Space size={8} wrap>
-              <Upload
-                accept=".zip"
-                maxCount={1}
-                beforeUpload={(file) => {
-                  setUploadFile(file);
-                  return false;
-                }}
-                onRemove={() => setUploadFile(null)}
-                fileList={uploadFile ? ([{ uid: '-1', name: uploadFile.name, status: 'done' }] as UploadFile[]) : []}
-              >
-                <Button variant="secondary">选择插件 zip 包</Button>
-              </Upload>
-              <Input
-                style={{ width: 260 }}
-                placeholder="备注（可选，如：发版流程助手）"
-                value={uploadNotes}
-                onChange={(e) => setUploadNotes(e.target.value)}
-              />
-            </Space>
-            <Space size={8}>
-              <Button disabled={!uploadFile || uploading} loading={uploading} onClick={doUpload}>
-                <UploadIcon size={12} /> 上传
-              </Button>
-              <Button variant="secondary" disabled={uploading} onClick={() => setUploadOpen(false)}>
-                取消
-              </Button>
-            </Space>
+      <Modal
+        open={uploadOpen}
+        onCancel={() => !uploading && setUploadOpen(false)}
+        title="上传个人插件（zip ≤10MB）"
+        footer={
+          <Space size={8}>
+            <Button variant="secondary" disabled={uploading} onClick={() => setUploadOpen(false)}>
+              取消
+            </Button>
+            <Button disabled={!uploadFile || uploading} loading={uploading} onClick={doUpload}>
+              <UploadIcon size={12} /> 上传
+            </Button>
           </Space>
-        </Card>
-      ) : null}
+        }
+        width={480}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            上传后进入个人区：仅自己可见可装；进公共市场需管理员审核发布
+          </Typography.Text>
+          <Space size={8} wrap>
+            <Upload
+              accept=".zip"
+              maxCount={1}
+              beforeUpload={(file) => {
+                setUploadFile(file);
+                return false;
+              }}
+              onRemove={() => setUploadFile(null)}
+              fileList={uploadFile ? ([{ uid: '-1', name: uploadFile.name, status: 'done' }] as UploadFile[]) : []}
+            >
+              <Button variant="secondary">选择插件 zip 包</Button>
+            </Upload>
+            <Input
+              style={{ width: 260 }}
+              placeholder="备注（可选，如：发版流程助手）"
+              value={uploadNotes}
+              onChange={(e) => setUploadNotes(e.target.value)}
+            />
+          </Space>
+        </Space>
+      </Modal>
 
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} /> : null}
       {notice ? <Alert type="success" showIcon message={notice} style={{ marginBottom: 8 }} /> : null}
@@ -430,7 +517,7 @@ export function PluginPage() {
       <Drawer
         open={!!detail}
         onClose={() => setDetail(null)}
-        width={480}
+        width="50%"
         destroyOnClose
         title={
           detail ? (
@@ -487,6 +574,40 @@ export function PluginPage() {
               </div>
             ) : null}
 
+            {/* 用户侧身份开关（2026-11-25 拍板）：HTTP MCP 以我的身份调用；
+                作者声明 usesIdentity 的恒注入——只读展示（声明优先，D22 §6.3/D38） */}
+            {detail.plugin.installed && local && (identityTargets.length > 0 || detail.plugin.manifest?.usesIdentity) ? (
+              <div>
+                <Typography.Text strong>身份调用</Typography.Text>
+                <div style={{ marginTop: 8 }}>
+                  <Space size={8} align="center">
+                    <Switch
+                      checked={detail.plugin.manifest?.usesIdentity ? true : !!local.useIdentity}
+                      disabled={
+                        !!detail.plugin.manifest?.usesIdentity || busyId === detail.plugin.plugin_id
+                      }
+                      onChange={(checked) => toggleIdentity(detail.plugin.plugin_id, checked)}
+                    />
+                    <span>
+                      {detail.plugin.manifest?.usesIdentity
+                        ? '插件声明：将以你的身份调用（卸载/禁用即停止注入）'
+                        : local.useIdentity
+                          ? '已开启（HTTP MCP 自动注入登录凭证）'
+                          : '未开启（匿名调用；HTTP server 可开启）'}
+                    </span>
+                  </Space>
+                  {identityTargets.length ? (
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, display: 'block', marginTop: 4 }}
+                    >
+                      目的地：{identityTargets.join('、')}
+                    </Typography.Text>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
             <div>
               <Typography.Text strong>组件</Typography.Text>
               <div style={{ marginTop: 8 }}>
@@ -526,15 +647,20 @@ export function PluginPage() {
               />
             </div>
 
-            {detail.plugin.manifest?.configKeys?.length ? (
+            {configFormKeys.length ? (
               <div>
                 <Typography.Text strong>配置</Typography.Text>
+                {detail.plugin.manifest?.configKeys?.length ? null : (
+                  <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                    从 MCP 配置自动发现（${'{CONFIG:key}'} 占位）——填写后保存即注入调用
+                  </Typography.Text>
+                )}
                 <Form layout="vertical" style={{ marginTop: 8 }}>
-                  {detail.plugin.manifest.configKeys.map((key) => (
+                  {configFormKeys.map(({ key, secret }) => (
                     <Form.Item key={key} label={<Typography.Text code>{key}</Typography.Text>}>
                       <Input.Password
                         value={configDraft[key] ?? ''}
-                        placeholder={/token|secret|key/i.test(key) ? '敏感值，保存后存入系统钥匙串' : ''}
+                        placeholder={secret || /token|secret|key/i.test(key) ? '敏感值，保存后存入系统钥匙串' : ''}
                         onChange={(ev) => setConfigDraft((prev) => ({ ...prev, [key]: ev.target.value }))}
                       />
                     </Form.Item>
@@ -565,6 +691,7 @@ export function PluginPage() {
           </Space>
         ) : null}
       </Drawer>
+      </div>
     </div>
   );
 }
