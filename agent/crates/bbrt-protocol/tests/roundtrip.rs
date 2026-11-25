@@ -38,7 +38,6 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             history_ref: None,
             title: None,
             unattended: false,
-            approval_timeout_secs: None,
             origin: None,
             conv_id: None,
             conv_type: None,
@@ -397,7 +396,6 @@ fn golden_session_start() {
             history_ref: None,
             title: None,
             unattended: false,
-            approval_timeout_secs: None,
             origin: None,
             conv_id: None,
             conv_type: None,
@@ -427,7 +425,9 @@ fn golden_session_start() {
 
 #[test]
 fn session_start_unattended_fields_roundtrip() {
-    // D35：unattended/approvalTimeoutSecs 双向；缺省不序列化（旧 golden 兼容）
+    // D35：unattended 双向；缺省不序列化（旧 golden 兼容）。审批等待窗口
+    // approvalTimeoutSecs 已随「审批不超时」拍板退役（2026-11-25），旧宿主
+    // 多发该字段被 serde 忽略
     let msg = HostToRuntime::SessionStart {
         session_id: "sess-u".into(),
         workspace: String::new(),
@@ -438,16 +438,29 @@ fn session_start_unattended_fields_roundtrip() {
         history_ref: None,
         title: None,
         unattended: true,
-        approval_timeout_secs: Some(1800),
         origin: None,
         conv_id: None,
         conv_type: None,
     };
     let payload = serde_json::to_value(&msg).unwrap();
     assert_eq!(payload["unattended"], json!(true));
-    assert_eq!(payload["approvalTimeoutSecs"], json!(1800));
+    assert!(payload.get("approvalTimeoutSecs").is_none());
     let back: HostToRuntime = serde_json::from_value(payload).unwrap();
     assert_eq!(back, msg);
+    // 旧宿主多发已退役字段：解析不报错、缺席语义
+    let legacy = serde_json::json!({
+        "type": "session.start", "sessionId": "sess-u2", "workspace": "",
+        "mode": "ask", "modelPolicy": "auto", "skills": [],
+        "unattended": true, "approvalTimeoutSecs": 1800,
+    });
+    let m: HostToRuntime = serde_json::from_value(legacy).unwrap();
+    assert!(matches!(
+        m,
+        HostToRuntime::SessionStart {
+            unattended: true,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -463,7 +476,6 @@ fn session_start_origin_fields_roundtrip() {
         history_ref: None,
         title: Some("与张三的对话".into()),
         unattended: false,
-        approval_timeout_secs: None,
         origin: Some("embedded".into()),
         conv_id: Some("886".into()),
         conv_type: Some("group".into()),
@@ -485,7 +497,6 @@ fn session_start_origin_fields_roundtrip() {
         history_ref: None,
         title: None,
         unattended: false,
-        approval_timeout_secs: None,
         origin: None,
         conv_id: None,
         conv_type: None,
@@ -1017,7 +1028,6 @@ fn unknown_fields_are_tolerated() {
             history_ref: None,
             title: None,
             unattended: false,
-            approval_timeout_secs: None,
             origin: None,
             conv_id: None,
             conv_type: None,
@@ -1041,7 +1051,6 @@ fn envelope_wrap_unwrap_roundtrip() {
         history_ref: None,
         title: None,
         unattended: false,
-        approval_timeout_secs: None,
         origin: None,
         conv_id: None,
         conv_type: None,
@@ -1378,7 +1387,6 @@ fn golden_session_title_and_interrupt() {
             history_ref: None,
             title: Some("与张三的对话".into()),
             unattended: false,
-            approval_timeout_secs: None,
             origin: None,
             conv_id: None,
             conv_type: None,

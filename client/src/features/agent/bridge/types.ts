@@ -87,8 +87,6 @@ export interface AgentSessionMeta {
   updatedAt: number;
   endedAt?: number;
   summary?: string;
-  /** D35 定时任务：审批等待秒数（缺省=普通会话 120s；0=不超时） */
-  approvalTimeoutSecs?: number;
 }
 
 /** 子 Agent run 行（D16 §3.1 agent_run 投影；runs.list 数据源） */
@@ -202,9 +200,6 @@ export type AgentEvent =
       reason: string;
       preview: PermissionPreview;
       options: GrantScope[];
-      /** 到点未决=拒绝（D08 §6.1）；普通会话 created_at+120000；
-       *  D35 定时会话按任务 approvalTimeoutSecs 计算，0=不超时 */
-      expiresAt: number;
     }
   | {
       type: 'permissionResponse';

@@ -78,8 +78,6 @@ pub struct StartParams {
     pub restored: Option<crate::recovery::ReplayReport>,
     /// D35 定时任务：无人值守（禁 ask_user + 提示词约束）
     pub unattended: bool,
-    /// D35 定时任务：审批等待秒数（None=默认 120s；Some(0)=不超时）
-    pub approval_timeout_secs: Option<u64>,
     /// 会话场景（2026-11-23 三区块场景提示词）：创建方判定（workspace 非空=
     /// Project / origin=embedded=Embedded{conv_id} / 其余=Task）。落库 form+
     /// conv_id 供复活还原；注入 runner 拼 SYSTEM_PROMPT 场景段
@@ -230,18 +228,11 @@ impl SessionManager {
         // 后台任务中枢注入（D16 §5：经 manager 的会话恒可后台；
         // raw runner（测试/嵌入式）保持 None=退化）
         runner.bg_hub = Some(self.hub.clone());
-        // D35 定时任务：无人值守 + 审批等待窗口（None=默认 120s；0=不超时）
+        // D35 定时任务：无人值守（审批等待已改全链不超时，2026-11-25 拍板，
+        // approval_timeout_secs 窗口随之退役）
         runner.unattended = p.unattended;
         // 场景注入（2026-11-23）：SYSTEM_PROMPT 末尾场景段由 runner 消费
         runner.scene = p.scene.clone();
-        if let Some(secs) = p.approval_timeout_secs {
-            runner.permission_timeout = if secs == 0 {
-                // recv_timeout 不支持无限：一年近似“不超时”，用户仍可「取消运行」
-                std::time::Duration::from_secs(365 * 24 * 3600)
-            } else {
-                std::time::Duration::from_secs(secs.min(7 * 24 * 3600))
-            };
-        }
         self.permission_tx
             .lock()
             .unwrap()

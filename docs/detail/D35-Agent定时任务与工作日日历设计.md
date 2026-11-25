@@ -311,3 +311,11 @@ CREATE TABLE IF NOT EXISTS public.workday_calendar (
 3. 新增启动时清理“上次进程遗留 running/waiting_approval run → failed”（§4.5 的重启口径落到实处）
 4. workday 到点二次校验日历（防止 next_run_at 计算后管理员改了节假日）；日历同步成功后重算全部 workday 任务
 5. 一次性时间创建时要求晚于当前（前端校验），避免建出来永不触发
+## 11. 追记：审批等待窗口整链退役（2026-11-25 用户拍板）
+
+**拍板：需要审批的不会发生过期，clarify 同款口径（clarify 本就不超时）。** 原「120s/任务窗口超时=自动拒绝」机制全链退役，审批等待只由用户 allow/deny/「停止」中断收口：
+
+- Runtime（`bbrt-session/loop_runner.rs`）：等待循环删 timeout 分支，改对齐 clarify 的不超时轮询（1s 查中断旗）；`PERMISSION_TIMEOUT`/`permission_timeout` 字段、manager `StartParams.approval_timeout_secs` 注入（§5.3 的极大 Duration 方案）随之删除；`session.start` 协议（`bbrt-protocol`）删 `approvalTimeoutSecs` 字段——旧宿主多发该字段被 serde 忽略，无兼容负担
+- 壳：`agent_bridge` `start_session`/SessionCache 删参删字段；`schedule/mod.rs` 任务配置删 `approval_timeout_secs`（默认 1800 作废；旧 `tasks.json` 多余字段读时忽略），`patch_event` 只保留 `unattended` 注入
+- 前端：`permissionRequest` 事件删 `expiresAt`；store `permTimers` 倒计时、审批卡 120s 进度条/超时置灰/「已超时（视为拒绝）」终态全删；SchedulesPage「审批等待」表单项（30 分钟/2 小时/不超时）退役；mock 剧本同步
+- §4 验收 8 的「等待审批中重启」、§5.3 窗口语义、§7 表单「审批等待」三处口径由本追记覆盖；`permission.response` 的 `timeout` decision 无生产者（码位不复用）

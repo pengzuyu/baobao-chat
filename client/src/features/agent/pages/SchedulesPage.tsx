@@ -105,7 +105,6 @@ export function SchedulesPage() {
   const [onceAt, setOnceAt] = useState(toLocalInput(Date.now() + 3600_000));
   const [workdayTime, setWorkdayTime] = useState('09:00');
   const [mode, setMode] = useState<ScheduleMode>('ask');
-  const [approval, setApproval] = useState(1800);
   const [modelPolicy, setModelPolicy] = useState<'auto' | 'fast' | 'strong'>('auto');
   const [formError, setFormError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<{ id: string; path: string; name: string }[]>([]);
@@ -178,7 +177,6 @@ export function SchedulesPage() {
     setOnceAt(toLocalInput(Date.now() + 3600_000));
     setWorkdayTime('09:00');
     setMode('ask');
-    setApproval(1800);
     setModelPolicy('auto');
     setFormError(null);
     setDrawerOpen(true);
@@ -200,7 +198,6 @@ export function SchedulesPage() {
     if (t.schedule.type === 'once') setOnceAt(toLocalInput(t.schedule.at));
     if (t.schedule.type === 'workday') setWorkdayTime(t.schedule.time);
     setMode(t.mode);
-    setApproval(t.approvalTimeoutSecs);
     setModelPolicy(t.modelPolicy);
     setFormError(null);
     setDrawerOpen(true);
@@ -254,7 +251,6 @@ export function SchedulesPage() {
       modelPolicy,
       model: null,
       mode,
-      approvalTimeoutSecs: approval,
     };
   };
 
@@ -654,19 +650,6 @@ export function SchedulesPage() {
                   </Radio>
                 ))}
               </Radio.Group>
-            </div>
-            <div>
-              <Typography.Text strong>审批等待</Typography.Text>
-              <Select
-                style={{ width: '100%', marginTop: 4 }}
-                value={approval}
-                onChange={setApproval}
-                options={[
-                  { value: 1800, label: '30 分钟（超时视为拒绝）' },
-                  { value: 7200, label: '2 小时' },
-                  { value: 0, label: '不超时（需手动取消）' },
-                ]}
-              />
             </div>
             <div>
               <Typography.Text strong>模型档位</Typography.Text>

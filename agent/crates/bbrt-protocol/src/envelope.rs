@@ -527,11 +527,10 @@ pub enum HostToRuntime {
         title: Option<String>,
         /// D35 定时任务：无人值守执行——禁用 ask_user（工具面移除+分支防御）、
         /// SYSTEM_PROMPT 追加“不能提问、按合理默认继续”约束
+        /// （审批等待窗口 approval_timeout_secs 已随“审批不超时”拍板退役，
+        /// 2026-11-25；旧宿主多发该字段会被 serde 忽略，无兼容负担）
         #[serde(default, skip_serializing_if = "is_false")]
         unattended: bool,
-        /// D35 定时任务：权限审批等待秒数（None=默认 120s；Some(0)=不超时）
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        approval_timeout_secs: Option<u64>,
         /// 会话场景来源（2026-11-23 三区块场景提示词）："embedded"=IM 私聊/群聊
         /// 唤起（SYSTEM_PROMPT 末尾注入聊天场景段，conv_id 常驻抗压缩）；
         /// "task"=任务区新建（不绑定单一项目段）。缺省时按 workspace 判定：

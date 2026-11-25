@@ -168,7 +168,6 @@ fn manager_run_cancel_unknown_run_not_found() {
             title: "取消路由".into(),
             restored: None,
             unattended: false,
-            approval_timeout_secs: None,
             scene: Default::default(),
         },
     )
@@ -198,7 +197,6 @@ fn interrupt_cancels_session_background_runs_only() {
         title: title.into(),
         restored: None,
         unattended: false,
-        approval_timeout_secs: None,
         scene: Default::default(),
     };
     mgr.start("s-i1".into(), params("中断传导")).unwrap();

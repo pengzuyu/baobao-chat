@@ -605,7 +605,6 @@ fn handle_send(app: &AppHandle, hub: &ExtHub, params: Value) -> Result<Value, (i
                 None,
                 Some(&format!("{EXTERNAL_TITLE_PREFIX}·{}", truncate(&text, 24))),
                 false,
-                None,
                 // A2A 外部会话（D30）：无 IM 来源，缺省场景（空 workspace=任务段）
                 None,
                 None,

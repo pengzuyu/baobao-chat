@@ -40,7 +40,7 @@ pub use expert::{
 };
 pub use loop_runner::{
     EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, Scene, SessionRunner,
-    TurnReport, MAX_STEPS, PERMISSION_TIMEOUT,
+    TurnReport, MAX_STEPS,
 };
 pub use manager::{
     register_workspace, ManagerError, RestoredSummary, SessionManager, SessionWorkspaces,

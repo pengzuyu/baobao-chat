@@ -256,7 +256,6 @@ fn permission_allow_executes_and_denies_blocks() {
         ModelTier::Strong,
         None,
     );
-    runner.permission_timeout = Duration::from_millis(500);
     let tx = runner.permission_sender();
     // 后台线程扮演宿主：收到请求即允许
     let tx2 = tx.clone();
@@ -302,7 +301,6 @@ fn permission_allow_executes_and_denies_blocks() {
         ModelTier::Strong,
         None,
     );
-    r2.permission_timeout = Duration::from_millis(500);
     let tx = r2.permission_sender();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
@@ -504,8 +502,11 @@ fn clarify_bad_args_blocked_no_request() {
     )));
 }
 
+/// 审批不超时（2026-11-25 拍板：审批不会发生过期，超时=拒绝机制整链退役）：
+/// 无人应答期间不产生任何 resolved 事件（含 timeout）、不执行工具；应答
+/// 迟到也照常放行——等待由用户 allow/deny/中断收口
 #[test]
-fn permission_timeout_counts_as_deny() {
+fn permission_waits_indefinitely_until_response() {
     let sink = Arc::new(CollectSink::default());
     let model = Arc::new(FakeModel {
         calls: AtomicUsize::new(0),
@@ -524,12 +525,44 @@ fn permission_timeout_counts_as_deny() {
         ModelTier::Strong,
         None,
     );
-    runner.permission_timeout = Duration::from_millis(100);
-    let report = runner.run_turn("无人应答", &d, None);
+    let tx = runner.permission_sender();
+    let turn = std::thread::spawn(move || runner.run_turn("无人应答", &d, None));
+    // 等审批卡出现（=已进入等待）
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !events_of(sink.as_ref())
+        .iter()
+        .any(|e| matches!(e, SessionEvent::PermissionRequest { .. }))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "3s 内未出现审批卡，turn 未进入等待"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // 冷置 300ms（远超旧 100ms 超时窗）：不自动拒绝、不执行
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !events_of(sink.as_ref())
+            .iter()
+            .any(|e| matches!(e, SessionEvent::PermissionResolved { .. })),
+        "无人应答期间不得产生任何审批收口事件（超时机制已退役）"
+    );
     assert_eq!(tools.executed.lock().unwrap().len(), 0);
+    // 迟到的应答照常放行
+    let _ = tx.send(PermissionResponse {
+        request_id: "pr-call-1".into(),
+        decision: PermissionDecision::Allow,
+        scope: GrantScope::Once,
+        edited: None,
+    });
+    let report = turn.join().unwrap();
     assert_eq!(report.tool_calls, 1);
+    assert_eq!(
+        *tools.executed.lock().unwrap(),
+        vec!["run_command".to_string()]
+    );
     assert!(events_of(sink.as_ref()).iter().any(
-        |e| matches!(e, SessionEvent::PermissionResolved { decision, .. } if decision == "timeout")
+        |e| matches!(e, SessionEvent::PermissionResolved { decision, .. } if decision == "allow")
     ));
 }
 
@@ -563,9 +596,6 @@ fn interrupt_flags_through_taken_runner_while_waiting_permission() {
             title: "t".into(),
             restored: None,
             unattended: false,
-            // 回归兜底：若中断失效 5s 超时收口（report.interrupted=false 断言失败
-            // 而非挂死）；正常路径中断 <2s 收口
-            approval_timeout_secs: Some(5),
             scene: Default::default(),
         },
     )
@@ -669,7 +699,6 @@ fn set_mode_takes_effect_on_next_tool_gate() {
             title: "t".into(),
             restored: None,
             unattended: false,
-            approval_timeout_secs: None,
             scene: Default::default(),
         },
     )
@@ -859,7 +888,6 @@ fn manager_unlimited_sessions_guard_removed() {
                 title: "t".into(),
                 restored: None,
                 unattended: false,
-                approval_timeout_secs: None,
                 scene: Default::default(),
             },
         )
@@ -878,7 +906,6 @@ fn manager_unlimited_sessions_guard_removed() {
             title: "t".into(),
             restored: None,
             unattended: false,
-            approval_timeout_secs: None,
             scene: Default::default(),
         },
     )
@@ -1524,7 +1551,6 @@ fn manager_switch_model_emits() {
             title: "切换测试".into(),
             restored: None,
             unattended: false,
-            approval_timeout_secs: None,
             scene: Default::default(),
         },
     )
@@ -1679,7 +1705,6 @@ fn switch_model_override_persists() {
             title: "引用持久化".into(),
             restored: None,
             unattended: false,
-            approval_timeout_secs: None,
             scene: Default::default(),
         },
     )
@@ -2538,7 +2563,6 @@ fn manager_persists_scene_form_and_conv_id() {
                 title: "与张三的对话".into(),
                 restored: None,
                 unattended: false,
-                approval_timeout_secs: None,
                 scene: Scene::Embedded {
                     conv_id: "886".into(),
                     conv_type: "group".into(),
@@ -2574,7 +2598,6 @@ fn manager_persists_scene_form_and_conv_id() {
                 title: "t".into(),
                 restored: None,
                 unattended: false,
-                approval_timeout_secs: None,
                 scene,
             },
         )

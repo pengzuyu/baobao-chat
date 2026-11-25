@@ -25,7 +25,6 @@ export interface ScheduleTask {
   modelPolicy: 'auto' | 'fast' | 'strong';
   model: string | null;
   mode: ScheduleMode;
-  approvalTimeoutSecs: number;
   status: ScheduleStatus;
   nextRunAt: number | null;
   lastRunAt: number | null;
@@ -53,7 +52,6 @@ export interface ScheduleTaskInput {
   modelPolicy?: 'auto' | 'fast' | 'strong';
   model?: string | null;
   mode?: ScheduleMode;
-  approvalTimeoutSecs?: number;
 }
 
 export interface ScheduleList {

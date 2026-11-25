@@ -55,7 +55,6 @@ pub fn agent_start_session(
         model.as_deref(),
         title.as_deref(),
         false,
-        None,
         origin.as_deref(),
         conv_id.as_deref(),
         conv_type.as_deref(),

@@ -196,8 +196,8 @@ export const ToolBlock = memo(function ToolBlock({ item, permission, clarify }: 
   const clarifyPending = !!clarify && clarify.answer === null;
   const gatePending = permPending || clarifyPending;
   // 审批已允许、工具执行中（result 未落）→ 头行补「已允许 · 粒度」小字
-  const permAllowed = !!permission && permission.outcome !== null && permission.outcome !== 'timeout' && permission.outcome.decision === 'allow';
-  const allowNote = permAllowed && running ? `已允许 · ${scopeLabel(permission.outcome === null || permission.outcome === 'timeout' ? undefined : permission.outcome.scope)}` : '';
+  const permAllowed = !!permission && permission.outcome !== null && permission.outcome.decision === 'allow';
+  const allowNote = permAllowed && running ? `已允许 · ${scopeLabel(permission.outcome === null ? undefined : permission.outcome.scope)}` : '';
 
   // D19 自动折叠：运行中（含门控等待）展开、结果落定自动收回头行
   const [open, setOpen] = useState(running || gatePending);

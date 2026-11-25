@@ -51,12 +51,11 @@ export type StreamItem =
       kind: 'permission';
       key: string;
       request: Extract<AgentEvent, { type: 'permissionRequest' }>;
-      /** null=等待中；'timeout'=120s 到点（灰显=拒绝）；对象=已决策。
+      /** null=等待中（不超时，2026-11-25 拍板：审批不会发生过期）；对象=已决策。
        *  editedArgs=允许时用户改过的命令（本地随决策落——镜像回执不带，
        *  供终态「原命令 → 实际执行」对比回看） */
       outcome:
         | null
-        | 'timeout'
         | { decision: 'allow' | 'deny' | 'cancelled'; scope?: GrantScope; at: number; editedArgs?: Record<string, unknown> };
     }
   /** 澄清提问卡（D20 ask_user；不超时——等回答或「停止」中断收口） */
@@ -230,9 +229,6 @@ export function ensureAgentEventSubscribed(): void {
     useAgentStore.getState().handleEvent(event);
   });
 }
-
-/** requestId → 审批倒计时（到点置 timeout=拒绝语义；窗口随事件 expiresAt，D35） */
-const permTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** 右栏内容坞收起态持久化 key（无 tab 时坞整体不渲染，收起态只记用户偏好） */
 const DOCK_COLLAPSED_KEY = 'bbc:agent-dock:collapsed';
@@ -618,11 +614,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   respondPermission: (requestId, decision, scope, editedArgs) => {
-    const timer = permTimers.get(requestId);
-    if (timer) {
-      clearTimeout(timer);
-      permTimers.delete(requestId);
-    }
     // 卡片终态先落（权限响应镜像到达后幂等覆盖）；按 requestId 全流扫描——
     // D18 内嵌卡：embedded 会话往往不是 activeSessionId，不能只写当前会话
     set((s) => {
@@ -867,36 +858,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           const list = s.streams[event.sessionId] ?? [];
           const item: StreamItem = { kind: 'permission', key: `p-${event.requestId}`, request: event, outcome: null };
           // 系统通知（2026-11-11 真机事故：审批弹框挂在活动卡/工作台页，用户不在场
-          // → 无人应答自动拒绝，表现为"很久没响应"）——跨页面可见。
-          // D35：窗口按事件 expiresAt（定时任务=任务配置，0=不超时；普通会话 120s）
-          const timeoutMs = event.expiresAt <= 0 ? 0 : Math.max(0, event.expiresAt - Date.now());
-          const windowText =
-            timeoutMs === 0
-              ? '等待人工审批（不超时）'
-              : timeoutMs >= 60_000
-                ? `${Math.round(timeoutMs / 60_000)} 分钟内未响应将自动拒绝`
-                : `${Math.round(timeoutMs / 1000)} 秒内未响应将自动拒绝`;
-          void sendSystemNotification('Agent 请求审批', `${event.tool}（${windowText}）`);
-          if (timeoutMs > 0) {
-            const timer = setTimeout(() => {
-              permTimers.delete(event.requestId);
-              useAgentStore.setState((st) => ({
-                streams: {
-                  ...st.streams,
-                  [event.sessionId]: (st.streams[event.sessionId] ?? []).map((it) =>
-                    it.kind === 'permission' && it.request.requestId === event.requestId && it.outcome === null
-                      ? { ...it, outcome: 'timeout' }
-                      : it,
-                  ),
-                },
-              }));
-            }, timeoutMs);
-            permTimers.set(event.requestId, timer);
-          }
+          // 表现为"很久没响应"）——跨页面可见。审批不超时（2026-11-25 拍板）：
+          // 无自动拒绝，等用户处理或中断
+          void sendSystemNotification('Agent 请求审批', `${event.tool}（等待人工审批，不超时）`);
           return { streams: { ...s.streams, [event.sessionId]: [...list, item] } };
         }
         case 'permissionResponse': {
-          // 宿主回执镜像（多端/快捷键一致）；已 timeout 的保持 timeout 展示
+          // 宿主回执镜像（多端/快捷键一致）；已落定终态的保持原样
           const list = s.streams[event.sessionId] ?? [];
           return {
             streams: {

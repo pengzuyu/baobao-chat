@@ -5,7 +5,8 @@
 //! → 直至 finish=stop 或步数/失败上限。全程 WAL 先行。
 //!
 //! 并发模型：同步阻塞；每 turn 在独立线程跑（bin 装配），宿主侧
-//! respond_permission 经 channel 注入，120s 超时=拒绝（09 §7.4）。
+//! respond_permission 经 channel 注入，不超时等待（2026-11-25 拍板：
+//! 审批不会发生过期，与 clarify 同款；用户中断/拒绝才收口）。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -30,8 +31,6 @@ use crate::state::{self, SessionState};
 /// 用户拍板：不自动杀会话——用户拒绝/连续失败都不终止本轮，防失控由
 /// 步数上限 + 用户中断兜底；8021 码位随之彻底无生产者）
 pub const MAX_STEPS: usize = 50;
-/// 审批等待窗口（09 §4.1 ⑥；测试可注入更短值）
-pub const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// 子任务同步等待窗（D16 决策④：探查/专家超窗转后台；2026-11-24 用户拍板
 /// 默认 120s→600s——真实调查任务 120s 普遍超窗转后台，本轮内看不到结果）
@@ -317,8 +316,6 @@ pub struct SessionRunner {
     clarify_rx: Receiver<ClarifyAnswer>,
     /// W2② 连续错误计数器（同工具同错 ≥2 次 → feedback 教训；跨 turn 保留）
     err_tracker: bbrt_memory::ErrorTracker,
-    /// 审批超时（测试注入）
-    pub permission_timeout: Duration,
     /// D35 定时任务：无人值守——工具面剔除 ask_user + SYSTEM_PROMPT 追加约束
     pub unattended: bool,
     /// 子任务同步等待窗（D16 决策④：探查/专家 spawn 后同步等窗内 join，
@@ -435,7 +432,6 @@ impl SessionRunner {
             clarify_rx: crx,
             // v0.1 恒开（`memory.heuristic=off` 开关随配置系统接线，D15 §2.2）
             err_tracker: bbrt_memory::ErrorTracker::new(true),
-            permission_timeout: PERMISSION_TIMEOUT,
             unattended: false,
             subagent_wait_window: SUBAGENT_WAIT_WINDOW,
             bg_hub: None,
@@ -1630,11 +1626,9 @@ impl SessionRunner {
                     &format!("{{\"request_id\":\"{request_id}\"}}"),
                 );
 
-                // 等待宿主回执：1s 轮询查中断旗（用户「停止」→ 作废未决审批收口
-                // cancelled，与 clarify 等待同款——否则旗置上仍要干等超时）；
-                // 120s 超时=拒绝（09 §7.4）。checked_add 溢出（D35 不超时=一年
-                // 近似）时恒等 1s 步进、永不进超时分支
-                let expires_at = std::time::Instant::now().checked_add(self.permission_timeout);
+                // 等待宿主回执：不超时（2026-11-25 用户拍板：审批不会发生过期，
+                // 与 clarify 等待同款口径）；1s 轮询查中断旗（用户「停止」→
+                // 作废未决审批收口 cancelled）；迟到的其它回执丢弃继续等
                 let decision = loop {
                     if self.interrupted.load(Ordering::Relaxed) {
                         emit(deps, &self.session_id, |id| {
@@ -1656,31 +1650,7 @@ impl SessionRunner {
                         );
                         break None;
                     }
-                    let wait = expires_at
-                        .map(|dl| dl.saturating_duration_since(std::time::Instant::now()))
-                        .filter(|remain| !remain.is_zero())
-                        .map(|remain| remain.min(Duration::from_secs(1)));
-                    let Some(wait) = wait else {
-                        emit(deps, &self.session_id, |id| {
-                            SessionEvent::PermissionResolved {
-                                session_id: id,
-                                request_id: request_id.clone(),
-                                decision: "timeout".into(),
-                                scope: "once".into(),
-                            }
-                        });
-                        self.state =
-                            state::permission_resolved(self.state).unwrap_or(SessionState::Running);
-                        deps.wal.append(
-                            &self.session_id,
-                            "permission.resolved",
-                            &format!(
-                                "{{\"request_id\":\"{request_id}\",\"decision\":\"timeout\"}}"
-                            ),
-                        );
-                        break None;
-                    };
-                    match self.permission_rx.recv_timeout(wait) {
+                    match self.permission_rx.recv_timeout(Duration::from_secs(1)) {
                         Ok(resp)
                             if resp.request_id == request_id
                                 && resp.decision == PermissionDecision::Allow =>
@@ -1741,7 +1711,7 @@ impl SessionRunner {
                     Some(exec_call) => self.execute_allowed(deps, &exec_call),
                     None => ToolOutcome::Rejected {
                         code: 8002,
-                        summary: "用户拒绝或审批超时".into(),
+                        summary: "用户拒绝或会话中断".into(),
                     },
                 }
             }

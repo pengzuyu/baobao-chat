@@ -26,7 +26,6 @@ import type {
 const STREAM_INTERVAL_MS = 80; // 分片节奏（任务约定）
 const READ_FILE_RESULT_DELAY_MS = 3000; // read_file 运行时长
 const RUN_COMMAND_RESULT_DELAY_MS = 2600; // run_command 运行时长
-const PERMISSION_TIMEOUT_MS = 120_000; // 审批 120s 倒计时（D08 §3.4）
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
@@ -77,19 +76,17 @@ class ScriptContext {
   }
 }
 
-/** 审批回应结果（mock 侧收口：用户回应或 120s 超时=拒绝） */
+/** 审批回应结果（mock 侧收口：用户回应；不超时——2026-11-25 拍板） */
 interface PermissionAnswer {
   decision: 'allow' | 'deny';
   scope: GrantScope;
   editedArgs?: Record<string, unknown>;
-  timedOut: boolean;
 }
 
 interface PendingPermission {
   sessionId: string;
   requestId: string;
   resolve: (v: PermissionAnswer) => void;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 /** 澄清回答（D20；null=被中断，剧本协程随之弃置） */
@@ -312,11 +309,10 @@ export class MockAgentBridge implements AgentBridge {
       }
       ctx.inFlightCalls.clear();
     }
-    // 未决审批作废（同 emergencyStop 口径：cancelled 镜像收口，审批卡不再倒计时；
+    // 未决审批作废（同 emergencyStop 口径：cancelled 镜像收口；
     // 脚本协程随 ctx.cancel 弃置，承诺不 resolve）
     for (const [requestId, p] of this.pending) {
       if (p.sessionId !== sessionId) continue;
-      clearTimeout(p.timer);
       this.pending.delete(requestId);
       this.emit({ type: 'permissionResponse', sessionId, requestId, decision: 'cancelled' });
     }
@@ -365,7 +361,6 @@ export class MockAgentBridge implements AgentBridge {
   async emergencyStop(): Promise<void> {
     // 三入口一致语义（INT-AG-12）：杀剧本 + 未决审批/提问作废 + 会话暂停展示
     for (const [requestId, p] of this.pending) {
-      clearTimeout(p.timer);
       this.pending.delete(requestId);
       this.emit({ type: 'permissionResponse', sessionId: p.sessionId, requestId, decision: 'cancelled' });
     }
@@ -389,10 +384,9 @@ export class MockAgentBridge implements AgentBridge {
   ): Promise<void> {
     const p = this.pending.get(requestId);
     if (!p) return;
-    clearTimeout(p.timer);
     this.pending.delete(requestId);
     this.emit({ type: 'permissionResponse', sessionId: p.sessionId, requestId, decision, scope });
-    p.resolve({ decision, scope: scope ?? 'once', editedArgs, timedOut: false });
+    p.resolve({ decision, scope: scope ?? 'once', editedArgs });
   }
 
   /** 澄清回答（D20）：resolve 挂起剧本 + 回执镜像（多端一致） */
@@ -483,25 +477,19 @@ export class MockAgentBridge implements AgentBridge {
     this.emit({ type: 'sessionEnded', sessionId, summary });
   }
 
-  /** 等待审批回应（120s 超时=拒绝，D08 §3.4；取消时抛 ScriptCancelled） */
+  /** 等待审批回应（不超时——2026-11-25 拍板：审批不会发生过期；取消时抛 ScriptCancelled） */
   private awaitPermission(ctx: ScriptContext, sessionId: string, requestId: string): Promise<PermissionAnswer> {
     return new Promise<PermissionAnswer>((resolve, reject) => {
       const entry: PendingPermission = {
         sessionId,
         requestId,
-        timer: setTimeout(() => {
-          this.pending.delete(requestId);
-          this.emit({ type: 'permissionResponse', sessionId, requestId, decision: 'deny' });
-          entry.resolve({ decision: 'deny', scope: 'once', timedOut: true });
-        }, PERMISSION_TIMEOUT_MS),
         resolve: (v) => resolve(v),
       };
       this.pending.set(requestId, entry);
-      // 剧本被取消 → 拒绝挂起的 promise（避免泄漏）；正常回应/超时也会停掉监视
+      // 剧本被取消 → 拒绝挂起的 promise（避免泄漏）；正常回应也会停掉监视
       const watch = setInterval(() => {
         if (ctx.cancelled) {
           clearInterval(watch);
-          clearTimeout(entry.timer);
           this.pending.delete(requestId);
           reject(new ScriptCancelled());
         }
@@ -601,7 +589,6 @@ export class MockAgentBridge implements AgentBridge {
         preview,
         // 高危 → options 不含 permanent（D08 §3.4）
         options: ['once', 'session'],
-        expiresAt: Date.now() + PERMISSION_TIMEOUT_MS,
       });
       this.setStatus(sid, 'waiting_permission', 'gate.confirm');
       const answer = await this.awaitPermission(ctx, sid, requestId);
@@ -651,7 +638,7 @@ export class MockAgentBridge implements AgentBridge {
         this.emit({ type: 'streamDone', sessionId: sid, finishReason: 'stop', usage: { in: 2510, out: 518 } });
         this.setStatus(sid, 'idle', 'finish');
       } else {
-        // ---- 阻止分支（用户拒绝 / 120s 超时=拒绝）----
+        // ---- 阻止分支（用户拒绝）----
         this.setStatus(sid, 'running', 'permission.deny');
         ctx.inFlightCalls.delete(`call-${sid}-r2`);
         this.emit({
@@ -659,7 +646,7 @@ export class MockAgentBridge implements AgentBridge {
           sessionId: sid,
           callId: `call-${sid}-r2`,
           ok: false,
-          summary: answer.timedOut ? '审批超时（120s），按拒绝处理' : '用户拒绝执行，理由已回填给模型',
+          summary: '用户拒绝执行，理由已回填给模型',
           truncated: false,
           blocked: { rule: 'permission.denied', kind: 'permission', code: 8020 },
           durationMs: 0,

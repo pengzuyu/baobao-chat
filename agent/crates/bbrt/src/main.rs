@@ -373,7 +373,6 @@ fn dispatch(
             history_ref,
             title,
             unattended,
-            approval_timeout_secs,
             origin,
             conv_id,
             conv_type,
@@ -432,7 +431,6 @@ fn dispatch(
                     title: title.unwrap_or_else(|| "新会话".into()),
                     restored,
                     unattended,
-                    approval_timeout_secs,
                     scene,
                 },
             ) {
@@ -1235,7 +1233,6 @@ fn revive_session(
             restored: Some(replay),
             // 恢复路径不带 unattended（WAL 未记录该标记；按普通会话恢复）
             unattended: false,
-            approval_timeout_secs: None,
             scene,
         },
     )

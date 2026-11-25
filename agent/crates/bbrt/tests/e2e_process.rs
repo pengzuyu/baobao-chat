@@ -240,7 +240,6 @@ fn e2e_full_runtime_process() {
             history_ref: None,
             title: None,
             unattended: false,
-            approval_timeout_secs: None,
             origin: None,
             conv_id: None,
             conv_type: None,

@@ -298,7 +298,6 @@ fn manager_workspace_of() {
             title: "t".into(),
             restored: None,
             unattended: false,
-            approval_timeout_secs: None,
             scene: Default::default(),
         },
     )

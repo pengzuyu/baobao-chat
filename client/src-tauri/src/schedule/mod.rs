@@ -5,7 +5,8 @@
 //! - `runs.jsonl` 运行历史（每任务保留最近 50 条）
 //! - `calendar-<year>.json` 工作日日历缓存（服务端只读同步）
 //! 到点用现有 `session.start`（unattended=true）+ `user.message` 驱动本地 Runtime；
-//! 权限审批仍走会话内 D33 内嵌卡（没人点就等 `approvalTimeoutSecs`）。
+//! 权限审批仍走会话内门控弹窗（不超时，2026-11-25 拍板：审批不会发生过期；
+//! 原 `approvalTimeoutSecs` 任务窗口已退役，旧 tasks.json 多余字段读时忽略）。
 
 mod calendar;
 mod cron;
@@ -99,8 +100,6 @@ pub struct Task {
     pub model: Option<String>,
     #[serde(default = "default_mode")]
     pub mode: String,
-    #[serde(default = "default_approval")]
-    pub approval_timeout_secs: u64,
     #[serde(default = "default_status")]
     pub status: String, // active | paused | completed | expired
     #[serde(default)]
@@ -116,9 +115,6 @@ fn default_model_policy() -> String {
 }
 fn default_mode() -> String {
     "ask".into()
-}
-fn default_approval() -> u64 {
-    1800
 }
 fn default_status() -> String {
     "active".into()
@@ -166,8 +162,6 @@ pub struct TaskInput {
     pub model: Option<String>,
     #[serde(default)]
     pub mode: String,
-    #[serde(default)]
-    pub approval_timeout_secs: Option<u64>,
 }
 
 // ── 存储 ────────────────────────────────────────────────────────────────────
@@ -349,7 +343,7 @@ impl Store {
 
 // ── 校验与下一次触发 ────────────────────────────────────────────────────────
 
-fn validate_input(input: &TaskInput) -> Result<(String, Option<String>, u64), String> {
+fn validate_input(input: &TaskInput) -> Result<(String, Option<String>), String> {
     let name = input.name.trim();
     if name.is_empty() {
         return Err("任务名称不能为空".into());
@@ -389,11 +383,7 @@ fn validate_input(input: &TaskInput) -> Result<(String, Option<String>, u64), St
             parse_hhmm(time)?;
         }
     }
-    let approval = input.approval_timeout_secs.unwrap_or(1800);
-    if approval != 0 && !(60..=7 * 24 * 3600).contains(&approval) {
-        return Err("审批等待需为 0（不超时）或 60s–7 天".into());
-    }
-    Ok((mode, Some(policy).filter(|p| p != "auto"), approval))
+    Ok((mode, Some(policy).filter(|p| p != "auto")))
 }
 
 fn parse_hhmm(s: &str) -> Result<NaiveTime, String> {
@@ -473,7 +463,7 @@ impl Runtime {
     // ── 任务 CRUD ──
 
     pub fn create(&self, input: TaskInput) -> Result<Task, String> {
-        let (mode, policy, approval) = validate_input(&input)?;
+        let (mode, policy) = validate_input(&input)?;
         let now = now_ms();
         let mut task = Task {
             id: new_id("sct"),
@@ -484,7 +474,6 @@ impl Runtime {
             model_policy: policy.unwrap_or_else(|| "auto".into()),
             model: input.model,
             mode,
-            approval_timeout_secs: approval,
             status: "active".into(),
             next_run_at: None,
             last_run_at: None,
@@ -500,7 +489,7 @@ impl Runtime {
     }
 
     pub fn update(&self, id: &str, input: TaskInput) -> Result<Task, String> {
-        let (mode, policy, approval) = validate_input(&input)?;
+        let (mode, policy) = validate_input(&input)?;
         let mut task = self
             .store
             .get_task(id)
@@ -512,7 +501,6 @@ impl Runtime {
         task.model_policy = policy.unwrap_or_else(|| "auto".into());
         task.model = input.model;
         task.mode = mode;
-        task.approval_timeout_secs = approval;
         task.updated_at = now_ms();
         // 编辑后按当前时间重排下次触发
         task.next_run_at = compute_next(&task, &self.store, now_ms());
@@ -734,7 +722,6 @@ impl Runtime {
             task.model.as_deref(),
             Some(&title),
             true,
-            Some(task.approval_timeout_secs),
             // 定时任务无 IM 来源；workspace 判定场景（空=任务段，非空=项目段）
             None,
             None,
@@ -820,20 +807,10 @@ impl Runtime {
         if sid.is_empty() {
             return;
         }
-        let run_id = match self.sessions.lock().unwrap().get(sid) {
-            Some(v) => v.clone(),
-            None => return,
-        };
-        let Some(run) = self.store.get_run(&run_id) else {
+        if self.sessions.lock().unwrap().get(sid).is_none() {
             return;
-        };
-        let secs = self
-            .store
-            .get_task(&run.task_id)
-            .map(|t| t.approval_timeout_secs)
-            .unwrap_or(1800);
+        }
         if let Some(obj) = payload.as_object_mut() {
-            obj.insert("approval_timeout_secs".into(), json!(secs));
             obj.insert("unattended".into(), json!(true));
         }
     }
@@ -1189,7 +1166,6 @@ mod tests {
             model_policy: "auto".into(),
             model: None,
             mode: "ask".into(),
-            approval_timeout_secs: 1800,
             status: "active".into(),
             next_run_at: None,
             last_run_at: None,

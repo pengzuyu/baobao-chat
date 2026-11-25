@@ -44,9 +44,6 @@ pub struct SessionCache {
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
-    /// D35 定时任务：审批等待秒数（None=普通会话 120s；Some(0)=不超时）。
-    /// 前端据此设置审批卡倒计时（否则定时任务 30 分钟窗口会被 120s 误判超时）。
-    pub approval_timeout_secs: Option<u64>,
 }
 
 impl SessionCache {
@@ -56,7 +53,6 @@ impl SessionCache {
             "mode": self.mode, "model_policy": self.model_policy,
             "model_override": self.model_override, "status": self.status,
             "created_at": self.created_at, "updated_at": self.updated_at,
-            "approval_timeout_secs": self.approval_timeout_secs,
         })
     }
 }
@@ -837,7 +833,6 @@ impl AgentHost {
         model: Option<&str>,
         title: Option<&str>,
         unattended: bool,
-        approval_timeout_secs: Option<u64>,
         origin: Option<&str>,
         conv_id: Option<&str>,
         conv_type: Option<&str>,
@@ -873,15 +868,13 @@ impl AgentHost {
             status: "starting".into(),
             created_at: now,
             updated_at: now,
-            approval_timeout_secs,
         });
         let payload = json!({
             "sessionId": sid, "workspace": workspace_norm, "mode": mode,
             "modelPolicy": model_policy, "model": model, "skills": [],
             "title": title,
-            // D35 定时任务：无人值守 + 审批等待窗口（普通会话 false/缺省）
+            // D35 定时任务：无人值守（审批等待已改全链不超时，2026-11-25 拍板）
             "unattended": unattended,
-            "approvalTimeoutSecs": approval_timeout_secs,
             // 场景来源（2026-11-23）：embedded=IM 唤起（conv_id/conv_type 常驻
             // 场景段）；任务/项目缺省（workspace 判定）
             "origin": origin,
@@ -1463,7 +1456,6 @@ mod tests {
                 status: "starting".into(),
                 created_at: 0,
                 updated_at: 0,
-                approval_timeout_secs: None,
             }]),
             token: Mutex::new(None),
             // 并发防重入锁（ensure_running 双检查用；测试不经并发路径，空锁即可）
