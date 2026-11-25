@@ -91,8 +91,9 @@ func (m *PluginMemory) ListPlugins(_ context.Context, tenantID int64, status str
 	return out, nil
 }
 
-// UpdatePluginMeta 元数据（空串/越界 policy 不覆盖）
-func (m *PluginMemory) UpdatePluginMeta(_ context.Context, tenantID, id int64, name, description, category string, policy int) error {
+// UpdatePluginMeta 元数据（空串/越界 policy 不覆盖；readme 同语义——管理面不
+// 改 readme，service 传空即不动）
+func (m *PluginMemory) UpdatePluginMeta(_ context.Context, tenantID, id int64, name, description, category string, policy int, readme string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, ok := m.plugins[id]
@@ -110,6 +111,9 @@ func (m *PluginMemory) UpdatePluginMeta(_ context.Context, tenantID, id int64, n
 	}
 	if policy >= 1 && policy <= 3 {
 		p.Policy = policy
+	}
+	if readme != "" {
+		p.Readme = readme
 	}
 	p.UpdatedAt = time.Now()
 	return nil
@@ -256,6 +260,30 @@ func (m *PluginMemory) DeletePluginInstall(_ context.Context, tenantID, pkgID, u
 	return nil
 }
 
+// CountPluginInstalls 装机数聚合（D39）
+func (m *PluginMemory) CountPluginInstalls(_ context.Context, tenantID int64) (map[int64]int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[int64]int64{}
+	for _, i := range m.insts {
+		if i.TenantID == tenantID {
+			out[i.PkgID]++
+		}
+	}
+	return out, nil
+}
+
+// GetPluginReadme 说明单查（D39：读列不含，专路径）
+func (m *PluginMemory) GetPluginReadme(_ context.Context, tenantID, id int64) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.plugins[id]
+	if !ok || p.TenantID != tenantID {
+		return "", ErrPluginNotFound
+	}
+	return p.Readme, nil
+}
+
 // ── PG（lock 9138/9139）──
 
 // PluginPostgres 插件 PG 仓储
@@ -300,10 +328,10 @@ func (p *PluginPostgres) InsertPlugin(ctx context.Context, v Plugin) (Plugin, er
 		}
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO eco_plugin (id, tenant_id, plugin_id, name, description, category, policy, status, current_version, manifest, owner_user_id, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,'draft','','',$8,$9)
+		INSERT INTO eco_plugin (id, tenant_id, plugin_id, name, description, category, policy, status, current_version, manifest, readme, owner_user_id, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,'draft','','',$8,$9,$10)
 		RETURNING created_at, updated_at`,
-		v.ID, v.TenantID, v.PluginID, v.Name, v.Description, v.Category, v.Policy, v.OwnerUserID, v.CreatedBy).
+		v.ID, v.TenantID, v.PluginID, v.Name, v.Description, v.Category, v.Policy, v.Readme, v.OwnerUserID, v.CreatedBy).
 		Scan(&v.CreatedAt, &v.UpdatedAt)
 	if err != nil {
 		if isAppDup(err) {
@@ -365,16 +393,17 @@ func (p *PluginPostgres) ListPluginsByOwner(ctx context.Context, tenantID, userI
 	return out, rows.Err()
 }
 
-// UpdatePluginMeta 元数据
-func (p *PluginPostgres) UpdatePluginMeta(ctx context.Context, tenantID, id int64, name, description, category string, policy int) error {
+// UpdatePluginMeta 元数据（空串不覆盖；readme 同语义——管理面传空即不动）
+func (p *PluginPostgres) UpdatePluginMeta(ctx context.Context, tenantID, id int64, name, description, category string, policy int, readme string) error {
 	tag, err := p.pool.Exec(ctx, `
 		UPDATE eco_plugin SET
 			name=COALESCE(NULLIF($3,''), name),
 			description=COALESCE(NULLIF($4,''), description),
 			category=COALESCE(NULLIF($5,''), category),
 			policy=CASE WHEN $6 BETWEEN 1 AND 3 THEN $6 ELSE policy END,
+			readme=COALESCE(NULLIF($7,''), readme),
 			updated_at=now()
-		WHERE tenant_id=$1 AND id=$2`, tenantID, id, name, description, category, policy)
+		WHERE tenant_id=$1 AND id=$2`, tenantID, id, name, description, category, policy, readme)
 	if err != nil {
 		return err
 	}
@@ -382,6 +411,21 @@ func (p *PluginPostgres) UpdatePluginMeta(ctx context.Context, tenantID, id int6
 		return ErrPluginNotFound
 	}
 	return nil
+}
+
+// GetPluginReadme 说明单查（D39：pluginCols 读列不含，detail 专路径）
+func (p *PluginPostgres) GetPluginReadme(ctx context.Context, tenantID, id int64) (string, error) {
+	var readme string
+	err := p.pool.QueryRow(ctx,
+		`SELECT COALESCE(readme,'') FROM eco_plugin WHERE tenant_id=$1 AND id=$2`, tenantID, id).
+		Scan(&readme)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", ErrPluginNotFound
+		}
+		return "", err
+	}
+	return readme, nil
 }
 
 // SetPluginStatus 状态
@@ -534,4 +578,24 @@ func (p *PluginPostgres) DeletePluginInstall(ctx context.Context, tenantID, pkgI
 	_, err := p.pool.Exec(ctx, `DELETE FROM eco_plugin_install WHERE tenant_id=$1 AND pkg_id=$2 AND user_id=$3`,
 		tenantID, pkgID, userID)
 	return err
+}
+
+// CountPluginInstalls 装机数聚合（D39：当前装机口径，GROUP BY 一次拉全量）
+func (p *PluginPostgres) CountPluginInstalls(ctx context.Context, tenantID int64) (map[int64]int64, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT pkg_id, COUNT(*) FROM eco_plugin_install
+		WHERE tenant_id=$1 GROUP BY pkg_id`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]int64{}
+	for rows.Next() {
+		var pkgID, n int64
+		if err := rows.Scan(&pkgID, &n); err != nil {
+			return nil, err
+		}
+		out[pkgID] = n
+	}
+	return out, rows.Err()
 }

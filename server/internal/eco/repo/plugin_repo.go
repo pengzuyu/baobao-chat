@@ -27,11 +27,15 @@ type Plugin struct {
 	Status         string
 	CurrentVersion string
 	Manifest       string
+	// Readme 插件说明（D39：插件级元数据随最新上传对齐）。仅写路径使用
+	// （InsertPlugin/UpdatePluginMeta 带入）；pluginCols 读列不含——读路径
+	// 恒空，detail 走 GetPluginReadme 单查（列表不背长文）。
+	Readme string
 	/// 0=公共（管理员发布）；>0=个人插件归属（0037/方案 A：draft 仅 owner 可见可装）
-	OwnerUserID    int64
-	CreatedBy      int64
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	OwnerUserID int64
+	CreatedBy   int64
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // PluginVersion eco_plugin_version 行（Package 仅在写入与专路径读取时携带）
@@ -66,10 +70,12 @@ type PluginRepo interface {
 	ListPlugins(ctx context.Context, tenantID int64, status string) ([]Plugin, error)
 	// ListPluginsByOwner 个人插件全集（方案 A：owner 的 draft+published；管理端审计）
 	ListPluginsByOwner(ctx context.Context, tenantID, userID int64) ([]Plugin, error)
-	UpdatePluginMeta(ctx context.Context, tenantID, id int64, name, description, category string, policy int) error
+	UpdatePluginMeta(ctx context.Context, tenantID, id int64, name, description, category string, policy int, readme string) error
 	SetPluginStatus(ctx context.Context, tenantID, id int64, status string) error
 	// SetPluginCurrent publish 切当前版（manifest=该版快照）
 	SetPluginCurrent(ctx context.Context, tenantID, id int64, version, manifest string) error
+	// GetPluginReadme 说明专路径（D39：pluginCols 读列不含 readme，detail 单查）
+	GetPluginReadme(ctx context.Context, tenantID, id int64) (string, error)
 
 	InsertVersion(ctx context.Context, v PluginVersion) (PluginVersion, error) // (pkg,version) 冲突→ErrPluginVersionDup
 	GetVersion(ctx context.Context, tenantID, pkgID int64, version string) (*PluginVersion, error)
@@ -81,4 +87,7 @@ type PluginRepo interface {
 	UpsertPluginInstall(ctx context.Context, i PluginInstall) error
 	ListPluginInstallsByUser(ctx context.Context, tenantID, userID int64) ([]PluginInstall, error)
 	DeletePluginInstall(ctx context.Context, tenantID, pkgID, userID int64) error
+	// CountPluginInstalls 装机数聚合（D39：当前装机口径——每用户一行天然去重、
+	// 卸载即减；pkg_id→人数，tenant 内全量一次拉、内存拼装）
+	CountPluginInstalls(ctx context.Context, tenantID int64) (map[int64]int64, error)
 }

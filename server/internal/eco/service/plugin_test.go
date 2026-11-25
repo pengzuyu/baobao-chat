@@ -39,10 +39,10 @@ func fullPlugin(manifestDir string) map[string]string {
 		"bbc":{"risk":"medium","category":"devops","netAllow":["*.company.internal"],
 			"config":[{"key":"gitlab_token","label":"GitLab Token","type":"secret","required":true}]}}`
 	return map[string]string{
-		manifestDir + "/plugin.json":  manifest,
-		"skills/deploy/SKILL.md":      "---\nname: deploy\ndescription: 发版流程\n---\n正文",
-		"commands/release.md":         "---\nname: release\n---\n发布清单：$ARGUMENTS",
-		"agents/release-verify.md":    "---\nname: release-verify\ndescription: 验收\n---",
+		manifestDir + "/plugin.json": manifest,
+		"skills/deploy/SKILL.md":     "---\nname: deploy\ndescription: 发版流程\n---\n正文",
+		"commands/release.md":        "---\nname: release\n---\n发布清单：$ARGUMENTS",
+		"agents/release-verify.md":   "---\nname: release-verify\ndescription: 验收\n---",
 		".mcp.json": `{"mcpServers":{
 			"deploy":{"command":"node","args":["${PLUGIN_ROOT}/server.js"],"env":{"BBC_USER_ID":"${BBC_USER_ID}"}},
 			"bbc-kb":{"url":"https://bbc.company.internal/mcp/kb","headers":{"Authorization":"Bearer ${BBC_USER_TOKEN}"}}}}`,
@@ -51,10 +51,11 @@ func fullPlugin(manifestDir string) map[string]string {
 }
 
 func TestValidatePluginPackage_Full(t *testing.T) {
-	m, files, err := validatePluginPackage(zipOf(t, fullPlugin(".bbc-plugin")))
+	vr, err := validatePluginPackage(zipOf(t, fullPlugin(".bbc-plugin")))
 	if err != nil {
 		t.Fatalf("合法包被拒: %v", err)
 	}
+	m := vr.Manifest
 	if m.Name != "deploy-helper" || m.Version != "1.2.0" {
 		t.Fatalf("快照元数据错: %+v", m)
 	}
@@ -70,14 +71,14 @@ func TestValidatePluginPackage_Full(t *testing.T) {
 	if m.Category != "devops" || m.Risk != "medium" || len(m.NetAllow) != 1 {
 		t.Fatalf("bbc 扩展块错: %+v", m)
 	}
-	if len(files) != 5 { // SKILL.md + release.md + agent.md + .mcp.json + plugin.json? 组件文件应含清单外四件
-		t.Logf("组件文件清单: %v", files)
+	if len(vr.ComponentFiles) != 5 { // SKILL.md + release.md + agent.md + .mcp.json + plugin.json? 组件文件应含清单外四件
+		t.Logf("组件文件清单: %v", vr.ComponentFiles)
 	}
 }
 
 func TestValidatePluginPackage_ManifestDirFallback(t *testing.T) {
 	for _, dir := range []string{".claude-plugin", ".zcode-plugin"} {
-		if _, _, err := validatePluginPackage(zipOf(t, fullPlugin(dir))); err != nil {
+		if _, err := validatePluginPackage(zipOf(t, fullPlugin(dir))); err != nil {
 			t.Fatalf("清单目录 %s 应被识别: %v", dir, err)
 		}
 	}
@@ -89,10 +90,10 @@ func TestValidatePluginPackage_TopLevelDir(t *testing.T) {
 	for k, v := range src {
 		wrapped["deploy-helper/"+k] = v
 	}
-	if m, _, err := validatePluginPackage(zipOf(t, wrapped)); err != nil {
+	if vr, err := validatePluginPackage(zipOf(t, wrapped)); err != nil {
 		t.Fatalf("顶层单目录形态应被识别: %v", err)
-	} else if m.Components.Skills != 1 {
-		t.Fatalf("顶层目录下组件统计错: %+v", m.Components)
+	} else if vr.Manifest.Components.Skills != 1 {
+		t.Fatalf("顶层目录下组件统计错: %+v", vr.Manifest.Components)
 	}
 }
 
@@ -171,7 +172,7 @@ func TestValidatePluginPackage_Rejects(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, _, err := validatePluginPackage(zipOf(t, c.pkg))
+			_, err := validatePluginPackage(zipOf(t, c.pkg))
 			if err == nil {
 				t.Fatalf("应被拒绝")
 			}
@@ -193,7 +194,7 @@ func TestValidatePluginPackage_ZipSlip(t *testing.T) {
 	w3, _ := zw.Create("skills/SKILL.md")
 	_, _ = w3.Write([]byte("s"))
 	_ = zw.Close()
-	if _, _, err := validatePluginPackage(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "zip slip") {
+	if _, err := validatePluginPackage(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "zip slip") {
 		t.Fatalf("zip slip 应被拒: %v", err)
 	}
 }
@@ -203,10 +204,11 @@ func TestValidatePluginPackage_InlineMcp(t *testing.T) {
 		".claude-plugin/plugin.json": `{"name":"inline-mcp","version":"0.1.0","description":"内联",
 			"mcpServers":{"api":{"url":"https://x.internal/mcp"}}}`,
 	}
-	m, _, err := validatePluginPackage(zipOf(t, pkg))
+	vr, err := validatePluginPackage(zipOf(t, pkg))
 	if err != nil {
 		t.Fatalf("内联 mcpServers 应支持: %v", err)
 	}
+	m := vr.Manifest
 	if m.Components.McpServers != 1 {
 		t.Fatalf("内联 server 计数错: %+v", m.Components)
 	}
@@ -222,16 +224,90 @@ func TestValidatePluginPackage_XBbcAuth(t *testing.T) {
 			"mcpServers":{"oa":{"url":"https://oa.company.internal/mcp","x-bbc-auth":{"type":"obo","scope":["oa:read"]}},
 			"ro":{"url":"https://hr.company.internal/mcp","x-bbc-auth":{"type":"obo"}}}}`,
 	}
-	m, _, err := validatePluginPackage(zipOf(t, pkg))
+	vr, err := validatePluginPackage(zipOf(t, pkg))
 	if err != nil {
 		t.Fatalf("x-bbc-auth 合法声明应通过: %v", err)
 	}
+	m := vr.Manifest
 	if !m.UsesIdentity {
 		t.Fatal("x-bbc-auth 应标 usesIdentity")
 	}
 	if len(m.AuthAudiences) != 2 || m.AuthAudiences[0] != "https://oa.company.internal/mcp" ||
 		m.AuthAudiences[1] != "https://hr.company.internal/mcp" {
 		t.Fatalf("受众收集错: %v", m.AuthAudiences)
+	}
+}
+
+// D39 §3.2：README 提取——双位置/根优先/CRLF 归一/空白=无/超限拒/单目录形态
+func TestValidatePluginPackage_Readme(t *testing.T) {
+	base := fullPlugin(".bbc-plugin")
+	readmeBody := "# deploy-helper\n\n发布流程：`bbc release`。\n"
+
+	withReadme := func(pos string, body string) map[string]string {
+		m := map[string]string{}
+		for k, v := range base {
+			m[k] = v
+		}
+		m[pos] = body
+		return m
+	}
+
+	// 根位置
+	vr, err := validatePluginPackage(zipOf(t, withReadme("README.md", readmeBody)))
+	if err != nil {
+		t.Fatalf("根 README 应识别: %v", err)
+	}
+	if vr.Readme != "# deploy-helper\n\n发布流程：`bbc release`。\n" {
+		t.Fatalf("根 README 内容错: %q", vr.Readme)
+	}
+	// 清单目录内（次选，三目录名命中者）
+	vr2, err := validatePluginPackage(zipOf(t, withReadme(".bbc-plugin/README.md", "inner")))
+	if err != nil || vr2.Readme != "inner" {
+		t.Fatalf("清单目录内 README 应识别: %v %q", err, vr2.Readme)
+	}
+	// .claude-plugin 命中时次选位置跟随命中目录
+	claude := fullPlugin(".claude-plugin")
+	claude[".claude-plugin/README.md"] = "claude-inner"
+	vr3, err := validatePluginPackage(zipOf(t, claude))
+	if err != nil || vr3.Readme != "claude-inner" {
+		t.Fatalf("命中目录跟随错: %v %q", err, vr3.Readme)
+	}
+	// 两处并存根优先
+	bothFiles := withReadme(".bbc-plugin/README.md", "inner")
+	bothFiles["README.md"] = "root-wins"
+	vr4, err := validatePluginPackage(zipOf(t, bothFiles))
+	if err != nil || vr4.Readme != "root-wins" {
+		t.Fatalf("两处并存应根优先: %v %q", err, vr4.Readme)
+	}
+	// CRLF 归一
+	vr5, err := validatePluginPackage(zipOf(t, withReadme("README.md", "a\r\nb\r\n")))
+	if err != nil || vr5.Readme != "a\nb\n" {
+		t.Fatalf("CRLF 应归一: %v %q", err, vr5.Readme)
+	}
+	// 空白=无
+	vr6, err := validatePluginPackage(zipOf(t, withReadme("README.md", " \n\t ")))
+	if err != nil || vr6.Readme != "" {
+		t.Fatalf("空白 README 应视为无: %v %q", err, vr6.Readme)
+	}
+	// 无 README（存量插件向后兼容）
+	vr7, err := validatePluginPackage(zipOf(t, base))
+	if err != nil || vr7.Readme != "" {
+		t.Fatalf("无 README 应为空: %v %q", err, vr7.Readme)
+	}
+	// 顶层单目录形态：根 README 在 <base>/README.md
+	wrapped := map[string]string{}
+	for k, v := range withReadme("README.md", readmeBody) {
+		wrapped["deploy-helper/"+k] = v
+	}
+	vr8, err := validatePluginPackage(zipOf(t, wrapped))
+	if err != nil || vr8.Readme == "" {
+		t.Fatalf("单目录形态根 README 应识别: %v", err)
+	}
+	// >64KB 拒
+	big := strings.Repeat("x", 64<<10+1)
+	if _, err := validatePluginPackage(zipOf(t, withReadme("README.md", big))); err == nil ||
+		!strings.Contains(err.Error(), "README.md 超限") {
+		t.Fatalf("超限应拒: %v", err)
 	}
 }
 
@@ -396,10 +472,11 @@ func TestPluginDelistAndDupVersion(t *testing.T) {
 
 // manifest 快照 JSON 可序列化（存表列；DTO 展开还原）
 func TestPluginManifestJSONRoundtrip(t *testing.T) {
-	m, _, err := validatePluginPackage(zipOf(t, fullPlugin(".bbc-plugin")))
+	vr, err := validatePluginPackage(zipOf(t, fullPlugin(".bbc-plugin")))
 	if err != nil {
 		t.Fatal(err)
 	}
+	m := vr.Manifest
 	b, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
@@ -459,5 +536,98 @@ func TestPluginPersonalSandbox(t *testing.T) {
 	// owner 视角不重复（两源去重）
 	if l7b, _ := svc.PluginCatalog(ctx, 1, 7, "", "", ""); len(l7b) != 1 {
 		t.Fatalf("owner 两源去重失败: %d", len(l7b))
+	}
+}
+
+// D39：README 随最新上传对齐 + 装机数口径（当前装机：去重/卸载即减/重装不涨）
+// + 管理面元数据更新不清 readme + 追加无 README 版本保留旧说明
+func TestPluginReadmeAndInstalls(t *testing.T) {
+	svc := newPluginSvc(t)
+	ctx := context.Background()
+
+	// 带 README 上传 → 发布
+	files := fullPlugin(".bbc-plugin")
+	files["README.md"] = "# 说明 v1\n首版文档\n"
+	if _, err := svc.UploadPlugin(ctx, 1, 9, zipOf(t, files), "", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = svc.PublishPluginVersion(ctx, 1, "deploy-helper", "1.2.0")
+
+	// detail 带 readme；catalog 列表不带（决策 4：列表不背长文）
+	e, _, err := svc.PluginDetail(ctx, 1, 7, "deploy-helper")
+	if err != nil || e.Readme != "# 说明 v1\n首版文档\n" {
+		t.Fatalf("detail readme 错: %v %q", err, e.Readme)
+	}
+	l, _ := svc.PluginCatalog(ctx, 1, 7, "", "", "")
+	if l[0].Readme != "" {
+		t.Fatalf("catalog 列表不应带 readme: %q", l[0].Readme)
+	}
+	if l[0].Installs != 0 || l[0].UpdatedAt == 0 {
+		t.Fatalf("装机数/更新时间初始态错: %+v", l[0].PluginDTO)
+	}
+
+	// 装机数：装→1、他装→2、重装（同人不涨）→2、卸→1
+	_, _ = svc.InstallPlugin(ctx, 1, 7, "deploy-helper", "")
+	_, _ = svc.InstallPlugin(ctx, 1, 8, "deploy-helper", "")
+	e2, _, _ := svc.PluginDetail(ctx, 1, 7, "deploy-helper")
+	if e2.Installs != 2 {
+		t.Fatalf("双人安装应为 2: %d", e2.Installs)
+	}
+	_, _ = svc.InstallPlugin(ctx, 1, 7, "deploy-helper", "")
+	e3, _, _ := svc.PluginDetail(ctx, 1, 7, "deploy-helper")
+	if e3.Installs != 2 {
+		t.Fatalf("同人重装不应涨: %d", e3.Installs)
+	}
+	_ = svc.UninstallPlugin(ctx, 1, 8, "deploy-helper")
+	e4, _, _ := svc.PluginDetail(ctx, 1, 7, "deploy-helper")
+	if e4.Installs != 1 {
+		t.Fatalf("卸载即减应为 1: %d", e4.Installs)
+	}
+	// mine 同样带装机数
+	mine, _ := svc.MyPlugins(ctx, 1, 7)
+	if len(mine) != 1 || mine[0].Installs != 1 {
+		t.Fatalf("mine 装机数错: %+v", mine)
+	}
+
+	// 管理面元数据更新（无 readme 字段）不清 readme
+	if err := svc.UpdatePluginMeta(ctx, 1, "deploy-helper", PluginMetaReq{
+		Name: "deploy-helper", Description: "新描述", Category: "devops", Policy: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e5, _, _ := svc.PluginDetail(ctx, 1, 7, "deploy-helper")
+	if e5.Readme == "" || e5.Description != "新描述" {
+		t.Fatalf("管理面更新不应清 readme: %q %q", e5.Readme, e5.Description)
+	}
+
+	// 追加无 README 版本（空不覆盖语义：readme 保留）
+	files2 := fullPlugin(".bbc-plugin")
+	files2[".bbc-plugin/plugin.json"] = strings.Replace(
+		files2[".bbc-plugin/plugin.json"], "1.2.0", "1.3.0", 1)
+	if _, err := svc.UploadPlugin(ctx, 1, 9, zipOf(t, files2), "v2", 0); err != nil {
+		t.Fatal(err)
+	}
+	e6, _, _ := svc.PluginDetail(ctx, 1, 7, "deploy-helper")
+	if e6.Readme != "# 说明 v1\n首版文档\n" {
+		t.Fatalf("无 README 版本追加应保留旧说明: %q", e6.Readme)
+	}
+
+	// 追加带新 README 版本 → 对齐最新
+	files3 := fullPlugin(".bbc-plugin")
+	files3[".bbc-plugin/plugin.json"] = strings.Replace(
+		files3[".bbc-plugin/plugin.json"], "1.2.0", "1.4.0", 1)
+	files3["README.md"] = "# 说明 v2\n"
+	if _, err := svc.UploadPlugin(ctx, 1, 9, zipOf(t, files3), "v3", 0); err != nil {
+		t.Fatal(err)
+	}
+	e7, _, _ := svc.PluginDetail(ctx, 1, 7, "deploy-helper")
+	if e7.Readme != "# 说明 v2\n" {
+		t.Fatalf("新 README 应对齐: %q", e7.Readme)
+	}
+
+	// 管理面列表带装机数
+	admin, _ := svc.ListPluginsAdmin(ctx, 1)
+	if len(admin) != 1 || admin[0].Installs != 1 {
+		t.Fatalf("admin 装机数错: %+v", admin)
 	}
 }

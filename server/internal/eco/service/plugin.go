@@ -29,9 +29,16 @@ type PluginDTO struct {
 	Status         string          `json:"status"`
 	CurrentVersion string          `json:"current_version"`
 	Manifest       *PluginManifest `json:"manifest,omitempty"`
+	// Readme 说明全文（D39：仅 detail 口填充——列表不背长文，repo 单查）
+	Readme string `json:"readme,omitempty"`
+	// Installs 当前装机人数（D39：每用户一行天然去重、卸载即减；个人插件照填，
+	// 前端按 owner 隐藏）
+	Installs int `json:"installs"`
+	// UpdatedAt 最近更新（列已有纯透出，市场「最近更新」）
+	UpdatedAt int64 `json:"updated_at"`
 	// >0=个人插件归属（方案 A：仅 owner 与管理员可见；0=公共）
-	OwnerUserID    int64           `json:"owner_user_id,omitempty"`
-	CreatedAt      int64           `json:"created_at"`
+	OwnerUserID int64 `json:"owner_user_id,omitempty"`
+	CreatedAt   int64 `json:"created_at"`
 }
 
 // PluginCatalogEntry 用户 catalog 条目（含安装态）
@@ -67,7 +74,7 @@ func (s *Service) plugins() (ecorepo.PluginRepo, error) {
 }
 
 // UploadPlugin 管理面：上传 zip → 校验 → 公共插件入库（owner=0）+ 版本行
-//（已存在则追加版本；name/description/category 以清单快照为准覆盖元数据）
+// （已存在则追加版本；name/description/category 以清单快照为准覆盖元数据）
 func (s *Service) UploadPlugin(ctx context.Context, tenantID, userID int64, pkg []byte, notes string, policy int) (*PluginDTO, error) {
 	return s.uploadPluginAs(ctx, tenantID, userID, pkg, notes, policy, 0)
 }
@@ -85,10 +92,11 @@ func (s *Service) uploadPluginAs(ctx context.Context, tenantID, userID int64, pk
 	if err != nil {
 		return nil, err
 	}
-	m, _, err := validatePluginPackage(pkg)
+	vr, err := validatePluginPackage(pkg)
 	if err != nil {
 		return nil, err
 	}
+	m := vr.Manifest
 	if policy < PluginPolicyForce || policy > PluginPolicyOptional {
 		policy = PluginPolicyOptional
 	}
@@ -105,7 +113,7 @@ func (s *Service) uploadPluginAs(ctx context.Context, tenantID, userID int64, pk
 		created, cerr := repo.InsertPlugin(ctx, ecorepo.Plugin{
 			TenantID: tenantID, PluginID: m.Name, Name: m.Name,
 			Description: m.Description, Category: m.Category, Policy: policy,
-			OwnerUserID: owner, CreatedBy: userID,
+			Readme: vr.Readme, OwnerUserID: owner, CreatedBy: userID,
 		})
 		if cerr != nil {
 			return nil, errx.From(cerr)
@@ -116,8 +124,8 @@ func (s *Service) uploadPluginAs(ctx context.Context, tenantID, userID int64, pk
 	} else if owner != 0 && existing.OwnerUserID != owner {
 		return nil, errx.New(errx.CodePermACLDenied, "plugin_id 已被占用（个人插件不可覆盖他人）")
 	} else {
-		// 元数据随最新上传对齐（清单为准）
-		if uerr := repo.UpdatePluginMeta(ctx, tenantID, existing.ID, m.Name, m.Description, m.Category, 0); uerr != nil {
+		// 元数据随最新上传对齐（清单+README 为准）
+		if uerr := repo.UpdatePluginMeta(ctx, tenantID, existing.ID, m.Name, m.Description, m.Category, 0, vr.Readme); uerr != nil {
 			return nil, errx.From(uerr)
 		}
 	}
@@ -168,7 +176,7 @@ type PluginMetaReq struct {
 	Policy      int    `json:"policy"`
 }
 
-// UpdatePluginMeta 管理面：policy/category 等元数据
+// UpdatePluginMeta 管理面：policy/category 等元数据（readme 随包走——传空不动）
 func (s *Service) UpdatePluginMeta(ctx context.Context, tenantID int64, pluginID string, req PluginMetaReq) error {
 	repo, err := s.plugins()
 	if err != nil {
@@ -178,7 +186,7 @@ func (s *Service) UpdatePluginMeta(ctx context.Context, tenantID int64, pluginID
 	if err != nil {
 		return errx.New(errx.CodeNotFound, "插件不存在")
 	}
-	return wrapErr(repo.UpdatePluginMeta(ctx, tenantID, p.ID, req.Name, req.Description, req.Category, req.Policy))
+	return wrapErr(repo.UpdatePluginMeta(ctx, tenantID, p.ID, req.Name, req.Description, req.Category, req.Policy, ""))
 }
 
 // DelistPlugin 管理面：下架
@@ -194,7 +202,7 @@ func (s *Service) DelistPlugin(ctx context.Context, tenantID int64, pluginID str
 	return wrapErr(repo.SetPluginStatus(ctx, tenantID, p.ID, "delisted"))
 }
 
-// ListPluginsAdmin 管理面全量
+// ListPluginsAdmin 管理面全量（D39：含装机数——治理视角哪些插件没人用）
 func (s *Service) ListPluginsAdmin(ctx context.Context, tenantID int64) ([]PluginDTO, error) {
 	repo, err := s.plugins()
 	if err != nil {
@@ -204,9 +212,15 @@ func (s *Service) ListPluginsAdmin(ctx context.Context, tenantID int64) ([]Plugi
 	if err != nil {
 		return nil, errx.From(err)
 	}
+	insts, err := repo.CountPluginInstalls(ctx, tenantID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
 	out := make([]PluginDTO, 0, len(list))
 	for _, p := range list {
-		out = append(out, toPluginDTO(p))
+		dto := toPluginDTO(p)
+		dto.Installs = int(insts[p.ID])
+		out = append(out, dto)
 	}
 	return out, nil
 }
@@ -265,6 +279,11 @@ func (s *Service) PluginCatalog(ctx context.Context, tenantID, userID int64, q, 
 	for _, i := range insts {
 		instOf[i.PkgID] = i
 	}
+	// D39：装机数聚合（个人插件照填，前端按 owner 隐藏）
+	counts, err := repo.CountPluginInstalls(ctx, tenantID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
 	q = strings.ToLower(strings.TrimSpace(q))
 	seen := map[int64]bool{}
 	all := append(pub, mine...)
@@ -275,6 +294,7 @@ func (s *Service) PluginCatalog(ctx context.Context, tenantID, userID int64, q, 
 		}
 		seen[p.ID] = true
 		dto := toPluginDTO(p)
+		dto.Installs = int(counts[p.ID])
 		if q != "" && !strings.Contains(strings.ToLower(p.Name+p.Description+p.PluginID), q) {
 			continue
 		}
@@ -302,7 +322,7 @@ func (s *Service) PluginCatalog(ctx context.Context, tenantID, userID int64, q, 
 	return out, nil
 }
 
-// PluginDetail 用户详情（清单/组件/权限声明/版本线/安装态）
+// PluginDetail 用户详情（清单/组件/权限声明/版本线/安装态/readme/装机数）
 func (s *Service) PluginDetail(ctx context.Context, tenantID, userID int64, pluginID string) (*PluginCatalogEntry, []PluginVersionDTO, error) {
 	repo, err := s.plugins()
 	if err != nil {
@@ -319,6 +339,13 @@ func (s *Service) PluginDetail(ctx context.Context, tenantID, userID int64, plug
 			e.Installed, e.Version = true, i.Version
 			e.HasUpdate = i.Version != p.CurrentVersion
 		}
+	}
+	// D39：readme 单查（仅 detail 口——列表不背长文）+ 装机数
+	if readme, rerr := repo.GetPluginReadme(ctx, tenantID, p.ID); rerr == nil {
+		e.Readme = readme
+	}
+	if counts, cerr := repo.CountPluginInstalls(ctx, tenantID); cerr == nil {
+		e.Installs = int(counts[p.ID])
 	}
 	vers, err := repo.ListVersions(ctx, tenantID, p.ID)
 	if err != nil {
@@ -423,6 +450,10 @@ func (s *Service) MyPlugins(ctx context.Context, tenantID, userID int64) ([]Plug
 	if err != nil {
 		return nil, errx.From(err)
 	}
+	counts, err := repo.CountPluginInstalls(ctx, tenantID)
+	if err != nil {
+		return nil, errx.From(err)
+	}
 	pOf := map[int64]ecorepo.Plugin{}
 	for _, p := range all {
 		pOf[p.ID] = p
@@ -433,8 +464,10 @@ func (s *Service) MyPlugins(ctx context.Context, tenantID, userID int64) ([]Plug
 		if !ok {
 			continue
 		}
+		dto := toPluginDTO(p)
+		dto.Installs = int(counts[p.ID])
 		out = append(out, PluginCatalogEntry{
-			PluginDTO: toPluginDTO(p), Installed: true, Version: i.Version,
+			PluginDTO: dto, Installed: true, Version: i.Version,
 			HasUpdate: p.Status == "published" && i.Version != p.CurrentVersion,
 		})
 	}
@@ -454,7 +487,8 @@ func toPluginDTO(p ecorepo.Plugin) PluginDTO {
 	dto := PluginDTO{
 		ID: i64s(p.ID), PluginID: p.PluginID, Name: p.Name, Description: p.Description,
 		Category: p.Category, Policy: p.Policy, Status: p.Status,
-		CurrentVersion: p.CurrentVersion, OwnerUserID: p.OwnerUserID, CreatedAt: p.CreatedAt.UnixMilli(),
+		CurrentVersion: p.CurrentVersion, OwnerUserID: p.OwnerUserID,
+		CreatedAt: p.CreatedAt.UnixMilli(), UpdatedAt: p.UpdatedAt.UnixMilli(),
 	}
 	if p.Manifest != "" {
 		var m PluginManifest

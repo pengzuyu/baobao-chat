@@ -51,6 +51,7 @@
 | D37 | [项目进度台账设计](D37-项目进度台账设计.md) | D15/D19/D23 | **记忆形态的状态扩展**（兑现 D23 #10 状态类扩展位）：进度=一条普通项目记忆条目（`MemoryType::Status`/`项目进度台账.md`，复用 KnowledgeStore::save+memory.saved 回执，零新存储/协议/UI）·完全扁平五段（待办/已做/阻塞/决策/坑，无目标无线程无 thread_id）·仅会话结束 W3 自动写（对象 payload memories+progress 双产出/数组兜底/转录保首条）·注入为 [记忆] 第三段 [项目进度]（probe 继承/assemble 截断兜底）·加法合并（归一化去重+todo→done 对账+脱敏丢条+拒识不覆盖+跨 clone 共享锁）·**D15 单条 4KB 上限废除**（项目记忆与状态不限大小，拍板 2026-11-19）·memory_save 拒绝 status |
 
 | D38 | [统一身份票据与生态MCP验签设计](D38-统一身份票据与生态MCP验签设计.md) | 03/D22/D26/D28/10 | **agent 票 ES256 单票制**（统一单票/内部 HS256 票退役 corp·aigw 逻辑受众 bbc-corp·bbc-aigw 收编）：aud=目的地（生态=MCP 端点 URL 零登记、公开 jwks+本地验签+60s 容差+alg 白名单）·换票装配驱动（没装就没票·四触发点事件驱动·票据代齐进齐出·运行时纯内存查取零网络）·scope 默认用户全量（x-bbc-auth.scope 可收窄）·url 只许打包写死（BBC_SERVER_URL 部署变量与管理员改 url 永久否决·禁 CONFIG）·主令牌回落删除（换票失败不发票 401）·kid 改公钥指纹·stdio 永不需要令牌·旧 `${BBC_USER_TOKEN}` 写法装配器归一·零新表零新 env 零迁移 |
+| D39 | [插件README与市场统计元数据设计](D39-插件README与市场统计元数据设计.md) | D22/D34/D38 | **插件市场说明文档+统计信号补全**：README.md 双位置识别（包根优先→命中清单目录内，只认大写，≤64KB 超限拒，CRLF 归一）·**插件级元数据随最新上传对齐**（与 name/description 同组非版本快照，版本行不存）·仅 detail 口返回（列表不背长文，repo 单查 GetPluginReadme）·装机数=COUNT GROUP BY 当前装机口径（每用户一行天然去重/卸载即减，不做累计计数器）·个人插件前端隐藏装机数·readme 远程图片一律拦截（MarkdownText 加 blockRemoteImages prop 防 beacon，文本链接保留）·updated_at 顺带透出·管理端 v0 只加装机数列 |
 
 ## 模板（D01 §13）
 
