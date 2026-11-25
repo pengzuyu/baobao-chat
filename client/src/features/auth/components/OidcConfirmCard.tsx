@@ -8,23 +8,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert, Avatar, Modal, Space, Tag, Typography, message } from 'antd';
 import { useAuthStore } from '../store/auth';
 import { apiOidcConfirm, apiOidcConfirmInfo, type OidcConfirmInfo } from '../api/oidc';
+import { scopeLabel } from '../scopeLabels';
 import { ApiError } from '../../../shared/api/http';
 import { APP_NAME } from '../../../shared/brand';
-
-/** scope 人类可读（标准保留 scope + 常见权限点；未映射的回退原码——权限点字典后续接） */
-const SCOPE_LABEL: Record<string, string> = {
-  openid: '身份标识',
-  profile: '基础资料',
-  email: '邮箱地址',
-  offline_access: '离线保持登录',
-  'kb:query:use': '知识库检索',
-  'kb:doc:contribute': '知识库投稿',
-  'im:message:send': '发送消息',
-};
-
-function scopeLabel(s: string): string {
-  return SCOPE_LABEL[s] ?? s;
-}
 
 type Phase = 'loading' | 'need-login' | 'ready' | 'done' | 'error';
 

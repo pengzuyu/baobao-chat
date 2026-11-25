@@ -91,3 +91,11 @@ export async function apiAdminOidcClientCreate(body: { name: string; redirect_ur
 export async function apiAdminOidcClientStatus(id: number, status: 'active' | 'disabled'): Promise<void> {
   await http.patch('/admin/oidc/clients/status', { id, status });
 }
+
+/** 编辑（name/redirect_uris/scopes 全量覆盖；client_id 恒定不可改） */
+export async function apiAdminOidcClientUpdate(
+  id: number,
+  body: { name: string; redirect_uris: string[]; scopes?: string[] },
+): Promise<AdminOidcClient> {
+  return http.patch<AdminOidcClient>(`/admin/oidc/clients/${id}`, body);
+}

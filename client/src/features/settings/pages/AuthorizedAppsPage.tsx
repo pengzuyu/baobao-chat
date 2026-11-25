@@ -15,6 +15,7 @@ import {
   type OidcGrant,
   type OidcSession,
 } from '../../auth/api/oidc';
+import { scopeLabel } from '../../auth/scopeLabels';
 
 const { Title, Text } = Typography;
 
@@ -81,7 +82,7 @@ export function AuthorizedAppsPage() {
       render: (scopes: string[]) => (
         <Space size={[4, 4]} wrap>
           {scopes.map((s) => (
-            <Tag key={s}>{s}</Tag>
+            <Tag key={s}>{scopeLabel(s)}</Tag>
           ))}
         </Space>
       ),

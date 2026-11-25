@@ -75,3 +75,30 @@ func (m *Module) HandleClientsStatus() http.HandlerFunc {
 		httpx.OK(w, r, map[string]bool{"ok": true})
 	}
 }
+
+// HandleClientsUpdate PATCH /api/v1/admin/oidc/clients/{id}
+// （name/redirect_uris/scopes 全量覆盖，校验同创建；client_id 恒定不可改）
+func (m *Module) HandleClientsUpdate() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			httpx.Fail(w, r, errors.New("id 非法"))
+			return
+		}
+		var req clientCreateReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || len(req.RedirectURIs) == 0 {
+			httpx.Fail(w, r, errors.New("name/redirect_uris 必填"))
+			return
+		}
+		scopes := req.Scopes
+		if len(scopes) == 0 {
+			scopes = []string{"openid", "profile"}
+		}
+		updated, err := m.storage.updateClient(r, id, req.Name, req.RedirectURIs, scopes)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, updated)
+	}
+}

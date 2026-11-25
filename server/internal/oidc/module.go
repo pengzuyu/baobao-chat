@@ -172,3 +172,31 @@ func (s *Storage) setClientStatus(r *http.Request, id int64, status string) erro
 	}
 	return nil
 }
+
+// updateClient 编辑（name/redirect_uris/scopes 全量覆盖；client_id 恒定不可改）。
+// GetClientByClientID 每次查库（clientRow），改动即时生效无缓存失效问题。
+func (s *Storage) updateClient(r *http.Request, id int64, name string, redirectURIs, scopes []string) (*clientDTO, error) {
+	ctx := r.Context()
+	tag, err := s.db.Exec(ctx, `UPDATE oidc_client SET name=$2, redirect_uris=$3, scopes=$4, updated_at=now() WHERE id=$1 AND tenant_id=$5`,
+		id, name, mustJSON(redirectURIs), mustJSON(scopes), s.defaultTenant)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, errors.New("客户端不存在")
+	}
+	var dto clientDTO
+	var redirect, scopesB []byte
+	var created time.Time
+	err = s.db.QueryRow(ctx, `
+		SELECT id, client_id, name, redirect_uris, scopes, status, created_at
+		FROM oidc_client WHERE id=$1 AND tenant_id=$2`, id, s.defaultTenant).
+		Scan(&dto.ID, &dto.ClientID, &dto.Name, &redirect, &scopesB, &dto.Status, &created)
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(redirect, &dto.RedirectURIs)
+	_ = json.Unmarshal(scopesB, &dto.Scopes)
+	dto.CreatedAt = created.Format(time.RFC3339)
+	return &dto, nil
+}

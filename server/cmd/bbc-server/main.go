@@ -1072,6 +1072,7 @@ func main() {
 		mux.Handle("POST /api/v1/admin/oidc/clients", requirePerm("admin:app:publish")(oidcMod.HandleClientsCreate()))
 		mux.Handle("GET /api/v1/admin/oidc/clients", requirePerm("admin:app:publish")(oidcMod.HandleClientsList()))
 		mux.Handle("PATCH /api/v1/admin/oidc/clients/status", requirePerm("admin:app:publish")(oidcMod.HandleClientsStatus()))
+		mux.Handle("PATCH /api/v1/admin/oidc/clients/{id}", requirePerm("admin:app:publish")(oidcMod.HandleClientsUpdate()))
 	}
 	mux.Handle("PATCH /api/v1/admin/users/{id}", requirePerm("admin:user:manage")(handleAdminUserPatch(adminSvc)))
 	mux.Handle("POST /api/v1/admin/users/{id}/disable", requirePerm("admin:user:manage")(handleAdminUserStatus(adminSvc, orgapi.UserStatusDisabled)))
