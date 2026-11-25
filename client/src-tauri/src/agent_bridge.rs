@@ -1144,7 +1144,8 @@ fn assemble_mcp_servers(
             "baseUrl": format!("{}/mcp/corp", gateway.trim_end_matches('/')),
             // D38 单票制：corp 收编保留逻辑受众（与服务端 platform/agentjwt 同值）
             "auth": { "type": "obo", "audience": "bbc-corp", "scope": [] }
-        }
+        },
+        "meta": { "source": "corp" }
     })];
     let mut taken: Vec<String> = vec!["corp".into()];
     // B3：系统级第二位=壳本地工具面（/mcp/local，schedule_*）；token 每次
@@ -1156,7 +1157,8 @@ fn assemble_mcp_servers(
                 "kind": "http",
                 "baseUrl": format!("http://127.0.0.1:{port}/mcp/local"),
                 "headers": { "Authorization": format!("Bearer {token}") }
-            }
+            },
+            "meta": { "source": "local" }
         }));
         taken.push("local".into());
     }
@@ -1204,8 +1206,32 @@ fn assemble_mcp_servers(
                 continue;
             }
             match mcp_server_wire(name, def, &root, user, &config) {
-                Some(w) => {
+                Some(mut w) => {
                     taken.push(name.clone());
+                    // 来源元数据（list_plugins 自省面：agent 据此答"装了什么插件"）
+                    w["meta"] = json!({
+                        "source": "plugin",
+                        "pluginId": id,
+                        "pluginName": read_plugin_display_name(&ver_dir).unwrap_or_else(|| id.clone()),
+                        "version": ver,
+                    });
+                    // 用户侧身份开关（D22 §6.3 用户面扩展，2026-11-25 拍板）：启用后对该
+                    // 插件 HTTP server 注入统一身份（audience=该 server url，scope 空=
+                    // 用户全量票）。作者已声明 auth（x-bbc-auth/legacy 归一）的不动——
+                    // 声明优先；受众随全量装配进 Shared.audiences → 换票链自动覆盖
+                    let use_identity = sv
+                        .get("useIdentity")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if use_identity
+                        && w["transport"]["kind"] == "http"
+                        && w["transport"]["auth"].is_null()
+                    {
+                        if let Some(url) = w["transport"]["baseUrl"].as_str() {
+                            w["transport"]["auth"] =
+                                json!({ "type": "obo", "audience": url, "scope": [] });
+                        }
+                    }
                     out.push(w);
                 }
                 None => eprintln!(
@@ -1233,8 +1259,9 @@ fn append_personal(
             continue;
         }
         match mcp_server_wire(&name, &def, "", user, &serde_json::Map::new()) {
-            Some(w) => {
+            Some(mut w) => {
                 taken.push(name.clone());
+                w["meta"] = json!({ "source": "personal" });
                 out.push(w);
             }
             None => {
@@ -1244,10 +1271,28 @@ fn append_personal(
     }
 }
 
+/// 插件展示名（plugin.json 三目录名规范的 name 字段；list_plugins 自省面用）
+fn read_plugin_display_name(ver_dir: &std::path::Path) -> Option<String> {
+    for dir in [".bbc-plugin", ".claude-plugin", ".zcode-plugin"] {
+        let Ok(text) = std::fs::read_to_string(ver_dir.join(dir).join("plugin.json")) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        if let Some(name) = v.get("name").and_then(Value::as_str) {
+            if !name.trim().is_empty() {
+                return Some(name.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
 /// 插件 MCP 定义读取：.mcp.json 文件优先；缺省回落 plugin.json（三目录名）
 /// 的 mcpServers 字段（string=路径 → 读该文件；object=内联——包一层
-/// {"mcpServers": ...} 归一）
-fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
+/// {"mcpServers": ...} 归一）。pub(crate)：plugin_local_state 配置项发现复用
+pub(crate) fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
     if let Ok(text) = std::fs::read_to_string(ver_dir.join(".mcp.json")) {
         return serde_json::from_str(&text).ok();
     }

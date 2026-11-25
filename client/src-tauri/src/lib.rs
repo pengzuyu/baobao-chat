@@ -244,6 +244,7 @@ pub fn run() {
             plugin_commands::plugin_set_enabled,
             plugin_commands::plugin_local_state,
             plugin_commands::plugin_write_config,
+            plugin_commands::plugin_set_use_identity,
             plugin_commands::plugin_commands_list,
             mcp_commands::mcp_personal_list,
             mcp_commands::mcp_personal_upsert,

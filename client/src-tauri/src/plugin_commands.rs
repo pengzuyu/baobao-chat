@@ -217,12 +217,100 @@ pub fn plugin_local_state(host: Host, plugin_id: String) -> Result<Value, String
     }
     versions.sort();
     let config = Value::Object(read_plugin_config(&root));
+    let active_version = state.get("activeVersion").and_then(Value::as_str).unwrap_or("");
+    let (discovered, servers) = (!active_version.is_empty())
+        .then(|| crate::agent_bridge::read_plugin_mcp_doc(&root.join(active_version)))
+        .flatten()
+        .map(|doc| discover_config_keys(&doc))
+        .unwrap_or((json!([]), json!([])));
     Ok(json!({
         "enabled": state.get("enabled").and_then(Value::as_bool).unwrap_or(true),
-        "activeVersion": state.get("activeVersion").and_then(Value::as_str).unwrap_or(""),
+        "activeVersion": active_version,
         "versions": versions,
         "config": config,
+        // 配置项自动发现（2026-11-25 拍板）：mcp 定义实际引用的 ${CONFIG:key}
+        // ——清单未声明 configKeys 的插件也有配置入口（详情抽屉合并渲染）
+        "discoveredConfigKeys": discovered,
+        // MCP server 概览（身份开关可见性判定 + 目的地展示）
+        "mcpServers": servers,
+        "useIdentity": state.get("useIdentity").and_then(Value::as_bool).unwrap_or(false),
     }))
+}
+
+/// mcp 定义扫描（配置项自动发现 + server 概览）：
+/// - `${CONFIG:key}` 占位递归收集；出现在 headers → secret=true（值进请求头），
+///   其余（env/args/url）secret=false；同名取并集
+/// - server 概览：name/kind/url（stdio 缺 url——command 不是网络目的地）
+fn discover_config_keys(doc: &Value) -> (Value, Value) {
+    let mut keys: Vec<Value> = Vec::new();
+    let mut servers: Vec<Value> = Vec::new();
+    let Some(map) = doc.get("mcpServers").and_then(Value::as_object) else {
+        return (Value::Array(vec![]), Value::Array(vec![]));
+    };
+    for (name, def) in map {
+        let kind = if def.get("url").is_some() { "http" } else { "stdio" };
+        servers.push(json!({
+            "name": name,
+            "kind": kind,
+            "url": def.get("url").cloned().unwrap_or(Value::Null),
+        }));
+        // headers 值先收（secret=true），其余值后收（secret=false）——同名 headers 优先
+        for (secret, node) in [
+            (true, def.get("headers")),
+            (false, Some(def)),
+        ] {
+            let Some(node) = node else { continue };
+            collect_config_keys(node, secret, &mut keys);
+        }
+    }
+    (Value::Array(keys), Value::Array(servers))
+}
+
+/// 递归收集字符串值中的 `${CONFIG:key}`（BTreeMap 语义由后续排序保证稳定；
+/// 同 key 以首次写入的 secret 标记为准——headers 分支先扫即优先）
+fn collect_config_keys(node: &Value, secret: bool, out: &mut Vec<Value>) {
+    match node {
+        Value::String(text) => {
+            let mut rest = text.as_str();
+            while let Some(start) = rest.find("${CONFIG:") {
+                let after = &rest[start + "${CONFIG:".len()..];
+                let Some(end) = after.find('}') else { break };
+                let key = &after[..end];
+                if !key.is_empty() && !out.iter().any(|k| k["key"] == Value::String(key.into())) {
+                    out.push(json!({ "key": key, "secret": secret }));
+                }
+                rest = &after[end + 1..];
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_config_keys(item, secret, out);
+            }
+        }
+        Value::Object(map) => {
+            for v in map.values() {
+                collect_config_keys(v, secret, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 用户侧身份开关（2026-11-25 拍板）：useIdentity 写 plugin-state.json +
+/// 装配重推（HTTP server 注入统一身份；前端开启时已弹身份确认）
+#[tauri::command(async)]
+pub fn plugin_set_use_identity(host: Host, plugin_id: String, enabled: bool) -> Result<(), String> {
+    let root = plugin_root(&host, &plugin_id)?;
+    if !root.exists() {
+        return Err("插件未安装".into());
+    }
+    let mut state = read_state(&root);
+    state["useIdentity"] = json!(enabled);
+    write_state(&root, &state)?;
+    if let Err(e) = host.push_mcp_assembly() {
+        eprintln!("[bbc-plugin] 身份开关装配重推失败（降级，重启会话后生效）: {e}");
+    }
+    Ok(())
 }
 
 /// 钥匙串条目（service 固定；account={plugin_id}/{key}——卸载保留=钥匙串
