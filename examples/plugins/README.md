@@ -100,6 +100,7 @@ risk: medium               # 可省，缺省 low
 ```
 
 - server 名（`my-plugin`/`my-remote`）= 工具命名空间段：模型侧工具全名 `mcp.<server名>.<工具名>`；**不能叫 `corp`**（系统级保留）
+- `command` 直接写裸名（`node`/`python` 等）即可：宿主拉起 Agent 运行时前会用登录 shell 解析一次 PATH 注入子进程（macOS 打包版从 Dock 启动也能找到 homebrew/nvm 的 node；排障逃生口 `BBC_RT_SHELL_SNAPSHOT=0` 禁用回退）。与两家生态同款口径——Claude Code 官方包也全用裸 `npx`/`uvx`，不需要插件作者管运行时定位
 - stdio 行协议与最小实现：**直接抄 `hello-baobao/server.mjs`**（~100 行零依赖，initialize/tools/list/tools/call 四方法注释齐全）
 - 工具风险标注：tools/list 的 `annotations["x-bbc-risk"] = "low|medium|high"`（缺省承插件 bbc.risk，再缺省 medium）；所有工具与内置工具走同一审批门控，无特权
 - 业务失败请返回 `isError: true` 的**结果**（模型可自行处置），JSON-RPC error 只用于协议错误

@@ -645,6 +645,11 @@ impl AgentHost {
                 Ok(f) => Stdio::from(f),
                 Err(_) => Stdio::inherit(),
             });
+        // 登录 shell PATH 注入（模块注释详背景）：Finder/Dock 启动的壳 PATH
+        // 缺 homebrew/nvm 等，stdio 插件的裸 `node` 断链；Windows 继承系统
+        // PATH 无此问题（下方 cfg(windows) 块同款分支先例）
+        #[cfg(unix)]
+        shell_env::apply(&mut child);
         // Windows：GUI 父进程（windows_subsystem）启动控制台子进程，系统默认给
         // 子进程新开一个控制台窗口——登录即拉起 RT 后桌面会弹「bbrt.exe shell」
         // （2026-11-24 用户报修）。bbrt 三路 IO 全接管（stdin/stdout JSONL 管道 +
@@ -1396,6 +1401,117 @@ pub(crate) fn mcp_server_wire(
     None
 }
 
+#[cfg(unix)]
+mod shell_env {
+    use std::collections::HashSet;
+    use std::process::{Command, Stdio};
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    /// 交互初始化脚本挂死保护（重 zshrc/p10k 场景）：超时 kill 回退现状
+    const TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// 输出分界标记：常量随机尾不可猜 + 解析取最后一个匹配行，双保险防
+    /// 欢迎信息偶然碰瓷
+    const MARKER: &str = "BBC_SHELL_ENV_SNAPSHOT_MARKER_7F3A";
+
+    /// 快照产物（合并后的 PATH）；None=解析失败，同样缓存（本进程内不再重试）
+    static MERGED: OnceLock<Option<String>> = OnceLock::new();
+
+    /// 注入入口：spawn_child 的 env 链上调用
+    pub fn apply(cmd: &mut Command) {
+        if let Some(path) = MERGED.get_or_init(resolve).as_ref() {
+            cmd.env("PATH", path);
+        }
+    }
+
+    fn resolve() -> Option<String> {
+        // 排障逃生口：一键禁用（行为回退现状）
+        if std::env::var("BBC_RT_SHELL_SNAPSHOT").ok().as_deref() == Some("0") {
+            return None;
+        }
+        let shell = std::env::var("SHELL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/bin/sh".to_string());
+        let output = run_shell(&shell)?;
+        let snapshot = parse_after_marker(&output)?
+            .into_iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v)?;
+        Some(merge_path(
+            &snapshot,
+            &std::env::var("PATH").unwrap_or_default(),
+        ))
+    }
+
+    /// 登录 shell 快照：参数分开传（dash 不认 bundled 短参）；脚本
+    /// `echo; env` 分号语法在 zsh/bash/fish/sh 通用。主线程拿走 stdout
+    /// 交读线程，超时 kill+收尸（读线程随后 EOF 自然退出，无死锁无僵尸）。
+    pub fn run_shell(shell: &str) -> Option<String> {
+        let script = format!("echo {MARKER}; env");
+        let mut child = Command::new(shell)
+            .args(["-l", "-i", "-c", &script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let mut stdout = child.stdout.take()?;
+        let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+        std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut buf = String::new();
+            let read = stdout.read_to_string(&mut buf).is_ok().then_some(buf);
+            let _ = tx.send(read); // 主线程已超时返回则丢弃
+        });
+        match rx.recv_timeout(TIMEOUT) {
+            Ok(out) => {
+                let _ = child.wait(); // 收尸
+                out
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                None
+            }
+        }
+    }
+
+    /// marker 之后的 env 行解析为 (KEY, VALUE)。非法行（多行值的续行、
+    /// 噪声残段）跳过；无 marker 返回 None。
+    pub fn parse_after_marker(output: &str) -> Option<Vec<(String, String)>> {
+        let lines: Vec<&str> = output.lines().collect();
+        let idx = lines.iter().rposition(|l| l.trim() == MARKER)?;
+        let mut out = Vec::new();
+        for line in lines.iter().skip(idx + 1) {
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
+            let head_ok = k.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
+            let body_ok = k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if head_ok && body_ok {
+                out.push((k.to_string(), v.to_string()));
+            }
+        }
+        Some(out)
+    }
+
+    /// 合并：快照条目在前（用户 shell 里的 node 优先于系统目录），壳现有
+    /// PATH 条目保序去重追加（tauri app 目录等不丢）；空段（= 当前目录
+    /// 语义）丢弃更安全
+    pub fn merge_path(snapshot: &str, current: &str) -> String {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut parts: Vec<&str> = Vec::new();
+        for p in snapshot.split(':').chain(current.split(':')) {
+            if !p.is_empty() && seen.insert(p) {
+                parts.push(p);
+            }
+        }
+        parts.join(":")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1668,6 +1784,75 @@ mod tests {
         assert!(
             !shared.complete_req("h-late", reply_payload(&env)),
             "无等待方=不投递"
+        );
+    }
+    /// shell_env：噪声在前（欢迎信息/ANSI 碎片）+ marker + env 块 → 正确解析
+    /// PATH；marker 后混非法行（无 = / 数字开头 / 续行）跳过
+    #[cfg(unix)]
+    #[test]
+    fn shell_env_parse_skips_noise_and_invalid_lines() {
+        use super::shell_env;
+        let m = "BBC_SHELL_ENV_SNAPSHOT_MARKER_7F3A";
+        let out = format!(
+            "Last login: ...\n\x1b[?2004h\n{m}\nPATH=/opt/homebrew/bin:/usr/bin\nHOME=/Users/alice\nmultiline value 续行\n1BAD=x\nno-equals\n"
+        );
+        let kv = shell_env::parse_after_marker(&out).expect("marker 存在应解析");
+        assert_eq!(
+            kv.iter()
+                .find(|(k, _)| k == "PATH")
+                .map(|(_, v)| v.as_str()),
+            Some("/opt/homebrew/bin:/usr/bin")
+        );
+        assert!(
+            kv.iter().all(|(k, _)| k == "PATH" || k == "HOME"),
+            "非法行全部跳过"
+        );
+        // 无 marker（快照失败/纯噪声）→ None
+        assert_eq!(shell_env::parse_after_marker("PATH=/x\n"), None);
+    }
+
+    /// shell_env：marker 出现两次取最后一个（欢迎信息碰瓷双保险）
+    #[cfg(unix)]
+    #[test]
+    fn shell_env_parse_takes_last_marker() {
+        use super::shell_env;
+        let m = "BBC_SHELL_ENV_SNAPSHOT_MARKER_7F3A";
+        let out = format!("{m}\nPATH=/wrong\nnoise\n{m}\nPATH=/right\n");
+        let kv = shell_env::parse_after_marker(&out).unwrap();
+        assert_eq!(
+            kv.iter()
+                .find(|(k, _)| k == "PATH")
+                .map(|(_, v)| v.as_str()),
+            Some("/right")
+        );
+    }
+
+    /// shell_env：合并=快照前置+现有 PATH 保序去重追加；空段丢弃
+    #[cfg(unix)]
+    #[test]
+    fn shell_env_merge_path_dedups_keeps_order() {
+        use super::shell_env;
+        let merged = shell_env::merge_path(
+            "/opt/homebrew/bin:/usr/bin::/Users/x/.nvm/versions/node/v22/bin",
+            "/usr/bin:/Applications/BaobaoChat.app/Contents/MacOS:/opt/homebrew/bin",
+        );
+        assert_eq!(
+            merged,
+            "/opt/homebrew/bin:/usr/bin:/Users/x/.nvm/versions/node/v22/bin:\
+             /Applications/BaobaoChat.app/Contents/MacOS"
+        );
+    }
+
+    /// shell_env：真进程冒烟——/bin/sh 全链路（spawn→marker→env 输出→解析出 PATH）
+    #[cfg(unix)]
+    #[test]
+    fn shell_env_run_shell_smoke() {
+        use super::shell_env;
+        let out = shell_env::run_shell("/bin/sh").expect("/bin/sh 快照应成功");
+        let kv = shell_env::parse_after_marker(&out).expect("输出应含 marker");
+        assert!(
+            kv.iter().any(|(k, _)| k == "PATH"),
+            "env 输出必含 PATH，实际：{out}"
         );
     }
 }
