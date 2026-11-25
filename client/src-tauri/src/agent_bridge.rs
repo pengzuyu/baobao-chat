@@ -1119,7 +1119,8 @@ fn camel_to_snake(s: &str) -> String {
 //      mcpServers——string 路径/内联对象双形态，与服务端 Go 校验器同口径）；
 //   3. 个人级（D26）：用户自配 eco/mcp/personal.json（stdio/HTTP 双形态，
 //      secret 值钥匙串合并——mcp_commands::read_personal_servers）。
-// `${PLUGIN_ROOT}` 替换为版本目录绝对路径（装配时静态替换）；身份变量
+// `${PLUGIN_ROOT}`（及生态别名 `${CLAUDE_PLUGIN_ROOT}`）替换为版本目录绝对
+// 路径（装配时静态替换）；身份变量
 // （${BBC_USER_TOKEN}/${CONFIG:*}）随 L4 在 RT 调用层动态注入——HTTP
 // headers 本层暂丢弃（TransportConfig::Http 尚无自定义头，登记 L4）。
 // server 名冲突：系统级 > 插件级 > 个人级，同名跳过（防劫持 corp 命名空间、
@@ -1267,8 +1268,9 @@ fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
 }
 
 /// 单 server 定义 → wire（D22 §6.1/L4 变量族——装配层静态替换：
-/// `${PLUGIN_ROOT}` 版本目录 / `${BBC_USER_ID}`·`${BBC_USER_NAME}` 当前登录
-/// 用户 / `${CONFIG:key}` 插件配置（config.json+钥匙串合并）。
+/// `${PLUGIN_ROOT}` 版本目录（生态别名 `${CLAUDE_PLUGIN_ROOT}` 同义——
+/// Claude Code/zcode 包按规范用它定位脚本）/ `${BBC_USER_ID}`·`${BBC_USER_NAME}`
+/// 当前登录用户 / `${CONFIG:key}` 插件配置（config.json+钥匙串合并）。
 /// **统一身份（D38 §5）**：`x-bbc-auth:{type:"obo"[,scope]}` 声明 → wire 带
 /// auth（audience=该 server url，宿主显式填、RT 不推导）；**旧写法归一**（拍板 12）：
 /// headers 含 `${BBC_USER_TOKEN}` 等价统一身份（headers 原样保留——RT 调用层
@@ -1283,7 +1285,11 @@ pub(crate) fn mcp_server_wire(
     config: &serde_json::Map<String, Value>,
 ) -> Option<Value> {
     let subst_static = |s: &str| -> String {
+        // 根路径变量两写法同义：bbc 原生 ${PLUGIN_ROOT} + 生态标准
+        // ${CLAUDE_PLUGIN_ROOT}（Claude Code/zcode 插件规范变量名——生态包
+        // stdio server 以它定位脚本，不补认则字面量路径传入 server 起不来）
         let mut out = s.replace("${PLUGIN_ROOT}", plugin_root);
+        out = out.replace("${CLAUDE_PLUGIN_ROOT}", plugin_root);
         out = out.replace("${BBC_USER_ID}", &user.0);
         out = out.replace("${BBC_USER_NAME}", &user.1);
         // CONFIG:key（缺省保留占位符——外部系统收到 401 比伪值诚实）
@@ -1543,6 +1549,33 @@ mod tests {
         .expect("普通外部系统应出 wire");
         assert!(w["transport"]["auth"].is_null(), "无声明=匿名不注入");
         assert_eq!(w["transport"]["headers"]["Private-Token"], "secret-x");
+    }
+
+    #[test]
+    fn wire_plugin_root_alias_expanded() {
+        // 根路径变量两写法同义：生态包 ${CLAUDE_PLUGIN_ROOT} 与 bbc 原生
+        // ${PLUGIN_ROOT} 都展开为版本目录（混用互不干扰）
+        let def = json!({
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/server.js"],
+            "env": { "SCRIPT": "${PLUGIN_ROOT}/x.js", "MIX": "${CLAUDE_PLUGIN_ROOT}/a ${PLUGIN_ROOT}/b" }
+        });
+        let w = mcp_server_wire(
+            "eco-pkg",
+            &def,
+            "/data/eco/plugins/eco-pkg/1.0.0",
+            &(String::new(), String::new()),
+            &Default::default(),
+        )
+        .expect("stdio 定义应出 wire");
+        let root = "/data/eco/plugins/eco-pkg/1.0.0";
+        assert_eq!(w["transport"]["args"][0], format!("{root}/server.js"));
+        assert_eq!(w["transport"]["env"]["SCRIPT"], format!("{root}/x.js"));
+        assert_eq!(
+            w["transport"]["env"]["MIX"],
+            format!("{root}/a {root}/b"),
+            "同一字符串混用两写法都展开"
+        );
     }
 
     #[test]
