@@ -6,6 +6,15 @@
 //! Content-Length；响应整读后按 `Content-Length` / `Transfer-Encoding: chunked` /
 //! 读到 EOF 三种语义解出 body。公司域 MCP 网关（Go 端 /mcp/corp，server/mcpgw）
 //! 小响应走 Content-Length，chunked 分支为兼容通用 MCP server 保留。
+//!
+//! Streamable HTTP 客户端合规面（2026-11-25，phebs/Sourcebot 接入前补齐）：
+//! - Accept 双列 `application/json, text/event-stream`（规范硬性要求，单列
+//!   会被合规 server 406 拒）；
+//! - 应答 Content-Type 透出，SSE（`text/event-stream`）body 由 transport 层
+//!   解析（服务端回 JSON 或 SSE 都合规，客户端必须都支持）；
+//! - `Mcp-Session-Id` 响应头透出 + 后续请求回带（server 在 initialize 应答
+//!   下发后，不带会 404）；
+//! - 不做 GET 监听流/resumption——单请求交换模式用不上，规范亦不强制。
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -100,15 +109,27 @@ fn connect_stream(url: &ParsedUrl, timeout: Duration) -> Result<BoxStream, McpEr
     Ok(Box::new(rustls::StreamOwned::new(conn, tcp)))
 }
 
-/// 单次 POST 交换：返回 (状态码, body 文本)。IO 失败/超时 → Connect。
+/// POST 交换应答：状态码 + Streamable HTTP 客户端面所需的两项响应头透出
+/// （content_type 小写归一去参数，供 SSE/JSON 分派；session_id 即
+/// `Mcp-Session-Id`）+ body 文本。
+pub(crate) struct HttpResponse {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub session_id: Option<String>,
+    pub body: String,
+}
+
+/// 单次 POST 交换。IO 失败/超时 → Connect。
 /// extra_headers：自定义头（D22 §6.1/L4）；同名（如 Authorization）覆盖自动 Bearer。
+/// session：`Mcp-Session-Id` 回带（HttpTransport 持有，initialize 应答后填入）。
 pub(crate) fn post_json(
     url: &ParsedUrl,
     bearer: Option<&str>,
     extra_headers: &[(String, String)],
+    session: Option<&str>,
     body: &str,
     timeout: Duration,
-) -> Result<(u16, String), McpError> {
+) -> Result<HttpResponse, McpError> {
     let mut stream = connect_stream(url, timeout)?;
 
     // 自动 Bearer 之上叠自定义头；同名 Authorization 覆盖由调用方
@@ -122,17 +143,25 @@ pub(crate) fn post_json(
         if k.is_empty()
             || k.eq_ignore_ascii_case("host")
             || k.eq_ignore_ascii_case("content-length")
+            || k.eq_ignore_ascii_case("content-type")
+            || k.eq_ignore_ascii_case("accept")
+            || k.eq_ignore_ascii_case("mcp-session-id")
         {
-            continue; // 保留字段不可覆盖
+            continue; // 保留字段不可覆盖（session 由本层参数注入，防重复头）
         }
         header_lines.push_str(&format!("{k}: {v}\r\n"));
     }
+    let session_line = match session {
+        Some(sid) => format!("Mcp-Session-Id: {sid}\r\n"),
+        None => String::new(),
+    };
     let head = format!(
         "POST {path} HTTP/1.1\r\n\
          Host: {host}:{port}\r\n\
          {header_lines}\
+         {session_line}\
          Content-Type: application/json\r\n\
-         Accept: application/json\r\n\
+         Accept: application/json, text/event-stream\r\n\
          User-Agent: {ua}\r\n\
          Content-Length: {len}\r\n\
          Connection: close\r\n\
@@ -187,15 +216,15 @@ pub fn get_text(url: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw).map_err(|e| e.to_string())?;
-    let (status, body) = split_response(&raw).map_err(|e| e.to_string())?;
-    if (200..300).contains(&status) {
-        Ok(body)
+    let resp = split_response(&raw).map_err(|e| e.to_string())?;
+    if (200..300).contains(&resp.status) {
+        Ok(resp.body)
     } else {
-        Err(format!("http {status}"))
+        Err(format!("http {}", resp.status))
     }
 }
 
-fn split_response(raw: &[u8]) -> Result<(u16, String), McpError> {
+fn split_response(raw: &[u8]) -> Result<HttpResponse, McpError> {
     let split_at = find_subslice(raw, b"\r\n\r\n")
         .ok_or_else(|| McpError::Protocol("响应头不完整（无空行终止）".into()))?;
     let head = String::from_utf8_lossy(&raw[..split_at]).into_owned();
@@ -213,6 +242,8 @@ fn split_response(raw: &[u8]) -> Result<(u16, String), McpError> {
 
     let mut content_length = None;
     let mut chunked = false;
+    let mut content_type = None;
+    let mut session_id = None;
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
             let name = name.trim().to_ascii_lowercase();
@@ -222,6 +253,18 @@ fn split_response(raw: &[u8]) -> Result<(u16, String), McpError> {
             } else if name == "transfer-encoding" && value.to_ascii_lowercase().contains("chunked")
             {
                 chunked = true;
+            } else if name == "content-type" {
+                // 去参数（; charset=...）+ 小写归一，供 SSE/JSON 分派比对
+                content_type = Some(
+                    value
+                        .split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_ascii_lowercase(),
+                );
+            } else if name == "mcp-session-id" {
+                session_id = Some(value.to_string());
             }
         }
     }
@@ -232,7 +275,12 @@ fn split_response(raw: &[u8]) -> Result<(u16, String), McpError> {
     } else {
         body_bytes
     };
-    Ok((status, String::from_utf8_lossy(body_bytes).into_owned()))
+    Ok(HttpResponse {
+        status,
+        content_type,
+        session_id,
+        body: String::from_utf8_lossy(body_bytes).into_owned(),
+    })
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -314,14 +362,28 @@ mod tests {
     #[test]
     fn split_response_content_length_and_chunked() {
         let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\n{\"x\":1}";
-        assert_eq!(split_response(raw).unwrap(), (200, "{\"x\":1}".into()));
+        let r = split_response(raw).unwrap();
+        assert_eq!((r.status, r.body.as_str()), (200, "{\"x\":1}"));
+        assert_eq!(r.content_type, None);
+        assert_eq!(r.session_id, None);
 
         // 两块 chunked：5 "hello" + 1 ","；终止块
         let chunked = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1\r\n,\r\n0\r\n\r\n";
-        assert_eq!(
-            split_response(chunked.as_bytes()).unwrap(),
-            (200, "hello,".into())
+        let r = split_response(chunked.as_bytes()).unwrap();
+        assert_eq!((r.status, r.body.as_str()), (200, "hello,"));
+    }
+
+    /// Streamable HTTP 客户端面：content-type（去参数归一）与 Mcp-Session-Id 透出
+    #[test]
+    fn split_response_streams_headers() {
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: Text/Event-Stream; charset=utf-8\r\n\
+             Mcp-Session-Id: sid-1846a\r\nContent-Length: 0\r\n\r\n"
         );
+        let r = split_response(raw.as_bytes()).unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.content_type.as_deref(), Some("text/event-stream"));
+        assert_eq!(r.session_id.as_deref(), Some("sid-1846a"));
     }
 }
 
