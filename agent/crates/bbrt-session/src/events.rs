@@ -15,14 +15,6 @@ pub enum StreamChannel {
     Reasoning,
 }
 
-/// 模型档位（08 §4.3）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ModelTier {
-    Fast,
-    Strong,
-}
-
 /// 会话事件全集（camelCase；仅枚举变体名蛇形——tag 用 type）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -126,12 +118,11 @@ pub enum SessionEvent {
         freed_tokens: usize,
         degraded: bool, // 摘要失败退化为截断
     },
-    /// model.switched（降档/用户切换）
+    /// model.switched（用户切换）。2026-11-26 单档化：档位 from/to 退役——会话模型
+    /// 只剩「直达引用 / 公司默认档」两态；旧 WAL 行多出的 from/to 反序列化时忽略
     ModelSwitched {
         session_id: String,
-        from: ModelTier,
-        to: ModelTier,
-        /// 切换后的直达引用（0023；None=档位别名模式）
+        /// 切换后的直达引用（0023；None=公司默认档）
         model_override: Option<String>,
         reason: String,
     },

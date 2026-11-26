@@ -145,7 +145,7 @@ fn write_all(stream: &mut TcpStream, bytes: &[u8]) {
 fn sample_request() -> ChatRequest {
     ChatRequest {
         thinking: None,
-        model: "bbc-strong".to_string(),
+        model: "bbc-default".to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: "读取 a.rs".into(),
@@ -261,7 +261,7 @@ fn mock_happy_path_sse_with_request_assertions() {
     assert!(request.contains("Accept: text/event-stream\r\n"));
     let body_start = request.find("\r\n\r\n").map(|i| i + 4).expect("应有请求体");
     let body = &request[body_start..];
-    assert!(body.contains(r#""model":"bbc-strong""#), "body={body}");
+    assert!(body.contains(r#""model":"bbc-default""#), "body={body}");
     assert!(body.contains(r#""stream":true"#), "body={body}");
     assert!(body.contains("read_file"), "body 应含工具定义：{body}");
 }

@@ -19,7 +19,8 @@ CREATE TABLE agent_session (
   form          TEXT NOT NULL DEFAULT 'workbench' CHECK(form IN('embedded','workbench')),
   mode          TEXT NOT NULL DEFAULT 'ask' CHECK(mode IN('ask','auto-edit','full-auto')),
   backend       TEXT,                          -- 委派后端 zcode|claude|generic|builtin（17 篇增列）
-  model_policy  TEXT NOT NULL DEFAULT 'auto' CHECK(model_policy IN('fast','strong','auto')),
+  -- 2026-11-26 对话档位单档化：原 model_policy 列（fast/strong/auto）退役，基线直改不迁移
+  --   （存量库残留列 NOT NULL DEFAULT 'auto'，代码不再读写，插入沿列缺省）
   status        TEXT NOT NULL DEFAULT 'idle',  -- §3 状态机枚举
   share_enabled INTEGER NOT NULL DEFAULT 0,
   created_at    INTEGER NOT NULL,

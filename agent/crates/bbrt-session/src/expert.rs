@@ -98,7 +98,8 @@ pub struct ExpertManifest {
     /// 知识空间绑定（ACL 服务端兜底，本地声明透传）
     pub knowledge_spaces: Vec<String>,
     pub constraints: ExpertConstraints,
-    /// strong | fast（缺省 strong；映射 bbc-strong/bbc-fast，19 篇档位）
+    /// strong | fast（缺省 strong）。2026-11-26 单档化：取值已无区分——专家恒走公司
+    /// 默认档；字段保留解析仅为兼容存量清单（写了不报错、不生效）
     pub model_tier: String,
     /// company | personal
     pub source: String,
@@ -391,7 +392,7 @@ pub struct AssembledExpert {
     pub manifest: ExpertManifest,
     /// persona + 技能正文 + 约束引导（独立窗口 system）
     pub system_prompt: String,
-    /// bbc-strong / bbc-fast（tier 缺省 strong）
+    /// 请求模型：公司默认档别名 DEFAULT_MODEL_ALIAS（单档化；原按 tier 映射 bbc-strong/bbc-fast）
     pub model: String,
     pub max_steps: usize,
     /// 上下文预算（tokens；超限自杀返部分结果）
@@ -450,10 +451,7 @@ pub fn assemble(
     }
     AssembledExpert {
         system_prompt: build_system(m, &skill_bodies),
-        model: match m.model_tier.as_str() {
-            "fast" => "bbc-fast".into(),
-            _ => "bbc-strong".into(),
-        },
+        model: crate::DEFAULT_MODEL_ALIAS.to_string(),
         max_steps: m.constraints.max_steps,
         max_context_tokens: m.constraints.max_context_k * 1024,
         tool_names,

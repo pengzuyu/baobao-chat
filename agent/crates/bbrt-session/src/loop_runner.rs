@@ -23,7 +23,7 @@ use bbrt_sec::gate::PermissionMode;
 use bbrt_sec::memory::GrantScope;
 use bbrt_store::Store;
 
-use crate::events::{ModelTier, SessionEvent, SessionSink, StreamChannel};
+use crate::events::{SessionEvent, SessionSink, StreamChannel};
 use crate::executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome};
 use crate::state::{self, SessionState};
 
@@ -236,12 +236,9 @@ fn unix_now_ms() -> i64 {
         .unwrap_or_default()
 }
 
-/// 快模型摘要器（compaction 用；08 §4.6 降档语义的正面应用）
+/// 摘要器（compaction 用；走公司默认档的单轮调用，见 chat_text）
 struct FastSummarizer<'a> {
     client: &'a dyn ChatClient,
-    /// 档位别名（预留：AigwClient 按别名路由，请求体 model 已固定 bbc-fast）
-    #[allow(dead_code)]
-    model: String,
 }
 impl Summarizer for FastSummarizer<'_> {
     fn summarize(&self, text: &str) -> Result<String, String> {
@@ -249,15 +246,16 @@ impl Summarizer for FastSummarizer<'_> {
     }
 }
 
-/// bbc-fast 单轮调用共用壳（system+user → 流式汇总全文）；
-/// compaction 摘要、W3 记忆提炼与探查 planner 共用（19 篇档位别名固定 bbc-fast）
+/// 默认档单轮调用共用壳（system+user → 流式汇总全文）；
+/// compaction 摘要、W3 记忆提炼与探查 planner 共用（2026-11-26 单档化：内部辅助
+/// 调用固定走公司默认档 DEFAULT_MODEL_ALIAS——原固定快档 bbc-fast）
 pub(crate) fn chat_text(
     client: &dyn ChatClient,
     system: &str,
     user: &str,
 ) -> Result<String, String> {
     let req = ChatRequest {
-        model: "bbc-fast".to_string(),
+        model: crate::DEFAULT_MODEL_ALIAS.to_string(),
         messages: vec![
             ChatMessage {
                 role: "system".into(),
@@ -298,9 +296,9 @@ pub struct SessionRunner {
     /// 会话权限模式（共享句柄：session.set_mode 中途切档即时生效——runner 被
     /// turn 线程取走期间 manager 仍经同一 Arc 改写；读点每次取当前值）
     pub mode: Arc<RwLock<PermissionMode>>,
-    pub model_policy: ModelTier,
-    /// 会话级模型直达引用（0023：p:<provider_id>:<model>；None=档位别名）。
-    /// 仅主循环对话模型；planner/压缩/探查/选角等辅助调用恒档位
+    /// 会话级模型直达引用（0023：p:<provider_id>:<model>；None=公司默认档
+    /// DEFAULT_MODEL_ALIAS——2026-11-26 单档化：档位字段退役）。
+    /// 仅主循环对话模型；planner/压缩/探查/选角等辅助调用恒走默认档
     pub model_override: Option<String>,
     state: SessionState,
     history: Vec<Round>,
@@ -427,7 +425,6 @@ impl SessionRunner {
         session_id: String,
         workspace: String,
         mode: PermissionMode,
-        model_policy: ModelTier,
         model_override: Option<String>,
     ) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -436,7 +433,6 @@ impl SessionRunner {
             session_id,
             workspace,
             mode: Arc::new(RwLock::new(mode)),
-            model_policy,
             model_override,
             state: state::begin(),
             history: vec![],
@@ -699,13 +695,10 @@ impl SessionRunner {
                 );
                 // 通用子 agent＝主的分身（D16 决策①）：system/技能/记忆/
                 // 工具/模型与主会话同源，仅任务提示词不同、历史清零
-                let model_name =
-                    self.model_override
-                        .clone()
-                        .unwrap_or_else(|| match self.model_policy {
-                            ModelTier::Fast => "bbc-fast".to_string(),
-                            ModelTier::Strong => "bbc-strong".to_string(),
-                        });
+                let model_name = self
+                    .model_override
+                    .clone()
+                    .unwrap_or_else(|| crate::DEFAULT_MODEL_ALIAS.to_string());
                 // D35：无人值守上下文传给子 agent（禁 ask_user + 提示词约束）
                 let fanout_system = if self.unattended {
                     format!("{}{UNATTENDED_NOTE}", system_prompt_base())
@@ -820,7 +813,6 @@ impl SessionRunner {
                 });
                 let summarizer = FastSummarizer {
                     client: deps.model.as_ref(),
-                    model: "bbc-fast".into(), // 19 篇档位别名
                 };
                 match compact(&deps.budget, &self.history, &summarizer) {
                     Ok(CompactionOutcome {
@@ -913,14 +905,11 @@ impl SessionRunner {
             };
             let messages = to_chat_messages(&assembled, &vision);
             // 19 篇 §3.2 + 0023 引用扩展：override 直达引用优先（p:<id>:<model>，
-            // 网关校验归属/清单），缺省回落档位别名
-            let model_name =
-                self.model_override
-                    .clone()
-                    .unwrap_or_else(|| match self.model_policy {
-                        ModelTier::Fast => "bbc-fast".to_string(),
-                        ModelTier::Strong => "bbc-strong".to_string(),
-                    });
+            // 网关校验归属/清单），缺省回落公司默认档
+            let model_name = self
+                .model_override
+                .clone()
+                .unwrap_or_else(|| crate::DEFAULT_MODEL_ALIAS.to_string());
             let req = ChatRequest {
                 model: model_name,
                 messages,
@@ -2200,7 +2189,7 @@ fn wal_turn_error(deps: &LoopDeps, session_id: &str, code: u32, message: &str, f
 }
 
 // ---------------------------------------------------------------------------
-// W3 会话结束提炼（D15 §2.2 表第 3 行；bbc-fast，尽力而为）
+// W3 会话结束提炼（D15 §2.2 表第 3 行；公司默认档，尽力而为）
 // ---------------------------------------------------------------------------
 
 /// W3 每会话最多提炼条数（防记忆膨胀）

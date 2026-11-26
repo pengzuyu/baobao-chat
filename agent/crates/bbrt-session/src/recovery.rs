@@ -625,7 +625,6 @@ mod history_tests {
                 title: "t".into(),
                 form: "workbench".into(),
                 mode: "ask".into(),
-                model_policy: "fast".into(),
                 model_override: None,
                 status: "idle".into(),
                 share_enabled: false,

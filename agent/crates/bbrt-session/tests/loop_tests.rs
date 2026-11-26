@@ -12,7 +12,7 @@ use bbrt_memory::MemoryEngine;
 use bbrt_sec::gate::PermissionMode;
 use bbrt_sec::memory::GrantScope;
 
-use bbrt_session::events::{ModelTier, SessionEvent, SessionSink};
+use bbrt_session::events::{SessionEvent, SessionSink};
 use bbrt_session::executor::{
     CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview,
 };
@@ -194,13 +194,7 @@ fn happy_path_tool_call_then_answer() {
     });
     let d = deps(model.clone(), tools.clone(), sink.clone(), None);
 
-    let mut runner = SessionRunner::new(
-        "s-1".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-1".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let report = runner.run_turn("读一下 foo.txt", &d, None);
 
     assert_eq!(report.steps, 2); // 工具轮 + 收尾轮
@@ -249,13 +243,7 @@ fn permission_allow_executes_and_denies_blocks() {
     });
     let d = deps(model, tools.clone(), sink.clone(), None);
 
-    let mut runner = SessionRunner::new(
-        "s-2".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-2".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let tx = runner.permission_sender();
     // 后台线程扮演宿主：收到请求即允许
     let tx2 = tx.clone();
@@ -294,13 +282,7 @@ fn permission_allow_executes_and_denies_blocks() {
         fail: false,
     });
     let d2 = deps(model2, tools2.clone(), sink2, None);
-    let mut r2 = SessionRunner::new(
-        "s-2b".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut r2 = SessionRunner::new("s-2b".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let tx = r2.permission_sender();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
@@ -389,13 +371,8 @@ fn clarify_answered_continues_turn() {
         fail: false,
     });
     let d = deps(model, tools.clone(), sink.clone(), None);
-    let mut runner = SessionRunner::new(
-        "s-cl1".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner =
+        SessionRunner::new("s-cl1".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let tx = runner.clarify_sender();
     // 后台扮演宿主：300ms 后回答「方案A」+自由补充
     std::thread::spawn(move || {
@@ -444,13 +421,8 @@ fn clarify_interrupt_cancels() {
         fail: false,
     });
     let d = deps(model, tools.clone(), sink.clone(), None);
-    let mut runner = SessionRunner::new(
-        "s-cl2".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner =
+        SessionRunner::new("s-cl2".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     // 后台 300ms 后置中断旗标（提问等待 1s 轮询感知 → cancelled 收口）
     let flag = runner.interrupted.clone();
     std::thread::spawn(move || {
@@ -478,13 +450,8 @@ fn clarify_bad_args_blocked_no_request() {
         fail: false,
     });
     let d = deps(model, tools.clone(), sink.clone(), None);
-    let mut runner = SessionRunner::new(
-        "s-cl3".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner =
+        SessionRunner::new("s-cl3".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let report = runner.run_turn("坏参数", &d, None);
     assert_eq!(report.tool_calls, 1);
     let evs = events_of(sink.as_ref());
@@ -518,13 +485,7 @@ fn permission_waits_indefinitely_until_response() {
         fail: false,
     });
     let d = deps(model, tools.clone(), sink.clone(), None);
-    let mut runner = SessionRunner::new(
-        "s-3".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-3".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let tx = runner.permission_sender();
     let turn = std::thread::spawn(move || runner.run_turn("无人应答", &d, None));
     // 等审批卡出现（=已进入等待）
@@ -591,7 +552,6 @@ fn interrupt_flags_through_taken_runner_while_waiting_permission() {
         StartParams {
             workspace: "/w".into(),
             mode: PermissionMode::Ask,
-            model_policy: ModelTier::Strong,
             model_override: None,
             title: "t".into(),
             restored: None,
@@ -694,7 +654,6 @@ fn set_mode_takes_effect_on_next_tool_gate() {
         StartParams {
             workspace: "/w".into(),
             mode: PermissionMode::Ask, // 以 Ask 启动
-            model_policy: ModelTier::Strong,
             model_override: None,
             title: "t".into(),
             restored: None,
@@ -727,13 +686,7 @@ fn memory_heuristic_and_daily_report() {
     });
     let d = deps(model, tools, sink.clone(), Some(mem.clone()));
 
-    let mut runner = SessionRunner::new(
-        "s-4".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Fast,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-4".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     runner.run_turn("记住：本机服务端口用 8090", &d, None);
     let evs = events_of(sink.as_ref());
     assert!(evs
@@ -764,7 +717,6 @@ fn consecutive_failures_no_circuit_break() {
         "s-5".into(),
         "/tmp/ws".into(),
         PermissionMode::AutoEdit,
-        ModelTier::Strong,
         None,
     );
     let report = runner.run_turn("反复失败", &d, None);
@@ -847,13 +799,7 @@ fn wal_records_monotonic_events() {
         experts: None,
         budget: BudgetConfig::default(),
     };
-    let mut runner = SessionRunner::new(
-        "s-6".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-6".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     runner.run_turn("记录一下", &d, None);
     let wal = log.0.lock().unwrap();
     assert!(wal.iter().any(|(_, t)| t == "turn.start"));
@@ -883,7 +829,6 @@ fn manager_unlimited_sessions_guard_removed() {
             StartParams {
                 workspace: "/w".into(),
                 mode: PermissionMode::Ask,
-                model_policy: ModelTier::Fast,
                 model_override: None,
                 title: "t".into(),
                 restored: None,
@@ -901,7 +846,6 @@ fn manager_unlimited_sessions_guard_removed() {
         StartParams {
             workspace: "/w".into(),
             mode: PermissionMode::Ask,
-            model_policy: ModelTier::Fast,
             model_override: None,
             title: "t".into(),
             restored: None,
@@ -939,13 +883,7 @@ fn compaction_triggers_on_long_history() {
         experts: None,
         budget: cfg,
     };
-    let mut runner = SessionRunner::new(
-        "s-7".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-7".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     // 预填长历史
     let _ = MiniBudget;
     let long_text = "上下文压力测试内容。".repeat(120);
@@ -1006,7 +944,6 @@ fn max_steps_guard() {
         "s-8".into(),
         "/tmp/ws".into(),
         PermissionMode::FullAuto,
-        ModelTier::Fast,
         None,
     );
     let report = runner.run_turn("无限工具循环", &d, None);
@@ -1114,13 +1051,8 @@ fn w2_lesson_after_repeated_tool_failures() {
     let tmp = tempfile::tempdir().unwrap();
     let mem = test_memory(tmp.path());
     let d = deps(model, tools, sink.clone(), Some(mem.clone()));
-    let mut runner = SessionRunner::new(
-        "s-w2".into(),
-        "/ws".into(),
-        PermissionMode::FullAuto,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner =
+        SessionRunner::new("s-w2".into(), "/ws".into(), PermissionMode::FullAuto, None);
     let _ = runner.run_turn("跑一下构建", &d, None);
 
     // 同工具同错连续 ≥2 次 → feedback 教训自动落盘（带 Why/How to apply）。
@@ -1164,13 +1096,7 @@ fn w3_distills_memories_on_session_end() {
     let tmp = tempfile::tempdir().unwrap();
     let mem = test_memory(tmp.path());
     let d = deps(model.clone(), tools, sink.clone(), Some(mem.clone()));
-    let mut runner = SessionRunner::new(
-        "s-w3".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-w3".into(), "/ws".into(), PermissionMode::Ask, None);
     let _ = runner.run_turn("以后做事先给我方案再动手", &d, None);
     runner.end(&d, "");
 
@@ -1219,7 +1145,6 @@ fn w3_object_payload_merges_project_progress() {
         "s-w3p".into(),
         ws.to_string_lossy().into_owned(),
         PermissionMode::Ask,
-        ModelTier::Strong,
         None,
     );
     let _ = runner.run_turn("D35 定时任务做到哪了", &d, None);
@@ -1269,7 +1194,6 @@ fn w3_progress_skipped_for_daily_sessions() {
         "s-w3d".into(),
         String::new(), // 日常会话
         PermissionMode::Ask,
-        ModelTier::Strong,
         None,
     );
     let _ = runner.run_turn("聊聊", &d, None);
@@ -1298,13 +1222,7 @@ fn w3_distill_swallows_unparseable_output() {
     let tmp = tempfile::tempdir().unwrap();
     let mem = test_memory(tmp.path());
     let d = deps(model, tools, sink.clone(), Some(mem.clone()));
-    let mut runner = SessionRunner::new(
-        "s-w3b".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-w3b".into(), "/ws".into(), PermissionMode::Ask, None);
     let _ = runner.run_turn("帮我看下配置", &d, None);
     runner.end(&d, "");
     // 非法输出 → 静默跳过：无记忆条目、无 MemorySaved，但会话正常收口
@@ -1327,13 +1245,7 @@ fn w3_skipped_when_no_assistant_reply() {
     let tmp = tempfile::tempdir().unwrap();
     let mem = test_memory(tmp.path());
     let d = deps(model.clone(), tools, sink, Some(mem));
-    let mut runner = SessionRunner::new(
-        "s-w3c".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-w3c".into(), "/ws".into(), PermissionMode::Ask, None);
     runner.end(&d, ""); // 未发生任何对话
     assert_eq!(
         model.calls.load(Ordering::SeqCst),
@@ -1363,13 +1275,7 @@ fn system_prompt_carries_memory_guidance_and_recall() {
     })
     .unwrap();
     let d = deps(model.clone(), tools, sink, Some(mem));
-    let mut runner = SessionRunner::new(
-        "s-sys".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-sys".into(), "/ws".into(), PermissionMode::Ask, None);
     let _ = runner.run_turn("8090 端口起服务", &d, None);
     let systems = model.seen_system.lock().unwrap().clone();
     let sys = systems.first().expect("应捕获 system 消息");
@@ -1398,13 +1304,8 @@ fn scene_notes_appended_by_scene() {
     {
         let (sink, model, tools) = mk();
         let d = deps(model.clone(), tools, sink, None);
-        let mut runner = SessionRunner::new(
-            "s-proj".into(),
-            "/ws".into(),
-            PermissionMode::Ask,
-            ModelTier::Strong,
-            None,
-        );
+        let mut runner =
+            SessionRunner::new("s-proj".into(), "/ws".into(), PermissionMode::Ask, None);
         runner.scene = Scene::Project;
         let _ = runner.run_turn("看下这个仓库", &d, None);
         let sys = model.seen_system.lock().unwrap()[0].clone();
@@ -1416,13 +1317,8 @@ fn scene_notes_appended_by_scene() {
     {
         let (sink, model, tools) = mk();
         let d = deps(model.clone(), tools, sink, None);
-        let mut runner = SessionRunner::new(
-            "s-emb".into(),
-            String::new(),
-            PermissionMode::Ask,
-            ModelTier::Strong,
-            None,
-        );
+        let mut runner =
+            SessionRunner::new("s-emb".into(), String::new(), PermissionMode::Ask, None);
         runner.scene = Scene::Embedded {
             conv_id: "886".into(),
             conv_type: "group".into(),
@@ -1440,13 +1336,8 @@ fn scene_notes_appended_by_scene() {
     {
         let (sink, model, tools) = mk();
         let d = deps(model.clone(), tools, sink, None);
-        let mut runner = SessionRunner::new(
-            "s-task".into(),
-            String::new(),
-            PermissionMode::Ask,
-            ModelTier::Strong,
-            None,
-        );
+        let mut runner =
+            SessionRunner::new("s-task".into(), String::new(), PermissionMode::Ask, None);
         runner.scene = Scene::Task;
         let _ = runner.run_turn("整理两边进展", &d, None);
         let sys = model.seen_system.lock().unwrap()[0].clone();
@@ -1470,13 +1361,7 @@ fn memory_snapshot_frozen_across_turns() {
     let tmp = tempfile::tempdir().unwrap();
     let mem = test_memory(tmp.path());
     let d = deps(model.clone(), tools, sink, Some(mem.clone()));
-    let mut runner = SessionRunner::new(
-        "s-snap".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-snap".into(), "/ws".into(), PermissionMode::Ask, None);
     runner.scene = Scene::Project;
     let _ = runner.run_turn("第一轮", &d, None);
     // 会话中途落一条新记忆（模拟 memory_save / 被动轨启发式）
@@ -1550,7 +1435,6 @@ fn manager_switch_model_emits() {
         StartParams {
             workspace: "/ws-sw".into(),
             mode: PermissionMode::AutoEdit,
-            model_policy: ModelTier::Strong,
             model_override: None,
             title: "切换测试".into(),
             restored: None,
@@ -1560,30 +1444,25 @@ fn manager_switch_model_emits() {
     )
     .unwrap();
 
-    // 同档幂等：不产生事件
+    // 同引用幂等：不产生事件（会话起步=公司默认档 None）
+    assert_eq!(mgr.switch_model(Some("s-sw"), None, "user").unwrap(), 0);
+    // 切到直达引用：事件 + WAL（2026-11-26 单档化：切换只在「引用/默认档」两态间）
     assert_eq!(
-        mgr.switch_model(Some("s-sw"), ModelTier::Strong, None, "user")
-            .unwrap(),
-        0
-    );
-    // 切档：事件 + WAL
-    assert_eq!(
-        mgr.switch_model(Some("s-sw"), ModelTier::Fast, None, "user")
+        mgr.switch_model(Some("s-sw"), Some("p:1:glm-5.3"), "user")
             .unwrap(),
         1
     );
-    assert!(events_of(sink.as_ref())
-        .iter()
-        .any(|e| matches!(e, SessionEvent::ModelSwitched { to, .. } if *to == ModelTier::Fast)));
+    assert!(events_of(sink.as_ref()).iter().any(|e| matches!(
+        e,
+        SessionEvent::ModelSwitched { model_override: Some(m), .. } if m == "p:1:glm-5.3"
+    )));
     assert!(log
         .0
         .lock()
         .unwrap()
         .contains(&"model.switched".to_string()));
     // 不存在的会话 → NotFound
-    assert!(mgr
-        .switch_model(Some("nope"), ModelTier::Fast, None, "user")
-        .is_err());
+    assert!(mgr.switch_model(Some("nope"), None, "user").is_err());
     let _ = NoopEventLog; // 引用保持（避免 unused import 波动）
 }
 
@@ -1649,7 +1528,6 @@ fn model_override_routes_reference_and_falls_back() {
         "s-ref".into(),
         "/tmp/ws".into(),
         PermissionMode::Ask,
-        ModelTier::Strong,
         Some("p:1:glm-5.3".into()),
     );
     let _ = runner.run_turn("你好", &d, None);
@@ -1659,15 +1537,14 @@ fn model_override_routes_reference_and_falls_back() {
         models: Mutex::new(vec![]),
     });
     let d2 = capture_deps(cap2.clone());
-    let mut runner2 = SessionRunner::new(
-        "s-ref2".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner2 =
+        SessionRunner::new("s-ref2".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let _ = runner2.run_turn("你好", &d2, None);
-    assert_eq!(*cap2.models.lock().unwrap(), vec!["bbc-strong".to_string()]);
+    // 未指定直达引用 → 公司默认档别名（2026-11-26 单档化：原按档位回 bbc-strong）
+    assert_eq!(
+        *cap2.models.lock().unwrap(),
+        vec![bbrt_session::DEFAULT_MODEL_ALIAS.to_string()]
+    );
 }
 
 /// switch_model 带 override：事件携带引用 + agent_session 持久化（含清除）
@@ -1704,7 +1581,6 @@ fn switch_model_override_persists() {
         bbrt_session::StartParams {
             workspace: "/ws".into(),
             mode: PermissionMode::Ask,
-            model_policy: ModelTier::Strong,
             model_override: Some("p:2:deepseek-chat".into()),
             title: "引用持久化".into(),
             restored: None,
@@ -1720,27 +1596,25 @@ fn switch_model_override_persists() {
         assert_eq!(row.model_override.as_deref(), Some("p:2:deepseek-chat"));
     }
 
-    // 切到档位（清 override）→ 事件 + 库回写
-    assert_eq!(
-        mgr.switch_model(Some("s-ov"), ModelTier::Fast, None, "user")
-            .unwrap(),
-        1
-    );
+    // 切回公司默认档（清 override）→ 事件 + 库回写
+    assert_eq!(mgr.switch_model(Some("s-ov"), None, "user").unwrap(), 1);
     let evts = events_of(sink.as_ref());
     assert!(evts.iter().any(|e| matches!(
         e,
-        SessionEvent::ModelSwitched { to, model_override: None, .. } if *to == ModelTier::Fast
+        SessionEvent::ModelSwitched {
+            model_override: None,
+            ..
+        }
     )));
     {
         let s = store.lock().unwrap();
         let row = s.get_session("s-ov").unwrap().unwrap();
-        assert_eq!(row.model_policy, "fast");
         assert!(row.model_override.is_none());
     }
 
     // 再切回引用 → 库存 override
     assert_eq!(
-        mgr.switch_model(Some("s-ov"), ModelTier::Fast, Some("p:1:glm-5.3"), "user")
+        mgr.switch_model(Some("s-ov"), Some("p:1:glm-5.3"), "user")
             .unwrap(),
         1
     );
@@ -1862,13 +1736,7 @@ fn subagent_wait_finished_run_returns_result() {
         ),
     });
     let d = wait_deps(model, wal, sink.clone());
-    let mut runner = SessionRunner::new(
-        "s-w1".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-w1".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let report = runner.run_turn("等那个后台命令的结果", &d, None);
     assert_eq!(report.tool_calls, 1);
     let evs = events_of(sink.as_ref());
@@ -1894,13 +1762,7 @@ fn subagent_wait_unknown_run_rejected() {
         rows: Mutex::new(std::collections::HashMap::new()),
     });
     let d = wait_deps(model, wal, sink.clone());
-    let mut runner = SessionRunner::new(
-        "s-w2".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-w2".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let report = runner.run_turn("等结果", &d, None);
     assert_eq!(report.tool_calls, 1);
     let evs = events_of(sink.as_ref());
@@ -2084,7 +1946,6 @@ fn run_command_background_returns_task_id_and_finishes() {
         "s-bg1".into(),
         "/tmp/ws".into(),
         PermissionMode::FullAuto,
-        ModelTier::Strong,
         None,
     );
     let report = runner.run_turn("后台跑个构建", &d, None);
@@ -2209,7 +2070,6 @@ fn run_command_sync_times_out_into_background() {
         "s-sbg1".into(),
         "/tmp/ws".into(),
         PermissionMode::FullAuto,
-        ModelTier::Strong,
         None,
     );
     let report = runner.run_turn("跑个构建", &d, None);
@@ -2352,13 +2212,8 @@ fn run_command_background_must_pass_gate() {
         experts: None,
         budget: BudgetConfig::default(),
     };
-    let mut runner = SessionRunner::new(
-        "s-bgd1".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner =
+        SessionRunner::new("s-bgd1".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let report = runner.run_turn("后台跑个删除", &d, None);
     // gate 必须被咨询（原实现后台路径零 check）
     assert!(
@@ -2406,13 +2261,8 @@ fn task_wait_terminal_task_returns_output() {
         ),
     });
     let d = wait_deps(model, wal, sink.clone());
-    let mut runner = SessionRunner::new(
-        "s-tw1".into(),
-        "/tmp/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner =
+        SessionRunner::new("s-tw1".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
     let report = runner.run_turn("等命令结果", &d, None);
     assert_eq!(report.tool_calls, 1);
     let evs = events_of(sink.as_ref());
@@ -2471,13 +2321,7 @@ fn unattended_filters_ask_user_tool_spec() {
         fail: false,
     });
     let d = deps(model.clone(), tools, sink, None);
-    let mut runner = SessionRunner::new(
-        "s-tools".into(),
-        String::new(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-tools".into(), String::new(), PermissionMode::Ask, None);
     runner.unattended = true;
     let _ = runner.run_turn("列一下工具", &d, None);
     let names = model.tools.lock().unwrap().clone();
@@ -2504,13 +2348,7 @@ fn unattended_blocks_ask_user_call_without_clarify_event() {
         fail: false,
     });
     let d = deps(model, tools, sink.clone(), None);
-    let mut runner = SessionRunner::new(
-        "s-block".into(),
-        String::new(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-block".into(), String::new(), PermissionMode::Ask, None);
     runner.unattended = true;
     let rep = runner.run_turn("无人值守跑一下", &d, None);
     assert_eq!(rep.tool_calls, 1);
@@ -2562,7 +2400,6 @@ fn manager_persists_scene_form_and_conv_id() {
             StartParams {
                 workspace: String::new(),
                 mode: PermissionMode::Ask,
-                model_policy: ModelTier::Strong,
                 model_override: None,
                 title: "与张三的对话".into(),
                 restored: None,
@@ -2597,7 +2434,6 @@ fn manager_persists_scene_form_and_conv_id() {
             StartParams {
                 workspace: ws,
                 mode: PermissionMode::Ask,
-                model_policy: ModelTier::Strong,
                 model_override: None,
                 title: "t".into(),
                 restored: None,

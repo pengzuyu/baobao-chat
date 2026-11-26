@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use bbrt_aigw::{ChatClient, ChatMessage, ChatRequest, FinishReason, StreamEvent, ToolSpec, Usage};
 use bbrt_sec::gate::PermissionMode;
 use bbrt_session::bg_hub::{BgHub, BgJoin};
-use bbrt_session::events::{ModelTier, SessionEvent, SessionSink};
+use bbrt_session::events::{SessionEvent, SessionSink};
 use bbrt_session::executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome};
 use bbrt_session::loop_runner::{BgHostMsg, LoopDeps, NoopEventLog, SessionRunner};
 use bbrt_session::manager::{SessionManager, StartParams};
@@ -108,13 +108,8 @@ fn hub_park_drain_inject_feeds_model_next_turn() {
         seen: Mutex::new(vec![]),
     });
     let d = deps(model.clone(), sink.clone());
-    let mut runner = SessionRunner::new(
-        "s-inj".into(),
-        "/ws".into(),
-        PermissionMode::AutoEdit,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner =
+        SessionRunner::new("s-inj".into(), "/ws".into(), PermissionMode::AutoEdit, None);
     let _ = runner.run_turn("先干活", &d, None);
 
     // 后台 run 完成 park → manager 语义在此以 runner 级等价呈现：
@@ -163,7 +158,6 @@ fn manager_run_cancel_unknown_run_not_found() {
         StartParams {
             workspace: "/ws".into(),
             mode: PermissionMode::AutoEdit,
-            model_policy: ModelTier::Strong,
             model_override: None,
             title: "取消路由".into(),
             restored: None,
@@ -192,7 +186,6 @@ fn interrupt_cancels_session_background_runs_only() {
     let params = |title: &str| StartParams {
         workspace: "/ws".into(),
         mode: PermissionMode::AutoEdit,
-        model_policy: ModelTier::Strong,
         model_override: None,
         title: title.into(),
         restored: None,

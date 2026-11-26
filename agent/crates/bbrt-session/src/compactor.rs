@@ -1,4 +1,4 @@
-//! 公共层压实器（D23 §3.3 第②步 / M2）：bbc-fast 档凝缩。
+//! 公共层压实器（D23 §3.3 第②步 / M2）：公司默认档凝缩（2026-11-26 单档化前固定 bbc-fast）。
 //!
 //! bbrt-memory 是纯存储 crate（无模型栈依赖），压实器 trait 在彼处定义、
 //! 实现在此（bbrt-session 同时依赖 bbrt-memory 与 bbrt-aigw）；装配点=
@@ -11,7 +11,8 @@ use bbrt_aigw::{ChatClient, ChatMessage, ChatRequest, StreamEvent};
 use bbrt_memory::global::{parse_compacted, Compactor};
 use bbrt_memory::{compaction_prompt, GlobalEntry};
 
-/// bbc-fast 压实器（机械凝缩不需强模型；provider 不可用=Err→引擎保留旧视图）
+/// 压实器（走公司默认档；provider 不可用=Err→引擎保留旧视图）。类型名沿用 Fast 前缀
+/// （单档化后「快模型」语义已不存在，纯命名，避免跨 crate 改名扰动）
 pub struct FastCompactor {
     client: Arc<dyn ChatClient>,
 }
@@ -25,7 +26,7 @@ impl FastCompactor {
     /// 单轮文本收集（与 loop_runner::chat_text 同形，模块内自持避免跨模块可见性放大）
     fn chat_text(&self, system: &str) -> Result<String, String> {
         let req = ChatRequest {
-            model: "bbc-fast".to_string(),
+            model: crate::DEFAULT_MODEL_ALIAS.to_string(),
             messages: vec![
                 ChatMessage {
                     role: "system".into(),

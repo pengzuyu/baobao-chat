@@ -435,15 +435,15 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 8091,
         };
-        let bytes = build_request_bytes(&base, "tok-xyz", r#"{"model":"bbc-strong"}"#);
+        let bytes = build_request_bytes(&base, "tok-xyz", r#"{"model":"bbc-default"}"#);
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
         assert!(text.contains("Host: 127.0.0.1:8091\r\n"));
         assert!(text.contains("Authorization: Bearer tok-xyz\r\n"));
         assert!(text.contains("Content-Type: application/json\r\n"));
         assert!(text.contains("Accept: text/event-stream\r\n"));
-        assert!(text.contains(r#"Content-Length: 22"#));
-        assert!(text.ends_with(r#"{"model":"bbc-strong"}"#));
+        assert!(text.contains(r#"Content-Length: 23"#));
+        assert!(text.ends_with(r#"{"model":"bbc-default"}"#));
     }
 
     /// chunked 解码：数据块跨任意读块边界（每次底层 read 仅 1~3 字节）仍正确。

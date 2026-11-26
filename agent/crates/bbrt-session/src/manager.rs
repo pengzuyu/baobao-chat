@@ -16,7 +16,7 @@ use bbrt_store::Store;
 use bbrt_sec::gate::PermissionMode;
 use bbrt_store::SessionRow;
 
-use crate::events::{ModelTier, SessionEvent};
+use crate::events::SessionEvent;
 use crate::loop_runner::{LoopDeps, PermissionResponse, SessionRunner};
 use crate::state::SessionState;
 
@@ -69,8 +69,7 @@ pub struct RestoredSummary {
 pub struct StartParams {
     pub workspace: String,
     pub mode: PermissionMode,
-    pub model_policy: ModelTier,
-    /// 会话级模型直达引用（0023：p:<provider_id>:<model>；None=档位别名）
+    /// 会话级模型直达引用（0023：p:<provider_id>:<model>；None=公司默认档）
     pub model_override: Option<String>,
     pub title: String,
     /// 崩溃恢复产物（session.start 带 historyRef 时由装配层先行 recover；
@@ -194,7 +193,6 @@ impl SessionManager {
                     bbrt_sec::gate::PermissionMode::FullAuto => "full-auto",
                 }
                 .to_string(),
-                model_policy: format!("{:?}", p.model_policy).to_lowercase(),
                 model_override: p.model_override.clone(),
                 status: "idle".into(),
                 share_enabled: false,
@@ -222,7 +220,6 @@ impl SessionManager {
             session_id.clone(),
             workspace_real.clone(),
             p.mode,
-            p.model_policy,
             p.model_override.clone(),
         );
         // 后台任务中枢注入（D16 §5：经 manager 的会话恒可后台；
@@ -398,14 +395,15 @@ impl SessionManager {
         Arc::clone(&self.hub)
     }
 
-    /// model.switch（D11 §4 ModelSwitched 产生方）：空闲会话档位切换 →
+    /// model.switch（D11 §4 ModelSwitched 产生方）：空闲会话模型切换 →
     /// 事件 + WAL。turn 进行中（runner 被取走）返回 Busy——排队切换随
     /// 阶段二登记（切换通常发生在空闲的设置面板场景，v0.1 空闲即切）。
-    /// session_id None=全部活跃会话；同档幂等不产生事件。
+    /// session_id None=全部活跃会话；同引用幂等不产生事件。
+    /// model_override：Some(p:<id>:<model>)=直达引用，None=回公司默认档
+    /// （2026-11-26 单档化：档位参数退役）。
     pub fn switch_model(
         &self,
         session_id: Option<&str>,
-        to: crate::events::ModelTier,
         model_override: Option<&str>,
         reason: &str,
     ) -> Result<usize, ManagerError> {
@@ -431,29 +429,24 @@ impl SessionManager {
             let Some(runner) = guard.as_mut() else {
                 continue; // turn 中：跳过该会话（广播语义尽力而为）
             };
-            let from = runner.model_policy;
-            if from == to && runner.model_override.as_deref() == model_override {
-                continue; // 同档且同 override：幂等
+            if runner.model_override.as_deref() == model_override {
+                continue; // 同引用：幂等
             }
-            runner.model_policy = to;
             runner.model_override = model_override.map(str::to_string);
             // 换模型后视觉降级标记失效（新模型可能支持图片输入，重新尝试）
             runner.reset_vision();
             drop(guard);
             // 持久化（修既有缺陷：此前切换不回写 agent_session，重启即丢）
             if let Some(store) = &self.store {
-                let _ = store.lock().unwrap().update_session_model(
-                    &sid,
-                    &format!("{to:?}").to_lowercase(),
-                    model_override,
-                );
+                let _ = store
+                    .lock()
+                    .unwrap()
+                    .update_session_model(&sid, model_override);
             }
             self.deps
                 .sink
                 .emit(crate::events::SessionEvent::ModelSwitched {
                     session_id: sid.clone(),
-                    from,
-                    to,
                     model_override: model_override.map(str::to_string),
                     reason: reason.to_string(),
                 });
@@ -461,7 +454,7 @@ impl SessionManager {
                 &sid,
                 "model.switched",
                 &format!(
-                    "{{\"from\":\"{from:?}\",\"to\":\"{to:?}\",\"model\":{},\"reason\":\"{}\"}}",
+                    "{{\"model\":{},\"reason\":\"{}\"}}",
                     match model_override {
                         Some(m) => format!("\"{m}\""),
                         None => "null".to_string(),

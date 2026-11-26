@@ -122,7 +122,8 @@ pub struct ToolSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatRequest {
-    /// 模型档位别名（docs/19 §3.2：只允许 bbc-fast / bbc-strong 等，网关侧校验）。
+    /// 模型：公司默认档别名 bbc-default（docs/19 §3.2；2026-11-26 单档化——快/强双档
+    /// 退役，网关侧仍兼容 bbc-fast/bbc-strong）或 p:<id>:<model> 直达引用，网关侧校验。
     pub model: String,
     pub messages: Vec<ChatMessage>,
     /// 空时序列化时省略（无工具轮次不占请求体）。
@@ -208,7 +209,7 @@ mod tests {
     fn sample_request() -> ChatRequest {
         ChatRequest {
             thinking: None,
-            model: "bbc-strong".to_string(),
+            model: "bbc-default".to_string(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -248,7 +249,7 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
 
         // 字段名断言（camelCase 锁定）
-        assert_eq!(json["model"], "bbc-strong");
+        assert_eq!(json["model"], "bbc-default");
         assert!(json.get("messages").is_some());
         let assistant = &json["messages"][1];
         assert_eq!(assistant["toolCalls"][0]["id"], "call-1");
@@ -268,7 +269,7 @@ mod tests {
     #[test]
     fn wire_body_injects_stream_and_skips_empty_tools() {
         let body = wire_body(&ChatRequest {
-            model: "bbc-fast".to_string(),
+            model: "bbc-default".to_string(),
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: "hi".into(),
@@ -280,7 +281,7 @@ mod tests {
         });
         assert!(body.contains(r#""stream":true"#), "body={body}");
         assert!(!body.contains("\"tools\""), "空 tools 应省略，body={body}");
-        assert!(body.contains(r#""model":"bbc-fast""#));
+        assert!(body.contains(r#""model":"bbc-default""#));
         // 纯文本 content 仍是 JSON 字符串（v0.1 线上字节不变——prompt cache 前缀稳定）
         assert!(body.contains(r#""content":"hi""#), "body={body}");
 
@@ -341,7 +342,7 @@ mod tests {
 
         // wire 体同样落数组
         let body = wire_body(&ChatRequest {
-            model: "bbc-strong".to_string(),
+            model: "bbc-default".to_string(),
             messages: vec![msg],
             tools: vec![],
             thinking: None,

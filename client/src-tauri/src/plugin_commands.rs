@@ -485,7 +485,8 @@ pub fn plugin_commands_list(host: Host) -> Result<Value, String> {
 /// tools/model）→ 专家 Persona Manifest 落 {dataDir}/eco/experts/
 /// plugin_{plugin_id}_{name}.yaml（走 ExpertIndex::scan 既有装配链——
 /// manifest ∩ 注册表 ∩ 租户策略交集，超集剔除标灰）。
-/// tools 分拣：`mcp.*` 进 mcp 白名单、其余进 builtin；model→tier（缺省 strong）。
+/// tools 分拣：`mcp.*` 进 mcp 白名单、其余进 builtin。专家恒走公司默认档
+/// （2026-11-26 单档化：frontmatter 的 model 档位声明失效，不再翻译 tier）。
 /// 单条翻译失败跳过（降级语义同生态装载）。幂等：先清本插件旧翻译再写。
 fn sync_plugin_experts(root: &std::path::Path, plugin_id: &str) {
     // root = {dataDir}/eco/plugins/{id} → experts = {dataDir}/eco/experts
@@ -562,10 +563,6 @@ fn sync_plugin_experts(root: &std::path::Path, plugin_id: &str) {
                 }
             }
         }
-        let tier = match fm_get(&kvs, "model") {
-            Some("fast") => "fast",
-            _ => "strong",
-        };
         let display = fm_get(&kvs, "description").unwrap_or(&name).to_string();
         // persona 块标量：正文按两空格缩进（expert.rs take_block 按 dedent 处理）
         let persona_block: String = body
@@ -574,7 +571,7 @@ fn sync_plugin_experts(root: &std::path::Path, plugin_id: &str) {
             .collect::<Vec<_>>()
             .join("\n");
         let yaml = format!(
-            "id: plugin.{plugin_id}.{name}\ntype: local\nversion: {ver}\ndisplay: {display}\nicon: plug\npersona: |\n{persona_block}\ntools:\n  builtin: [{}]\n  apps: []\n  mcp: [{}]\nmodel: {{ tier: {tier} }}\n",
+            "id: plugin.{plugin_id}.{name}\ntype: local\nversion: {ver}\ndisplay: {display}\nicon: plug\npersona: |\n{persona_block}\ntools:\n  builtin: [{}]\n  apps: []\n  mcp: [{}]\n",
             builtin.join(", "),
             mcp.join(", "),
         );

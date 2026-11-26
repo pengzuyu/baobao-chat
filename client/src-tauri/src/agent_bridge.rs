@@ -39,7 +39,6 @@ pub struct SessionCache {
     pub title: String,
     pub workspace: String,
     pub mode: String,
-    pub model_policy: String,
     pub model_override: Option<String>,
     pub status: String,
     pub created_at: i64,
@@ -50,8 +49,7 @@ impl SessionCache {
     fn to_row(&self) -> Value {
         json!({
             "id": self.id, "title": self.title, "workspace": self.workspace,
-            "mode": self.mode, "model_policy": self.model_policy,
-            "model_override": self.model_override, "status": self.status,
+            "mode": self.mode, "model_override": self.model_override, "status": self.status,
             "created_at": self.created_at, "updated_at": self.updated_at,
         })
     }
@@ -274,10 +272,9 @@ impl Shared {
             "session.ready" => {
                 row.status = "idle".into();
             }
+            // 2026-11-26 单档化：切换只在「直达引用 / 公司默认档」两态间（model
+            // 缺席/null=默认档）；RT 事件不再带 from/to 档位
             "model.switched" => {
-                if let Some(to) = pre["to"].as_str() {
-                    row.model_policy = to.to_string();
-                }
                 row.model_override = pre["model"].as_str().map(str::to_string);
             }
             "session.ended" => {
@@ -836,7 +833,6 @@ impl AgentHost {
         &self,
         workspace: &str,
         mode: &str,
-        model_policy: &str,
         model: Option<&str>,
         title: Option<&str>,
         unattended: bool,
@@ -870,7 +866,6 @@ impl AgentHost {
                 .unwrap_or_else(|| format!("会话 {n}")),
             workspace: workspace_norm.clone(),
             mode: mode.to_string(),
-            model_policy: model_policy.to_string(),
             model_override: model.map(str::to_string),
             status: "starting".into(),
             created_at: now,
@@ -878,7 +873,9 @@ impl AgentHost {
         });
         let payload = json!({
             "sessionId": sid, "workspace": workspace_norm, "mode": mode,
-            "modelPolicy": model_policy, "model": model, "skills": [],
+            // model=直达引用 p:<id>:<model>；None=公司默认档（2026-11-26 单档化：
+            // 档位载荷退役，不再下发档位键）
+            "model": model, "skills": [],
             "title": title,
             // D35 定时任务：无人值守（审批等待已改全链不超时，2026-11-25 拍板）
             "unattended": unattended,
@@ -1011,11 +1008,10 @@ fn now_ms() -> i64 {
 }
 
 /// D19 session.list 持久行 camelCase → FE snake_case（mapSession 口径）：
-/// modelPolicy→model_policy 等五个复合键重命名，其余原样透传
+/// modelOverride→model_override 等四个复合键重命名，其余原样透传
 fn camel_to_snake_session(row: &Value) -> Value {
     let mut out = row.clone();
     for (from, to) in [
-        ("modelPolicy", "model_policy"),
         ("modelOverride", "model_override"),
         ("createdAt", "created_at"),
         ("updatedAt", "updated_at"),
@@ -1594,7 +1590,7 @@ mod tests {
     fn camel_to_snake_cases() {
         assert_eq!(camel_to_snake("sessionId"), "session_id");
         assert_eq!(camel_to_snake("id"), "id");
-        assert_eq!(camel_to_snake("modelPolicy"), "model_policy");
+        assert_eq!(camel_to_snake("modelOverride"), "model_override");
         assert_eq!(camel_to_snake("replayedEvents"), "replayed_events");
     }
 
@@ -1625,7 +1621,6 @@ mod tests {
                 title: "会话 1".into(),
                 workspace: "~/code".into(),
                 mode: "ask".into(),
-                model_policy: "auto".into(),
                 model_override: None,
                 status: "starting".into(),
                 created_at: 0,

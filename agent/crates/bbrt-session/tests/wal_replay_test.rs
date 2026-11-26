@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use bbrt_aigw::{ChatClient, ChatRequest, FinishReason, StreamEvent, ToolSpec, Usage};
 use bbrt_context::BudgetConfig;
 use bbrt_sec::gate::PermissionMode;
-use bbrt_session::events::{ModelTier, SessionEvent, SessionSink};
+use bbrt_session::events::{SessionEvent, SessionSink};
 use bbrt_session::executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome};
 use bbrt_session::loop_runner::{EventLog, LoopDeps, SessionRunner};
 use bbrt_session::{recover, SessionManager, StartParams};
@@ -84,7 +84,6 @@ fn seed_session(store: &Store, dir: &Path, session_id: &str) {
             title: session_id.into(),
             form: "workbench".into(),
             mode: "ask".into(),
-            model_policy: "strong".into(),
             model_override: None,
             status: "idle".into(),
             share_enabled: false,
@@ -232,7 +231,6 @@ fn wal_replay_recovers_user_turn_after_fix() {
         "s-rp".into(),
         dir.to_string_lossy().into_owned(),
         PermissionMode::Ask,
-        ModelTier::Strong,
         None,
     );
     runner.run_turn("修复登录超时并跑测试", &deps, None);
@@ -293,7 +291,6 @@ fn manager_workspace_of() {
         StartParams {
             workspace: "/ws/mine".into(),
             mode: PermissionMode::Ask,
-            model_policy: ModelTier::Strong,
             model_override: None,
             title: "t".into(),
             restored: None,

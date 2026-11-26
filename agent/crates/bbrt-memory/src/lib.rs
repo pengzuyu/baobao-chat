@@ -462,7 +462,7 @@ impl MemoryEngine {
         Some(entry.body)
     }
 
-    /// D23：装配公共层压实器（bbrt main 接 bbc-fast；见 bbrt_session::FastCompactor）
+    /// D23：装配公共层压实器（bbrt main 接公司默认档；见 bbrt_session::FastCompactor）
     pub fn set_compactor(&self, c: Option<Arc<dyn global::Compactor>>) {
         self.global.set_compactor(c);
     }

@@ -36,13 +36,14 @@ pub fn run_history(host: Host, run_id: String) -> Result<Value, String> {
 
 /// 新建会话：宿主生成 sessionId → session.start（等 session.ready 回执）。
 /// title 可选初始标题（IM embedded 会话来源名；缺省=「会话 n」占位，
-/// 前端首条用户消息后经 agent_rename 派生）
+/// 前端首条用户消息后经 agent_rename 派生）。
+/// model=直达引用 p:<供应商ID>:<模型>；缺省=公司默认档（2026-11-26 单档化：
+/// 原档位参数退役，前端不再传档位键）
 #[tauri::command(async)]
 pub fn agent_start_session(
     host: Host,
     workspace_id: String,
     mode: String,
-    model_policy: String,
     model: Option<String>,
     title: Option<String>,
     origin: Option<String>,
@@ -52,7 +53,6 @@ pub fn agent_start_session(
     let sid = host.start_session(
         &workspace_id,
         &mode,
-        &model_policy,
         model.as_deref(),
         title.as_deref(),
         false,
@@ -218,17 +218,17 @@ pub fn agent_asset_revoke_session(
     Ok(json!({ "removed": removed.len() }))
 }
 
-/// 会话内切换模型（model=直达引用 p:<id>:<model>；回执 model.switched 事件驱动 UI）
+/// 会话内切换模型（model=直达引用 p:<id>:<model>，None=回公司默认档；回执
+/// model.switched 事件驱动 UI）。2026-11-26 单档化：原档位参数退役
 #[tauri::command(async)]
 pub fn agent_switch_model(
     host: Host,
     session_id: String,
-    to: String,
     model: Option<String>,
 ) -> Result<(), String> {
     host.fire(
         "model.switch",
-        json!({ "sessionId": session_id, "to": to, "model": model, "reason": "user" }),
+        json!({ "sessionId": session_id, "model": model, "reason": "user" }),
     )
 }
 

@@ -28,7 +28,6 @@ fn seed_session(store: &Store, id: &str) {
             title: "run 记录测试".into(),
             form: "workbench".into(),
             mode: "ask".into(),
-            model_policy: "auto".into(),
             model_override: None,
             status: "idle".into(),
             share_enabled: false,

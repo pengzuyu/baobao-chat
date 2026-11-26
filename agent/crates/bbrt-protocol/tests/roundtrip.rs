@@ -8,8 +8,8 @@ use std::io::Cursor;
 use bbrt_protocol::{
     read_message, write_message, Attachment, AttachmentKind, Blocked, ClarifyOption, CodecError,
     CompactionPhase, Decision, EndReason, Envelope, GrantScope, HistoryItem, HostToRuntime,
-    MemoryListItem, MemoryScope, ModelPolicy, ModelSwitchReason, OboTokenEntry, PermissionMode,
-    Preview, ProtocolError, RenewReason, RiskLevel, RuntimeToHost, SessionState, StreamChannel,
+    MemoryListItem, MemoryScope, ModelSwitchReason, OboTokenEntry, PermissionMode, Preview,
+    ProtocolError, RenewReason, RiskLevel, RuntimeToHost, SessionState, StreamChannel,
     SubagentPhase, SubagentResult, ThinkingLevel, ToolSource, ToolsReloadReason, Usage,
     PROTOCOL_VERSION,
 };
@@ -33,7 +33,6 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
             session_id: "sess-1".into(),
             workspace: "~/code/bbc".into(),
             mode: PermissionMode::AutoEdit,
-            model_policy: ModelPolicy::Auto,
             model: Some("p:1:glm-5.3".into()),
             skills: vec!["sql-review".into()],
             history_ref: None,
@@ -115,7 +114,6 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
         },
         HostToRuntime::ModelSwitch {
             session_id: Some("s1".into()),
-            to: bbrt_protocol::ModelPolicy::Fast,
             model: Some("p:2:deepseek-chat".into()),
             reason: Some("user".into()),
         },
@@ -219,8 +217,6 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
         },
         RuntimeToHost::ModelSwitched {
             session_id: "sess-1".into(),
-            from: ModelPolicy::Fast,
-            to: ModelPolicy::Strong,
             model: Some("p:1:glm-5.3".into()),
             reason: ModelSwitchReason::Auto,
         },
@@ -398,7 +394,6 @@ fn golden_session_start() {
             session_id: "sess-1".into(),
             workspace: "~/code/bbc".into(),
             mode: PermissionMode::Ask,
-            model_policy: ModelPolicy::Fast,
             model: None, // None=缺席不序列化(golden)
             skills: vec!["sql-review".into()],
             history_ref: None,
@@ -413,11 +408,11 @@ fn golden_session_start() {
             "sessionId": "sess-1",
             "workspace": "~/code/bbc",
             "mode": "ask",
-            "modelPolicy": "fast",
             "skills": ["sql-review"]
         }),
     );
-    // 反向：JSON 字符串 → 枚举
+    // 反向：JSON 字符串 → 枚举（2026-11-26 单档化：旧宿主 JSON 仍带 modelPolicy，
+    // 现为被容忍的未知字段）
     let m: HostToRuntime = serde_json::from_str(
         r#"{"type":"session.start","sessionId":"s","workspace":"w","mode":"full-auto","modelPolicy":"auto","skills":[]}"#,
     )
@@ -440,7 +435,6 @@ fn session_start_unattended_fields_roundtrip() {
         session_id: "sess-u".into(),
         workspace: String::new(),
         mode: PermissionMode::Ask,
-        model_policy: ModelPolicy::Auto,
         model: None,
         skills: vec![],
         history_ref: None,
@@ -478,7 +472,6 @@ fn session_start_origin_fields_roundtrip() {
         session_id: "sess-e".into(),
         workspace: String::new(),
         mode: PermissionMode::Ask,
-        model_policy: ModelPolicy::Auto,
         model: None,
         skills: vec![],
         history_ref: None,
@@ -499,7 +492,6 @@ fn session_start_origin_fields_roundtrip() {
         session_id: "s".into(),
         workspace: "w".into(),
         mode: PermissionMode::Ask,
-        model_policy: ModelPolicy::Auto,
         model: None,
         skills: vec![],
         history_ref: None,
@@ -666,13 +658,39 @@ fn golden_compaction_and_model_switched() {
     golden(
         &RuntimeToHost::ModelSwitched {
             session_id: "s".into(),
-            from: ModelPolicy::Strong,
-            to: ModelPolicy::Fast,
             model: None,
             reason: ModelSwitchReason::Downgrade,
         },
-        json!({"type":"model.switched","sessionId":"s","from":"strong","to":"fast","reason":"downgrade"}),
+        json!({"type":"model.switched","sessionId":"s","reason":"downgrade"}),
     );
+    // 2026-11-26 单档化：档位字段 from/to 退役——旧 WAL 行多出这两个字段，
+    // 反序列化忽略、回放不断裂（同 approvalTimeoutSecs 的退役口径）
+    let legacy: RuntimeToHost = serde_json::from_value(json!({
+        "type":"model.switched","sessionId":"s","from":"strong","to":"fast",
+        "reason":"downgrade"
+    }))
+    .unwrap();
+    assert!(matches!(
+        legacy,
+        RuntimeToHost::ModelSwitched {
+            session_id,
+            model: None,
+            reason: ModelSwitchReason::Downgrade,
+        } if session_id == "s"
+    ));
+    // model.switch 同理：旧宿主多带 to 被忽略，model 缺席=回公司默认档
+    let legacy_switch: HostToRuntime = serde_json::from_value(json!({
+        "type":"model.switch","sessionId":"s","to":"fast"
+    }))
+    .unwrap();
+    assert!(matches!(
+        legacy_switch,
+        HostToRuntime::ModelSwitch {
+            session_id: Some(_),
+            model: None,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -1030,7 +1048,6 @@ fn unknown_fields_are_tolerated() {
             session_id: "s".into(),
             workspace: "w".into(),
             mode: PermissionMode::Ask,
-            model_policy: ModelPolicy::Auto,
             model: None,
             skills: vec![],
             history_ref: None,
@@ -1053,7 +1070,6 @@ fn envelope_wrap_unwrap_roundtrip() {
         session_id: "sess-1".into(),
         workspace: "~/code/bbc".into(),
         mode: PermissionMode::Ask,
-        model_policy: ModelPolicy::Auto,
         model: None,
         skills: vec![],
         history_ref: None,
@@ -1067,14 +1083,14 @@ fn envelope_wrap_unwrap_roundtrip() {
     assert_eq!(env.msg_type, "session.start");
     assert_eq!(
         env.payload,
-        json!({"sessionId":"sess-1","workspace":"~/code/bbc","mode":"ask","modelPolicy":"auto","skills":[]})
+        json!({"sessionId":"sess-1","workspace":"~/code/bbc","mode":"ask","skills":[]})
     );
     // 线路形态：type 在信封层、payload 嵌套，reply_to/ts 缺席
     assert_eq!(
         serde_json::to_value(&env).unwrap(),
         json!({
             "v":1,"id":"h-1","type":"session.start",
-            "payload":{"sessionId":"sess-1","workspace":"~/code/bbc","mode":"ask","modelPolicy":"auto","skills":[]}
+            "payload":{"sessionId":"sess-1","workspace":"~/code/bbc","mode":"ask","skills":[]}
         })
     );
     let back: HostToRuntime = env.unwrap().expect("unwrap");
@@ -1260,7 +1276,6 @@ fn golden_d19_workspace_and_session_list_messages() {
                 title: "会话 1".into(),
                 workspace: "/Users/me/code/baobao-chat".into(),
                 mode: "ask".into(),
-                model_policy: "auto".into(),
                 model_override: None,
                 status: "ended".into(),
                 created_at: 1_780_000_000_000,
@@ -1272,7 +1287,7 @@ fn golden_d19_workspace_and_session_list_messages() {
         json!({
             "type":"session.listed",
             "items":[{"id":"sess-1","title":"会话 1","workspace":"/Users/me/code/baobao-chat",
-                      "mode":"ask","modelPolicy":"auto","status":"ended",
+                      "mode":"ask","status":"ended",
                       "createdAt":1780000000000i64,"updatedAt":1790000000000i64,
                       "endedAt":1790000000500i64,"summary":"收口"}]
         }),
@@ -1466,7 +1481,6 @@ fn golden_session_title_and_interrupt() {
             session_id: "sess-1".into(),
             workspace: String::new(),
             mode: PermissionMode::Ask,
-            model_policy: ModelPolicy::Auto,
             model: None,
             skills: vec![],
             history_ref: None,
@@ -1478,7 +1492,7 @@ fn golden_session_title_and_interrupt() {
         },
         json!({
             "type":"session.start","sessionId":"sess-1","workspace":"","mode":"ask",
-            "modelPolicy":"auto","skills":[],"title":"与张三的对话"
+            "skills":[],"title":"与张三的对话"
         }),
     );
     golden(

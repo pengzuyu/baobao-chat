@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use bbrt_aigw::{ChatClient, ChatRequest, FinishReason, StreamEvent, ToolSpec, Usage};
 use bbrt_context::BudgetConfig;
 use bbrt_sec::gate::PermissionMode;
-use bbrt_session::events::{ModelTier, SessionEvent, SessionSink};
+use bbrt_session::events::{SessionEvent, SessionSink};
 use bbrt_session::executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome};
 use bbrt_session::loop_runner::{LoopDeps, NoopEventLog, SessionRunner};
 use bbrt_session::{SkillEntry, SkillIndex};
@@ -131,13 +131,7 @@ fn skill_catalog_listed_in_system_only() {
         experts: None,
         budget: BudgetConfig::default(),
     };
-    let mut runner = SessionRunner::new(
-        "s-skl".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-skl".into(), "/ws".into(), PermissionMode::Ask, None);
 
     // 「命中」关键词轮（旧机制会注入正文——新口径同样只有目录）
     runner.run_turn("帮我报销上次的差旅费", &deps, None);
@@ -290,7 +284,6 @@ fn pick_tools_not_narrowed_by_skill_declarations() {
         "s-pick".into(),
         "/ws".into(),
         PermissionMode::AutoEdit,
-        ModelTier::Strong,
         None,
     );
     runner.run_turn("帮我部署服务", &deps, None);
@@ -335,7 +328,6 @@ fn pick_tools_keeps_full_when_undeclared() {
         "s-pick2".into(),
         "/ws".into(),
         PermissionMode::AutoEdit,
-        ModelTier::Strong,
         None,
     );
     runner.run_turn("自由发挥", &deps, None);

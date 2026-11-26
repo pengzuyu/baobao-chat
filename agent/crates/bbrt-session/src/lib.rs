@@ -30,8 +30,13 @@ pub mod skills;
 pub mod state;
 pub mod subagent;
 
+/// 公司默认档的网关别名（19 篇 §3.2）。2026-11-26 对话档位单档化：快/强双档退役，
+/// 会话主循环未指定直达引用时、以及压缩摘要/记忆提炼/探查规划/专家等内部辅助调用
+/// 一律走它（网关侧 bbc-fast/bbc-strong 兼容别名同解到此档）。
+pub const DEFAULT_MODEL_ALIAS: &str = "bbc-default";
+
 pub use compactor::FastCompactor;
-pub use events::{ModelTier, NullSink, SessionEvent, SessionSink, StreamChannel};
+pub use events::{NullSink, SessionEvent, SessionSink, StreamChannel};
 pub use executor::{
     CheckOutcome, CommandHandoff, ToolExecutor, ToolInvocation, ToolOutcome, ToolPreview,
 };

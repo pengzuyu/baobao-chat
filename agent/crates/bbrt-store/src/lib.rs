@@ -123,7 +123,6 @@ pub(crate) mod testutil {
             title: "测试会话".to_string(),
             form: "workbench".to_string(),
             mode: "ask".to_string(),
-            model_policy: "auto".to_string(),
             model_override: None,
             status: "idle".to_string(),
             share_enabled: false,

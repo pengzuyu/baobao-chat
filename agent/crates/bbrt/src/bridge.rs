@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use bbrt_protocol::{
-    Blocked, CompactionPhase, Envelope, GrantScope, ModelPolicy, ModelSwitchReason, Preview,
-    RiskLevel, RuntimeToHost, SessionState, StreamChannel, Usage,
+    Blocked, CompactionPhase, Envelope, GrantScope, ModelSwitchReason, Preview, RiskLevel,
+    RuntimeToHost, SessionState, StreamChannel, Usage,
 };
 use bbrt_session::events::SessionEvent;
 use bbrt_session::SessionSink;
@@ -304,14 +304,10 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
         },
         SessionEvent::ModelSwitched {
             session_id,
-            from,
-            to,
             model_override,
             reason,
         } => RuntimeToHost::ModelSwitched {
             session_id: session_id.clone(),
-            from: tier_policy(*from),
-            to: tier_policy(*to),
             model: model_override.clone(),
             reason: match reason.as_str() {
                 "user" => ModelSwitchReason::User,
@@ -368,11 +364,4 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
             session_id: Some(session_id.clone()),
         },
     })
-}
-
-fn tier_policy(t: bbrt_session::events::ModelTier) -> ModelPolicy {
-    match t {
-        bbrt_session::events::ModelTier::Fast => ModelPolicy::Fast,
-        bbrt_session::events::ModelTier::Strong => ModelPolicy::Strong,
-    }
 }

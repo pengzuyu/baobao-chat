@@ -19,11 +19,10 @@ pub struct SessionRow {
     pub form: String,
     /// ask | auto-edit | full-auto
     pub mode: String,
-    /// 委派后端 zcode|claude|generic|builtin（17 篇增列）
-    /// fast | strong | auto
-    pub model_policy: String,
     /// 会话级模型直达引用（0023 多供应商；p:<provider_id>:<model>）。
-    /// NULL=走 model_policy 档位别名；仅作用于主循环对话模型（002 迁移增列）。
+    /// NULL=公司默认档 bbc-default（2026-11-26 单档化：档位列 model_policy 退役——
+    /// 001 基线直改不迁移，存量库残留列带 DEFAULT 'auto'，本模块不再读写）；
+    /// 仅作用于主循环对话模型（002 迁移增列）。
     pub model_override: Option<String>,
     /// D11 §3 状态机枚举
     pub status: String,
@@ -38,7 +37,7 @@ pub struct SessionRow {
 }
 
 /// SELECT 列清单（顺序与 from_row 一致）
-const COLS: &str = "id, workspace_id, title, form, mode, model_policy, model_override, status, \
+const COLS: &str = "id, workspace_id, title, form, mode, model_override, status, \
                     share_enabled, conv_id, created_at, updated_at, ended_at, summary";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
@@ -48,15 +47,14 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         title: row.get(2)?,
         form: row.get(3)?,
         mode: row.get(4)?,
-        model_policy: row.get(5)?,
-        model_override: row.get(6)?,
-        status: row.get(7)?,
-        share_enabled: row.get::<_, i64>(8)? != 0,
-        conv_id: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
-        ended_at: row.get(12)?,
-        summary: row.get(13)?,
+        model_override: row.get(5)?,
+        status: row.get(6)?,
+        share_enabled: row.get::<_, i64>(7)? != 0,
+        conv_id: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+        ended_at: row.get(11)?,
+        summary: row.get(12)?,
     })
 }
 
@@ -65,16 +63,15 @@ impl Store {
     pub fn insert_session(&self, s: &SessionRow) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO agent_session
-                 (id, workspace_id, title, form, mode, model_policy, model_override, status,
+                 (id, workspace_id, title, form, mode, model_override, status,
                   share_enabled, conv_id, created_at, updated_at, ended_at, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 s.id,
                 s.workspace_id,
                 s.title,
                 s.form,
                 s.mode,
-                s.model_policy,
                 s.model_override,
                 s.status,
                 s.share_enabled,
@@ -111,21 +108,20 @@ impl Store {
         Ok(())
     }
 
-    /// 模型选择回写（model.switch 持久化；override None=清直达引用回档位）。
+    /// 模型选择回写（model.switch 持久化；override None=清直达引用回公司默认档）。
+    /// 不触碰已退役的档位列（存量库残留 NOT NULL DEFAULT 'auto'，不写即沿用缺省）。
     pub fn update_session_model(
         &self,
         id: &str,
-        policy: &str,
         model_override: Option<&str>,
     ) -> Result<(), StoreError> {
         let now = now_ms();
         self.conn.execute(
             "UPDATE agent_session
-             SET model_policy   = ?2,
-                 model_override = ?3,
-                 updated_at     = ?4
+             SET model_override = ?2,
+                 updated_at     = ?3
              WHERE id = ?1",
-            params![id, policy, model_override, now],
+            params![id, model_override, now],
         )?;
         Ok(())
     }
@@ -235,7 +231,7 @@ impl Store {
         limit: u32,
     ) -> Result<Vec<SessionListRow>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.title, COALESCE(w.path, ''), s.mode, s.model_policy, s.model_override, \
+            "SELECT s.id, s.title, COALESCE(w.path, ''), s.mode, s.model_override, \
                     s.status, s.created_at, s.updated_at, s.ended_at, s.summary
              FROM agent_session s
              LEFT JOIN agent_workspace w ON w.id = s.workspace_id
@@ -247,13 +243,12 @@ impl Store {
                 title: row.get(1)?,
                 workspace: row.get(2)?,
                 mode: row.get(3)?,
-                model_policy: row.get(4)?,
-                model_override: row.get(5)?,
-                status: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-                ended_at: row.get(9)?,
-                summary: row.get(10)?,
+                model_override: row.get(4)?,
+                status: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+                ended_at: row.get(8)?,
+                summary: row.get(9)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -335,7 +330,6 @@ pub struct SessionListRow {
     /// 工作目录（""=日常/未关联）
     pub workspace: String,
     pub mode: String,
-    pub model_policy: String,
     pub model_override: Option<String>,
     pub status: String,
     pub created_at: i64,

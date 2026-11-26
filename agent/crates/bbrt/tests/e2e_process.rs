@@ -151,7 +151,7 @@ fn sse_line(data: &str) -> String {
     format!("data: {data}\n\n")
 }
 
-/// fanout 判定轮（FastPlanner 首个 bbc-fast 请求的响应：不分解）
+/// fanout 判定轮（FastPlanner 首个默认档请求的响应：不分解）
 fn planner_noop() -> String {
     format!(
         "{}{}{}",
@@ -234,7 +234,6 @@ fn e2e_full_runtime_process() {
             session_id: "sess-e2e".into(),
             workspace: tmp.path().to_string_lossy().into_owned(),
             mode: bbrt_protocol::PermissionMode::Ask,
-            model_policy: bbrt_protocol::ModelPolicy::Strong,
             model: None,
             skills: vec![],
             history_ref: None,

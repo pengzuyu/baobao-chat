@@ -69,11 +69,9 @@ fn main() {
         .start_session(
             ws.to_str().unwrap(),
             "ask",
-            "strong",
             None,
             None,
             false,
-            None,
             None,
             None,
             None,

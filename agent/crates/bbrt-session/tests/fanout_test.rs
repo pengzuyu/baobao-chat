@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use bbrt_aigw::{ChatClient, ChatRequest, FinishReason, StreamEvent, ToolSpec, Usage};
 use bbrt_context::BudgetConfig;
 use bbrt_sec::gate::PermissionMode;
-use bbrt_session::events::{ModelTier, SessionEvent, SessionSink};
+use bbrt_session::events::{SessionEvent, SessionSink};
 use bbrt_session::executor::{CheckOutcome, ToolExecutor, ToolInvocation, ToolOutcome};
 use bbrt_session::loop_runner::{EventLog, LoopDeps, SessionRunner};
 use bbrt_session::subagent::{FanoutPlanner, ProbeSpec};
@@ -243,13 +243,7 @@ fn fanout_two_probes_join_into_history() {
         tools.clone(),
     );
 
-    let mut runner = SessionRunner::new(
-        "s-fan".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-fan".into(), "/ws".into(), PermissionMode::Ask, None);
     runner.run_turn("梳理这个项目的认证与配置", &deps, None);
 
     // 工具经完整管线执行（每子任务 1 次 search_files）
@@ -338,13 +332,7 @@ fn fanout_none_keeps_normal_loop() {
         log.clone(),
         tools,
     );
-    let mut runner = SessionRunner::new(
-        "s-plain".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-plain".into(), "/ws".into(), PermissionMode::Ask, None);
     runner.run_turn("普通单任务", &deps, None);
 
     let evs = sink.0.lock().unwrap().clone();
@@ -429,13 +417,7 @@ fn fanout_window_timeout_goes_background() {
         tools,
     );
     let hub = Arc::new(bbrt_session::bg_hub::BgHub::new());
-    let mut runner = SessionRunner::new(
-        "s-bg-fan".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-bg-fan".into(), "/ws".into(), PermissionMode::Ask, None);
     runner.subagent_wait_window = std::time::Duration::from_millis(150);
     runner.bg_hub = Some(hub.clone());
 
@@ -548,13 +530,7 @@ fn fanout_midrun_adjust_injected() {
         tools,
     );
     let hub = Arc::new(bbrt_session::bg_hub::BgHub::new());
-    let mut runner = SessionRunner::new(
-        "s-adj".into(),
-        "/ws".into(),
-        PermissionMode::Ask,
-        ModelTier::Strong,
-        None,
-    );
+    let mut runner = SessionRunner::new("s-adj".into(), "/ws".into(), PermissionMode::Ask, None);
     runner.subagent_wait_window = std::time::Duration::from_millis(250);
     runner.bg_hub = Some(hub.clone());
     runner.run_turn("梳理认证与配置", &deps, None);

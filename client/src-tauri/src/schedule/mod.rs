@@ -94,8 +94,9 @@ pub struct Task {
     #[serde(default)]
     pub workspace: String,
     pub schedule: ScheduleType,
-    #[serde(default = "default_model_policy")]
-    pub model_policy: String,
+    /// 任务会话模型：None=公司默认档；Some=直达引用 p:<供应商ID>:<模型>。
+    /// 2026-11-26 单档化：原档位字段退役——旧 tasks.json 里的档位键读入即被
+    /// 忽略，存量任务一律回落公司默认档
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default = "default_mode")]
@@ -110,9 +111,6 @@ pub struct Task {
     pub updated_at: i64,
 }
 
-fn default_model_policy() -> String {
-    "auto".into()
-}
 fn default_mode() -> String {
     "ask".into()
 }
@@ -156,8 +154,7 @@ pub struct TaskInput {
     #[serde(default)]
     pub workspace: String,
     pub schedule: ScheduleType,
-    #[serde(default)]
-    pub model_policy: String,
+    /// None=公司默认档；Some=直达引用 p:<供应商ID>:<模型>（单档化后取代原档位入参）
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -362,14 +359,18 @@ fn validate_input(input: &TaskInput) -> Result<(String, Option<String>), String>
     if !matches!(mode.as_str(), "ask" | "auto-edit" | "full-auto") {
         return Err("执行模式非法（ask/auto-edit/full-auto）".into());
     }
-    let policy = if input.model_policy.is_empty() {
-        "auto".to_string()
-    } else {
-        input.model_policy.clone()
+    // 模型（2026-11-26 单档化：档位入参退役）：空=公司默认档；非空=直达引用，
+    // 这里只拦格式（归属/清单由网关在起会话时校验）
+    let model = match input.model.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(m) => {
+            let parts: Vec<&str> = m.splitn(3, ':').collect();
+            if parts.len() != 3 || parts[0] != "p" || parts[1].is_empty() || parts[2].is_empty() {
+                return Err("模型引用格式非法（p:<供应商ID>:<模型>；留空=公司默认）".into());
+            }
+            Some(m.to_string())
+        }
     };
-    if !matches!(policy.as_str(), "auto" | "fast" | "strong") {
-        return Err("模型档位非法（auto/fast/strong）".into());
-    }
     match &input.schedule {
         ScheduleType::Cron { expr } => {
             cron::parse(expr)?;
@@ -383,7 +384,7 @@ fn validate_input(input: &TaskInput) -> Result<(String, Option<String>), String>
             parse_hhmm(time)?;
         }
     }
-    Ok((mode, Some(policy).filter(|p| p != "auto")))
+    Ok((mode, model))
 }
 
 fn parse_hhmm(s: &str) -> Result<NaiveTime, String> {
@@ -463,7 +464,7 @@ impl Runtime {
     // ── 任务 CRUD ──
 
     pub fn create(&self, input: TaskInput) -> Result<Task, String> {
-        let (mode, policy) = validate_input(&input)?;
+        let (mode, model) = validate_input(&input)?;
         let now = now_ms();
         let mut task = Task {
             id: new_id("sct"),
@@ -471,8 +472,7 @@ impl Runtime {
             prompt: input.prompt.trim().to_string(),
             workspace: input.workspace.trim().to_string(),
             schedule: input.schedule,
-            model_policy: policy.unwrap_or_else(|| "auto".into()),
-            model: input.model,
+            model,
             mode,
             status: "active".into(),
             next_run_at: None,
@@ -489,7 +489,7 @@ impl Runtime {
     }
 
     pub fn update(&self, id: &str, input: TaskInput) -> Result<Task, String> {
-        let (mode, policy) = validate_input(&input)?;
+        let (mode, model) = validate_input(&input)?;
         let mut task = self
             .store
             .get_task(id)
@@ -498,8 +498,7 @@ impl Runtime {
         task.prompt = input.prompt.trim().to_string();
         task.workspace = input.workspace.trim().to_string();
         task.schedule = input.schedule;
-        task.model_policy = policy.unwrap_or_else(|| "auto".into());
-        task.model = input.model;
+        task.model = model;
         task.mode = mode;
         task.updated_at = now_ms();
         // 编辑后按当前时间重排下次触发
@@ -718,7 +717,6 @@ impl Runtime {
         let sid = match host.start_session(
             &task.workspace,
             &task.mode,
-            &task.model_policy,
             task.model.as_deref(),
             Some(&title),
             true,
@@ -1163,7 +1161,6 @@ mod tests {
             prompt: "p".into(),
             workspace: String::new(),
             schedule: s,
-            model_policy: "auto".into(),
             model: None,
             mode: "ask".into(),
             status: "active".into(),
@@ -1261,5 +1258,43 @@ mod tests {
         let task = task_with(ScheduleType::Once { at: 1 });
         assert!(compute_next(&task, &store, 1000).is_none());
         let _ = fs::remove_dir_all(dir);
+    }
+
+    /// 模型入参（2026-11-26 单档化：档位入参退役）：空=公司默认档；非空必须是直达
+    /// 引用 p:<供应商ID>:<模型>（只拦格式，归属/清单由网关在起会话时校验）；
+    /// 旧 tasks.json 的档位键读入即被忽略——存量任务回落公司默认档
+    #[test]
+    fn model_input_and_legacy_policy_key() {
+        let input = |model: &str| TaskInput {
+            name: "t".into(),
+            prompt: "p".into(),
+            workspace: String::new(),
+            schedule: ScheduleType::Cron {
+                expr: "0 9 * * *".into(),
+            },
+            model: (!model.is_empty()).then(|| model.to_string()),
+            mode: "ask".into(),
+        };
+        assert_eq!(validate_input(&input("")).unwrap().1, None);
+        assert_eq!(
+            validate_input(&input(" p:7:glm-4.7 "))
+                .unwrap()
+                .1
+                .as_deref(),
+            Some("p:7:glm-4.7")
+        );
+        for bad in ["glm-4.7", "bbc-default", "p:7", "p::glm", "x:7:glm"] {
+            let err = validate_input(&input(bad)).unwrap_err();
+            assert!(err.contains("模型引用格式非法"), "{bad}: {err}");
+        }
+
+        let legacy: Task = serde_json::from_value(serde_json::json!({
+            "id": "sct-old", "name": "t", "prompt": "p",
+            "schedule": { "type": "cron", "expr": "0 9 * * *" },
+            "modelPolicy": "fast", "model": null,
+            "mode": "ask", "status": "active", "createdAt": 0i64, "updatedAt": 0i64
+        }))
+        .unwrap();
+        assert!(legacy.model.is_none(), "旧档位键不得被当成模型引用");
     }
 }

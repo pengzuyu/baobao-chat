@@ -24,7 +24,6 @@ use bbrt_hostapi::handshake;
 use bbrt_hostapi::{IdGen, RuntimeHandler, StdioTransport};
 use bbrt_memory::MemoryEngine;
 use bbrt_protocol::{Envelope, HostToRuntime, RuntimeToHost, AUD_AIGW, AUD_CORP};
-use bbrt_session::events::ModelTier;
 use bbrt_session::{LoopDeps, SessionManager, StartParams, ToolExecutor};
 use bbrt_store::Store;
 
@@ -186,7 +185,7 @@ fn run() -> Result<(), String> {
             .and_then(|c| c.get(AUD_AIGW, now).map(str::to_string))
             .unwrap_or_else(|| static_token.clone())
     }));
-    // D23/M2：公共层压实器接线（USER.md 超 3000 字时仅软条目进 bbc-fast 凝缩，
+    // D23/M2：公共层压实器接线（USER.md 超 3000 字时仅软条目进公司默认档凝缩，
     // 禁止/授权硬条目引擎侧结构性隔离不进 LLM；失败保留旧视图）
     memory.set_compactor(Some(Arc::new(bbrt_session::FastCompactor::new(
         model.clone(),
@@ -389,7 +388,6 @@ fn dispatch(
             session_id,
             workspace,
             mode,
-            model_policy,
             model,
             history_ref,
             title,
@@ -399,10 +397,8 @@ fn dispatch(
             conv_type,
             ..
         } => {
-            let tier = match model_policy {
-                bbrt_protocol::ModelPolicy::Fast => ModelTier::Fast,
-                _ => ModelTier::Strong,
-            };
+            // 2026-11-26 单档化：session.start 不再带档位（档位字段退役）——
+            // model=直达引用或 None（公司默认档），旧宿主多带的档位字段被忽略
             let sec_mode = match mode {
                 bbrt_protocol::PermissionMode::Ask => bbrt_sec::gate::PermissionMode::Ask,
                 bbrt_protocol::PermissionMode::AutoEdit => bbrt_sec::gate::PermissionMode::AutoEdit,
@@ -446,7 +442,6 @@ fn dispatch(
                 StartParams {
                     workspace,
                     mode: sec_mode,
-                    model_policy: tier,
                     model_override: model,
                     // 2026-11-11：宿主可带初始标题（embedded 会话来源名）；缺省=库默认口径
                     title: title.unwrap_or_else(|| "新会话".into()),
@@ -858,7 +853,6 @@ fn dispatch(
                     title: r.title,
                     workspace: r.workspace,
                     mode: r.mode,
-                    model_policy: r.model_policy,
                     model_override: r.model_override,
                     status: r.status,
                     created_at: r.created_at,
@@ -871,20 +865,14 @@ fn dispatch(
         }
         HostToRuntime::ModelSwitch {
             session_id,
-            to,
             model,
             reason,
         } => {
             // model.switched 产生方（D11 §4）：空闲会话切换；turn 中跳过。
-            // model=直达引用（0023）透传；缺省=清 override 回 to 档位
-            let tier = match to {
-                bbrt_protocol::ModelPolicy::Fast => bbrt_session::ModelTier::Fast,
-                bbrt_protocol::ModelPolicy::Strong => bbrt_session::ModelTier::Strong,
-                bbrt_protocol::ModelPolicy::Auto => bbrt_session::ModelTier::Strong,
-            };
+            // model=直达引用（0023）透传；缺省=清 override 回公司默认档
+            // （2026-11-26 单档化：档位参数退役，旧宿主多带的档位字段被忽略）
             let _ = mgr.switch_model(
                 session_id.as_deref(),
-                tier,
                 model.as_deref(),
                 reason.as_deref().unwrap_or("user"),
             );
@@ -1264,11 +1252,6 @@ fn revive_session(
         "full-auto" => bbrt_sec::gate::PermissionMode::FullAuto,
         _ => bbrt_sec::gate::PermissionMode::Ask,
     };
-    let tier = if row.model_policy == "fast" {
-        ModelTier::Fast
-    } else {
-        ModelTier::Strong
-    };
     // 场景还原（2026-11-23）：form+conv_id 还原场景段——runtime 不依赖前端
     // IDB 映射；老数据（form=workbench+空 workspace）落 Task=与改动前行为同
     let scene = if !ws_path.is_empty() {
@@ -1287,7 +1270,6 @@ fn revive_session(
         StartParams {
             workspace: ws_path,
             mode,
-            model_policy: tier,
             model_override: row.model_override,
             title: row.title,
             restored: Some(replay),

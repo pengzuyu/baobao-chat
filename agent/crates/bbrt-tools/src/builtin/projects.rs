@@ -273,7 +273,6 @@ mod tests {
                 title: "测试会话".into(),
                 form: form.into(),
                 mode: "ask".into(),
-                model_policy: "auto".into(),
                 model_override: None,
                 status: "idle".into(),
                 share_enabled: false,

@@ -52,7 +52,7 @@ pub trait FanoutPlanner: Send + Sync {
     fn plan(&self, model: &dyn ChatClient, user_text: &str) -> Option<Vec<ProbeSpec>>;
 }
 
-/// 快模型判定器（19 篇 bbc-fast；输出 JSON {complex, subtasks[]}，
+/// 任务分解判定器（走公司默认档；输出 JSON {complex, subtasks[]}，
 /// 解析失败/围栏噪声一律降级为"不分解"——fan-out 是优化不是依赖）
 pub struct FastPlanner;
 

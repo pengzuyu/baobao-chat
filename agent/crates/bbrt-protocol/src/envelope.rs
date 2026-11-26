@@ -29,15 +29,6 @@ pub enum PermissionMode {
     FullAuto,
 }
 
-/// 模型档位策略（"fast"/"strong"/"auto"）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ModelPolicy {
-    Fast,
-    Strong,
-    Auto,
-}
-
 /// 工具风险级（TODO: 分级口径与 09 篇风险矩阵对齐）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -379,9 +370,8 @@ pub struct SessionListItem {
     /// 工作目录（""=日常对话；未关联 workspace 的历史行同样为 ""）
     pub workspace: String,
     pub mode: String,
-    /// fast | strong | auto
-    pub model_policy: String,
-    /// 会话级模型直达引用（p:<provider>:<model>；缺省=档位别名）
+    /// 会话级模型直达引用（p:<provider>:<model>；缺省=公司默认档 bbc-default——
+    /// 2026-11-26 单档化：快/强档位与 model_policy 字段退役）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_override: Option<String>,
     pub status: String,
@@ -575,9 +565,10 @@ pub enum HostToRuntime {
         /// agent_workspace 并回填 session.workspace_id，工具沙箱根=该目录）
         workspace: String,
         mode: PermissionMode,
-        model_policy: ModelPolicy,
         /// 会话级模型直达引用（0023 多供应商）：p:<provider_id>:<model>；
-        /// 缺省=走 model_policy 档位别名。仅主循环对话模型，内部辅助调用恒档位
+        /// 缺省=公司默认档 bbc-default（2026-11-26 单档化：model_policy 字段退役，
+        /// 会话不再有档位——有引用走引用，没有走默认档）。仅主循环对话模型，
+        /// 内部辅助调用恒走默认档
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
         #[serde(default)]
@@ -662,16 +653,15 @@ pub enum HostToRuntime {
         graceful: bool,
     },
 
-    /// 模型档位切换（D11 §4 model.switched 产生方；回执经 model.switched 事件，
+    /// 会话模型切换（D11 §4 model.switched 产生方；回执经 model.switched 事件，
     /// 非 REQ→RES——切换结果事件化与 14 篇推送语义一致）
     #[serde(rename = "model.switch", rename_all = "camelCase")]
     ModelSwitch {
         /// 目标会话（None=全部活跃会话）
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
-        to: ModelPolicy,
-        /// 直达引用（0023）：非空=切到 p:<id>:<model>（to 为名义档位）；
-        /// 显式 null/缺省=清除 override 回 to 档位
+        /// 直达引用（0023）：非空=切到 p:<id>:<model>；
+        /// null/缺省=清除 override 回公司默认档（2026-11-26 单档化：档位字段 to 退役）
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -956,13 +946,12 @@ pub enum RuntimeToHost {
         kept_rounds: Option<u32>,
     },
 
-    /// 模型档位切换（UNT）
+    /// 会话模型切换（UNT；2026-11-26 单档化：档位字段 from/to 退役——旧 WAL 行多出的
+    /// from/to 按前向兼容口径忽略，回放不断裂）
     #[serde(rename = "model.switched", rename_all = "camelCase")]
     ModelSwitched {
         session_id: String,
-        from: ModelPolicy,
-        to: ModelPolicy,
-        /// 切换后的直达引用（0023；None=档位别名模式）
+        /// 切换后的直达引用（0023；None=公司默认档）
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
         reason: ModelSwitchReason,
