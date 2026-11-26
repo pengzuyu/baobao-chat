@@ -119,12 +119,11 @@ func (s *Service) uploadPluginAs(ctx context.Context, tenantID, userID int64, pk
 			return nil, errx.From(cerr)
 		}
 		existing = &created
-	} else if existing.Status == "delisted" {
-		return nil, errx.New(errx.CodeBadRequest, "插件已下架，不可追加版本（重新发布请新 plugin_id）")
 	} else if owner != 0 && existing.OwnerUserID != owner {
 		return nil, errx.New(errx.CodePermACLDenied, "plugin_id 已被占用（个人插件不可覆盖他人）")
 	} else {
-		// 元数据随最新上传对齐（清单+README 为准）
+		// 元数据随最新上传对齐（清单+README 为准）。delisted 也可追加版本
+		// （2026-11-26 拍板：先重新上架再发布新版本；上传不改状态，仍不可见）
 		if uerr := repo.UpdatePluginMeta(ctx, tenantID, existing.ID, m.Name, m.Description, m.Category, 0, vr.Readme); uerr != nil {
 			return nil, errx.From(uerr)
 		}
@@ -200,6 +199,24 @@ func (s *Service) DelistPlugin(ctx context.Context, tenantID int64, pluginID str
 		return errx.New(errx.CodeNotFound, "插件不存在")
 	}
 	return wrapErr(repo.SetPluginStatus(ctx, tenantID, p.ID, "delisted"))
+}
+
+// DeletePlugin 管理面：彻底删除（不可恢复——插件行+版本线+安装记录一并清除）。
+// 仅 draft/delisted 可删（published 须先下架）；已装用户本地副本不受影响
+// （安装=客户端落盘本机，服务端删除只收回市场面与下载）
+func (s *Service) DeletePlugin(ctx context.Context, tenantID int64, pluginID string) error {
+	repo, err := s.plugins()
+	if err != nil {
+		return err
+	}
+	p, err := repo.GetPluginByPluginID(ctx, tenantID, pluginID)
+	if err != nil {
+		return errx.New(errx.CodeNotFound, "插件不存在")
+	}
+	if p.Status == "published" {
+		return errx.New(errx.CodeBadRequest, "已上架插件不可直接删除——先下架再删除")
+	}
+	return wrapErr(repo.DeletePlugin(ctx, tenantID, p.ID))
 }
 
 // ListPluginsAdmin 管理面全量（D39：含装机数——治理视角哪些插件没人用）

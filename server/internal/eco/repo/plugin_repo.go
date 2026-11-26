@@ -72,6 +72,9 @@ type PluginRepo interface {
 	ListPluginsByOwner(ctx context.Context, tenantID, userID int64) ([]Plugin, error)
 	UpdatePluginMeta(ctx context.Context, tenantID, id int64, name, description, category string, policy int, readme string) error
 	SetPluginStatus(ctx context.Context, tenantID, id int64, status string) error
+	// DeletePlugin 彻底删除（版本线+安装记录一并清；仅 draft/delisted 可删由
+	// service 把关——published 须先下架。不可恢复，已装用户本地副本不在管辖内）
+	DeletePlugin(ctx context.Context, tenantID, id int64) error
 	// SetPluginCurrent publish 切当前版（manifest=该版快照）
 	SetPluginCurrent(ctx context.Context, tenantID, id int64, version, manifest string) error
 	// GetPluginReadme 说明专路径（D39：pluginCols 读列不含 readme，detail 单查）

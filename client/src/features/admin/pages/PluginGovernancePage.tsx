@@ -3,10 +3,12 @@
  * - 列表全量（公共 + 个人提交——owner 列透出）
  * - 上传公共插件（multipart zip + 三档策略；与插件页个人上传通道分离）——
  *   上传成功即弹「立即发布」引导（draft→published 一步上架，不用管理员找入口）
- * - 操作列按状态给显式动作：draft=「发布」（审批进市场，个人提交同此口）、
- *   delisted=「重新上架」、published=「下架」；行首 + 展开版本线做逐版本
- *   发布/回滚（2026-11-26 交互收口：发布动作不再藏在版本线折叠行里）
- * - 下架语义=仅市场不可见不可装；已装用户本地副本保留可用（仅无法更新/重装）
+ * - 操作列按状态给显式动作：draft=「发布/删除」、delisted=「重新上架/删除」、
+ *   published=「下架」；行首 + 展开版本线做逐版本发布/回滚（2026-11-26 交互
+ *   收口：发布动作不再藏在版本线折叠行里）
+ * - 删除=完全清除（不可恢复）：插件+版本线+安装记录一并删；published 须先下架
+ * - 下架语义=仅市场不可见不可装；已装用户本地副本保留可用（仅无法更新/重装）；
+ *   下架期间可直接上传新版本（先重新上架再发布新版本）
  * - policy 调整（force=全员推发免确认、recommend 置顶、optional）
  * D26-O2：Table（expandable 版本线）/Upload/Select/Tag/Alert/Modal.confirm 化。
  */
@@ -120,10 +122,15 @@ export function PluginGovernancePage() {
 
   // 发布确认+执行（行内「发布/重新上架」、版本线逐版本、上传后引导三处共用）——
   // 服务端 publish=draft→published + current 切换（重发旧版本即回滚）
-  const confirmPublish = (p: { plugin_id: string; name: string }, version: string, republish: boolean) => {
+  const confirmPublish = (p: { plugin_id: string; name: string }, version: string, republish: boolean, note?: string) => {
     Modal.confirm({
       title: republish ? `重新上架「${p.name}」（v${version}）？` : `发布 ${p.plugin_id} v${version} 进公共市场？`,
-      content: republish ? '所有用户重新可见可装' : '所有用户将可见可装',
+      content: (
+        <div>
+          {republish ? '所有用户重新可见可装' : '所有用户将可见可装'}
+          {note ? <div style={{ marginTop: 4 }}>{note}</div> : null}
+        </div>
+      ),
       okText: republish ? '重新上架' : '发布',
       cancelText: '取消',
       onOk: () =>
@@ -146,14 +153,42 @@ export function PluginGovernancePage() {
     fetchVersions(p.plugin_id)
       .then((items) => {
         const cur = items.find((v) => v.version === p.current_version);
-        const v = p.status === 'delisted' && cur ? cur.version : items[0]?.version;
+        const latest = items[0]?.version;
+        const v = p.status === 'delisted' && cur ? cur.version : latest;
         if (!v) {
           setError(`${p.name} 无版本行（包体缺失？），无法发布`);
           return;
         }
-        confirmPublish(p, v, p.status === 'delisted');
+        // 下架期间传过新版本：重新上架先恢复旧版，提示新版本走版本线发布
+        const note =
+          p.status === 'delisted' && latest && latest !== v
+            ? `检测到未发布的新版本 v${latest}——重新上架后展开版本线发布新版本`
+            : undefined;
+        confirmPublish(p, v, p.status === 'delisted', note);
       })
       .catch((e) => setError(errText(e, '版本线加载失败')));
+  };
+
+  // 彻底删除（不可恢复）：版本线+安装记录一并清；published 须先下架
+  const deletePlugin = (p: PluginRow) => {
+    Modal.confirm({
+      title: `完全删除「${p.name}」？`,
+      content: '不可恢复：插件、版本线与安装记录一并清除；已装用户本地副本保留可用，但服务端不再提供下载',
+      okText: '永久删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () =>
+        http
+          .delete(`/admin/eco/plugins/${encodeURIComponent(p.plugin_id)}`)
+          .then(() => {
+            setNotice(`${p.name} 已彻底删除`);
+            reload();
+          })
+          .catch((e) => {
+            setError(`删除失败：${errText(e, '未知错误')}`);
+            throw e;
+          }),
+    });
   };
 
   const delist = (p: PluginRow) => {
@@ -263,18 +298,28 @@ export function PluginGovernancePage() {
     {
       title: '操作',
       key: 'ops',
-      width: 170,
+      width: 210,
       render: (_, p) => (
         <Space size={4}>
           {p.status === 'draft' ? (
-            <Button size="small" disabled={busy} onClick={() => publishRow(p)} data-testid={`plugin-publish-${p.plugin_id}`}>
-              发布
-            </Button>
+            <>
+              <Button size="small" disabled={busy} onClick={() => publishRow(p)} data-testid={`plugin-publish-${p.plugin_id}`}>
+                发布
+              </Button>
+              <Button variant="danger" size="small" disabled={busy} onClick={() => deletePlugin(p)} data-testid={`plugin-delete-${p.plugin_id}`}>
+                删除
+              </Button>
+            </>
           ) : null}
           {p.status === 'delisted' ? (
-            <Button size="small" disabled={busy} onClick={() => publishRow(p)} data-testid={`plugin-republish-${p.plugin_id}`}>
-              重新上架
-            </Button>
+            <>
+              <Button size="small" disabled={busy} onClick={() => publishRow(p)} data-testid={`plugin-republish-${p.plugin_id}`}>
+                重新上架
+              </Button>
+              <Button variant="danger" size="small" disabled={busy} onClick={() => deletePlugin(p)} data-testid={`plugin-delete-${p.plugin_id}`}>
+                删除
+              </Button>
+            </>
           ) : null}
           {p.status === 'published' ? (
             <Button variant="danger" size="small" disabled={busy} onClick={() => delist(p)}>
@@ -303,7 +348,8 @@ export function PluginGovernancePage() {
       {pubOpen ? (
         <Space direction="vertical" size={8} style={{ marginBottom: 12 }}>
           <Typography.Text type="secondary">
-            公共插件（全员可见；policy=force 时用户端免确认自动推装）。个人插件请走插件页「上传插件」
+            公共插件（全员可见；policy=force 时用户端免确认自动推装）。个人插件请走插件页「上传插件」。
+            已下架插件可直接上传新版本（先「重新上架」，再展开版本线发布新版本）
           </Typography.Text>
           <Upload
             accept=".zip"

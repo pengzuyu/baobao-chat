@@ -160,6 +160,13 @@ func handlePluginDelist(svc *ecoservice.Service) http.HandlerFunc {
 	}
 }
 
+func handlePluginDelete(svc *ecoservice.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		respond(w, r, map[string]bool{"ok": true},
+			svc.DeletePlugin(r.Context(), tenantOf(r), r.PathValue("plugin_id")))
+	}
+}
+
 // ── helpers ──
 
 func formInt(r *http.Request, key string) int {

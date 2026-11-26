@@ -455,7 +455,8 @@ func TestPluginDelistAndDupVersion(t *testing.T) {
 	if _, err := svc.UploadPlugin(ctx, 1, 9, pkg, "", 0); err == nil || !strings.Contains(err.Error(), "版本已存在") {
 		t.Fatalf("同版重传应拒: %v", err)
 	}
-	// 下架 → catalog 不可见 + 追加版本拒
+	// 下架 → catalog 不可见；下架后追加版本放行（2026-11-26 拍板：先重新上架
+	// 再发布新版本；上传不改状态仍不可见）
 	if err := svc.DelistPlugin(ctx, 1, "deploy-helper"); err != nil {
 		t.Fatal(err)
 	}
@@ -464,8 +465,55 @@ func TestPluginDelistAndDupVersion(t *testing.T) {
 	}
 	files := fullPlugin(".bbc-plugin")
 	files[".bbc-plugin/plugin.json"] = strings.Replace(files[".bbc-plugin/plugin.json"], "1.2.0", "1.4.0", 1)
-	if _, err := svc.UploadPlugin(ctx, 1, 9, zipOf(t, files), "", 0); err == nil || !strings.Contains(err.Error(), "已下架") {
-		t.Fatalf("下架后追加版本应拒: %v", err)
+	if _, err := svc.UploadPlugin(ctx, 1, 9, zipOf(t, files), "", 0); err != nil {
+		t.Fatalf("下架后追加版本应放行: %v", err)
+	}
+	if l, _ := svc.PluginCatalog(ctx, 1, 7, "", "", ""); len(l) != 0 {
+		t.Fatal("delisted 追加版本不改状态，catalog 仍应空")
+	}
+	// 重新上架（恢复原 current 1.2.0）→ 可见；再发布新版本 1.4.0 切 current
+	if err := svc.PublishPluginVersion(ctx, 1, "deploy-helper", "1.2.0"); err != nil {
+		t.Fatalf("重新上架失败: %v", err)
+	}
+	if l, _ := svc.PluginCatalog(ctx, 1, 7, "", "", ""); len(l) != 1 || l[0].CurrentVersion != "1.2.0" {
+		t.Fatalf("重新上架后应见 v1.2.0: %v", l)
+	}
+	if err := svc.PublishPluginVersion(ctx, 1, "deploy-helper", "1.4.0"); err != nil {
+		t.Fatalf("发布新版本失败: %v", err)
+	}
+	if l, _ := svc.PluginCatalog(ctx, 1, 7, "", "", ""); len(l) != 1 || l[0].CurrentVersion != "1.4.0" {
+		t.Fatalf("新版本应切 current: %v", l)
+	}
+
+	// 删除：published 拒（先下架）；delisted 可删（不可恢复——列表/版本线/安装全清）
+	if err := svc.DeletePlugin(ctx, 1, "deploy-helper"); err == nil || !strings.Contains(err.Error(), "先下架") {
+		t.Fatalf("published 删除应拒: %v", err)
+	}
+	if err := svc.DelistPlugin(ctx, 1, "deploy-helper"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeletePlugin(ctx, 1, "deploy-helper"); err != nil {
+		t.Fatalf("delisted 删除应成功: %v", err)
+	}
+	if l, _ := svc.PluginCatalog(ctx, 1, 7, "", "", ""); len(l) != 0 {
+		t.Fatal("删除后 catalog 应空")
+	}
+	if all, _ := svc.ListPluginsAdmin(ctx, 1); len(all) != 0 {
+		t.Fatalf("删除后管理面列表应空: %d", len(all))
+	}
+	if _, _, err := svc.PluginDetail(ctx, 1, 7, "deploy-helper"); err == nil {
+		t.Fatal("删除后详情应 404")
+	}
+
+	// draft 也可删（误传包的清场路径）
+	if _, err := svc.UploadPlugin(ctx, 1, 9, pkg, "", 0); err != nil {
+		t.Fatalf("删除后重传应建新插件: %v", err)
+	}
+	if err := svc.DeletePlugin(ctx, 1, "deploy-helper"); err != nil {
+		t.Fatalf("draft 删除应成功: %v", err)
+	}
+	if all, _ := svc.ListPluginsAdmin(ctx, 1); len(all) != 0 {
+		t.Fatalf("draft 删除后列表应空: %d", len(all))
 	}
 }
 

@@ -75,7 +75,7 @@ func RegisterAdminRoutes(mux *http.ServeMux, adminOnly func(http.HandlerFunc) ht
 	mux.Handle("GET /api/v1/admin/eco/skills", adminOnly(handleSkillList(svc)))
 	mux.Handle("PATCH /api/v1/admin/eco/skills/{id}", adminOnly(handleSkillUpdate(svc)))
 	mux.Handle("POST /api/v1/admin/eco/skills/{id}/delist", adminOnly(handleSkillDelist(svc)))
-	// 插件市场管理面（D22/L1：上传/版本线/发布/元数据/下架；admin:app:publish
+	// 插件市场管理面（D22/L1：上传/版本线/发布/元数据/下架/删除；admin:app:publish
 	// 字典未建前同组守卫——同 skills 口径登记）
 	mux.Handle("POST /api/v1/admin/eco/plugins", adminOnly(handlePluginUpload(svc)))
 	mux.Handle("GET /api/v1/admin/eco/plugins", adminOnly(handlePluginAdminList(svc)))
@@ -83,6 +83,7 @@ func RegisterAdminRoutes(mux *http.ServeMux, adminOnly func(http.HandlerFunc) ht
 	mux.Handle("POST /api/v1/admin/eco/plugins/{plugin_id}/versions/{version}/publish", adminOnly(handlePluginVersionPublish(svc)))
 	mux.Handle("PATCH /api/v1/admin/eco/plugins/{plugin_id}", adminOnly(handlePluginUpdate(svc)))
 	mux.Handle("POST /api/v1/admin/eco/plugins/{plugin_id}/delist", adminOnly(handlePluginDelist(svc)))
+	mux.Handle("DELETE /api/v1/admin/eco/plugins/{plugin_id}", adminOnly(handlePluginDelete(svc)))
 }
 
 func handlePublish(svc *ecoservice.Service, asCompany bool) http.HandlerFunc {

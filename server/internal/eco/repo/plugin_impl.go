@@ -145,6 +145,28 @@ func (m *PluginMemory) SetPluginCurrent(_ context.Context, tenantID, id int64, v
 	return nil
 }
 
+// DeletePlugin 彻底删除（版本线+安装记录一并清；不可恢复）
+func (m *PluginMemory) DeletePlugin(_ context.Context, tenantID, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.plugins[id]
+	if !ok || p.TenantID != tenantID {
+		return ErrPluginNotFound
+	}
+	delete(m.plugins, id)
+	for vid, v := range m.versions {
+		if v.TenantID == tenantID && v.PkgID == id {
+			delete(m.versions, vid)
+		}
+	}
+	for iid, i := range m.insts {
+		if i.TenantID == tenantID && i.PkgID == id {
+			delete(m.insts, iid)
+		}
+	}
+	return nil
+}
+
 // InsertVersion 版本行（同版冲突→ErrPluginVersionDup）
 func (m *PluginMemory) InsertVersion(_ context.Context, v PluginVersion) (PluginVersion, error) {
 	m.mu.Lock()
@@ -452,6 +474,28 @@ func (p *PluginPostgres) SetPluginCurrent(ctx context.Context, tenantID, id int6
 		return ErrPluginNotFound
 	}
 	return nil
+}
+
+// DeletePlugin 彻底删除（版本线+安装记录一并清；不可恢复）
+func (p *PluginPostgres) DeletePlugin(ctx context.Context, tenantID, id int64) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, tbl := range []string{"eco_plugin_version", "eco_plugin_install"} {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+tbl+` WHERE tenant_id=$1 AND pkg_id=$2`, tenantID, id); err != nil {
+			return err
+		}
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM eco_plugin WHERE tenant_id=$1 AND id=$2`, tenantID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrPluginNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 const pluginVersionCols = `id, tenant_id, pkg_id, version, COALESCE(notes,''), COALESCE(manifest,''), created_at`
