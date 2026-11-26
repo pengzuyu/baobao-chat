@@ -179,6 +179,8 @@ func (s *Service) publishConvUpdated(ctx context.Context, conv *messagerepo.Conv
 
 // singlePeer 会话显示名 + 单聊对端 uid：单聊=对端显示名（微信同款；种子/历史行存的
 // "alice-bob" 双拼名不面向用户），群/广播群=会话名（peerUid 空）。对端解析失败回落原 Name。
+// 自聊会话（成员仅自己，2026-11-26）：显示名=自己的显示名、peerUid=自己——前端头像/
+// 在线点/签名等 peerUid 链路零改动复用；「（我）」展示标识由前端叠加。
 func (s *Service) singlePeer(ctx context.Context, conv *messagerepo.Conversation, viewerID int64) (string, string) {
 	if conv.Type != messageapi.ConvSingle {
 		return conv.Name, ""
@@ -196,7 +198,12 @@ func (s *Service) singlePeer(ctx context.Context, conv *messagerepo.Conversation
 			return name, strconv.FormatInt(id, 10)
 		}
 	}
-	return conv.Name, ""
+	// 无「≠自己」的成员 = 自聊
+	name := conv.Name
+	if n := s.nameOf(viewerID); n != "" {
+		name = n
+	}
+	return name, strconv.FormatInt(viewerID, 10)
 }
 
 // buildDetail 会话详情组装（API-IM-03：成员概要全量简版 + group_setting + my）
@@ -264,7 +271,7 @@ func (s *Service) CreateConversation(ctx context.Context, userID int64, p messag
 	if p.Type != messageapi.ConvSingle && p.Type != messageapi.ConvGroup && p.Type != messageapi.ConvBroadcast {
 		return nil, errx.New(errx.CodeBadRequest, "type 应为 1/2/3")
 	}
-	// 成员解析 + 去重（剔除创建者自身）
+	// 成员解析 + 去重（剔除创建者自身；自聊单聊例外见下方校验——剔除后空集即自聊）
 	uids := make([]int64, 0, len(p.MemberIDs))
 	seen := map[int64]bool{userID: true}
 	for _, raw := range p.MemberIDs {
@@ -278,7 +285,9 @@ func (s *Service) CreateConversation(ctx context.Context, userID int64, p messag
 		seen[uid] = true
 		uids = append(uids, uid)
 	}
-	if p.Type == messageapi.ConvSingle && len(uids) != 1 {
+	// 单聊按原始 member_ids 数量校验（自聊恰为自己：被上方去重剔除后 uids 为空集合法，
+	// 2026-11-26 用户需求——与自己对话当备忘录用）
+	if p.Type == messageapi.ConvSingle && len(p.MemberIDs) != 1 {
 		return nil, errx.New(errx.CodeBadRequest, "单聊 member_ids 恰 1 人")
 	}
 	if p.Type != messageapi.ConvSingle && strings.TrimSpace(p.Name) == "" {
@@ -293,9 +302,14 @@ func (s *Service) CreateConversation(ctx context.Context, userID int64, p messag
 			return nil, errx.New(errx.CodeIMTargetNotJoinable, "目标用户不可加入")
 		}
 	}
-	// 单聊去重：同对成员已有 active 单聊直接复用（INT-IM-15）
+	// 单聊去重：同对成员已有 active 单聊直接复用（INT-IM-15）；自聊走 FindSelfConv
+	// （成员恰为自身的单聊——FindSingleConv(uid, uid) 双 EXISTS 恒真会误命中任意单聊）
 	if p.Type == messageapi.ConvSingle {
-		if existing, _ := s.repo.FindSingleConv(ctx, userID, uids[0]); existing != nil {
+		if len(uids) == 0 {
+			if existing, _ := s.repo.FindSelfConv(ctx, userID); existing != nil {
+				return s.buildDetail(ctx, existing, userID)
+			}
+		} else if existing, _ := s.repo.FindSingleConv(ctx, userID, uids[0]); existing != nil {
 			return s.buildDetail(ctx, existing, userID)
 		}
 	}

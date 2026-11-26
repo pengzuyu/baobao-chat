@@ -246,9 +246,9 @@ export function ContactsPage() {
     return () => cancelAnimationFrame(raf);
   }, [flashId, expanded, tree.data, users, token.colorPrimary]);
 
-  /** 发消息：单聊幂等创建直达（双击用户/详情卡按钮共用） */
+  /** 发消息：单聊幂等创建直达（双击用户/详情卡按钮共用；自己也可发起=自聊备忘录，服务端 2026-11-26 放开） */
   const startDm = async (u: DirectoryUser) => {
-    if (dmBusy || u.uid === myUid) return;
+    if (dmBusy) return;
     setDmBusy(true);
     try {
       const conv = await convCreate({ type: 1, memberIds: [u.uid] });
@@ -450,18 +450,14 @@ export function ContactsPage() {
                 <PresenceTag status={toPresenceStatus(presence[u.uid])} />
               </Space>
               <Space size={12} wrap align="center" style={{ marginTop: 4 }}>
-                {u.uid === myUid ? (
-                  <Typography.Text type="secondary">这是你自己的账号</Typography.Text>
-                ) : (
-                  <Button
-                    icon={<MessageCircle size={14} />}
-                    disabled={dmBusy}
-                    onClick={() => void startDm(u)}
-                    data-testid="contacts-detail-msg"
-                  >
-                    发消息
-                  </Button>
-                )}
+                <Button
+                  icon={<MessageCircle size={14} />}
+                  disabled={dmBusy}
+                  onClick={() => void startDm(u)}
+                  data-testid="contacts-detail-msg"
+                >
+                  {u.uid === myUid ? '给自己发消息' : '发消息'}
+                </Button>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   双击左侧树中用户可直接发起聊天
                 </Typography.Text>

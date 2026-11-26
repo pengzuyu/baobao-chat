@@ -655,6 +655,27 @@ func (p *Postgres) FindSingleConv(ctx context.Context, userA, userB int64) (*Con
 	return c, nil
 }
 
+// FindSelfConv 自聊会话复用：活跃成员恰含自己一人的 active 单聊（2026-11-26）。
+// 不用 FindSingleConv(uid, uid) 代替——双 EXISTS 对同 uid 恒真，会误命中任意单聊
+func (p *Postgres) FindSelfConv(ctx context.Context, userID int64) (*Conversation, error) {
+	c, err := scanConversation(p.pool.QueryRow(ctx, `
+		SELECT `+convCols+`
+		FROM conversation c
+		WHERE c.type = 1 AND c.status = 1
+			AND EXISTS (SELECT 1 FROM conversation_member m
+				WHERE m.conv_id = c.id AND m.user_id = $1 AND m.status = 1)
+			AND NOT EXISTS (SELECT 1 FROM conversation_member o
+				WHERE o.conv_id = c.id AND o.user_id <> $1 AND o.status = 1)
+		LIMIT 1`, userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 // ListMembersDetailed 成员行明细（全状态；join_at 直读 timestamptz——Member.JoinAt
 // 即 time.Time，毫秒化在 DTO 层做。2026-11-12 修复：原第 5 列选 epoch 毫秒 bigint
 // 却扫进 time.Time，PG 二进制协议必炸 9004——conv.create 落库成功后 buildDetail 恒

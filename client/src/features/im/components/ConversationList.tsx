@@ -15,6 +15,7 @@ import { BellOff, Pin } from 'lucide-react';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { PresenceBadge, toPresenceStatus } from '../../../shared/ui/PresenceDot';
 import { formatListTime } from '../../../shared/utils/time';
+import { useAuthStore } from '../../auth/store/auth';
 import { useImStore } from '../store/im';
 import type { Conversation } from '../model/types';
 
@@ -44,6 +45,9 @@ function ConvItem({
   onContextMenu: (e: React.MouseEvent, convId: string) => void;
 }) {
   const { token } = theme.useToken();
+  const myUid = useAuthStore((s) => s.user?.uid);
+  // 自聊会话（peerUid=自己，2026-11-26）：标题加「（我）」小标识区分备忘录
+  const isSelf = conv.type === 1 && !!conv.peerUid && conv.peerUid === myUid;
   // 单聊对端在线状态（peerUid 后端 type=1 下发；群/广播群不挂点）
   const peerStatus = useImStore((s) => (conv.type === 1 && conv.peerUid ? s.presence[conv.peerUid] : undefined));
   const unread = conv.my?.unreadBadge ?? 0;
@@ -89,7 +93,18 @@ function ConvItem({
             {mute ? (
               <BellOff size={12} aria-label="免打扰" style={{ marginRight: 2, verticalAlign: -1, color: token.colorTextQuaternary }} />
             ) : null}
-            {conv.type === 1 ? conv.name : `${conv.name} (${conv.memberCount})`}
+            {conv.type === 1 ? (
+              <>
+                {conv.name}
+                {isSelf ? (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    （我）
+                  </Typography.Text>
+                ) : null}
+              </>
+            ) : (
+              `${conv.name} (${conv.memberCount})`
+            )}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
             {conv.lastMsgTs ? formatListTime(conv.lastMsgTs) : ''}

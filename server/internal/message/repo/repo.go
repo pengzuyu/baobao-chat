@@ -103,6 +103,9 @@ type Repo interface {
 	UpdateConversationMeta(ctx context.Context, convID int64, name string, ownerID int64) error
 	// FindSingleConv 单聊去重：同为活跃成员的单聊复用（INT-IM-15；无匹配返回 nil）
 	FindSingleConv(ctx context.Context, userA, userB int64) (*Conversation, error)
+	// FindSelfConv 自聊会话复用（2026-11-26）：活跃成员恰含自己一人的 active 单聊（无匹配返回 nil）。
+	// 不能用 FindSingleConv(uid, uid) 代替——双 EXISTS 对同 uid 恒真，会误命中该用户的任意单聊
+	FindSelfConv(ctx context.Context, userID int64) (*Conversation, error)
 	// ListMembersDetailed 成员行明细（含 role/mute_until/status/join_at，全状态；供 API-IM-05）
 	ListMembersDetailed(ctx context.Context, convID int64) ([]Member, error)
 

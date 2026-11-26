@@ -9,6 +9,7 @@ import { ArrowLeft, Bot, Info, MoreHorizontal } from 'lucide-react';
 import { Flex, Typography, theme } from 'antd';
 import { Button } from '../../../shared/ui/Button';
 import { PRESENCE_LABEL, PresenceDot, toPresenceStatus, usePresenceColors } from '../../../shared/ui/PresenceDot';
+import { useAuthStore } from '../../auth/store/auth';
 import type { Conversation } from '../model/types';
 
 interface ChatHeaderProps {
@@ -28,6 +29,9 @@ export function ChatHeader({ conv, typing, peerStatus, onBack, onOpenAgent, onTo
   const { token } = theme.useToken();
   const presenceColors = usePresenceColors();
   const peerDisp = toPresenceStatus(peerStatus);
+  const myUid = useAuthStore((s) => s.user?.uid);
+  // 自聊会话（peerUid=自己，2026-11-26）：标题加「（我）」小标识区分备忘录
+  const isSelf = conv.type === 1 && !!conv.peerUid && conv.peerUid === myUid;
   const typeName = conv.type === 1 ? '' : conv.type === 2 ? ` (${conv.memberCount})` : ' · 广播群';
 
   return (
@@ -59,6 +63,11 @@ export function ChatHeader({ conv, typing, peerStatus, onBack, onOpenAgent, onTo
       <Flex align="baseline" gap={8} style={{ minWidth: 0 }}>
         <Typography.Text strong ellipsis style={{ fontSize: 16, minWidth: 0 }} title={conv.name}>
           {conv.name}
+          {isSelf ? (
+            <Typography.Text type="secondary" style={{ fontSize: 13, fontWeight: 400 }}>
+              （我）
+            </Typography.Text>
+          ) : null}
           {typeName}
         </Typography.Text>
         {typing ? (

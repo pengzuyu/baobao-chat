@@ -521,6 +521,33 @@ func (m *Memory) FindSingleConv(_ context.Context, userA, userB int64) (*Convers
 	return nil, nil
 }
 
+// FindSelfConv 自聊会话复用：活跃成员恰含自己一人的 active 单聊（2026-11-26）
+func (m *Memory) FindSelfConv(_ context.Context, userID int64) (*Conversation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for convID, c := range m.convs {
+		if c.Type != messageapi.ConvSingle || c.Status != messageapi.ConvActive {
+			continue
+		}
+		in, other := false, false
+		for _, e := range m.members[convID] {
+			if e.Status != 1 {
+				continue
+			}
+			if e.UserID == userID {
+				in = true
+			} else {
+				other = true
+			}
+		}
+		if in && !other {
+			cp := *c
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
 // ListMembersDetailed 成员行明细（全状态，含 role/mute_until/join_at）
 func (m *Memory) ListMembersDetailed(_ context.Context, convID int64) ([]Member, error) {
 	m.mu.Lock()

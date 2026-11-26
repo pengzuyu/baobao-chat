@@ -134,6 +134,49 @@ func TestConvCreateSingleDedup(t *testing.T) {
 	}
 }
 
+// 自聊会话（2026-11-26 用户需求：与自己对话当备忘录用）：member_ids 恰为 [自己]——
+// 创建放行、成员仅 creator 一行、幂等复用、singlePeer 回自己（Name=own/PeerUID=own）、可发消息。
+func TestConvCreateSelfChat(t *testing.T) {
+	svc, r, _, _ := groupFixture(t, Options{})
+	ctx := context.Background()
+	first, err := svc.CreateConversation(ctx, 10001, messageapi.ConvCreatePayload{
+		Type: messageapi.ConvSingle, MemberIDs: []string{"10001"},
+	})
+	if err != nil {
+		t.Fatalf("自聊创建: %v", err)
+	}
+	convID := mustParseI64(t, first.ID)
+	// 展示名=自己（NameOf 未注入回落字符串 uid）、peerUid=自己
+	if first.Name != "10001" || first.PeerUID != "10001" {
+		t.Fatalf("自聊展示应回自己: name=%q peerUid=%q", first.Name, first.PeerUID)
+	}
+	// 成员仅 creator 一行（去重剔除后不重复落 member）
+	members, _ := r.MembersOf(ctx, convID)
+	if len(members) != 1 || members[0] != 10001 {
+		t.Fatalf("自聊成员应恰 1 行(creator): %v", members)
+	}
+	// 幂等复用：再建同 ID
+	second, err := svc.CreateConversation(ctx, 10001, messageapi.ConvCreatePayload{
+		Type: messageapi.ConvSingle, MemberIDs: []string{"10001"},
+	})
+	if err != nil {
+		t.Fatalf("自聊重复创建: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("自聊应幂等复用: %s vs %s", first.ID, second.ID)
+	}
+	// 与他人混合（[自己, bob]）仍拒绝——单聊恰 1 人口径不变
+	if _, err := svc.CreateConversation(ctx, 10001, messageapi.ConvCreatePayload{
+		Type: messageapi.ConvSingle, MemberIDs: []string{"10001", "10002"},
+	}); codeOf(err) != errx.CodeBadRequest {
+		t.Fatalf("自聊+他人应 9001: %v", err)
+	}
+	// 自聊会话可正常收发消息
+	if _, err := svc.Send(ctx, 10001, textPayload(convID, "self-1", "记一笔")); err != nil {
+		t.Fatalf("自聊发消息: %v", err)
+	}
+}
+
 // 建群：owner 落位 + 系统消息 group.created + 事件 kind=meta
 func TestConvCreateGroupOwnerAndSystemMessage(t *testing.T) {
 	svc, _, bus, convID := groupFixture(t, Options{})
