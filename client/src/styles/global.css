@@ -120,6 +120,11 @@ body {
 .im-page {
   flex: 1;
   min-width: 0;
+  /* min-height:0（2026-11-26 页面塌宽修复续）：Content 改纵向 flex 后本页成为主轴
+     flex 项，缺省 min-height:auto 会按会话流内容高度把页面撑出容器——文档层
+     overflow:hidden 不滚动，底部输入框被顶出窗口裁掉；归零后页高恒等容器、长会话
+     在内部滚动容器里滚（工作台根 div 同批同修） */
+  min-height: 0;
   display: flex;
   position: relative;
 }

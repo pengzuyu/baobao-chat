@@ -663,7 +663,11 @@ export function AgentWorkbenchPage() {
   );
 
   return (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+    // minHeight:0（2026-11-26 工作台高度溢出修复）：MainLayout Content 改纵向 flex
+    // 后本根成为主轴 flex 项，缺省 min-height:auto 按内容最小高度撑页——会话列表/长流
+    // 把整页顶出容器，底部 Composer 被裁出窗口（文档层 overflow:hidden 不滚动）；
+    // 归零后页高恒等 Content，长内容由内层各滚动容器（minHeight:0 链）消化
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <AgentSubNav />
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         {/* 左：会话列表（六态）；整体可折叠成细条（会话多时让宽给中栏） */}
