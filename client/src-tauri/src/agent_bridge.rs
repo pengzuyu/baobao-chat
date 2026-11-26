@@ -571,22 +571,7 @@ impl AgentHost {
         let servers = assemble_mcp_servers(&self.data_dir, &self.gateway, &user, local);
         // 受众集合随装配更新（D38 §3.1：没装就没受众；卸载/禁用即消失）
         {
-            let mut auds = Vec::new();
-            for srv in &servers {
-                if let (Some(aud), scope) = (
-                    srv["transport"]["auth"]["audience"].as_str(),
-                    srv["transport"]["auth"]["scope"].as_array(),
-                ) {
-                    let sc: Vec<String> = scope
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|x| x.as_str().map(str::to_string))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    auds.push((aud.to_string(), sc));
-                }
-            }
+            let auds = collect_audiences(&servers);
             *self.shared.audiences.lock().unwrap() = auds;
         }
         // 票据先于装配下发（D38 §3.2 触发点 2/4）：RT 的 OboToken 分支收到票即
@@ -1128,6 +1113,45 @@ fn camel_to_snake(s: &str) -> String {
 // headers 本层暂丢弃（TransportConfig::Http 尚无自定义头，登记 L4）。
 // server 名冲突：系统级 > 插件级 > 个人级，同名跳过（防劫持 corp 命名空间、
 // 防个人顶替插件）。
+
+/// 受众集合提取 + 合法性预检（与服务端 agentjwt::ValidAudience 同规则：保留名
+/// bbc-corp/bbc-aigw + 带 host 的 https:// URL；http 拒签是 D38 拍板——票不可
+/// 经明文传输出站）。防御性过滤的必要性：服务端 IssueOBO 对 audiences 整批
+/// 校验齐进齐出，单个非法 aud 会 1015 拒整签——常驻 bbc-aigw 一起失票，RT 回退
+/// 静态 token 被网关拒 → 全部对话 1004「模型不可用」（2026-11-26 phebs 0.2.0
+/// 真机事故：x-bbc-auth 未声明 audience，装配按「受众=server url」注入内网
+/// http:// 地址）。过滤后坏目的地个体失票（调用诚实 401），不再毒化整批；
+/// 非法不静默，stderr 点名来源。
+fn collect_audiences(servers: &[Value]) -> Vec<(String, Vec<String>)> {
+    let mut auds = Vec::new();
+    for srv in servers {
+        let (Some(aud), Some(scope)) = (
+            srv["transport"]["auth"]["audience"].as_str(),
+            srv["transport"]["auth"]["scope"].as_array(),
+        ) else {
+            continue; // 无 auth 声明的 server 不进受众集合
+        };
+        let legal = aud == "bbc-corp"
+            || aud == "bbc-aigw"
+            || (aud.starts_with("https://") && aud.len() > "https://".len());
+        if !legal {
+            let who = srv["meta"]["pluginId"]
+                .as_str()
+                .or_else(|| srv["name"].as_str())
+                .unwrap_or("?");
+            eprintln!(
+                "[bbc-bridge] 受众 '{aud}' 非法（{who}）：服务端仅签 https:// URL 与保留名 bbc-corp/bbc-aigw，已从换票清单剔除（该目的地调用将 401，不影响其它受众）"
+            );
+            continue;
+        }
+        let sc: Vec<String> = scope
+            .iter()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect();
+        auds.push((aud.to_string(), sc));
+    }
+    auds
+}
 
 fn assemble_mcp_servers(
     data_dir: &std::path::Path,
@@ -1831,27 +1855,23 @@ mod tests {
 
     #[test]
     fn audiences_extracted_from_assembly() {
-        // 受众集合提取： corp 恒在 + 插件声明者入集（没装就没受众——D38 §3.1）
+        // 受众集合提取：corp 恒在 + 插件声明者入集（没装就没受众——D38 §3.1）；
+        // 非法受众（内网 http://）防御性剔除——服务端整批齐进齐出，毒化会连坐
+        // 常驻 bbc-aigw 致全部对话 1004（2026-11-26 phebs 0.2.0 真机事故回归）
         let assembly = vec![
             json!({ "name": "corp", "transport": { "kind": "http", "baseUrl": "http://x/mcp/corp",
                 "auth": { "type": "obo", "audience": "bbc-corp", "scope": [] } } }),
             json!({ "name": "oa", "transport": { "kind": "http", "baseUrl": "https://oa.internal/mcp",
                 "auth": { "type": "obo", "audience": "https://oa.internal/mcp", "scope": ["oa:read"] } } }),
             json!({ "name": "gitlab", "transport": { "kind": "http", "baseUrl": "https://gl/api" } }),
+            json!({ "name": "phebs", "meta": { "pluginId": "xiaohailing_plugin_phebs" },
+                "transport": { "kind": "http", "baseUrl": "http://172.16.105.109:30700/api/mcp",
+                    "auth": { "type": "obo", "audience": "http://172.16.105.109:30700/api/mcp", "scope": [] } } }),
+            json!({ "name": "bad", "transport": { "kind": "http", "baseUrl": "https://x",
+                "auth": { "type": "obo", "audience": "https://", "scope": [] } } }),
         ];
-        let mut auds = Vec::new();
-        for srv in &assembly {
-            if let (Some(aud), scope) = (
-                srv["transport"]["auth"]["audience"].as_str(),
-                srv["transport"]["auth"]["scope"].as_array(),
-            ) {
-                let sc: Vec<String> = scope
-                    .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
-                    .unwrap_or_default();
-                auds.push((aud.to_string(), sc));
-            }
-        }
-        assert_eq!(auds.len(), 2, "无 auth 的 server 不进受众集合");
+        let auds = collect_audiences(&assembly);
+        assert_eq!(auds.len(), 2, "无 auth 不进集合；http:// 与空 host https:// 非法剔除");
         assert_eq!(auds[0].0, "bbc-corp");
         assert_eq!(auds[1].0, "https://oa.internal/mcp");
         assert_eq!(auds[1].1, vec!["oa:read".to_string()]);
