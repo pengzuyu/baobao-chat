@@ -80,6 +80,9 @@ export function MsgContextMenu({ message, myUid, anchor, onClose, ...actions }: 
   /** 翻转后的实际位置（先按锚点渲染，测量后校正） */
   const [pos, setPos] = useState({ x: anchor.x, y: anchor.y });
   const vis = msgActionsVisible(message, myUid);
+  // 2026-11-26 全员试用收口：知识库域整域「敬请期待」，「存入知识库」入口随域隐藏
+  // （内容存了也无入口查看；恢复=删除本行）
+  vis.saveKb = false;
 
   // 视口边缘翻转：菜单右缘越界 → 左移一个菜单宽；底缘越界 → 上移一个菜单高（留 8px 安全边距）
   useLayoutEffect(() => {

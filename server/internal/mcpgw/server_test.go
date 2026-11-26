@@ -48,6 +48,12 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	// 2026-11-26 试用收口（trialGatedKbTools）在测试内放开：kb 四件是网关机制
+	// （审计/OBO/参数校验）的既有测试载体，覆盖须保持到恢复开放之日；
+	// 默认收口行为由 TestTrialGatedKbToolsHidden 单独反向验证。
+	savedGated := trialGatedKbTools
+	trialGatedKbTools = map[string]bool{}
+	t.Cleanup(func() { trialGatedKbTools = savedGated })
 	// D38 批3：agent 票 ES256 验签（aud 包含 bbc-corp），HS256 内部票退役
 	key, err := agentjwt.GenDevKey()
 	if err != nil {
@@ -256,6 +262,34 @@ func TestToolsListDeclaresRiskAnnotation(t *testing.T) {
 		if got[name] != risk {
 			t.Fatalf("%s 风险级应为 %s，得到 %v（全集: %v）", name, risk, got[name], got)
 		}
+	}
+}
+
+// TestTrialGatedKbToolsHidden 2026-11-26 试用收口反向验证：默认（夹具放开之前的
+// 生产口径）知识库四件不对 Agent 开放——tools/list 不广播（18→14）、tools/call
+// 经 findTool 拦为未知工具；恢复开放=清空 trialGatedKbTools（存量 kb 用例即刻复效）。
+func TestTrialGatedKbToolsHidden(t *testing.T) {
+	f := newFixture(t)
+	trialGatedKbTools = map[string]bool{
+		"kb_query": true, "doc_read": true, "kb_spaces": true, "kb_nodes": true,
+	}
+
+	tok := f.mint(t, "7", false)
+	rec := post(t, f.gw, `{"jsonrpc":"2.0","id":30,"method":"tools/list","params":{}}`, tok)
+	tools := decode(t, rec)["result"].(map[string]any)["tools"].([]any)
+	if len(tools) != 14 {
+		t.Fatalf("收口后供给应为 14 工具（18-kb 四件）: %d 项", len(tools))
+	}
+	for _, tl := range tools {
+		name := tl.(map[string]any)["name"].(string)
+		if trialGatedKbTools[name] {
+			t.Fatalf("%s 收口期间不应广播", name)
+		}
+	}
+
+	rec = post(t, f.gw, `{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"kb_query","arguments":{"keyword":"x"}}}`, tok)
+	if code := errCode(t, decode(t, rec)); code != codeUnknownTool {
+		t.Fatalf("收口工具调用应 -32003 未知工具，得到 %v", code)
 	}
 }
 

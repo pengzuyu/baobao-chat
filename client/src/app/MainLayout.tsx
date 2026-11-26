@@ -38,6 +38,8 @@ interface NavItem {
   to: string;
   icon: LucideIcon;
   label: string;
+  /** 敬请期待占位（2026-11-26 试用收口）：入口保留可见，点击仅提示不进入 */
+  soon?: boolean;
 }
 
 /** 一级导航（D01 §4.1；管理项按权限动态显隐） */
@@ -48,7 +50,9 @@ function useNavItems(): NavItem[] {
   // 通讯录（M2，2026-11-12 用户裁决：全员可见——组织树+成员浏览/找人发消息）
   { to: '/contacts', icon: BookUser, label: t('nav.contacts') },
   { to: '/notifications', icon: Bell, label: t('nav.notification') },
-  { to: '/kb', icon: BrainCircuit, label: t('nav.kb') },
+  // 2026-11-26 全员试用收口：知识库暂不开放（入口保留，点击弹「敬请期待」不跳转；
+  // 路由整域落 ComingSoon 占位页见 App.tsx）。恢复=删除下方 soon 标记与 onClick 拦截
+  { to: '/kb', icon: BrainCircuit, label: t('nav.kb'), soon: true },
   { to: '/mail', icon: Mail, label: t('nav.mail') },
   { to: '/agent', icon: Bot, label: t('nav.agent') },
   // 2026-11-12 用户指示先隐藏，恢复时取消注释即可（路由保留可直接深链访问）
@@ -249,7 +253,15 @@ export function MainLayout() {
               mode="inline"
               inlineIndent={0} /* 根因修复：rc-menu 对 inline 根级项注入内联 paddingLeft=level×24px（盖过 itemPaddingInline 令牌），致内容右顶+左侧留白、56px 下挤压重叠 */
               selectedKeys={selectedKey ? [selectedKey] : []}
-              onClick={({ key }) => navigate(key)}
+              onClick={({ key }) => {
+                // 敬请期待占位（2026-11-26 知识库试用收口）：入口保留可见，点击仅提示
+                // 不跳转（路由整域落 ComingSoon 占位页兜底深链）；恢复=删除 soon 标记
+                if (navItems.find((i) => i.to === key)?.soon) {
+                  message.info('敬请期待');
+                  return;
+                }
+                navigate(key);
+              }}
               items={menuItems}
               style={{
                 flex: 1,

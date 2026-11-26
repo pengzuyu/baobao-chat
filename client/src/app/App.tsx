@@ -53,6 +53,7 @@ import { AuditPage } from '../features/admin/pages/AuditPage';
 import { resolveWsBase, wsClient } from '../shared/api/ws';
 import { bindWsToConnectionStore, useConnectionStore } from '../shared/store/connection';
 import { MainLayout } from './MainLayout';
+import { ComingSoon } from '../shared/ui/ComingSoon';
 import { SettingsLayout } from '../features/settings/pages/SettingsLayout';
 import { ProfileSettingsPage } from '../features/settings/pages/ProfileSettingsPage';
 import { ShortcutSettingsPage } from '../features/settings/pages/ShortcutSettingsPage';
@@ -345,10 +346,13 @@ export function App() {
         {/* 知识库（D07 阶段一务实版）：空间/摄入/检索三合一最小可用页 */}
         {/* kb/* 单条 splat：/kb 与 /kb/d/:id 同组件零重挂（tab 切换不销毁壳/树/首页，
             双路由版本切 tab 整壳重挂——真机「打开文章整页卡死」根因）；search/my/s 静态段优先匹配 */}
-        <Route path="/kb/*" element={<KbShellPage />} />
-        <Route path="/kb/search" element={<SearchPage />} />
-        <Route path="/kb/s/:spaceId" element={<SpaceBrowsePage />} />
-        <Route path="/kb/my" element={<MyArticlesPage />} />
+        {/* 知识库（2026-11-26 全员试用收口）：一级导航点击弹「敬请期待」，路由整域
+            落 ComingSoon 占位页（兜底深链/收藏/通知等历史链接）；原页面组件原样包在
+            children 内（不渲染零副作用、import 保持活跃），恢复=去掉 ComingSoon 包裹 */}
+        <Route path="/kb/*" element={<ComingSoon feature="知识库"><KbShellPage /></ComingSoon>} />
+        <Route path="/kb/search" element={<ComingSoon feature="知识库"><SearchPage /></ComingSoon>} />
+        <Route path="/kb/s/:spaceId" element={<ComingSoon feature="知识库"><SpaceBrowsePage /></ComingSoon>} />
+        <Route path="/kb/my" element={<ComingSoon feature="知识库"><MyArticlesPage /></ComingSoon>} />
         {/* 邮箱（22 篇 MAI-01~04：三栏/写信/设置/搜索） */}
         <Route path="/mail" element={<MailPage />} />
         {/* 专家库（D14 PAG-13~15：公司/个人库/编辑器） */}
@@ -367,7 +371,8 @@ export function App() {
         <Route path="/settings/agent" element={<Navigate to="/agent/settings" replace />} />
         <Route path="/settings/mcp" element={<Navigate to="/agent/mcp" replace />} />
         {/* 管理后台（D10 阶段一务实版）：仪表盘/用户/策略/用量/审计五页；
-            一级"管理"入口按 me.perms admin:* 显隐（MainLayout），服务端守卫 2003 兜底 */}
+            一级"管理"入口按 me.perms admin:* 显隐（MainLayout），服务端守卫 2003 兜底。
+            知识库治理子页 2026-11-26 随知识库域试用收口落「敬请期待」占位（其余管理页不受影响） */}
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<DashboardPage />} />
           {/* 2026-11-12 用户裁决：用户+组织合并为通讯录页；旧 /admin/users 重定向 */}
@@ -380,7 +385,9 @@ export function App() {
           <Route path="agent" element={<AgentGovernancePage />} />
           <Route path="plugins" element={<PluginGovernancePage />} />
           <Route path="org" element={<OrgDirectoryPage />} />
-          <Route path="kb" element={<KbGovernancePage />} />
+          {/* 知识库治理（2026-11-26 随知识库域试用收口）：整页「敬请期待」占位；
+              KbGovernancePage 原样包在 children 内不渲染，恢复=去掉 ComingSoon 包裹 */}
+          <Route path="kb" element={<ComingSoon feature="知识库治理"><KbGovernancePage /></ComingSoon>} />
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="ai-providers" element={<AiProvidersPage />} />
           <Route path="stickers" element={<StickersPage />} />

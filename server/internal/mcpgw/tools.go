@@ -36,10 +36,20 @@ type ToolDef struct {
 	Scope string
 }
 
+// trialGatedKbTools 2026-11-26 全员试用收口：知识库四件工具随知识库域整域「敬请期待」
+// 暂不对 Agent 开放——tools/list 不广播、tools/call 经 findTool 拦为未知工具；
+// 注册表定义与执行闭包原样保留，恢复=清空本集合。
+var trialGatedKbTools = map[string]bool{
+	"kb_query":  true,
+	"doc_read":  true,
+	"kb_spaces": true,
+	"kb_nodes":  true,
+}
+
 // corpTools 注册表（试点 kb_query——OQ-B26 裁决；im_send/file_upload
 // 治理属性已登记 09 篇 §3.1，供给接入随域需求排期）
 func corpTools() []ToolDef {
-	return []ToolDef{
+	all := []ToolDef{
 		{
 			Name:        "kb_query",
 			Description: "知识库混合检索（向量余弦+关键词 RRF 融合；按用户可见空间过滤）。返回命中文档分块与高亮片段。",
@@ -333,6 +343,15 @@ func corpTools() []ToolDef {
 			Scope: "im:conv:manage",
 		},
 	}
+	// 试用收口过滤（2026-11-26，见 trialGatedKbTools 注释）
+	kept := make([]ToolDef, 0, len(all))
+	for _, t := range all {
+		if trialGatedKbTools[t.Name] {
+			continue
+		}
+		kept = append(kept, t)
+	}
+	return kept
 }
 
 // findTool 裸名查注册表
