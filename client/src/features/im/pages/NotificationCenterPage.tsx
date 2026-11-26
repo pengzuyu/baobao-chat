@@ -138,7 +138,10 @@ export function NotificationCenterPage() {
   return (
     <div
       data-testid="notif-page"
-      style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: token.colorBgLayout }}
+      // minHeight:0（2026-11-26 高度溢出修复，与工作台根同批同因）：Content 纵向 flex 后
+      // 本根是主轴 flex 项，缺省 min-height:auto 按通知列表内容撑页——列表一多整页顶出
+      // 容器，文档层 overflow:hidden 不滚动，内层滚动条永不触发、底部条目够不着
+      style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', background: token.colorBgLayout }}
     >
       <Flex
         component="header"
