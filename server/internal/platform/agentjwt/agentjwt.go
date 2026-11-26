@@ -85,15 +85,19 @@ func (c *Claims) HasAudience(aud string) bool {
 	return false
 }
 
-// ValidAudience 签发格式闸（D38 §3.3）：仅合法 https URL（生态应用，aud=目的地，
-// 须带 host——"https://" 空地址拒）或保留逻辑名（内部端点）。http 拒签——票不可
-// 经明文传输出站。
+// ValidAudience 签发格式闸（D38 §3.3）：合法 http(s) URL（生态应用，aud=目的地，
+// 须带 host——空地址拒）或保留逻辑名（内部端点）。
+// 2026-11-26 拍板修订：放开 http（原「http 拒签——票不可经明文传输出站」）。
+// 缘起=内网部署目的地普遍明文（NodePort/服务地址），且更高价值的主 access token
+// 本就经明文 http 传输，仅拦 agent 票属威胁模型错位；phebs 0.2.0 内网 http 目的
+// 地触 1015 拒整批换票致对话全挂（连坐常驻 bbc-aigw）。暂不做私网限定（用户拍板：
+// 未来需要时再加约束），公网明文目的地由发布清单纪律兜底。
 func ValidAudience(aud string) bool {
 	if aud == AudCorp || aud == AudAigw {
 		return true
 	}
 	u, err := url.Parse(aud)
-	return err == nil && u.Scheme == "https" && u.Host != ""
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
 }
 
 // ── 密钥装载与指纹 ──────────────────────────────────────────────────────────

@@ -178,12 +178,15 @@ func TestKidFingerprint(t *testing.T) {
 	}
 }
 
-// 格式闸（D38 §3.3）：仅 https:// URL 或保留逻辑名
+// 格式闸（D38 §3.3）：合法 http(s) URL 或保留逻辑名
+// （2026-11-26 拍板修订：放开 http——内网明文目的地为主流形态，原「票不可明文
+// 出站」仅拦 agent 票而主 token 同走明文，属威胁模型错位；暂不限私网，未来再收）
 func TestValidAudience(t *testing.T) {
 	yes := []string{AudCorp, AudAigw,
-		"https://oa.company.internal/mcp", "https://bbc.test/oauth2"}
-	no := []string{"http://oa.company.internal/mcp", "corp", "bbc-corpx",
-		"", "oa.company.internal", "ftp://x", "https://"}
+		"https://oa.company.internal/mcp", "https://bbc.test/oauth2",
+		"http://oa.company.internal/mcp", "http://172.16.105.109:30700/api/mcp"}
+	no := []string{"corp", "bbc-corpx",
+		"", "oa.company.internal", "ftp://x", "https://", "http://"}
 	for _, a := range yes {
 		if !ValidAudience(a) {
 			t.Fatalf("%q 应通过格式闸", a)

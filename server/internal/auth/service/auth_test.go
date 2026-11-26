@@ -279,13 +279,22 @@ func TestIssueOBO(t *testing.T) {
 		Audiences: []authapi.OBOTarget{
 			{Audience: "https://oa.company.internal/mcp", Scope: []string{"im:message:send"}},
 			{Audience: agentjwt.AudCorp}, // scope 缺省=用户权限全量（拍板 4）
+			{Audience: "http://phebs.internal:30700/api/mcp"}, // 2026-11-26 拍板修订：http 目的地放行（内网明文为主流形态）
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tickets) != 2 {
-		t.Fatalf("应逐受众两张票: %d", len(tickets))
+	if len(tickets) != 3 {
+		t.Fatalf("应逐受众三张票: %d", len(tickets))
+	}
+
+	// 票3（内网 http 受众）：同批可签（修订后格式闸放行）
+	if tickets[2].Audience != "http://phebs.internal:30700/api/mcp" {
+		t.Fatalf("http 受众票缺失: %+v", tickets[2])
+	}
+	if _, err := f.agentVerifier.Verify(tickets[2].Token, "http://phebs.internal:30700/api/mcp"); err != nil {
+		t.Fatal(err)
 	}
 
 	// 票1（生态受众）：验签→act/子集/sub；audience 字段保真
@@ -339,8 +348,8 @@ func TestIssueOBOFailures(t *testing.T) {
 			{Audience: "https://oa.internal/mcp", Scope: []string{"admin:org:manage"}}}}, errx.CodeAuthOBOScopeExceeded},
 		{"缺会话 ID", 10001, authapi.OBOReq{Audiences: []authapi.OBOTarget{{Audience: agentjwt.AudCorp}}}, errx.CodeBadRequest},
 		{"缺 audiences", 10001, authapi.OBOReq{AgentSessionID: "a"}, errx.CodeBadRequest},
-		{"audience http 拒", 10001, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{
-			{Audience: "http://oa.internal/mcp"}}}, errx.CodeAuthAudienceInvalid},
+		{"audience ftp 拒", 10001, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{
+			{Audience: "ftp://oa.internal/mcp"}}}, errx.CodeAuthAudienceInvalid},
 		{"audience 非保留名字串拒", 10001, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{
 			{Audience: "corp"}}}, errx.CodeAuthAudienceInvalid},
 		{"audience 重复拒", 10001, authapi.OBOReq{AgentSessionID: "a", Audiences: []authapi.OBOTarget{
