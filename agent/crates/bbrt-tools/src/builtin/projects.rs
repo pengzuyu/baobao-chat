@@ -53,7 +53,9 @@ pub fn use_project_def() -> ToolDef {
         description: "Switch the working root of this task session to a project registered in \
                       the workbench (call list_projects first to get exact paths). After a \
                       successful call, file tools, commands and git operate inside that project \
-                      and writes there are allowed; memory saves go to that project's partition. \
+                      — it can be read and written there, while paths outside it (including the \
+                      user workspace) are rejected — and memory saves go to that project's \
+                      partition. \
                       Only projects the user has already opened in the workbench can be adopted. \
                       Call it again without path to return to the default user workspace. Not \
                       available in project-bound or chat-invoked sessions"
@@ -242,9 +244,9 @@ pub(crate) fn use_project(
     registry.set(session_id, Some(PathBuf::from(&ws.path)));
     Ok(ok_output(format!(
         "Working root switched to project \"{}\" ({}). From now on file tools, commands and git \
-         operate inside this project — paths resolve there and writing elsewhere is rejected; \
-         memory saves go to this project's partition. Call use_project again without path to \
-         return to the default user workspace.",
+         operate inside this project — paths resolve there and anything outside it (including \
+         the user workspace) is rejected; memory saves go to this project's partition. Call \
+         use_project again without path to return to the default user workspace.",
         ws.name, ws.path
     )))
 }
