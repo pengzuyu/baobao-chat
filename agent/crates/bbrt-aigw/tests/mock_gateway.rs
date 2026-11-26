@@ -148,7 +148,7 @@ fn sample_request() -> ChatRequest {
         model: "bbc-strong".to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),
-            content: "读取 a.rs".to_string(),
+            content: "读取 a.rs".into(),
             tool_calls: vec![],
             tool_call_id: None,
         }],

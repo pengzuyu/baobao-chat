@@ -601,6 +601,7 @@ pub fn run_expert(
                     );
                     history.push(Round::User {
                         content: format!("[主 Agent 补充指令] {text}"),
+                        attachments: Vec::new(),
                     });
                     sink.emit(SessionEvent::SubagentProbeEvt {
                         session_id: session_id.to_string(),
@@ -644,7 +645,7 @@ pub fn run_expert(
         let msgs = messages_with(&assembled.system_prompt, &history, task);
         if msgs
             .iter()
-            .map(|m| estimate_tokens(&m.content))
+            .map(|m| estimate_tokens(m.content.text()))
             .sum::<usize>()
             > assembled.max_context_tokens
         {

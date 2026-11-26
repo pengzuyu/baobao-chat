@@ -261,7 +261,7 @@ fn assert_replay(rep: bbrt_session::ReplayReport) {
     );
     // 用户轮次原文找回（修复前 user.text 未写 → 恢复丢用户输入）
     assert!(rep.history.iter().any(
-        |r| matches!(r, bbrt_context::Round::User { content } if content == "修复登录超时并跑测试")
+        |r| matches!(r, bbrt_context::Round::User { content, .. } if content == "修复登录超时并跑测试")
     ));
     // 工具轮以摘要重建
     assert!(rep

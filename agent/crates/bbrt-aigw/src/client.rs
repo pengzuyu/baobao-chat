@@ -162,7 +162,7 @@ mod tests {
             model: "bbc-fast".to_string(),
             messages: vec![ChatMessage {
                 role: "user".to_string(),
-                content: "hi".to_string(),
+                content: "hi".into(),
                 tool_calls: vec![],
                 tool_call_id: None,
             }],

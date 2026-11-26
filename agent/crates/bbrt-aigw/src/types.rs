@@ -11,18 +11,91 @@ use serde::{Deserialize, Serialize};
 /// 一条对话消息。role 取值：system / user / assistant / tool。
 ///
 /// - assistant 消息可携带 `tool_calls`（历史回放时把整轮工具调用列表发回网关）；
-/// - tool 消息携带 `tool_call_id`（对应被执行的调用）。
+/// - tool 消息携带 `tool_call_id`（对应被执行的调用）；
+/// - user 消息的 `content` 可为分段数组（2026-11-26 视觉通道：文本段 + 图像段）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    pub content: MessageContent,
     /// assistant 消息的工具调用列表；空时序列化时省略。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCallMsg>,
     /// tool 消息对应的调用 id；None 时序列化时省略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+}
+
+/// 消息内容（2026-11-26）：纯文本 or 分段数组（OpenAI 兼容多模态形态）。
+///
+/// `untagged` 序列化：`Text` 落 JSON 字符串——与 v0.1 线上字节逐字节一致，纯文本
+/// 会话的 prompt cache 前缀不受影响；`Parts` 落数组。反序列化按形态自动判别。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+impl MessageContent {
+    /// 文本部分（Parts 形态=各 text 段拼接；仅做 token 估算/断言用）
+    pub fn text(&self) -> &str {
+        match self {
+            MessageContent::Text(s) => s,
+            // Parts 形态的文本段由调用方保证恰好一个；多段取首段
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .find_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .unwrap_or(""),
+        }
+    }
+
+    /// 图像段数量（0=纯文本消息）
+    pub fn image_count(&self) -> usize {
+        match self {
+            MessageContent::Text(_) => 0,
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .filter(|p| matches!(p, ContentPart::ImageUrl { .. }))
+                .count(),
+        }
+    }
+}
+
+impl Default for MessageContent {
+    fn default() -> Self {
+        MessageContent::Text(String::new())
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(s: String) -> Self {
+        MessageContent::Text(s)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(s: &str) -> Self {
+        MessageContent::Text(s.to_string())
+    }
+}
+
+/// 分段内容的一段：文本 or 图像（`type` 用 OpenAI snake_case——多模态 wire 形态，
+/// 非本 crate 的 camelCase 嵌套约定：上游模型侧只认这一种拼写）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+/// 图像段载荷：`url` 为 data URL（runtime 侧读盘缩放后内联；本 crate 不碰文件）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageUrl {
+    pub url: String,
 }
 
 /// 一次工具调用（assistant 发起）。`arguments` 为 JSON 字符串——
@@ -139,13 +212,13 @@ mod tests {
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
-                    content: "你是编码助手".to_string(),
+                    content: "你是编码助手".into(),
                     tool_calls: vec![],
                     tool_call_id: None,
                 },
                 ChatMessage {
                     role: "assistant".to_string(),
-                    content: String::new(),
+                    content: MessageContent::default(),
                     tool_calls: vec![ToolCallMsg {
                         id: "call-1".to_string(),
                         name: "read_file".to_string(),
@@ -155,7 +228,7 @@ mod tests {
                 },
                 ChatMessage {
                     role: "tool".to_string(),
-                    content: "文件内容…".to_string(),
+                    content: "文件内容…".into(),
                     tool_calls: vec![],
                     tool_call_id: Some("call-1".to_string()),
                 },
@@ -198,7 +271,7 @@ mod tests {
             model: "bbc-fast".to_string(),
             messages: vec![ChatMessage {
                 role: "user".to_string(),
-                content: "hi".to_string(),
+                content: "hi".into(),
                 tool_calls: vec![],
                 tool_call_id: None,
             }],
@@ -208,6 +281,8 @@ mod tests {
         assert!(body.contains(r#""stream":true"#), "body={body}");
         assert!(!body.contains("\"tools\""), "空 tools 应省略，body={body}");
         assert!(body.contains(r#""model":"bbc-fast""#));
+        // 纯文本 content 仍是 JSON 字符串（v0.1 线上字节不变——prompt cache 前缀稳定）
+        assert!(body.contains(r#""content":"hi""#), "body={body}");
 
         let with_tools = wire_body(&sample_request());
         assert!(with_tools.contains(r#""stream":true"#));
@@ -220,7 +295,57 @@ mod tests {
     fn chat_message_defaults_for_missing_fields() {
         let msg: ChatMessage = serde_json::from_str(r#"{"role":"user","content":"问题"}"#).unwrap();
         assert_eq!(msg.role, "user");
+        assert_eq!(msg.content.text(), "问题");
+        assert_eq!(msg.content.image_count(), 0);
         assert!(msg.tool_calls.is_empty());
         assert!(msg.tool_call_id.is_none());
+    }
+
+    /// 2026-11-26 视觉通道：分段 content（文本段 + 图像段）的线上形态与往返。
+    #[test]
+    fn message_content_parts_wire_shape_and_roundtrip() {
+        let data_url = "data:image/jpeg;base64,/9j/4AAQ";
+        let msg = ChatMessage {
+            role: "user".to_string(),
+            content: MessageContent::Parts(vec![
+                ContentPart::Text {
+                    text: "帮我看这张图".to_string(),
+                },
+                ContentPart::ImageUrl {
+                    image_url: ImageUrl {
+                        url: data_url.to_string(),
+                    },
+                },
+            ]),
+            tool_calls: vec![],
+            tool_call_id: None,
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        // 多模态 wire 形态：type 用 snake_case（image_url），与 OpenAI/智谱兼容层一致
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "role":"user",
+                "content":[
+                    {"type":"text","text":"帮我看这张图"},
+                    {"type":"image_url","image_url":{"url":data_url}}
+                ]
+            })
+        );
+        assert_eq!(msg.content.text(), "帮我看这张图");
+        assert_eq!(msg.content.image_count(), 1);
+
+        // 往返保形（Parts 不塌回 Text）
+        let back: ChatMessage = serde_json::from_value(json).unwrap();
+        assert_eq!(back, msg);
+
+        // wire 体同样落数组
+        let body = wire_body(&ChatRequest {
+            model: "bbc-strong".to_string(),
+            messages: vec![msg],
+            tools: vec![],
+            thinking: None,
+        });
+        assert!(body.contains(r#""type":"image_url""#), "body={body}");
     }
 }

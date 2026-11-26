@@ -1,6 +1,7 @@
 //! bbrt-session：会话生命周期、状态机与核心循环（D11 §2.2）。
 //!
 //! 模块地图：
+//! - attachments.rs 用户消息附件（2026-11-26：路径引用的上下文渲染 + 视觉通道）
 //! - state.rs      纯函数状态机（D11 §3 全 20 条迁移）
 //! - events.rs     会话对外事件（SessionSink；D11 §4 会话子集 + D15 记忆/日报）
 //! - executor.rs   工具执行契约（依赖倒置：session 定义、bbrt-tools 实现）
@@ -15,6 +16,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod attachments;
 pub mod bg_hub;
 pub mod brand;
 pub mod compactor;

@@ -141,7 +141,7 @@ fn hub_park_drain_inject_feeds_model_next_turn() {
             m.tool_call_id
                 .as_deref()
                 .is_some_and(|t| t.starts_with("subagent.join:agent-9f1e2d3c"))
-                && m.content.contains("定位到 3 处")
+                && m.content.text().contains("定位到 3 处")
         })
     });
     assert!(injected, "下一轮模型请求应包含后台产物回填：{seen:?}");

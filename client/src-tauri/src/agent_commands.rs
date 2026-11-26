@@ -63,17 +63,44 @@ pub fn agent_start_session(
 }
 
 /// 用户输入（回执=session.state running/queued；命令返回 ok 而非透传协议回执）。
-/// thinking 思考三档（2026-11-11 轮级生效）：low/medium/high，缺省 None=medium
+/// thinking 思考三档（2026-11-11 轮级生效）：low/medium/high，缺省 None=medium。
+/// attachments 附件（2026-11-26）：本机路径引用，camelCase（path/kind/name/size/mime）；
+/// 壳侧校验存在+单文件上限后原样透传（视觉加载/读授权都在 RT 侧）
 #[tauri::command(async)]
 pub fn agent_input(
     host: Host,
     session_id: String,
     text: String,
     thinking: Option<String>,
+    attachments: Option<Value>,
 ) -> Result<Value, String> {
+    // 附件校验：路径存在且是普通文件；单文件 ≤100MB（大于此值用户该走 IM 文件
+    // 或压缩）；每条消息 ≤20 个。校验失败外抛（前端可还原输入）
+    const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
+    const MAX_ATTACHMENTS: usize = 20;
+    let atts = attachments.unwrap_or(Value::Null);
+    let empty = Vec::new();
+    let list = atts.as_array().unwrap_or(&empty);
+    if list.len() > MAX_ATTACHMENTS {
+        return Err(format!("附件过多：{0} 个（上限 {MAX_ATTACHMENTS} 个）", list.len()));
+    }
+    for a in list {
+        let path = a["path"].as_str().unwrap_or_default();
+        let meta = std::fs::metadata(path)
+            .map_err(|_| format!("附件不存在：{path}"))?;
+        if !meta.is_file() {
+            return Err(format!("附件不是普通文件：{path}"));
+        }
+        if meta.len() > MAX_FILE_BYTES {
+            return Err(format!(
+                "附件过大（{} MB，上限 100MB）：{path}",
+                meta.len() / 1024 / 1024
+            ));
+        }
+    }
     let rep = host.request(
         "user.message",
-        json!({ "sessionId": session_id, "text": text, "attachments": [], "thinking": thinking }),
+        json!({ "sessionId": session_id, "text": text, "attachments": list, "thinking": thinking }),
     )?;
     // RT 错误回执必须外抛（2026-11-16 幽灵会话事故：回执 type=error 被静默吞成
     // Ok——上层 agentFlow 全链无感知）。注意幽灵会话的「会话不存在」是异步

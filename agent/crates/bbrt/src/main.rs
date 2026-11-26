@@ -472,22 +472,37 @@ fn dispatch(
         HostToRuntime::UserMessage {
             session_id,
             text,
+            attachments,
             thinking,
             ..
         } => {
+            // 协议 Attachment → 上下文 AttachmentRef（字段同构，纯搬运）
+            let atts: Vec<bbrt_context::AttachmentRef> = attachments
+                .iter()
+                .map(|a| bbrt_context::AttachmentRef {
+                    path: a.path.clone(),
+                    kind: match a.kind {
+                        bbrt_protocol::AttachmentKind::Image => bbrt_context::AttachmentKind::Image,
+                        bbrt_protocol::AttachmentKind::File => bbrt_context::AttachmentKind::File,
+                    },
+                    name: a.name.clone(),
+                    size: a.size,
+                    mime: a.mime.clone(),
+                })
+                .collect();
             let mgr2 = mgr.clone();
             let store2 = store.clone();
             let sid = session_id.clone();
             // turn 独立线程：流式事件经共享 stdout 即时外发
             std::thread::spawn(move || {
-                let report = match mgr2.run_turn(&sid, &text, thinking) {
+                let report = match mgr2.run_turn_with(&sid, &text, &atts, thinking) {
                     Ok(r) => r,
                     // 会话复活（2026-11-11 用户裁决：会话=上下文，无不可逆终态）：
                     // ended/error/重启清扫后的会话 input 即复活——从库行还原参数、
                     // 重放事件镜像续上下文后再投本轮
                     Err(bbrt_session::ManagerError::NotFound(_)) => {
                         match revive_session(&store2, &mgr2, &sid) {
-                            Ok(true) => match mgr2.run_turn(&sid, &text, thinking) {
+                            Ok(true) => match mgr2.run_turn_with(&sid, &text, &atts, thinking) {
                                 Ok(r) => r,
                                 Err(e) => {
                                     emit_turn_error(&sid, &e.to_string());

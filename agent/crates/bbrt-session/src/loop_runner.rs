@@ -261,13 +261,13 @@ pub(crate) fn chat_text(
         messages: vec![
             ChatMessage {
                 role: "system".into(),
-                content: system.to_string(),
+                content: system.into(),
                 tool_calls: vec![],
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "user".into(),
-                content: user.to_string(),
+                content: user.into(),
                 tool_calls: vec![],
                 tool_call_id: None,
             },
@@ -337,6 +337,13 @@ pub struct SessionRunner {
     memory_snapshot: Option<String>,
     /// 技能目录会话级快照（同上：原每 step 重渲染，技能装卸会中途打断前缀）
     skills_snapshot: Option<String>,
+    /// 附件图片数据缓存（2026-11-26 视觉通道）：path → data URL。用户轮入历史时
+    /// 预载定格——同一轮每步组装字节一致（prompt cache 前缀稳定），文件中途被
+    /// 改写不影响本轮；图像数据不进 WAL，重启续会话后按路径重新读盘
+    image_cache: crate::attachments::ImageCache,
+    /// 当前模型不支持图片输入（2026-11-26）：带图请求被网关拒绝、改发路径清单
+    /// 重试成功后置位，之后图片附件只以路径清单进上下文；切换模型清除
+    pub(crate) vision_unsupported: bool,
 }
 
 impl SessionRunner {
@@ -445,7 +452,14 @@ impl SessionRunner {
             scene: Scene::default(),
             memory_snapshot: None,
             skills_snapshot: None,
+            image_cache: crate::attachments::ImageCache::default(),
+            vision_unsupported: false,
         }
+    }
+
+    /// 切换模型后清除视觉降级标记（新模型可能支持图片输入，重新尝试）
+    pub(crate) fn reset_vision(&mut self) {
+        self.vision_unsupported = false;
     }
 
     /// 模式共享句柄（start 时克隆入 ManagedSession——session.set_mode 经
@@ -488,10 +502,22 @@ pub struct LoopDeps {
 }
 
 impl SessionRunner {
-    /// 执行一轮 turn（user.message 已入 history 前置）
+    /// 执行一轮 turn（user.message 已入 history 前置；无附件形态）
     pub fn run_turn(
         &mut self,
         user_text: &str,
+        deps: &LoopDeps,
+        thinking: Option<bbrt_protocol::ThinkingLevel>,
+    ) -> TurnReport {
+        self.run_turn_with(user_text, &[], deps, thinking)
+    }
+
+    /// 执行一轮 turn（带附件，2026-11-26）：附件是本机路径引用——先登记为用户
+    /// 显式授权（工具层读这些路径不走读审批）、图片预载入缓存，再落 WAL 入历史
+    pub fn run_turn_with(
+        &mut self,
+        user_text: &str,
+        attachments: &[bbrt_context::AttachmentRef],
         deps: &LoopDeps,
         thinking: Option<bbrt_protocol::ThinkingLevel>,
     ) -> TurnReport {
@@ -504,24 +530,41 @@ impl SessionRunner {
             state: "running".into(),
             reason: "user.message".into(),
         });
+        if !attachments.is_empty() {
+            deps.tools
+                .register_attachments(&self.session_id, attachments);
+            self.image_cache.preload(attachments);
+        }
         deps.wal.append(
             &self.session_id,
             "turn.start",
             &format!("{{\"text_len\":{}}}", user_text.len()),
         );
         // 崩溃恢复契约（§9.2 时间线重建）：用户原文独立落 WAL——
-        // turn.start 仅记长度，恢复重放依赖 user.text 找回轮次内容
-        deps.wal.append(
-            &self.session_id,
-            "user.text",
-            &format!("{{\"text\":\"{}\"}}", escape_json(user_text)),
-        );
+        // turn.start 仅记长度，恢复重放依赖 user.text 找回轮次内容。
+        // 2026-11-26：payload 改 serde 构造（原 escape_json 的 trim_matches('"')
+        // 会把结尾引号的转义一并剥掉，文本以 " 结尾时写出坏 JSON，重开会话丢消息）；
+        // 附件清单随行落盘（空附件不带键——旧 payload 字节形态不变，全文检索
+        // 触发器取 $.text 不受影响）
+        let mut user_payload = serde_json::json!({ "text": user_text });
+        if !attachments.is_empty() {
+            user_payload["attachments"] =
+                serde_json::to_value(attachments).unwrap_or(serde_json::Value::Null);
+        }
+        deps.wal
+            .append(&self.session_id, "user.text", &user_payload.to_string());
+
+        // 专家选角/探查分解的任务文本附附件清单（子代理看不到图像，但要知道
+        // 有哪些附件及其路径；无附件时即用户原文）
+        let user_brief = crate::attachments::attachment_lines(attachments)
+            .map(|lines| format!("{user_text}\n{lines}"));
+        let user_brief = user_brief.as_deref().unwrap_or(user_text);
 
         // 单专家调用（D14 §3.3 精简形态：选角命中 → run_expert → 摘要回填；
         // 优先于探查——专家=重执行体，探查=信息收集优化。状态复用 #9/#10
         // （"并行子任务执行中"同语义；专家并发 ≤1 由本顺序天然保证）
         if let Some(source) = deps.experts.as_ref() {
-            if let Some(pick) = source.pick(deps.model.as_ref(), user_text) {
+            if let Some(pick) = source.pick(deps.model.as_ref(), user_brief) {
                 self.state = crate::subagent::transition_fanout(self.state);
                 emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
                     session_id: id,
@@ -531,7 +574,7 @@ impl SessionRunner {
                 deps.wal.append(
                     &self.session_id,
                     "expert.pick",
-                    &format!("{{\"expert\":\"{}\"}}", escape_json(&pick.label)),
+                    &serde_json::json!({ "expert": pick.label }).to_string(),
                 );
                 // 等待窗 + 超窗转后台（D16 决策④：同探查口径；专家在专用线程，
                 // 窗内收口即时回填 / 超窗 park 摘要下一轮注入）
@@ -639,7 +682,7 @@ impl SessionRunner {
         // 探查子 Agent fan-out（08 §4.5/D11 §7）：判定 complex → ≤3 并行探查 →
         // join 摘要回填（主 Agent 基于摘要继续规划；未装配/不分解=零行为）
         if let Some(planner) = deps.fanout.as_ref() {
-            if let Some(subs) = planner.plan(deps.model.as_ref(), user_text) {
+            if let Some(subs) = planner.plan(deps.model.as_ref(), user_brief) {
                 self.state = crate::subagent::transition_fanout(self.state);
                 emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
                     session_id: id,
@@ -733,6 +776,7 @@ impl SessionRunner {
 
         self.history.push(Round::User {
             content: user_text.to_string(),
+            attachments: attachments.to_vec(),
         });
         // 被动轨：用户输入的启发式记忆提示（W2①；正文取原句，标题截 40 字）
         if let Some(m) = deps.memory.as_ref() {
@@ -789,6 +833,7 @@ impl SessionRunner {
                                 content: format!(
                                     "[已压缩摘要，原文见本地事件镜像]\n{archived_summary}"
                                 ),
+                                attachments: Vec::new(),
                             },
                         );
                         emit(deps, &self.session_id, |id| SessionEvent::Compaction {
@@ -852,7 +897,18 @@ impl SessionRunner {
                     tool_results: &self.tool_results,
                 },
             );
-            let messages = to_chat_messages(&assembled);
+            // 视觉通道（2026-11-26）：带图用户轮附图像段（仅保留窗口内且模型未判
+            // 不支持）；无附件轮仍为纯文本，线上字节与 v0.1 一致
+            let has_images = assembled.history.iter().any(|r| {
+                matches!(r, Round::User { attachments, .. }
+                    if attachments.iter().any(|a| a.kind == bbrt_context::AttachmentKind::Image))
+            });
+            let vision = crate::attachments::VisionState {
+                cache: &self.image_cache,
+                unsupported: self.vision_unsupported,
+                with_images: !self.vision_unsupported,
+            };
+            let messages = to_chat_messages(&assembled, &vision);
             // 19 篇 §3.2 + 0023 引用扩展：override 直达引用优先（p:<id>:<model>，
             // 网关校验归属/清单），缺省回落档位别名
             let model_name =
@@ -885,6 +941,37 @@ impl SessionRunner {
 
             // ③ 流式消费（delta 即时外发；错误→8011 语义暂停）
             let stream = match deps.model.chat(&req) {
+                Ok(s) => Ok(s),
+                Err(e)
+                    if has_images
+                        && !self.vision_unsupported
+                        && matches!(e, bbrt_aigw::AigwError::HttpStatus { .. }) =>
+                {
+                    // 视觉降级（2026-11-26）：带图请求被网关拒绝 → 改发路径清单重试
+                    // 一次；重试成功才标记「当前模型不支持视觉」（限流等瞬时错误
+                    // 重试仍失败 → 原样报错，不误标）。标记后本会话图片只发路径，
+                    // 切换模型时清除
+                    let fallback = to_chat_messages(
+                        &assembled,
+                        &crate::attachments::VisionState {
+                            cache: &self.image_cache,
+                            unsupported: false,
+                            with_images: false,
+                        },
+                    );
+                    let mut retry = req.clone();
+                    retry.messages = fallback;
+                    match deps.model.chat(&retry) {
+                        Ok(s) => {
+                            self.vision_unsupported = true;
+                            Ok(s)
+                        }
+                        Err(_) => Err(e),
+                    }
+                }
+                Err(e) => Err(e),
+            };
+            let stream = match stream {
                 Ok(s) => s,
                 Err(e) => {
                     emit(deps, &self.session_id, |id| SessionEvent::Error {
@@ -1169,12 +1256,12 @@ impl SessionRunner {
                 deps.wal.append(
                     &self.session_id,
                     "tool.result",
-                    &format!(
-                        "{{\"call_id\":\"{}\",\"ok\":{},\"summary\":\"{}\"}}",
-                        tc.id,
-                        matches!(outcome, ToolOutcome::Ok { .. }),
-                        escape_json(&summary)
-                    ),
+                    &serde_json::json!({
+                        "call_id": tc.id,
+                        "ok": matches!(outcome, ToolOutcome::Ok { .. }),
+                        "summary": summary,
+                    })
+                    .to_string(),
                 );
                 self.history.push(Round::Tool {
                     call_id: tc.id.clone(),
@@ -1988,23 +2075,48 @@ const SCENE_PROJECT: &str = "\n\n[Scene: Project] This session works on the repo
 /// list_projects 发现、use_project 采纳；历史对话经 session_search 可查
 const SCENE_TASK: &str = "\n\n[Scene: Task] This session is not bound to a single project and suits cross-project or general-purpose work. When a specific project is involved, call list_projects and use_project to make it the working target instead of guessing its path — a project the user has not opened in the workbench cannot be adopted, so ask them to open it there first. For earlier discussions of the same topic, call session_search before asking the user to repeat themselves.";
 
-/// 组装结果 → 模型消息序列（system/记忆/项目 → history → 工具结果）
-fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {
+/// 组装结果 → 模型消息序列（system/记忆/项目 → history → 工具结果）。
+///
+/// 2026-11-26 视觉通道：带附件的用户轮经 [`crate::attachments::VisionState::user_content`]
+/// 渲染（文本段 + 可选图像段）；无附件轮仍为纯文本，线上字节与 v0.1 一致。
+fn to_chat_messages(
+    a: &bbrt_context::Assembled,
+    vision: &crate::attachments::VisionState<'_>,
+) -> Vec<ChatMessage> {
+    // 带图用户轮从最新数起的序号（图像数据保留窗口判定；无图轮不占序号）
+    let mut image_rank: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut image_rounds = 0usize;
+    for (i, r) in a.history.iter().enumerate().rev() {
+        if matches!(r, Round::User { attachments, .. }
+            if attachments.iter().any(|x| x.kind == bbrt_context::AttachmentKind::Image))
+        {
+            image_rounds += 1;
+            image_rank.insert(i, image_rounds);
+        }
+    }
     let mut msgs = vec![ChatMessage {
         role: "system".into(),
         // [技能] 段（10 篇 §4.5 命中注入；此前 Assembled.skills 组装后被丢弃——补消费）
         content: format!(
             "{}\n\n[Skills]\n{}\n\n[Project]\n{}\n\n[Memory]\n{}",
             a.system, a.skills, a.project, a.memory_index
-        ),
+        )
+        .into(),
         tool_calls: vec![],
         tool_call_id: None,
     }];
-    for r in &a.history {
+    for (i, r) in a.history.iter().enumerate() {
         match r {
-            Round::User { content } => msgs.push(ChatMessage {
+            Round::User {
+                content,
+                attachments,
+            } => msgs.push(ChatMessage {
                 role: "user".into(),
-                content: content.clone(),
+                content: vision.user_content(
+                    content,
+                    attachments,
+                    image_rank.get(&i).copied().unwrap_or(usize::MAX),
+                ),
                 tool_calls: vec![],
                 tool_call_id: None,
             }),
@@ -2013,7 +2125,7 @@ fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {
                 tool_calls,
             } => msgs.push(ChatMessage {
                 role: "assistant".into(),
-                content: content.clone(),
+                content: content.as_str().into(),
                 tool_calls: tool_calls
                     .iter()
                     .map(|t| ToolCallMsg {
@@ -2030,7 +2142,7 @@ fn to_chat_messages(a: &bbrt_context::Assembled) -> Vec<ChatMessage> {
                 summary,
             } => msgs.push(ChatMessage {
                 role: "tool".into(),
-                content: summary.clone(),
+                content: summary.as_str().into(),
                 tool_calls: vec![],
                 tool_call_id: Some(format!("{name}:{call_id}")),
             }),
@@ -2047,14 +2159,6 @@ fn run_command_is_background(call: &ToolInvocation) -> bool {
             .ok()
             .and_then(|v| v.get("background").and_then(|b| b.as_bool()))
             .unwrap_or(false)
-}
-
-/// WAL/事件内嵌 JSON 字符串转义（避免手拼破坏 JSON 结构）
-fn escape_json(s: &str) -> String {
-    serde_json::to_string(s)
-        .unwrap_or_default()
-        .trim_matches('"')
-        .to_string()
 }
 
 /// 事件外发小工具（闭包拿 session_id，避免重复借用）
@@ -2230,7 +2334,7 @@ fn transcript_of(history: &[Round]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for r in history {
         let (role, content) = match r {
-            Round::User { content } => ("用户", content.as_str()),
+            Round::User { content, .. } => ("用户", content.as_str()),
             Round::Assistant { content, .. } => {
                 if content.trim().is_empty() {
                     continue;

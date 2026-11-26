@@ -399,6 +399,9 @@ pub enum HistoryItem {
         /// 回合收口时刻毫秒（turn.end 行 created_at 投影）
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_done_at: Option<i64>,
+        /// 本轮附件（user.text 行 attachments 投影；旧 WAL 行无此字段 → 空）
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<Attachment>,
     },
     #[serde(rename = "assistant")]
     Assistant { text: String },
@@ -505,6 +508,35 @@ pub enum ThinkingLevel {
     High,
 }
 
+/// 用户消息附件类型（宿主按扩展名判定；runtime 复核后才决定是否走视觉）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttachmentKind {
+    /// 图片（png/jpeg/gif/webp；支持视觉的模型以图像形式接收）
+    Image,
+    /// 普通文件（runtime 只把路径告诉模型，由模型自行 read_file）
+    File,
+}
+
+/// 用户消息附件（2026-11-26）：本机文件**路径引用**——不复制、不内联字节
+/// （协议单行上限 `MAX_LINE_BYTES` 255KB，内联图片走不通；由 runtime 自行读盘）。
+/// 用户亲自附带的文件视为已授权读取（工作区外也不弹读审批）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    /// 本机绝对路径
+    pub path: String,
+    pub kind: AttachmentKind,
+    /// 展示文件名（路径被改名后仍可读；缺省取 path 文件名）
+    pub name: String,
+    /// 字节数
+    #[serde(default)]
+    pub size: u64,
+    /// MIME（图片 png/jpeg/gif/webp；普通文件可缺省）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+}
+
 /// 宿主下发消息（15 个宿主→RT 类型 + D15 追加 3 类型 + 双向 ping/pong）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive] // 前向兼容：新增变体不破坏下游匹配（D11 §2.1）
@@ -573,9 +605,10 @@ pub enum HostToRuntime {
     UserMessage {
         session_id: String,
         text: String,
-        /// TODO: 附件目前为引用字符串，结构随 09/10 篇细化
+        /// 附件（本机路径引用，见 [`Attachment`]；空=无附件。2026-11-26 前为占位
+        /// 字符串数组且 runtime 不消费）
         #[serde(default)]
-        attachments: Vec<String>,
+        attachments: Vec<Attachment>,
         /// 斜杠指令（/strong 等）
         #[serde(default, skip_serializing_if = "Option::is_none")]
         slash: Option<String>,

@@ -23,6 +23,7 @@ fn 全链路_预算_组装_压缩_摘录_文件map() {
     let history: Vec<Round> = (0..8)
         .map(|i| Round::User {
             content: format!("{}t{i}", "a".repeat(1_996)),
+            attachments: Vec::new(),
         })
         .collect();
     let tool_results = [ToolResultEntry {

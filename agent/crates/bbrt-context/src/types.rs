@@ -22,6 +22,57 @@ pub struct ToolCallRecord {
     pub args_digest: String,
 }
 
+/// 用户轮附件类型（与协议 `Attachment.kind` 同构）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttachmentKind {
+    /// 图片（支持视觉的模型以图像形式接收）
+    Image,
+    /// 普通文件（只把路径告诉模型）
+    File,
+}
+
+/// 用户轮附件（2026-11-26）：本机文件路径引用——与协议 `Attachment` 线上同构
+/// （本 crate 不依赖 protocol；`Round` 随 agent_context 持久化直接往返）。
+/// 只存元数据，不存图像字节：图像数据由 session 侧按需读盘并缓存。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentRef {
+    /// 本机绝对路径
+    pub path: String,
+    pub kind: AttachmentKind,
+    /// 展示文件名
+    pub name: String,
+    /// 字节数
+    #[serde(default)]
+    pub size: u64,
+    /// MIME（图片 png/jpeg/gif/webp；普通文件可缺省）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+}
+
+impl AttachmentRef {
+    /// 该附件的上下文 token 估算（路径/文件名文本行 + 图片固定估算）
+    pub fn est_tokens(&self) -> usize {
+        let image = if self.kind == AttachmentKind::Image {
+            crate::budget::IMAGE_TOKENS
+        } else {
+            0
+        };
+        image + estimate_tokens(&self.path) + estimate_tokens(&self.name)
+    }
+
+    /// 附件清单文本行（进模型上下文的单源形态：`[Attachment: 类型] 路径（文件名）`；
+    /// 英文——提示词体系已英文化，该行作为用户内容的一部分进上下文）
+    pub fn context_line(&self) -> String {
+        let kind = match self.kind {
+            AttachmentKind::Image => "image",
+            AttachmentKind::File => "file",
+        };
+        format!("[Attachment: {kind}] {} ({})", self.path, self.name)
+    }
+}
+
 /// 一轮会话（user / assistant / tool 三态）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
@@ -34,6 +85,9 @@ pub enum Round {
     User {
         /// 文本内容
         content: String,
+        /// 本轮附件（路径引用；空=无附件，序列化省略——旧 agent_context 行兼容）
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<AttachmentRef>,
     },
     /// 模型回复轮（可携带工具调用记录）
     Assistant {
@@ -58,7 +112,12 @@ impl Round {
     /// （id/name 等小字段计入，协议回填时它们同样占上下文）。
     pub fn est_tokens(&self) -> usize {
         match self {
-            Round::User { content } => estimate_tokens(content),
+            Round::User {
+                content,
+                attachments,
+            } => {
+                estimate_tokens(content) + attachments.iter().map(|a| a.est_tokens()).sum::<usize>()
+            }
             Round::Assistant {
                 content,
                 tool_calls,
@@ -120,6 +179,7 @@ mod tests {
         // User：仅 content
         let u = Round::User {
             content: "你好abc".to_string(),
+            attachments: Vec::new(),
         }; // 2 + 1 = 3
         assert_eq!(u.est_tokens(), 3);
         // Assistant：content + 每个 tool_call 的 id/name/args_digest

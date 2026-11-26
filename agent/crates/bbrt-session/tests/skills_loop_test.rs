@@ -34,7 +34,7 @@ impl ChatClient for CaptureModel {
         bbrt_aigw::AigwError,
     > {
         if let Some(m) = req.messages.first() {
-            self.0.lock().unwrap().push(m.content.clone());
+            self.0.lock().unwrap().push(m.content.text().to_string());
         }
         let n = self.1.fetch_add(1, Ordering::SeqCst);
         let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if n == 0 {

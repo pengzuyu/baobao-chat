@@ -309,6 +309,17 @@ impl SessionManager {
         text: &str,
         thinking: Option<bbrt_protocol::ThinkingLevel>,
     ) -> Result<crate::loop_runner::TurnReport, ManagerError> {
+        self.run_turn_with(session_id, text, &[], thinking)
+    }
+
+    /// user.message 带附件形态（2026-11-26）：附件随轮登记授权+预载图像+落 WAL
+    pub fn run_turn_with(
+        &self,
+        session_id: &str,
+        text: &str,
+        attachments: &[bbrt_context::AttachmentRef],
+        thinking: Option<bbrt_protocol::ThinkingLevel>,
+    ) -> Result<crate::loop_runner::TurnReport, ManagerError> {
         let entry = self
             .sessions
             .lock()
@@ -327,7 +338,7 @@ impl SessionManager {
         for join in self.hub.drain_joins(session_id) {
             runner.inject_bg_join(&join.run_id, &join.name, &join.summary);
         }
-        let report = runner.run_turn(text, &self.deps, thinking);
+        let report = runner.run_turn_with(text, attachments, &self.deps, thinking);
         *entry.state.lock().unwrap() = runner.state();
         *entry.runner.lock().unwrap() = Some(runner);
         Ok(report)
@@ -426,6 +437,8 @@ impl SessionManager {
             }
             runner.model_policy = to;
             runner.model_override = model_override.map(str::to_string);
+            // 换模型后视觉降级标记失效（新模型可能支持图片输入，重新尝试）
+            runner.reset_vision();
             drop(guard);
             // 持久化（修既有缺陷：此前切换不回写 agent_session，重启即丢）
             if let Some(store) = &self.store {

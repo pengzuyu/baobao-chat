@@ -231,6 +231,7 @@ pub fn run_probe(
                     );
                     history.push(Round::User {
                         content: format!("[主 Agent 补充指令] {text}"),
+                        attachments: Vec::new(),
                     });
                     sink.emit(SessionEvent::SubagentProbeEvt {
                         session_id: session_id.to_string(),
@@ -661,36 +662,48 @@ pub(crate) fn drain(
     (text, calls, finish)
 }
 
-/// 独立窗口组装（探查/专家子会话共用：任意 system + 任务指令，无主历史）
+/// 独立窗口组装（探查/专家子会话共用：任意 system + 任务指令，无主历史）。
+/// 子代理无视觉通道（2026-11-26）：历史用户轮的附件只以清单行进文本
+/// （图像数据不进子窗口——成本与窗口预算归主会话管）
 pub(crate) fn messages_with(system: &str, history: &[Round], task: &str) -> Vec<ChatMessage> {
     let mut msgs = vec![
         ChatMessage {
             role: "system".into(),
-            content: system.to_string(),
+            content: system.into(),
             tool_calls: vec![],
             tool_call_id: None,
         },
         ChatMessage {
             role: "user".into(),
-            content: task.to_string(),
+            content: task.into(),
             tool_calls: vec![],
             tool_call_id: None,
         },
     ];
     for r in history {
         match r {
-            Round::User { content } => msgs.push(ChatMessage {
-                role: "user".into(),
-                content: content.clone(),
-                tool_calls: vec![],
-                tool_call_id: None,
-            }),
+            Round::User {
+                content,
+                attachments,
+            } => {
+                let mut text = content.clone();
+                for a in attachments {
+                    text.push('\n');
+                    text.push_str(&a.context_line());
+                }
+                msgs.push(ChatMessage {
+                    role: "user".into(),
+                    content: text.into(),
+                    tool_calls: vec![],
+                    tool_call_id: None,
+                })
+            }
             Round::Assistant {
                 content,
                 tool_calls,
             } => msgs.push(ChatMessage {
                 role: "assistant".into(),
-                content: content.clone(),
+                content: content.as_str().into(),
                 tool_calls: tool_calls
                     .iter()
                     .map(|t| ToolCallMsg {
@@ -707,7 +720,7 @@ pub(crate) fn messages_with(system: &str, history: &[Round], task: &str) -> Vec<
                 summary,
             } => msgs.push(ChatMessage {
                 role: "tool".into(),
-                content: clamp_summary(summary),
+                content: clamp_summary(summary).into(),
                 tool_calls: vec![],
                 tool_call_id: Some(format!("{call_id}:{name}")),
             }),

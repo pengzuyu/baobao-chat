@@ -38,5 +38,6 @@ pub use client::{AigwClient, ChatClient};
 pub use error::{parse_gateway_error_body, AigwError, GatewayError};
 pub use merge::{merge_stream_events, MergedTurn};
 pub use types::{
-    ChatMessage, ChatRequest, FinishReason, StreamEvent, ToolCallMsg, ToolSpec, Usage,
+    ChatMessage, ChatRequest, ContentPart, FinishReason, ImageUrl, MessageContent, StreamEvent,
+    ToolCallMsg, ToolSpec, Usage,
 };

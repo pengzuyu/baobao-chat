@@ -48,7 +48,7 @@ impl ChatClient for ScriptModel {
         let m0 = req
             .messages
             .first()
-            .map(|m| m.content.clone())
+            .map(|m| m.content.text().to_string())
             .unwrap_or_default();
         self.seen
             .lock()

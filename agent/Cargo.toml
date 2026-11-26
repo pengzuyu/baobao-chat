@@ -15,6 +15,10 @@ serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
+# 视觉通道（2026-11-26）：附件图片读盘缩放后内联——只开四种常见格式，
+# 默认特性（tiff/avif/bmp/qoi 等）全关，控制二进制体积与编译时间
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+base64 = "0.22"
 bbrt-protocol = { path = "crates/bbrt-protocol" }
 bbrt-sec = { path = "crates/bbrt-sec" }
 bbrt-memory = { path = "crates/bbrt-memory" }

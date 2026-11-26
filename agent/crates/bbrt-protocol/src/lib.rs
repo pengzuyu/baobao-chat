@@ -8,10 +8,10 @@ pub mod envelope;
 
 pub use codec::{read_message, write_message, MAX_LINE_BYTES};
 pub use envelope::{
-    Blocked, ClarifyOption, CompactionPhase, Decision, EndReason, Envelope, GrantScope,
-    HistoryItem, HostToRuntime, McpAuthWire, McpServerWire, McpTransportWire, MemoryListItem,
-    MemoryScope, ModelPolicy, ModelSwitchReason, OboTokenEntry, PermissionMode, Preview,
-    ProtocolError, RenewReason, RiskLevel, RuntimeToHost, SessionListItem, SessionState,
+    Attachment, AttachmentKind, Blocked, ClarifyOption, CompactionPhase, Decision, EndReason,
+    Envelope, GrantScope, HistoryItem, HostToRuntime, McpAuthWire, McpServerWire, McpTransportWire,
+    MemoryListItem, MemoryScope, ModelPolicy, ModelSwitchReason, OboTokenEntry, PermissionMode,
+    Preview, ProtocolError, RenewReason, RiskLevel, RuntimeToHost, SessionListItem, SessionState,
     StreamChannel, SubagentPhase, SubagentResult, SubagentTraceItem, ThinkingLevel, ToolSource,
     ToolsReloadReason, Usage, WorkspaceItem, AUD_AIGW, AUD_CORP, PROTOCOL_VERSION,
 };

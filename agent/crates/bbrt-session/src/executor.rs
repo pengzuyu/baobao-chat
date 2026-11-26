@@ -115,6 +115,15 @@ pub trait ToolExecutor: Send + Sync {
         call: &ToolInvocation,
         scope: GrantScope,
     ) -> Result<(), String>;
+    /// 用户随消息附带的文件登记（2026-11-26）：附件是用户亲自给的——工具层读
+    /// 这些路径视为已授权（工作区外/敏感文件读不走审批）。default=执行器无
+    /// 读审批概念（测试桩/嵌入式）
+    fn register_attachments(
+        &self,
+        _session_id: &str,
+        _attachments: &[bbrt_context::AttachmentRef],
+    ) {
+    }
     /// 工具清单（assemble 时注入模型 tools 参数）
     fn tool_specs(&self) -> Vec<bbrt_aigw::ToolSpec>;
 }

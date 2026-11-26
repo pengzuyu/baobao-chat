@@ -57,7 +57,7 @@ fn recover_happy_turn_then_idle() {
     // 历史重建：user + assistant + tool + assistant
     assert_eq!(rep.history.len(), 4);
     assert!(
-        matches!(&rep.history[0], bbrt_context::Round::User { content } if content.contains("foo.txt"))
+        matches!(&rep.history[0], bbrt_context::Round::User { content, .. } if content.contains("foo.txt"))
     );
     assert!(
         matches!(&rep.history[2], bbrt_context::Round::Tool { summary, .. } if summary.contains("hello"))
@@ -106,7 +106,7 @@ fn recover_crash_mid_tool_and_pending_permission() {
     assert_eq!(rep.final_state, SessionState::Paused);
     // 用户输入不丢
     assert!(
-        matches!(rep.history.first(), Some(bbrt_context::Round::User { content }) if content == "跑个命令")
+        matches!(rep.history.first(), Some(bbrt_context::Round::User { content, .. }) if content == "跑个命令")
     );
 }
 

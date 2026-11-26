@@ -102,7 +102,18 @@ fn render_rounds(rounds: &[Round]) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(rounds.len());
     for r in rounds {
         parts.push(match r {
-            Round::User { content } => format!("[user] {content}"),
+            Round::User {
+                content,
+                attachments,
+            } => {
+                // 附件只进清单行（路径/类型），不带图像——摘要器只吃文本
+                let mut s = format!("[user] {content}");
+                for a in attachments {
+                    s.push('\n');
+                    s.push_str(&a.context_line());
+                }
+                s
+            }
             Round::Assistant {
                 content,
                 tool_calls,
@@ -133,6 +144,7 @@ mod tests {
     fn round_est(tag: &str, tokens: usize) -> Round {
         Round::User {
             content: format!("{}{}", "a".repeat((tokens - 1) * 4), tag),
+            attachments: Vec::new(),
         }
     }
 
@@ -188,8 +200,12 @@ mod tests {
         assert!(!out.degraded_to_truncation);
         assert_eq!(out.kept_rounds.len(), 6);
         // 保留的是最近 6 轮（t04..t09），最旧的 4 轮被归档
-        assert!(matches!(&out.kept_rounds[0], Round::User { content } if content.ends_with("t04")));
-        assert!(matches!(&out.kept_rounds[5], Round::User { content } if content.ends_with("t09")));
+        assert!(
+            matches!(&out.kept_rounds[0], Round::User { content, .. } if content.ends_with("t04"))
+        );
+        assert!(
+            matches!(&out.kept_rounds[5], Round::User { content, .. } if content.ends_with("t09"))
+        );
         // 归档段首行带 §5.2 标注
         assert!(out
             .archived_summary
@@ -258,6 +274,7 @@ mod tests {
         let rounds = vec![
             Round::User {
                 content: "看下日志".to_string(),
+                attachments: Vec::new(),
             },
             Round::Assistant {
                 content: "好的".to_string(),

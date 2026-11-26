@@ -30,7 +30,7 @@ pub mod types;
 pub use assemble::{assemble, AssembleParts, Assembled};
 pub use budget::{
     block_budgets, budget_report, estimate_tokens, BlockBudgets, BudgetConfig, BudgetReport,
-    DEFAULT_WINDOW_TOKENS,
+    DEFAULT_WINDOW_TOKENS, IMAGE_TOKENS,
 };
 pub use compaction::{
     compact, CompactionOutcome, Summarizer, ARCHIVE_MAX_TOKENS, ARCHIVE_NOTE, KEEP_ROUNDS,
@@ -40,4 +40,6 @@ pub use excerpt::{
 };
 pub use file_map::{FileMap, FileMapEntry, FILE_MAP_CAPACITY};
 pub use truncate::{fit_text, fit_text_tail, TRUNCATION_MARKER};
-pub use types::{ContextError, Round, ToolCallRecord, ToolResultEntry};
+pub use types::{
+    AttachmentKind, AttachmentRef, ContextError, Round, ToolCallRecord, ToolResultEntry,
+};

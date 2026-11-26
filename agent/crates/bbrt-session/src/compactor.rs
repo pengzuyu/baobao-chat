@@ -29,13 +29,13 @@ impl FastCompactor {
             messages: vec![
                 ChatMessage {
                     role: "system".into(),
-                    content: system.to_string(),
+                    content: system.into(),
                     tool_calls: vec![],
                     tool_call_id: None,
                 },
                 ChatMessage {
                     role: "user".into(),
-                    content: "开始压缩".to_string(),
+                    content: "开始压缩".into(),
                     tool_calls: vec![],
                     tool_call_id: None,
                 },

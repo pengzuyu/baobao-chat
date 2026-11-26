@@ -79,12 +79,12 @@ impl ChatClient for ProbeModel {
         let m0 = req
             .messages
             .first()
-            .map(|m| m.content.clone())
+            .map(|m| m.content.text().to_string())
             .unwrap_or_default();
         let m1 = req
             .messages
             .get(1)
-            .map(|m| m.content.clone())
+            .map(|m| m.content.text().to_string())
             .unwrap_or_default();
         // 通用子 agent（D16 决策①）：system 与主同构，按任务指令文本区分
         let is_probe = m1.contains("查认证模块") || m1.contains("查配置加载");
@@ -375,7 +375,7 @@ impl ChatClient for SlowProbeModel {
         let m1 = req
             .messages
             .get(1)
-            .map(|m| m.content.clone())
+            .map(|m| m.content.text().to_string())
             .unwrap_or_default();
         let is_probe = m1.contains("查认证") || m1.contains("查配置");
         let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if is_probe {
@@ -490,7 +490,7 @@ impl ChatClient for AdjustableModel {
         let adjusted = req
             .messages
             .iter()
-            .any(|m| m.content.contains("[主 Agent 补充指令]"));
+            .any(|m| m.content.text().contains("[主 Agent 补充指令]"));
         let events: Vec<Result<StreamEvent, bbrt_aigw::AigwError>> = if adjusted {
             vec![
                 Ok(StreamEvent::TextDelta {

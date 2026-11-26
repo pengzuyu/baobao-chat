@@ -6,11 +6,12 @@
 use std::io::Cursor;
 
 use bbrt_protocol::{
-    read_message, write_message, Blocked, ClarifyOption, CodecError, CompactionPhase, Decision,
-    EndReason, Envelope, GrantScope, HostToRuntime, MemoryListItem, MemoryScope, ModelPolicy,
-    ModelSwitchReason, OboTokenEntry, PermissionMode, Preview, ProtocolError, RenewReason,
-    RiskLevel, RuntimeToHost, SessionState, StreamChannel, SubagentPhase, SubagentResult,
-    ThinkingLevel, ToolSource, ToolsReloadReason, Usage, PROTOCOL_VERSION,
+    read_message, write_message, Attachment, AttachmentKind, Blocked, ClarifyOption, CodecError,
+    CompactionPhase, Decision, EndReason, Envelope, GrantScope, HistoryItem, HostToRuntime,
+    MemoryListItem, MemoryScope, ModelPolicy, ModelSwitchReason, OboTokenEntry, PermissionMode,
+    Preview, ProtocolError, RenewReason, RiskLevel, RuntimeToHost, SessionState, StreamChannel,
+    SubagentPhase, SubagentResult, ThinkingLevel, ToolSource, ToolsReloadReason, Usage,
+    PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -45,7 +46,13 @@ fn all_host_to_runtime() -> Vec<HostToRuntime> {
         HostToRuntime::UserMessage {
             session_id: "sess-1".into(),
             text: "修复登录超时 bug".into(),
-            attachments: vec!["file-9".into()],
+            attachments: vec![Attachment {
+                path: "/Users/u/Desktop/a.png".into(),
+                kind: AttachmentKind::Image,
+                name: "a.png".into(),
+                size: 1_024,
+                mime: Some("image/png".into()),
+            }],
             slash: Some("/strong".into()),
             thinking: Some(ThinkingLevel::High),
         },
@@ -261,6 +268,7 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
                 text: "定位超时来源".into(),
                 ts: None,
                 turn_done_at: None,
+                attachments: vec![],
             }],
         },
         RuntimeToHost::SessionStateReport {
@@ -1290,6 +1298,7 @@ fn golden_session_history_messages() {
                     text: "修复登录超时".into(),
                     ts: Some(1_000),
                     turn_done_at: Some(8_000),
+                    attachments: vec![],
                 },
                 HistoryItem::Reasoning {
                     text: "先看超时阈值再查连接池".into(),
@@ -1370,6 +1379,82 @@ fn golden_user_message_thinking_levels() {
     assert!(matches!(
         m,
         HostToRuntime::UserMessage { thinking: None, .. }
+    ));
+}
+
+/// 2026-11-26 附件契约：本机路径引用（不内联字节），camelCase，普通文件 mime 省略
+fn sample_attachment(kind: AttachmentKind) -> Attachment {
+    Attachment {
+        path: "/Users/u/Desktop/截图.png".into(),
+        kind,
+        name: "截图.png".into(),
+        size: 2_048,
+        mime: (kind == AttachmentKind::Image).then(|| "image/png".to_string()),
+    }
+}
+
+#[test]
+fn golden_user_message_attachments() {
+    golden(
+        &HostToRuntime::UserMessage {
+            session_id: "sess-1".into(),
+            text: "帮我看这张图".into(),
+            attachments: vec![sample_attachment(AttachmentKind::Image)],
+            slash: None,
+            thinking: None,
+        },
+        json!({"type":"user.message","sessionId":"sess-1","text":"帮我看这张图",
+               "attachments":[{"path":"/Users/u/Desktop/截图.png","kind":"image","name":"截图.png",
+                               "size":2048,"mime":"image/png"}]}),
+    );
+    // 普通文件：mime 缺席不序列化
+    golden(
+        &sample_attachment(AttachmentKind::File),
+        json!({"path":"/Users/u/Desktop/截图.png","kind":"file","name":"截图.png","size":2048}),
+    );
+    // 只带附件不带文字：text 允许空串（前端「仅附件发送」）
+    golden(
+        &HostToRuntime::UserMessage {
+            session_id: "sess-1".into(),
+            text: String::new(),
+            attachments: vec![sample_attachment(AttachmentKind::File)],
+            slash: None,
+            thinking: None,
+        },
+        json!({"type":"user.message","sessionId":"sess-1","text":"",
+               "attachments":[{"path":"/Users/u/Desktop/截图.png","kind":"file","name":"截图.png",
+                               "size":2048}]}),
+    );
+    // 附件字段整体缺席（更老的宿主）→ 空数组
+    let m: HostToRuntime =
+        serde_json::from_str(r#"{"type":"user.message","sessionId":"s","text":"t"}"#).unwrap();
+    assert!(matches!(
+        m,
+        HostToRuntime::UserMessage { attachments, .. } if attachments.is_empty()
+    ));
+}
+
+#[test]
+fn golden_history_user_attachments() {
+    // 带附件：空时不序列化（上方黄金 `"kind":"user","text":...` 不含 attachments 即证）
+    golden(
+        &HistoryItem::User {
+            text: "帮我看这张图".into(),
+            ts: Some(1_000),
+            turn_done_at: Some(8_000),
+            attachments: vec![sample_attachment(AttachmentKind::Image)],
+        },
+        json!({"kind":"user","text":"帮我看这张图","ts":1000,"turnDoneAt":8000,
+               "attachments":[{"path":"/Users/u/Desktop/截图.png","kind":"image","name":"截图.png",
+                               "size":2048,"mime":"image/png"}]}),
+    );
+    // 旧 WAL 行（无 attachments 字段）→ 空
+    let it: HistoryItem =
+        serde_json::from_str(r#"{"kind":"user","text":"旧消息","ts":1000,"turnDoneAt":8000}"#)
+            .unwrap();
+    assert!(matches!(
+        it,
+        HistoryItem::User { attachments, .. } if attachments.is_empty()
     ));
 }
 

@@ -166,9 +166,17 @@ fn fit_round(r: &Round, max: usize) -> Round {
         return r.clone();
     }
     match r {
-        Round::User { content } => Round::User {
-            content: fit_text(content, max),
-        },
+        Round::User {
+            content,
+            attachments,
+        } => {
+            // 附件标记整份保留（路径/图片估算是固定开销）：只截文本
+            let fixed: usize = attachments.iter().map(|a| a.est_tokens()).sum();
+            Round::User {
+                content: fit_text(content, max.saturating_sub(fixed)),
+                attachments: attachments.clone(),
+            }
+        }
         Round::Tool {
             call_id,
             name,
@@ -238,6 +246,7 @@ mod tests {
     fn round_est(tag: &str, tokens: usize) -> Round {
         Round::User {
             content: format!("{}{}", "a".repeat((tokens - 1) * 4), tag),
+            attachments: Vec::new(),
         }
     }
 
@@ -338,8 +347,8 @@ mod tests {
         assert!(out.truncated);
         assert_eq!(out.history.len(), 7); // 3500 ≤ 3600 < 4000
                                           // 保留的是连续后缀：最旧 t00 被丢，t01..t07 保留
-        assert!(matches!(&out.history[0], Round::User { content } if content.ends_with("t01")));
-        assert!(matches!(&out.history[6], Round::User { content } if content.ends_with("t07")));
+        assert!(matches!(&out.history[0], Round::User { content, .. } if content.ends_with("t01")));
+        assert!(matches!(&out.history[6], Round::User { content, .. } if content.ends_with("t07")));
         // est = 1 + 450 + 900 + 0 + 0 + 3500 = 4851
         assert_eq!(out.est_tokens, 4_851);
     }

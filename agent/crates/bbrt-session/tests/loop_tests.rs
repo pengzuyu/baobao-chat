@@ -977,10 +977,11 @@ fn summarizer_trait_object_compatible() {
     // Round/ChatMessage 形态锚点
     let _ = Round::User {
         content: String::new(),
+        attachments: Vec::new(),
     };
     let _ = ChatMessage {
         role: "user".into(),
-        content: String::new(),
+        content: bbrt_aigw::MessageContent::default(),
         tool_calls: vec![ToolCallMsg {
             id: "1".into(),
             name: "n".into(),
@@ -1075,7 +1076,10 @@ impl ChatClient for ScriptedModel {
     > {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(first) = req.messages.first() {
-            self.seen_system.lock().unwrap().push(first.content.clone());
+            self.seen_system
+                .lock()
+                .unwrap()
+                .push(first.content.text().to_string());
         }
         let text = self
             .replies

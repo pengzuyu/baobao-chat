@@ -37,6 +37,10 @@ pub const MEMORY_INDEX_SHARE_PERCENT: usize = 10;
 /// 软上限占比：相对（历史 + 工具结果）区块预算合计的 75%
 pub const SOFT_LIMIT_PERCENT: usize = 75;
 
+/// 单张图片的上下文 token 固定估算（2026-11-26 视觉通道）：图片以图像段进请求体，
+/// 文本启发式估不出——按主流视觉模型 1k 出头的量级取值，只保证预算不被零成本漏记
+pub const IMAGE_TOKENS: usize = 1_100;
+
 /// token 预算配置（W 已由上层按 `min(模型窗口, 租户上限)` 折算）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -159,7 +163,36 @@ mod tests {
         // 构造 est_tokens == tokens 的 User 轮（ASCII 4 字符 ≈ 1 token）
         Round::User {
             content: "a".repeat(tokens * 4),
+            attachments: Vec::new(),
         }
+    }
+
+    #[test]
+    fn estimate_用户轮图片按固定估算计入() {
+        // 文本 3 + 图片 1 张（IMAGE_TOKENS）+ 路径 "/a.png"（2）+ 文件名 "a.png"（2）
+        let r = Round::User {
+            content: "你好abc".to_string(),
+            attachments: vec![crate::types::AttachmentRef {
+                path: "/a.png".to_string(),
+                kind: crate::types::AttachmentKind::Image,
+                name: "a.png".to_string(),
+                size: 1,
+                mime: None,
+            }],
+        };
+        assert_eq!(r.est_tokens(), 3 + IMAGE_TOKENS + 2 + 2);
+        // 普通文件附件不计图片估算
+        let f = Round::User {
+            content: String::new(),
+            attachments: vec![crate::types::AttachmentRef {
+                path: "/a.pdf".to_string(),
+                kind: crate::types::AttachmentKind::File,
+                name: "a.pdf".to_string(),
+                size: 1,
+                mime: None,
+            }],
+        };
+        assert_eq!(f.est_tokens(), 2 + 2);
     }
 
     #[test]

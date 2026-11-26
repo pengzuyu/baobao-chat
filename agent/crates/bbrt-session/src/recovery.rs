@@ -76,7 +76,9 @@ pub fn recover(store: &Store, session_id: &str) -> ReplayReport {
     let mut open_tools: Vec<InFlightTool> = vec![];
     let mut last_seq = 0i64;
     let mut in_turn = false;
-    let mut pending_user: Option<String> = None;
+    // 待入历史的用户输入（原文, 附件）——落 Round::User 的时机在首个 assistant.done
+    // （或 turn.end/中断收尾），此前先挂起
+    let mut pending_user: Option<(String, Vec<bbrt_context::AttachmentRef>)> = None;
     let mut pending_permission: Option<String> = None;
 
     for ev in events {
@@ -99,18 +101,31 @@ pub fn recover(store: &Store, session_id: &str) -> ReplayReport {
                 report.final_state = SessionState::Running;
             }
             "user.text" => {
-                // payload: {"text":"..."}（loop_runner 写入契约）；解析失败退回裸 payload
-                let text = serde_json::from_str::<serde_json::Value>(&ev.payload)
-                    .ok()
+                // payload: {"text":"...","attachments":[...]?}（loop_runner 写入契约）；
+                // 解析失败退回裸 payload。附件随行还原（2026-11-26：重启续会话后
+                // 模型仍知道有哪些附件；图像数据按路径重新读盘）
+                let parsed = serde_json::from_str::<serde_json::Value>(&ev.payload).ok();
+                let text = parsed
+                    .as_ref()
                     .and_then(|v| v.get("text").and_then(|x| x.as_str()).map(str::to_string))
                     .unwrap_or_else(|| ev.payload.clone());
-                pending_user = Some(text);
+                let attachments = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("attachments"))
+                    .and_then(|x| {
+                        serde_json::from_value::<Vec<bbrt_context::AttachmentRef>>(x.clone()).ok()
+                    })
+                    .unwrap_or_default();
+                pending_user = Some((text, attachments));
             }
             "assistant.done" => {
                 // 一轮模型输出完成（含纯文本轮）：入 assistant 轮（摘要级）
                 if in_turn {
-                    if let Some(text) = pending_user.take() {
-                        report.history.push(Round::User { content: text });
+                    if let Some((content, attachments)) = pending_user.take() {
+                        report.history.push(Round::User {
+                            content,
+                            attachments,
+                        });
                     }
                     report.history.push(Round::Assistant {
                         content: String::new(),
@@ -182,8 +197,11 @@ pub fn recover(store: &Store, session_id: &str) -> ReplayReport {
             }
             "turn.end" => {
                 in_turn = false;
-                if let Some(text) = pending_user.take() {
-                    report.history.push(Round::User { content: text });
+                if let Some((content, attachments)) = pending_user.take() {
+                    report.history.push(Round::User {
+                        content,
+                        attachments,
+                    });
                 }
                 report.final_state = SessionState::Idle;
             }
@@ -201,8 +219,11 @@ pub fn recover(store: &Store, session_id: &str) -> ReplayReport {
     }
     // 中断的 turn：残留 pending_user 一并入历史（用户输入不丢）
     if in_turn {
-        if let Some(text) = pending_user.take() {
-            report.history.push(Round::User { content: text });
+        if let Some((content, attachments)) = pending_user.take() {
+            report.history.push(Round::User {
+                content,
+                attachments,
+            });
         }
         if matches!(
             report.final_state,
@@ -225,6 +246,14 @@ pub fn ready_event(session_id: &str, report: &ReplayReport) -> SessionEvent {
         restored: report.found,
         replayed_events: report.replayed_events,
     }
+}
+
+/// user.text 行的附件投影（缺失/坏数据 → 空；旧 WAL 行无此字段）
+fn wal_attachments(payload: &serde_json::Value) -> Vec<bbrt_protocol::Attachment> {
+    payload
+        .get("attachments")
+        .and_then(|x| serde_json::from_value::<Vec<bbrt_protocol::Attachment>>(x.clone()).ok())
+        .unwrap_or_default()
 }
 
 /// WAL → 会话历史条目（session.history 回执投影，与 recover 同一数据源）。
@@ -255,6 +284,7 @@ pub fn wal_history(events: &[EventRow]) -> Vec<HistoryItem> {
                         text,
                         ts: turn_started_at,
                         turn_done_at: None,
+                        attachments: wal_attachments(&payload),
                     });
                 }
             }
@@ -378,6 +408,7 @@ pub fn wal_run_history(events: &[EventRow]) -> Vec<HistoryItem> {
                             // run 级行无 turn.start/end——侧栏回放不带冻结用时
                             ts: None,
                             turn_done_at: None,
+                            attachments: vec![],
                         });
                     }
                 }
@@ -507,6 +538,7 @@ mod history_tests {
                     text: "修复登录".into(),
                     ts: Some(1_000),
                     turn_done_at: Some(8_000),
+                    attachments: vec![],
                 },
                 HistoryItem::Tool {
                     call_id: "c1".into(),
@@ -520,6 +552,100 @@ mod history_tests {
                 },
             ]
         );
+    }
+
+    /// 2026-11-26 附件契约：user.text 行的 attachments 随恢复与历史回放读出；
+    /// 文本以双引号结尾（escape_json 缺陷修复回归——旧实现写出坏 JSON，重开丢消息）
+    #[test]
+    fn user_text_附件随恢复与回放还原_结尾引号不丢消息() {
+        let att_payload = r#"[{"path":"/Users/u/Desktop/a.png","kind":"image","name":"a.png","size":1024,"mime":"image/png"},{"path":"/tmp/b.pdf","kind":"file","name":"b.pdf","size":9}]"#;
+        // recover：assistant.done flush pending_user（含附件）入 Round::User
+        let events = vec![
+            ev(1, "session.start", r#"{"workspace":""}"#),
+            ev(2, "turn.start", r#"{"text_len":5}"#),
+            ev(
+                3,
+                "user.text",
+                &format!(r#"{{"text":"他说\"好\"","attachments":{att_payload}}}"#),
+            ),
+            ev(
+                4,
+                "assistant.done",
+                r#"{"finish":"stop","usage_in":9,"usage_out":3,"text":"好"}"#,
+            ),
+            ev(
+                5,
+                "turn.end",
+                r#"{"steps":1,"paused":false,"interrupted":false}"#,
+            ),
+        ];
+        let rep = recover_store(&events);
+        assert!(matches!(
+            rep.history.first(),
+            Some(bbrt_context::Round::User { content, attachments })
+                if content == "他说\"好\""
+                    && attachments.len() == 2
+                    && attachments[0].kind == bbrt_context::AttachmentKind::Image
+                    && attachments[1].path == "/tmp/b.pdf"
+        ));
+        // wal_history：同数据源投影出 HistoryItem::User（含附件）
+        let items = wal_history(&events[2..3]);
+        assert!(matches!(
+            items.first(),
+            Some(HistoryItem::User { text, attachments, .. })
+                if text == "他说\"好\"" && attachments.len() == 2
+        ));
+        // 旧 WAL 行（无 attachments 键）→ 空数组（须包在回合内——pending_user
+        // 只在 assistant.done / turn.end flush）
+        let old = vec![
+            ev(1, "session.start", r#"{"workspace":""}"#),
+            ev(2, "turn.start", r#"{"text_len":6}"#),
+            ev(3, "user.text", r#"{"text":"旧消息"}"#),
+            ev(
+                4,
+                "assistant.done",
+                r#"{"finish":"stop","usage_in":1,"usage_out":1,"text":"好"}"#,
+            ),
+        ];
+        assert!(matches!(
+            recover_store(&old).history.first(),
+            Some(bbrt_context::Round::User { attachments, .. }) if attachments.is_empty()
+        ));
+    }
+
+    /// recover 的内存 store 便捷装配（仅测试用：事件直接落表；需先插会话行——
+    /// recover 首查 get_session，无行直接返回未找到）
+    fn recover_store(events: &[EventRow]) -> ReplayReport {
+        let dir = tempfile::tempdir().unwrap();
+        let store = bbrt_store::Store::open(&dir.path().join("t.db")).unwrap();
+        store
+            .insert_session(&bbrt_store::SessionRow {
+                id: "sess-att".into(),
+                workspace_id: None,
+                title: "t".into(),
+                form: "workbench".into(),
+                mode: "ask".into(),
+                model_policy: "fast".into(),
+                model_override: None,
+                status: "idle".into(),
+                share_enabled: false,
+                created_at: 0,
+                updated_at: 0,
+                ended_at: None,
+                summary: None,
+                conv_id: None,
+            })
+            .unwrap();
+        let mut seq = 0;
+        for e in events {
+            seq += 1;
+            store
+                .append_event("sess-att", seq, &e.type_, &e.payload)
+                .unwrap();
+        }
+        drop(store);
+        let store = bbrt_store::Store::open(&dir.path().join("t.db")).unwrap();
+        recover(&store, "sess-att")
     }
 
     /// D33 思考回放：assistant.thinking → Reasoning（置于正文前，回放顺序=
@@ -555,6 +681,7 @@ mod history_tests {
                     text: "查下日志".into(),
                     ts: Some(1_000),
                     turn_done_at: Some(5_000),
+                    attachments: vec![],
                 },
                 HistoryItem::Reasoning {
                     text: "先 grep error 再看时间线".into()
@@ -592,6 +719,7 @@ mod history_tests {
                     text: "帮我查下".into(),
                     ts: Some(1_000),
                     turn_done_at: Some(4_000),
+                    attachments: vec![],
                 },
                 HistoryItem::Error {
                     code: 8011,
@@ -638,6 +766,7 @@ mod history_tests {
                     text: "旧会话问题".into(),
                     ts: None,
                     turn_done_at: None,
+                    attachments: vec![],
                 },
                 HistoryItem::Tool {
                     call_id: "c9".into(),
@@ -673,6 +802,7 @@ mod history_tests {
                     text: "跑测试".into(),
                     ts: None,
                     turn_done_at: None,
+                    attachments: vec![],
                 },
                 HistoryItem::Tool {
                     call_id: "c2".into(),
@@ -740,6 +870,7 @@ mod history_tests {
                     text: "定位超时来源".into(),
                     ts: None,
                     turn_done_at: None,
+                    attachments: vec![],
                 },
                 HistoryItem::Tool {
                     call_id: "c1".into(),
