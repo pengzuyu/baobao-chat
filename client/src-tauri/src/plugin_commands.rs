@@ -249,10 +249,22 @@ fn discover_config_keys(doc: &Value) -> (Value, Value) {
     };
     for (name, def) in map {
         let kind = if def.get("url").is_some() { "http" } else { "stdio" };
+        // 身份已声明（装配层恒注入统一身份，无需用户开关）：显式 x-bbc-auth
+        // 或 headers 含 ${BBC_USER_TOKEN} 占位（配置值引用经装配归一的等价形态
+        // 同样算——装配后 headers 落盘态由 discover 复扫，此处看作者原始声明）
+        let auth_declared = def.get("x-bbc-auth").is_some()
+            || def
+                .get("headers")
+                .and_then(Value::as_object)
+                .is_some_and(|m| {
+                    m.values()
+                        .any(|v| v.to_string().contains("${BBC_USER_TOKEN}"))
+                });
         servers.push(json!({
             "name": name,
             "kind": kind,
             "url": def.get("url").cloned().unwrap_or(Value::Null),
+            "authDeclared": auth_declared,
         }));
         // headers 值先收（secret=true），其余值后收（secret=false）——同名 headers 优先
         for (secret, node) in [

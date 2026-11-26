@@ -1325,8 +1325,9 @@ pub(crate) fn read_plugin_mcp_doc(ver_dir: &std::path::Path) -> Option<Value> {
 /// 当前登录用户 / `${CONFIG:key}` 插件配置（config.json+钥匙串合并）。
 /// **统一身份（D38 §5）**：`x-bbc-auth:{type:"obo"[,scope]}` 声明 → wire 带
 /// auth（audience=该 server url，宿主显式填、RT 不推导）；**旧写法归一**（拍板 12）：
-/// headers 含 `${BBC_USER_TOKEN}` 等价统一身份（headers 原样保留——RT 调用层
-/// 按受众票替换该占位，效果与自动 Bearer 等价）。**stdio 声明统一身份 → 拒装**
+/// headers 含 `${BBC_USER_TOKEN}` 等价统一身份（headers 路径 CONFIG 替换后保留
+/// 占位——配置值填平台凭证经 `${CONFIG:key}` 引用同样触发归一，组合链 2026-11-26
+/// 打通；RT 调用层按受众票替换该占位，效果与自动 Bearer 等价）。**stdio 声明统一身份 → 拒装**
 /// （拍板 8：管道内无验证方，令牌不进子进程）。个人面（D26 §6）复用：
 /// plugin_root 传空串、config 传空表）
 pub(crate) fn mcp_server_wire(
@@ -1336,7 +1337,11 @@ pub(crate) fn mcp_server_wire(
     user: &(String, String),
     config: &serde_json::Map<String, Value>,
 ) -> Option<Value> {
-    let subst_static = |s: &str| -> String {
+    // keep_token：HTTP headers 路径替换 CONFIG 后保留 ${BBC_USER_TOKEN} 占位
+    // （RT 调用层按受众票逐请求动态注入）——配置值填平台凭证经 ${CONFIG:key}
+    // 引用进 header 的组合链在此打通；stdio（command/args/env）维持剥空
+    // （拍板 8：令牌不进子进程）
+    let subst_static = |s: &str, keep_token: bool| -> String {
         // 根路径变量两写法同义：bbc 原生 ${PLUGIN_ROOT} + 生态标准
         // ${CLAUDE_PLUGIN_ROOT}（Claude Code/zcode 插件规范变量名——生态包
         // stdio server 以它定位脚本，不补认则字面量路径传入 server 起不来）
@@ -1355,8 +1360,12 @@ pub(crate) fn mcp_server_wire(
             }
             out = replaced;
         }
-        // stdio 约定：TOKEN 不进子进程 env（HTTP-only）
-        out.replace("${BBC_USER_TOKEN}", "")
+        if keep_token {
+            out
+        } else {
+            // stdio 约定：TOKEN 不进子进程 env（HTTP-only）
+            out.replace("${BBC_USER_TOKEN}", "")
+        }
     };
     // D38 拍板 8：stdio 永不需要令牌——声明统一身份直接拒装（发布校验双保险，
     // 装配器为最后一道）
@@ -1373,7 +1382,7 @@ pub(crate) fn mcp_server_wire(
             .map(|a| {
                 a.iter()
                     .filter_map(Value::as_str)
-                    .map(&subst_static)
+                    .map(|s| subst_static(s, false))
                     .collect()
             })
             .unwrap_or_default();
@@ -1383,7 +1392,7 @@ pub(crate) fn mcp_server_wire(
                 .map(|(k, v)| {
                     (
                         k.clone(),
-                        Value::String(subst_static(&v.to_string().trim_matches('"'))),
+                        Value::String(subst_static(&v.to_string().trim_matches('"'), false)),
                     )
                 })
                 .collect::<serde_json::Map<String, Value>>(),
@@ -1391,22 +1400,18 @@ pub(crate) fn mcp_server_wire(
         };
         return Some(json!({
             "name": name,
-            "transport": { "kind": "stdio", "command": subst_static(cmd), "args": args, "env": env }
+            "transport": { "kind": "stdio", "command": subst_static(cmd, false), "args": args, "env": env }
         }));
     }
     if let Some(url) = def.get("url").and_then(Value::as_str) {
-        // headers：CONFIG 静态替换，${BBC_USER_TOKEN} 保留（RT 调用层动态替换）
+        // headers：CONFIG 静态替换，${BBC_USER_TOKEN} 恒保留（RT 调用层动态替换）
+        // ——含占位符的原文不再跳过 CONFIG 替换（混写与配置值引用组合链都通）
         let headers = match def.get("headers").and_then(Value::as_object) {
             Some(m) => m
                 .iter()
                 .map(|(k, v)| {
                     let raw = v.to_string().trim_matches('"').to_string();
-                    let val = if raw.contains("${BBC_USER_TOKEN}") {
-                        raw // 保留给 RT
-                    } else {
-                        subst_static(&raw)
-                    };
-                    (k.clone(), Value::String(val))
+                    (k.clone(), Value::String(subst_static(&raw, true)))
                 })
                 .collect::<serde_json::Map<String, Value>>(),
             None => serde_json::Map::new(),
@@ -1712,6 +1717,79 @@ mod tests {
         .expect("普通外部系统应出 wire");
         assert!(w["transport"]["auth"].is_null(), "无声明=匿名不注入");
         assert_eq!(w["transport"]["headers"]["Private-Token"], "secret-x");
+    }
+
+    #[test]
+    fn wire_config_value_token_composes_into_header() {
+        // 组合链（2026-11-26 打通）：配置值填平台凭证经 ${CONFIG:key} 引用进
+        // header——替换后占位保留给 RT，且触发旧写法归一（audience=url）
+        let def = json!({
+            "url": "https://oa.company.internal/mcp",
+            "headers": { "X-Api-Key": "k-${CONFIG:api_key}" }
+        });
+        let w = mcp_server_wire(
+            "oa",
+            &def,
+            "",
+            &(String::new(), String::new()),
+            &serde_json::Map::from_iter([("api_key".into(), json!("${BBC_USER_TOKEN}"))]),
+        )
+        .expect("配置值引用平台凭证应出 wire");
+        assert_eq!(
+            w["transport"]["headers"]["X-Api-Key"],
+            "k-${BBC_USER_TOKEN}",
+            "CONFIG 替换后占位保留——RT 按受众票动态注入"
+        );
+        assert_eq!(
+            w["transport"]["auth"]["audience"],
+            "https://oa.company.internal/mcp",
+            "配置值引用占位=统一身份意图，归一注入"
+        );
+    }
+
+    #[test]
+    fn wire_header_mixes_config_and_token() {
+        // header 原文 ${CONFIG:key} 与 ${BBC_USER_TOKEN} 混写——两替换都要发生
+        // （旧实现含占位符即跳过 CONFIG 替换，${CONFIG:} 字面量漏到服务端）
+        let def = json!({
+            "url": "https://hr.company.internal/mcp",
+            "headers": { "Authorization": "Bearer ${CONFIG:prefix}-${BBC_USER_TOKEN}" }
+        });
+        let w = mcp_server_wire(
+            "hr",
+            &def,
+            "",
+            &("u1".into(), "张三".into()),
+            &serde_json::Map::from_iter([("prefix".into(), json!("pp"))]),
+        )
+        .expect("混写 header 应出 wire");
+        assert_eq!(
+            w["transport"]["headers"]["Authorization"],
+            "Bearer pp-${BBC_USER_TOKEN}"
+        );
+        assert_eq!(
+            w["transport"]["auth"]["audience"],
+            "https://hr.company.internal/mcp"
+        );
+    }
+
+    #[test]
+    fn wire_stdio_config_token_stripped() {
+        // stdio 维持剥空（拍板 8：令牌不进子进程）——配置值引用占位也不破例
+        let def = json!({
+            "command": "node",
+            "args": ["server.mjs"],
+            "env": { "API_KEY": "${CONFIG:api_key}" }
+        });
+        let w = mcp_server_wire(
+            "std",
+            &def,
+            "",
+            &(String::new(), String::new()),
+            &serde_json::Map::from_iter([("api_key".into(), json!("${BBC_USER_TOKEN}"))]),
+        )
+        .expect("stdio 定义应出 wire");
+        assert_eq!(w["transport"]["env"]["API_KEY"], "", "stdio 剥空不破例");
     }
 
     #[test]
