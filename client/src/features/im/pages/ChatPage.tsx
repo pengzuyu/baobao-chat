@@ -43,6 +43,7 @@ import { ConvInfoSidebar } from '../components/ConvInfoSidebar';
 import { CreateConvModal } from '../components/CreateConvModal';
 import { PersonPickerModal } from '../components/PersonPicker';
 import type { DirectoryUser } from '../../contacts/api/contacts';
+import type { AttachmentPayload } from '../../agent/bridge/types';
 import { FileSendPreview } from '../components/FileSendPreview';
 import { MessageBubble, type BubbleActions } from '../components/MessageBubble';
 import { MsgContextMenu, copyTextOf, type MenuAnchor, type MsgMenuActions } from '../components/stream/MsgContextMenu';
@@ -242,6 +243,8 @@ export function ChatPage() {
   //    落流卡=纯展示+审批/提问应答条——发消息走输入框（🤖 按钮//agent 命令），
   //    进工作台走 ChatHeader 🤖 图标） ──
   const [agentMode, setAgentMode] = useState(false);
+  /** 回复卡「追问」聚焦信号（2026-11-26）：递增触发输入框聚焦（切模式由本处一并做） */
+  const [agentFocusTick, setAgentFocusTick] = useState(0);
   const [embeddedActive, setEmbeddedActive] = useState<string | null>(null);
   useEffect(() => {
     setAgentMode(false);
@@ -297,17 +300,20 @@ export function ChatPage() {
   };
 
   /** Agent 流程（D18 §2/§3.1）：问题交本会话 embedded Agent 处理，回复经落流卡回流。
-   *  失败必须可见（2026-11-16 幽灵映射事故：裸 void 全链静默=发消息无任何反馈） */
-  const agentFlow = async (rawText: string) => {
-    if (!convId) return;
+   *  失败必须可见（2026-11-16 幽灵映射事故：裸 void 全链静默=发消息无任何反馈）。
+   *  附件（2026-11-26）：随提问交 agent（本机路径引用）；返回成败供输入框还原 */
+  const agentFlow = async (rawText: string, attachments?: AttachmentPayload[]): Promise<boolean> => {
+    if (!convId) return false;
     const question = rawText.replace(/^\/agent\s*/, '').trim() || rawText;
     try {
       const sid = await ensureEmbeddedSession();
       setEmbeddedActive(sid);
-      await useAgentStore.getState().sendTextTo(sid, question);
+      await useAgentStore.getState().sendTextTo(sid, question, attachments);
+      return true;
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       message.error(`Agent 处理失败：${detail}`, 4);
+      return false;
     }
   };
 
@@ -663,6 +669,12 @@ export function ChatPage() {
       setEditing(null);
       setReplyTo(m);
     },
+    // agent 卡「追问」（2026-11-26）：切机器人对话模式+聚焦输入框——继续同一
+    // embedded 会话上下文（会话不死），附件经输入框 📎/拖拽/粘贴加
+    onAgentCardFollowUp: () => {
+      setAgentMode(true);
+      setAgentFocusTick((t) => t + 1);
+    },
     onEdit: (m) => {
       setReplyTo(null);
       setEditing(m);
@@ -780,7 +792,9 @@ export function ChatPage() {
   // 搜索框联系人命中（M3）：搜人即聊——点人发起单聊直达
   const onPickPerson = useCallback((u: DirectoryUser) => void startDm(u.uid), [startDm]);
 
-  const doSend = (text: string) => {
+  /** 输入框发送（text=草稿；atts=机器人模式附件待发区，2026-11-26）。
+   *  返回 false=Agent 受理失败（输入框还原草稿与附件）；void=已受理 */
+  const doSend = (text: string, atts?: AttachmentPayload[]): boolean | void => {
     if (!convId) return;
     // Agent 模式 / /agent 前缀（2026-11-11 命令口径；@Agent 触发已下线留作他用）
     const toAgent = agentMode || /^\/agent([\s　]|$)/.test(text);
@@ -789,10 +803,16 @@ export function ChatPage() {
       // + 交 embedded Agent，对方/群友全程无感知；最终结论经卡上「发送」以 bot 名义
       // 发引用式消息（问+正文），未点发送前会话零痕迹
       const question = text.replace(/^\/agent\s*/, '').trim() || text;
-      useImStore.getState().appendLocalQuestion(convId, question);
+      useImStore.getState().appendLocalQuestion(convId, question, atts);
       pendingMentionsRef.current = []; // @面板选择作废（提问不发送，提及无从谈起）
       setReplyTo(null);
-      void agentFlow(question);
+      void agentFlow(question, atts).then((ok) => {
+        if (!ok) {
+          // 受理失败（幽灵映射/会话丢失等）：本地提问气泡回收（发得出去才算数）；
+          // 草稿已被输入框受理清空——错误提示+气泡回收兜底，重发成本低
+          useImStore.getState().dropLocalQuestion(convId, question);
+        }
+      });
       return;
     }
     // @全体：文本包含「@全体」即携带 all mention（服务端按 mention_all_policy 校验 3014）
@@ -1135,6 +1155,7 @@ export function ChatPage() {
           convId={convId}
           agentMode={agentMode}
           onToggleAgentMode={() => setAgentMode((v) => !v)}
+          focusSignal={agentFocusTick}
           /* typing 上报仅单聊（OQ-B03 拍板：群聊默认关——大群广播扰动高；广播群本就只读） */
           typingEnabled={activeConv?.type === 1}
           /* 禁用三态：广播群非 publisher / 单人禁言 / 全员禁言（非 owner/admin），D03 §3.3；

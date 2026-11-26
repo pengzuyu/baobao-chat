@@ -48,6 +48,7 @@ import {
 import { Avatar } from '../../../shared/ui/Avatar';
 import { Button } from '../../../shared/ui/Button';
 import { AgentProcessCard, agentStatsText, type AgentCardBody } from '../../../shared/components/AgentProcessCard';
+import { AttachmentList } from '../../../shared/attachments/components';
 import { getErrorText } from '../../../shared/api/http';
 import { formatBytes } from '../../../shared/utils/format';
 import { digestOf } from '../store/im';
@@ -105,6 +106,9 @@ export interface BubbleActions {
   onMultiSelect: (m: Message) => void;
   /** 打开合并转发详情抽屉（PIM-11：merge_forward 气泡点击） */
   onOpenMergeDetail: (m: Message) => void;
+  /** agent 卡「追问」（2026-11-26）：切机器人对话模式并聚焦输入框（附件在输入框加）；
+   *  不传=不渲染按钮 */
+  onAgentCardFollowUp?: () => void;
 }
 
 interface MessageBubbleProps {
@@ -1149,6 +1153,10 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
         >
           {isText ? (
             <span style={{ ...bubbleStyle(false), fontSize: token.fontSize, color: token.colorText, wordBreak: 'break-word', ...(isBot ? undefined : { whiteSpace: 'pre-wrap' }) }}>
+              {message.attachments?.length ? (
+                // 本机提问气泡附件（2026-11-26 机器人模式；仅 local='local' 消息携带）
+                <AttachmentList attachments={message.attachments} />
+              ) : null}
               <ReplyQuote message={message} onLocate={actions?.onLocate} />
               {/* bot 名义消息（2026-11-20）：markdown 原文渲染（拍板「渲染完的信息」，
                   非本人样式的原 markdown 源码文本）；无 mention 语义 */}
@@ -1286,6 +1294,24 @@ function isAgentCardBody(b: unknown): b is AgentCardBody {
                 >
                   <Send size={12} aria-hidden style={{ marginRight: 3 }} />
                   {botSent ? '已发送到聊天' : '发送'}
+                </Button>
+              ) : null}
+              {/* agent 卡「追问」（2026-11-26）：切机器人对话模式+聚焦输入框——继续
+                  本会话上下文提问（附件经输入框 📎/拖拽/粘贴加），不回工作台 */}
+              {agentCardShareable && actions?.onAgentCardFollowUp ? (
+                <Button
+                  variant="text"
+                  size="small"
+                  data-testid="agent-card-follow-up"
+                  title="追问：切到机器人对话模式继续本会话提问"
+                  style={{ fontSize: 12, color: token.colorTextSecondary }}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    actions.onAgentCardFollowUp?.();
+                  }}
+                >
+                  <Bot size={12} aria-hidden style={{ marginRight: 3 }} />
+                  追问
                 </Button>
               ) : null}
               {/* ⋯ 打开统一右键菜单（锚定按钮左下角；菜单内动作复用同一套 handlers） */}

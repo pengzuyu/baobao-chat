@@ -106,6 +106,17 @@ export interface Message {
   ts: number;
   /** 仅本端消息：sending/sent/failed（乐观更新） */
   localState?: MsgLocalState;
+  /** 本机提问气泡附件（2026-11-26 机器人模式；仅 localState='local' 消息携带——
+   *  服务端消息/其他端永不携带；渲染=气泡内附件段，「提问仅本机可见」口径不变） */
+  attachments?: LocalAttachment[];
+}
+
+/** 本机提问气泡附件元数据（结构=agent 域 AttachmentMeta 镜像；跨域解耦不引 agent 类型） */
+export interface LocalAttachment {
+  path: string;
+  name: string;
+  size: number;
+  kind: 'image' | 'file';
 }
 
 export interface UserConvState {

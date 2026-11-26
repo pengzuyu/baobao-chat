@@ -11,9 +11,18 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Alert, Flex, Input, Tooltip, Typography, theme } from 'antd';
+import { Alert, Flex, Input, Tooltip, Typography, message, theme } from 'antd';
 import type { InputRef } from 'antd';
 import { AtSign, Bot, Mic, Paperclip, Smile, Square, Trash2, X } from 'lucide-react';
+import {
+  MAX_ATTACHMENTS,
+  pickAttachmentPaths,
+  savePastedImage,
+  statAttachments,
+} from '../../../shared/attachments';
+import { AttachmentStrip, type StripItem } from '../../../shared/attachments/components';
+import { useImagePaste } from '../../../shared/attachments/hooks';
+import type { AttachmentPayload } from '../../agent/bridge/types';
 import { Button } from '../../../shared/ui/Button';
 import { useImeGuard } from '../../../shared/hooks/useImeGuard';
 import { sendTyping } from '../api/im';
@@ -58,7 +67,9 @@ interface MessageInputProps {
   disabledHint?: string;
   draft: string;
   onDraftChange: (text: string) => void;
-  onSend: (text: string) => void;
+  /** 发送（text=草稿原文）。机器人模式下第二参=附件待发区（2026-11-26）；
+   *  返回 false=Agent 处理失败（还原草稿与附件），void/true=已受理（清空） */
+  onSend: (text: string, attachments: AttachmentPayload[]) => void | boolean | Promise<boolean | void>;
   /** 引用回复目标（null=普通发送）；发送后由父层清除 */
   replyTo: Message | null;
   onCancelReply: () => void;
@@ -79,6 +90,8 @@ interface MessageInputProps {
   /** Agent 模式（D18 §3.1）：点亮后本条消息交给内嵌 Agent 处理（不传=不显示入口） */
   agentMode?: boolean;
   onToggleAgentMode?: () => void;
+  /** 聚焦信号（2026-11-26 回复卡「追问」：递增计数触发输入框聚焦） */
+  focusSignal?: number;
 }
 
 export function MessageInput({
@@ -101,6 +114,7 @@ export function MessageInput({
   onPickSticker,
   agentMode,
   onToggleAgentMode,
+  focusSignal,
 }: MessageInputProps) {
   const { token } = theme.useToken();
   const [sending, setSending] = useState(false);
@@ -123,6 +137,32 @@ export function MessageInput({
   const taRef = useRef<TaRefLike>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingAt = useRef(0);
+  /** 机器人模式附件待发区（2026-11-26：回形针/粘贴两入口；仅 agentMode 使用与显示） */
+  const [agentAtts, setAgentAtts] = useState<StripItem[]>([]);
+  const addAgentPaths = async (paths: string[]) => {
+    const fresh = paths.filter((x) => !agentAtts.some((a) => a.path === x));
+    if (fresh.length === 0) return;
+    if (agentAtts.length + fresh.length > MAX_ATTACHMENTS) {
+      message.warning(`附件过多（最多 ${MAX_ATTACHMENTS} 个）`);
+      return;
+    }
+    try {
+      const metas = await statAttachments(fresh);
+      setAgentAtts((prev) => [...prev, ...metas]);
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+  useImagePaste(!!agentMode, (bytes) => {
+    void savePastedImage(bytes)
+      .then((path) => addAgentPaths([path]))
+      .catch((e: unknown) => message.error(e instanceof Error ? e.message : String(e)));
+  });
+  // 回复卡「追问」：外部信号触发聚焦（徽标已由 ChatPage 置 agentMode）
+  useEffect(() => {
+    if (focusSignal) focusTa();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusSignal]);
 
   /** 底层原生 textarea（光标/选区操作直达；antd 封装下同样持有 selectionStart 等） */
   const taEl = () => taRef.current?.resizableTextArea?.textArea ?? null;
@@ -153,10 +193,33 @@ export function MessageInput({
       return;
     }
     const text = draft.trim();
-    if (!text || disabled || sending) return;
-    onSend(text);
-    onDraftChange(''); // 清空草稿（发送成功或手动清空同步空串，INT-IM-10）
-    setMention(null);
+    if ((!text && agentAtts.length === 0) || disabled || sending) return;
+    const atts: AttachmentPayload[] = agentAtts.map(({ path, name, size, kind }) => ({ path, name, size, kind }));
+    const result = onSend(text, atts);
+    const restore = () => {
+      setAgentAtts(atts); // Agent 失败还原附件待发区（草稿在 store 未动，无需还原）
+    };
+    if (result && typeof (result as Promise<boolean>).then === 'function') {
+      void (result as Promise<boolean | void>).then(
+        (sent) => {
+          if (sent === false) {
+            restore();
+            return;
+          }
+          onDraftChange('');
+          setAgentAtts([]);
+          setMention(null);
+        },
+        () => restore(),
+      );
+    } else if (result === false) {
+      restore();
+      return;
+    } else {
+      onDraftChange(''); // 清空草稿（发送成功或手动清空同步空串，INT-IM-10）
+      setAgentAtts([]);
+      setMention(null);
+    }
     setSending(true);
     setTimeout(() => setSending(false), 300); // 乐观更新即时上屏，此处仅做按钮态节流
   };
@@ -419,6 +482,9 @@ export function MessageInput({
         background: agentMode ? `color-mix(in srgb, ${token.colorPrimary} 6%, transparent)` : undefined,
       }}
     >
+      {agentMode && agentAtts.length > 0 ? (
+        <AttachmentStrip items={agentAtts} onRemove={(p) => setAgentAtts((prev) => prev.filter((x) => x.path !== p))} />
+      ) : null}
       {/* 引用回复条 / 编辑条（互斥；编辑优先） */}
       {editing ? (
         <Flex
@@ -502,13 +568,21 @@ export function MessageInput({
             <AtSign size={17} />
           </Button>
         </Tooltip>
-        <Tooltip title="发送文件/图片">
+        <Tooltip title={agentMode ? '附加文件给 Agent（也可拖入/粘贴）' : '发送文件/图片'}>
           <Button
             variant="text"
             size="small"
             data-testid="attach-btn"
-            style={{ width: 28, height: 28, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
-            onClick={() => fileInputRef.current?.click()}
+            style={{ width: 28, height: 28, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: agentMode ? token.colorPrimary : token.colorTextSecondary }}
+            onClick={() => {
+              if (agentMode) {
+                void pickAttachmentPaths().then((paths) => {
+                  if (paths.length > 0) void addAgentPaths(paths);
+                });
+                return;
+              }
+              fileInputRef.current?.click();
+            }}
           >
             <Paperclip size={17} />
           </Button>

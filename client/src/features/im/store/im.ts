@@ -13,7 +13,7 @@ import { sendTextMessage, updateConvState as apiUpdateConvState } from '../api/i
 import { systemMessageText } from '../pages/systemMessageRegistry';
 // 本地持久化（写穿/outbox）——与 ../api/local 互引为运行时环（函数体引用，模块初始化无环序依赖）
 import { outboxBumpRetry, outboxEnqueue, outboxSettle, persistMessage, persistReadSeq, persistUpdatedLocal } from '../api/local';
-import type { Conversation, ConvUpdatedPushPayload, Mention, Message, MessageBody, MsgExt, SystemBody } from '../model/types';
+import type { Conversation, ConvUpdatedPushPayload, LocalAttachment, Mention, Message, MessageBody, MsgExt, SystemBody } from '../model/types';
 import '../events'; // 装载 bus 事件类型声明（im:unread-changed 等）
 
 interface ImState {
@@ -93,7 +93,10 @@ interface ImState {
 
   /** 纯本地消息（'local'，永不发送，2026-11-25）：IM 内嵌 Agent 提问气泡与过程卡
    *  仅本机可见——不走 outbox/本地消息表/会话摘要，对方与群友全程无感知 */
-  appendLocalQuestion: (convId: string, text: string) => void;
+  /** 提问气泡（2026-11-26）：attachments=机器人模式附件（仅本机气泡渲染，不发送） */
+  appendLocalQuestion: (convId: string, text: string, attachments?: LocalAttachment[]) => void;
+  /** 回收本地提问气泡（Agent 受理失败）：按文本匹配移除最近的本地 text 消息 */
+  dropLocalQuestion: (convId: string, text: string) => void;
   upsertLocalAgentCard: (convId: string, clientMsgId: string, body: MessageBody) => void;
   patchLocalAgentCard: (convId: string, clientMsgId: string, body: MessageBody) => void;
   /** EmbeddedAgentSync 挂载恢复：KV 轮次记录重建为本地消息灌回（幂等） */
@@ -565,7 +568,7 @@ export const useImStore = create<ImState>((set, get) => ({
    *  无感知），复用负序置底排序与 replaceMessages 保留分支两份现有保护 ── */
 
   /** 提问气泡：普通本人 text 样式上屏（不落服务端） */
-  appendLocalQuestion: (convId, text) => {
+  appendLocalQuestion: (convId, text, attachments) => {
     const { myUid } = get();
     const optimistic: Message = {
       msgId: '',
@@ -579,11 +582,26 @@ export const useImStore = create<ImState>((set, get) => ({
       status: 1,
       ts: Date.now(),
       localState: 'local',
+      // 机器人模式附件（2026-11-26）：仅本机提问气泡渲染——服务端消息恒无此字段
+      attachments,
     };
     set((s) => ({
       // 不 touchConv：会话列表摘要不出现 agent 交互内容（列表预览只反映双方共同可见的消息）
       messagesByConv: { ...s.messagesByConv, [convId]: sortMessages([...(s.messagesByConv[convId] ?? []), optimistic]) },
     }));
+  },
+
+  dropLocalQuestion: (convId, text) => {
+    set((s) => {
+      const list = s.messagesByConv[convId] ?? [];
+      // 从尾向找最近一条匹配文本的本地提问气泡移除（幂等：不存在即无操作）
+      const idx = [...list].reverse().findIndex((m) => m.localState === 'local' && m.type === 'text' && (m.body as { text?: string }).text === text);
+      if (idx < 0) return {};
+      const real = list.length - 1 - idx;
+      return {
+        messagesByConv: { ...s.messagesByConv, [convId]: [...list.slice(0, real), ...list.slice(real + 1)] },
+      };
+    });
   },
 
   /** 本地 agent 卡落卡：按 clientMsgId 幂等（轮内重落回原卡，跨轮唯一） */

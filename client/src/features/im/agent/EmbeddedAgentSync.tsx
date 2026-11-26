@@ -25,7 +25,7 @@ import { getAgentBridge } from '../../agent/bridge';
 import type { GrantScope } from '../../agent/bridge/types';
 import { ClarifyForm, type ClarifySubmit } from '../../agent/components/ClarifyCard';
 import { useImStore } from '../store/im';
-import { agentCardRoundToken, currentRoundItems, landAgentCard, patchAgentCard, roundQuestionFullOf, roundQuestionOf, stagesFromStream, stagesSignature } from './embedded';
+import { agentCardRoundToken, currentRoundItems, landAgentCard, patchAgentCard, roundAttachmentsOf, roundQuestionFullOf, roundQuestionOf, stagesFromStream, stagesSignature } from './embedded';
 
 const TERMINAL_STATES = new Set(['error', 'ended']);
 
@@ -187,7 +187,7 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
           // 落卡（2026-11-25 本地化）：token 兜底同绑本轮 user ts（正常路径轮 token 已在
           // 新回合分支生成存 ref）；提问全文随卡注册（KV 记录+分享引用数据源）
           landedTokenRef.current = roundTokenRef.current ?? agentCardRoundToken(sessionId, userCount, lastUserItem?.ts ?? Date.now());
-          await landAgentCard(convId, landedTokenRef.current, body, roundQuestionFullOf(stream));
+          await landAgentCard(convId, landedTokenRef.current, body, roundQuestionFullOf(stream), roundAttachmentsOf(stream));
         } else if (status !== 'running' && !retiredRef.current) {
           retiredRef.current = true;
           await patchAgentCard(convId, landedTokenRef.current, body);

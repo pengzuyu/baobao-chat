@@ -61,6 +61,8 @@ export interface AgentRoundRecord {
   clientMsgId: string;
   /** 本轮提问全文（roundQuestionFullOf 口径；纯指令轮为空串） */
   question: string;
+  /** 本轮提问附件（2026-11-26 机器人模式；恢复提问气泡带图——仅本机可见） */
+  attachments?: Array<{ path: string; name: string; size: number; kind: 'image' | 'file' }>;
   /** 卡 body（落卡时 running 初态，终态 PATCH 回写快照） */
   body: AgentCardBody;
   /** 轮起点 ts（本轮最后一条 user 的 ts） */
@@ -106,12 +108,21 @@ export function roundQuestionFullOf(items: StreamItem[]): string {
   return '';
 }
 
+/** 本轮问题附件提取（2026-11-26）：最后一条 user 条目的 attachments（空=undefined） */
+export function roundAttachmentsOf(items: StreamItem[]): Array<{ path: string; name: string; size: number; kind: 'image' | 'file' }> | undefined {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const it = items[i];
+    if (it.kind === 'user') return it.attachments?.length ? it.attachments : undefined;
+  }
+  return undefined;
+}
+
 /** KV 轮次记录 → 本地消息序列（每轮=提问气泡（question 非空时）+ 过程卡）；
  *  seq 置 0 由 restoreLocalMessages 按序重分配负序 */
 function roundRecordsToMessages(records: AgentRoundRecord[], convId: string, myUid: string): Message[] {
   const msgs: Message[] = [];
   for (const r of records) {
-    if (r.question) {
+    if (r.question || (r.attachments ?? []).length > 0) {
       msgs.push({
         msgId: '',
         convId,
@@ -124,6 +135,7 @@ function roundRecordsToMessages(records: AgentRoundRecord[], convId: string, myU
         status: 1,
         ts: r.ts,
         localState: 'local',
+        attachments: r.attachments,
       });
     }
     msgs.push({
@@ -159,12 +171,21 @@ export async function restoreAgentRounds(convId: string, myUid: string): Promise
  * @param clientMsgId 轮 token（agentCardRoundToken：轮内稳定/跨轮唯一）
  * @param question 本轮提问全文（注册表与 KV 记录；纯指令轮传空串）
  */
-export async function landAgentCard(convId: string, clientMsgId: string, body: AgentCardBody, question: string): Promise<void> {
+export async function landAgentCard(
+  convId: string,
+  clientMsgId: string,
+  body: AgentCardBody,
+  question: string,
+  attachments?: Array<{ path: string; name: string; size: number; kind: 'image' | 'file' }>,
+): Promise<void> {
   registerRoundQuestion(clientMsgId, question);
   useImStore.getState().upsertLocalAgentCard(convId, clientMsgId, body);
   const records = await loadAgentRounds(convId);
   if (records.some((r) => r.clientMsgId === clientMsgId)) return;
-  await saveAgentRounds(convId, [...records, { clientMsgId, question, body, ts: body.started_at ?? Date.now() }]);
+  await saveAgentRounds(convId, [
+    ...records,
+    { clientMsgId, question, body, ts: body.started_at ?? Date.now(), attachments },
+  ]);
 }
 
 /** 分阶段更新本地卡（原 REST PATCH /messages/{id}/agent-card 退役）：只更新本机
