@@ -303,7 +303,7 @@ export function PluginPage() {
               上传后进入个人区：仅自己可见可装；进公共市场需管理员审核发布
             </Typography.Text>
             <Space size={8} wrap>
-              <Upload
+              <Upload.Dragger
                 accept=".zip"
                 maxCount={1}
                 beforeUpload={(file) => {
@@ -313,8 +313,13 @@ export function PluginPage() {
                 onRemove={() => setUploadFile(null)}
                 fileList={uploadFile ? ([{ uid: '-1', name: uploadFile.name, status: 'done' }] as UploadFile[]) : []}
               >
-                <Button variant="secondary">选择插件 zip 包</Button>
-              </Upload>
+                <div style={{ padding: '10px 0' }}>
+                  <UploadIcon size={20} style={{ color: 'var(--bbc-primary)', marginBottom: 4 }} />
+                  <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+                    点击选择或拖拽插件 zip 包到此处
+                  </Typography.Text>
+                </div>
+              </Upload.Dragger>
               <Input
                 style={{ width: 260 }}
                 placeholder="备注（可选，如：发版流程助手）"

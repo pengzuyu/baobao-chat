@@ -266,7 +266,7 @@ export function PluginGovernancePage() {
           <Typography.Text type="secondary">
             公共插件（全员可见；policy=force 时用户端免确认自动推装）。个人插件请走插件页「上传插件」
           </Typography.Text>
-          <Upload
+          <Upload.Dragger
             accept=".zip"
             maxCount={1}
             beforeUpload={(file) => {
@@ -276,8 +276,13 @@ export function PluginGovernancePage() {
             onRemove={() => setPubFile(null)}
             fileList={pubFile ? ([{ uid: '-1', name: pubFile.name, status: 'done' }] as UploadFile[]) : []}
           >
-            <Button variant="secondary">选择插件 zip 包</Button>
-          </Upload>
+            <div style={{ padding: '10px 0' }}>
+              <UploadIcon size={20} style={{ color: 'var(--bbc-primary)', marginBottom: 4 }} />
+              <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+                点击选择或拖拽插件 zip 包到此处
+              </Typography.Text>
+            </div>
+          </Upload.Dragger>
           <Space size={8} wrap>
             <Input style={{ width: 220 }} placeholder="备注（可选）" value={pubNotes} onChange={(e) => setPubNotes(e.target.value)} />
             <Select
