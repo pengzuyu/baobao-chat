@@ -162,13 +162,13 @@ export const ClarifyCard = memo(function ClarifyCard({
         opacity: waiting ? 1 : 0.85,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: token.colorPrimaryBg }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: token.colorPrimaryBg }}>
         <HelpCircle size={14} aria-hidden style={{ color: token.colorPrimary }} />
         <Typography.Text strong style={{ fontSize: 12 }}>
           Agent 提问
         </Typography.Text>
       </div>
-      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
         {waiting ? (
           <ClarifyForm
             question={item.request.question}

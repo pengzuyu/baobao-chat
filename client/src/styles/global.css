@@ -350,8 +350,9 @@ body {
 .agent-md {
   display: flex;
   flex-direction: column;
-  gap: var(--bbc-space-2);
+  gap: var(--bbc-space-3);
   font-size: var(--bbc-font-14);
+  line-height: 1.7; /* 正文行距放宽（继承 body 1.5 时行间过密，2026-11-24 用户反馈） */
 }
 
 .agent-md--inner {

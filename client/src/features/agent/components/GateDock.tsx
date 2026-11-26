@@ -61,9 +61,11 @@ export function GateDock({ items, onRespond, onClarify, dockRef }: GateDockProps
           }}
         >
           {it.kind === 'permission' ? (
-            <PermissionControls item={it} onRespond={onRespond} />
+            <div style={{ padding: 14 }}>
+              <PermissionControls item={it} onRespond={onRespond} />
+            </div>
           ) : (
-            <div style={{ padding: 12 }}>
+            <div style={{ padding: 14 }}>
               <ClarifyForm
                 question={it.request.question}
                 header={it.request.header}
