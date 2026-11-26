@@ -2,7 +2,7 @@
  * PAG-13/14/15 专家库页（D14 §4）：公司库/个人库双栏卡片 + 编辑器弹窗
  * （manifest YAML 发布，个人命名空间校验提示）+ 详情抽屉（manifest 预览/
  * 下架/删除）。
- * D17：「用此专家开会话」入口——建工作台会话（mode=ask + manifest model 直达引用；
+ * D17：「用此专家开会话」入口——建工作台会话（mode=工作台默认档 + manifest model 直达引用；
  * persona/skills 注入随宿主 expert_id 参数阶段二，登记）。
  * D26-O3：exp-* 自研壳退役——卡片→Card、编辑器→Modal+Form、详情→Drawer、
  * 下架 confirm→Modal.confirm（danger）。
@@ -16,6 +16,7 @@ import * as api from '../api/expert';
 import type { EcoExpert } from '../model/types';
 import { useNavigate } from 'react-router-dom';
 import { useAgentStore } from '../../agent/store/agent';
+import { DEFAULT_PERMISSION_MODE } from '../../agent/bridge/types';
 
 const BLANK_MANIFEST = `id: usr.1001.my-expert
 type: local
@@ -49,7 +50,7 @@ export function ExpertLibraryPage() {
       const manifest = await api.downloadManifest(detail.id).catch(() => '');
       const modelLine = manifest.split('\n').find((l) => /^\s*model:\s*\S+/.test(l));
       const model = modelLine ? modelLine.replace(/^\s*model:\s*/, '').trim() : undefined;
-      await useAgentStore.getState().startSession('ask', model);
+      await useAgentStore.getState().startSession(DEFAULT_PERMISSION_MODE, model);
       const sid = useAgentStore.getState().activeSessionId;
       if (sid) navigate(`/agent/s/${sid}`);
     } finally {

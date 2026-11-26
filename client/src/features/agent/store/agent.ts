@@ -21,7 +21,7 @@ import type {
   SessionStatus,
   TurnUsage,
 } from '../bridge/types';
-import { parseToolArgs } from '../bridge/types';
+import { DEFAULT_PERMISSION_MODE, parseToolArgs } from '../bridge/types';
 import type { AttachmentPayload } from '../bridge/types';
 
 /** 会话流条目（UI 投影模型；stream.delta 增量拼进 agentText/reasoning 尾项） */
@@ -537,7 +537,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // title 可选初始标题（IM embedded 来源名）；缺省=占位，首条消息后自动派生
     // origin 场景来源（2026-11-23）：embedded 会话带 IM 来源，runtime 注入场景段
     // modelPolicy 档位（新建会话页草稿态；缺省 auto=此前口径）
-    const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? 'ask', opts?.model, opts?.title, opts?.origin, opts?.modelPolicy);
+    // mode 权限档：缺省=默认档自主（IM embedded 显式传 ask，不走缺省）
+    const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? DEFAULT_PERMISSION_MODE, opts?.model, opts?.title, opts?.origin, opts?.modelPolicy);
     set((s) => ({
       createError: null,
       sessions: [meta, ...s.sessions],

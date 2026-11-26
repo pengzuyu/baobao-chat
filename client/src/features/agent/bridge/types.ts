@@ -9,6 +9,12 @@
 /** 权限模式三档（09 §3.3；中文名见 AGENT_MODE_OPTIONS，D13-A1 官方口径） */
 export type PermissionMode = 'ask' | 'auto-edit' | 'full-auto';
 
+/** 新建会话默认档=自主（auto-edit）。D32 §7 口径「默认 auto-edit 开箱即用」——前端
+ *  各建会话入口此前散落硬编码 ask 未对齐，2026-11-26 用户拍板收敛为单源。
+ *  例外（各有独立口径，不走本缺省）：IM 内嵌会话固定 ask（D18 群聊注入防线）、
+ *  定时任务（无人值守）、外部智能体通道（full-auto） */
+export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto-edit';
+
 /** 附件元数据（2026-11-26）：本机路径引用——发送/历史回放共用（壳 agent_attach_stat
  *  产出；RT 侧图片走视觉通道+读授权登记） */
 export interface AttachmentMeta {

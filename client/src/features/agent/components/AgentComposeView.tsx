@@ -5,7 +5,8 @@
  * - 上下文差异（用户口径）：项目新建会话（?workspace=目录）页上显示「所属项目」；
  *   任务新建会话不显示任何项目信息
  * - 重复点击天然幂等：入口均 navigate 到同一路由，本页无任何创建副作用
- * - 权限模式/模型为本页草稿态（首建生效；会话建立后由 store setMode/switchModel 接管），
+ * - 权限模式/模型为本页草稿态（首建生效；会话建立后由 store setMode/switchModel 接管；
+ *   模式默认档=自主，单源 DEFAULT_PERMISSION_MODE），
  *   控件与会话视图同款（Dropdown+ModelThinkPicker，full-auto 二次确认）
  * - 发送链路：createSession（store 置 activeSessionId+头插列表）→ void sendText
  *   （origin='workbench' 乐观上屏+首条消息派生标题；sendTextTo 恒 origin='im' 勿用）
@@ -18,7 +19,7 @@ import { Alert, Dropdown, Flex, Modal, Typography, theme, type MenuProps } from 
 import { FolderOpen, ShieldCheck } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useAgentStore } from '../store/agent';
-import { AGENT_MODE_OPTIONS } from '../bridge/types';
+import { AGENT_MODE_OPTIONS, DEFAULT_PERMISSION_MODE } from '../bridge/types';
 import type { AttachmentPayload, PermissionMode } from '../bridge/types';
 import { ModelThinkPicker } from './ModelThinkPicker';
 import { Composer } from './Composer';
@@ -43,8 +44,8 @@ export function AgentComposeView({ workspace, aiProviders, pluginCommands }: Age
   const sendText = useAgentStore((s) => s.sendText);
   const workspaces = useAgentStore((s) => s.workspaces);
 
-  // 权限模式/模型=本页草稿态：随 createSession 落到新会话
-  const [mode, setMode] = useState<PermissionMode>('ask');
+  // 权限模式/模型=本页草稿态：随 createSession 落到新会话（模式默认档=自主）
+  const [mode, setMode] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE);
   const [modelChoice, setModelChoice] = useState<{ policy: 'fast' | 'strong' | 'auto'; override?: string }>({ policy: 'auto' });
   const [sending, setSending] = useState(false);
   // 同步防重入（state 更新滞后一帧：Enter+按钮连点会各建一个会话）

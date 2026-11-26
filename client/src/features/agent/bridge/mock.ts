@@ -23,6 +23,7 @@ import type {
   PermissionMode,
   PermissionPreview,
 } from './types';
+import { DEFAULT_PERMISSION_MODE } from './types';
 
 const STREAM_INTERVAL_MS = 80; // 分片节奏（任务约定）
 const READ_FILE_RESULT_DELAY_MS = 3000; // read_file 运行时长
@@ -277,7 +278,7 @@ export class MockAgentBridge implements AgentBridge {
         id: sessionId,
         title: 'Agent 会话',
         workspace: '',
-        mode: 'ask',
+        mode: DEFAULT_PERMISSION_MODE,
         modelPolicy: 'auto',
         status: 'idle',
         createdAt: Date.now(),

@@ -289,6 +289,7 @@ export function ChatPage() {
     // 创建即带来源标题（与xxx的对话/xxx · 群聊）——工作台左栏可辨识
     const created = await useAgentStore.getState().createSession({
       workspace: '',
+      // mode 固定 ask、不跟随工作台默认档（D18：逐工具审批弹框=群聊内嵌提示词注入防线）
       mode: 'ask',
       title: embeddedTitle(activeConv?.name ?? '', activeConv?.type ?? 1),
       // 场景来源（2026-11-23）：embedded 带 IM 来源——runtime 场景段常驻
