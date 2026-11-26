@@ -32,6 +32,7 @@ export const MODEL_CONTEXT_PRESETS: ReadonlyArray<readonly [model: string, token
   // DeepSeek
   ['deepseek', 128 * K],
   // 智谱 GLM
+  ['glm-5.3', 1024 * K],
   ['glm-4.7', 200 * K],
   ['glm-4.6', 200 * K],
   ['glm-4.5', 128 * K],
