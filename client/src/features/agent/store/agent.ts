@@ -23,6 +23,7 @@ import type {
 } from '../bridge/types';
 import { DEFAULT_PERMISSION_MODE, parseToolArgs } from '../bridge/types';
 import type { AttachmentPayload } from '../bridge/types';
+import { DEFAULT_MODEL_KEY, readModelPref, resolveRememberedModel, writeModelPref } from '../utils/modelPref';
 
 /** 会话流条目（UI 投影模型；stream.delta 增量拼进 agentText/reasoning 尾项） */
 export type StreamItem =
@@ -121,8 +122,9 @@ interface AgentState {
   /** sessionId → 历史已回填完毕（新建会话即置；loadHistoryIfEmpty 结束置，成败都置）。
    *  区分「真空会话」与「历史还没加载完」——工作台据此决定输入框居中（空）还是沉底 */
   historyLoadedBySession: Record<string, boolean>;
-  /** sessionId → 当前模型选择（model.switched 维护；override=直达引用 p:<id>:<model>） */
-  modelBySession: Record<string, { policy: 'fast' | 'strong' | 'auto'; override?: string }>;
+  /** sessionId → 当前模型选择（model.switched 维护）：DEFAULT_MODEL_KEY=公司默认档 /
+   *  'p:<id>:<model>'=直达引用（2026-11-26 对话档位单档化：快/强档位退役） */
+  modelBySession: Record<string, string>;
   /** sessionId → 最近一轮 LLM 用量（stream.done；D36 增 cached/model——输入框状态条） */
   usageBySession: Record<string, TurnUsage>;
   /** sessionId → run 记录（D16 §3.1 runs.list；子任务生命周期事件触发刷新） */
@@ -138,9 +140,14 @@ interface AgentState {
   /** 右栏收起态（localStorage 持久化；无 tab 时坞整体不显示） */
   dockCollapsed: boolean;
 
-  /** 思考强度档位（2026-11-11 zcode 同款三档；全局用户选择，随每条消息下发） */
+  /** 思考强度档位（2026-11-11 zcode 同款三档；全局用户选择，随每条消息下发）。
+   *  2026-11-26 起本地持久化——选择即记住，重开沿用 */
   thinkLevel: 'low' | 'medium' | 'high';
   setThinkLevel: (level: 'low' | 'medium' | 'high') => void;
+  /** 本地常用模型（2026-11-26：选择即记住，localStorage 持久化，不落服务端；新建会话
+   *  未显式指定模型时沿用）。取值同 modelBySession；失效自愈见 utils/modelPref */
+  modelPref: string;
+  setModelPref: (model: string) => void;
 
   /** D36：模型上下文上限本机覆盖（键=小写模型 ID；仅本机 localStorage，不落服务端）。
    *  与内置预设共同服务输入框状态条占比；设置 · Agent 可编辑 */
@@ -163,8 +170,9 @@ interface AgentState {
   /** 显式建会话并返回 meta（D18 内嵌卡：不切换 activeSessionId 之外还供 im 侧直接持有引用；
    *  title 可选初始标题——IM embedded 来源名「与xxx的对话」/「xxx · 群聊」；
    *  origin 场景来源（2026-11-23）：embedded 专用，runtime 注入场景段；
-   *  modelPolicy 档位（新建会话页草稿态，缺省 auto） */
-  createSession: (opts?: { workspace?: string; mode?: PermissionMode; model?: string; modelPolicy?: 'fast' | 'strong' | 'auto'; title?: string; origin?: import('../bridge/types').SessionOriginInfo }) => Promise<import('../bridge/types').AgentSessionMeta>;
+   *  model 三态（2026-11-26 单档化）：缺省=跟随本地常用模型（含失效自愈）/
+   *  null=显式公司默认档 / 字符串=直达引用 p:<id>:<model> */
+  createSession: (opts?: { workspace?: string; mode?: PermissionMode; model?: string | null; title?: string; origin?: import('../bridge/types').SessionOriginInfo }) => Promise<import('../bridge/types').AgentSessionMeta>;
   /** 手动重命名（2026-11-24 行内编辑提交；RT 落库回最终标题——显式名不受
    *  首条消息占位派生覆盖） */
   renameSessionTitle: (sessionId: string, title: string) => Promise<void>;
@@ -187,8 +195,9 @@ interface AgentState {
   endActive: () => void;
   emergencyStop: () => void;
   setMode: (mode: PermissionMode) => void;
-  /** 会话内切换模型（model=直达引用；缺省=档位；回执 modelSwitched 事件驱动 UI） */
-  switchModel: (to: 'fast' | 'strong' | 'auto', model?: string) => void;
+  /** 会话内切换模型（model=直达引用 p:<id>:<model>；缺省=回公司默认档；回执
+   *  modelSwitched 事件驱动 UI，并同步本地常用模型） */
+  switchModel: (model?: string) => void;
   /** D19 拉取项目登记表 */
   loadWorkspaces: () => Promise<void>;
   /** D19 登记项目（workspace.register：realpath upsert；返回登记行） */
@@ -250,6 +259,14 @@ function persistDockCollapsed(collapsed: boolean): void {
   } catch {
     /* localStorage 不可用静默——仅本次会话生效 */
   }
+}
+
+/** 本地常用模型 + 思考强度（同一存储键 bbc:agent:model-pref，见 utils/modelPref）：
+ *  进程启动读一次作初值，之后任一变化整键回写 */
+const initialModelPref = readModelPref();
+
+function persistModelPref(model: string, think: 'low' | 'medium' | 'high'): void {
+  writeModelPref({ model, think });
 }
 
 /** D36：模型上下文上限本机覆盖（bbc:agent:model-context = {模型ID: tokens}） */
@@ -459,7 +476,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   modelBySession: {},
   usageBySession: {},
   runsBySession: {},
-  thinkLevel: 'medium',
+  thinkLevel: initialModelPref.think,
+  modelPref: initialModelPref.model,
   modelContextOverrides: readModelContextOverrides(),
   sideStreams: {},
   dockTabs: [],
@@ -516,7 +534,15 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }));
   },
 
-  setThinkLevel: (level) => set({ thinkLevel: level }),
+  setThinkLevel: (level) => {
+    set({ thinkLevel: level });
+    persistModelPref(get().modelPref, level);
+  },
+
+  setModelPref: (model) => {
+    set({ modelPref: model });
+    persistModelPref(model, get().thinkLevel);
+  },
 
   setModelContextOverride: (modelId, tokens) => {
     const key = modelId.trim().toLowerCase();
@@ -533,17 +559,26 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   createSession: async (opts) => {
     // D19：workspace 缺省=日常对话（空串，无工作目录——文件/命令类工具不可用，
     // 记忆恒用户级）；项目会话由 openProject 传入目录。
-    // model=用户默认模型的直达引用（settings.ai_default 解析，0023；缺省=档位别名）
+    // model 三态（2026-11-26 单档化，取代原 settings.ai_default 服务端默认模型）：
+    // 缺省=跟随本地常用模型（直达引用建会话前校验，失效回退公司默认并改写偏好）/
+    // null=显式公司默认档 / 字符串=直达引用（调用方保证来自当前供应商清单）
+    let model: string | undefined;
+    if (typeof opts?.model === 'string') {
+      model = opts.model;
+    } else if (opts?.model === undefined) {
+      const remembered = await resolveRememberedModel(get().modelPref);
+      if (remembered === undefined && get().modelPref !== DEFAULT_MODEL_KEY) set({ modelPref: DEFAULT_MODEL_KEY });
+      model = remembered;
+    }
     // title 可选初始标题（IM embedded 来源名）；缺省=占位，首条消息后自动派生
     // origin 场景来源（2026-11-23）：embedded 会话带 IM 来源，runtime 注入场景段
-    // modelPolicy 档位（新建会话页草稿态；缺省 auto=此前口径）
     // mode 权限档：缺省=默认档自主（IM embedded 显式传 ask，不走缺省）
-    const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? DEFAULT_PERMISSION_MODE, opts?.model, opts?.title, opts?.origin, opts?.modelPolicy);
+    const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? DEFAULT_PERMISSION_MODE, model, opts?.title, opts?.origin);
     set((s) => ({
       createError: null,
       sessions: [meta, ...s.sessions],
       activeSessionId: meta.id,
-      modelBySession: { ...s.modelBySession, [meta.id]: { policy: meta.modelPolicy, override: meta.modelOverride } },
+      modelBySession: { ...s.modelBySession, [meta.id]: meta.modelOverride ?? DEFAULT_MODEL_KEY },
       // 新建即无历史：直接置已回填（工作台进会话首帧即居中输入框，不经加载态）
       historyLoadedBySession: { ...s.historyLoadedBySession, [meta.id]: true },
     }));
@@ -698,11 +733,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     void bridge.setMode(sid, mode).catch(() => undefined);
   },
 
-  switchModel: (to, model) => {
+  switchModel: (model) => {
     const sid = get().activeSessionId;
     if (!sid) return;
-    // 状态更新与时间线提示以 modelSwitched 回执事件驱动（与 Runtime 口径一致）
-    void bridge.switchModel(sid, to, model).catch(() => undefined);
+    // 状态更新（会话模型 + 本地常用模型）以 modelSwitched 回执事件驱动（与 Runtime 口径一致）
+    void bridge.switchModel(sid, model).catch(() => undefined);
   },
 
   loadWorkspaces: async () => {
@@ -905,10 +940,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           };
         }
         case 'modelSwitched': {
-          // 2026-11-12 用户口径：切换提示不进回复气泡（chip 即时反映档位/直达引用，
-          // 时间线插话打扰阅读）；仅更新会话模型状态
+          // 2026-11-12 用户口径：切换提示不进回复气泡（chip 即时反映模型，
+          // 时间线插话打扰阅读）；仅更新会话模型状态。
+          // 2026-11-26 选择即记住：会话内切换同步更新本地常用模型，新建会话沿用
+          const model = event.modelOverride ?? DEFAULT_MODEL_KEY;
           return {
-            modelBySession: { ...s.modelBySession, [event.sessionId]: { policy: event.to, override: event.modelOverride } },
+            modelBySession: { ...s.modelBySession, [event.sessionId]: model },
+            modelPref: model,
           };
         }
         case 'memorySaved': {
@@ -1078,6 +1116,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           return s;
       }
     });
+    // 常用模型落盘（modelSwitched 改写了 modelPref；思考强度保持现值）
+    if (event.type === 'modelSwitched') {
+      const st = useAgentStore.getState();
+      persistModelPref(st.modelPref, st.thinkLevel);
+    }
     // 跨端终态上报（14 篇 §3.3 OQ-C32）：run 终态 → notify 域落卡 + agent.task.completed
     // 推其它在线设备（本端经 markReportedRun 自滤防双响；尽力而为不阻塞事件泵）
     if (event.type === 'subagentEvent' && (event.phase === 'done' || event.phase === 'fail')) {

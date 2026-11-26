@@ -104,8 +104,8 @@ export interface AgentSessionMeta {
   title: string;
   workspace: string;
   mode: PermissionMode;
-  modelPolicy: 'fast' | 'strong' | 'auto';
-  /** 会话级模型直达引用（0023 多供应商；p:<providerId>:<model>；缺省=档位别名） */
+  /** 会话级模型直达引用（0023 多供应商；p:<providerId>:<model>；缺省=公司默认档——
+   *  2026-11-26 对话档位单档化：快/强档位与 modelPolicy 字段退役） */
   modelOverride?: string;
   status: SessionStatus;
   createdAt: number;
@@ -255,7 +255,8 @@ export type AgentEvent =
     }
   | { type: 'memorySaved'; sessionId: string; name: string; title: string; memoryType: MemoryType; updated: boolean; scope?: 'user' | 'project'; workspaceName?: string }
   | { type: 'sessionEnded'; sessionId: string; summary: string }
-  | { type: 'modelSwitched'; sessionId: string; from: 'fast' | 'strong' | 'auto'; to: 'fast' | 'strong' | 'auto'; modelOverride?: string; reason: string }
+  /** 模型切换回执（model.switched；2026-11-26 单档化：档位 from/to 退役——modelOverride 缺省=公司默认档） */
+  | { type: 'modelSwitched'; sessionId: string; modelOverride?: string; reason: string }
   /**
    * 子 Agent（D16 类型 1：探查/通用子 agent）。sub_id 即持久任务 id（agent- 前缀+32hex）；
    * spawn 携 session 归属，event 按 runId 定位会话流内卡片
@@ -290,11 +291,11 @@ export interface AgentBridge {
 
   /** 会话列表（session_list，按 updated_at 倒序） */
   listSessions(): Promise<AgentSessionMeta[]>;
-  /** 新建会话（agent_start_session：workspace + 模式 + 模型直达引用（0023 可选）；
+  /** 新建会话（agent_start_session：workspace + 模式 + 模型直达引用（0023 可选；
+   *  缺省=公司默认档。2026-11-26 单档化：档位参数 modelPolicy 退役）；
    *  title 可选初始标题（IM embedded 来源名「与xxx的对话」），缺省占位由首条消息 rename 派生；
-   *  origin 场景来源（2026-11-23，embedded 专用），任务/项目不传；
-   *  modelPolicy 档位 fast/strong/auto（缺省 auto——新建会话页的档位草稿，此前写死 auto） */
-  startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: SessionOriginInfo, modelPolicy?: 'fast' | 'strong' | 'auto'): Promise<AgentSessionMeta>;
+   *  origin 场景来源（2026-11-23，embedded 专用），任务/项目不传 */
+  startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: SessionOriginInfo): Promise<AgentSessionMeta>;
   /** 发送用户消息（agent_input；UI 乐观上屏，回复经 streamDelta 事件回流）；
    *  thinking 思考三档（2026-11-11 轮级生效）缺省=medium；
    *  attachments 附件（2026-11-26：本机路径引用，壳校验后透传 RT——图片走视觉
@@ -305,9 +306,9 @@ export interface AgentBridge {
     thinking?: 'low' | 'medium' | 'high',
     attachments?: AttachmentPayload[],
   ): Promise<void>;
-  /** 会话内切换模型（agent_switch_model：model 非空=直达引用；to 为名义档位；
-   *  model 缺省=清引用回档位。回执 modelSwitched 事件） */
-  switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void>;
+  /** 会话内切换模型（agent_switch_model：model 非空=直达引用 p:<id>:<model>；
+   *  缺省=清引用回公司默认档。回执 modelSwitched 事件。2026-11-26 单档化：档位参数退役） */
+  switchModel(sessionId: string, model?: string): Promise<void>;
   /** 中断当前轮（agent_interrupt：LLM 流内/工具间检查点断，收口 idle 可继续追问；
    *  2026-11-11 取代旧 pause/resume 用户通道——暂停按钮已移除） */
   interrupt(sessionId: string): Promise<void>;
@@ -374,9 +375,6 @@ export const AGENT_MODE_OPTIONS: Array<{ value: PermissionMode; label: string; d
 
 /** 风险级中文（工具卡/审批卡徽标） */
 export const RISK_LABELS: Record<RiskLevel, string> = { low: '低危', mid: '中危', high: '高危' };
-
-/** 模型档位显示（model_policy / model.switched） */
-export const MODEL_TIER_LABELS: Record<'fast' | 'strong' | 'auto', string> = { fast: '快', strong: '强', auto: '自动' };
 
 /** run 类型中文（右栏内容坞 tab/历史子任务下拉共用） */
 export const RUN_KIND_LABELS: Record<RunInfo['kind'], string> = { probe: '探查', expert: '专家', terminal: '终端' };

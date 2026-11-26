@@ -22,7 +22,8 @@ export interface ScheduleTask {
   prompt: string;
   workspace: string;
   schedule: ScheduleSpec;
-  modelPolicy: 'auto' | 'fast' | 'strong';
+  /** 任务会话模型（2026-11-26 单档化：取代原「模型档位」）：null=公司默认档 /
+   *  'p:<供应商ID>:<模型>'=直达引用 */
   model: string | null;
   mode: ScheduleMode;
   status: ScheduleStatus;
@@ -49,7 +50,7 @@ export interface ScheduleTaskInput {
   prompt: string;
   workspace?: string;
   schedule: ScheduleSpec;
-  modelPolicy?: 'auto' | 'fast' | 'strong';
+  /** 同 ScheduleTask.model；缺省=公司默认档 */
   model?: string | null;
   mode?: ScheduleMode;
 }

@@ -29,7 +29,7 @@ import { useAgentStore, selectActiveSession, composerDisabledFor, type StreamIte
 import { AGENT_MODE_OPTIONS, RUN_KIND_LABELS, RUN_STATUS_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
 import type { AttachmentPayload, PermissionMode, RunInfo } from '../bridge/types';
 import { fetchMyProviders, fetchSharedProviders } from '../../settings/api/ai';
-import type { AIProvider } from '../../admin/model/types';
+import { DEFAULT_MODEL_KEY, cacheModelProviders, isModelPrefStale, type ModelProviders } from '../utils/modelPref';
 import { AgentSubNav } from '../components/AgentSubNav';
 import { AgentSessionList } from '../components/AgentSessionList';
 import { AgentComposeView } from '../components/AgentComposeView';
@@ -127,13 +127,19 @@ export function AgentWorkbenchPage() {
   const setMode = useAgentStore((s) => s.setMode);
   const switchModel = useAgentStore((s) => s.switchModel);
 
-  // ---- 模型选项（0023 多供应商：公司级 shared + 我的 BYOK；失败静默回落纯档位）----
-  const [aiProviders, setAiProviders] = useState<{ shared: AIProvider[]; mine: AIProvider[] }>({ shared: [], mine: [] });
+  // ---- 模型选项（0023 多供应商：公司级 shared + 我的 BYOK；失败静默回落仅公司默认）。
+  //      清单到位后登记缓存，并对本地常用模型做失效自愈（2026-11-26：记住的直达引用
+  //      已不在当前账号清单 → 回退公司默认）----
+  const [aiProviders, setAiProviders] = useState<ModelProviders>({ shared: [], mine: [] });
   useEffect(() => {
     let disposed = false;
     void Promise.all([fetchSharedProviders(), fetchMyProviders().catch(() => [])])
       .then(([shared, mine]) => {
-        if (!disposed) setAiProviders({ shared, mine });
+        if (disposed) return;
+        cacheModelProviders(shared, mine);
+        setAiProviders({ shared, mine });
+        const st = useAgentStore.getState();
+        if (isModelPrefStale(st.modelPref)) st.setModelPref(DEFAULT_MODEL_KEY);
       })
       .catch(() => undefined);
     return () => {
@@ -488,11 +494,8 @@ export function AgentWorkbenchPage() {
   // （OBO 到期/步数超限等），无流可断，只能「结束」；全局杀进程兜底=⌘⇧.
   const canStop = status === 'running' || status === 'waiting_permission' || status === 'waiting_clarify' || status === 'subagent_fanout';
   const modeOption = AGENT_MODE_OPTIONS.find((m) => m.value === activeSession?.mode);
-  const modelChoice = (activeSessionId && modelBySession[activeSessionId]) || {
-    policy: activeSession?.modelPolicy ?? 'auto',
-    override: activeSession?.modelOverride,
-  };
-  const modelTier = modelChoice.policy;
+  // 当前会话模型：modelSwitched 维护的值优先，否则取会话行的直达引用；都没有=公司默认档
+  const modelChoice = (activeSessionId && modelBySession[activeSessionId]) || activeSession?.modelOverride || DEFAULT_MODEL_KEY;
 
   // ---- 右栏内容坞（D33 2026-11-19）：只按当前会话归属/隔离；无 tab 不渲染 ----
   const dockVisible = !!activeSession && dockTabs.length > 0;
@@ -523,18 +526,14 @@ export function AgentWorkbenchPage() {
     },
   };
 
-  // ---- 模型选择（0023）：档位 + 公司供应商模型 + 我的供应商模型（ModelThinkPicker
-  //      面板承载，与思考强度合体；key 口径沿用旧下拉菜单）----
+  // ---- 模型选择（0023；2026-11-26 单档化）：公司默认 + 公司供应商模型 + 我的供应商模型
+  //      （ModelThinkPicker 面板承载，与思考强度合体）；回执 modelSwitched 事件驱动 UI ----
   const onSelectModel = useCallback(
     (key: string) => {
-      if (key.startsWith('tier:')) {
-        switchModel(key.slice(5) as 'fast' | 'strong');
-        return;
-      }
-      // p:<id>:<model> 直达引用（名义档位随当前；回执 modelSwitched 事件驱动 UI）
-      switchModel(modelTier === 'fast' ? 'fast' : 'strong', key);
+      // 'default'=回公司默认档 / p:<id>:<model>=直达引用
+      switchModel(key === DEFAULT_MODEL_KEY ? undefined : key);
     },
-    [switchModel, modelTier],
+    [switchModel],
   );
 
   const sessionListNode = (
@@ -620,7 +619,7 @@ export function AgentWorkbenchPage() {
     statusInfo: (
       <ContextUsageMeter
         usage={activeSessionId ? usageBySession[activeSessionId] : undefined}
-        modelHint={modelChoice.override}
+        modelHint={modelChoice === DEFAULT_MODEL_KEY ? undefined : modelChoice}
       />
     ),
     modePicker: (
@@ -636,7 +635,7 @@ export function AgentWorkbenchPage() {
       </Dropdown>
     ),
     modelPicker: (
-      <ModelThinkPicker providers={aiProviders} policy={modelTier} override={modelChoice.override} onSelect={onSelectModel} />
+      <ModelThinkPicker providers={aiProviders} value={modelChoice} onSelect={onSelectModel} />
     ),
   };
   // 空会话居中输入（头部保留：标题/状态/回到聊天等照常可用）

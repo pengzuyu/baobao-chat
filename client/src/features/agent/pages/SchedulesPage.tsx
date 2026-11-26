@@ -3,6 +3,8 @@
  * - 三种互斥调度类型：cron（5 字段）/ 一次性 / 每个工作日 HH:mm
  * - 权限模式三档（ask/auto-edit/full-auto）；ask/auto-edit 需要审批时，
  *   任务停在会话里，用户在「历史 → 去审批」打开会话内嵌审批卡处理
+ * - 任务模型（2026-11-26 单档化：取代原「模型档位」下拉）：公司默认 / 公司供应商 /
+ *   我的供应商 的具体模型（直达引用，落 Task.model）；新建默认带出本地常用模型
  * - 任务/调度/历史全在本地（Tauri 壳），服务端只提供工作日日历的只读同步
  */
 
@@ -15,6 +17,15 @@ import { CalendarClock, Play, RefreshCw } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { AgentSubNav } from '../components/AgentSubNav';
 import { getAgentBridge } from '../bridge';
+import { fetchMyProviders, fetchSharedProviders } from '../../settings/api/ai';
+import { useAgentStore } from '../store/agent';
+import {
+  DEFAULT_MODEL_KEY,
+  buildModelGroups,
+  modelLabelOf,
+  modelRefListed,
+  type ModelProviders,
+} from '../utils/modelPref';
 import {
   scheduleAvailable,
   scheduleCancelRun,
@@ -105,7 +116,10 @@ export function SchedulesPage() {
   const [onceAt, setOnceAt] = useState(toLocalInput(Date.now() + 3600_000));
   const [workdayTime, setWorkdayTime] = useState('09:00');
   const [mode, setMode] = useState<ScheduleMode>('ask');
-  const [modelPolicy, setModelPolicy] = useState<'auto' | 'fast' | 'strong'>('auto');
+  // 任务模型：'default'=公司默认档 / 'p:<id>:<model>'=直达引用（2026-11-26 取代「模型档位」）
+  const [modelChoice, setModelChoice] = useState<string>(DEFAULT_MODEL_KEY);
+  // 模型清单（抽屉下拉选项 + 列表展示名）；null=未加载。拉取失败静默——抽屉只剩公司默认
+  const [modelProviders, setModelProviders] = useState<ModelProviders | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<{ id: string; path: string; name: string }[]>([]);
 
@@ -128,6 +142,18 @@ export function SchedulesPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    let disposed = false;
+    void Promise.all([fetchSharedProviders(), fetchMyProviders().catch(() => [])])
+      .then(([shared, mine]) => {
+        if (!disposed) setModelProviders({ shared, mine });
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   const loadRuns = useCallback(async (taskId: string) => {
     setRunsLoading(true);
@@ -177,7 +203,9 @@ export function SchedulesPage() {
     setOnceAt(toLocalInput(Date.now() + 3600_000));
     setWorkdayTime('09:00');
     setMode('ask');
-    setModelPolicy('auto');
+    // 新建默认带出本地常用模型；常用值已不在当前清单（换账号/供应商被删）→ 公司默认
+    const pref = useAgentStore.getState().modelPref;
+    setModelChoice(modelProviders && !modelRefListed(pref, modelProviders) ? DEFAULT_MODEL_KEY : pref);
     setFormError(null);
     setDrawerOpen(true);
     try {
@@ -198,7 +226,8 @@ export function SchedulesPage() {
     if (t.schedule.type === 'once') setOnceAt(toLocalInput(t.schedule.at));
     if (t.schedule.type === 'workday') setWorkdayTime(t.schedule.time);
     setMode(t.mode);
-    setModelPolicy(t.modelPolicy);
+    // 存量任务 model=null=公司默认；已失效的引用原样带回（下拉里标注「已失效」，不静默替换）
+    setModelChoice(t.model ?? DEFAULT_MODEL_KEY);
     setFormError(null);
     setDrawerOpen(true);
     try {
@@ -248,8 +277,7 @@ export function SchedulesPage() {
       prompt: prompt.trim(),
       workspace,
       schedule,
-      modelPolicy,
-      model: null,
+      model: modelChoice === DEFAULT_MODEL_KEY ? null : modelChoice,
       mode,
     };
   };
@@ -364,7 +392,7 @@ export function SchedulesPage() {
         <Space direction="vertical" size={0}>
           <Typography.Text strong>{t.name}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {t.workspace || '日常对话'} · {t.mode}
+            {t.workspace || '日常对话'} · {t.mode} · {modelLabelOf(t.model ?? DEFAULT_MODEL_KEY, modelProviders ?? undefined)}
           </Typography.Text>
         </Space>
       ),
@@ -420,6 +448,29 @@ export function SchedulesPage() {
       ),
     },
   ];
+
+  // 抽屉「模型」下拉：公司默认 / 公司供应商 / 我的供应商（与工作台模型面板同源）。
+  // 当前值已失效时追加「已失效」项原样显示，不静默替换
+  const modelOptions = useMemo(() => {
+    const [def, ...rest] = buildModelGroups(modelProviders ?? { shared: [], mine: [] });
+    const groups = [
+      {
+        label: def.label,
+        options: def.options.map((o) => ({ value: o.value, label: `${o.label}（${o.sub}）` })),
+      },
+      ...rest.map((g) => ({
+        label: g.label,
+        options: g.options.map((o) => ({ value: o.value, label: o.label, title: o.sub })),
+      })),
+    ];
+    if (modelChoice !== DEFAULT_MODEL_KEY && modelProviders && !modelRefListed(modelChoice, modelProviders)) {
+      groups.push({
+        label: '已失效',
+        options: [{ value: modelChoice, label: `${modelLabelOf(modelChoice)}（供应商已不存在）` }],
+      });
+    }
+    return groups;
+  }, [modelProviders, modelChoice]);
 
   const runColumns: ColumnsType<ScheduleRun> = [
     { title: '计划时间', dataIndex: 'plannedAt', width: 170, render: (v: number) => fmt(v) },
@@ -652,16 +703,13 @@ export function SchedulesPage() {
               </Radio.Group>
             </div>
             <div>
-              <Typography.Text strong>模型档位</Typography.Text>
+              <Typography.Text strong>模型</Typography.Text>
               <Select
                 style={{ width: '100%', marginTop: 4 }}
-                value={modelPolicy}
-                onChange={setModelPolicy}
-                options={[
-                  { value: 'auto', label: '自动（跟随公司默认）' },
-                  { value: 'fast', label: '快（bbc-fast）' },
-                  { value: 'strong', label: '强（bbc-strong）' },
-                ]}
+                value={modelChoice}
+                onChange={setModelChoice}
+                options={modelOptions}
+                loading={!modelProviders}
               />
             </div>
           </Space>

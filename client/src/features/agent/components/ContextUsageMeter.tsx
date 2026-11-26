@@ -13,8 +13,9 @@ import type { TurnUsage } from '../bridge/types';
 import { useAgentStore } from '../store/agent';
 import { formatTokenSize, formatTokensUsed, resolveContextWindow } from '../../../shared/utils/modelContext';
 
-/** 档位别名（非真实模型名，不能用于上下文预设匹配） */
-const TIER_ALIAS = /^bbc-(fast|strong|auto|embed|rerank)$/;
+/** 档位别名（非真实模型名，不能用于上下文预设匹配）。2026-11-26 单档化新增 default；
+ *  fast/strong 保留以识别历史 WAL 用量行里的旧别名 */
+const TIER_ALIAS = /^bbc-(default|fast|strong|auto|embed|rerank)$/;
 
 /** 模型名解析：wire 实际模型优先；否则回退 p:<provider>:<model> 直达引用 */
 function pickModel(usageModel: string | undefined, override: string | undefined): string | undefined {

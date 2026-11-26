@@ -1,8 +1,8 @@
 /**
  * Agent · 设置（2026-11-25 自设置域迁入 agent 工作台域，与定时任务/插件同域；
  * D01 §4.2 / D08 + 0023 多供应商）：
- * - 默认模型：跟随公司默认（fast/strong 档位）或指定供应商+模型（公司级或我的 BYOK，
- *   发起会话时客户端解析为 p:<providerId>:<model> 直达引用）
+ * - 默认模型卡已退役（2026-11-26 对话档位单档化）：常用模型改为「选择即记住」的本地
+ *   偏好（工作台模型面板/思考强度滑杆即时落盘，新建会话沿用），不再落服务端
  * - 我的供应商：个人 BYOK CRUD（≤5 个；密钥服务端加密落库，仅本人可用）
  * - 权限模式/紧急停止为 D08 既定约定（骨架；三级记忆管理卡已随记忆浏览面退役删除）
  * D26-O3：卡片壳→Card、行→List.Item、BYOK 表→Table、表单控件→Input/Select（settings-、admin-、bbc- 系自研类退役）。
@@ -17,14 +17,10 @@ import { Button } from '../../../shared/ui/Button';
 import {
   createMyProvider,
   deleteMyProvider,
-  fetchMeSettings,
   fetchMyProviders,
-  fetchSharedProviders,
-  patchAIDefault,
   probeMyProvider,
   probeMyProviderRaw,
   updateMyProvider,
-  type AIDefaultSetting,
 } from '../../settings/api/ai';
 import { PROVIDER_PRESETS, presetKeyOfBaseUrl, type AIProvider } from '../../admin/model/types';
 import { ProviderModelsEditor } from '../../admin/components/ProviderModelsEditor';
@@ -58,7 +54,6 @@ export function AgentSettingsPage() {
             Agent
           </Typography.Title>
 
-          <DefaultModelCard />
           <MyProvidersCard />
           <ModelContextCard />
           <ExtAgentCard />
@@ -81,157 +76,6 @@ export function AgentSettingsPage() {
         </Space>
       </div>
     </div>
-  );
-}
-
-/* ── 默认模型卡片 ── */
-
-function DefaultModelCard() {
-  const [shared, setShared] = useState<AIProvider[]>([]);
-  const [mine, setMine] = useState<AIProvider[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [mode, setMode] = useState<'org' | 'provider'>('org');
-  const [provId, setProvId] = useState<string>('');
-  const [model, setModel] = useState<string>('');
-  const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const [sh, my, settings] = await Promise.all([fetchSharedProviders(), fetchMyProviders(), fetchMeSettings()]);
-        setShared(sh);
-        setMine(my);
-        const ai = settings.ai_default as AIDefaultSetting | undefined;
-        if (ai?.mode === 'provider' && ai.providerId && ai.model) {
-          setMode('provider');
-          setProvId(ai.providerId);
-          setModel(ai.model);
-        }
-      } catch {
-        /* 六态由各卡片自行提示；此处静默降级为"跟随公司默认" */
-      } finally {
-        setLoaded(true);
-      }
-    })();
-  }, []);
-
-  const all = [...shared.map((p) => ({ ...p, mine: false })), ...mine.map((p) => ({ ...p, mine: true }))];
-  const models = all.find((p) => p.id === provId)?.models ?? [];
-
-  /** 选择即存（无保存按钮）：org 切换即存；provider 需供应商+模型齐备才落库（半截引用会被路由校验拒） */
-  const persist = async (next: AIDefaultSetting) => {
-    setSaving(true);
-    setError('');
-    setSaved(false);
-    try {
-      await patchAIDefault(next);
-      setSaved(true);
-    } catch (err) {
-      setError(errText(err, '保存失败'));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const changeMode = (v: 'org' | 'provider') => {
-    setMode(v);
-    setSaved(false);
-    if (v === 'org') {
-      void persist({ mode: 'org' });
-      return;
-    }
-    let pid = provId;
-    if (!pid) {
-      const first = all[0];
-      if (first) {
-        pid = first.id;
-        setProvId(pid);
-      }
-    }
-    // 已有完整且仍有效的配对才立即存，否则等模型选完
-    if (pid && model && all.find((p) => p.id === pid)?.models.some((m) => m.id === model)) {
-      void persist({ mode: 'provider', providerId: pid, model });
-    }
-  };
-
-  const rows: Array<{ key: string; name: ReactNode; desc: ReactNode; control: ReactNode }> = [
-    {
-      key: 'mode',
-      name: '默认模型',
-      desc: '新会话使用的模型；未指定时跟随公司默认（快/强档位自动路由），选择后自动保存',
-      control: (
-        <Select
-          size="small"
-          style={{ width: 170 }}
-          loading={!loaded}
-          value={mode}
-          onChange={changeMode}
-          options={[
-            { value: 'org', label: '跟随公司默认' },
-            { value: 'provider', label: '指定供应商与模型' },
-          ]}
-        />
-      ),
-    },
-    ...(mode === 'provider'
-      ? [
-          {
-            key: 'pm',
-            name: '供应商 / 模型',
-            desc: '公司统一接入或「我的供应商」；会话内可临时切换',
-            control: (
-              <Space size={8} wrap>
-                <Select
-                  size="small"
-                  style={{ width: 170 }}
-                  placeholder="选择供应商"
-                  value={provId || undefined}
-                  onChange={(v) => {
-                    setProvId(v);
-                    setModel('');
-                    setSaved(false);
-                  }}
-                  options={all.map((p) => ({ value: p.id, label: `${p.mine ? '我的 · ' : ''}${p.name}` }))}
-                />
-                <Select
-                  size="small"
-                  style={{ width: 190 }}
-                  placeholder="选择模型"
-                  value={model || undefined}
-                  onChange={(v) => {
-                    setModel(v);
-                    setSaved(false);
-                    if (provId && v) void persist({ mode: 'provider', providerId: provId, model: v });
-                  }}
-                  disabled={!provId}
-                  options={models.map((m) => ({ value: m.id, label: m.label ? `${m.label}（${m.id}）` : m.id }))}
-                />
-              </Space>
-            ),
-          },
-        ]
-      : []),
-  ];
-
-  return (
-    <Card size="small" data-testid="agent-default-model">
-      <List
-        size="small"
-        dataSource={rows}
-        renderItem={(row) => <SettingRow key={row.key} name={row.name} desc={row.desc} control={row.control} />}
-      />
-      {saving ? (
-        <Typography.Text type="secondary">保存中…</Typography.Text>
-      ) : error ? (
-        <Alert type="error" showIcon message={error} />
-      ) : saved ? (
-        <Typography.Text type="secondary">已保存 ✓</Typography.Text>
-      ) : mode === 'provider' && (!provId || !model) ? (
-        <Typography.Text type="secondary">选好供应商与模型后自动保存</Typography.Text>
-      ) : null}
-    </Card>
   );
 }
 

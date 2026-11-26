@@ -8,7 +8,7 @@
  * | 前端调用 | Tauri 命令 | 参数 → 返回（D08 §5.1） |
  * |---|---|---|
  * | listSessions() | `session_list` | `{ cursor?: string }` → `{ items: SessionRow[], next_cursor }`（agent_session 表读，updated_at 倒序） |
- * | startSession() | `agent_start_session` | `{ workspace_id?: string, form: 'workbench', mode: PermissionMode, model_policy: 'auto' }` → `{ session_id }` |
+ * | startSession() | `agent_start_session` | `{ workspace_id?: string, form: 'workbench', mode: PermissionMode, model?: string }` → `{ session_id }` |
  * | sendMessage() | `agent_input` | `{ session_id, text, attachments?: [] }` → `{ ok: true }` |
  * | interrupt() | `agent_interrupt` | `{ session_id }` → `{ ok }`（2026-11-11 取代旧 pause/resume：中断当前轮，收口 idle） |
  * | renameSession() | `agent_rename` | `{ session_id, title }` → `{ ok, title }`（标题落库+宿主缓存同步） |
@@ -74,8 +74,8 @@ interface SessionRow {
   title: string;
   workspace: string;
   mode: PermissionMode;
-  model_policy: 'fast' | 'strong' | 'auto';
-  /** 0023 模型直达引用（agent_session.model_override） */
+  /** 0023 模型直达引用（agent_session.model_override）；缺省=公司默认档
+   *  （2026-11-26 单档化：档位列已退役，会话行里不再有该键） */
   model_override?: string;
   /** 原始 IPC 字段（壳缓存瞬态可含 starting 等）：mapSession 归一为 SessionStatus */
   status: string;
@@ -128,7 +128,6 @@ function mapSession(row: SessionRow): AgentSessionMeta {
     title: row.title,
     workspace: row.workspace,
     mode: row.mode,
-    modelPolicy: row.model_policy,
     modelOverride: row.model_override,
     // starting=壳侧建会话 REQ 在途的瞬态（并发 list 的极小窗口）：前端枚举已无此态，归一 idle
     status: (row.status === 'starting' ? 'idle' : row.status) as SessionStatus,
@@ -171,13 +170,13 @@ export class TauriAgentBridge implements AgentBridge {
     return data.items.map(mapSession).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: import('./types').SessionOriginInfo, modelPolicy: 'fast' | 'strong' | 'auto' = 'auto'): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: import('./types').SessionOriginInfo): Promise<AgentSessionMeta> {
     const ack = await invoke<{ session_id: string }>('agent_start_session', {
       workspaceId: workspace,
       form: 'workbench',
       mode,
-      modelPolicy,
-      // 0023 模型直达引用（p:<id>:<model>）；缺省=档位别名（宿主命令透传 Runtime session.start）
+      // 0023 模型直达引用（p:<id>:<model>）；缺省=公司默认档（宿主命令透传 Runtime session.start）。
+      // 2026-11-26 单档化：不再下发档位键
       model: model ?? null,
       title: title ?? null,
       // 场景来源（2026-11-23）：embedded 会话带 IM 来源，runtime 注入场景段
@@ -193,7 +192,6 @@ export class TauriAgentBridge implements AgentBridge {
       title: title?.trim() || '新会话',
       workspace,
       mode,
-      modelPolicy,
       modelOverride: model,
       status: 'idle',
       createdAt: Date.now(),
@@ -215,9 +213,9 @@ export class TauriAgentBridge implements AgentBridge {
     });
   }
 
-  async switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void> {
-    // 回执经 agent://event 的 model.switched 镜像事件
-    await invoke('agent_switch_model', { sessionId, to, model: model ?? null });
+  async switchModel(sessionId: string, model?: string): Promise<void> {
+    // 回执经 agent://event 的 model.switched 镜像事件（model 缺省=回公司默认档）
+    await invoke('agent_switch_model', { sessionId, model: model ?? null });
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -420,8 +418,7 @@ export function normalizeEvent(raw: RawAgentEvent): AgentEvent | null {
       return {
         type: 'modelSwitched',
         sessionId: sid,
-        from: (str(raw.from) || 'auto') as 'fast' | 'strong' | 'auto',
-        to: (str(raw.to) || 'auto') as 'fast' | 'strong' | 'auto',
+        // 单档化：壳→RT 的 model.switched 不再带档位 from/to；model 缺席=公司默认档
         modelOverride: raw.model ? str(raw.model) : undefined,
         reason: str(raw.reason),
       };

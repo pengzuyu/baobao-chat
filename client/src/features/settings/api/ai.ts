@@ -1,8 +1,9 @@
 /**
  * 设置 · AI 个人配置 REST（0023）：
  * - 我的供应商 BYOK CRUD + 探活（/me/ai/providers；密钥服务端加密，仅本人可见）
- * - 公司级供应商只读（/ai/providers/shared；默认模型下拉数据源）
- * - 个人设置（/me/settings；ai_default 默认模型选择，PATCH 顶层浅合并）
+ * - 公司级供应商只读（/ai/providers/shared；模型选择器数据源）
+ * （原 /me/settings 的 ai_default 默认模型选择客户端已随 2026-11-26 对话档位单档化退役：
+ *   常用模型改为客户端本地记忆；服务端通用个人设置端点保留）
  */
 
 import { http } from '../../../shared/api/http';
@@ -46,21 +47,4 @@ export async function probeMyProviderRaw(baseUrl: string, apiKey: string): Promi
 export async function fetchSharedProviders(): Promise<AIProvider[]> {
   const data = await http.get<{ items: Array<AIProvider & { id: number | string }> }>('/ai/providers/shared');
   return data.items.map((it) => ({ ...it, id: String(it.id) }));
-}
-
-/** ai_default 默认模型选择（users.settings；mode=org 跟随公司默认） */
-export interface AIDefaultSetting {
-  mode: 'org' | 'provider';
-  providerId?: string;
-  model?: string;
-}
-
-/** 读个人设置（任意 JSON；ai_default 为本页消费键） */
-export async function fetchMeSettings(): Promise<Record<string, unknown>> {
-  return http.get<Record<string, unknown>>('/me/settings');
-}
-
-/** 保存默认模型选择 */
-export async function patchAIDefault(aiDefault: AIDefaultSetting): Promise<void> {
-  await http.patch('/me/settings', { ai_default: aiDefault });
 }

@@ -5,15 +5,16 @@
  * - 上下文差异（用户口径）：项目新建会话（?workspace=目录）页上显示「所属项目」；
  *   任务新建会话不显示任何项目信息
  * - 重复点击天然幂等：入口均 navigate 到同一路由，本页无任何创建副作用
- * - 权限模式/模型为本页草稿态（首建生效；会话建立后由 store setMode/switchModel 接管；
- *   模式默认档=自主，单源 DEFAULT_PERMISSION_MODE），
+ * - 权限模式为本页草稿态（模式默认档=自主，单源 DEFAULT_PERMISSION_MODE）、模型草稿取本地
+ *   常用模型（2026-11-26 选择即记住：初值=常用值，选择同步落盘）；首建生效；会话建立后由
+ *   store setMode/switchModel 接管，
  *   控件与会话视图同款（Dropdown+ModelThinkPicker，full-auto 二次确认）
  * - 发送链路：createSession（store 置 activeSessionId+头插列表）→ void sendText
  *   （origin='workbench' 乐观上屏+首条消息派生标题；sendTextTo 恒 origin='im' 勿用）
  *   → navigate /agent/s/:id；失败（bbrt 缺失/8001 超限等）停留本页 Alert 提示
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, Dropdown, Flex, Modal, Typography, theme, type MenuProps } from 'antd';
 import { FolderOpen, ShieldCheck } from 'lucide-react';
@@ -23,16 +24,16 @@ import { AGENT_MODE_OPTIONS, DEFAULT_PERMISSION_MODE } from '../bridge/types';
 import type { AttachmentPayload, PermissionMode } from '../bridge/types';
 import { ModelThinkPicker } from './ModelThinkPicker';
 import { Composer } from './Composer';
-import { resolveDefaultModel } from '../utils/resolveModel';
+import { DEFAULT_MODEL_KEY } from '../utils/modelPref';
 import { displayPath } from '../utils/displayPath';
 import type { PluginCommand } from '../../eco/api/plugins';
-import type { AIProvider } from '../../admin/model/types';
+import type { ModelProviders } from '../utils/modelPref';
 
 interface AgentComposeViewProps {
   /** 工作目录（项目会话=绝对路径；''=任务会话，页上不显示所属项目） */
   workspace: string;
   /** 模型选项（公司级 shared + 我的 BYOK；页面层拉取后注入） */
-  aiProviders: { shared: AIProvider[]; mine: AIProvider[] };
+  aiProviders: ModelProviders;
   /** 插件斜杠命令表（/ 唤起；空表=功能关闭） */
   pluginCommands: PluginCommand[];
 }
@@ -44,9 +45,17 @@ export function AgentComposeView({ workspace, aiProviders, pluginCommands }: Age
   const sendText = useAgentStore((s) => s.sendText);
   const workspaces = useAgentStore((s) => s.workspaces);
 
-  // 权限模式/模型=本页草稿态：随 createSession 落到新会话（模式默认档=自主）
+  // 权限模式/模型=本页草稿态：随 createSession 落到新会话（模式默认档=自主）。
+  // 模型草稿初值=本地常用模型（2026-11-26 选择即记住：'default'=公司默认档 /
+  // 'p:<id>:<model>'=直达引用）；常用值被失效自愈改写时草稿跟随，用户手选后不再覆盖
   const [mode, setMode] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE);
-  const [modelChoice, setModelChoice] = useState<{ policy: 'fast' | 'strong' | 'auto'; override?: string }>({ policy: 'auto' });
+  const modelPref = useAgentStore((s) => s.modelPref);
+  const setModelPref = useAgentStore((s) => s.setModelPref);
+  const [modelChoice, setModelChoice] = useState<string>(modelPref);
+  const [modelTouched, setModelTouched] = useState(false);
+  useEffect(() => {
+    if (!modelTouched) setModelChoice(modelPref);
+  }, [modelPref, modelTouched]);
   const [sending, setSending] = useState(false);
   // 同步防重入（state 更新滞后一帧：Enter+按钮连点会各建一个会话）
   const sendingRef = useRef(false);
@@ -87,14 +96,15 @@ export function AgentComposeView({ workspace, aiProviders, pluginCommands }: Age
     onClick: ({ key }) => doSetMode(key as PermissionMode),
   };
 
-  /** 模型选择草稿：档位=清直达引用；p:<id>:<model>=直达引用（名义档位随当前） */
-  const onSelectModel = useCallback((key: string) => {
-    if (key.startsWith('tier:')) {
-      setModelChoice({ policy: key.slice(5) as 'fast' | 'strong' });
-      return;
-    }
-    setModelChoice((c) => ({ ...c, override: key }));
-  }, []);
+  /** 模型选择草稿：'default'=公司默认档 / p:<id>:<model>=直达引用；选择即记住（落常用值） */
+  const onSelectModel = useCallback(
+    (key: string) => {
+      setModelTouched(true);
+      setModelChoice(key);
+      setModelPref(key);
+    },
+    [setModelPref],
+  );
 
   /** 懒创建发送：此刻才建会话 → 乐观上屏+派生标题 → 跳会话视图（底部输入框形态）。
    *  回 true=已发出；false=建会话失败（停留本页报错，Composer 还原输入原文） */
@@ -105,15 +115,13 @@ export function AgentComposeView({ workspace, aiProviders, pluginCommands }: Age
       setSending(true);
       setSendError(null);
       try {
-        // 模型草稿：直达引用优先（名义档位随草稿）；用户显式选了档位（快/强）→
-        // 按档位建会话；未动过（auto）→ 沿用 ai_default 的直达引用
-        const pick =
-          modelChoice.override
-            ? { modelPolicy: modelChoice.policy, model: modelChoice.override }
-            : modelChoice.policy === 'auto'
-              ? { modelPolicy: modelChoice.policy, model: await resolveDefaultModel() }
-              : { modelPolicy: modelChoice.policy, model: undefined };
-        const meta = await createSession({ workspace, mode, ...pick });
+        // 模型草稿：公司默认=显式 null（本页草稿即最终选择，不再叠常用值）；
+        // 直达引用原样透传（选项来自当前供应商清单）
+        const meta = await createSession({
+          workspace,
+          mode,
+          model: modelChoice === DEFAULT_MODEL_KEY ? null : modelChoice,
+        });
         void sendText(text, attachments); // createSession 已置 activeSessionId；同步段先乐观上屏再跳转
         navigate(`/agent/s/${meta.id}`);
         return true;
@@ -174,7 +182,7 @@ export function AgentComposeView({ workspace, aiProviders, pluginCommands }: Age
               </Button>
             </Dropdown>
           }
-          modelPicker={<ModelThinkPicker providers={aiProviders} policy={modelChoice.policy} override={modelChoice.override} onSelect={onSelectModel} />}
+          modelPicker={<ModelThinkPicker providers={aiProviders} value={modelChoice} onSelect={onSelectModel} />}
         />
       </div>
     </div>

@@ -3,7 +3,7 @@
  * 剧本（对齐任务验收路径）：
  * - 发消息 → stateChanged(running) → 思考摘要 + streamDelta 分片输出（80ms/片）
  *   → toolCall(read_file foo.txt) → 3s 后 toolResult(ok) → 结论流 → streamDone → idle
- * - 再发一条 → modelSwitched(升档) → toolCall(run_command) → permission.request
+ * - 再发一条 → toolCall(run_command) → permission.request
  *   （cargo test，risk=high，命令预览可编辑，仅 once/session 两档）
  *   → 允许：toolResult(exit 0 通过)；拒绝/超时：toolResult(blocked 红条带)
  *   → memory.saved 事件 → sessionEnded
@@ -113,7 +113,6 @@ function seedSessions(): AgentSessionMeta[] {
       title: '修复登录超时',
       workspace: '~/code/bbc-server',
       mode: 'auto-edit',
-      modelPolicy: 'auto',
       status: 'paused',
       createdAt: now - 3 * HOUR,
       updatedAt: now - 40 * MIN,
@@ -123,7 +122,6 @@ function seedSessions(): AgentSessionMeta[] {
       title: '退款接口调研',
       workspace: '~/code/order-svc',
       mode: 'ask',
-      modelPolicy: 'fast',
       status: 'ended',
       createdAt: now - 2 * DAY,
       updatedAt: now - DAY - 2 * HOUR,
@@ -136,7 +134,6 @@ function seedSessions(): AgentSessionMeta[] {
       // D19：日常对话（无工作目录——文件/命令类工具不可用）
       workspace: '',
       mode: 'ask',
-      modelPolicy: 'auto',
       status: 'idle',
       createdAt: now - 5 * HOUR,
       updatedAt: now - 3 * HOUR,
@@ -215,7 +212,7 @@ export class MockAgentBridge implements AgentBridge {
     return [...this.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, _origin?: import('./types').SessionOriginInfo, modelPolicy: 'fast' | 'strong' | 'auto' = 'auto'): Promise<AgentSessionMeta> {
+  async startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, _origin?: import('./types').SessionOriginInfo): Promise<AgentSessionMeta> {
     await delay(200);
     // D19：项目会话自动登记（对齐 bbrt manager.start 的 realpath upsert 行为）
     if (workspace) {
@@ -241,7 +238,6 @@ export class MockAgentBridge implements AgentBridge {
       title: title?.trim() || '新会话',
       workspace,
       mode,
-      modelPolicy,
       modelOverride: model,
       status: 'idle',
       createdAt: Date.now(),
@@ -251,16 +247,15 @@ export class MockAgentBridge implements AgentBridge {
     return { ...meta };
   }
 
-  async switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void> {
+  async switchModel(sessionId: string, model?: string): Promise<void> {
     await delay(120);
     const meta = this.sessions.find((s) => s.id === sessionId);
-    const from = meta?.modelPolicy ?? 'auto';
     if (meta) {
-      meta.modelPolicy = to;
+      // 单档化（2026-11-26）：切换只在「直达引用 / 公司默认档」两态间
       meta.modelOverride = model;
       meta.updatedAt = Date.now();
     }
-    this.emit({ type: 'modelSwitched', sessionId, from, to, modelOverride: model, reason: 'user' });
+    this.emit({ type: 'modelSwitched', sessionId, modelOverride: model, reason: 'user' });
   }
 
   async sendMessage(
@@ -279,7 +274,6 @@ export class MockAgentBridge implements AgentBridge {
         title: 'Agent 会话',
         workspace: '',
         mode: DEFAULT_PERMISSION_MODE,
-        modelPolicy: 'auto',
         status: 'idle',
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -567,9 +561,8 @@ export class MockAgentBridge implements AgentBridge {
     const sid = s.id;
     try {
       this.setStatus(sid, 'running', 'user.message');
-      // 复杂任务自动升档（D11 §4 model.switched）
+      // （原「复杂任务自动升档」剧本随 2026-11-26 单档化删除：运行时本无真实升降档）
       await ctx.wait(300);
-      this.emit({ type: 'modelSwitched', sessionId: sid, from: 'fast', to: 'strong', reason: 'auto:任务复杂度升档' });
       await this.streamOut(ctx, sid, '需要执行测试命令验证修复。该命令不在白名单内，按当前模式需要你确认：');
       // 管线第 0 步先展示 tool.call，再走门控确认（D11 §6）
       this.emit({
