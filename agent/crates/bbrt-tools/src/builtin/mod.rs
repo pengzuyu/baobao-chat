@@ -21,6 +21,7 @@ pub mod memory;
 pub mod plugins;
 pub mod projects;
 pub mod search;
+pub mod sessions;
 pub mod skill;
 
 use std::path::PathBuf;
@@ -148,6 +149,34 @@ pub(crate) fn usize_arg(args: &serde_json::Value, key: &str) -> Option<usize> {
     args.get(key).and_then(|v| v.as_u64()).map(|v| v as usize)
 }
 
+/// Runtime 本地库取锁（中毒锁也取：store 侧失败不该连带拖垮后续所有工具调用）
+pub(crate) fn lock_store(
+    store: &std::sync::Arc<std::sync::Mutex<bbrt_store::Store>>,
+) -> std::sync::MutexGuard<'_, bbrt_store::Store> {
+    store.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// 本地库类工具（list_projects / use_project / session_search）的正常返回
+pub(crate) fn ok_output(summary: impl Into<String>) -> ExecOutput {
+    ExecOutput {
+        summary: summary.into(),
+        truncated: false,
+        exit_code: None,
+        duration_ms: 0,
+    }
+}
+
+/// 本地库类工具的降级返回：未装配（单测/嵌入式）或查询失败——Ok + exit_code=1
+/// （非阻断，list_plugins 降级同款），文案让模型知道下一步
+pub(crate) fn degraded_output(summary: impl Into<String>) -> ExecOutput {
+    ExecOutput {
+        summary: summary.into(),
+        truncated: false,
+        exit_code: Some(1),
+        duration_ms: 0,
+    }
+}
+
 /// 注册全部内置工具（registry.builtin() 调用）
 pub(crate) fn register_all(registry: &mut ToolRegistry) {
     registry.register(fs::read_file_def());
@@ -178,4 +207,6 @@ pub(crate) fn register_all(registry: &mut ToolRegistry) {
     // （执行体在 pipeline dispatch——数据源为 ToolsConfig.store）
     registry.register(projects::list_projects_def());
     registry.register(projects::use_project_def());
+    // 任务感知工作台：历史对话检索/翻页/通读/最近会话（四形态由参数组合推断）
+    registry.register(sessions::session_search_def());
 }

@@ -1528,7 +1528,16 @@ fn register_project(store: &Arc<Mutex<bbrt_store::Store>>, root: &Path, name: &s
     real
 }
 
-/// 未装配本地库（单测/嵌入式）：两工具降级不阻断
+/// 往会话追加一条文本事件，返回事件 id
+fn append_event(store: &Arc<Mutex<bbrt_store::Store>>, sid: &str, kind: &str, text: &str) -> i64 {
+    let payload = serde_json::json!({ "text": text }).to_string();
+    let s = store.lock().unwrap();
+    let seq = s.next_event_seq(sid).unwrap();
+    s.append_event(sid, seq, kind, &payload).unwrap();
+    s.events_after(sid, seq - 1, 1).unwrap().remove(0).id
+}
+
+/// 未装配本地库（单测/嵌入式）：三工具降级不阻断
 #[test]
 fn 工作台工具_未装配降级() {
     let f = Fixture::new();
@@ -1542,6 +1551,11 @@ fn 工作台工具_未装配降级() {
     let (_, _, exit_code, _) = ok_of(ex.execute(
         PermissionMode::Ask,
         &call("use_project", serde_json::json!({"path": "/x"})),
+    ));
+    assert_eq!(exit_code, Some(1));
+    let (_, _, exit_code, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("session_search", serde_json::json!({"query": "登录超时"})),
     ));
     assert_eq!(exit_code, Some(1));
 }
@@ -1663,4 +1677,71 @@ fn use_project_聊天会话与项目会话拒绝() {
     ));
     assert_eq!(code, 8002);
     assert!(msg.contains(&path), "{msg}");
+}
+
+/// session_search 经管线：搜索命中其他会话并带命中点上下文，默认排除当前会话；
+/// 通读与翻页按参数组合推断，显式指定会话不受排除限制；只读工具三档全放行
+#[test]
+fn session_search_管线搜索翻页通读() {
+    let sf = StoreFixture::new();
+    seed_session(&sf.store, "sess-old", "workbench");
+    seed_session(&sf.store, "sess-test", "workbench");
+    let hit = append_event(&sf.store, "sess-old", "user.text", "登录页的超时时间太短了");
+    append_event(
+        &sf.store,
+        "sess-old",
+        "assistant.done",
+        "已把登录页的超时改成 30 秒",
+    );
+    append_event(
+        &sf.store,
+        "sess-test",
+        "user.text",
+        "当前会话也提到登录页的超时",
+    );
+    let ex = sf.executor();
+
+    for mode in [
+        PermissionMode::Ask,
+        PermissionMode::AutoEdit,
+        PermissionMode::FullAuto,
+    ] {
+        let c = call(
+            "session_search",
+            serde_json::json!({"query": "登录页的超时"}),
+        );
+        match ex.check(mode, &c) {
+            CheckOutcome::Allow { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    let run = |args: serde_json::Value| -> serde_json::Value {
+        let (summary, _, exit_code, _) =
+            ok_of(ex.execute(PermissionMode::Ask, &call("session_search", args)));
+        assert_eq!(exit_code, None, "{summary}");
+        serde_json::from_str(&summary).expect("结果应为 JSON")
+    };
+
+    // 搜索：当前会话虽命中但被排除
+    let v = run(serde_json::json!({"query": "登录页的超时", "limit": 5}));
+    assert_eq!(v["mode"], "discover");
+    let results = v["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "{v}");
+    assert_eq!(results[0]["session_id"], "sess-old");
+    let snippet = results[0]["snippet"].as_str().unwrap();
+    assert!(snippet.contains(">>>登录页的超时<<<"), "{snippet}");
+    let window = results[0]["window"].as_array().unwrap();
+    assert_eq!(window[0]["anchor"], serde_json::json!(true));
+    assert_eq!(window[1]["text"], "已把登录页的超时改成 30 秒");
+
+    // 通读：显式指定的会话不受排除限制
+    let v = run(serde_json::json!({"session_id": "sess-test"}));
+    assert_eq!(v["mode"], "read");
+    assert_eq!(v["event_count"], 1);
+
+    // 翻页：锚点前无内容、后有一条
+    let v = run(serde_json::json!({"session_id": "sess-old", "around_event_id": hit}));
+    assert_eq!(v["mode"], "scroll");
+    assert_eq!(v["events_before"], 0);
+    assert_eq!(v["events_after"], 1);
 }

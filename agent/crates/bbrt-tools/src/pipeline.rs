@@ -494,6 +494,12 @@ impl ToolExecutor for PipelineExecutor {
                 &call.session_id,
                 &args,
             ),
+            // 任务感知工作台：历史对话检索/翻页/通读/最近会话（搜索默认排除当前会话）
+            "session_search" => builtin::sessions::search(
+                self.config.store.as_ref(),
+                &call.session_id,
+                &args,
+            ),
             // mcp.{server}.{tool}（D11 §2.10 dispatch_by_source：网关/外部 MCP 工具；
             // OBO 由 McpClient 令牌闭包逐请求注入；断连/未注册 → 8002 标灰语义）
             _ if call.name.starts_with("mcp.") => match &self.mcp {

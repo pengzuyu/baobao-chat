@@ -24,7 +24,7 @@ use bbrt_sec::errors::CODE_TOOL_DISABLED;
 use bbrt_session::SessionWorkspaces;
 use bbrt_store::Store;
 
-use super::{deny, str_arg, ExecOutput, ToolBlock};
+use super::{degraded_output, deny, lock_store, ok_output, str_arg, ExecOutput, ToolBlock};
 use crate::registry::{RiskLevel, ToolDef};
 
 /// 工具参数/装配错误码（14 篇：8002）
@@ -73,32 +73,6 @@ pub fn use_project_def() -> ToolDef {
     }
 }
 
-/// 取锁（中毒锁也取：store 侧失败不该连带拖垮后续所有工具调用）
-fn lock(store: &Arc<Mutex<Store>>) -> std::sync::MutexGuard<'_, Store> {
-    store.lock().unwrap_or_else(|p| p.into_inner())
-}
-
-/// 正常返回
-fn ok(summary: impl Into<String>) -> ExecOutput {
-    ExecOutput {
-        summary: summary.into(),
-        truncated: false,
-        exit_code: None,
-        duration_ms: 0,
-    }
-}
-
-/// 本地库未装配（单测/嵌入式）或查询失败：Ok + exit_code=1（非阻断，list_plugins
-/// 降级同款），文案让模型知道下一步
-fn failed(summary: impl Into<String>) -> ExecOutput {
-    ExecOutput {
-        summary: summary.into(),
-        truncated: false,
-        exit_code: Some(1),
-        duration_ms: 0,
-    }
-}
-
 /// 毫秒时间差 → 粗略相对时间（清单展示用）
 fn ago(ms: i64) -> String {
     let ms = ms.max(0);
@@ -120,22 +94,22 @@ pub(crate) fn list(
     _args: &serde_json::Value,
 ) -> Result<ExecOutput, ToolBlock> {
     let Some(store) = store else {
-        return Ok(failed(
+        return Ok(degraded_output(
             "Project listing is unavailable: the local session store is not assembled.",
         ));
     };
     let fetched = {
-        let store = lock(store);
+        let store = lock_store(store);
         store
             .list_workspaces()
             .and_then(|projects| Ok((projects, store.count_sessions_by_workspace()?)))
     };
     let (projects, counts) = match fetched {
         Ok(v) => v,
-        Err(e) => return Ok(failed(format!("Project listing failed: {e}"))),
+        Err(e) => return Ok(degraded_output(format!("Project listing failed: {e}"))),
     };
     if projects.is_empty() {
-        return Ok(ok(
+        return Ok(ok_output(
             "No projects registered yet (open a folder in the workbench to add one).",
         ));
     }
@@ -165,7 +139,7 @@ pub(crate) fn list(
         ));
     }
     lines.push("To work inside one of them, call use_project with its path.".into());
-    Ok(ok(lines.join("\n")))
+    Ok(ok_output(lines.join("\n")))
 }
 
 /// use_project 实现：校验通过后改会话工作区登记表（不写库）。
@@ -176,7 +150,7 @@ pub(crate) fn use_project(
     args: &serde_json::Value,
 ) -> Result<ExecOutput, ToolBlock> {
     let (Some(store), Some(registry)) = (store, registry) else {
-        return Ok(failed(
+        return Ok(degraded_output(
             "Project switching is unavailable: the local session store is not assembled.",
         ));
     };
@@ -184,12 +158,12 @@ pub(crate) fn use_project(
     // 所以采纳后的会话仍可切回用户工作区或换项目（登记表此时与项目会话同形，
     // 不能作为判据）；会话行不在库（嵌入式 runner）时才退回登记表判定
     let row = {
-        let store = lock(store);
+        let store = lock_store(store);
         store.get_session(session_id)
     };
     let row = match row {
         Ok(row) => row,
-        Err(e) => return Ok(failed(format!("Project switching failed: {e}"))),
+        Err(e) => return Ok(degraded_output(format!("Project switching failed: {e}"))),
     };
     match row {
         Some(row) if row.workspace_id.is_some() => {
@@ -225,20 +199,20 @@ pub(crate) fn use_project(
     }
     let Some(path) = str_arg(args, "path") else {
         registry.set(session_id, None);
-        return Ok(ok(
+        return Ok(ok_output(
             "Working root switched back to the default user workspace.",
         ));
     };
     // 路径校验：只认工作台已登记的目录（agent 不能自授权写任意目录）
     let real = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
     let found = {
-        let store = lock(store);
+        let store = lock_store(store);
         store.get_workspace_by_path(&real.to_string_lossy())
     };
     let ws = match found {
         Ok(Some(ws)) => ws,
         Ok(None) => {
-            let registered = lock(store)
+            let registered = lock_store(store)
                 .list_workspaces()
                 .map(|all| all.into_iter().map(|w| w.path).collect::<Vec<_>>())
                 .unwrap_or_default();
@@ -252,7 +226,7 @@ pub(crate) fn use_project(
                 ),
             ));
         }
-        Err(e) => return Ok(failed(format!("Project switching failed: {e}"))),
+        Err(e) => return Ok(degraded_output(format!("Project switching failed: {e}"))),
     };
     // 目录已被移动/删除时不采纳：session_env 首用会 create_dir_all，凭空重建一个空目录
     if !Path::new(&ws.path).is_dir() {
@@ -266,7 +240,7 @@ pub(crate) fn use_project(
         ));
     }
     registry.set(session_id, Some(PathBuf::from(&ws.path)));
-    Ok(ok(format!(
+    Ok(ok_output(format!(
         "Working root switched to project \"{}\" ({}). From now on file tools, commands and git \
          operate inside this project — paths resolve there and writing elsewhere is rejected; \
          memory saves go to this project's partition. Call use_project again without path to \
@@ -290,7 +264,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
-        lock(store)
+        lock_store(store)
             .insert_session(&bbrt_store::SessionRow {
                 id: id.into(),
                 workspace_id: None,
@@ -315,7 +289,7 @@ mod tests {
         let dir = root.join(id);
         std::fs::create_dir_all(&dir).unwrap();
         let real = std::fs::canonicalize(&dir).unwrap();
-        lock(store)
+        lock_store(store)
             .upsert_workspace(&bbrt_store::Workspace {
                 id: id.into(),
                 path: real.to_string_lossy().into_owned(),
@@ -365,7 +339,7 @@ mod tests {
         seed_session(&store, "sess-1", "workbench");
         seed_session(&store, "sess-2", "workbench");
         {
-            let s = lock(&store);
+            let s = lock_store(&store);
             let sid = s
                 .get_workspace_by_path(a.to_string_lossy().as_ref())
                 .unwrap()
@@ -495,12 +469,12 @@ mod tests {
         let (dir, store) = open_store();
         let real = register(&store, dir.path(), "ws-a");
         seed_session(&store, "sess-1", "workbench");
-        let wid = lock(&store)
+        let wid = lock_store(&store)
             .get_workspace_by_path(real.to_string_lossy().as_ref())
             .unwrap()
             .unwrap()
             .id;
-        lock(&store)
+        lock_store(&store)
             .set_session_workspace("sess-1", Some(&wid))
             .unwrap();
         let registry = SessionWorkspaces::new();
