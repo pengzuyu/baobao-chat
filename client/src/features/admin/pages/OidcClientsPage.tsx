@@ -4,12 +4,13 @@
  * redirect_uris 精确匹配白名单；禁用=拒新授权（存量靠过期收敛）。
  * 2026-11-25：scope 白名单改勾选组+说明（管理员可读）、创建成功态展示
  * client_id 可复制、补编辑（PATCH {id}：name/回调/scope 全量覆盖，client_id 恒定）。
+ * 2026-11-26：列表 client_id 缺省打码——逐行眼睛切换显示/隐藏，复制按钮前置（隐藏态也可复制）。
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Checkbox, Form, Input, Modal, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { Button, Checkbox, Form, Input, Modal, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Copy, Check } from 'lucide-react';
+import { Check, Copy, Eye, EyeOff } from 'lucide-react';
 import {
   apiAdminOidcClientCreate,
   apiAdminOidcClients,
@@ -46,6 +47,12 @@ function splitStdCustom(scopes: string[]): { checked: string[]; custom: string }
   return { checked, custom };
 }
 
+/** client_id 打码：保留 bbc- 前缀，其余逐字符换 •（等宽字体下与原文等宽，显隐切换不跳动） */
+function maskClientId(id: string): string {
+  const head = id.slice(0, id.indexOf('-') + 1);
+  return head + '•'.repeat(id.length - head.length);
+}
+
 export function OidcClientsPage() {
   const [items, setItems] = useState<AdminOidcClient[]>([]);
   const [loading, setLoading] = useState(false);
@@ -55,6 +62,8 @@ export function OidcClientsPage() {
   const [stdChecked, setStdChecked] = useState<string[]>(['profile']); // 标准 scope 勾选（openid 恒含）
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [revealed, setRevealed] = useState<Set<number>>(() => new Set()); // 列表内已点眼睛显示的行（按 id）
+  const [copiedRow, setCopiedRow] = useState<number | null>(null); // 列表内刚复制成功的行（图标短暂变 ✓）
   const [form] = Form.useForm<CreateForm>();
 
   const load = useCallback(async () => {
@@ -124,18 +133,59 @@ export function OidcClientsPage() {
     }
   };
 
+  const toggleReveal = (id: number) =>
+    setRevealed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+
+  const copyId = async (c: AdminOidcClient) => {
+    try {
+      await navigator.clipboard.writeText(c.client_id);
+      setCopiedRow(c.id);
+      setTimeout(() => setCopiedRow((v) => (v === c.id ? null : v)), 1500);
+    } catch {
+      void message.error('复制失败——请点眼睛显示后手动选择复制');
+    }
+  };
+
   const cols: ColumnsType<AdminOidcClient> = [
     {
       title: '应用',
       key: 'app',
-      render: (_, c) => (
-        <Space direction="vertical" size={0}>
-          <Typography.Text strong>{c.name}</Typography.Text>
-          <Typography.Text code copyable={{ text: c.client_id, tooltips: ['复制 client_id', '已复制'] }} style={{ fontSize: 12 }}>
-            {c.client_id}
-          </Typography.Text>
-        </Space>
-      ),
+      render: (_, c) => {
+        const show = revealed.has(c.id);
+        const copied = copiedRow === c.id;
+        return (
+          <Space direction="vertical" size={0}>
+            <Typography.Text strong>{c.name}</Typography.Text>
+            <Space size={2}>
+              <Tooltip title={copied ? '已复制' : '复制 client_id'}>
+                <Button
+                  variant="text"
+                  size="small"
+                  aria-label="复制 client_id"
+                  icon={copied ? <Check size={13} /> : <Copy size={13} />}
+                  onClick={() => void copyId(c)}
+                />
+              </Tooltip>
+              <Typography.Text code style={{ fontSize: 12 }}>
+                {show ? c.client_id : maskClientId(c.client_id)}
+              </Typography.Text>
+              <Tooltip title={show ? '隐藏' : '显示'}>
+                <Button
+                  variant="text"
+                  size="small"
+                  aria-label={show ? '隐藏 client_id' : '显示 client_id'}
+                  icon={show ? <EyeOff size={13} /> : <Eye size={13} />}
+                  onClick={() => toggleReveal(c.id)}
+                />
+              </Tooltip>
+            </Space>
+          </Space>
+        );
+      },
     },
     {
       title: '回调地址（白名单）',
