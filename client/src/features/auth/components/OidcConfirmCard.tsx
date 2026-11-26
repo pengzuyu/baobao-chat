@@ -22,6 +22,7 @@ export function OidcConfirmCard({ reqId, onClose }: { reqId: string; onClose: ()
   const [errText, setErrText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [leftSec, setLeftSec] = useState(0);
+  const [closeIn, setCloseIn] = useState(0);
 
   const load = useCallback(async () => {
     if (!token) {
@@ -55,11 +56,23 @@ export function OidcConfirmCard({ reqId, onClose }: { reqId: string; onClose: ()
     return () => clearInterval(t);
   }, [phase]);
 
+  // 授权完成 10s 后自动关闭卡片
+  useEffect(() => {
+    if (phase !== 'done') return;
+    const t = setInterval(() => setCloseIn((v) => Math.max(0, v - 1)), 1000);
+    return () => clearInterval(t);
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase === 'done' && closeIn === 0) onClose();
+  }, [phase, closeIn, onClose]);
+
   const approve = async () => {
     if (!info || submitting) return;
     setSubmitting(true);
     try {
       await apiOidcConfirm(reqId, info.covered_by_grant ? '' : info.code);
+      setCloseIn(10);
       setPhase('done');
     } catch (e) {
       if (e instanceof ApiError) {
@@ -107,7 +120,12 @@ export function OidcConfirmCard({ reqId, onClose }: { reqId: string; onClose: ()
       )}
 
       {phase === 'done' && (
-        <Alert type="success" showIcon message="已确认授权" description="请回到浏览器继续，页面将自动跳转。" />
+        <Alert
+          type="success"
+          showIcon
+          message="已确认授权"
+          description={`请回到浏览器继续，页面将自动跳转。${closeIn} 秒后本窗口自动关闭。`}
+        />
       )}
 
       {phase === 'ready' && info && (
