@@ -23,7 +23,7 @@ type Config struct {
 	OIDCSigningKey      string        // ES256 私钥 PEM（D28 拍板⑩①手工轮换；空=临时密钥仅联调）
 	BrandName           string        // 品牌显示名（D31 白标；OIDC 等待页等文案源）
 	DeepLinkScheme      string        // 桌面端深链 scheme（D31；须与客户端 brand/brand.json 对齐）
-	MailDomain          string        // 生成邮箱后缀（/setup 首超管+批量导入；D31 曾名 BootstrapMailDomain，2026-11-18 通用化改名）
+	MailDomain          string        // 生成邮箱后缀（/setup 首超管+批量导入；D31 曾名 BootstrapMailDomain，2026-11-18 通用化改名；2026-11-26 起唯一权威源——brand.json mail_domain 退役，前端经 /config/public 运行时取）
 }
 
 // DevJWTSecret 开发默认 HS256 密钥（≥32 字节仅为通过长度校验；生产必经

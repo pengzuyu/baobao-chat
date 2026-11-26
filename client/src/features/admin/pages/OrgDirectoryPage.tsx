@@ -9,10 +9,10 @@
  * - 右：选中「全公司」=全量用户表（搜索/状态过滤/禁用/启用）；
  *       选中部门=该部门成员表（工号/姓名/邮箱/主部门/状态/操作——挂靠已有用户/移出）
  * - 创建用户弹窗：工号自动建议（姓名全拼+重名两位补零递增，可手改）/姓名/
- *   邮箱=前缀@统一后缀 MAIL_DOMAIN（前缀默认跟工号可改；2026-11-18 品牌单源）/
+ *   邮箱=前缀@统一后缀（前缀默认跟工号可改；2026-11-26 部署侧单源运行时取）/
  *   所属组织（默认=触发节点）/角色（默认不授权）——初始口令=工号+!BBC 首登强制改密
  * - 批量导入弹窗（2026-11-18 收编，原独立 ImportPage 退役）：导入前选目标组织（可
- *   无组织）；文件只认姓名，工号/邮箱服务端按规范生成不支持自定义（邮箱同走 MAIL_DOMAIN）
+ *   无组织）；文件只认姓名，工号/邮箱服务端按规范生成不支持自定义（邮箱=工号@部署后缀）
  * - 用户表角色列（2026-11-18）：服务端 ListUsers 聚合 roles 引用，点击角色 Tag 开
  *   右抽屉只读展示全量权限字典（勾上该角色已授权项；编辑仍走角色管理页）
  * D26-O2：Table/Modal/Select/Input/Segmented/Alert/Tag 化；补充轮：组织树→antd Tree
@@ -35,7 +35,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import { ApiError, getErrorText, errText } from '../../../shared/api/http';
-import { MAIL_DOMAIN } from '../../../shared/brand';
+import { useMailDomain } from '../../../shared/publicConfig';
 import { Button } from '../../../shared/ui/Button';
 import { ImportUsersModal, flattenTree } from '../components/ImportUsersModal';
 import { SplitCollapseTab, SplitHandle, useCollapsibleSplit } from '../../../shared/ui/Splitter';
@@ -95,8 +95,10 @@ function CreateUserModal({
   const [name, setName] = useState('');
   const [empno, setEmpno] = useState('');
   const [empnoDirty, setEmpnoDirty] = useState(false);
-  // 邮箱前缀（2026-11-18 统一后缀制：前缀@MAIL_DOMAIN；未手改时前缀跟随工号）
+  // 邮箱前缀（统一后缀制：前缀@部署后缀；未手改时前缀跟随工号）
   const [emailPrefix, setEmailPrefix] = useState('');
+  // 统一后缀（2026-11-26 部署侧单源）：运行时取；未取到时提交不发邮箱字段
+  const mailDomain = useMailDomain();
   const [emailDirty, setEmailDirty] = useState(false);
   const [dept, setDept] = useState(deptId);
   const [roleId, setRoleId] = useState('0');
@@ -148,7 +150,8 @@ function CreateUserModal({
       const u = await createUser({
         employee_no: empno.trim() || undefined,
         display_name: name.trim(),
-        email: prefix ? `${prefix}@${MAIL_DOMAIN}` : undefined,
+        // 后缀未取到（公开配置请求失败，路径学场景）不发邮箱=不设邮箱（既有合法态）
+        email: prefix && mailDomain ? `${prefix}@${mailDomain}` : undefined,
         dept_id: dept ? Number(dept) : undefined,
         role_id: roleId !== '0' ? Number(roleId) : undefined,
       });
@@ -209,7 +212,7 @@ function CreateUserModal({
             setEmailPrefix(e.target.value);
             setEmailDirty(true);
           }}
-          addonAfter={`@${MAIL_DOMAIN}`}
+          addonAfter={`@${mailDomain || '…'}`}
           placeholder="默认=工号，留空=不设邮箱"
           data-testid="create-user-email"
         />

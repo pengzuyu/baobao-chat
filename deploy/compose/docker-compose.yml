@@ -65,7 +65,7 @@ x-bbc-env: &bbc-env
   # 品牌白标（D31；2026-11-18 补透传——.env.tpl 同名键此前未进容器走服务端默认值的缺口）
   BBC_BRAND_NAME: ${BBC_BRAND_NAME:-BaobaoChat}
   BBC_DEEP_LINK_SCHEME: ${BBC_DEEP_LINK_SCHEME:-bbc}
-  BBC_MAIL_DOMAIN: ${BBC_MAIL_DOMAIN:-bbc.io}   # 邮箱统一后缀（首超管+批量导入+mail 懒开户；与 brand.json mail_domain 同值）
+  BBC_MAIL_DOMAIN: ${BBC_MAIL_DOMAIN:-bbc.io}   # 邮箱统一后缀（首超管+单建/导入/注册+mail 懒开户；唯一权威源——前端经 /config/public 运行时取；2026-11-26 brand.json mail_domain 字段退役）
 
 services:
   # ===========================================================================

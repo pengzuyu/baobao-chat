@@ -406,6 +406,12 @@ func main() {
 	mux.HandleFunc("GET /api/v1/setup/status", handleSetupStatus(orgRepo))
 	mux.HandleFunc("POST /api/v1/setup/bootstrap", handleSetupBootstrap(orgRepo, roleStore, setupGate, cfg.MailDomain))
 
+	// 公开配置快照（2026-11-26 邮箱后缀部署侧单源化）：预登录可读的最小部署期配置——
+	// 目前仅邮箱统一后缀。唯一权威源=cfg.MailDomain（helm config.mailDomain / compose
+	// BBC_MAIL_DOMAIN），前端编译期不再烘死（brand.json mail_domain 字段退役），
+	// 注册页提示/管理员表单运行时取此值，与服务端生成同源永不劈叉
+	mux.HandleFunc("GET /api/v1/config/public", handlePublicConfig(cfg.MailDomain))
+
 	// 受保护路由：auth → tenant（D02 §6 链尾两环）
 	authed := func(h http.HandlerFunc) http.Handler {
 		return httpx.Chain(h, httpx.Auth(authAPI.Verify), httpx.Tenant)
@@ -1481,6 +1487,14 @@ type setupBootstrapReq struct {
 	EmployeeNo  string `json:"employee_no"`  // 缺省 admin
 	DisplayName string `json:"display_name"` // 缺省"平台管理员"
 	Password    string `json:"password"`
+}
+
+// handlePublicConfig 公开配置快照（免认证；登录/注册页展示所需的最小部署期配置）。
+// 部署期定值、启动后恒定的只读快照——非运行时可切换，客户端无任何修改入口
+func handlePublicConfig(mailDomain string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		httpx.OK(w, r, map[string]string{"mail_domain": mailDomain})
+	}
 }
 
 // handleSetupStatus 初始化状态（免认证；仅回布尔）

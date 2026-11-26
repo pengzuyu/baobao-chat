@@ -4,7 +4,7 @@
  */
 
 import { ApiError, getErrorText, http } from '../../../shared/api/http';
-import { DEVICE_NAME, MAIL_DOMAIN } from '../../../shared/brand';
+import { DEVICE_NAME } from '../../../shared/brand';
 
 /** 是否使用内置桩数据（默认连真实后端；显式 VITE_USE_MOCK=1 才走桩——D18 翻转） */
 export const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
@@ -145,7 +145,8 @@ export async function apiRegister(displayName: string, password: string): Promis
   if (USE_MOCK) {
     await delay(400);
     const empno = `mock-${displayName.toLowerCase()}`;
-    return { employee_no: empno, email: `${empno}@${MAIL_DOMAIN}` };
+    // 桩无服务端：后缀取演示域（真实环境=服务端按 BBC_MAIL_DOMAIN 生成，2026-11-26 部署侧单源）
+    return { employee_no: empno, email: `${empno}@bbc.io` };
   }
   return http.post<RegisterResult>('/auth/register', {
     display_name: displayName,

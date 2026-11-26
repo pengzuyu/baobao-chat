@@ -17,7 +17,8 @@ import { Alert, Button, Card, Flex, Form, Input, Typography } from 'antd';
 import { Navigate } from 'react-router-dom';
 import { errText, getErrorText } from '../../../shared/api/http';
 import { Logo } from '../../../shared/ui/Logo';
-import { APP_NAME, COPYRIGHT, MAIL_DOMAIN, TAGLINE } from '../../../shared/brand';
+import { APP_NAME, COPYRIGHT, TAGLINE } from '../../../shared/brand';
+import { useMailDomain } from '../../../shared/publicConfig';
 import { useAuthStore } from '../store/auth';
 import { apiRegister, apiSetupStatus, type UserCard } from '../api/auth';
 import { UserPicker } from '../components/UserPicker';
@@ -82,6 +83,9 @@ export function LoginPage() {
   const [regError, setRegError] = useState('');
   const [registeredEmpno, setRegisteredEmpno] = useState('');
   const [registeredEmail, setRegisteredEmail] = useState('');
+
+  // 邮箱统一后缀（2026-11-26 部署侧单源）：注册提示运行时取，未返回前文案降级
+  const mailDomain = useMailDomain();
 
   const submitRegister = async () => {
     if (regBusy) return;
@@ -218,7 +222,10 @@ export function LoginPage() {
         <Card style={{ width: 360 }}>
           <AuthBrand title="注册账号" sub="姓名 + 口令即可，工号将自动分配" />
           <Form layout="vertical">
-            <Form.Item label="姓名" extra={`邮箱将自动生成为 工号@${MAIL_DOMAIN}（与工号一并展示）`}>
+            <Form.Item
+              label="姓名"
+              extra={mailDomain ? `邮箱将自动生成为 工号@${mailDomain}（与工号一并展示）` : '邮箱将自动生成（与工号一并展示）'}
+            >
               <Input
                 placeholder="真实姓名（用于通讯录与搜索）"
                 value={regName}

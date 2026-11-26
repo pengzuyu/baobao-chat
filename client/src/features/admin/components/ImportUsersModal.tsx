@@ -4,7 +4,7 @@
  * - 文件只认姓名：粘贴 CSV（每行首列=姓名，多余列忽略，# 注释行跳过）或上传
  *   Excel（.xlsx/.xls 首表首列=姓名，表头「姓名/name」自动跳过）
  * - 工号/邮箱不支持自定义，服务端按规范生成：工号=姓名全拼（重名两位补零递增）、
- *   邮箱=工号@BBC_MAIL_DOMAIN（与单建弹窗 MAIL_DOMAIN 品牌单源同后缀）；初始口令=
+ *   邮箱=工号@部署后缀（2026-11-26 部署侧单源，与单建弹窗同源运行时取）；初始口令=
  *   工号+!BBC 首登强制改密；≤100 行/次
  * - 结果表回显每行生成的工号/邮箱（管理员分发首登凭据的依据）
  * 样式对齐 CreateUserModal（Typography 标签+自研 Button）；隐藏 file input 保留——
@@ -16,7 +16,7 @@ import * as XLSX from 'xlsx';
 import { Alert, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { FileUp } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
-import { MAIL_DOMAIN } from '../../../shared/brand';
+import { useMailDomain } from '../../../shared/publicConfig';
 import { Button } from '../../../shared/ui/Button';
 import { batchImportUsers, type DeptNode, type ImportInputRow, type ImportResult } from '../api/admin';
 
@@ -98,6 +98,8 @@ export function ImportUsersModal({
   const [result, setResult] = useState<ImportResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // 统一后缀（2026-11-26 部署侧单源）：提示文案运行时取，未返回前降级通用表述
+  const mailDomain = useMailDomain();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const flat = useMemo(() => flattenTree(tree), [tree]);
@@ -243,7 +245,7 @@ export function ImportUsersModal({
             {parsed.bad > 0 ? `（${parsed.bad} 行格式非法将被跳过）` : ''} · ≤100 行/次
           </Typography.Text>
           <Typography.Text type="secondary">
-            工号与邮箱由系统自动生成（工号=姓名全拼、重名补零递增；邮箱=工号@{MAIL_DOMAIN}），不支持自定义；初始口令=工号+“!BBC”，首登强制改密
+            工号与邮箱由系统自动生成（工号=姓名全拼、重名补零递增；邮箱=工号@{mailDomain || '统一后缀'}），不支持自定义；初始口令=工号+“!BBC”，首登强制改密
           </Typography.Text>
           {error ? <Alert type="error" showIcon message={error} /> : null}
         </Space>
