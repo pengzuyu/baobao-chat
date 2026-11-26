@@ -26,10 +26,12 @@
  * INITIAL_SESSION_LIMIT(5) 条，其余收成「加载更多（还有 N 条）」，每次点击再放
  * LOAD_MORE_STEP(10) 条；项目分组收起→展开重置回 5 条，左栏整体收起会卸载本组件、
  * 重新展开同样回到初始态（日常对话区不在本次折叠口径内）。
+ * 项目分组展开/收起态持久化（2026-11-25 用户口径「重开工作台不应默认全展开」）：
+ * localStorage bbc:agent-sessions:collapsed-groups（key=项目路径，未记录=默认展开），
+ * 重开/重启恢复上次状态。
  */
 
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Alert, Badge, ConfigProvider, Flex, Input, Menu, Tag, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import { Bot, ChevronDown, FolderOpen, ListTodo, MessageSquare, PanelLeftClose, Pencil, Plus, Trash2 } from 'lucide-react';
@@ -39,6 +41,29 @@ import { Button } from '../../../shared/ui/Button';
 import { formatListTime } from '../../../shared/utils/time';
 import { displayPath } from '../utils/displayPath';
 import { embeddedSessionIds } from '../../im/agent/embedded';
+
+/** 项目分组折叠态持久化（2026-11-25 用户报修：重开工作台/重启应用全量重置为展开）。
+ *  值=折叠表 {项目路径: 是否收起}（与组件 collapsed state 同构），未记录=默认展开——
+ *  新登记项目首次出现保持展开，不受老记录影响。localStorage 不可用静默降级为仅本次会话
+ *  （同 bbc:agent-dock:collapsed 口径）。任务/日常两分区不在此口径（本来无折叠态）。 */
+const PROJECT_FOLD_KEY = 'bbc:agent-project-fold';
+
+function readProjectFolds(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(PROJECT_FOLD_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistProjectFolds(collapsed: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(PROJECT_FOLD_KEY, JSON.stringify(collapsed));
+  } catch {
+    /* localStorage 不可用静默——仅本次会话生效 */
+  }
+}
 
 /** 状态点形态（D08 §3.1：●运行 / ◐等待审批 / ○暂停 / ✕错误 / ▪已结束）→ antd Badge 状态 */
 function statusBadge(status: AgentSessionMeta['status']): 'success' | 'processing' | 'error' | 'warning' | 'default' {
@@ -266,7 +291,6 @@ interface AgentSessionListProps {
   sessions: AgentSessionMeta[];
   workspaces: AgentWorkspaceInfo[];
   activeId: string | null;
-  bridgeKind: 'mock' | 'tauri';
   /** 新建会话失败提示（bbrt 缺失/超时/超限；成功后清除） */
   createError?: string | null;
   onSelect: (id: string) => void;
@@ -292,7 +316,6 @@ export const AgentSessionList = memo(function AgentSessionList({
   sessions,
   workspaces,
   activeId,
-  bridgeKind,
   createError,
   onSelect,
   onNewTask,
@@ -304,7 +327,6 @@ export const AgentSessionList = memo(function AgentSessionList({
   onCollapse,
 }: AgentSessionListProps) {
   const { token } = theme.useToken();
-  const navigate = useNavigate();
 
   // embedded 会话集合（💬 来源徽标；挂载时读一次——映射只在 IM 侧写入）
   const [embeddedIds, setEmbeddedIds] = useState<Set<string>>(new Set());
@@ -357,8 +379,11 @@ export const AgentSessionList = memo(function AgentSessionList({
     return { chatSessions: chats, taskSessions: tasks };
   }, [dailySessions, embeddedIds]);
 
-  // 折叠态：默认展开含活跃会话的项目；切项目即用（状态不持久化，v0.1 简化）
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // 折叠态：默认展开含活跃会话的项目；切项目即用。
+  // 持久化（2026-11-25 用户报修）：重开工作台/重启应用应回到用户上次设置的展开/收起，
+  // 不再「未记录=全部展开」重置——初始态懒读 bbc:agent-project-fold，切换时整表落盘；
+  // 未记录的分组（新登记项目）仍默认展开
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readProjectFolds);
   // 「加载更多」展开量（key=proj:<path> / tasks）：未记录=初始 5 条；
   // 项目分组收起时清回初始态（重新展开回到最近 5 条，用户口径 2026-11-19）
   const [sessionLimits, setSessionLimits] = useState<Record<string, number>>({});
@@ -562,7 +587,9 @@ export const AgentSessionList = memo(function AgentSessionList({
       }
       return changed ? next : prev;
     });
-    setCollapsed(Object.fromEntries(projectGroups.map((g) => [g.path, !open.has(projKey(g.path))])));
+    const next: Record<string, boolean> = Object.fromEntries(projectGroups.map((g) => [g.path, !open.has(projKey(g.path))]));
+    setCollapsed(next);
+    persistProjectFolds(next);
   };
 
   const onMenuClick: MenuProps['onClick'] = ({ key }) => {
@@ -621,27 +648,7 @@ export const AgentSessionList = memo(function AgentSessionList({
           />
         </ConfigProvider>
       </div>
-      <div
-        style={{
-          flexShrink: 0,
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          gap: '4px 8px',
-          padding: '8px 12px',
-          borderTop: `1px solid ${token.colorBorderSecondary}`,
-        }}
-      >
-        <Tag
-          style={{ marginInlineEnd: 0, fontSize: 10 }}
-          title={bridgeKind === 'mock' ? '未检测到 Tauri 宿主，正在使用本地演示剧本' : '已连接宿主 Runtime'}
-        >
-          {bridgeKind === 'mock' ? '演示桥' : '宿主桥'}
-        </Tag>
-        <Button variant="text" size="small" onClick={() => navigate('/settings/agent')}>
-          Agent 设置
-        </Button>
-      </div>
+      {/* 底部横条整条退役（2026-11-25 用户口径：宿主桥徽标与「Agent 设置」按钮均不展示——设置入口在域二级导航 /agent/settings */}
     </>
   );
 });

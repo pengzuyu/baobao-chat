@@ -26,6 +26,8 @@ import { ExpertLibraryPage } from '../features/expert/pages/ExpertLibraryPage';
 import { useImStore } from '../features/im/store/im';
 import { AgentWorkbenchPage } from '../features/agent/pages/AgentWorkbenchPage';
 import { SchedulesPage } from '../features/agent/pages/SchedulesPage';
+import { AgentSettingsPage } from '../features/agent/pages/AgentSettingsPage';
+import { McpSettingsPage } from '../features/agent/pages/McpSettingsPage';
 import { PluginPage } from '../features/eco/pages/PluginPage';
 import { ensureAgentEventSubscribed, useAgentStore } from '../features/agent/store/agent';
 import { isLocallyReported, notifyAgentDone, notifyScheduleApproval } from '../features/agent/bridge/notify';
@@ -57,8 +59,6 @@ import { ShortcutSettingsPage } from '../features/settings/pages/ShortcutSetting
 import { GeneralSettingsPage } from '../features/settings/pages/GeneralSettingsPage';
 import { NotificationSettingsPage } from '../features/settings/pages/NotificationSettingsPage';
 import { TransferSettingsPage } from '../features/settings/pages/TransferSettingsPage';
-import { AgentSettingsPage } from '../features/settings/pages/AgentSettingsPage';
-import { McpSettingsPage } from '../features/settings/pages/McpSettingsPage';
 import { AuthorizedAppsPage } from '../features/settings/pages/AuthorizedAppsPage';
 import { AboutPage } from '../features/settings/pages/AboutPage';
 import { sendSystemNotification } from '../features/agent/bridge/notify';
@@ -360,6 +360,12 @@ export function App() {
         <Route path="/agent/s/:sessionId" element={<AgentWorkbenchPage />} />
         <Route path="/agent/schedules" element={<SchedulesPage />} />
         <Route path="/agent/plugins" element={<PluginPage />} />
+        {/* Agent 设置/MCP 服务（2026-11-25 自设置域迁入：与定时任务/插件同属 agent 域二级导航） */}
+        <Route path="/agent/settings" element={<AgentSettingsPage />} />
+        <Route path="/agent/mcp" element={<McpSettingsPage />} />
+        {/* 旧设置域路由兼容跳转 */}
+        <Route path="/settings/agent" element={<Navigate to="/agent/settings" replace />} />
+        <Route path="/settings/mcp" element={<Navigate to="/agent/mcp" replace />} />
         {/* 管理后台（D10 阶段一务实版）：仪表盘/用户/策略/用量/审计五页；
             一级"管理"入口按 me.perms admin:* 显隐（MainLayout），服务端守卫 2003 兜底 */}
         <Route path="/admin" element={<AdminLayout />}>
@@ -384,7 +390,8 @@ export function App() {
           <Route path="usage" element={<UsagePage />} />
           <Route path="audit" element={<AuditPage />} />
         </Route>
-        {/* 设置页族（D01 §4.2）：通用/通知/传输/Agent/关于；通用页主题切换真实生效 */}
+        {/* 设置页族（D01 §4.2）：通用/通知/传输/关于；通用页主题切换真实生效。
+            Agent/MCP 服务两 tab 已迁 agent 工作台域（/agent/settings、/agent/mcp） */}
         <Route path="/settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="/settings/profile" replace />} />
           <Route path="profile" element={<ProfileSettingsPage />} />
@@ -392,8 +399,6 @@ export function App() {
           <Route path="notification" element={<NotificationSettingsPage />} />
           <Route path="transfer" element={<TransferSettingsPage />} />
           <Route path="shortcuts" element={<ShortcutSettingsPage />} />
-          <Route path="agent" element={<AgentSettingsPage />} />
-          <Route path="mcp" element={<McpSettingsPage />} />
           <Route path="authorized" element={<AuthorizedAppsPage />} />
           <Route path="about" element={<AboutPage />} />
         </Route>

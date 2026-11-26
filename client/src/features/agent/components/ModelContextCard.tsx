@@ -1,5 +1,5 @@
 /**
- * 设置 · Agent「模型上下文上限（本地）」（D36）：
+ * Agent「模型上下文上限（本地）」（D36；2026-11-25 随 Agent 设置页自设置域迁入 agent 工作台域）：
  * - 用于输入框状态条计算上下文占比；**只存本机 localStorage，不落服务端**
  * - 内置预设覆盖常见模型（`shared/utils/modelContext.ts`）；本卡片按模型 ID 覆盖，
  *   匹配=精确 → 最长前缀；填入模型 ID 时按内置预设自动填充上限
@@ -11,7 +11,7 @@ import { useState } from 'react';
 import { Card, Collapse, Flex, Input, Tag, Typography } from 'antd';
 import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
-import { useAgentStore } from '../../agent/store/agent';
+import { useAgentStore } from '../store/agent';
 import {
   MODEL_CONTEXT_PRESETS,
   formatTokenSize,

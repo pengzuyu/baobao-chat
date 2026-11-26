@@ -1,5 +1,5 @@
 /**
- * 外部智能体接入授权卡（D30 批4，设置·Agent 页）：
+ * 外部智能体接入授权卡（D30 批4，Agent 设置页；2026-11-25 随页迁入 agent 工作台域）：
  * 本机回环 A2A/MCP 面的状态、token 展示/复制/重发（=撤销），接入指引。
  * 知识检索按当前登录用户权限；会话与审批卡都在本 App 内——面随 App 生命周期。
  */
@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Card, List, Popconfirm, Space, Typography } from 'antd';
 import { Check, Copy, Eye, EyeOff, RefreshCw } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
-import { fetchExtAgentStatus, isExtAgentUiAvailable, regenExtAgentToken, type ExtAgentStatus } from '../api/extAgent';
+import { fetchExtAgentStatus, isExtAgentUiAvailable, regenExtAgentToken, type ExtAgentStatus } from '../../settings/api/extAgent';
 import { APP_NAME } from '../../../shared/brand';
 
 export function ExtAgentCard() {

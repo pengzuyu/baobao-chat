@@ -1,5 +1,6 @@
 /**
- * 设置 · MCP 服务（D26 §7）：用户自配 MCP server（zcode 同款接入面）。
+ * Agent · MCP 服务（D26 §7；2026-11-25 自设置域迁入 agent 工作台域）：
+ * 用户自配 MCP server（zcode 同款接入面）。
  * - 列表：启停/编辑/删除/测试连接（RT 真实链路回显工具清单）
  * - 编辑器：stdio（command/args/env）与 HTTP（url/headers）双形态；
  *   env/header 逐值「密文」→ 钥匙串（文件空串占位，真值不落盘）
@@ -24,6 +25,7 @@ import {
   type McpTestResult,
   type PersonalMcpServer,
 } from '../api/mcp';
+import { AgentSubNav } from '../components/AgentSubNav';
 
 /** 键值行（env/headers 共用）：key / value / 密文勾选 */
 interface KvRow {
@@ -42,11 +44,14 @@ const rowsOf = (map: Record<string, string> | undefined, secretKeys: string[] | 
 
 export function McpSettingsPage() {
   return (
-    <div>
-      <Typography.Title level={5} style={{ margin: 0, marginBottom: 16 }}>
-        MCP 服务
-      </Typography.Title>
-      <McpServersCard />
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
+      <AgentSubNav />
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
+        <Typography.Title level={5} style={{ margin: 0, marginBottom: 16 }}>
+          MCP 服务
+        </Typography.Title>
+        <McpServersCard />
+      </div>
     </div>
   );
 }

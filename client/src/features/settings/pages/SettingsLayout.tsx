@@ -2,13 +2,14 @@
  * 设置页壳（D01 §4.2 /settings/*）：左侧二级导航 + 右侧内容区。
  * D26-O3：导航换 antd Menu（原 settings-nav 自研样式退役，写法对齐 AdminLayout）；
  * S 档导航转横条；拖宽仍用 useSplitWidth+SplitHandle；布局内联化。
+ * 2026-11-25：Agent/MCP 服务两 tab 迁 agent 工作台域（/agent/settings、/agent/mcp）。
  */
 
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Menu } from 'antd';
 import type { MenuProps } from 'antd';
 import { t, useI18nStore } from '../../../shared/i18n';
-import { ArrowDownUp, Bell, Bot, Info, Keyboard, Plug, Settings, ShieldCheck, UserRound } from 'lucide-react';
+import { ArrowDownUp, Bell, Info, Keyboard, Settings, ShieldCheck, UserRound } from 'lucide-react';
 import { ErrorBoundary } from '../../../shared/ui/ErrorBoundary';
 import { SplitHandle, useSplitWidth } from '../../../shared/ui/Splitter';
 import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
@@ -21,8 +22,6 @@ function useTabs() {
     { to: '/settings/notification', icon: Bell, label: t('settings.tab.notification') },
     { to: '/settings/transfer', icon: ArrowDownUp, label: t('settings.tab.transfer') },
     { to: '/settings/shortcuts', icon: Keyboard, label: t('settings.tab.shortcuts') },
-    { to: '/settings/agent', icon: Bot, label: t('settings.tab.agent') },
-    { to: '/settings/mcp', icon: Plug, label: t('settings.tab.mcp') },
     { to: '/settings/authorized', icon: ShieldCheck, label: t('settings.tab.authorized') },
     { to: '/settings/about', icon: Info, label: t('settings.tab.about') },
   ] as const;

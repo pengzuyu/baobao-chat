@@ -1,5 +1,6 @@
 /**
- * 设置 · Agent · 会话云备份卡（OQ-B09 / 08 篇 §5.2/§6.3；零知识端侧加密）：
+ * Agent · 会话云备份卡（OQ-B09 / 08 篇 §5.2/§6.3；零知识端侧加密；
+ * 2026-11-25 随 Agent 设置页自设置域迁入 agent 工作台域）：
  * - 未设置：设口令（≥8 位）→ 生成恢复码（仅展示一次，可复制）→ 本机缓存 DEK
  * - 已设置：[备份全部会话]（壳侧会话列表 → DEK 加密 → POST 密文+envelope）
  * - 备份列表：时间/大小/标题；[恢复]（票据下载 → 口令或恢复码解密 → 明文 JSON 导出）
@@ -25,8 +26,8 @@ import {
   type BackupKeyEnvelope,
   type DekMaterial,
 } from '../../../shared/utils/backupCrypto';
-import { createBackup, deleteBackup, downloadBackupBlob, issueRestoreTicket, listBackups, type BackupItem } from '../../agent/api/backup';
-import { getAgentBridge } from '../../agent/bridge';
+import { createBackup, deleteBackup, downloadBackupBlob, issueRestoreTicket, listBackups, type BackupItem } from '../api/backup';
+import { getAgentBridge } from '../bridge';
 
 function unb64(s: string): Uint8Array {
   const bin = atob(s);

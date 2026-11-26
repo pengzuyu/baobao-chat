@@ -1,5 +1,6 @@
 /**
- * 设置 · Agent（D01 §4.2 / D08 + 0023 多供应商）：
+ * Agent · 设置（2026-11-25 自设置域迁入 agent 工作台域，与定时任务/插件同域；
+ * D01 §4.2 / D08 + 0023 多供应商）：
  * - 默认模型：跟随公司默认（fast/strong 档位）或指定供应商+模型（公司级或我的 BYOK，
  *   发起会话时客户端解析为 p:<providerId>:<model> 直达引用）
  * - 我的供应商：个人 BYOK CRUD（≤5 个；密钥服务端加密落库，仅本人可用）
@@ -24,12 +25,13 @@ import {
   probeMyProviderRaw,
   updateMyProvider,
   type AIDefaultSetting,
-} from '../api/ai';
+} from '../../settings/api/ai';
 import { PROVIDER_PRESETS, presetKeyOfBaseUrl, type AIProvider } from '../../admin/model/types';
 import { ProviderModelsEditor } from '../../admin/components/ProviderModelsEditor';
 import { CloudBackupCard } from '../components/CloudBackupCard';
 import { ExtAgentCard } from '../components/ExtAgentCard';
 import { ModelContextCard } from '../components/ModelContextCard';
+import { AgentSubNav } from '../components/AgentSubNav';
 
 /** 设置行统一渲染：名称（可带图标）+ 描述 + 右侧控件 */
 function SettingRow({ name, desc, control }: { name: ReactNode; desc: ReactNode; control: ReactNode }) {
@@ -48,32 +50,37 @@ function SettingRow({ name, desc, control }: { name: ReactNode; desc: ReactNode;
 export function AgentSettingsPage() {
   const { token } = theme.useToken();
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Typography.Title level={5} style={{ margin: 0 }}>
-        Agent
-      </Typography.Title>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
+      <AgentSubNav />
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            Agent
+          </Typography.Title>
 
-      <DefaultModelCard />
-      <MyProvidersCard />
-      <ModelContextCard />
-      <ExtAgentCard />
-      <CloudBackupCard />
+          <DefaultModelCard />
+          <MyProvidersCard />
+          <ModelContextCard />
+          <ExtAgentCard />
+          <CloudBackupCard />
 
-      <Card size="small">
-        <List size="small">
-          <SettingRow
-            name={
-              <Space size={6}>
-                <Zap size={14} style={{ color: token.colorWarning }} /> 紧急停止
-              </Space>
-            }
-            desc="全局快捷键立即中止所有 Agent 任务（D08 紧急停止）"
-            control={<Typography.Text keyboard>⌘ ⇧ .</Typography.Text>}
-          />
-        </List>
-      </Card>
+          <Card size="small">
+            <List size="small">
+              <SettingRow
+                name={
+                  <Space size={6}>
+                    <Zap size={14} style={{ color: token.colorWarning }} /> 紧急停止
+                  </Space>
+                }
+                desc="全局快捷键立即中止所有 Agent 任务（D08 紧急停止）"
+                control={<Typography.Text keyboard>⌘ ⇧ .</Typography.Text>}
+              />
+            </List>
+          </Card>
 
-    </Space>
+        </Space>
+      </div>
+    </div>
   );
 }
 
