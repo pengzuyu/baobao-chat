@@ -232,8 +232,9 @@ func TestValidatePluginPackage_XBbcAuth(t *testing.T) {
 	if !m.UsesIdentity {
 		t.Fatal("x-bbc-auth 应标 usesIdentity")
 	}
-	if len(m.AuthAudiences) != 2 || m.AuthAudiences[0] != "https://oa.company.internal/mcp" ||
-		m.AuthAudiences[1] != "https://hr.company.internal/mcp" {
+	// 受众清单排序输出（确定性产物；原按 map 遍历顺序、断言偶发失败）
+	if len(m.AuthAudiences) != 2 || m.AuthAudiences[0] != "https://hr.company.internal/mcp" ||
+		m.AuthAudiences[1] != "https://oa.company.internal/mcp" {
 		t.Fatalf("受众收集错: %v", m.AuthAudiences)
 	}
 }

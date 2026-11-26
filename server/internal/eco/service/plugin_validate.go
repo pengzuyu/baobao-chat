@@ -22,6 +22,7 @@ import (
 	"io"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 
 	errx "github.com/baobaochat/server/internal/platform/errors"
@@ -343,7 +344,10 @@ func validatePluginPackage(pkg []byte) (*pluginValidateResult, error) {
 		}
 		m.Components.McpServers = len(servers)
 	}
-	// 身份使用探测（D38 批6）：旧 ${BBC_USER_TOKEN} 占位 或 x-bbc-auth 声明
+	// 身份使用探测（D38 批6）：旧 ${BBC_USER_TOKEN} 占位 或 x-bbc-auth 声明。
+	// 受众清单排序输出：上方按 map 遍历收集、顺序每次随机——校验结果须确定可复现
+	// （2026-11-26 顺修：曾致 TestValidatePluginPackage_XBbcAuth 偶发失败）
+	sort.Strings(authAudiences)
 	m.UsesIdentity = reIdentityVar.MatchString(mcpText) || len(authAudiences) > 0
 	m.AuthAudiences = authAudiences
 
