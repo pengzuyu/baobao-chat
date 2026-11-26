@@ -1096,7 +1096,7 @@ func main() {
 	mux.Handle("POST /api/v1/admin/stickers/sets/{id}/items", requirePerm("admin:policy:manage")(handleStickerAddItem(stickerSvc, true)))
 	mux.Handle("PATCH /api/v1/admin/stickers/sets/{id}/status", requirePerm("admin:policy:manage")(handleStickerSetStatus(stickerSvc)))
 	mux.Handle("DELETE /api/v1/admin/stickers/sets/{id}", requirePerm("admin:policy:manage")(handleStickerRemoveSet(stickerSvc, true)))
-	// AI 供应商治理（0023 多供应商：公司级 CRUD/探活 + fast/strong 默认路由主备；19 篇 §6.5 v0.1 子集）。
+	// AI 供应商治理（0023 多供应商：公司级 CRUD/探活 + 默认档路由主备（2026-11-26 单档化）+ embed/rerank；19 篇 §6.5 v0.1 子集）。
 	// Registry 仅 PG 模式存在（内存模式无表驱动，路由不挂）
 	if aigwReg := aigwMod.Registry; aigwReg != nil {
 		mux.Handle("GET /api/v1/admin/ai/providers", requirePerm("admin:policy:manage")(handleAIProviderList(aigwReg, "corp")))
@@ -1107,7 +1107,7 @@ func main() {
 		mux.Handle("POST /api/v1/admin/ai/providers/{id}/probe", requirePerm("admin:policy:manage")(handleAIProviderProbeByID(aigwReg, false)))
 		mux.Handle("GET /api/v1/admin/ai/routes", requirePerm("admin:policy:manage")(handleAIRoutesGet(aigwReg)))
 		mux.Handle("PUT /api/v1/admin/ai/routes", requirePerm("admin:policy:manage")(handleAIRoutesPut(aigwReg)))
-		// 用户侧：公司级只读（设置页下拉）+ 个人 BYOK CRUD/探活 + 个人设置（ai_default）
+		// 用户侧：公司级只读（模型选择器下拉）+ 个人 BYOK CRUD/探活 + 通用个人设置
 		mux.Handle("GET /api/v1/ai/providers/shared", authed(handleAIProviderList(aigwReg, "shared")))
 		mux.Handle("GET /api/v1/me/ai/providers", authed(handleAIProviderList(aigwReg, "mine")))
 		mux.Handle("POST /api/v1/me/ai/providers", authed(handleAIProviderCreate(aigwReg, true)))
@@ -1116,7 +1116,7 @@ func main() {
 		mux.Handle("DELETE /api/v1/me/ai/providers/{id}", authed(handleAIProviderDelete(aigwReg, true)))
 		mux.Handle("POST /api/v1/me/ai/providers/{id}/probe", authed(handleAIProviderProbeByID(aigwReg, true)))
 		mux.Handle("GET /api/v1/me/settings", authed(handleMeSettingsGet(pgPool)))
-		mux.Handle("PATCH /api/v1/me/settings", authed(handleMeSettingsPatch(pgPool, aigwReg)))
+		mux.Handle("PATCH /api/v1/me/settings", authed(handleMeSettingsPatch(pgPool)))
 	}
 	mux.Handle("GET /api/v1/admin/usage/summary", requirePerm("admin:usage:read")(handleAdminUsage(adminSvc)))
 	mux.Handle("GET /api/v1/admin/audit", requirePerm("admin:audit:read")(handleAdminAudit(adminSvc)))

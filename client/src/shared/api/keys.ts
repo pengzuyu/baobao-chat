@@ -88,7 +88,7 @@ export const qk = {
     permPoints: ['admin', 'permPoints'] as const,
     /** AI 供应商列表 ['admin','aiProviders']（0023；CRUD 后失效） */
     aiProviders: ['admin', 'aiProviders'] as const,
-    /** fast/strong 默认路由 ['admin','aiRoutes']（PUT 后失效） */
+    /** 默认档路由 ['admin','aiRoutes']（PUT 后失效） */
     aiRoutes: ['admin', 'aiRoutes'] as const,
   },
 } as const;

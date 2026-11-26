@@ -613,7 +613,7 @@ export async function probeAIProviderRaw(baseUrl: string, apiKey: string): Promi
   return data.models;
 }
 
-/** 当前 fast/strong active 路由 */
+/** 当前 active 路由（default/embed/rerank） */
 export async function fetchAIRoutes(): Promise<AIRouteRule[]> {
   if (USE_MOCK) return [];
   const data = await http.get<{ items: Array<AIRouteRule & { candidates: Array<{ providerId: number | string; model: string; priority: number }> }> }>('/admin/ai/routes');

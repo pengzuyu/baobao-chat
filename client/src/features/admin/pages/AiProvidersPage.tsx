@@ -2,7 +2,8 @@
  * AI 供应商治理（0023 表驱动多供应商，路由 /admin/ai-providers）：
  * - 供应商（公司级）CRUD：名称/BaseURL/密钥（服务端 KMS 加密落库，回显仅掩码）/
  *   模型清单（探活从上游 /models 拉取 + 手动补充）——新增/编辑走右侧抽屉
- * - 默认模型路由：fast/strong 必配主备 + embed/rerank 可选档（D24 N3a；priority 逐候选降级，全尽 8051）
+ * - 默认模型路由：对话默认档（bbc-default，全员共用）必配主备 + embed/rerank 可选档（D24 N3a；
+ *   priority 逐候选降级，全尽 8051）——2026-11-26 单档化：原快/强双档退役
  * - 六态：列表独立 loading/empty/error/forbidden/offline；行操作失败不认领 → 全局 toast 兜底
  * 蓝图：19 篇 §3.1/§3.3/§6.5 v0.1 子集。
  */
@@ -101,7 +102,7 @@ function ProvidersPanel() {
       setForm((f) => ({ ...f, candidates: models }));
     } catch (err) {
       setConnResult(null);
-      // 服务端 message 优先（如「供应商被 fast 档默认路由引用，先调整路由」——
+      // 服务端 message 优先（如「供应商被 default 档路由引用，先调整路由」——
       // 只显码表文案会把删除被拒的真实原因吞成通用「请求参数错误」）
       setFormError(err instanceof ApiError ? err.message || getErrorText(err.code) : '连接失败');
     } finally {
@@ -344,9 +345,9 @@ function ProvidersPanel() {
   );
 }
 
-/* ── 默认路由面板（fast/strong 必配 + embed/rerank 可选档） ── */
+/* ── 默认路由面板（对话默认档必配主备 + embed/rerank 可选档） ── */
 
-type Tier = 'fast' | 'strong' | 'embed' | 'rerank';
+type Tier = 'default' | 'embed' | 'rerank';
 
 interface TierDraft {
   mainProv: string;
@@ -375,7 +376,7 @@ function RoutesPanel() {
         backupModel: backup?.model ?? '',
       };
     };
-    return { fast: draft('fast'), strong: draft('strong'), embed: draft('embed'), rerank: draft('rerank') };
+    return { default: draft('default'), embed: draft('embed'), rerank: draft('rerank') };
   }, [routesQuery.data]);
 
   const [draft, setDraft] = useState(initial);
@@ -402,7 +403,7 @@ function RoutesPanel() {
         return;
       }
     }
-    const items = (['fast', 'strong', 'embed', 'rerank'] as const)
+    const items = (['default', 'embed', 'rerank'] as const)
       .map((tier) => {
         const d = draft[tier];
         const candidates = [];
@@ -411,8 +412,8 @@ function RoutesPanel() {
         return { tier, candidates };
       })
       .filter((r) => r.candidates.length > 0);
-    if (!items.some((r) => r.tier === 'fast') || !items.some((r) => r.tier === 'strong')) {
-      setError('fast 与 strong 都需配置主选模型');
+    if (!items.some((r) => r.tier === 'default')) {
+      setError('默认模型需配置主选模型');
       return;
     }
     setError('');
@@ -426,8 +427,7 @@ function RoutesPanel() {
     modelsOf(provId).map((m) => ({ value: m.id, label: m.label ? `${m.label}（${m.id}）` : m.id }));
 
   const TIERS: Array<{ tier: Tier; label: string; desc: string }> = [
-    { tier: 'fast', label: '快速档', desc: '轻量任务/工具调用循环' },
-    { tier: 'strong', label: '强力档', desc: '复杂推理/长文写作' },
+    { tier: 'default', label: '默认模型', desc: '全员共用——Agent 对话、工具调用循环与内部摘要/规划' },
     { tier: 'embed', label: '嵌入档', desc: '知识库向量化（bbc-embed；可选，未配走 mock 兜底向量）' },
     { tier: 'rerank', label: '重排档', desc: '知识库检索重排（bbc-rerank；可选，未配走词面重排兜底）' },
   ];
@@ -509,7 +509,7 @@ function RoutesPanel() {
         title={
           <Space size={8}>
             默认模型（全员路由）
-            <Typography.Text type="secondary">档位别名 bbc-fast/bbc-strong/bbc-embed/bbc-rerank → 此处主选；主选失败自动切备选（§4.4 降级链）；embed/rerank 可选——留空=沿用现有配置/内置兜底</Typography.Text>
+            <Typography.Text type="secondary">档位别名 bbc-default/bbc-embed/bbc-rerank → 此处主选；主选失败自动切备选（§4.4 降级链）；embed/rerank 可选——留空=沿用现有配置/内置兜底</Typography.Text>
           </Space>
         }
       >

@@ -149,9 +149,9 @@ export interface AIRouteCandidate {
   priority: number;
 }
 
-/** 一条 active 路由（embed/rerank 为可选档：不提交该档=不覆盖现有 active，D24 N3a 四档） */
+/** 一条 active 路由（default=对话默认档；embed/rerank 为可选档：不提交该档=不覆盖现有 active，D24 N3a） */
 export interface AIRouteRule {
-  tier: 'fast' | 'strong' | 'embed' | 'rerank';
+  tier: 'default' | 'embed' | 'rerank';
   candidates: AIRouteCandidate[];
 }
 

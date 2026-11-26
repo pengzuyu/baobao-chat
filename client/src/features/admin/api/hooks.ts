@@ -164,7 +164,7 @@ export function useDeleteAIProvider() {
   });
 }
 
-/** fast/strong 默认路由（主备） */
+/** 默认档路由（主备 + embed/rerank 可选档） */
 export function useAIRoutes() {
   return useQuery({ queryKey: qk.admin.aiRoutes, queryFn: fetchAIRoutes });
 }

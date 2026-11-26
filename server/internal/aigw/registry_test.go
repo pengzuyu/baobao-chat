@@ -2,6 +2,7 @@
 package aigw
 
 import (
+	"context"
 	"testing"
 
 	errx "github.com/baobaochat/server/internal/platform/errors"
@@ -51,6 +52,8 @@ func TestResolveForRefGuards(t *testing.T) {
 		{"p:100:", 42, errx.CodeBadRequest},                    // 空模型
 		{"glm-4.7", 42, errx.CodeBadRequest},                   // 裸具体模型名=绕过路由
 		{"bbc-vision", 42, errx.CodeAIGWRouteNotDefined},       // 未知别名
+		{"bbc-embed", 42, errx.CodeAIGWRouteNotDefined},        // 能力档别名不在对话白名单
+		{"bbc-rerank", 42, errx.CodeAIGWRouteNotDefined},       // 同上
 		{"", 42, errx.CodeBadRequest},                          // 空 model
 	}
 	for _, tc := range cases {
@@ -73,16 +76,65 @@ func TestResolveForTenantIsolation(t *testing.T) {
 }
 
 func TestResolveForTierFallback(t *testing.T) {
-	// 无表数据：档位别名回落 env/mock 兜底装配（E2E 兼容）
+	// 无表数据：默认档别名回落 env/mock 兜底装配（E2E 兼容）
 	r := NewRouter(NewMockProvider(1, "mock-echo"), nil)
-	if c, err := r.ResolveFor(1, 42, AliasStrong); err != nil || len(c) == 0 {
-		t.Fatalf("档位别名应回落兜底: %+v %v", c, err)
+	if c, err := r.ResolveFor(1, 42, AliasDefault); err != nil || len(c) == 0 {
+		t.Fatalf("默认档别名应回落兜底: %+v %v", c, err)
 	}
 	// 表驱动 SetTier 后替换生效
-	r.SetTier("strong", []Candidate{{Provider: NewMockProvider(100, "corp"), Model: "glm-4.7", Priority: 1}})
-	c, err := r.ResolveFor(1, 42, AliasStrong)
+	r.SetTier(TierDefault, []Candidate{{Provider: NewMockProvider(100, "corp"), Model: "glm-4.7", Priority: 1}})
+	c, err := r.ResolveFor(1, 42, AliasDefault)
 	if err != nil || c[0].Model != "glm-4.7" || c[0].Provider.ID() != 100 {
 		t.Fatalf("表驱动候选应生效: %+v %v", c, err)
+	}
+}
+
+// TestEnvDefaultModelCompatKeys env 装配的默认档模型键：default 优先，其次兼容
+// 单档化前的 strong / fast 键（现有部署 BBC_AIGW_OPENAI_MODELS 不必改）
+func TestEnvDefaultModelCompatKeys(t *testing.T) {
+	cases := []struct {
+		models map[string]string
+		want   string
+	}{
+		{map[string]string{"default": "glm-5.3", "strong": "glm-4.7", "fast": "glm-4.7-air"}, "glm-5.3"},
+		{map[string]string{"strong": "glm-4.7", "fast": "glm-4.7-air"}, "glm-4.7"},
+		{map[string]string{"fast": "glm-4.7-air"}, "glm-4.7-air"},
+		{map[string]string{"embed": "bge-m3"}, ""}, // 只配了能力档：默认档无上游，走 mock
+	}
+	for i, tc := range cases {
+		up := &OpenAICompatProvider{IDOf: 2, NameOf: "up", Cfg: OpenAICompatConfig{BaseURL: "https://x", Models: tc.models}}
+		r := NewRouter(NewMockProvider(1, "mock-echo"), up)
+		c, err := r.ResolveFor(1, 42, AliasDefault)
+		if err != nil || len(c) == 0 {
+			t.Fatalf("case %d 应有兜底候选: %+v %v", i, c, err)
+		}
+		if tc.want == "" {
+			if c[0].Provider.ID() != 1 {
+				t.Fatalf("case %d 无上游时应只剩 mock: %+v", i, c)
+			}
+			continue
+		}
+		// 具体模型名随候选携带（handler 注入请求体，StreamChat 不再做档位映射）
+		if c[0].Provider.ID() != 2 || c[0].Model != tc.want || c[0].Priority >= c[len(c)-1].Priority {
+			t.Fatalf("case %d 上游候选应居首并带模型名: %+v", i, c)
+		}
+	}
+}
+
+// TestPutRoutesRejectsLegacyTier 单档化后管理端只认 default/embed/rerank：
+// fast/strong 提交直接 400（校验先于落库，内存态即可覆盖）
+func TestPutRoutesRejectsLegacyTier(t *testing.T) {
+	reg := &Registry{}
+	ok := RouteCandidateDTO{ProviderID: 100, Model: "glm-4.7", Priority: 1}
+	for _, legacy := range []string{"fast", "strong"} {
+		err := reg.PutRoutes(context.Background(), []RouteRuleDTO{{Tier: legacy, Candidates: []RouteCandidateDTO{ok}}}, 1, 1)
+		if err == nil || errx.From(err).Code != errx.CodeBadRequest {
+			t.Fatalf("tier=%s 应 400: %v", legacy, err)
+		}
+	}
+	// default 档缺主选 → 400
+	if err := reg.PutRoutes(context.Background(), []RouteRuleDTO{{Tier: TierDefault}}, 1, 1); errx.From(err).Code != errx.CodeBadRequest {
+		t.Fatalf("default 档缺主选应 400: %v", err)
 	}
 }
 

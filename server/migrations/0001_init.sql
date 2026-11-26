@@ -144,6 +144,8 @@ CREATE TABLE public.ai_provider (
 
 --
 -- Name: ai_route_rule; Type: TABLE; Schema: public; Owner: -
+-- 2026-11-26 对话档位单档化：tier=对话默认档 default + 能力档 embed/rerank（原快/强双档退役；
+-- 全新能力口径不做数据迁移——存量库需重建或手工改本约束）
 --
 
 CREATE TABLE public.ai_route_rule (
@@ -158,7 +160,7 @@ CREATE TABLE public.ai_route_rule (
     approved_by bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ai_route_rule_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'active'::text, 'archived'::text]))),
-    CONSTRAINT ai_route_rule_tier_check CHECK ((tier = ANY (ARRAY['fast'::text, 'strong'::text, 'embed'::text, 'rerank'::text])))
+    CONSTRAINT ai_route_rule_tier_check CHECK ((tier = ANY (ARRAY['default'::text, 'embed'::text, 'rerank'::text])))
 );
 
 

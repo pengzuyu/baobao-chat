@@ -97,7 +97,7 @@ func NewModule(pool *pgxpool.Pool, verify func(token string) (*authjwt.Claims, e
 			n := len(router.providers)
 			router.mu.RUnlock()
 			if n > 0 {
-				log.Printf("[aigw] 表驱动装配：供应商池 %d 个（fast/strong active 路由生效）", n)
+				log.Printf("[aigw] 表驱动装配：供应商池 %d 个（默认档 active 路由生效）", n)
 			}
 		}
 	}

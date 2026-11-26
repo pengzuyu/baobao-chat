@@ -15,20 +15,32 @@ import (
 	errx "github.com/baobaochat/server/internal/platform/errors"
 )
 
-// 档位别名（§3.2：调用方只允许别名或 p: 引用；具体模型名 9001、未知别名 8052）
+// 档位别名（§3.2：调用方只允许别名或 p: 引用；具体模型名 9001、未知别名 8052）。
+// 2026-11-26 单档化：对话快/强双档退役，只剩一条全员共用的公司默认档（不另选供应商
+// 的人默认走它；要换模型走 p: 直达引用）。
 const (
+	AliasDefault = "bbc-default"
+	AliasEmbed   = "bbc-embed"
+	AliasRerank  = "bbc-rerank" // D24：kb 重排档（/v1/rerank；mock 词面重叠兜底）
+	// 兼容别名（单档化前的对话双档）：旧包客户端仍在发，ResolveFor 同解到默认档；
+	// 只做入参识别，不进路由表/管理端
 	AliasFast   = "bbc-fast"
 	AliasStrong = "bbc-strong"
-	AliasEmbed  = "bbc-embed"
-	AliasRerank = "bbc-rerank" // D24：kb 重排档（/v1/rerank；mock 词面重叠兜底）
 	// RefPrefix 直达引用前缀：p:<provider_id>:<model>（0023 表驱动多供应商）
 	RefPrefix = "p:"
+)
+
+// 档位 key（ai_route_rule.tier / Router.tier；对话单档 + 嵌入/重排两个能力档）
+const (
+	TierDefault = "default"
+	TierEmbed   = "embed"
+	TierRerank  = "rerank"
 )
 
 // Candidate 候选（§3.3 版本化路由表条目；表驱动/环境兜底两装配共用）
 type Candidate struct {
 	Provider Provider
-	Model    string // 该候选上游具体模型名（空=provider 自行按档位映射，env 兜底装配路径）
+	Model    string // 该候选上游具体模型名（handler 注入请求体；空=适配层自定，如 mock 兜底）
 	Priority int    // 小者先
 }
 
@@ -43,39 +55,49 @@ type providerEntry struct {
 // Router 档位路由 + 直达引用（默认表；租户覆盖/灰度/熔断状态机阶段二接 Redis §7.6）
 type Router struct {
 	mu        sync.RWMutex
-	tier      map[string][]Candidate   // fast/strong/embed
+	tier      map[string][]Candidate   // default/embed/rerank
 	providers map[int64]*providerEntry // 表驱动池（registry.Reload 装配；env/mock 装配不进池）
 }
 
 // NewRouter 装配：mock 恒可用；上游经环境注入后按优先级排前（§3.3 私有/直连优先原则不适用 v0.1，取"真实上游优先于 mock"）
 func NewRouter(mock Provider, upstream *OpenAICompatProvider) *Router {
 	r := &Router{tier: map[string][]Candidate{}, providers: map[int64]*providerEntry{}}
+	// 对话单档：env 上游配了模型才入链（具体模型名随候选携带，handler 注入请求体）
 	chat := []Candidate{{Provider: mock, Priority: 10}}
-	if upstream != nil && upstream.Cfg.Models["strong"] != "" {
-		chat = append([]Candidate{{Provider: upstream, Priority: 1}}, chat...)
+	if m := envDefaultModel(upstream); m != "" {
+		chat = append([]Candidate{{Provider: upstream, Model: m, Priority: 1}}, chat...)
 	}
-	fast := []Candidate{{Provider: mock, Priority: 10}}
-	if upstream != nil && upstream.Cfg.Models["fast"] != "" {
-		fast = append([]Candidate{{Provider: upstream, Priority: 1}}, fast...)
-	}
-	r.tier["strong"] = chat
-	r.tier["fast"] = fast
+	r.tier[TierDefault] = chat
 	// embed/rerank：mock 兜底恒可用（联调零配置）；管理端配表路由后由 Reload 覆盖
 	// （registry 放开 embed/rerank 档表驱动——D24 N3a：管理员可配嵌入/重排供应商）
-	r.tier["embed"] = []Candidate{{Provider: mock, Priority: 1}}
-	r.tier["rerank"] = []Candidate{{Provider: mock, Priority: 1}}
+	r.tier[TierEmbed] = []Candidate{{Provider: mock, Priority: 1}}
+	r.tier[TierRerank] = []Candidate{{Provider: mock, Priority: 1}}
 	return r
 }
 
-// Route 选主：按优先级（v0.1 无熔断态，逐候选尝试由 handler 承担 §4.4 降级链）
-func (r *Router) Route(alias string) ([]Candidate, bool) {
+// envDefaultModel 环境装配的默认档上游模型（BBC_AIGW_OPENAI_MODELS）：default 键优先，
+// 其次兼容单档化前的 strong / fast 键——现有部署的环境变量不必改
+func envDefaultModel(upstream *OpenAICompatProvider) string {
+	if upstream == nil {
+		return ""
+	}
+	for _, k := range []string{TierDefault, "strong", "fast"} {
+		if m := upstream.Cfg.Models[k]; m != "" {
+			return m
+		}
+	}
+	return ""
+}
+
+// Route 按档位 key 取候选（embed/rerank 入口用；对话档走 ResolveFor）
+func (r *Router) Route(tier string) ([]Candidate, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	c, ok := r.tier[tierOf(alias)]
+	c, ok := r.tier[tier]
 	return c, ok
 }
 
-// SetTier 表驱动装配：替换档位候选（registry.Reload 调用；fast/strong/embed/rerank 四档）
+// SetTier 表驱动装配：替换档位候选（registry.Reload 调用；default/embed/rerank 三档）
 func (r *Router) SetTier(tier string, cands []Candidate) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -89,28 +111,28 @@ func (r *Router) SetProviders(entries map[int64]*providerEntry) {
 	r.providers = entries
 }
 
-// EntryOf 供应商池查询（me/settings 校验与 DTO 组装共用；不存在返回 nil）
+// EntryOf 供应商池查询（路由候选校验用；不存在返回 nil）
 func (r *Router) EntryOf(id int64) *providerEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.providers[id]
 }
 
-// ResolveFor model 解析统一入口（§3.2 引用扩展，0023）：
+// ResolveFor model 解析统一入口（§3.2 引用扩展，0023；2026-11-26 对话单档化）：
 //
-//	bbc-fast/bbc-strong → 档位路由（表驱动 active 路由，无则 env/mock 兜底装配）
-//	p:<id>:<model>      → 直达引用：存在且启用（8053）→ 公司级或本人（8054）→ 清单内（8055）
-//	其余                → 8052（bbc- 未知别名）/ 9001（具体模型名绕过路由）
+//	bbc-default（及兼容别名 bbc-fast/bbc-strong）→ 默认档路由（表驱动 active 路由，无则 env/mock 兜底装配）
+//	p:<id>:<model>                            → 直达引用：存在且启用（8053）→ 公司级或本人（8054）→ 清单内（8055）
+//	其余                                      → 8052（bbc- 其它别名，含 embed/rerank——非对话入口）/ 9001（具体模型名绕过路由）
 func (r *Router) ResolveFor(tenant, uid int64, model string) ([]Candidate, error) {
 	if model == "" {
 		return nil, errx.New(errx.CodeBadRequest, "model 必填")
 	}
-	if model == AliasFast || model == AliasStrong {
+	if model == AliasDefault || model == AliasFast || model == AliasStrong {
 		r.mu.RLock()
-		c, ok := r.tier[tierOf(model)]
+		c, ok := r.tier[TierDefault]
 		r.mu.RUnlock()
 		if !ok || len(c) == 0 {
-			return nil, errx.New(errx.CodeAIGWRouteNotDefined, "路由档位未配置: "+model)
+			return nil, errx.New(errx.CodeAIGWRouteNotDefined, "路由档位未配置: "+AliasDefault)
 		}
 		return c, nil
 	}
@@ -118,7 +140,7 @@ func (r *Router) ResolveFor(tenant, uid int64, model string) ([]Candidate, error
 		if strings.HasPrefix(model, "bbc-") {
 			return nil, errx.New(errx.CodeAIGWRouteNotDefined, "路由档位未配置: "+model)
 		}
-		return nil, errx.New(errx.CodeBadRequest, "model 仅允许档位别名（bbc-fast/bbc-strong）或直达引用（p:<供应商ID>:<模型>）")
+		return nil, errx.New(errx.CodeBadRequest, "model 仅允许档位别名（"+AliasDefault+"）或直达引用（p:<供应商ID>:<模型>）")
 	}
 	parts := strings.SplitN(model, ":", 3)
 	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {

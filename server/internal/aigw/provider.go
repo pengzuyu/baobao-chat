@@ -304,11 +304,12 @@ func isSpaceASCII(b byte) bool {
 
 // ---- openai_compatible 供应商（真实上游透传）----
 
-// OpenAICompatConfig 环境装配：BBC_AIGW_OPENAI_BASE / _KEY / _MODELS("strong=glm-4.7,fast=glm-4.7-air")
+// OpenAICompatConfig 环境装配：BBC_AIGW_OPENAI_BASE / _KEY / _MODELS("default=glm-4.7"；
+// 兼容单档化前的 strong=/fast= 键，见 envDefaultModel）
 type OpenAICompatConfig struct {
 	BaseURL string            // 如 https://open.bigmodel.cn/api/paas/v4
 	APIKey  string            // 网关侧持有（§1.2-2），仅环境注入不落库
-	Models  map[string]string // 档位 → 上游具体模型名
+	Models  map[string]string // 键 → 上游具体模型名
 }
 
 // OpenAICompatProvider HTTP 透传实现（SSE 原样回传）
@@ -328,24 +329,14 @@ func (p *OpenAICompatProvider) Name() string { return p.NameOf }
 // Kind 适配类型
 func (p *OpenAICompatProvider) Kind() string { return "openai_compatible" }
 
-// StreamChat 透传（model 换上游实名；流式逐帧回传；非流式转单帧）。
-// model 两形态（0023）：bbc- 档位别名=env 兜底装配路径（Cfg.Models 档位映射）；
-// 其余=表驱动路径的具体模型名（handler/路由已按清单校验），直接透传上游。
+// StreamChat 透传（流式逐帧回传；非流式转单帧）。req.model 为上游具体模型名
+// （表驱动候选清单内模型 / env 装配默认模型，均由 handler 随候选注入请求体），直接透传上游。
 func (p *OpenAICompatProvider) StreamChat(ctx context.Context, req *ChatRequest) *ProviderResult {
 	frames := make(chan string, 32)
 	res := &ProviderResult{Frames: frames}
 	go func() {
 		defer close(frames)
-		upstream := req.Model
-		if strings.HasPrefix(req.Model, "bbc-") {
-			var ok bool
-			upstream, ok = p.Cfg.Models[tierOf(req.Model)]
-			if !ok {
-				res.Err = fmt.Errorf("上游未配置档位 %s", req.Model)
-				return
-			}
-		}
-		body := map[string]any{"model": upstream, "messages": req.Messages, "stream": true}
+		body := map[string]any{"model": req.Model, "messages": req.Messages, "stream": true}
 		if req.Thinking != nil {
 			body["thinking"] = req.Thinking // 思考开关透传（2026-11-11）
 		}
@@ -575,10 +566,6 @@ func normalizeToolsForUpstream(tools []map[string]any) []map[string]any {
 		out = append(out, map[string]any{"type": "function", "function": fn})
 	}
 	return out
-}
-
-func tierOf(alias string) string {
-	return strings.TrimPrefix(alias, "bbc-")
 }
 
 func usageOfFrame(data string) *UsageOpenAI {

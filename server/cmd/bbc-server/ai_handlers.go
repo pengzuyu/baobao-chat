@@ -1,10 +1,11 @@
 // AI 供应商 REST（0023 表驱动多供应商；19 篇 §6.5 蓝图的 v0.1 子集）：
 // 管理端 /api/v1/admin/ai/*（requirePerm admin:policy:manage）：
 //
-//	provider CRUD + 探活（probe=调上游 /models，兼"拉取模型清单"）+ fast/strong 默认路由 PUT；
+//	provider CRUD + 探活（probe=调上游 /models，兼"拉取模型清单"）+ 默认档路由 PUT（ bbc-default 主备 + embed/rerank 可选档）；
 //
 // 用户端 /api/v1/me/ai/*（authed）：个人 BYOK CRUD + 探活；/api/v1/ai/providers/shared 公司级只读。
-// me/settings（users.settings JSONB，0023 新列）：通用个人设置，首个消费者 ai_default 默认模型。
+// me/settings（users.settings JSONB，0023 新列）：通用个人设置（原首个消费者 ai_default
+// 默认模型已于 2026-11-26 单档化时退役——常用模型改为客户端本地记忆，见 docs/19 修订注记）。
 package main
 
 import (
@@ -168,7 +169,7 @@ func handleAIProviderProbeByID(reg *aigw.Registry, personal bool) http.HandlerFu
 	}
 }
 
-// ── 默认路由（fast/strong 主备）──
+// ── 默认路由（对话默认档主备 + embed/rerank 可选档）──
 
 func handleAIRoutesGet(reg *aigw.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +227,8 @@ func handleMeSettingsGet(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-func handleMeSettingsPatch(pool *pgxpool.Pool, reg *aigw.Registry) http.HandlerFunc {
+// handleMeSettingsPatch PATCH 顶层浅合并（通用个人设置通道；按键原样合并，无键级语义校验）
+func handleMeSettingsPatch(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uid, err := uidFrom(r)
 		if err != nil {
@@ -237,38 +239,6 @@ func handleMeSettingsPatch(pool *pgxpool.Pool, reg *aigw.Registry) http.HandlerF
 		if err := decodeJSON(r, &patch); err != nil {
 			httpx.Fail(w, r, err)
 			return
-		}
-		// ai_default 键带语义校验（mode=provider 时走 p: 解析链验证供应商/清单归属）
-		if raw, ok := patch["ai_default"]; ok {
-			var d struct {
-				Mode       string `json:"mode"` // org=跟随公司默认 | provider=指定
-				ProviderID int64  `json:"providerId"`
-				Model      string `json:"model"`
-			}
-			if err := json.Unmarshal(raw, &d); err != nil {
-				httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "ai_default 格式非法"))
-				return
-			}
-			switch d.Mode {
-			case "org":
-				// 跟随公司默认：清为标记形态
-				norm, _ := json.Marshal(map[string]string{"mode": "org"})
-				patch["ai_default"] = norm
-			case "provider":
-				if d.ProviderID <= 0 || d.Model == "" {
-					httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "ai_default.providerId/model 必填"))
-					return
-				}
-				if err := reg.ValidateChoice(httpx.TenantID(r.Context()), uid, d.ProviderID, d.Model); err != nil {
-					httpx.Fail(w, r, err)
-					return
-				}
-				norm, _ := json.Marshal(map[string]any{"mode": "provider", "providerId": d.ProviderID, "model": d.Model})
-				patch["ai_default"] = norm
-			default:
-				httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "ai_default.mode 仅 org/provider"))
-				return
-			}
 		}
 		merged, _ := json.Marshal(patch)
 		tag, err := pool.Exec(r.Context(),

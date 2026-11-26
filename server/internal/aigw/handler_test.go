@@ -45,7 +45,7 @@ func sseFrames(rec *httptest.ResponseRecorder) []string {
 
 func TestChatStreamShapeAndUsageFrame(t *testing.T) {
 	gw, meter, _ := newTestGateway(0, "dev-tok")
-	body := `{"model":"bbc-strong","stream":true,"messages":[{"role":"user","content":"读一下 foo.txt"}],"tools":[{"type":"function","function":{"name":"read_file"}}]}`
+	body := `{"model":"bbc-default","stream":true,"messages":[{"role":"user","content":"读一下 foo.txt"}],"tools":[{"type":"function","function":{"name":"read_file"}}]}`
 	rec := postChat(gw, body, "dev-tok")
 
 	if rec.Code != http.StatusOK {
@@ -72,11 +72,11 @@ func TestChatStreamShapeAndUsageFrame(t *testing.T) {
 	if !strings.Contains(joined, `"tool_calls"`) || !strings.Contains(joined, `"finish_reason":"tool_calls"`) {
 		t.Fatalf("应发起 read_file 工具调用: %v", frames)
 	}
-	// 计量开票（scene 默认 chat、tier strong、provider=1）
+	// 计量开票（scene 默认 chat、tier default、provider=1）
 	snap := meter.Snapshot()
 	var hit bool
 	for dim, row := range snap {
-		if dim.Scene == "chat" && dim.Tier == "strong" && dim.Provider == 1 && row.Requests == 1 {
+		if dim.Scene == "chat" && dim.Tier == "default" && dim.Provider == 1 && row.Requests == 1 {
 			hit = true
 		}
 	}
@@ -87,7 +87,7 @@ func TestChatStreamShapeAndUsageFrame(t *testing.T) {
 
 func TestChatFinalAnswerAfterToolResult(t *testing.T) {
 	gw, _, _ := newTestGateway(0, "dev-tok")
-	body := `{"model":"bbc-strong","stream":true,"messages":[
+	body := `{"model":"bbc-default","stream":true,"messages":[
 		{"role":"user","content":"读一下 foo.txt"},
 		{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"foo.txt\"}"}}]},
 		{"role":"tool","tool_call_id":"read_file:call-1","content":"hello runtime"}]}`
@@ -113,6 +113,36 @@ func TestModelAliasGuards(t *testing.T) {
 	rec = postChat(gw, `{"model":"bbc-vision","messages":[{"role":"user","content":"hi"}]}`, "dev-tok")
 	if rec.Code != 404 || !strings.Contains(rec.Body.String(), `"code":8052`) {
 		t.Fatalf("未知别名应 8052: %d %s", rec.Code, rec.Body.String())
+	}
+	// 能力档别名不在对话白名单 → 8052（单档化前 embed 靠 handler 特判，现统一由 ResolveFor 白名单拒绝）
+	for _, alias := range []string{AliasEmbed, AliasRerank} {
+		rec = postChat(gw, `{"model":"`+alias+`","messages":[{"role":"user","content":"hi"}]}`, "dev-tok")
+		if rec.Code != 404 || !strings.Contains(rec.Body.String(), `"code":8052`) {
+			t.Fatalf("%s 走对话入口应 8052: %d %s", alias, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestLegacyTierAliasesResolveToDefault 单档化兼容（2026-11-26）：旧包客户端仍发
+// bbc-fast/bbc-strong——与 bbc-default 同解到默认档同一组候选，计量档位标注同为 default
+func TestLegacyTierAliasesResolveToDefault(t *testing.T) {
+	gw, meter, _ := newTestGateway(0, "dev-tok")
+	corp := NewMockProvider(100, "corp")
+	gw.router.SetTier(TierDefault, []Candidate{{Provider: corp, Model: "glm-4.7", Priority: 1}})
+	for _, alias := range []string{AliasDefault, AliasFast, AliasStrong} {
+		c, err := gw.router.ResolveFor(1, 42, alias)
+		if err != nil || len(c) != 1 || c[0].Model != "glm-4.7" || c[0].Provider.ID() != 100 {
+			t.Fatalf("%s 应同解默认档候选: %+v %v", alias, c, err)
+		}
+		rec := postChat(gw, `{"model":"`+alias+`","messages":[{"role":"user","content":"普通问题"}]}`, "dev-tok")
+		if rec.Code != 200 {
+			t.Fatalf("%s 应 200: %d %s", alias, rec.Code, rec.Body.String())
+		}
+	}
+	for dim := range meter.Snapshot() {
+		if dim.Tier != "default" {
+			t.Fatalf("兼容别名计量档位应 default: %+v", dim)
+		}
 	}
 }
 

@@ -1,6 +1,8 @@
 // 供应商注册表（0023 表驱动多供应商，19 篇 §3.1/§3.3/§6.5 蓝图的 v0.1 落地）：
-// ai_provider（公司级 owner NULL / 个人 BYOK owner=uid）+ ai_route_rule（fast/strong
-// 各一条 active，candidates=[{provider_id, model, priority}] 主备降级）的读写与热装配。
+// ai_provider（公司级 owner NULL / 个人 BYOK owner=uid）+ ai_route_rule（对话默认档
+// 一条 active + embed/rerank 可选档，candidates=[{provider_id, model, priority}] 主备降级）
+// 的读写与热装配。2026-11-26 单档化：对话 fast/strong 双档退役为 default（基线直改
+// CHECK，不做数据迁移——存量库重建或手工改约束）。
 // 密钥经 kms（AES-256-GCM）加密落 api_key_ref，明文只在内存；接口只回掩码。
 package aigw
 
@@ -62,7 +64,7 @@ type RouteCandidateDTO struct {
 	Priority   int    `json:"priority"`
 }
 
-// RouteRuleDTO 一条 active 路由（tier=fast/strong）
+// RouteRuleDTO 一条 active 路由（tier=default/embed/rerank）
 type RouteRuleDTO struct {
 	Tier       string              `json:"tier"`
 	Candidates []RouteCandidateDTO `json:"candidates"`
@@ -245,7 +247,7 @@ func (reg *Registry) DeleteProvider(ctx context.Context, id int64) error {
 	for _, rr := range routes {
 		for _, c := range rr.Candidates {
 			if c.ProviderID == id {
-				return errx.New(errx.CodeBadRequest, fmt.Sprintf("供应商被 %s 档默认路由引用，先调整路由", rr.Tier))
+				return errx.New(errx.CodeBadRequest, fmt.Sprintf("供应商被 %s 档路由引用，先调整路由", rr.Tier))
 			}
 		}
 	}
@@ -375,7 +377,7 @@ func (reg *Registry) loadOne(ctx context.Context, id int64) (*providerRec, error
 }
 
 // Reload 热装配：ai_provider(enabled) → Router 供应商池；ai_route_rule(active,
-// fast/strong/embed/rerank) → 档位候选（替换 env/mock 兜底装配；embed/rerank 未配
+// default/embed/rerank) → 档位候选（替换 env/mock 兜底装配；embed/rerank 未配
 // 表时不覆盖 → mock 兜底恒可用，D24 N3a）。单行解密失败跳过并登记日志。
 func (reg *Registry) Reload(ctx context.Context) error {
 	rows, err := reg.pool.Query(ctx,
@@ -451,16 +453,16 @@ func (reg *Registry) Reload(ctx context.Context) error {
 		}
 	}
 	for tier, list := range tiers {
-		if tier == "fast" || tier == "strong" || tier == "embed" || tier == "rerank" {
+		if tier == TierDefault || tier == TierEmbed || tier == TierRerank {
 			reg.router.SetTier(tier, list) // D24：embed/rerank 放开表驱动（未配时 NewRouter mock 兜底不覆盖）
 		}
 	}
 	return routeRows.Err()
 }
 
-// ---- 路由治理（默认 provider 主备）----
+// ---- 路由治理（默认档主备）----
 
-// GetRoutes 当前 active 路由（fast/strong；无配置返回空）
+// GetRoutes 当前 active 路由（default/embed/rerank；无配置返回空）
 func (reg *Registry) GetRoutes(ctx context.Context) ([]RouteRuleDTO, error) {
 	rows, err := reg.pool.Query(ctx,
 		`SELECT tier, candidates FROM ai_route_rule
@@ -483,7 +485,7 @@ func (reg *Registry) GetRoutes(ctx context.Context) ([]RouteRuleDTO, error) {
 		}
 	}
 	list := make([]RouteRuleDTO, 0, len(out))
-	for _, t := range []string{"fast", "strong", "embed", "rerank"} {
+	for _, t := range []string{TierDefault, TierEmbed, TierRerank} {
 		if rr, ok := out[t]; ok {
 			list = append(list, rr)
 		}
@@ -491,15 +493,16 @@ func (reg *Registry) GetRoutes(ctx context.Context) ([]RouteRuleDTO, error) {
 	return list, rows.Err()
 }
 
-// PutRoutes 整表替换 fast/strong/embed/rerank 路由（版本化：旧 active→archived，新
+// PutRoutes 整表替换 default/embed/rerank 路由（版本化：旧 active→archived，新
 // version+1 active；D24 N3a 放开 embed/rerank 档——管理员经此配 bbc-embed/bbc-rerank
 // 上游）。候选校验：供应商存在且启用、公司级（个人 BYOK 不进路由表）、model 在清单。
+// 2026-11-26 单档化：对话只认 default 档，fast/strong 不再受理（旧包管理页提交会被拒）。
 func (reg *Registry) PutRoutes(ctx context.Context, rules []RouteRuleDTO, tenantID, uid int64) error {
 	for _, rr := range rules {
 		switch rr.Tier {
-		case "fast", "strong", "embed", "rerank":
+		case TierDefault, TierEmbed, TierRerank:
 		default:
-			return errx.New(errx.CodeBadRequest, "tier 仅 fast/strong/embed/rerank")
+			return errx.New(errx.CodeBadRequest, "tier 仅 "+TierDefault+"/"+TierEmbed+"/"+TierRerank)
 		}
 		if len(rr.Candidates) == 0 {
 			return errx.New(errx.CodeBadRequest, rr.Tier+" 档至少 1 个候选（主选）")
@@ -603,10 +606,4 @@ func probeModels(ctx context.Context, baseURL, apiKey string) ([]string, error) 
 		}
 	}
 	return out, nil
-}
-
-// ValidateChoice 用户默认模型选择校验（me/settings ai_default 落库前；复用 p: 解析链）
-func (reg *Registry) ValidateChoice(tenantID, uid, providerID int64, model string) error {
-	_, err := reg.router.ResolveFor(tenantID, uid, fmt.Sprintf("%s%d:%s", RefPrefix, providerID, model))
-	return err
 }

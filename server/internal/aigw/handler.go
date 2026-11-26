@@ -109,14 +109,11 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, 9001, "请求体非法", 0)
 		return
 	}
-	// model 解析（§3.2 引用扩展，0023）：档位别名（表驱动路由，env/mock 兜底）或
-	// p:<id>:<model> 直达引用（公司级或本人供应商 + 清单内校验，8053/8054/8055）
-	alias := req.Model
-	if alias == AliasEmbed { // chat 入口不接受 embed 档（维持既有口径）
-		writeErr(w, http.StatusNotFound, 8052, "路由档位未配置: "+alias, 0)
-		return
-	}
-	candidates, rerr := g.router.ResolveFor(who.TenantID, uidOf(who), alias)
+	// model 解析（§3.2 引用扩展，0023；2026-11-26 对话单档化）：默认档别名
+	// bbc-default（兼容 bbc-fast/bbc-strong；表驱动路由，env/mock 兜底）或
+	// p:<id>:<model> 直达引用（公司级或本人供应商 + 清单内校验，8053/8054/8055）。
+	// embed/rerank 等其它 bbc- 别名不在对话白名单，ResolveFor 回 8052
+	candidates, rerr := g.router.ResolveFor(who.TenantID, uidOf(who), req.Model)
 	if rerr != nil {
 		e := errx.From(rerr)
 		writeErr(w, resolveStatus(e.Code), int(e.Code), e.Msg, 0)
@@ -136,7 +133,7 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	scene := headerOr(r, "X-BBC-Scene", "chat")
 	session := r.Header.Get("X-BBC-Agent-Session")
-	dim := MeterDim{Tenant: who.TenantID, User: uidOf(who), Svc: svcSubject(who), Session: session, Scene: scene, Tier: tierLabel(alias)}
+	dim := MeterDim{Tenant: who.TenantID, User: uidOf(who), Svc: svcSubject(who), Session: session, Scene: scene, Tier: tierLabel(req.Model)}
 
 	// 供应商链（§4.4：逐候选降级——以「首帧产出或错误」为选定依据：StreamChat 异步，
 	// 连接失败/上游 5xx 在首帧前经 Err+close 暴露，此时切下一候选；全尽 8051(503)。
@@ -210,7 +207,7 @@ func (g *Gateway) HandleChat(w http.ResponseWriter, r *http.Request) {
 		"request_id":        r.Header.Get("Idempotency-Key"),
 		"prompt_tokens":     usage.PromptTokens,
 		"completion_tokens": usage.CompletionTokens,
-		"tier":              tierLabel(alias),
+		"tier":              tierLabel(req.Model),
 	})
 	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", usageFrame)
 	if flusher != nil {
@@ -260,7 +257,7 @@ func (g *Gateway) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusTooManyRequests, 8050, "网关限流", wait)
 		return
 	}
-	candidates, ok := g.router.Route(AliasEmbed)
+	candidates, ok := g.router.Route(TierEmbed)
 	if !ok || len(candidates) == 0 {
 		writeErr(w, http.StatusNotFound, 8052, "路由档位未配置: embed", 0)
 		return
@@ -327,7 +324,7 @@ func (g *Gateway) HandleRerank(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusTooManyRequests, 8050, "网关限流", wait)
 		return
 	}
-	candidates, ok := g.router.Route(AliasRerank)
+	candidates, ok := g.router.Route(TierRerank)
 	if !ok || len(candidates) == 0 {
 		writeErr(w, http.StatusNotFound, 8052, "路由档位未配置: rerank", 0)
 		return
@@ -363,12 +360,12 @@ func resolveStatus(code errx.Code) int {
 	}
 }
 
-// tierLabel 计量/终帧的档位标注：别名→档位名；p: 直达引用→direct
+// tierLabel 计量/终帧的档位标注：对话别名（含兼容别名）→default；p: 直达引用→direct
 func tierLabel(model string) string {
 	if strings.HasPrefix(model, RefPrefix) {
 		return "direct"
 	}
-	return tierOf(model)
+	return TierDefault
 }
 
 func svcSubject(c *Claims) string {
