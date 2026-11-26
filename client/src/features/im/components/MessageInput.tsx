@@ -16,6 +16,7 @@ import type { InputRef } from 'antd';
 import { AtSign, Bot, Mic, Paperclip, Smile, Square, Trash2, X } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useImeGuard } from '../../../shared/hooks/useImeGuard';
+import { useFileDrop } from '../../../shared/hooks/useFileDrop';
 import { sendTyping } from '../api/im';
 import type { Message } from '../model/types';
 import { EmojiPicker } from './EmojiPicker';
@@ -123,6 +124,13 @@ export function MessageInput({
   const taRef = useRef<TaRefLike>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingAt = useRef(0);
+  // 文件拖入输入区（2026-11-26「文件选择全功能点支持拖拽」）：单文件语义同点击选择，多拖取首个
+  const { isOver: fileDragOver, dropProps: fileDropProps } = useFileDrop({
+    onFiles: (files) => {
+      const f = files[0];
+      if (f) onPickFile?.(f);
+    },
+  });
 
   /** 底层原生 textarea（光标/选区操作直达；antd 封装下同样持有 selectionStart 等） */
   const taEl = () => taRef.current?.resizableTextArea?.textArea ?? null;
@@ -408,6 +416,7 @@ export function MessageInput({
 
   return (
     <div
+      {...fileDropProps}
       style={{
         position: 'relative', // @提及/表情/斜杠面板 absolute 锚定基准（缺失则漂到窗口左上，2026-11-10 真机）
         flexShrink: 0,
@@ -416,7 +425,9 @@ export function MessageInput({
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
-        background: agentMode ? `color-mix(in srgb, ${token.colorPrimary} 6%, transparent)` : undefined,
+        // 拖文件悬停高亮（inset 描边不挤布局；覆盖 agentMode 底色）
+        background: fileDragOver ? token.colorPrimaryBg : agentMode ? `color-mix(in srgb, ${token.colorPrimary} 6%, transparent)` : undefined,
+        boxShadow: fileDragOver ? `inset 0 0 0 1.5px ${token.colorPrimary}` : undefined,
       }}
     >
       {/* 引用回复条 / 编辑条（互斥；编辑优先） */}

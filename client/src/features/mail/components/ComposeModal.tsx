@@ -4,11 +4,13 @@
  * （file_id 引用复用 D06），列表可移除，send 携带 attachments。
  * D26-O3：自研 mail-compose 壳退役，antd Modal+Form vertical 化
  * （附件仍走隐藏 file input；发送结果 → Alert）。
+ * 2026-11-26：附件支持拖入 Modal 直接上传（useFileDrop；多文件，与点击多选同链路）。
  */
 import { useMemo, useRef, useState } from 'react';
-import { Alert, Form, Input, Modal, Select, Space, Tag } from 'antd';
+import { Alert, Form, Input, Modal, Select, Space, Tag, theme } from 'antd';
 import { FileText, Paperclip, Send } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
+import { useFileDrop } from '../../../shared/hooks/useFileDrop';
 import type { MailAttachment, SendMailResp, SharedMailboxView } from '../model/types';
 import { uploadFileSmart } from '../../im/api/files';
 import { discardDraft, saveDraft } from '../api/mail';
@@ -31,6 +33,7 @@ interface Props {
 }
 
 export function ComposeModal({ onClose, onSend, sharedOwnerBoxes = [], onSendAs, replyTo, draftInit, onDraftSaved }: Props) {
+  const { token } = theme.useToken();
   const [draftId, setDraftId] = useState(draftInit?.id ?? '');
   const [to, setTo] = useState(draftInit?.to ?? (replyTo ? replyTo.addr : ''));
   const [cc, setCc] = useState(draftInit?.cc ?? '');
@@ -43,7 +46,7 @@ export function ComposeModal({ onClose, onSend, sharedOwnerBoxes = [], onSendAs,
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const pickFiles = async (files: FileList | null) => {
+  const pickFiles = async (files: File[] | FileList | null) => {
     if (!files || files.length === 0) return;
     setUploading(true);
     try {
@@ -59,6 +62,12 @@ export function ComposeModal({ onClose, onSend, sharedOwnerBoxes = [], onSendAs,
       if (fileRef.current) fileRef.current.value = '';
     }
   }
+  // 附件拖入弹窗（2026-11-26）：多文件与点击多选同链路；上传中让路（按钮 disabled 同语义）
+  const { isOver: fileDragOver, dropProps: fileDropProps } = useFileDrop({
+    onFiles: (files) => void pickFiles(files),
+    multiple: true,
+    disabled: uploading,
+  });
   const [result, setResult] = useState<SendMailResp | null>(null);
 
   const ownerBoxes = useMemo(() => sharedOwnerBoxes.filter((b) => b.is_owner), [sharedOwnerBoxes]);
@@ -107,6 +116,8 @@ export function ComposeModal({ onClose, onSend, sharedOwnerBoxes = [], onSendAs,
       onCancel={onClose}
       destroyOnClose
       data-testid="mail-compose"
+      {...fileDropProps}
+      styles={{ body: fileDragOver ? { boxShadow: `inset 0 0 0 2px ${token.colorPrimary}`, borderRadius: token.borderRadius } : undefined }}
       footer={
         result
           ? null
