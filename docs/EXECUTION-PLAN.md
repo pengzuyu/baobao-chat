@@ -14,7 +14,7 @@
 > 孤儿表清理见迁移 0035；删除前快照 `backup/full-suite-20261109`。
 >
 > **⚠ 2026-11-17 bbw→bbc 全仓改名（清 baobao-work 旧名残留）**：全仓 bbw/BBW→bbc/BBC
-> （env 前缀 ~110 名、wire 值：AI 别名 bbc-fast 等/_meta.bbcObo/X-BBC-* 头/MCP serverInfo 与工具
+> （env 前缀 ~110 名、wire 值：AI 别名 bbc-default（2026-11-26 单档化前为 bbc-fast/bbc-strong）等/_meta.bbcObo/X-BBC-* 头/MCP serverInfo 与工具
 > bbc_agent_chat、cookie/JWKS kid/client_id 前缀、深链 scheme `bbc://`（推翻 D31 该项锁定，见其篇内追记）、
 > 部署资源：PG bbc 库/桶 bbc-data/helm chart bbc/K8s 对象 bbc-*、客户端持久化键 bbc-*、
 > CSS 令牌 --bbc-*、CLI bin `bbc`/`bbc ask`）。**零兼容硬切**：老数据（IndexedDB bbw-local/备份

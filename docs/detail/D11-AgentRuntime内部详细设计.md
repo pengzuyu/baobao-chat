@@ -1,5 +1,7 @@
 # D11 - Agent Runtime 内部详细设计（Rust 运行时）
 
+> **⚠ 2026-11-26 对话档位单档化修订**：协议 `session.start.model_policy`、`model.switch.to`、`model.switched.from/to`、`SessionListItem.model_policy` 与枚举 `ModelPolicy` 退役（前向兼容口径：旧 WAL 行/旧宿主多出的字段被忽略，回放不断裂）；`agent_session.model_policy` 列自建表基线移除（不写增量迁移，存量本地库残留列不再读写）；会话模型只剩「`model` 直达引用 / None=公司默认档 `DEFAULT_MODEL_ALIAS`（bbc-default）」两态；压缩摘要（`chat_text`）、W3 记忆提炼、探查 planner、`FastCompactor`、专家统一走默认档（原固定 bbc-fast）。`model.switched` 的 WAL 载荷去 `from/to`。
+
 > **D19 落地注记（2026-11-10）**：§4 消息表追加 workspace.register/listed、workspace.list/listed、workspace.forget/forgot、session.list/listed 四对（含 golden 契约）；session.start workspace 空串=日常对话；memory.list/delete 增 scope/workspacePath、memory.saved 增 scope/workspaceName。§11 agent_workspace 表已接线：session.start 带目录自动 upsert+回填 workspace_id（修悬空缺口）；工具沙箱根按会话解析（SessionWorkspaces 共享表，修全局 '.' 占位）。
 
 
