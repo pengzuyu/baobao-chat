@@ -49,7 +49,7 @@ export function AgentStreamView({ items, onRespond, active = false, onShareTurn 
       {head.length > 0 ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{renderStreamItems(head, onRespond)}</div> : null}
       {turns.map((t, i) => (
         <Fragment key={t.user.key}>
-          <UserBlock text={t.user.text} />
+          <UserBlock text={t.user.text} attachments={t.user.attachments} />
           <TurnBlock
             user={t.user}
             items={t.items}

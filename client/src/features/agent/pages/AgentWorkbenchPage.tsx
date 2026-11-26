@@ -27,7 +27,7 @@ import { useBreakpoint } from '../../../shared/utils/useBreakpoint';
 import { useConnectionStore } from '../../../shared/store/connection';
 import { useAgentStore, selectActiveSession, composerDisabledFor, type StreamItem } from '../store/agent';
 import { AGENT_MODE_OPTIONS, RUN_KIND_LABELS, RUN_STATUS_LABELS, SESSION_STATUS_LABELS } from '../bridge/types';
-import type { PermissionMode, RunInfo } from '../bridge/types';
+import type { AttachmentPayload, PermissionMode, RunInfo } from '../bridge/types';
 import { fetchMyProviders, fetchSharedProviders } from '../../settings/api/ai';
 import type { AIProvider } from '../../admin/model/types';
 import { AgentSubNav } from '../components/AgentSubNav';
@@ -542,7 +542,6 @@ export function AgentWorkbenchPage() {
       sessions={sessions}
       workspaces={workspaces}
       activeId={activeSessionId}
-      bridgeKind={bridgeKind}
       createError={createError}
       onSelect={handleSelect}
       onNewTask={handleNewTask}
@@ -615,7 +614,7 @@ export function AgentWorkbenchPage() {
     disabled: composerState.disabled,
     disabledHint: composerState.hint,
     canStop,
-    onSend: (text: string) => void sendText(text),
+    onSend: (text: string, attachments: AttachmentPayload[]) => void sendText(text, attachments),
     onStop: stopActive,
     commands: pluginCommands,
     statusInfo: (

@@ -17,7 +17,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # devtools（2026-11-23 开发者模式）：release 构建开放 WebView 调试台（open_devtools
 # command，DevPanel·环境 Tab 触发）；debug 构建本就可用，统一带 feature 少一档差异
-tauri = { version = "2", features = ["devtools"] }
+# protocol-asset（2026-11-26 附件图片）：convertFileSrc 本地图片缩略图/预览——
+# scope 运行时经 dialog 授权 + asset_grants 落盘恢复（tauri.conf.json assetProtocol）
+tauri = { version = "2", features = ["devtools", "protocol-asset"] }
 # 外链一律走系统浏览器（D01 §10），Tauri 2 官方 opener 插件
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"

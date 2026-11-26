@@ -7,6 +7,7 @@
 
 pub mod agent_bridge;
 pub mod agent_commands;
+pub mod asset_grants;
 pub mod auth_commands;
 pub mod brand;
 pub mod ext_agent;
@@ -197,6 +198,15 @@ pub fn run() {
             host.attach_ext_hub(hub.clone()); // B3：/mcp/local 本地工具面（schedule_*）
             app.manage(host.clone());
             app.manage(hub.clone());
+            // 附件图片显示授权（2026-11-26）：清单落盘 appData + 启动恢复 webview
+            // asset scope（历史气泡缩略图重启不丢）；handle 已被 emit 闭包 move——
+            // 用 app.handle() 另取
+            let asset_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("app_data_dir 不可用: {e}"))?;
+            let asset_grants = asset_grants::AssetGrants::load(asset_dir, Some(app.handle()));
+            app.manage(asset_grants);
             // 调度线程：抢到单实例锁才跑（双开时只有首个实例执行任务）
             if !schedule::start(schedule_rt.clone(), host.clone()) {
                 eprintln!("[bbc-schedule] 另一个实例持有调度锁，本实例不跑定时任务");
@@ -227,6 +237,10 @@ pub fn run() {
             agent_commands::agent_clarify_respond,
             agent_commands::agent_run_cancel,
             agent_commands::agent_runs_list,
+            agent_commands::agent_attach_stat,
+            agent_commands::agent_paste_image,
+            agent_commands::agent_asset_revoke_session,
+            agent_commands::sys_reveal_path,
             agent_commands::memory_list,
             agent_commands::memory_delete,
             agent_commands::memory_forget,

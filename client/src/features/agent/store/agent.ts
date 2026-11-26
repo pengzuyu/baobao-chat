@@ -22,6 +22,7 @@ import type {
   TurnUsage,
 } from '../bridge/types';
 import { parseToolArgs } from '../bridge/types';
+import type { AttachmentPayload } from '../bridge/types';
 
 /** 会话流条目（UI 投影模型；stream.delta 增量拼进 agentText/reasoning 尾项） */
 export type StreamItem =
@@ -34,6 +35,8 @@ export type StreamItem =
        *  stateChanged 打点（idle/error/ended/paused，含 interrupt）——回合结束
        *  必有终态收口；新 user 条目天然重置 */
       turnDoneAt?: number;
+      /** 本轮附件（2026-11-26：路径引用——气泡附件段渲染；历史回放从 WAL 同构） */
+      attachments?: AttachmentPayload[];
       /** 回合发起方（2026-11-20 修「工作台回合泄漏进 IM」）：im=聊天页发送
        *  （sendTextTo，落流卡覆盖）；workbench=工作台发送（sendText，不落卡）。
        *  历史回填/子 agent 流不带＝未知，EmbeddedAgentSync 按「非 im 不落」保守处理 */
@@ -170,8 +173,8 @@ interface AgentState {
   deleteSession: (sessionId: string) => Promise<void>;
   /** 定向发送（D18：embedded 会话由 im 侧显式指定 sessionId，不依赖 activeSessionId；
    *  首条用户消息自动派生标题（占位判定 + renameSession 落库）） */
-  sendTextTo: (sessionId: string, text: string) => Promise<void>;
-  sendText: (text: string) => Promise<void>;
+  sendTextTo: (sessionId: string, text: string, attachments?: AttachmentPayload[]) => Promise<void>;
+  sendText: (text: string, attachments?: AttachmentPayload[]) => Promise<void>;
   respondPermission: (requestId: string, decision: 'allow' | 'deny', scope?: GrantScope, editedArgs?: Record<string, unknown>) => void;
   /** D20 澄清回答（全流按 questionId 扫描置终态 + bridge 下发） */
   respondClarify: (questionId: string, answers: string[], freeText?: string) => void;
@@ -365,7 +368,7 @@ function nextKey(prefix: string): string {
 function historyToStreamItem(sid: string, it: HistoryItem, i: number): StreamItem {
   switch (it.kind) {
     case 'user':
-      return { kind: 'user', key: `h-u${i}`, text: it.text, ts: it.ts ?? 0, turnDoneAt: it.turnDoneAt };
+      return { kind: 'user', key: `h-u${i}`, text: it.text, ts: it.ts ?? 0, turnDoneAt: it.turnDoneAt, attachments: it.attachments };
     case 'assistant':
       return { kind: 'agentText', key: `h-a${i}`, text: it.text, streaming: false };
     case 'reasoning':
@@ -584,32 +587,34 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     await get().createSession({ mode, model });
   },
 
-  sendTextTo: async (sid, text) => {
-    if (!sid || !text.trim()) return;
+  sendTextTo: async (sid, text, attachments) => {
+    // 仅附件无文字也发送（attachments-only；text 传空串——RT 侧占位提示模型）
+    if (!sid || (!text.trim() && !(attachments ?? []).length)) return;
     const wasFirst = !(get().streams[sid] ?? []).some((it) => it.kind === 'user');
     // 乐观上屏（与 sendText 同款；embedded 会话在 im 聊天卡消费，工作台打开时同样可见）
     // origin=im：EmbeddedAgentSync 只落流聊天页发起的回合（工作台发起不进 IM 消息流）
     set((s) => ({
-      streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now(), origin: 'im' }] },
+      streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now(), origin: 'im', attachments }] },
       sessions: touchSession(s.sessions, sid, {}),
     }));
-    await bridge.sendMessage(sid, text, get().thinkLevel);
+    await bridge.sendMessage(sid, text, get().thinkLevel, attachments);
     // 首条用户消息自动命名（2026-11-11：标题以用户所问为准，对齐 zcode 感觉）。
     // 仅占位标题会话（'新会话'/'会话 n'/老数据 title=session_id）——embedded
     // 来源名等显式标题不被覆盖。失败静默（标题为辅链路，不阻断消息）
     if (wasFirst) void get().deriveTitleIfPlaceholder(sid, text);
   },
 
-  sendText: async (text) => {
+  sendText: async (text, attachments) => {
     const sid = get().activeSessionId;
-    if (!sid || !text.trim()) return;
+    if (!sid || (!text.trim() && !(attachments ?? []).length)) return;
     const wasFirst = !(get().streams[sid] ?? []).some((it) => it.kind === 'user');
-    // 乐观上屏（D08：agent_input 发送后 UI 乐观追加）；origin=workbench 不落 IM 卡
+    // 乐观上屏（D08：agent_input 发送后 UI 乐观追加）；origin=workbench 不落 IM 卡；
+    // 附件随条目上屏（气泡附件段；历史回放从 WAL attachments 同构渲染）
     set((s) => ({
-      streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now(), origin: 'workbench' }] },
+      streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now(), origin: 'workbench', attachments }] },
       sessions: touchSession(s.sessions, sid, {}),
     }));
-    await bridge.sendMessage(sid, text, get().thinkLevel);
+    await bridge.sendMessage(sid, text, get().thinkLevel, attachments);
     if (wasFirst) void get().deriveTitleIfPlaceholder(sid, text);
   },
 

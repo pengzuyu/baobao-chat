@@ -19,7 +19,7 @@ import { FolderOpen, ShieldCheck } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useAgentStore } from '../store/agent';
 import { AGENT_MODE_OPTIONS } from '../bridge/types';
-import type { PermissionMode } from '../bridge/types';
+import type { AttachmentPayload, PermissionMode } from '../bridge/types';
 import { ModelThinkPicker } from './ModelThinkPicker';
 import { Composer } from './Composer';
 import { resolveDefaultModel } from '../utils/resolveModel';
@@ -98,7 +98,7 @@ export function AgentComposeView({ workspace, aiProviders, pluginCommands }: Age
   /** 懒创建发送：此刻才建会话 → 乐观上屏+派生标题 → 跳会话视图（底部输入框形态）。
    *  回 true=已发出；false=建会话失败（停留本页报错，Composer 还原输入原文） */
   const doSend = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (text: string, attachments?: AttachmentPayload[]): Promise<boolean> => {
       if (sendingRef.current) return false;
       sendingRef.current = true;
       setSending(true);
@@ -113,7 +113,7 @@ export function AgentComposeView({ workspace, aiProviders, pluginCommands }: Age
               ? { modelPolicy: modelChoice.policy, model: await resolveDefaultModel() }
               : { modelPolicy: modelChoice.policy, model: undefined };
         const meta = await createSession({ workspace, mode, ...pick });
-        void sendText(text); // createSession 已置 activeSessionId；同步段先乐观上屏再跳转
+        void sendText(text, attachments); // createSession 已置 activeSessionId；同步段先乐观上屏再跳转
         navigate(`/agent/s/${meta.id}`);
         return true;
       } catch (err: unknown) {

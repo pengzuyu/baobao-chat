@@ -6,6 +6,7 @@
 //! 事件回流：agent_bridge 事件泵 → app.emit("agent://event", payload)（setup 装配注入）。
 
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
@@ -65,10 +66,13 @@ pub fn agent_start_session(
 /// 用户输入（回执=session.state running/queued；命令返回 ok 而非透传协议回执）。
 /// thinking 思考三档（2026-11-11 轮级生效）：low/medium/high，缺省 None=medium。
 /// attachments 附件（2026-11-26）：本机路径引用，camelCase（path/kind/name/size/mime）；
-/// 壳侧校验存在+单文件上限后原样透传（视觉加载/读授权都在 RT 侧）
+/// 壳侧校验存在+单文件上限后原样透传（视觉加载/读授权都在 RT 侧）；
+/// 图片附件登记 asset 显示授权（缩略图 asset:// 协议渲染 + 重启恢复）
 #[tauri::command(async)]
 pub fn agent_input(
     host: Host,
+    assets: State<'_, crate::asset_grants::AssetGrants>,
+    app: tauri::AppHandle,
     session_id: String,
     text: String,
     thinking: Option<String>,
@@ -82,12 +86,15 @@ pub fn agent_input(
     let empty = Vec::new();
     let list = atts.as_array().unwrap_or(&empty);
     if list.len() > MAX_ATTACHMENTS {
-        return Err(format!("附件过多：{0} 个（上限 {MAX_ATTACHMENTS} 个）", list.len()));
+        return Err(format!(
+            "附件过多：{0} 个（上限 {MAX_ATTACHMENTS} 个）",
+            list.len()
+        ));
     }
+    let mut image_paths: Vec<String> = Vec::new();
     for a in list {
         let path = a["path"].as_str().unwrap_or_default();
-        let meta = std::fs::metadata(path)
-            .map_err(|_| format!("附件不存在：{path}"))?;
+        let meta = std::fs::metadata(path).map_err(|_| format!("附件不存在：{path}"))?;
         if !meta.is_file() {
             return Err(format!("附件不是普通文件：{path}"));
         }
@@ -96,6 +103,9 @@ pub fn agent_input(
                 "附件过大（{} MB，上限 100MB）：{path}",
                 meta.len() / 1024 / 1024
             ));
+        }
+        if a["kind"].as_str() == Some("image") {
+            image_paths.push(path.to_string());
         }
     }
     let rep = host.request(
@@ -111,7 +121,101 @@ pub fn agent_input(
             rep["message"].as_str().unwrap_or("runtime error")
         ));
     }
+    // 发送成功后登记显示授权（失败不影响消息链路）
+    if !image_paths.is_empty() {
+        assets.grant_session(&session_id, &image_paths);
+        crate::asset_grants::allow_scope(&app, &image_paths);
+    }
     Ok(json!({ "ok": true }))
+}
+
+/// 附件待发区元数据（2026-11-26）：文件名/大小/是否图片——前端选中后逐个调用
+#[tauri::command(async)]
+pub fn agent_attach_stat(paths: Vec<String>) -> Result<Value, String> {
+    const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+    let mut items = Vec::with_capacity(paths.len());
+    for p in &paths {
+        let meta = std::fs::metadata(p).map_err(|_| format!("文件不存在：{p}"))?;
+        if !meta.is_file() {
+            return Err(format!("不是普通文件：{p}"));
+        }
+        let name = std::path::Path::new(p)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.clone());
+        let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let kind = if IMAGE_EXTS.contains(&ext.as_str()) {
+            "image"
+        } else {
+            "file"
+        };
+        items.push(json!({
+            "path": p,
+            "name": name,
+            "size": meta.len(),
+            "kind": kind,
+        }));
+    }
+    Ok(json!({ "items": items }))
+}
+
+/// 粘贴图片落盘（2026-11-26）：剪贴板图片没有本机原文件——壳写入用户工作空间
+/// inbox/ 后按普通附件引用。data 为 PNG/JPEG 原始字节（前端 Clipboard 从
+/// clipboardData 拿的 blob 字节）
+#[tauri::command(async)]
+pub fn agent_paste_image(data_base64: String) -> Result<Value, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| format!("图片数据解码失败：{e}"))?;
+    if bytes.is_empty() {
+        return Err("图片数据为空".into());
+    }
+    // 嗅探格式（只收 png/jpeg/gif/webp；粘贴源基本是 png）
+    let ext = match bytes.first() {
+        Some(0x89) => "png",
+        Some(0xFF) => "jpg",
+        Some(0x47) => "gif",
+        Some(0x52) => "webp",
+        _ => return Err("剪贴板内容不是支持的图片格式".into()),
+    };
+    // 用户工作空间 inbox（与 RT default_user_workspace 同源解析——BBC_RT_DEFAULT_WORKSPACE 优先）
+    let root = std::env::var("BBC_RT_DEFAULT_WORKSPACE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs_home().join(".baobaochat/workspace"));
+    let inbox = root.join("inbox");
+    std::fs::create_dir_all(&inbox).map_err(|e| format!("inbox 目录创建失败：{e}"))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let path = inbox.join(format!("paste-{ts}.{ext}"));
+    std::fs::write(&path, &bytes).map_err(|e| format!("写入失败：{e}"))?;
+    Ok(json!({ "path": path.to_string_lossy() }))
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// 在文件管理器中定位文件（附件卡点击/预览定位；复用 opener 插件）
+#[tauri::command(async)]
+pub fn sys_reveal_path(path: String) -> Result<(), String> {
+    tauri_plugin_opener::reveal_item_in_dir(path).map_err(|e| e.to_string())
+}
+
+/// 会话删除时的附件显示授权清理（agent_delete_session 内联调用；命令供测试/兜底）
+#[tauri::command(async)]
+pub fn agent_asset_revoke_session(
+    assets: State<'_, crate::asset_grants::AssetGrants>,
+    session_id: String,
+) -> Result<Value, String> {
+    let removed = assets.revoke_session(&session_id);
+    Ok(json!({ "removed": removed.len() }))
 }
 
 /// 会话内切换模型（model=直达引用 p:<id>:<model>；回执 model.switched 事件驱动 UI）
@@ -158,8 +262,14 @@ pub fn agent_stop(host: Host, session_id: String, reason: String) -> Result<Valu
 /// 会话删除（2026-11-24 工作台需求）：回合运行中 RT 拒 8002（先停止）；
 /// 整体清除运行态+持久层（事件 WAL/上下文/授权/审计/run 子表与审计文件），不可恢复
 #[tauri::command(async)]
-pub fn agent_delete_session(host: Host, session_id: String) -> Result<Value, String> {
+pub fn agent_delete_session(
+    host: Host,
+    assets: State<'_, crate::asset_grants::AssetGrants>,
+    session_id: String,
+) -> Result<Value, String> {
     host.delete_session(&session_id)?;
+    // 附件显示授权清理（该会话登记过的图片路径）
+    let _ = assets.revoke_session(&session_id);
     Ok(json!({ "ok": true }))
 }
 

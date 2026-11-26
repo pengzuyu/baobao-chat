@@ -9,6 +9,18 @@
 /** 权限模式三档（09 §3.3；中文名见 AGENT_MODE_OPTIONS，D13-A1 官方口径） */
 export type PermissionMode = 'ask' | 'auto-edit' | 'full-auto';
 
+/** 附件元数据（2026-11-26）：本机路径引用——发送/历史回放共用（壳 agent_attach_stat
+ *  产出；RT 侧图片走视觉通道+读授权登记） */
+export interface AttachmentMeta {
+  path: string;
+  name: string;
+  size: number;
+  kind: 'image' | 'file';
+}
+
+/** 发送附件（AttachmentMeta + 可选 mime；camelCase 与 RT 协议 Attachment 同构） */
+export type AttachmentPayload = AttachmentMeta & { mime?: string };
+
 /** 会话状态机枚举（D11 §3 + D20 waiting_clarify；session.state 上报同款）。
  *  无 starting：建会话 REQ 同步等完 session.ready 回执（壳侧阻塞），回执到即就绪 */
 export type SessionStatus =
@@ -41,7 +53,14 @@ export interface SessionOriginInfo {
  *  error=回合错误（turn.error 行投影，2026-11-23：错误卡重开保留——
  *  模型不可用/流中断/超限等重进会话可见，旧行无此类型） */
 export type HistoryItem =
-  | { kind: 'user'; text: string; ts?: number; turnDoneAt?: number }
+  | {
+      kind: 'user';
+      text: string;
+      ts?: number;
+      turnDoneAt?: number;
+      /** 本轮附件（user.text 行投影；旧 WAL 行缺省 undefined） */
+      attachments?: AttachmentMeta[];
+    }
   | { kind: 'assistant'; text: string }
   | { kind: 'reasoning'; text: string }
   | { kind: 'error'; code: number; message: string; fatal: boolean }
@@ -271,8 +290,15 @@ export interface AgentBridge {
    *  modelPolicy 档位 fast/strong/auto（缺省 auto——新建会话页的档位草稿，此前写死 auto） */
   startSession(workspace: string, mode: PermissionMode, model?: string, title?: string, origin?: SessionOriginInfo, modelPolicy?: 'fast' | 'strong' | 'auto'): Promise<AgentSessionMeta>;
   /** 发送用户消息（agent_input；UI 乐观上屏，回复经 streamDelta 事件回流）；
-   *  thinking 思考三档（2026-11-11 轮级生效）缺省=medium */
-  sendMessage(sessionId: string, text: string, thinking?: 'low' | 'medium' | 'high'): Promise<void>;
+   *  thinking 思考三档（2026-11-11 轮级生效）缺省=medium；
+   *  attachments 附件（2026-11-26：本机路径引用，壳校验后透传 RT——图片走视觉
+   *  通道/读授权登记） */
+  sendMessage(
+    sessionId: string,
+    text: string,
+    thinking?: 'low' | 'medium' | 'high',
+    attachments?: AttachmentPayload[],
+  ): Promise<void>;
   /** 会话内切换模型（agent_switch_model：model 非空=直达引用；to 为名义档位；
    *  model 缺省=清引用回档位。回执 modelSwitched 事件） */
   switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void>;

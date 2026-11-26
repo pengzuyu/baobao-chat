@@ -12,14 +12,25 @@
  *   resolve false=未发出（如建会话失败）→ 还原输入原文
  * D26-O4：textarea→Input.TextArea(autoSize)、壳类 agent-composer* 退役（内联布局）；
  * 自动聚焦/快捷键/IME 防误发/禁言态行为原样保留。
+ * 附件（2026-11-26）：📎 选择/拖拽/粘贴 → 待发区 chip（AttachmentStrip）→ 随消息发送；
+ * 发送条件=文字或附件至少一项；失败（onSend resolve false/抛错）还原文字与附件。
  */
 
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { Flex, Input, Typography, theme } from 'antd';
-import { Send, Square } from 'lucide-react';
+import { Flex, Input, Typography, message as antdMessage, theme } from 'antd';
+import { Paperclip, Send, Square } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { useImeGuard } from '../../../shared/hooks/useImeGuard';
 import { renderCommand, type PluginCommand } from '../../eco/api/plugins';
+import {
+  MAX_ATTACHMENTS,
+  pickAttachmentPaths,
+  savePastedImage,
+  statAttachments,
+} from '../../../shared/attachments';
+import { AttachmentStrip, type StripItem } from '../../../shared/attachments/components';
+import { useFileDrop, useImagePaste } from '../../../shared/attachments/hooks';
+import type { AttachmentPayload } from '../bridge/types';
 
 interface ComposerProps {
   disabled: boolean;
@@ -33,8 +44,9 @@ interface ComposerProps {
    *  2026-11-18 走查：工作台头部同款重复按钮退役） */
   canStop: boolean;
   /** 发送。可返回 Promise<boolean>：resolve false=未发出（如懒创建建会话失败）→
-   *  还原输入原文供改写/重试；返回 void/true/其它=已发出，照常清空 */
-  onSend: (text: string) => void | Promise<boolean | void>;
+   *  还原输入原文与附件待发区供改写/重试；返回 void/true/其它=已发出，照常清空。
+   *  attachments=待发附件（2026-11-26；仅附件无文字也发送） */
+  onSend: (text: string, attachments: AttachmentPayload[]) => void | Promise<boolean | void>;
   /** 停止当前会话正在生成的回答（interrupt；会话保留可继续追问） */
   onStop: () => void;
   /** 权限模式选择（2026-11-11 挪入输入框：页面注入 Dropdown 节点） */
@@ -54,6 +66,29 @@ export function Composer({ disabled, disabledHint, centered = false, autoFocus =
   const { imeEnterDecision, imeCompositionProps } = useImeGuard();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
+  /** 附件待发区（📎/拖拽/粘贴三入口汇合；去重按路径，上限与壳侧同步 20） */
+  const [pending, setPending] = useState<StripItem[]>([]);
+  const addPaths = async (paths: string[]) => {
+    const fresh = paths.filter((p) => !pending.some((x) => x.path === p));
+    if (fresh.length === 0) return;
+    if (pending.length + fresh.length > MAX_ATTACHMENTS) {
+      antdMessage.warning(`附件过多（最多 ${MAX_ATTACHMENTS} 个）`);
+      return;
+    }
+    try {
+      const metas = await statAttachments(fresh);
+      setPending((prev) => [...prev, ...metas]);
+    } catch (e: unknown) {
+      antdMessage.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+  // 原生拖拽（窗口 dragDropEnabled=true，HTML5 onDrop 不触发）与剪贴板图片
+  const dragOver = useFileDrop(!disabled, (paths) => void addPaths(paths));
+  useImagePaste(!disabled, (bytes) => {
+    void savePastedImage(bytes)
+      .then((path) => addPaths([path]))
+      .catch((e: unknown) => antdMessage.error(e instanceof Error ? e.message : String(e)));
+  });
 
   // `/` 开头 → 候选命令（首词前缀过滤；含空格后不再过滤——用户已在输参数）
   const slashCandidates = useMemo<PluginCommand[]>(() => {
@@ -71,7 +106,8 @@ export function Composer({ disabled, disabledHint, centered = false, autoFocus =
 
   const submit = () => {
     const trimmed = text.trim();
-    if (!trimmed || disabled) return;
+    // 发送条件：文字或附件至少一项（仅附件无文字也发——RT 侧占位提示模型）
+    if (disabled || (!trimmed && pending.length === 0)) return;
     // 斜杠命令解析：/name args... 命中→模板渲染；未命中原样（普通消息）
     let outgoing = trimmed;
     if (trimmed.startsWith('/')) {
@@ -79,17 +115,30 @@ export function Composer({ disabled, disabledHint, centered = false, autoFocus =
       const cmd = commands.find((c) => c.name === head.slice(1));
       if (cmd) outgoing = renderCommand(cmd, args);
     }
-    const pending = onSend(outgoing);
+    const attachments: AttachmentPayload[] = pending.map(({ path, name, size, kind }) => ({
+      path,
+      name,
+      size,
+      kind,
+    }));
+    const result = onSend(outgoing, attachments);
     setText('');
+    setPending([]);
     setSlashOpen(false);
     taRef.current?.focus();
-    if (pending && typeof pending.then === 'function') {
-      // 未发出（resolve false / 抛错）→ 还原用户所输原文（非斜杠渲染后的模板）
-      void pending.then(
+    if (result && typeof result.then === 'function') {
+      // 未发出（resolve false / 抛错）→ 还原用户所输原文与附件（非斜杠渲染后的模板）
+      void result.then(
         (sent) => {
-          if (sent === false) setText(text);
+          if (sent === false) {
+            setText(text);
+            setPending(pending);
+          }
         },
-        () => setText(text),
+        () => {
+          setText(text);
+          setPending(pending);
+        },
       );
     }
   };
@@ -166,6 +215,26 @@ export function Composer({ disabled, disabledHint, centered = false, autoFocus =
             }
       }
     >
+      {pending.length > 0 ? (
+        <AttachmentStrip items={pending} onRemove={(p) => setPending((prev) => prev.filter((x) => x.path !== p))} />
+      ) : null}
+      {dragOver ? (
+        <div
+          aria-hidden
+          style={{
+            marginBottom: 6,
+            padding: '14px 10px',
+            borderRadius: 10,
+            border: `1px dashed ${token.colorPrimary}`,
+            background: `color-mix(in srgb, ${token.colorPrimary} 8%, transparent)`,
+            textAlign: 'center',
+            fontSize: 12,
+            color: token.colorPrimary,
+          }}
+        >
+          松开以附加文件
+        </div>
+      ) : null}
       {slashCandidates.length > 0 ? (
         <div
           role="listbox"
@@ -246,6 +315,18 @@ export function Composer({ disabled, disabledHint, centered = false, autoFocus =
         <Flex align="center" gap={8}>
           {modelPicker}
           <Flex gap={8}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                if (disabled) return;
+                void pickAttachmentPaths().then((paths) => {
+                  if (paths.length > 0) void addPaths(paths);
+                });
+              }}
+              title="附加文件（也可拖入或粘贴）"
+            >
+              <Paperclip size={12} aria-hidden />
+            </Button>
             {/* 停止（红色）：中断当前回答，会话保留可继续 */}
             {canStop ? (
               <Button variant="danger" onClick={onStop}>
@@ -253,7 +334,7 @@ export function Composer({ disabled, disabledHint, centered = false, autoFocus =
                 停止
               </Button>
             ) : null}
-            <Button onClick={submit} disabled={disabled || !text.trim()}>
+            <Button onClick={submit} disabled={disabled || (!text.trim() && pending.length === 0)}>
               <Send size={12} aria-hidden />
               发送
             </Button>

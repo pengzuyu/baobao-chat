@@ -15,6 +15,7 @@ import type {
   AgentEvent,
   AgentSessionMeta,
   AgentWorkspaceInfo,
+  AttachmentPayload,
   GrantScope,
   HistoryItem,
   HistoryLoadResult,
@@ -261,7 +262,12 @@ export class MockAgentBridge implements AgentBridge {
     this.emit({ type: 'modelSwitched', sessionId, from, to, modelOverride: model, reason: 'user' });
   }
 
-  async sendMessage(sessionId: string, _text: string, _thinking?: 'low' | 'medium' | 'high'): Promise<void> {
+  async sendMessage(
+    sessionId: string,
+    _text: string,
+    _thinking?: 'low' | 'medium' | 'high',
+    _attachments?: AttachmentPayload[],
+  ): Promise<void> {
     let s = this.sessions.find((x) => x.id === sessionId);
     if (!s) {
       // 会话不死（revive 兜底）：embedded 映射跨页面重载持久（IndexedDB），而 mock

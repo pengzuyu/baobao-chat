@@ -39,6 +39,7 @@ import type {
   AgentEvent,
   AgentSessionMeta,
   AgentWorkspaceInfo,
+  AttachmentPayload,
   ClarifyOptionDTO,
   GrantScope,
   HistoryItem,
@@ -200,8 +201,18 @@ export class TauriAgentBridge implements AgentBridge {
     };
   }
 
-  async sendMessage(sessionId: string, text: string, thinking?: 'low' | 'medium' | 'high'): Promise<void> {
-    await invoke('agent_input', { sessionId, text, thinking: thinking ?? null });
+  async sendMessage(
+    sessionId: string,
+    text: string,
+    thinking?: 'low' | 'medium' | 'high',
+    attachments?: AttachmentPayload[],
+  ): Promise<void> {
+    await invoke('agent_input', {
+      sessionId,
+      text,
+      thinking: thinking ?? null,
+      attachments: attachments ?? null,
+    });
   }
 
   async switchModel(sessionId: string, to: 'fast' | 'strong' | 'auto', model?: string): Promise<void> {
