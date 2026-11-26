@@ -116,10 +116,14 @@ pub struct McpServerMetaWire {
     pub version: Option<String>,
 }
 
-/// 传输配置 wire（stdio 子进程 / 远程 HTTP；env 为 map 形态，Runtime 侧转 Vec 对）
+/// 传输配置 wire（stdio 子进程 / 远程 HTTP；env 为 map 形态，Runtime 侧转 Vec 对）。
+/// 变体字段名自带 rename_all：枚举容器级 rename_all 只传导变体名
+/// （stdio/http），不传导变体字段——漏写曾致宿主 camelCase `baseUrl`
+/// 永久 9001 解析失败（mcp.config/装配全链静默拒收，2026-11-26 真机破案）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum McpTransportWire {
+    #[serde(rename_all = "camelCase")]
     Stdio {
         command: String,
         #[serde(default)]
@@ -127,6 +131,7 @@ pub enum McpTransportWire {
         #[serde(default)]
         env: std::collections::HashMap<String, String>,
     },
+    #[serde(rename_all = "camelCase")]
     Http {
         base_url: String,
         /// 自定义请求头（外部系统鉴权如 Private-Token；值中 `${BBC_USER_TOKEN}`

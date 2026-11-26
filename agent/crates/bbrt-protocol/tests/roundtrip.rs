@@ -8,10 +8,10 @@ use std::io::Cursor;
 use bbrt_protocol::{
     read_message, write_message, Attachment, AttachmentKind, Blocked, ClarifyOption, CodecError,
     CompactionPhase, Decision, EndReason, Envelope, GrantScope, HistoryItem, HostToRuntime,
-    MemoryListItem, MemoryScope, ModelSwitchReason, OboTokenEntry, PermissionMode, Preview,
-    ProtocolError, RenewReason, RiskLevel, RuntimeToHost, SessionState, StreamChannel,
-    SubagentPhase, SubagentResult, ThinkingLevel, ToolSource, ToolsReloadReason, Usage,
-    PROTOCOL_VERSION,
+    McpServerWire, McpTransportWire, MemoryListItem, MemoryScope, ModelSwitchReason,
+    OboTokenEntry, PermissionMode, Preview, ProtocolError, RenewReason, RiskLevel, RuntimeToHost,
+    SessionState, StreamChannel, SubagentPhase, SubagentResult, ThinkingLevel, ToolSource,
+    ToolsReloadReason, Usage, PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -1566,4 +1566,75 @@ fn golden_d19_memory_scope_fields() {
             "scope":"project","workspaceName":"baobao-work-72ab07a9e501bc35"
         }),
     );
+}
+
+// ---------------------------------------------------------------------------
+// MCP 装配 wire 对家契约（壳侧 agent_bridge 手拼 JSON 的真实形状；
+// 2026-11-26 真机破案回归：Http 变体字段漏 rename_all 致 `baseUrl`
+// 永久 9001 解析失败——corp 恒在 servers 首位，每次 mcp.config 全军覆没）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn golden_mcp_config_accepts_host_camelcase_wire() {
+    let raw = json!({
+        "type": "mcp.config",
+        "servers": [
+            {
+                "name": "corp",
+                "transport": { "kind": "http", "baseUrl": "http://gw:30808/mcp/corp",
+                    "auth": { "type": "obo", "audience": "bbc-corp", "scope": [] } },
+                "meta": { "source": "corp" }
+            },
+            {
+                "name": "phebs",
+                "transport": { "kind": "stdio", "command": "node",
+                    "args": ["/eco/plugins/xiaohailing_plugin_phebs/0.1.0/server.mjs"],
+                    "env": { "PHEBS_URL": "http://phebs" } },
+                "meta": { "source": "plugin", "pluginId": "xiaohailing_plugin_phebs",
+                    "pluginName": "phebs", "version": "0.1.0" }
+            }
+        ]
+    });
+    let parsed: HostToRuntime =
+        serde_json::from_value(raw).expect("宿主 camelCase wire 必须可解析");
+    match parsed {
+        HostToRuntime::McpConfig { servers } => {
+            assert_eq!(servers.len(), 2);
+            assert_eq!(servers[0].name, "corp");
+            match &servers[0].transport {
+                McpTransportWire::Http { base_url, auth, .. } => {
+                    assert_eq!(base_url, "http://gw:30808/mcp/corp");
+                    assert!(auth.is_some());
+                }
+                other => panic!("corp 应为 http 形态: {other:?}"),
+            }
+            assert_eq!(servers[1].name, "phebs");
+            assert!(matches!(&servers[1].transport, McpTransportWire::Stdio { .. }));
+            assert_eq!(
+                servers[1].meta.as_ref().unwrap().plugin_id.as_deref(),
+                Some("xiaohailing_plugin_phebs")
+            );
+        }
+        other => panic!("应为 mcp.config: {other:?}"),
+    }
+
+    // 线路契约 camel：序列化端同形出 baseUrl（headers/auth 恒在无 skip）
+    let wire = McpServerWire {
+        name: "corp".into(),
+        transport: McpTransportWire::Http {
+            base_url: "http://gw/mcp/corp".into(),
+            headers: Default::default(),
+            auth: None,
+        },
+        meta: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&wire).unwrap(),
+        json!({"name":"corp","transport":{"kind":"http","baseUrl":"http://gw/mcp/corp","headers":{},"auth":null}}),
+    );
+
+    // mcp.test REQ：壳侧固定 {"server": wire} 包装（mcp_commands.rs）
+    let test_req = json!({"type":"mcp.test","server":{"name":"phebs","transport":{"kind":"http","baseUrl":"http://phebs/api/mcp"}}});
+    let parsed: HostToRuntime = serde_json::from_value(test_req).expect("mcp.test 包装必须可解析");
+    assert!(matches!(parsed, HostToRuntime::McpTest { .. }));
 }
