@@ -1,10 +1,13 @@
 /**
  * 管理端·插件治理（D22 §3.2 管理面 / 方案 A 审核台）：
  * - 列表全量（公共 + 个人提交——owner 列透出）
- * - 上传公共插件（multipart zip + 三档策略；与插件页个人上传通道分离）
- * - 版本线展开 → 逐版本「发布进公共市场」（方案 A 审核动作：个人插件 draft
- *   经此进公共；owner 视角不变）
- * - 下架 / policy 调整（force=全员推发免确认、recommend 置顶、optional）
+ * - 上传公共插件（multipart zip + 三档策略；与插件页个人上传通道分离）——
+ *   上传成功即弹「立即发布」引导（draft→published 一步上架，不用管理员找入口）
+ * - 操作列按状态给显式动作：draft=「发布」（审批进市场，个人提交同此口）、
+ *   delisted=「重新上架」、published=「下架」；行首 + 展开版本线做逐版本
+ *   发布/回滚（2026-11-26 交互收口：发布动作不再藏在版本线折叠行里）
+ * - 下架语义=仅市场不可见不可装；已装用户本地副本保留可用（仅无法更新/重装）
+ * - policy 调整（force=全员推发免确认、recommend 置顶、optional）
  * D26-O2：Table（expandable 版本线）/Upload/Select/Tag/Alert/Modal.confirm 化。
  */
 
@@ -79,42 +82,55 @@ export function PluginGovernancePage() {
   const uploadPublic = () => {
     if (!pubFile) return;
     setUploading(true);
+    const fname = pubFile.name;
     const fd = new FormData();
     fd.append('package', pubFile);
     if (pubNotes.trim()) fd.append('notes', pubNotes.trim());
     fd.append('policy', String(pubPolicy));
-    void postMultipart('/admin/eco/plugins', fd)
-      .then(() => {
-        setNotice(`已上传 ${pubFile.name}（draft——展开版本线点「发布」后进公共市场）`);
+    void postMultipart<{ plugin_id: string; name: string }>('/admin/eco/plugins', fd)
+      .then((dto) => {
+        setNotice(`已上传 ${fname}（草稿）`);
         setPubOpen(false);
         setPubFile(null);
         setPubNotes('');
         reload();
+        // 上传成功即引导发布（版本=刚上传的最新版；拉不到版本线则静默——列表行「发布」仍可用）
+        fetchVersions(dto.plugin_id)
+          .then((items) => {
+            if (items[0]) confirmPublish(dto, items[0].version, false);
+          })
+          .catch(() => {});
       })
       .catch((e) => setError(`上传失败：${errText(e, '未知错误')}`))
       .finally(() => setUploading(false));
   };
 
+  const fetchVersions = (pluginId: string) =>
+    http
+      .get<{ items: VersionRow[] }>(`/admin/eco/plugins/${encodeURIComponent(pluginId)}/versions`)
+      .then((d) => d.items ?? []);
+
   const openVersions = (p: PluginRow) => {
     setVerRow(p.plugin_id);
     setVersions([]);
-    http
-      .get<{ items: VersionRow[] }>(`/admin/eco/plugins/${encodeURIComponent(p.plugin_id)}/versions`)
-      .then((d) => setVersions(d.items ?? []))
+    fetchVersions(p.plugin_id)
+      .then(setVersions)
       .catch((e) => setError(errText(e, '版本线加载失败')));
   };
 
-  const publishVersion = (pluginId: string, version: string) => {
+  // 发布确认+执行（行内「发布/重新上架」、版本线逐版本、上传后引导三处共用）——
+  // 服务端 publish=draft→published + current 切换（重发旧版本即回滚）
+  const confirmPublish = (p: { plugin_id: string; name: string }, version: string, republish: boolean) => {
     Modal.confirm({
-      title: `发布 ${pluginId} v${version} 进公共市场？`,
-      content: '所有用户将可见可装',
-      okText: '发布',
+      title: republish ? `重新上架「${p.name}」（v${version}）？` : `发布 ${p.plugin_id} v${version} 进公共市场？`,
+      content: republish ? '所有用户重新可见可装' : '所有用户将可见可装',
+      okText: republish ? '重新上架' : '发布',
       cancelText: '取消',
       onOk: () =>
         http
-          .post(`/admin/eco/plugins/${encodeURIComponent(pluginId)}/versions/${encodeURIComponent(version)}/publish`, {})
+          .post(`/admin/eco/plugins/${encodeURIComponent(p.plugin_id)}/versions/${encodeURIComponent(version)}/publish`, {})
           .then(() => {
-            setNotice(`${pluginId} v${version} 已发布进公共市场`);
+            setNotice(`${p.name} v${version} 已${republish ? '重新上架' : '发布'}进公共市场`);
             reload();
           })
           .catch((e) => {
@@ -124,10 +140,26 @@ export function PluginGovernancePage() {
     });
   };
 
+  // 行内一键发布：draft=审批进市场（发最新版）；delisted=重新上架（优先原 current，
+  // 无则最新——恢复下架前状态）；逐版本选择走行首 + 展开的版本线
+  const publishRow = (p: PluginRow) => {
+    fetchVersions(p.plugin_id)
+      .then((items) => {
+        const cur = items.find((v) => v.version === p.current_version);
+        const v = p.status === 'delisted' && cur ? cur.version : items[0]?.version;
+        if (!v) {
+          setError(`${p.name} 无版本行（包体缺失？），无法发布`);
+          return;
+        }
+        confirmPublish(p, v, p.status === 'delisted');
+      })
+      .catch((e) => setError(errText(e, '版本线加载失败')));
+  };
+
   const delist = (p: PluginRow) => {
     Modal.confirm({
       title: `下架「${p.name}」？`,
-      content: '已装用户本地副本失效（catalog 不再可见）',
+      content: '新用户不再可见可装；已装用户本地副本保留可用，仅无法从市场更新/重装',
       okText: '下架',
       okButtonProps: { danger: true },
       cancelText: '取消',
@@ -135,7 +167,7 @@ export function PluginGovernancePage() {
         http
           .post(`/admin/eco/plugins/${encodeURIComponent(p.plugin_id)}/delist`, {})
           .then(() => {
-            setNotice(`${p.name} 已下架`);
+            setNotice(`${p.name} 已下架（可在「重新上架」一键恢复）`);
             reload();
           })
           .catch((e) => {
@@ -231,18 +263,25 @@ export function PluginGovernancePage() {
     {
       title: '操作',
       key: 'ops',
-      width: 150,
+      width: 170,
       render: (_, p) => (
-        <>
-          <Button variant="text" size="small" onClick={() => (verRow === p.plugin_id ? setVerRow(null) : openVersions(p))} data-testid={`plugin-vers-${p.plugin_id}`}>
-            版本线
-          </Button>
-          {p.status !== 'delisted' ? (
+        <Space size={4}>
+          {p.status === 'draft' ? (
+            <Button size="small" disabled={busy} onClick={() => publishRow(p)} data-testid={`plugin-publish-${p.plugin_id}`}>
+              发布
+            </Button>
+          ) : null}
+          {p.status === 'delisted' ? (
+            <Button size="small" disabled={busy} onClick={() => publishRow(p)} data-testid={`plugin-republish-${p.plugin_id}`}>
+              重新上架
+            </Button>
+          ) : null}
+          {p.status === 'published' ? (
             <Button variant="danger" size="small" disabled={busy} onClick={() => delist(p)}>
               下架
             </Button>
           ) : null}
-        </>
+        </Space>
       ),
     },
   ];
@@ -325,7 +364,7 @@ export function PluginGovernancePage() {
                       </span>
                       <Typography.Text type="secondary">{v.notes || '—'}</Typography.Text>
                       {v.version !== p.current_version || p.status !== 'published' ? (
-                        <Button disabled={busy} onClick={() => publishVersion(p.plugin_id, v.version)} data-testid={`plugin-pubver-${p.plugin_id}-${v.version}`}>
+                        <Button disabled={busy} onClick={() => confirmPublish(p, v.version, false)} data-testid={`plugin-pubver-${p.plugin_id}-${v.version}`}>
                           <Package size={12} /> 发布进公共市场
                         </Button>
                       ) : null}
