@@ -27,7 +27,9 @@ pub struct EventRow {
     pub run_id: String,
 }
 
-fn from_row(row: &Row<'_>) -> rusqlite::Result<EventRow> {
+/// 行映射（按位置读前 7 列：id, session_id, seq, type, payload, created_at, run_id——
+/// queries/search.rs 在其后追加列时复用）
+pub(super) fn from_row(row: &Row<'_>) -> rusqlite::Result<EventRow> {
     Ok(EventRow {
         id: row.get(0)?,
         session_id: row.get(1)?,

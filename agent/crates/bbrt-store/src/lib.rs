@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+mod fts;
 mod migrate;
 mod queries;
 
@@ -19,8 +20,10 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
+pub use fts::{plan_query, LikeQuery, SearchPlan, SearchSort};
 pub use queries::{
-    ContextRow, EventRow, GrantRow, RunRow, SessionListRow, SessionRow, ViolationRow, Workspace,
+    ContextRow, EventHit, EventRow, EventWindow, GrantRow, RunRow, SessionBrief, SessionListRow,
+    SessionMeta, SessionRow, ViolationRow, Workspace,
 };
 
 /// 存储层错误。
