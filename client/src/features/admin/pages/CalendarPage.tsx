@@ -12,6 +12,7 @@ import type { MenuProps } from 'antd';
 import { CalendarDays, Download, Ellipsis, Upload } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
+import { useFileDrop } from '../../../shared/hooks/useFileDrop';
 import {
   fetchWorkdayYear,
   importWorkday,
@@ -295,6 +296,12 @@ export function CalendarPage() {
     reader.readAsText(file, 'utf-8');
   };
 
+  // 日历 JSON 拖入导入弹窗（2026-11-26「文件选择全功能点支持拖拽」）：与点击选择同走 pickFile
+  const { isOver: calDragOver, dropProps: calDropProps } = useFileDrop({
+    onFiles: (files) => pickFile(files[0]),
+    accept: '.json,application/json',
+  });
+
   const cellBg = (d: WorkdayDay): string => {
     const override = d.source !== 'default';
     if (d.type === 'holiday') return token.colorErrorBg;
@@ -535,6 +542,8 @@ export function CalendarPage() {
           setImportOpen(false);
           setPreview(null);
         }}
+        {...calDropProps}
+        styles={{ body: calDragOver ? { boxShadow: `inset 0 0 0 2px ${token.colorPrimary}`, borderRadius: token.borderRadius } : undefined }}
         footer={
           <Flex gap={8} justify="flex-end">
             <Button variant="secondary" onClick={() => setImportOpen(false)}>

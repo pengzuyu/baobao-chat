@@ -11,6 +11,7 @@ import { Flex, Tabs, Tag, Typography, theme } from 'antd';
 import { Plus, X } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { getErrorText } from '../../../shared/api/http';
+import { useFileDrop } from '../../../shared/hooks/useFileDrop';
 import { downloadUrl, getDownloadTicket, uploadFileSmart } from '../api/files';
 import {
   addStickerItem,
@@ -219,6 +220,14 @@ function StickerPanel({ onPickSticker }: { onPickSticker: (item: StickerItem) =>
     }
   };
 
+  // 图片拖进面板即上传进我的表情（2026-11-26「文件选择全功能点支持拖拽」）；须在早退 return 之前守 hooks 规则
+  const { isOver: imgDragOver, dropProps: imgDropProps } = useFileDrop({
+    onFiles: (files) => void doUpload(files[0]),
+    accept: 'image/*',
+    disabled: busy,
+    onReject: () => setErrorText('仅支持图片文件'),
+  });
+
   const doRemove = async (itemId: string) => {
     try {
       await removeStickerItem(itemId);
@@ -249,7 +258,17 @@ function StickerPanel({ onPickSticker }: { onPickSticker: (item: StickerItem) =>
   return (
     <div
       data-testid="sticker-panel"
-      style={{ maxHeight: 232, overflowY: 'auto', padding: 6, display: 'flex', flexDirection: 'column', gap: 8 }}
+      {...imgDropProps}
+      style={{
+        maxHeight: 232,
+        overflowY: 'auto',
+        padding: 6,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        borderRadius: token.borderRadius,
+        boxShadow: imgDragOver ? `inset 0 0 0 1.5px ${token.colorPrimary}` : undefined,
+      }}
     >
       {sections.map(({ title, sets, removable }) =>
         sets.length === 0 && title === '公共表情' ? null : (

@@ -5,10 +5,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Card, Flex, Input, Space, Typography } from 'antd';
+import { Alert, Card, Flex, Input, Space, Typography, theme } from 'antd';
 import { ArrowDownToLine, ArrowUpToLine, Plus, Trash2 } from 'lucide-react';
 import { ApiError, getErrorText } from '../../../shared/api/http';
 import { Button } from '../../../shared/ui/Button';
+import { useFileDrop } from '../../../shared/hooks/useFileDrop';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
 import { StateView, type ViewStateOrOk } from '../../../shared/ui/StateView';
 import { uploadFileSmart } from '../../im/api/files';
@@ -103,6 +104,7 @@ export function StickersPage() {
 }
 
 function SetCard({ set, onReload, onError }: { set: StickerSet; onReload: () => Promise<void>; onError: (t: string) => void }) {
+  const { token } = theme.useToken();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const live = set.status === 1;
@@ -120,8 +122,31 @@ function SetCard({ set, onReload, onError }: { set: StickerSet; onReload: () => 
     }
   };
 
+  // 上传表情进本集（点击选择与拖入卡片共用；2026-11-26「文件选择全功能点支持拖拽」提取）
+  const uploadSticker = (f: File) => {
+    void run(async () => {
+      const up = await uploadFileSmart(f);
+      await addAdminStickerItem(set.id, up.id, f.name.replace(/\.[^.]+$/, ''));
+    });
+  };
+
+  // 图片拖进本集卡片即上传；非图片经 onReject 提示
+  const { isOver: imgDragOver, dropProps: imgDropProps } = useFileDrop({
+    onFiles: (files) => uploadSticker(files[0]),
+    accept: 'image/*',
+    disabled: busy,
+    onReject: () => onError('仅支持图片文件'),
+  });
+
   return (
-    <Card size="small" style={live ? undefined : { opacity: 0.6 }}>
+    <Card
+      {...imgDropProps}
+      size="small"
+      style={{
+        ...(live ? undefined : { opacity: 0.6 }),
+        boxShadow: imgDragOver ? `inset 0 0 0 2px ${token.colorPrimary}` : undefined,
+      }}
+    >
       <Flex gap={8} align="center" wrap style={{ marginBottom: 8 }}>
         <Typography.Text strong>{set.name}</Typography.Text>
         <Typography.Text type="secondary">
@@ -136,12 +161,7 @@ function SetCard({ set, onReload, onError }: { set: StickerSet; onReload: () => 
           onChange={(e) => {
             const f = e.target.files?.[0];
             e.target.value = '';
-            if (f) {
-              void run(async () => {
-                const up = await uploadFileSmart(f);
-                await addAdminStickerItem(set.id, up.id, f.name.replace(/\.[^.]+$/, ''));
-              });
-            }
+            if (f) uploadSticker(f);
           }}
         />
         <Space size={4}>

@@ -13,11 +13,12 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { Alert, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Input, Modal, Select, Space, Table, Tag, Typography, theme } from 'antd';
 import { FileUp } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
 import { MAIL_DOMAIN } from '../../../shared/brand';
 import { Button } from '../../../shared/ui/Button';
+import { useFileDrop } from '../../../shared/hooks/useFileDrop';
 import { batchImportUsers, type DeptNode, type ImportInputRow, type ImportResult } from '../api/admin';
 
 /** 部门树 → 缩进扁平清单（组织下拉展示用；OrgDirectoryPage 共用） */
@@ -127,6 +128,14 @@ export function ImportUsersModal({
     }
   };
 
+  // Excel 拖入弹窗（2026-11-26「文件选择全功能点支持拖拽」）：与点击选择同走 pickFile；非输入步/提交中让路
+  const { token } = theme.useToken();
+  const { isOver: fileDragOver, dropProps: fileDropProps } = useFileDrop({
+    onFiles: (files) => void pickFile(files[0]),
+    accept: '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel',
+    disabled: step !== 'input' || busy,
+  });
+
   const backToPaste = () => {
     setExcelRows(null);
     setFileName('');
@@ -168,6 +177,8 @@ export function ImportUsersModal({
       destroyOnClose
       width={720}
       data-testid="dir-import-modal"
+      {...fileDropProps}
+      styles={{ body: fileDragOver ? { boxShadow: `inset 0 0 0 2px ${token.colorPrimary}`, borderRadius: token.borderRadius } : undefined }}
       footer={[
         step === 'input' ? (
           <Button key="cancel" variant="secondary" onClick={onClose}>
