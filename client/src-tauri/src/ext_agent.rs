@@ -600,7 +600,9 @@ fn handle_send(app: &AppHandle, hub: &ExtHub, params: Value) -> Result<Value, (i
         _ => host
             .start_session(
                 "",
-                "ask",
+                // 外部智能体无人盯审批卡（2026-11-26 用户拍板）：固定自主档
+                // full-auto；高危/CorpWrite 红卡仍会出现在任务区会话内可人审
+                "full-auto",
                 "auto",
                 None,
                 Some(&format!("{EXTERNAL_TITLE_PREFIX}·{}", truncate(&text, 24))),
