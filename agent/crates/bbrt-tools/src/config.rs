@@ -65,6 +65,10 @@ pub struct ToolsConfig {
     /// tools.reload 热重扫共用同一实例）。None=未装配（单测/嵌入式）→ skill
     /// 工具降级返回不可用提示
     pub skills: Option<Arc<Mutex<bbrt_session::skills::SkillIndex>>>,
+    /// Runtime 本地库句柄（任务感知工作台：list_projects / use_project /
+    /// session_search 的数据源——项目登记表与会话事件索引都在这里；逐查询取锁）。
+    /// None=未装配（单测/嵌入式）→ 三个工具降级返回不可用提示
+    pub store: Option<Arc<Mutex<bbrt_store::Store>>>,
 }
 
 impl ToolsConfig {
@@ -90,6 +94,7 @@ impl ToolsConfig {
             session_workspaces: None,
             default_workspace: None,
             skills: None,
+            store: None,
         }
     }
 
@@ -137,6 +142,7 @@ impl Default for ToolsConfig {
             session_workspaces: None,
             default_workspace: None,
             skills: None,
+            store: None,
         }
     }
 }

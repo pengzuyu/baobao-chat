@@ -178,7 +178,13 @@ fn static_category(tool: &str) -> Option<ActionCategory> {
         "read_file" | "list_dir" | "search_files" | "glob" | "git_status" | "git_diff"
         | "kb_query" | "doc_read" | "im_history" | "mail_read" | "org_search" | "im_convs"
         | "im_search" | "kb_spaces" | "kb_nodes" | "calendar_query" | "file_list" | "presences"
-        | "schedule_list" => Some(ActionCategory::ReadOnly),
+        | "schedule_list"
+        // 工作台自省四件（2026-11-25）：插件自省 list_plugins + 项目清单/采纳/会话
+        // 检索——纯本机读，只读档全档自动（use_project 本身不落盘，采纳后的写
+        // 仍按矩阵逐次走）；漏登记会落兜底的任意命令档，ask/自主档逐次弹确认
+        | "list_plugins" | "list_projects" | "use_project" | "session_search" => {
+            Some(ActionCategory::ReadOnly)
+        }
         // 记忆工具：仅写本机记忆目录（D15 §2.2 W1：风险级低，全档放行，
         // 归入只读档即"三档自动"语义；密钥特征拒写由 bbrt-memory 落盘侧兜底）
         "memory_save" | "memory.save" => Some(ActionCategory::ReadOnly),
@@ -668,6 +674,30 @@ mod tests {
                         Decision::Allow { .. }
                     ),
                     "{cmd} @ {mode:?} 只读命令应全档放行"
+                );
+            }
+        }
+    }
+
+    /// 工作台自省四件（list_plugins + 项目清单/采纳/会话检索）归只读档：三档全放行。
+    /// 回归背景：只在注册表登记、不补 static_category 会落兜底的任意命令档，
+    /// ask/自主档逐次弹确认（list_plugins 首版即漏登记）
+    #[test]
+    fn workbench_introspection_tools_are_readonly_in_all_modes() {
+        let f = Fixture::new();
+        for tool in [
+            "list_plugins",
+            "list_projects",
+            "use_project",
+            "session_search",
+        ] {
+            for mode in MODES {
+                assert!(
+                    matches!(
+                        permission_gate(mode, &call(tool, &json!({})), &f.ctx()),
+                        Decision::Allow { .. }
+                    ),
+                    "{tool} @ {mode:?} 只读工具应全档放行"
                 );
             }
         }

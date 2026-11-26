@@ -50,6 +50,15 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::build(None, None)
+    }
+
+    /// 通用装配：`store`/`session_workspaces` 为 None 即基础夹具；带会话工作区表时
+    /// 日常会话默认工作区指向 tempdir（执行路径不碰真实 HOME）
+    fn build(
+        store: Option<Arc<Mutex<bbrt_store::Store>>>,
+        session_workspaces: Option<bbrt_session::SessionWorkspaces>,
+    ) -> Self {
         let ws = tempfile::tempdir().expect("tempdir");
         let sink = Arc::new(MemoryViolationSink::new());
         let journal = Arc::new(Mutex::new(Vec::new()));
@@ -61,6 +70,11 @@ impl Fixture {
         cfg.journal_hook = Some(Arc::new(move |event: &str| {
             hook_sink.lock().unwrap().push(event.to_string());
         }));
+        cfg.store = store;
+        if session_workspaces.is_some() {
+            cfg.default_workspace = Some(ws.path().join("user-ws"));
+        }
+        cfg.session_workspaces = session_workspaces;
         Self {
             ws,
             cfg: Arc::new(cfg),
@@ -1428,4 +1442,225 @@ fn agents_md_whitelist_reloads_on_change() {
     )
     .expect("追加 go vet");
     assert_eq!(ex.risk_of_call(&go), "low", "编辑 AGENTS.md 后应即时生效");
+}
+
+// ---------------------------------------------------------------------------
+// 任务感知工作台：list_projects / use_project / session_search
+// ---------------------------------------------------------------------------
+
+/// 工作台夹具：执行器 + Runtime 本地库 + 会话工作区表（库的临时目录保活到测试结束；
+/// 日常会话 sess-test 已登记）
+struct StoreFixture {
+    f: Fixture,
+    #[allow(dead_code)] // 保留库目录存活
+    dir: tempfile::TempDir,
+    store: Arc<Mutex<bbrt_store::Store>>,
+}
+
+impl StoreFixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("store dir");
+        let store = Arc::new(Mutex::new(
+            bbrt_store::Store::open(&dir.path().join("runtime.sqlite3")).expect("store"),
+        ));
+        let reg = bbrt_session::SessionWorkspaces::new();
+        reg.set("sess-test", None);
+        let f = Fixture::build(Some(Arc::clone(&store)), Some(reg));
+        Self { f, dir, store }
+    }
+
+    fn executor(&self) -> PipelineExecutor {
+        self.f.executor()
+    }
+
+    /// 日常会话的默认用户工作区（Fixture::build 指到 tempdir）
+    fn user_ws(&self) -> PathBuf {
+        self.f.ws.path().join("user-ws")
+    }
+}
+
+/// 落一行未绑定项目的会话
+fn seed_session(store: &Arc<Mutex<bbrt_store::Store>>, id: &str, form: &str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    store
+        .lock()
+        .unwrap()
+        .insert_session(&bbrt_store::SessionRow {
+            id: id.into(),
+            workspace_id: None,
+            title: format!("会话{id}"),
+            form: form.into(),
+            mode: "ask".into(),
+            model_policy: "auto".into(),
+            model_override: None,
+            status: "idle".into(),
+            share_enabled: false,
+            created_at: now,
+            updated_at: now,
+            ended_at: None,
+            summary: None,
+            conv_id: None,
+        })
+        .unwrap();
+}
+
+/// 在 `root` 下建目录并登记为工作台项目，返回真实路径
+fn register_project(store: &Arc<Mutex<bbrt_store::Store>>, root: &Path, name: &str) -> PathBuf {
+    fs::create_dir_all(root.join(name)).unwrap();
+    let real = fs::canonicalize(root.join(name)).unwrap();
+    store
+        .lock()
+        .unwrap()
+        .upsert_workspace(&bbrt_store::Workspace {
+            id: format!("ws-{name}"),
+            path: real.to_string_lossy().into_owned(),
+            name: name.into(),
+            is_repo: false,
+            trusted: true,
+            extra_dirs: None,
+            last_opened_at: 1_000,
+            created_at: 1_000,
+        })
+        .unwrap();
+    real
+}
+
+/// 未装配本地库（单测/嵌入式）：两工具降级不阻断
+#[test]
+fn 工作台工具_未装配降级() {
+    let f = Fixture::new();
+    let ex = f.executor();
+    let (summary, _, exit_code, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("list_projects", serde_json::json!({})),
+    ));
+    assert_eq!(exit_code, Some(1));
+    assert!(summary.contains("not assembled"), "{summary}");
+    let (_, _, exit_code, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("use_project", serde_json::json!({"path": "/x"})),
+    ));
+    assert_eq!(exit_code, Some(1));
+}
+
+/// list_projects 经管线执行：登记项目逐项可见；只读工具三档全放行
+#[test]
+fn list_projects_管线执行与只读放行() {
+    let sf = StoreFixture::new();
+    let proj = register_project(&sf.store, sf.f.ws.path(), "proj-a");
+    let ex = sf.executor();
+    for mode in [
+        PermissionMode::Ask,
+        PermissionMode::AutoEdit,
+        PermissionMode::FullAuto,
+    ] {
+        match ex.check(mode, &call("list_projects", serde_json::json!({}))) {
+            CheckOutcome::Allow { .. } => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    let (summary, _, exit_code, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("list_projects", serde_json::json!({})),
+    ));
+    assert_eq!(exit_code, None);
+    assert!(
+        summary.contains(&format!("proj-a — {} (not a git repo;", proj.display())),
+        "{summary}"
+    );
+}
+
+/// use_project 采纳后：相对路径写入落在项目目录（而非用户工作区），用户工作区暂不可写；
+/// 切回后相对路径回到用户工作区
+#[test]
+fn use_project_采纳后文件工具落项目目录() {
+    let sf = StoreFixture::new();
+    seed_session(&sf.store, "sess-test", "workbench");
+    let proj = register_project(&sf.store, sf.f.ws.path(), "proj-a");
+    let ex = sf.executor();
+    let path = proj.to_string_lossy().into_owned();
+
+    let (summary, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("use_project", serde_json::json!({"path": path})),
+    ));
+    assert!(summary.contains("switched to project"), "{summary}");
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "write_file",
+            serde_json::json!({"path": "notes.txt", "content": "hello\n"}),
+        ),
+    ));
+    assert_eq!(
+        fs::read_to_string(proj.join("notes.txt")).unwrap(),
+        "hello\n"
+    );
+    assert!(!sf.user_ws().join("notes.txt").exists(), "不应落用户工作区");
+
+    // 采纳期间根=项目目录：用户工作区越界 8020（与项目会话一致）
+    let outside = sf.user_ws().join("x.txt");
+    let (code, _) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "write_file",
+            serde_json::json!({"path": outside.to_string_lossy().as_ref(), "content": "x"}),
+        ),
+    ));
+    assert_eq!(code, 8020);
+
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("use_project", serde_json::json!({})),
+    ));
+    ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "write_file",
+            serde_json::json!({"path": "back.txt", "content": "b\n"}),
+        ),
+    ));
+    assert_eq!(
+        fs::read_to_string(sf.user_ws().join("back.txt")).unwrap(),
+        "b\n"
+    );
+}
+
+/// 范围校验经管线：聊天唤起会话（embedded）与项目会话均拒绝 8006，登记表不变
+#[test]
+fn use_project_聊天会话与项目会话拒绝() {
+    let sf = StoreFixture::new();
+    seed_session(&sf.store, "sess-test", "embedded");
+    seed_session(&sf.store, "sess-proj", "workbench");
+    let proj = register_project(&sf.store, sf.f.ws.path(), "proj-a");
+    let path = proj.to_string_lossy().into_owned();
+    {
+        let s = sf.store.lock().unwrap();
+        let wid = s.get_workspace_by_path(&path).unwrap().unwrap().id;
+        s.set_session_workspace("sess-proj", Some(&wid)).unwrap();
+    }
+    let ex = sf.executor();
+
+    let (code, msg) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call("use_project", serde_json::json!({"path": path})),
+    ));
+    assert_eq!(code, 8006);
+    assert!(msg.contains("chat-invoked"), "{msg}");
+
+    // 未登记路径：8002 且列出可用项目
+    seed_session(&sf.store, "sess-task", "workbench");
+    let (code, msg) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call_in(
+            "use_project",
+            serde_json::json!({"path": "/not/registered"}),
+            "sess-task",
+        ),
+    ));
+    assert_eq!(code, 8002);
+    assert!(msg.contains(&path), "{msg}");
 }

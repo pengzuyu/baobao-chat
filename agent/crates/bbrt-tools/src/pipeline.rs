@@ -484,6 +484,16 @@ impl ToolExecutor for PipelineExecutor {
             "skill" => builtin::skill::load(self.config.skills.as_ref(), &args),
             // D22/D26 自省面：已装插件与 MCP server 清单（inventory 内存快照）
             "list_plugins" => builtin::plugins::list_plugins(self.mcp.as_ref(), &args),
+            // 任务感知工作台：工作台登记项目清单（本机登记表实时查询）
+            "list_projects" => builtin::projects::list(self.config.store.as_ref(), &args),
+            // 采纳已登记项目为会话工作根：校验通过后改会话工作区登记表，
+            // 下个工具调用起 session_env 自动路由到项目目录
+            "use_project" => builtin::projects::use_project(
+                self.config.store.as_ref(),
+                self.config.session_workspaces.as_ref(),
+                &call.session_id,
+                &args,
+            ),
             // mcp.{server}.{tool}（D11 §2.10 dispatch_by_source：网关/外部 MCP 工具；
             // OBO 由 McpClient 令牌闭包逐请求注入；断连/未注册 → 8002 标灰语义）
             _ if call.name.starts_with("mcp.") => match &self.mcp {

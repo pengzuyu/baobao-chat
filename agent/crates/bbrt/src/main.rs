@@ -166,6 +166,9 @@ fn run() -> Result<(), String> {
         session_workspaces: Some(session_workspaces.clone()),
         // D33 §3.1：skill 工具与组装/tools.reload 热重扫共用同一索引实例
         skills: Some(skills_index.clone()),
+        // 任务感知工作台：list_projects / use_project / session_search 的数据源
+        // （项目登记表 + 会话事件索引，本机 runtime.db）
+        store: Some(store.clone()),
         ..Default::default()
     }));
     let obo_for_model = Arc::clone(&obo);
