@@ -290,7 +290,12 @@ export function MainLayout() {
 
       <Layout style={{ flex: 1, minWidth: 0, background: 'transparent' }}>
         <ConnectionBanner />
-        <Layout.Content style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+        {/* 纵向 flex（2026-11-26 页面塌宽修复）：Content 原为行向 flex，页面根元素
+            不写 flex:1/width 时按内容 max-content 收缩——AdminLayout/SettingsLayout/
+            SchedulesPage/PluginPage 等整批页面占不满右侧容器（聊天等老页面恰因 .im-page
+            自带 flex:1 才幸免）。改列向后子页面沿交叉轴默认拉伸占满宽度；纵向语义不变
+            （flex:1 页照常垂直撑满、height:'100%' 页照常解析），新页面无需再记宽度约定 */}
+        <Layout.Content style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <ErrorBoundary resetKey={location.pathname}>
             <Outlet />
           </ErrorBoundary>
