@@ -72,8 +72,7 @@
 
 ## 6. 已知情接受的风险（暗墙否决残余面，登记备查）
 
-- **凭证外传链未设墙**：run_command 子进程继承 env（`echo $BBC_RT_TOKEN` 可得用户服务器 token）、敏感路径读（`~/.ssh`、`.env*` 等）均不拦——防线收敛为 NetPolicy 出站白名单 + 权限模式 + danger_rules 既有 CredentialAccess 类规则；
-- 触发场景=prompt injection（agent 读到的内容指挥其外传凭证）；用户 2026-11-17 拍板接受（agent 有拿 token 办事的正当场景），复活路径见 §9。
+- **凭证外传链未设墙**：run_command 子进程继承 env（`echo $BBC_RT_TOKEN` 可得用户服务器 token）、敏感路径读（`~/.ssh`、`.env*` 等）均不拦——防线收敛为 NetPolicy 出站白名单 + 权限模式 + danger_rules 既有 CredentialAccess 类规则；触发场景=prompt injection（agent 读到的内容指挥其外传凭证）；用户 2026-11-17 拍板接受（agent 有拿 token 办事的正当场景），复活路径见 §9。**2026-11-26 追记**：敏感**文件工具读**通道后来加了审批闸（三档红卡仅本次，见 09 篇篇头修订注记）——本条「均不拦」仅余命令通道（cat 等，拍板暂不纳入）；env 继承不变。
 
 ## 7. UX 口径（随矩阵自然生效）
 

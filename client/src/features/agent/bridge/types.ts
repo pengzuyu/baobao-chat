@@ -120,10 +120,12 @@ export interface AgentWorkspaceInfo {
   createdAt: number;
 }
 
-/** 审批卡参数预览（D08 §6.3 preview 联合；本轮 UI 只消费 command 形态） */
+/** 审批卡参数预览（D08 §6.3 preview 联合；read/read-sensitive=2026-11-26 读审批化） */
 export type PermissionPreview =
   | { kind: 'command'; command: string; cwd: string; dangerFlags: string[] }
   | { kind: 'diff'; file: string; addLines: number; delLines: number }
+  | { kind: 'read'; path: string }
+  | { kind: 'read-sensitive'; path: string }
   | { kind: 'obo'; target: string; scopes: string[] };
 
 /** 工具结果被拦截信息（D11 §4 tool.result blocked；code=8020-8026） */

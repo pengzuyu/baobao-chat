@@ -280,7 +280,7 @@ export function EmbeddedAgentSync({ convId, sessionId }: Props) {
                 ))}
               </Radio.Group>
             </div>
-            <div className="agc-perm__hint">120 秒未决策将自动拒绝</div>
+            <div className="agc-perm__hint">不会超时，等你处理或中断会话</div>
           </div>
         ) : null}
       </Modal>
@@ -298,6 +298,10 @@ function previewText(p: { kind: string } | undefined): string {
       return `$ ${String(o.command)}${o.cwd ? `  (${String(o.cwd)})` : ''}${(o.dangerFlags as string[])?.length ? `\n⚠ ${((o.dangerFlags as string[]).join(', '))}` : ''}`;
     case 'diff':
       return `文件 ${String(o.file)}  +${String(o.addLines)}/-${String(o.delLines)}`;
+    case 'read':
+      return `读取文件 ${String(o.path)}`;
+    case 'read-sensitive':
+      return `读取敏感文件（密钥/凭据类，仅本次） ${String(o.path)}`;
     case 'obo':
       return `OBO ${String(o.target)}  scopes: ${(o.scopes as string[])?.join(', ')}`;
     default:

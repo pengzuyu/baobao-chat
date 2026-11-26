@@ -288,14 +288,25 @@ pub struct Blocked {
     pub kind: String,
 }
 
-/// 权限确认预览（permission.request.preview{kind:command/diff/obo,...}）
+/// 权限确认预览（permission.request.preview{kind:command/diff/read/obo,...}）
 /// TODO: diff/obo 的字段细节以 09 §6.1 审批卡设计为准
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Preview {
-    Command { command: String },
-    Diff { path: String },
-    Obo { scopes: Vec<String> },
+    Command {
+        command: String,
+    },
+    Diff {
+        path: String,
+    },
+    /// 文件读取审批（2026-11-26 读审批化）：sensitive=true=敏感文件红卡（仅本次）
+    Read {
+        path: String,
+        sensitive: bool,
+    },
+    Obo {
+        scopes: Vec<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------

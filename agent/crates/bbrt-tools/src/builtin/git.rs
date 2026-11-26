@@ -175,6 +175,8 @@ mod tests {
             memory: None,
             journal_hook: None,
             sink: Arc::new(bbrt_sec::sandbox::launcher::MemoryViolationSink::new()),
+            read_access: None,
+            full_auto: false,
         }
     }
 

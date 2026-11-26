@@ -1,19 +1,20 @@
 //! 文件工具：read_file / list_dir / write_file / edit_file（D11 §2.4 builtin/fs.rs）。
 //!
 //! - read_file：`context::excerpt` 摘录（默认 400 行/32KB 先到为准、行号前缀、
-//!   offset 分页续读）+ 敏感拒读 8026（bbrt-context 名单与 bbrt-sec PathPolicy
-//!   双检，后者带软链改名防御）；
+//!   offset 分页续读）。读授权走 read_access 统一入口（2026-11-26 审批化：
+//!   工作区内自动、工作区外 ask/auto-edit 弹卡、full-auto 放行、敏感红卡仅
+//!   本次、附件自动授权；执行层校验——子代理直调同样被拦）；
 //! - write_file/edit_file：工作区白名单外 8020 / 软链逃逸 8024（PathPolicy.validate
-//!   Write 意图）；修改前先发 journal 字符串事件回调（file.changed，喂被动轨）。
+//!   Write 意图，口径不变）；修改前先发 journal 字符串事件回调（file.changed，喂被动轨）。
 //!
-//! v0.1 收紧口径：读操作也限制在工作区 ∪ 例外可写目录内（B10 为"全盘可读+敏感
-//! 拒读"，此处取更严一档——agent 工作场景以工作区为主，宁可多拦）。
+//! 旧「读限制在工作区 ∪ 例外目录」（v0.1 收紧）已退役：B10 原始口径本就是
+//! 「全盘可读+敏感拒读」，2026-11-26 恢复全盘可读并叠加读审批（见 read_access.rs）。
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use bbrt_context::excerpt::{excerpt, is_sensitive_path};
-use bbrt_sec::errors::{CODE_SANDBOX_DENIED, CODE_SENSITIVE_READ};
+use bbrt_context::excerpt::excerpt;
+use bbrt_sec::errors::CODE_SANDBOX_DENIED;
 use bbrt_sec::sandbox::launcher::ViolationKind;
 use bbrt_sec::sandbox::path::{PathError, PathIntent};
 use serde_json::json;
@@ -31,7 +32,7 @@ const LIST_DIR_MAX: usize = 500;
 // read_file
 // ---------------------------------------------------------------------------
 
-/// read_file 实现：敏感拒读（8026）→ 读边界（8020，v0.1 收紧）→ 摘录
+/// read_file 实现：读授权统一入口（审批化）→ 摘录
 pub(crate) fn read_file(env: &ExecEnv, args: &serde_json::Value) -> Result<ExecOutput, ToolBlock> {
     let path =
         str_arg(args, "path").ok_or_else(|| deny(CODE_TOOL_ARGS, "read_file 缺少 path 参数"))?;
@@ -39,38 +40,10 @@ pub(crate) fn read_file(env: &ExecEnv, args: &serde_json::Value) -> Result<ExecO
     let limit = usize_arg(args, "limit").unwrap_or(0);
 
     let (result, ms) = timed(|| -> Result<ExecOutput, ToolBlock> {
-        // 8026 双检之一：context 名单（D11 §5.3）
-        if is_sensitive_path(&path) {
-            env.record_violation(
-                ViolationKind::Rule,
-                CODE_SENSITIVE_READ,
-                format!("read_file 命中默认拒读清单: {path}"),
-            );
-            return Err(deny(
-                CODE_SENSITIVE_READ,
-                format!("敏感文件拒读（8026）: {path} 命中默认拒读清单"),
-            ));
-        }
-        // 8026 双检之二：sec PathPolicy（软链改名绕过防御，09 §7.2）；
-        // 相对路径以工作区根为基准（不随进程 cwd 漂移）
-        let path_buf = resolve_against(&env.workspace, &path);
-        let resolved = match env.path_policy.validate(&path_buf, PathIntent::Read) {
-            Ok(p) => p,
-            Err(PathError::SensitiveRead { code, pattern, .. }) => {
-                env.record_violation(
-                    ViolationKind::Rule,
-                    code,
-                    format!("read_file 命中拒读清单 {pattern}: {path}"),
-                );
-                return Err(deny(
-                    code,
-                    format!("敏感文件拒读（8026）: {path} 命中 {pattern}"),
-                ));
-            }
-            Err(e) => return Err(deny(CODE_SANDBOX_DENIED, e.to_string())),
-        };
-        // v0.1 收紧：读限制在工作区 ∪ 例外目录（越界 8020）
-        ensure_inside_roots(env, &resolved, "read_file")?;
+        let target = resolve_against(&env.workspace, &path);
+        // 读授权（工作区内自动/附件自动/审批票据/full-auto 工作区外；敏感红卡；
+        // 未装配句柄退化为工作区内放行——单测/嵌入式兜底）
+        let resolved = super::read_access::authorize_read(env, "read_file", &target)?;
         let content = fs::read_to_string(&resolved).map_err(|e| {
             deny(
                 CODE_TOOL_ARGS,
@@ -97,23 +70,13 @@ pub(crate) fn read_file(env: &ExecEnv, args: &serde_json::Value) -> Result<ExecO
 // list_dir
 // ---------------------------------------------------------------------------
 
-/// list_dir 实现：读边界校验后列目录（d/f 前缀，≤500 条截断标注）
+/// list_dir 实现：读授权统一入口后列目录（d/f 前缀，≤500 条截断标注）
 pub(crate) fn list_dir(env: &ExecEnv, args: &serde_json::Value) -> Result<ExecOutput, ToolBlock> {
     let path =
         str_arg(args, "path").ok_or_else(|| deny(CODE_TOOL_ARGS, "list_dir 缺少 path 参数"))?;
     let (result, ms) = timed(|| -> Result<ExecOutput, ToolBlock> {
-        let path_buf = resolve_against(&env.workspace, &path);
-        let resolved = match env.path_policy.validate(&path_buf, PathIntent::Read) {
-            Ok(p) => p,
-            Err(PathError::SensitiveRead { code, pattern, .. }) => {
-                return Err(deny(
-                    code,
-                    format!("敏感路径拒访问（8026）: {path} 命中 {pattern}"),
-                ))
-            }
-            Err(e) => return Err(deny(CODE_SANDBOX_DENIED, e.to_string())),
-        };
-        ensure_inside_roots(env, &resolved, "list_dir")?;
+        let target = resolve_against(&env.workspace, &path);
+        let resolved = super::read_access::authorize_read(env, "list_dir", &target)?;
         let entries = fs::read_dir(&resolved)
             .map_err(|e| deny(CODE_TOOL_ARGS, format!("列目录失败 {path}: {e}")))?;
         let mut lines: Vec<String> = Vec::new();
@@ -264,31 +227,8 @@ fn validate_write(env: &ExecEnv, path: &str) -> Result<PathBuf, ToolBlock> {
     }
 }
 
-/// 读边界（v0.1 收紧）：解析后路径 ∈ 工作区根 ∪ 例外可写目录，否则 8020
-fn ensure_inside_roots(env: &ExecEnv, resolved: &Path, tool: &str) -> Result<(), ToolBlock> {
-    let inside = env
-        .path_policy
-        .workspace_roots
-        .iter()
-        .chain(env.path_policy.writable_exceptions.iter())
-        .any(|r| resolved.starts_with(fs::canonicalize(r).unwrap_or_else(|_| r.clone())));
-    if inside {
-        Ok(())
-    } else {
-        env.record_violation(
-            ViolationKind::Path,
-            CODE_SANDBOX_DENIED,
-            format!("{tool} 读路径越界: {}", resolved.display()),
-        );
-        Err(deny(
-            CODE_SANDBOX_DENIED,
-            format!(
-                "路径越界（8020）: {} 不在工作区白名单内",
-                resolved.display()
-            ),
-        ))
-    }
-}
+// 读边界 ensure_inside_roots 已退役（2026-11-26 读审批化）——读走
+// read_access::authorize_read 统一入口（见 builtin/read_access.rs）。
 
 /// 修改前 journal 字符串事件（file.changed；bin 侧转 ActivityEvent 喂被动轨）
 fn emit_file_changed(env: &ExecEnv, tool: &str, resolved: &Path, bytes: usize) {
@@ -319,14 +259,16 @@ fn path_error_code(e: &PathError) -> u32 {
 pub fn read_file_def() -> ToolDef {
     ToolDef {
         name: "read_file".into(),
-        description: "Read a text file in the workspace: returns a numbered excerpt (default 400 lines \
+        description: "Read a text file: returns a numbered excerpt (default 400 lines \
                       or 32KB, whichever comes first); when truncated, continue paging with \
-                      offset/limit; sensitive files (.env/secrets) are denied by default"
+                      offset/limit. Any local path works — outside the workspace an approval \
+                      card pops up (files attached by the user are pre-approved; secret/\
+                      credential-looking files always ask first)"
             .into(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "File path (inside the workspace)"},
+                "path": {"type": "string", "description": "File path (absolute, ~/ or relative to the workspace)"},
                 "offset": {"type": "integer", "description": "Starting line (1-based, default 1)"},
                 "limit": {"type": "integer", "description": "Number of lines to read (default 400)"}
             },
@@ -345,7 +287,7 @@ pub fn list_dir_def() -> ToolDef {
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Directory path (inside the workspace; defaults to the workspace root)"}
+                "path": {"type": "string", "description": "Directory path (absolute, ~/ or relative to the workspace; defaults to the workspace root)"}
             },
             "required": ["path"]
         }),

@@ -19,7 +19,7 @@ pub use launcher::{
     SandboxLauncher, Violation, ViolationKind, ViolationSink,
 };
 pub use network::{Cidr, NetPolicy, NetworkError};
-pub use path::{PathError, PathIntent, PathPolicy};
+pub use path::{is_sensitive_file, read_realpath, PathError, PathIntent, PathPolicy};
 pub use resource::ResourceLimits;
 
 /// 默认用户工作区（2026-11-12 ZCode 式口径）：不绑项目的会话——日常对话/任务/

@@ -61,6 +61,9 @@ pub struct PipelineExecutor {
     whitelist_cache: std::sync::Mutex<
         std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, Vec<String>)>,
     >,
+    /// 读授权登记表（2026-11-26 读审批化：附件自动授权 + 读审批的会话票据；
+    /// Arc 跨 session_env 克隆共享，子代理直调 execute 同表校验）
+    read_access: std::sync::Arc<builtin::read_access::ReadAccess>,
 }
 
 /// D19 workspace 类工具（依赖会话工作目录做沙箱根；项目会话=项目目录，
@@ -97,6 +100,8 @@ impl PipelineExecutor {
             memory: config.memory.clone(),
             journal_hook: config.journal_hook.clone(),
             sink,
+            read_access: None,
+            full_auto: false,
         };
         // MCP 来源注入（连接期发现 → register_mcp_tools；D26 OQ-3 收口：构造
         // 与 reload_mcp 热重建共用同一注册函数）
@@ -111,6 +116,7 @@ impl PipelineExecutor {
             mcp,
             policies: std::sync::Mutex::new(std::collections::HashMap::new()),
             whitelist_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            read_access: Arc::new(builtin::read_access::ReadAccess::default()),
         }
     }
 
@@ -154,6 +160,23 @@ impl PipelineExecutor {
         let mut env = self.env.clone();
         env.workspace = real.clone();
         env.path_policy = self.policy_for(&real);
+        // 读授权句柄（2026-11-26 读审批化）：绑定该会话——附件/审批票据按会话隔离
+        env.read_access = Some(Arc::new(builtin::read_access::SessionReadAccess {
+            session_id: session_id.to_string(),
+            access: Arc::clone(&self.read_access),
+        }));
+        env
+    }
+
+    /// 会话执行环境 + 当前档位覆写（读审批化：full-auto 工作区外非敏感读放行的
+    /// 判定依据；check 与 execute 同口径——同一调用同一结论）
+    fn session_env_with_mode(
+        &self,
+        session_id: &str,
+        mode: bbrt_sec::gate::PermissionMode,
+    ) -> ExecEnv {
+        let mut env = self.session_env(session_id);
+        env.full_auto = mode == bbrt_sec::gate::PermissionMode::FullAuto;
         env
     }
 
@@ -385,9 +408,48 @@ impl ToolExecutor for PipelineExecutor {
             args: &gate_args,
         };
         match permission_gate(mode, &gate_call, &ctx) {
-            Decision::Allow { source } => CheckOutcome::Allow {
-                source: allow_source_str(&source),
-            },
+            Decision::Allow { source } => {
+                // 读审批追加判定（2026-11-26：读工具三档矩阵放行后，工作区外
+                // 未授权读在 ask/auto-edit 弹卡、敏感读全档弹红卡）
+                if builtin::read_access::is_read_tool(&call.name) {
+                    let env = self.session_env_with_mode(&call.session_id, mode);
+                    let target = builtin::read_access::read_target(&env.workspace, &args);
+                    match self.read_access.decide(&env, &call.session_id, &target) {
+                        builtin::read_access::ReadDecision::Allowed => {}
+                        builtin::read_access::ReadDecision::NeedsApproval { sensitive, path } => {
+                            return CheckOutcome::NeedConfirm {
+                                reason: if sensitive {
+                                    format!(
+                                        "Agent 想读取敏感文件（密钥/凭据类，路径 {}）。批准后仅本次可读",
+                                        path.display()
+                                    )
+                                } else {
+                                    format!(
+                                        "Agent 想读取工作区外的文件（{}）——不在当前工作区内",
+                                        path.display()
+                                    )
+                                },
+                                preview: ToolPreview {
+                                    kind: if sensitive {
+                                        "read-sensitive".into()
+                                    } else {
+                                        "read".into()
+                                    },
+                                    content: path.display().to_string(),
+                                },
+                                options: if sensitive {
+                                    vec!["once".into()]
+                                } else {
+                                    vec!["once".into(), "session".into()]
+                                },
+                            };
+                        }
+                    }
+                }
+                CheckOutcome::Allow {
+                    source: allow_source_str(&source),
+                }
+            }
             Decision::Confirm {
                 double_prompt,
                 reason,
@@ -413,8 +475,21 @@ impl ToolExecutor for PipelineExecutor {
     /// 映射（ActionCategory::risk_level），run_command 以命令内容为准——只读/
     /// 白名单直调 low、任意命令 medium、规则命中 high；旧「按工具名静态表」
     /// （run_command 一律 high）退役。参数非法/未注册等异常 → medium（中性，
-    /// 不放大也不掩盖；8002 语义由 check 负责）
+    /// 不放大也不掩盖；8002 语义由 check 负责）。
+    /// 2026-11-26 读审批化：敏感文件读取标 high（审批卡红卡依据）。
     fn risk_of_call(&self, call: &ToolInvocation) -> &'static str {
+        // 敏感读优先（只读类但碰密钥/凭据 → 红卡高危）
+        if builtin::read_access::is_read_tool(&call.name) {
+            if let Ok(args) = Self::parse_args(call) {
+                let env = self.session_env(&call.session_id);
+                let target = builtin::read_access::read_target(&env.workspace, &args);
+                if bbrt_sec::sandbox::path::is_sensitive_file(
+                    &bbrt_sec::sandbox::path::read_realpath(&target),
+                ) {
+                    return "high";
+                }
+            }
+        }
         let args = match Self::parse_args(call) {
             Ok(v) => Self::gate_args(&call.name, &v),
             Err(_) => return "medium",
@@ -440,14 +515,15 @@ impl ToolExecutor for PipelineExecutor {
     /// D19：workspace 类工具按会话解析执行环境——项目会话沙箱根=该项目目录
     /// （A 项目会话写 B 项目 → 预检 8020 + Seatbelt 内核双拦），日常会话=
     /// 默认用户工作区同款覆写（2026-11-12 修订：原整体拒绝废除）。
-    fn execute(&self, _mode: bbrt_sec::gate::PermissionMode, call: &ToolInvocation) -> ToolOutcome {
+    fn execute(&self, mode: bbrt_sec::gate::PermissionMode, call: &ToolInvocation) -> ToolOutcome {
         let args = match Self::parse_args(call) {
             Ok(v) => v,
             Err(b) => return blocked(&b),
         };
         let ws_bound = WORKSPACE_BOUND_TOOLS.contains(&call.name.as_str());
         let env = if ws_bound {
-            self.session_env(&call.session_id)
+            // full-auto 覆写（读审批化：工作区外非敏感读在 full-auto 放行的依据）
+            self.session_env_with_mode(&call.session_id, mode)
         } else {
             self.env.clone()
         };
@@ -556,13 +632,25 @@ impl ToolExecutor for PipelineExecutor {
         }
     }
 
-    /// 审批通过后落记忆（§4.2；高危 permanent 由 GrantStore 硬名单拒绝）
+    /// 审批通过后落记忆（§4.2；高危 permanent 由 GrantStore 硬名单拒绝）。
+    /// 2026-11-26 读审批化：读工具路由到读授权登记表（once=精确票据 /
+    /// session=父目录树；敏感恒精确票据），不走命令级 GrantStore
     fn record_grant(
         &self,
         _mode: bbrt_sec::gate::PermissionMode,
         call: &ToolInvocation,
         scope: GrantScope,
     ) -> Result<(), String> {
+        if builtin::read_access::is_read_tool(&call.name) {
+            let args = Self::parse_args(call).map_err(|b| b.message)?;
+            let env = self.session_env(&call.session_id);
+            let target = builtin::read_access::read_target(&env.workspace, &args);
+            let resolved = bbrt_sec::sandbox::path::read_realpath(&target);
+            let sensitive = bbrt_sec::sandbox::path::is_sensitive_file(&resolved);
+            return self
+                .read_access
+                .record_grant(&call.session_id, &resolved, scope, sensitive);
+        }
         let args = Self::parse_args(call).map_err(|b| b.message)?;
         let pattern = grant_pattern(&call.name, &args);
         // A5 补充：命令命中危险规则 → 拒绝永久（GrantStore 硬名单只覆盖永不全自动工具）
@@ -591,6 +679,12 @@ impl ToolExecutor for PipelineExecutor {
             .read()
             .unwrap_or_else(|p| p.into_inner())
             .specs()
+    }
+
+    /// 用户随消息附带登记（2026-11-26：附件=用户亲自授权，工作区外读不弹卡）
+    fn register_attachments(&self, session_id: &str, attachments: &[bbrt_context::AttachmentRef]) {
+        self.read_access
+            .register_attachments(session_id, attachments);
     }
 }
 

@@ -130,7 +130,28 @@ impl PathPolicy {
             .chain(self.writable_exceptions.iter())
             .any(|r| base.starts_with(normalize_lexical(r)))
     }
+}
 
+/// 敏感文件判定（2026-11-26 读审批化：命中=三档弹红卡的依据）。原始名与解析名
+/// 都查（`ln -s id_rsa link` 改名绕过防御，同 validate(Read) 口径）
+pub fn is_sensitive_file(resolved: &Path) -> bool {
+    let hit = |p: &Path| {
+        sensitive_pattern(&p.file_name().unwrap_or_default().to_string_lossy()).is_some()
+    };
+    if hit(resolved) {
+        return true;
+    }
+    fs::canonicalize(resolved).map(|p| hit(&p)).unwrap_or(false)
+}
+
+/// 读路径解析（realpath 尽力而为：存在则 canonicalize，不存在则解析最深存在
+/// 祖先后拼接尾部；供读授权层统一入口用——与 validate 同一解析口径）
+pub fn read_realpath(path: &Path) -> PathBuf {
+    let absolutized = absolutize(path);
+    realpath_best_effort(&absolutized)
+}
+
+impl PathPolicy {
     /// L2 校验入口。返回解析后的规范路径。
     ///
     /// - Write：realpath（不存在则解析最深存在祖先后拼接尾部）∈ 白名单，

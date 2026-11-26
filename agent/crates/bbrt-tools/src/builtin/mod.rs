@@ -20,6 +20,7 @@ pub mod http;
 pub mod memory;
 pub mod plugins;
 pub mod projects;
+pub(crate) mod read_access;
 pub mod search;
 pub mod sessions;
 pub mod skill;
@@ -57,6 +58,12 @@ pub(crate) struct ExecEnv {
     pub journal_hook: Option<JournalHook>,
     /// violation 出口
     pub sink: Arc<dyn ViolationSink>,
+    /// 读授权句柄（2026-11-26 读审批化：工作区外读需审批/附件自动授权/敏感红卡）。
+    /// None=未装配（全局兜底 env——读工作区外一律按未授权拦截，与单测/嵌入式旧行为）
+    pub read_access: Option<Arc<read_access::SessionReadAccess>>,
+    /// 会话当前是否 full-auto（execute 时由 pipeline 按 mode 覆写；工作区外
+    /// 非敏感读在 full-auto 放行——2026-11-26 拍板）
+    pub full_auto: bool,
 }
 
 impl ExecEnv {
@@ -126,9 +133,26 @@ pub(crate) fn now_ms() -> u64 {
 }
 
 /// 相对路径以工作区根为基准解析（模型产出的相对路径语义 = 工作区内相对路径；
-/// 不随 Runtime 进程 cwd 漂移）
+/// 不随 Runtime 进程 cwd 漂移）。2026-11-26：`~`/`~/` 展开 HOME——原实现会把
+/// `~/Desktop/a.txt` 拼成 `<workspace>/~/Desktop/a.txt`（读审批化后模型常给
+/// home 绝对/波浪线路径，不展开则读授权判定全错）
 pub(crate) fn resolve_against(workspace: &std::path::Path, p: &str) -> std::path::PathBuf {
-    let path = std::path::Path::new(p);
+    let trimmed = p.trim();
+    let home = |rest: &str| -> std::path::PathBuf {
+        let h = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+        if rest.is_empty() {
+            h
+        } else {
+            h.join(rest.trim_start_matches('/'))
+        }
+    };
+    if trimmed == "~" {
+        return home("");
+    }
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        return home(rest);
+    }
+    let path = std::path::Path::new(trimmed);
     if path.is_absolute() {
         path.to_path_buf()
     } else {

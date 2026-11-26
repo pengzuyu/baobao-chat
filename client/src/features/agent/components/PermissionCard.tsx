@@ -102,6 +102,7 @@ export const PermissionControls = memo(function PermissionControls({
   item: PermissionItem;
   onRespond: (d: PermissionDecision) => void;
 }) {
+  const { token } = theme.useToken();
   const { request, outcome } = item;
   const waiting = outcome === null;
   const commandPreview = request.preview.kind === 'command' ? request.preview : null;
@@ -154,6 +155,30 @@ export const PermissionControls = memo(function PermissionControls({
               style={{ fontFamily: 'var(--bbc-font-mono)', fontSize: 13 }}
             />
           </div>
+        </>
+      ) : request.preview.kind === 'read' || request.preview.kind === 'read-sensitive' ? (
+        <>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
+            <Typography.Text type="secondary" style={{ flexShrink: 0, minWidth: 60 }}>
+              {request.preview.kind === 'read-sensitive' ? '敏感文件' : '读取文件'}
+            </Typography.Text>
+            <Typography.Text
+              style={{
+                fontFamily: 'var(--bbc-font-mono)',
+                fontSize: 12,
+                wordBreak: 'break-all',
+                minWidth: 0,
+                color: request.preview.kind === 'read-sensitive' ? token.colorError : undefined,
+              }}
+            >
+              {request.preview.path}
+            </Typography.Text>
+          </div>
+          {request.preview.kind === 'read-sensitive' ? (
+            <Typography.Text type="warning" style={{ fontSize: 12 }}>
+              密钥/凭据类文件：批准后仅本次可读，不提供会话/永久记忆
+            </Typography.Text>
+          ) : null}
         </>
       ) : (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13 }}>
@@ -226,7 +251,7 @@ export const PermissionCard = memo(function PermissionCard({
         overflow: 'hidden',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: headBandBg }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: headBandBg }}>
         <ShieldAlert size={14} aria-hidden style={{ color: token.colorWarning, flexShrink: 0 }} />
         <Typography.Text strong style={{ fontSize: 13, flexShrink: 0 }}>
           命令执行请求
@@ -238,7 +263,7 @@ export const PermissionCard = memo(function PermissionCard({
           {request.tool}
         </Typography.Text>
       </div>
-      <div style={{ padding: 12 }}>
+      <div style={{ padding: 14 }}>
         <PermissionControls item={item} onRespond={onRespond} />
       </div>
     </div>

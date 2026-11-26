@@ -10,10 +10,7 @@
 use std::fs;
 use std::path::Path;
 
-use bbrt_sec::errors::CODE_SANDBOX_DENIED;
 use bbrt_sec::gate::ActionCategory;
-use bbrt_sec::sandbox::launcher::ViolationKind;
-use bbrt_sec::sandbox::path::{PathError, PathIntent};
 use serde_json::json;
 
 use super::{deny, str_arg, timed, ExecEnv, ExecOutput, ToolBlock};
@@ -41,21 +38,12 @@ pub(crate) fn search_files(
     let root_arg = str_arg(args, "path");
 
     let (result, ms) = timed(|| -> Result<ExecOutput, ToolBlock> {
-        // 根目录解析：默认工作区；相对路径以工作区根为基准；读边界校验（8020/8026）
+        // 根目录解析：默认工作区；相对路径以工作区根为基准；读授权统一入口
+        // （2026-11-26 审批化：工作区内自动/附件/票据/full-auto；敏感红卡）
         let raw_root = root_arg
             .map(|p| super::resolve_against(&env.workspace, &p))
             .unwrap_or_else(|| env.workspace.clone());
-        let root = match env.path_policy.validate(&raw_root, PathIntent::Read) {
-            Ok(p) => p,
-            Err(PathError::SensitiveRead { code, pattern, .. }) => {
-                return Err(deny(
-                    code,
-                    format!("敏感路径拒访问（8026）: 命中 {pattern}"),
-                ))
-            }
-            Err(e) => return Err(deny(CODE_SANDBOX_DENIED, e.to_string())),
-        };
-        ensure_inside_roots(env, &root)?;
+        let root = super::read_access::authorize_read(env, "search_files", &raw_root)?;
 
         let is_glob = pattern.contains('*') || pattern.contains('?');
         let mut state = WalkState {
@@ -222,31 +210,8 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     go(&p, &t)
 }
 
-/// 读边界（与 fs::ensure_inside_roots 同口径；搜索独立实现避免跨模块私有依赖）
-fn ensure_inside_roots(env: &ExecEnv, resolved: &Path) -> Result<(), ToolBlock> {
-    let inside = env
-        .path_policy
-        .workspace_roots
-        .iter()
-        .chain(env.path_policy.writable_exceptions.iter())
-        .any(|r| resolved.starts_with(fs::canonicalize(r).unwrap_or_else(|_| r.clone())));
-    if inside {
-        Ok(())
-    } else {
-        env.record_violation(
-            ViolationKind::Path,
-            CODE_SANDBOX_DENIED,
-            format!("search_files 根越界: {}", resolved.display()),
-        );
-        Err(deny(
-            CODE_SANDBOX_DENIED,
-            format!(
-                "路径越界（8020）: {} 不在工作区白名单内",
-                resolved.display()
-            ),
-        ))
-    }
-}
+// 读边界 ensure_inside_roots 已退役（2026-11-26 读审批化）——根目录走
+// read_access::authorize_read 统一入口（见 builtin/read_access.rs）。
 
 /// search_files 工具定义（D13-A2 行 1：只读，全档自动）
 pub fn search_files_def() -> ToolDef {
@@ -261,7 +226,7 @@ pub fn search_files_def() -> ToolDef {
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Search pattern (glob or substring)"},
-                "path": {"type": "string", "description": "Search root directory (defaults to the workspace)"}
+                "path": {"type": "string", "description": "Search root directory (absolute, ~/ or relative; defaults to the workspace; outside-root search asks for approval)"}
             },
             "required": ["pattern"]
         }),

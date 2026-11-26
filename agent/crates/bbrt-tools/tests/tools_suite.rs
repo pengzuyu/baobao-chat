@@ -1745,3 +1745,225 @@ fn session_search_管线搜索翻页通读() {
     assert_eq!(v["events_before"], 0);
     assert_eq!(v["events_after"], 1);
 }
+
+// ---------------------------------------------------------------------------
+// 读审批化（2026-11-26）：工作区外读需审批 / 敏感红卡 / full-auto 放行 / 附件自动授权
+// ---------------------------------------------------------------------------
+
+/// 带会话表夹具（sess-daily=日常会话 → 默认用户工作区=ws/user-ws；执行层
+/// session_env 注入读授权句柄）
+fn read_approval_fixture() -> (Fixture, PipelineExecutor, tempfile::TempDir) {
+    let ws = tempfile::tempdir().expect("ws");
+    let reg = {
+        let r = bbrt_session::SessionWorkspaces::new();
+        r.set("sess-a", Some(ws.path().to_path_buf()));
+        r.set("sess-daily", None);
+        r
+    };
+    let f = Fixture::build(None, Some(reg));
+    let ex = f.executor();
+    (f, ex, ws)
+}
+
+#[test]
+fn 读审批_ask档工作区外弹卡_批准once后放行且票据一次性() {
+    let (_f, ex, ws) = read_approval_fixture();
+    let outside = tempfile::tempdir().expect("outside");
+    let f = outside.path().join("note.txt");
+    fs::write(&f, "secret-ish").unwrap();
+
+    // check：门控矩阵放行（ReadOnly）后追加读判定 → 弹卡
+    let c = call_in(
+        "read_file",
+        serde_json::json!({"path": f.to_string_lossy()}),
+        "sess-daily",
+    );
+    match ex.check(PermissionMode::Ask, &c) {
+        CheckOutcome::NeedConfirm {
+            reason,
+            preview,
+            options,
+        } => {
+            assert!(reason.contains("工作区外"), "{reason}");
+            assert_eq!(preview.kind, "read");
+            assert_eq!(preview.content, {
+                bbrt_sec::sandbox::path::read_realpath(&f)
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            assert_eq!(options, vec!["once".to_string(), "session".to_string()]);
+        }
+        other => panic!("期望 NeedConfirm，实际 {other:?}"),
+    }
+    // 执行层无票据：拒绝
+    let (code, msg) = blocked_code(ex.execute(PermissionMode::Ask, &c));
+    assert_eq!(code, bbrt_sec::errors::CODE_SANDBOX_DENIED, "{msg}");
+    // 审批通过（once）→ 放行
+    ex.record_grant(PermissionMode::Ask, &c, GrantScope::Once)
+        .unwrap();
+    let (summary, ..) = ok_of(ex.execute(PermissionMode::Ask, &c));
+    assert!(summary.contains("secret-ish"), "{summary}");
+    // once 票据已消费 → 再读拒绝
+    blocked_code(ex.execute(PermissionMode::Ask, &c));
+    let _ = ws;
+}
+
+#[test]
+fn 读审批_敏感文件红卡仅once_风险标high_session票据无效() {
+    let (_f, ex, _ws) = read_approval_fixture();
+    let outside = tempfile::tempdir().expect("outside");
+    let secret = outside.path().join("id_rsa_test");
+    fs::write(&secret, "PRIVATE KEY").unwrap();
+    let c = call_in(
+        "read_file",
+        serde_json::json!({"path": secret.to_string_lossy()}),
+        "sess-daily",
+    );
+    assert_eq!(ex.risk_of_call(&c), "high", "敏感读应标 high（红卡）");
+    match ex.check(PermissionMode::Ask, &c) {
+        CheckOutcome::NeedConfirm {
+            preview, options, ..
+        } => {
+            assert_eq!(preview.kind, "read-sensitive");
+            assert_eq!(options, vec!["once".to_string()], "敏感仅本次");
+        }
+        other => panic!("期望 NeedConfirm，实际 {other:?}"),
+    }
+    // 敏感文件的「会话」授权被降级为精确票据（record_grant 内 sensitive→once）：
+    // 同目录另一敏感文件不得连带放行
+    let secret2 = outside.path().join(".env.local");
+    fs::write(&secret2, "PASSWORD=x").unwrap();
+    let c2 = call_in(
+        "read_file",
+        serde_json::json!({"path": secret2.to_string_lossy()}),
+        "sess-daily",
+    );
+    ex.record_grant(PermissionMode::Ask, &c, GrantScope::Session)
+        .unwrap();
+    let (s, ..) = ok_of(ex.execute(PermissionMode::Ask, &c));
+    assert!(!s.is_empty());
+    blocked_code(ex.execute(PermissionMode::Ask, &c2));
+    // 目录树授权对敏感文件无效：先给 note 的 session 授权，敏感文件仍拦
+    let note = outside.path().join("note.txt");
+    fs::write(&note, "x").unwrap();
+    let cn = call_in(
+        "read_file",
+        serde_json::json!({"path": note.to_string_lossy()}),
+        "sess-daily",
+    );
+    ex.record_grant(PermissionMode::Ask, &cn, GrantScope::Session)
+        .unwrap();
+    blocked_code(ex.execute(PermissionMode::Ask, &c2));
+}
+
+#[test]
+fn 读审批_fullauto工作区外自动放行_session档目录树放行() {
+    let (_f, ex, _ws) = read_approval_fixture();
+    let outside = tempfile::tempdir().expect("outside");
+    let f1 = outside.path().join("a.txt");
+    let f2 = outside.path().join("b.txt");
+    fs::write(&f1, "AAA").unwrap();
+    fs::write(&f2, "BBB").unwrap();
+    let c1 = call_in(
+        "read_file",
+        serde_json::json!({"path": f1.to_string_lossy()}),
+        "sess-daily",
+    );
+    // full-auto：check 直接放行、execute 不需要票据
+    assert!(matches!(
+        ex.check(PermissionMode::FullAuto, &c1),
+        CheckOutcome::Allow { .. }
+    ));
+    ok_of(ex.execute(PermissionMode::FullAuto, &c1));
+    // ask 档弹卡批准「本会话」（目录树）→ 同目录其它文件免再批
+    let c2 = call_in(
+        "read_file",
+        serde_json::json!({"path": f2.to_string_lossy()}),
+        "sess-daily",
+    );
+    assert!(matches!(
+        ex.check(PermissionMode::Ask, &c2),
+        CheckOutcome::NeedConfirm { .. }
+    ));
+    ex.record_grant(PermissionMode::Ask, &c2, GrantScope::Session)
+        .unwrap();
+    let (s2, ..) = ok_of(ex.execute(PermissionMode::Ask, &c2));
+    assert!(s2.contains("BBB"), "{s2}");
+    let (s1, ..) = ok_of(ex.execute(PermissionMode::Ask, &c1));
+    assert!(s1.contains("AAA"), "{s1}");
+}
+
+#[test]
+fn 读审批_附件自动授权_用户亲自给的敏感文件也放行() {
+    let (_f, ex, _ws) = read_approval_fixture();
+    let outside = tempfile::tempdir().expect("outside");
+    let plain = outside.path().join("report.pdf");
+    let secret = outside.path().join(".env.local");
+    fs::write(&plain, "PDF").unwrap();
+    fs::write(&secret, "PASSWORD=x").unwrap();
+    let atts = vec![
+        bbrt_context::AttachmentRef {
+            path: plain.to_string_lossy().into_owned(),
+            kind: bbrt_context::AttachmentKind::File,
+            name: "report.pdf".into(),
+            size: 3,
+            mime: None,
+        },
+        bbrt_context::AttachmentRef {
+            path: secret.to_string_lossy().into_owned(),
+            kind: bbrt_context::AttachmentKind::File,
+            name: ".env.local".into(),
+            size: 10,
+            mime: None,
+        },
+    ];
+    ex.register_attachments("sess-daily", &atts);
+    let cp = call_in(
+        "read_file",
+        serde_json::json!({"path": plain.to_string_lossy()}),
+        "sess-daily",
+    );
+    let cs = call_in(
+        "read_file",
+        serde_json::json!({"path": secret.to_string_lossy()}),
+        "sess-daily",
+    );
+    // 附带文件（含敏感）ask 档直接放行——用户亲自给的
+    assert!(matches!(
+        ex.check(PermissionMode::Ask, &cp),
+        CheckOutcome::Allow { .. }
+    ));
+    assert!(matches!(
+        ex.check(PermissionMode::Ask, &cs),
+        CheckOutcome::Allow { .. }
+    ));
+    ok_of(ex.execute(PermissionMode::Ask, &cs));
+    ok_of(ex.execute(PermissionMode::Ask, &cp));
+    // 未附带的工作区外文件照旧弹卡
+    let other = outside.path().join("other.txt");
+    fs::write(&other, "x").unwrap();
+    let co = call_in(
+        "read_file",
+        serde_json::json!({"path": other.to_string_lossy()}),
+        "sess-daily",
+    );
+    assert!(matches!(
+        ex.check(PermissionMode::Ask, &co),
+        CheckOutcome::NeedConfirm { .. }
+    ));
+}
+
+#[test]
+fn 读审批_波浪号路径展开后正确判定() {
+    let (_f, ex, _ws) = read_approval_fixture();
+    // ~/ 不存在的工作区外路径：ask 弹卡（read_realpath 尽力解析不 panic）
+    let c = call_in(
+        "read_file",
+        serde_json::json!({"path": "~/bbc-nonexistent-probe.txt"}),
+        "sess-daily",
+    );
+    assert!(matches!(
+        ex.check(PermissionMode::Ask, &c),
+        CheckOutcome::NeedConfirm { .. }
+    ));
+}

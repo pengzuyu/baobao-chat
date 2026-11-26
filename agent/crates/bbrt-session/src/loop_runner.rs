@@ -389,13 +389,16 @@ impl SessionRunner {
 pub(crate) fn user_workspace_line(ws: &std::path::Path) -> String {
     format!(
         "User workspace {} (shared across tasks on this machine; store all outputs here)\n\
-         - Operations: file tools work inside the current working root, which is this space \
-         by default — read_file/list_dir/search_files to read, write_file/edit_file to create \
-         and modify (create new files directly with write_file); create directories and delete \
-         files/directories inside it via run_command. Paths outside the working root are \
-         rejected. The user's projects live elsewhere: to read or modify one, call \
-         list_projects and then use_project with its path — the working root switches to that \
-         project; call use_project without arguments to come back here.\n\
+         - Operations: read via read_file/list_dir/search_files — inside the current working \
+         root this is automatic; reading files outside the root triggers an approval card \
+         (files the user attaches to a message are pre-approved; in full-auto mode \
+         out-of-root reads run without asking; secret/credential-looking files always ask). \
+         Write via write_file/edit_file — inside the current working root only (create new \
+         files directly with write_file); create directories and delete files/directories \
+         inside it via run_command. Writing outside the working root is not allowed. The \
+         user's projects live elsewhere: to read or modify one, call list_projects and then \
+         use_project with its path — the working root switches to that project; call \
+         use_project without arguments to come back here.\n\
          - Directory layout: organize outputs into topic subdirectories (e.g. reports/, \
          data/) instead of piling loose files in the root; put one-off intermediates in tmp/.\n\
          - Naming: semantic file names; CJK characters are allowed; no spaces or special \

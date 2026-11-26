@@ -244,6 +244,11 @@ pub fn map_event(evt: &SessionEvent) -> Option<RuntimeToHost> {
                     "diff" => Preview::Diff {
                         path: preview.clone(),
                     },
+                    // 读审批（2026-11-26）：read-sensitive=敏感红卡
+                    "read" | "read-sensitive" => Preview::Read {
+                        path: preview.clone(),
+                        sensitive: preview_kind.as_str() == "read-sensitive",
+                    },
                     _ => Preview::Command {
                         command: preview.clone(),
                     },
