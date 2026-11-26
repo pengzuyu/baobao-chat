@@ -989,6 +989,9 @@ func main() {
 	// 递增，复用管理端 SuggestEmpno 口径）；不挂部门=虚拟「未分组」（管理员后续调整）；
 	// 注册成功回登录页自行登录（不自动签发——用户拍板）；单租户 v0.1=tenant 1
 	mux.HandleFunc("POST /api/v1/auth/register", handleAuthRegister(orgRepo, adminSvc.SuggestEmpno, cfg.MailDomain))
+	// 工号/邮箱预览（2026-11-26 注册表单动态展示）：预登录公开只读——姓名防抖取「将分配」
+	// 值（真实查重递增），预览不占用，注册瞬间以回执为准
+	mux.HandleFunc("GET /api/v1/auth/empno-preview", handleAuthEmpnoPreview(adminSvc.SuggestEmpno, cfg.MailDomain))
 	// D9 回填：平台总闸双点（auth OBO 签发 + aigw 每请求）
 	agentKillOn = adminSvc.AgentKillOn
 	// 管理路由守卫（RBAC 阶段二）：auth → tenant → per-route 权限点判定。
@@ -1442,6 +1445,27 @@ func handleAuthRegister(users orgrepo.Repo, suggest func(ctx context.Context, te
 		}
 		log.Printf("auth register: 自助注册成功（工号=%s 邮箱=%s 租户=1，未分组待管理员调整）", empno, email)
 		httpx.OK(w, r, map[string]any{"employee_no": empno, "email": email})
+	}
+}
+
+// handleAuthEmpnoPreview 工号/邮箱预览（预登录公开、只读无写径；2026-11-26 注册表单
+// 动态展示）：输入姓名防抖拉取「将分配」的工号与邮箱——复用 SuggestEmpno（拼音基名
+// +查重两位递增）与注册同一条路径，重名场景预览即真实值。预览仅供参考不占用：并发
+// 注册同名窗口以注册回执为准；生僻字/超 99 同名透出错误由前端降级占位。
+// 单租户 v0.1=tenant 1（与 handleAuthRegister 同口径）。
+func handleAuthEmpnoPreview(suggest func(ctx context.Context, tenantID int64, name string) (string, error), mailDomain string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+		if name == "" || len([]rune(name)) > 50 {
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, "姓名非法（非空 ≤50 字）"))
+			return
+		}
+		empno, err := suggest(r.Context(), 1, name)
+		if err != nil {
+			httpx.Fail(w, r, err)
+			return
+		}
+		httpx.OK(w, r, map[string]any{"employee_no": empno, "email": empno + "@" + mailDomain})
 	}
 }
 

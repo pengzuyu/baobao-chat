@@ -154,6 +154,19 @@ export async function apiRegister(displayName: string, password: string): Promis
   });
 }
 
+/** 工号/邮箱预览（2026-11-26 注册表单动态展示）：输入姓名防抖调用——服务端按当前库内
+ *  同名情况给出「将分配」值（真实查重递增，与注册同路径）。预览不占用：并发同名窗口
+ *  以注册回执为准；生僻字等场景 4xx，前端降级占位 */
+export async function apiEmpnoPreview(name: string): Promise<RegisterResult> {
+  if (USE_MOCK) {
+    await delay(150);
+    const empno = `mock-${name.toLowerCase()}`;
+    return { employee_no: empno, email: `${empno}@bbc.io` };
+  }
+  const params = new URLSearchParams({ name });
+  return http.get<RegisterResult>(`/auth/empno-preview?${params}`);
+}
+
 /** ── setup 初始化向导（16 篇 §2.2 Web 化：空系统引导首个管理员） ── */
 
 /** 系统是否已初始化（租户内已有用户）。mock 模式恒已初始化——纯前端走查不被向导打断 */

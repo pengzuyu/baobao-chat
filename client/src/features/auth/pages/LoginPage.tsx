@@ -10,6 +10,9 @@
  * （token 已发但被本页拦截，改密成功才放行进应用）。
  * D26-O3：login-page/login-card 自研壳退役——居中布局内联 + antd Card，
  * 错误/锁定提示→Alert、回车提交→onPressEnter；登录/注册/搜人逻辑不动。
+ * 2026-11-26：注册/回执/首登改密三卡补 margin:auto 与登录卡对齐（此前仅登录卡居中）；
+ * 注册表单工号/邮箱从 extra 提示改为框内动态只读预览——输入姓名防抖取服务端
+ * /auth/empno-preview（真实查重递增，预览不占用，注册以回执为准），生僻字降级占位。
  */
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
@@ -18,9 +21,8 @@ import { Navigate } from 'react-router-dom';
 import { errText, getErrorText } from '../../../shared/api/http';
 import { Logo } from '../../../shared/ui/Logo';
 import { APP_NAME, COPYRIGHT, TAGLINE } from '../../../shared/brand';
-import { useMailDomain } from '../../../shared/publicConfig';
 import { useAuthStore } from '../store/auth';
-import { apiRegister, apiSetupStatus, type UserCard } from '../api/auth';
+import { apiEmpnoPreview, apiRegister, apiSetupStatus, type RegisterResult, type UserCard } from '../api/auth';
 import { UserPicker } from '../components/UserPicker';
 
 /** 认证页居中壳 + 品牌区（D26-O3 内联化）
@@ -84,8 +86,30 @@ export function LoginPage() {
   const [registeredEmpno, setRegisteredEmpno] = useState('');
   const [registeredEmail, setRegisteredEmail] = useState('');
 
-  // 邮箱统一后缀（2026-11-26 部署侧单源）：注册提示运行时取，未返回前文案降级
-  const mailDomain = useMailDomain();
+  // 工号/邮箱动态预览（2026-11-26）：输入姓名防抖拉取「将分配」值（服务端真实查重），
+  // 生僻字/请求失败降级 null 占位；注册瞬间仍以服务端回执为准（并发同名窗口）
+  const [empnoPreview, setEmpnoPreview] = useState<RegisterResult | null>(null);
+  useEffect(() => {
+    const name = regName.trim();
+    if (!name) {
+      setEmpnoPreview(null);
+      return;
+    }
+    let alive = true;
+    const timer = setTimeout(() => {
+      apiEmpnoPreview(name)
+        .then((r) => {
+          if (alive) setEmpnoPreview(r);
+        })
+        .catch(() => {
+          if (alive) setEmpnoPreview(null);
+        });
+    }, 300);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [regName]);
 
   const submitRegister = async () => {
     if (regBusy) return;
@@ -161,7 +185,7 @@ export function LoginPage() {
     };
     return (
       <div style={AUTH_PAGE_STYLE}>
-        <Card style={{ width: 360 }}>
+        <Card style={{ width: 360, margin: 'auto' }}>
           <AuthBrand title="首次登录 · 修改密码" sub="初始口令为临时口令，请设置新密码后进入" />
           <Form layout="vertical">
             <Form.Item label="当前口令（初始口令）">
@@ -196,7 +220,7 @@ export function LoginPage() {
   if (mode === 'registered') {
     return (
       <div style={AUTH_PAGE_STYLE}>
-        <Card style={{ width: 360 }}>
+        <Card style={{ width: 360, margin: 'auto' }}>
           <AuthBrand title="注册成功" sub="请牢记你的工号（登录账号）" />
           <Typography.Text code data-testid="register-empno" style={{ display: 'block', textAlign: 'center', fontSize: 22, marginBottom: 4 }}>
             {registeredEmpno}
@@ -219,13 +243,10 @@ export function LoginPage() {
   if (mode === 'register') {
     return (
       <div style={AUTH_PAGE_STYLE}>
-        <Card style={{ width: 360 }}>
+        <Card style={{ width: 360, margin: 'auto' }}>
           <AuthBrand title="注册账号" sub="姓名 + 口令即可，工号将自动分配" />
           <Form layout="vertical">
-            <Form.Item
-              label="姓名"
-              extra={mailDomain ? `邮箱将自动生成为 工号@${mailDomain}（与工号一并展示）` : '邮箱将自动生成（与工号一并展示）'}
-            >
+            <Form.Item label="姓名">
               <Input
                 placeholder="真实姓名（用于通讯录与搜索）"
                 value={regName}
@@ -235,6 +256,14 @@ export function LoginPage() {
                 maxLength={50}
                 data-testid="register-name"
               />
+            </Form.Item>
+            {/* 工号/邮箱预览入框（2026-11-26）：输入姓名即动态显示「将分配」的真实值
+                （服务端查重递增），只读不可改；预览仅供参考——并发同名以注册回执为准 */}
+            <Form.Item label="工号（自动生成，登录账号）">
+              <Input value={empnoPreview?.employee_no ?? ''} placeholder="输入姓名后自动生成" disabled data-testid="register-empno-preview" />
+            </Form.Item>
+            <Form.Item label="邮箱（自动生成，不可修改）">
+              <Input value={empnoPreview?.email ?? ''} placeholder="输入姓名后自动生成" disabled data-testid="register-email-preview" />
             </Form.Item>
             <Form.Item label="密码（≥8 位，含字母与数字）">
               <Input.Password value={regPwd} onChange={(e) => setRegPwd(e.target.value)} size="large" autoComplete="new-password" />
