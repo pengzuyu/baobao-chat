@@ -14,7 +14,7 @@ import {
 } from 'antd';
 import type { UploadFile } from 'antd';
 import {
-  Bot, CheckCircle2, Download, Package, Puzzle, RefreshCw, Search, ShieldAlert, Sparkles, Terminal, Trash2, Upload as UploadIcon, Wrench,
+  Bot, CheckCircle2, Download, KeyRound, Package, Puzzle, RefreshCw, Search, ShieldAlert, Sparkles, Terminal, Trash2, Upload as UploadIcon, Wrench,
 } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
 import { Empty } from '../../../shared/ui/Empty';
@@ -29,6 +29,10 @@ import {
 import { AgentSubNav } from '../../agent/components/AgentSubNav';
 
 const CATEGORIES = ['', 'devops', 'kb', 'im', 'office', 'other'];
+/** 平台凭证占位（RT 调用层按受众票逐请求动态注入——D38 单票制）；敏感项快捷填充写此值 */
+const PLATFORM_TOKEN = '${BBC_USER_TOKEN}';
+/** 认证语义 key 命中（与占位提示同口径）——快捷填充按钮的展示条件之一 */
+const AUTH_KEY_RE = /token|secret|key|auth|credential/i;
 const COMPONENTS: { value: NonNullable<CatalogQuery['component']>; label: string }[] = [
   { value: '', label: '全部组件' },
   { value: 'tool', label: '带工具' },
@@ -258,6 +262,30 @@ export function PluginPage() {
   const identityTargets = useMemo(
     () => (local?.mcpServers ?? []).filter((sv) => sv.kind === 'http').map((sv) => sv.url ?? ''),
     [local],
+  );
+
+  // 平台凭证快捷填充（2026-11-26）：仅插件含 HTTP MCP server 时可见
+  // （stdio 无令牌拍板不变——占位在 env/args 一律剥空）
+  const hasHttpServer = useMemo(
+    () => (local?.mcpServers ?? []).some((sv) => sv.kind === 'http'),
+    [local],
+  );
+  // 身份注入是否已定（无需用户开关）：作者声明 usesIdentity 恒注入，
+  // 或任一 HTTP server 自带声明（x-bbc-auth/headers 占位——装配归一即注入）
+  const identityDeclared = useMemo(
+    () =>
+      !!detail?.plugin.manifest?.usesIdentity ||
+      (local?.mcpServers ?? []).some((sv) => sv.kind === 'http' && sv.authDeclared),
+    [detail, local],
+  );
+  // 填了平台凭证但身份未注入 → 提示条 + 一键开启（不静默代开，D22 §6.3 授权须确认）
+  const needIdentityHint = useMemo(
+    () =>
+      hasHttpServer &&
+      !identityDeclared &&
+      !local?.useIdentity &&
+      Object.values(configDraft).some((v) => typeof v === 'string' && v.includes(PLATFORM_TOKEN)),
+    [hasHttpServer, identityDeclared, local, configDraft],
   );
 
   const toggleIdentity = (pluginId: string, enabled: boolean) => {
@@ -655,20 +683,68 @@ export function PluginPage() {
                     从 MCP 配置自动发现（${'{CONFIG:key}'} 占位）——填写后保存即注入调用
                   </Typography.Text>
                 )}
+                <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                  认证类配置可点输入框旁「平台凭证」——调用时自动注入平台签发的身份票据（仅平台生态内服务可验证；第三方系统请粘贴其签发的 token）
+                </Typography.Text>
                 <Form layout="vertical" style={{ marginTop: 8 }}>
-                  {configFormKeys.map(({ key, secret }) => (
-                    <Form.Item key={key} label={<Typography.Text code>{key}</Typography.Text>}>
-                      <Input.Password
-                        value={configDraft[key] ?? ''}
-                        placeholder={secret || /token|secret|key/i.test(key) ? '敏感值，保存后存入系统钥匙串' : ''}
-                        onChange={(ev) => setConfigDraft((prev) => ({ ...prev, [key]: ev.target.value }))}
-                      />
-                    </Form.Item>
-                  ))}
+                  {configFormKeys.map(({ key, secret }) => {
+                    const authLike = secret || AUTH_KEY_RE.test(key);
+                    const quickFill = hasHttpServer && authLike;
+                    return (
+                      <Form.Item key={key} label={<Typography.Text code>{key}</Typography.Text>}>
+                        <Input.Password
+                          value={configDraft[key] ?? ''}
+                          placeholder={authLike ? '敏感值，保存后存入系统钥匙串' : ''}
+                          onChange={(ev) => setConfigDraft((prev) => ({ ...prev, [key]: ev.target.value }))}
+                          addonAfter={
+                            quickFill ? (
+                              <Button
+                                variant="text"
+                                size="small"
+                                icon={<KeyRound size={12} aria-hidden />}
+                                title="填入平台凭证——调用时自动注入平台签发的身份票据（仅平台生态内服务可验证）"
+                                onClick={() => setConfigDraft((prev) => ({ ...prev, [key]: PLATFORM_TOKEN }))}
+                              >
+                                平台凭证
+                              </Button>
+                            ) : undefined
+                          }
+                        />
+                        {configDraft[key] === PLATFORM_TOKEN ? (
+                          <Tag
+                            icon={<KeyRound size={11} aria-hidden />}
+                            closable
+                            onClose={() => setConfigDraft((prev) => ({ ...prev, [key]: '' }))}
+                            style={{ marginTop: 4 }}
+                          >
+                            平台凭证 · 调用时自动注入
+                          </Tag>
+                        ) : null}
+                      </Form.Item>
+                    );
+                  })}
                 </Form>
                 <Button disabled={busyId === detail.plugin.plugin_id} onClick={() => saveConfig(detail.plugin.plugin_id)}>
                   保存配置
                 </Button>
+                {needIdentityHint && detail ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginTop: 8 }}
+                    message="已填平台凭证，但「以我的身份调用」未开启——调用时占位将替换为空（匿名请求）"
+                    action={
+                      <Button
+                        variant="secondary"
+                        size="small"
+                        disabled={busyId === detail.plugin.plugin_id}
+                        onClick={() => toggleIdentity(detail.plugin.plugin_id, true)}
+                      >
+                        一键开启
+                      </Button>
+                    }
+                  />
+                ) : null}
               </div>
             ) : null}
 

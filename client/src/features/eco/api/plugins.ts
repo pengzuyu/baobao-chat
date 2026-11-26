@@ -126,8 +126,8 @@ export interface PluginLocalState {
   config: Record<string, string>;
   /** 配置项自动发现（2026-11-25）：mcp 定义实际引用的 ${CONFIG:key}（headers 引用=secret） */
   discoveredConfigKeys?: { key: string; secret: boolean }[];
-  /** MCP server 概览（身份开关可见性判定 + 目的地展示） */
-  mcpServers?: { name: string; kind: 'stdio' | 'http'; url: string | null }[];
+  /** MCP server 概览（身份开关可见性判定 + 目的地展示）；authDeclared=作者已声明统一身份（x-bbc-auth/headers 占位），无需用户开关 */
+  mcpServers?: { name: string; kind: 'stdio' | 'http'; url: string | null; authDeclared?: boolean }[];
   /** 用户侧身份开关（plugin-state.json useIdentity） */
   useIdentity?: boolean;
 }
