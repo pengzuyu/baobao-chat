@@ -461,6 +461,103 @@ function stampTurnDone(streams: Record<string, StreamItem[]>, sessionId: string)
   return streams;
 }
 
+// ---- 外部来源会话补发现（2026-11-27 用户报障：Claude Code/CLI 调用后会话重启 App 才出现）----
+// 会话列表只在 init 拉一次，此后仅前端自己的 createSession 往列表加行。外部智能体
+// （A2A/MCP）、bbc ask CLI、定时任务都在壳侧 host.start_session 建会话——前端无创建
+// 参与，也没有创建通知（session.ready 回执被泵按 reply_to 收走）→ 列表要等重启才
+// 出现这些会话。不加新事件：它们的后续事件照常经 agent://event 到达，「列表不认识
+// 的 sessionId 来了事件」即列表已过期的信号 → 拉一次列表补行。
+// 流同理：user.message 没有事件镜像、也没人乐观上屏，外部驱动回合的提问行要从 WAL
+// 历史补（回合开始的 session.state running 之后 RT 立即写 user.text，见
+// loop_runner run_turn_with；拉取往返远早于首个流式增量）。
+
+/** 拉取在途收到的未知会话事件补丁（sid → 最新状态）：拉取快照可能早于这些事件，
+ *  合并后回放到新行上，否则新行停在快照时的旧状态（如已收口 idle 仍显运行中） */
+const lateSessionPatches = new Map<string, Partial<AgentSessionMeta>>();
+let sessionsPullInFlight = false;
+let sessionsPullDirty = false;
+/** 本地发起、尚未见到 running 的回合（sendText/sendTextTo 登记，stateChanged
+ *  running 消费）：提问行已乐观上屏，回合开始的对账拉历史（整段 WAL）直接跳过 */
+const localTurns = new Set<string>();
+
+/** 拉会话列表补行：合并式——只加本地没有的行（置顶），不动既有行（保留本地乐观态）。
+ *  在途又有未知会话事件 → 本轮结束后再补一轮；失败静默（下一个未知会话事件/init
+ *  重入会再试）。返回本轮是否拉到列表 */
+async function pullSessions(): Promise<boolean> {
+  if (sessionsPullInFlight) {
+    sessionsPullDirty = true;
+    return false;
+  }
+  sessionsPullInFlight = true;
+  let ok = false;
+  try {
+    do {
+      sessionsPullDirty = false;
+      try {
+        const fetched = await bridge.listSessions();
+        ok = true;
+        useAgentStore.setState((s) => {
+          const known = new Set(s.sessions.map((x) => x.id));
+          const added = fetched.filter((m) => !known.has(m.id)).map((m) => {
+            const patch = lateSessionPatches.get(m.id);
+            return patch ? { ...m, ...patch } : m;
+          });
+          return added.length > 0 ? { sessions: [...added, ...s.sessions] } : s;
+        });
+      } catch {
+        /* 拉取失败静默：下一个未知会话事件 / init 重入会再补 */
+      }
+      // 补丁只对本轮快照有意义，不留到下一轮
+      lateSessionPatches.clear();
+    } while (sessionsPullDirty);
+  } finally {
+    sessionsPullInFlight = false;
+  }
+  return ok;
+}
+
+function noteUnknownSession(event: AgentEvent): void {
+  if (event.type === 'stateChanged') {
+    lateSessionPatches.set(event.sessionId, { status: event.state });
+  } else if (event.type === 'sessionEnded') {
+    lateSessionPatches.set(event.sessionId, { status: 'ended', endedAt: Date.now(), summary: event.summary });
+  }
+  void pullSessions();
+}
+
+/** 回合开始对账提问气泡：外部驱动回合（外部智能体/CLI/定时任务，含对既有会话的
+ *  续聊）流里没有本轮 user 行 → 按 WAL 历史的 user 行数补齐尾部差额（本地发送路径
+ *  已乐观上屏，行数相等即无操作）。流尚未初始化（从未打开/刚补发现的外部会话）先走
+ *  整段历史回填；回填被抢先落流的直播项顶掉时，对账仍把提问行补到流首 */
+async function backfillTurnUserLine(sid: string): Promise<void> {
+  const st = useAgentStore.getState();
+  // 回合开始时的流尾位置：拉取往返期间本轮直播项若已抢先落流，提问行仍插在其前
+  const anchor = (st.streams[sid] ?? []).length;
+  if (!st.historyLoadedBySession[sid] && anchor === 0) await st.loadHistoryIfEmpty(sid);
+  let items: HistoryItem[];
+  try {
+    items = (await bridge.loadHistory(sid)).items;
+  } catch {
+    return; // 历史拉取失败不阻断直播（缺提问行，重开会话由历史回放补上）
+  }
+  const userRows = items.filter((it): it is Extract<HistoryItem, { kind: 'user' }> => it.kind === 'user');
+  useAgentStore.setState((s) => {
+    const list = s.streams[sid] ?? [];
+    const missing = userRows.slice(list.filter((it) => it.kind === 'user').length);
+    if (missing.length === 0) return s;
+    const at = Math.min(anchor, list.length);
+    const lines: StreamItem[] = missing.map((it) => ({
+      kind: 'user',
+      key: nextKey('u'),
+      text: it.text,
+      ts: it.ts ?? 0,
+      turnDoneAt: it.turnDoneAt,
+      attachments: it.attachments,
+    }));
+    return { streams: { ...s.streams, [sid]: [...list.slice(0, at), ...lines, ...list.slice(at)] } };
+  });
+}
+
 export const useAgentStore = create<AgentState>((set, get) => ({
   bridgeKind: bridge.kind,
   ready: false,
@@ -491,7 +588,15 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   init: async () => {
     // 事件订阅只装一次（App 挂载已兜底注册；此处幂等）
     ensureAgentEventSubscribed();
-    if (get().ready || get().sessionsLoading) return;
+    if (get().sessionsLoading) return;
+    // 已就绪的重入（错误态「重试」/进工作台/进聊天页预取）= 静默补行：只加本地没有的
+    // 会话（外部来源会话的事件窗口期漏掉的在此兜底），拉到列表即清错误态
+    if (get().ready) {
+      void pullSessions().then((ok) => {
+        if (ok) set({ sessionsError: null });
+      });
+      return;
+    }
 
     set({ sessionsLoading: true, sessionsError: null });
     try {
@@ -576,7 +681,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const meta = await bridge.startSession(opts?.workspace ?? '', opts?.mode ?? DEFAULT_PERMISSION_MODE, model, opts?.title, opts?.origin);
     set((s) => ({
       createError: null,
-      sessions: [meta, ...s.sessions],
+      // 同 id 去重：session.ready 的 UNT 镜像若先于本命令返回到达，会按未知会话
+      // 触发外部来源补行（noteUnknownSession），此处以本地投影为准合并
+      sessions: [meta, ...s.sessions.filter((x) => x.id !== meta.id)],
       activeSessionId: meta.id,
       modelBySession: { ...s.modelBySession, [meta.id]: meta.modelOverride ?? DEFAULT_MODEL_KEY },
       // 新建即无历史：直接置已回填（工作台进会话首帧即居中输入框，不经加载态）
@@ -633,7 +740,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now(), origin: 'im', attachments }] },
       sessions: touchSession(s.sessions, sid, {}),
     }));
-    await bridge.sendMessage(sid, text, get().thinkLevel, attachments);
+    // 本地回合登记（回合开始的提问行对账据此跳过）；IPC 失败作废
+    localTurns.add(sid);
+    try {
+      await bridge.sendMessage(sid, text, get().thinkLevel, attachments);
+    } catch (err) {
+      localTurns.delete(sid);
+      throw err;
+    }
     // 首条用户消息自动命名（2026-11-11：标题以用户所问为准，对齐 zcode 感觉）。
     // 仅占位标题会话（'新会话'/'会话 n'/老数据 title=session_id）——embedded
     // 来源名等显式标题不被覆盖。失败静默（标题为辅链路，不阻断消息）
@@ -650,7 +764,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       streams: { ...s.streams, [sid]: [...(s.streams[sid] ?? []), { kind: 'user', key: nextKey('u'), text, ts: Date.now(), origin: 'workbench', attachments }] },
       sessions: touchSession(s.sessions, sid, {}),
     }));
-    await bridge.sendMessage(sid, text, get().thinkLevel, attachments);
+    localTurns.add(sid);
+    try {
+      await bridge.sendMessage(sid, text, get().thinkLevel, attachments);
+    } catch (err) {
+      localTurns.delete(sid);
+      throw err;
+    }
     if (wasFirst) void get().deriveTitleIfPlaceholder(sid, text);
   },
 
@@ -839,6 +959,17 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       return;
     }
     flushDeltaBuffer();
+    // 列表不认识的会话来了事件 = 外部来源（外部智能体/CLI/定时任务）在壳侧建了会话
+    // （或列表加载失败后、重试前的会话）→ 拉列表补行
+    if (event.sessionId && !useAgentStore.getState().sessions.some((x) => x.id === event.sessionId)) {
+      noteUnknownSession(event);
+    }
+    if (event.type === 'stateChanged') {
+      // 回合开始对账提问气泡（外部驱动回合的 user 行从 WAL 补；本地回合已乐观上屏跳过）
+      if (event.state === 'running' && !localTurns.delete(event.sessionId)) void backfillTurnUserLine(event.sessionId);
+    } else if (event.type === 'error') {
+      localTurns.delete(event.sessionId); // 本轮被拒不会再有 running：登记即作废
+    }
     set((s) => {
       switch (event.type) {
         case 'streamDone': {
