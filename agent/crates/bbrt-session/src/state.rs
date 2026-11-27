@@ -141,7 +141,8 @@ pub fn clarify_resolved(state: SessionState) -> Result<SessionState, TransitionE
     )
 }
 
-/// #9 running→subagent_fanout：快模型判定 complex 且可并行探查（上报 subagent.spawn×n）
+/// #9 running→subagent_fanout：主 Agent 调 spawn_subagents 发起子 agent 派发（上报 subagent.spawn×n；
+/// 2026-11-26 前为主请求前的快模型判定触发）
 pub fn begin_fanout(state: SessionState) -> Result<SessionState, TransitionError> {
     expect(
         SessionState::Running,

@@ -1,5 +1,7 @@
 # D11 - Agent Runtime 内部详细设计（Rust 运行时）
 
+> **⚠ 2026-11-26 子 agent 派发显式化修订**：§3 #9/#10 与 §7 的触发方式变更。原「每条用户消息在主请求前先跑一次模型判定要不要分解」（`FastPlanner`；对话单档化后走默认档）退役——判定藏在主请求之前，用户只见「正在处理」，首字平白多等一次完整往返。探查改由主 Agent **自己判断、以一次显式工具调用 `spawn_subagents(tasks[])` 发起**（通用派子 agent 入口：每条任务 `{kind, task}` 自带类型，由主 Agent 从类型登记表 `subagent::SUBAGENT_KINDS` 里选——目前只有 `probe`；「何时判断、什么情况该派、任务怎么写、有哪些类型」全部写在工具描述里，描述由登记表渲染）。影响：①主请求之前不再有任何隐藏模型调用；②派发以工具卡可见，结论作为工具结果回给模型；③状态 #9 仍复用 `subagent_fanout`，`reason` 由 `plan.fanout` 改 `subagent.fanout`；④等待中用户「停止」即返（原整窗阻塞，不响应中断）；⑤超窗转后台时工具结果带上仍在跑的 run id（主 Agent 可 `task.wait` 主动等）；⑥子 Agent 自身工具面剔除 `spawn_subagents`（防嵌套派发）；⑦派发归子 Agent 档（低风险、全档放行），子任务内部的写操作仍各自走完整审批；⑧未知类型/缺字段逐条明说并阻止（不静默丢弃），未知类型时列出可用类型。新增类型=登记表加一行+在派发路径接执行分支。§7 伪代码里的「触发：快模型判定」与状态表 #9 原表述为历史留档。
+
 > **⚠ 2026-11-26 对话档位单档化修订**：协议 `session.start.model_policy`、`model.switch.to`、`model.switched.from/to`、`SessionListItem.model_policy` 与枚举 `ModelPolicy` 退役（前向兼容口径：旧 WAL 行/旧宿主多出的字段被忽略，回放不断裂）；`agent_session.model_policy` 列自建表基线移除（不写增量迁移，存量本地库残留列不再读写）；会话模型只剩「`model` 直达引用 / None=公司默认档 `DEFAULT_MODEL_ALIAS`（bbc-default）」两态；压缩摘要（`chat_text`）、W3 记忆提炼、探查 planner、`FastCompactor`、专家统一走默认档（原固定 bbc-fast）。`model.switched` 的 WAL 载荷去 `from/to`。
 
 > **D19 落地注记（2026-11-10）**：§4 消息表追加 workspace.register/listed、workspace.list/listed、workspace.forget/forgot、session.list/listed 四对（含 golden 契约）；session.start workspace 空串=日常对话；memory.list/delete 增 scope/workspacePath、memory.saved 增 scope/workspaceName。§11 agent_workspace 表已接线：session.start 带目录自动 upsert+回填 workspace_id（修悬空缺口）；工具沙箱根按会话解析（SessionWorkspaces 共享表，修全局 '.' 占位）。
@@ -277,7 +279,7 @@ bbrt-mcp/src/
 | 6 | running→waiting_permission | 门控第⑥步 confirm | 120s/次 | permission.request |
 | 7 | waiting_permission→running | 允许/拒绝/单次超时（=拒绝，理由回填） | — | permission.response 镜像 |
 | 8 | waiting_permission→paused | 累计 ≥3 次超时（09 §7.4） | — | state(paused) |
-| 9 | running→subagent_fanout | 快模型判定 complex 且任务可并行探查 | 全部子任务 ≤15 步 | subagent.spawn×n |
+| 9 | running→subagent_fanout | 主 Agent 调 `spawn_subagents` 发起子 agent 派发（2026-11-26 起；原=快模型判定 complex） | 并发 ≤3，超出不派 | subagent.spawn×n |
 | 10 | subagent_fanout→running | join 汇总（含失败子任务的失败标注） | 单子任务 >15 步自杀 | subagent.join |
 > 原 #11-15（委派链：running→delegating / delegating→running|error / running↔waiting_review）已随委派域退役删除（2026-11-19）。
 

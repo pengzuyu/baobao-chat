@@ -116,7 +116,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         // 深链 bbc://（D28 批2/Q2b：等待页唤起 desktop 确认卡；scheme 声明在
         // tauri.conf.json plugins.deep-link，dev 形态运行时注册）
-        .plugin(tauri_plugin_deep_link::init());
+        .plugin(tauri_plugin_deep_link::init())
+        // WS 传输（0.1.4）：macOS WKWebView 拒 tauri:// 页面的 ws:// 出站，IM 实时
+        // 链改经 Rust 侧连接——前端 ws.ts 按 Tauri 宿主判定走插件
+        .plugin(tauri_plugin_websocket::init());
     if updater_pubkey.is_empty() {
         eprintln!(
             "[bbc] updater 未配置签名公钥（tauri.conf.json plugins.updater.pubkey），自动更新禁用；\
@@ -241,6 +244,7 @@ pub fn run() {
             agent_commands::agent_paste_image,
             agent_commands::agent_asset_revoke_session,
             agent_commands::sys_reveal_path,
+            agent_commands::sys_grant_asset_paths,
             agent_commands::memory_list,
             agent_commands::memory_delete,
             agent_commands::memory_forget,
@@ -257,6 +261,7 @@ pub fn run() {
             plugin_commands::plugin_remove_local,
             plugin_commands::plugin_set_enabled,
             plugin_commands::plugin_local_state,
+            plugin_commands::plugin_list_local,
             plugin_commands::plugin_write_config,
             plugin_commands::plugin_set_use_identity,
             plugin_commands::plugin_commands_list,

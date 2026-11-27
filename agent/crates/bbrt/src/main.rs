@@ -24,7 +24,7 @@ use bbrt_hostapi::handshake;
 use bbrt_hostapi::{IdGen, RuntimeHandler, StdioTransport};
 use bbrt_memory::MemoryEngine;
 use bbrt_protocol::{Envelope, HostToRuntime, RuntimeToHost, AUD_AIGW, AUD_CORP};
-use bbrt_session::{LoopDeps, SessionManager, StartParams, ToolExecutor};
+use bbrt_session::{LoopDeps, SessionManager, StartParams};
 use bbrt_store::Store;
 
 use bridge::BrtSink;
@@ -191,29 +191,17 @@ fn run() -> Result<(), String> {
         model.clone(),
     ))));
 
-    // 专家调用启用（D14 §3.3 / D16 P1-5）：本地专家库扫描（含 .override.yaml
-    // 覆写合并——D16 §6 三层配置）→ FastPicker 快模型单专家选角（判定优先于探查）。
-    // 空库零成本（空索引直接不调用）；选角是优化不是依赖，降级语义同探查。
-    // Arc<Mutex> 共享：tools.reload 热重扫（插件 agents/*.md 翻译落盘后即时生效）
+    // 专家库索引（D14/D16 §6 三层配置：本地专家库扫描，含 .override.yaml 覆写
+    // 合并）。Arc<Mutex> 共享：tools.reload 热重扫（插件 agents/*.md 翻译落盘后
+    // 即时生效）。2026-11-26：快模型选角器已退役（每条消息在主请求前的一次
+    // 隐藏模型调用，用户只见「正在处理」）——专家执行体保留、暂无调用方。
     let expert_shared = Arc::new(Mutex::new(bbrt_session::expert::ExpertIndex::scan(
         &data_dir.join("eco/experts"),
     )));
-    let skills_for_pick = skills_index.clone();
-    let tools_for_pick: Arc<dyn ToolExecutor> = tools.clone();
-    let picker = Arc::new(bbrt_session::expert::FastPicker {
-        index: expert_shared.clone(),
-        // 装配闭包：manifest ∩ 工具注册表（含 MCP）∩ 技能库；租户策略
-        // （AssemblePolicy.deny_tools）随策略面接线注入，v0.1 空策略
-        assemble_for: move |m| {
-            bbrt_session::expert::assemble(
-                m,
-                &tools_for_pick.tool_specs(),
-                &skills_for_pick.lock().unwrap(),
-                &bbrt_session::expert::AssemblePolicy::default(),
-            )
-        },
-    });
 
+    // 子 agent 的派发入口=spawn_subagents 通用工具（要不要派、每个任务用哪种
+    // 类型，由主 Agent 自己判断、以一次工具调用发起；2026-11-26 起不再在主请求
+    // 前跑隐藏判定 planner）
     let sink = Arc::new(BrtSink {
         pending: Mutex::new(std::collections::HashMap::new()),
         seq: Mutex::new(0),
@@ -225,8 +213,6 @@ fn run() -> Result<(), String> {
         wal: store.clone(),
         sink: sink.clone(),
         skills: skills_index.clone(),
-        fanout: Some(Arc::new(bbrt_session::FastPlanner)),
-        experts: Some(picker),
         budget: Default::default(),
     };
     let mut mgr_build = SessionManager::new(deps, Some(store.clone()));

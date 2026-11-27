@@ -66,6 +66,7 @@ x-bbc-env: &bbc-env
   BBC_BRAND_NAME: ${BBC_BRAND_NAME:-BaobaoChat}
   BBC_DEEP_LINK_SCHEME: ${BBC_DEEP_LINK_SCHEME:-bbc}
   BBC_MAIL_DOMAIN: ${BBC_MAIL_DOMAIN:-bbc.io}   # 邮箱统一后缀（首超管+单建/导入/注册+mail 懒开户；唯一权威源——前端经 /config/public 运行时取；2026-11-26 brand.json mail_domain 字段退役）
+  BBC_UPDATER_PUBKEY: ${BBC_UPDATER_PUBKEY:-}   # updater minisign 公钥（register 验签；与 tauri.conf.json pubkey 同值）
 
 services:
   # ===========================================================================
@@ -263,6 +264,9 @@ services:
         # CORS（D25 预签名直传：webview fetch PUT/GET 需过预检；预签名 URL 即凭证无
         # Authorization 头，通配 origin 无泄露面——签名本身即授权）
         aws s3api put-bucket-cors --bucket bbc-data --cors-configuration \
+          '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","POST","HEAD"],"AllowedHeaders":["content-type","x-amz-*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3600}]}' || true
+        # bbc-releases 同款 CORS（D39 安装包浏览器直传 PUT 到此桶；漏配致 OPTIONS 预检被拒）
+        aws s3api put-bucket-cors --bucket bbc-releases --cors-configuration \
           '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","POST","HEAD"],"AllowedHeaders":["content-type","x-amz-*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3600}]}' || true
         echo "[rustfs-init] 桶初始化完成：bbc-data(版本化) / bbc-backup（CORS 已配）"
     environment:

@@ -246,8 +246,17 @@ impl Summarizer for FastSummarizer<'_> {
     }
 }
 
+/// 首个增量耗时留痕（请求发出→首个 text/reasoning 增量；stderr 由宿主汇入
+/// bbrt.log）。首字慢时对同一步的「请求发出」行做差即得上游首字耗时
+fn log_first_delta(session_id: &str, step: usize, req_sent_at: std::time::Instant, channel: &str) {
+    eprintln!(
+        "[timing] session={session_id} step={step} 首个增量（{channel}）：请求发出后 {}ms",
+        req_sent_at.elapsed().as_millis()
+    );
+}
+
 /// 默认档单轮调用共用壳（system+user → 流式汇总全文）；
-/// compaction 摘要、W3 记忆提炼与探查 planner 共用（2026-11-26 单档化：内部辅助
+/// compaction 摘要与 W3 记忆提炼共用（2026-11-26 单档化：内部辅助
 /// 调用固定走公司默认档 DEFAULT_MODEL_ALIAS——原固定快档 bbc-fast）
 pub(crate) fn chat_text(
     client: &dyn ChatClient,
@@ -298,7 +307,8 @@ pub struct SessionRunner {
     pub mode: Arc<RwLock<PermissionMode>>,
     /// 会话级模型直达引用（0023：p:<provider_id>:<model>；None=公司默认档
     /// DEFAULT_MODEL_ALIAS——2026-11-26 单档化：档位字段退役）。
-    /// 仅主循环对话模型；planner/压缩/探查/选角等辅助调用恒走默认档
+    /// 仅主循环对话模型；压缩摘要/记忆提炼等辅助调用恒走默认档（探查子 agent
+    /// 与主同模型，见 run_spawn_subagents）
     pub model_override: Option<String>,
     state: SessionState,
     history: Vec<Round>,
@@ -492,11 +502,6 @@ pub struct LoopDeps {
     pub sink: Arc<dyn SessionSink>,
     /// 技能索引（10 篇 §4.5：triggers 命中正文注入 skills 区块；tools.reload 热替换）
     pub skills: Arc<Mutex<crate::skills::SkillIndex>>,
-    /// 探查子 Agent 判定器（08 §4.5；None=未装配零行为，FastPlanner 见 subagent.rs）
-    pub fanout: Option<Arc<dyn crate::subagent::FanoutPlanner>>,
-    /// 专家调用源（D14 §3.3 单专家选角；None=未装配零行为，FastPicker 见 expert.rs）。
-    /// 判定优先于探查——专家=重执行体，探查=信息收集优化
-    pub experts: Option<Arc<dyn crate::expert::ExpertSource>>,
     pub budget: BudgetConfig,
 }
 
@@ -521,6 +526,8 @@ impl SessionRunner {
         thinking: Option<bbrt_protocol::ThinkingLevel>,
     ) -> TurnReport {
         let mut report = TurnReport::default();
+        // 耗时留痕基准（首字延迟排查，见 ③ 处的 [timing] 行）
+        let turn_started = std::time::Instant::now();
         // 中断旗标只作用于当轮：新一轮用户输入前清零，否则中断过的会话下一轮秒断
         self.interrupted.store(false, Ordering::Relaxed);
         self.state = state::accept_user_message(self.state).unwrap_or(SessionState::Running);
@@ -552,209 +559,6 @@ impl SessionRunner {
         }
         deps.wal
             .append(&self.session_id, "user.text", &user_payload.to_string());
-
-        // 专家选角/探查分解的任务文本附附件清单（子代理看不到图像，但要知道
-        // 有哪些附件及其路径；无附件时即用户原文）
-        let user_brief = crate::attachments::attachment_lines(attachments)
-            .map(|lines| format!("{user_text}\n{lines}"));
-        let user_brief = user_brief.as_deref().unwrap_or(user_text);
-
-        // 单专家调用（D14 §3.3 精简形态：选角命中 → run_expert → 摘要回填；
-        // 优先于探查——专家=重执行体，探查=信息收集优化。状态复用 #9/#10
-        // （"并行子任务执行中"同语义；专家并发 ≤1 由本顺序天然保证）
-        if let Some(source) = deps.experts.as_ref() {
-            if let Some(pick) = source.pick(deps.model.as_ref(), user_brief) {
-                self.state = crate::subagent::transition_fanout(self.state);
-                emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-                    session_id: id,
-                    state: "subagent_fanout".into(),
-                    reason: "expert.pick".into(),
-                });
-                deps.wal.append(
-                    &self.session_id,
-                    "expert.pick",
-                    &serde_json::json!({ "expert": pick.label }).to_string(),
-                );
-                // 等待窗 + 超窗转后台（D16 决策④：同探查口径；专家在专用线程，
-                // 窗内收口即时回填 / 超窗 park 摘要下一轮注入）
-                let ctx = crate::expert::ExpertCtx {
-                    model: Arc::clone(&deps.model),
-                    tools: Arc::clone(&deps.tools),
-                    mode: self.cur_mode(),
-                    unattended: self.unattended,
-                    hub: self.bg_hub.clone(),
-                };
-                let sid = self.session_id.clone();
-                let sink_bg = Arc::clone(&deps.sink);
-                let wal_bg = Arc::clone(&deps.wal);
-                let hub = self.bg_hub.clone();
-                let label = pick.label.clone();
-                let (etx, erx) = std::sync::mpsc::channel::<crate::expert::ExpertResult>();
-                let _ = std::thread::Builder::new()
-                    .name("bbc-expert".into())
-                    .spawn(move || {
-                        let result = crate::expert::run_expert(
-                            &ctx,
-                            &sid,
-                            &pick.expert,
-                            &pick.task,
-                            sink_bg.as_ref(),
-                            wal_bg.as_ref(),
-                            "",
-                        );
-                        // rx 已关（主线程超窗弃等）→ send Err：超窗路径 park 摘要
-                        if etx.send(result.clone()).is_err() {
-                            if let Some(hub) = hub {
-                                // 超窗完成也发事件（通知/run 面板刷新；与窗内收口同构）
-                                sink_bg.emit(SessionEvent::SubagentJoined {
-                                    session_id: sid.clone(),
-                                    results: vec![bbrt_protocol::SubagentResult {
-                                        sub_id: result.run_id.clone(),
-                                        ok: result.ok,
-                                        summary: crate::subagent::truncate_chars(
-                                            &result.summary,
-                                            120,
-                                        ),
-                                    }],
-                                });
-                                hub.park_join(
-                                    &sid,
-                                    crate::bg_hub::BgJoin {
-                                        name: "expert.join".into(),
-                                        run_id: result.run_id.clone(),
-                                        summary: format!(
-                                            "## 专家结论（后台完成）\n{}",
-                                            result.summary
-                                        ),
-                                    },
-                                );
-                            }
-                        }
-                    });
-                // rx 先移出（超窗须显式 drop 才能让线程 send 失败→走 park 路径）
-                let (expert_in_window, timed_out) = {
-                    let rx = erx;
-                    match rx.recv_timeout(self.subagent_wait_window) {
-                        Ok(result) => (Some(result), false),
-                        // 关窗瞬间防丢：非阻塞补收一次再弃等（drop 触发 park）
-                        Err(_) => match rx.try_recv() {
-                            Ok(result) => (Some(result), false),
-                            Err(_) => {
-                                drop(rx);
-                                (None, true)
-                            }
-                        },
-                    }
-                };
-                self.state = crate::subagent::transition_join(self.state);
-                if let Some(result) = expert_in_window {
-                    self.history.push(Round::Tool {
-                        call_id: format!("expert-{}", result.run_id),
-                        name: "expert.join".to_string(),
-                        summary: format!("## 专家结论（{}）\n{}", label, result.summary),
-                    });
-                    emit(deps, &self.session_id, |id| SessionEvent::SubagentJoined {
-                        session_id: id,
-                        results: vec![bbrt_protocol::SubagentResult {
-                            sub_id: result.run_id.clone(),
-                            ok: result.ok,
-                            summary: crate::subagent::truncate_chars(&result.summary, 120),
-                        }],
-                    });
-                    emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-                        session_id: id,
-                        state: "running".into(),
-                        reason: "expert.join".into(),
-                    });
-                } else if timed_out {
-                    deps.wal
-                        .append(&self.session_id, "expert.backgrounded", "{}");
-                    emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-                        session_id: id,
-                        state: "running".into(),
-                        reason: "expert.backgrounded".into(),
-                    });
-                }
-            }
-        }
-
-        // 探查子 Agent fan-out（08 §4.5/D11 §7）：判定 complex → ≤3 并行探查 →
-        // join 摘要回填（主 Agent 基于摘要继续规划；未装配/不分解=零行为）
-        if let Some(planner) = deps.fanout.as_ref() {
-            if let Some(subs) = planner.plan(deps.model.as_ref(), user_brief) {
-                self.state = crate::subagent::transition_fanout(self.state);
-                emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-                    session_id: id,
-                    state: "subagent_fanout".into(),
-                    reason: "plan.fanout".into(),
-                });
-                deps.wal.append(
-                    &self.session_id,
-                    "subagent.fanout",
-                    &format!("{{\"count\":{}}}", subs.len()),
-                );
-                // 通用子 agent＝主的分身（D16 决策①）：system/技能/记忆/
-                // 工具/模型与主会话同源，仅任务提示词不同、历史清零
-                let model_name = self
-                    .model_override
-                    .clone()
-                    .unwrap_or_else(|| crate::DEFAULT_MODEL_ALIAS.to_string());
-                // D35：无人值守上下文传给子 agent（禁 ask_user + 提示词约束）
-                let fanout_system = if self.unattended {
-                    format!("{}{UNATTENDED_NOTE}", system_prompt_base())
-                } else {
-                    system_prompt_base()
-                };
-                let outcome = crate::subagent::fanout_probes(
-                    &self.session_id,
-                    self.cur_mode(),
-                    Arc::clone(&deps.model),
-                    Arc::clone(&deps.tools),
-                    Arc::clone(&deps.sink),
-                    Arc::clone(&deps.wal),
-                    &subs,
-                    &crate::subagent::FanoutEnv {
-                        system: &fanout_system,
-                        unattended: self.unattended,
-                        skills: &deps.skills,
-                        memory: deps.memory.as_ref(),
-                        workspace: &self.workspace,
-                        model_name,
-                        wait_window: self.subagent_wait_window,
-                        hub: self.bg_hub.clone(),
-                    },
-                );
-                self.state = crate::subagent::transition_join(self.state);
-                match outcome {
-                    crate::subagent::FanoutOutcome::Joined(digest) => {
-                        self.history.push(Round::Tool {
-                            call_id: format!("fanout-{}", self.history.len()),
-                            name: "subagent.join".to_string(),
-                            summary: format!("## 并行子任务结果\n{digest}"),
-                        });
-                        emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-                            session_id: id,
-                            state: "running".into(),
-                            reason: "subagent.join".into(),
-                        });
-                    }
-                    crate::subagent::FanoutOutcome::Backgrounded { pending } => {
-                        // 超窗转后台（D16 决策④）：turn 继续，收口线程完成后
-                        // 经 hub park 摘要，manager 下一轮 run_turn 注入回填
-                        deps.wal.append(
-                            &self.session_id,
-                            "subagent.backgrounded",
-                            &format!("{{\"pending\":{pending}}}"),
-                        );
-                        emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
-                            session_id: id,
-                            state: "running".into(),
-                            reason: "subagent.backgrounded".into(),
-                        });
-                    }
-                }
-            }
-        }
 
         // 记忆召回注入（D15 §2.3；D19 分级——项目会话注
         // [用户记忆]+[项目记忆] 两段、日常仅用户段）。
@@ -932,6 +736,18 @@ impl SessionRunner {
             };
 
             // ③ 流式消费（delta 即时外发；错误→8011 语义暂停）
+            // 耗时留痕（2026-11-26 首字延迟排查）：stderr 由宿主汇入 bbrt.log。
+            // 两段=「回合开始→请求发出」（发消息后的本地准备；这里不该再藏任何
+            // 模型调用——曾有的专家选角/任务分解前置判定已退役）与「请求发出→
+            // 首个增量」（网关+上游首字，含重试退避；带图降级重试计入本段）
+            eprintln!(
+                "[timing] session={} step={} 请求发出：回合开始后 {}ms",
+                self.session_id,
+                report.steps,
+                turn_started.elapsed().as_millis()
+            );
+            let req_sent_at = std::time::Instant::now();
+            let mut first_delta_logged = false;
             let stream = match deps.model.chat(&req) {
                 Ok(s) => Ok(s),
                 Err(e)
@@ -989,6 +805,10 @@ impl SessionRunner {
             for ev in stream {
                 match ev {
                     Ok(StreamEvent::TextDelta { text: t }) => {
+                        if !first_delta_logged {
+                            first_delta_logged = true;
+                            log_first_delta(&self.session_id, report.steps, req_sent_at, "text");
+                        }
                         text.push_str(&t);
                         let seq = self.delta_seq.fetch_add(1, Ordering::Relaxed) as u32;
                         emit(deps, &self.session_id, |id| SessionEvent::StreamDelta {
@@ -1001,6 +821,15 @@ impl SessionRunner {
                     // 思考增量（2026-11-11）：只外发不并入正文——前端思考折叠卡消费；
                     // 全文积累随步落 WAL（D33 思考回放：session.history 重开还原过程区）
                     Ok(StreamEvent::ReasoningDelta { text: t }) => {
+                        if !first_delta_logged {
+                            first_delta_logged = true;
+                            log_first_delta(
+                                &self.session_id,
+                                report.steps,
+                                req_sent_at,
+                                "reasoning",
+                            );
+                        }
                         thinking.push_str(&t);
                         let seq = self.delta_seq.fetch_add(1, Ordering::Relaxed) as u32;
                         emit(deps, &self.session_id, |id| SessionEvent::StreamDelta {
@@ -1644,6 +1473,173 @@ impl SessionRunner {
         }
     }
 
+    /// 子 agent 派发（spawn_subagents 专用路径，2026-11-26）：要不要派、每个任务
+    /// 用哪种类型，由主 Agent 自己判断，以一次工具调用发起 ≤3 并行子 agent，
+    /// 摘要作为工具结果回给模型——取代原「主请求前隐藏模型调用判定」的前置
+    /// planner（判定过程用户不可见，首字平白多等一次完整往返）。类型按登记表
+    /// （subagent::SUBAGENT_KINDS）校验与分派，目前只有探查。状态复用 #9/#10；
+    /// 等待中用户停止即返（子任务由 manager::interrupt 联动取消）。
+    fn run_spawn_subagents(&mut self, deps: &LoopDeps, call: &ToolInvocation) -> ToolOutcome {
+        let v: serde_json::Value =
+            serde_json::from_str(&call.args_json).unwrap_or(serde_json::json!({}));
+        // 逐条校验，不静默丢弃：哪一条缺什么、哪个类型不认识都明说，模型能纠正
+        let mut specs: Vec<(&'static str, String)> = Vec::new();
+        if let Some(arr) = v.get("tasks").and_then(|t| t.as_array()) {
+            for (i, t) in arr.iter().enumerate() {
+                let kind = t
+                    .get("kind")
+                    .and_then(|k| k.as_str())
+                    .map(str::trim)
+                    .unwrap_or_default();
+                let task = t
+                    .get("task")
+                    .and_then(|k| k.as_str())
+                    .map(str::trim)
+                    .unwrap_or_default();
+                if kind.is_empty() || task.is_empty() {
+                    return ToolOutcome::Blocked {
+                        code: 8002,
+                        summary: format!("spawn_subagents：tasks[{i}] 需同时给出 kind 与 task"),
+                    };
+                }
+                let Some(def) = crate::subagent::subagent_kind(kind) else {
+                    let available = crate::subagent::SUBAGENT_KINDS
+                        .iter()
+                        .map(|k| k.kind)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return ToolOutcome::Blocked {
+                        code: 8002,
+                        summary: format!(
+                            "spawn_subagents：未知子 agent 类型「{kind}」，可用类型：{available}"
+                        ),
+                    };
+                };
+                specs.push((def.kind, task.to_string()));
+            }
+        }
+        if specs.is_empty() {
+            return ToolOutcome::Blocked {
+                code: 8002,
+                summary: "spawn_subagents 需要 1-3 条任务（tasks：每条含 kind 与 task）".into(),
+            };
+        }
+        // 并发护栏：超出上限的任务不派（工具描述已写明上限）
+        let specs: Vec<(&'static str, String)> = specs
+            .into_iter()
+            .take(crate::subagent::PROBE_MAX_CONCURRENCY)
+            .collect();
+        // 按类型分派——目前登记表里只有探查（主的分身），全部转探查执行体；
+        // 新类型在 subagent::SUBAGENT_KINDS 登记后于此接分支
+        let kinds: Vec<&str> = specs.iter().map(|(k, _)| *k).collect();
+        let subs: Vec<crate::subagent::ProbeSpec> = specs
+            .into_iter()
+            .map(|(_, task)| crate::subagent::ProbeSpec { task })
+            .collect();
+        let started = std::time::Instant::now();
+        self.state = crate::subagent::transition_fanout(self.state);
+        emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+            session_id: id,
+            state: "subagent_fanout".into(),
+            reason: "subagent.fanout".into(),
+        });
+        deps.wal.append(
+            &self.session_id,
+            "subagent.fanout",
+            &serde_json::json!({ "count": subs.len(), "kinds": kinds, "call_id": call.call_id })
+                .to_string(),
+        );
+        let model_name = self
+            .model_override
+            .clone()
+            .unwrap_or_else(|| crate::DEFAULT_MODEL_ALIAS.to_string());
+        let fanout_system = if self.unattended {
+            format!("{}{UNATTENDED_NOTE}", system_prompt_base())
+        } else {
+            system_prompt_base()
+        };
+        // 通用子 agent＝主的分身（D16 决策①）：system/技能/记忆/工具/模型与主
+        // 会话同源，仅任务提示词不同、历史清零
+        let outcome = crate::subagent::fanout_probes(
+            &self.session_id,
+            self.cur_mode(),
+            Arc::clone(&deps.model),
+            Arc::clone(&deps.tools),
+            Arc::clone(&deps.sink),
+            Arc::clone(&deps.wal),
+            &subs,
+            &crate::subagent::FanoutEnv {
+                system: &fanout_system,
+                skills: &deps.skills,
+                memory: deps.memory.as_ref(),
+                workspace: &self.workspace,
+                model_name,
+                wait_window: self.subagent_wait_window,
+                hub: self.bg_hub.clone(),
+                unattended: self.unattended,
+                interrupt: Some(self.interrupted.as_ref()),
+            },
+        );
+        // 派发期间状态=subagent_fanout：无论何种收口，回模型前迁回 running
+        self.state = crate::subagent::transition_join(self.state);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        match outcome {
+            crate::subagent::FanoutOutcome::Joined(digest) => {
+                emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                    session_id: id,
+                    state: "running".into(),
+                    reason: "subagent.join".into(),
+                });
+                ToolOutcome::Ok {
+                    summary: format!("## 并行子任务结果\n{digest}"),
+                    truncated: false,
+                    exit_code: None,
+                    duration_ms: elapsed_ms,
+                }
+            }
+            crate::subagent::FanoutOutcome::Backgrounded {
+                pending,
+                pending_ids,
+            } => {
+                // 超窗转后台（D16 决策④）：turn 继续，收口线程完成后经 hub park
+                // 摘要，manager 下一轮 run_turn 注入回填
+                deps.wal.append(
+                    &self.session_id,
+                    "subagent.backgrounded",
+                    &serde_json::json!({ "pending": pending, "run_ids": &pending_ids }).to_string(),
+                );
+                emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                    session_id: id,
+                    state: "running".into(),
+                    reason: "subagent.backgrounded".into(),
+                });
+                ToolOutcome::Ok {
+                    summary: format!(
+                        "[子任务转后台] 还有 {pending} 个子任务在运行（{}）。结论会在你\
+                         下一次发言前注入上下文；需要结论才能继续时，用 task.wait 等待\
+                         对应 run_id",
+                        pending_ids.join("、")
+                    ),
+                    truncated: false,
+                    exit_code: None,
+                    duration_ms: elapsed_ms,
+                }
+            }
+            crate::subagent::FanoutOutcome::Interrupted => {
+                // 用户停止：已到结果作废；回合收尾由工具轮按中断报 idle
+                emit(deps, &self.session_id, |id| SessionEvent::StateChanged {
+                    session_id: id,
+                    state: "running".into(),
+                    reason: "subagent.interrupted".into(),
+                });
+                ToolOutcome::Blocked {
+                    code: 8002,
+                    summary: "子任务被中断：已请求取消子任务，结果未采纳".into(),
+                }
+            }
+        }
+    }
+
     /// 单个工具调用全流程：门控 →（审批 → 记忆）→ 执行
     fn run_tool(
         &mut self,
@@ -1660,6 +1656,12 @@ impl SessionRunner {
         // 等待子任务结果（B 批 2026-11-18）：异步发起后主动等待/取回
         if call.name == "task.wait" || call.name == "subagent.wait" {
             return self.run_subagent_wait(deps, call);
+        }
+        // 子 agent 派发（spawn_subagents，2026-11-26）：主 Agent 以一次工具调用
+        // 发起 ≤3 并行子 agent——专用路径（不走 pipeline 门控：派发本身低风险，
+        // 子任务内部的写操作仍各自走完整审批）
+        if call.name == crate::subagent::SPAWN_SUBAGENTS_TOOL {
+            return self.run_spawn_subagents(deps, call);
         }
         // D20 ask_user：向用户提问——专用路径（不走 pipeline 门控/执行）：
         // waiting_clarify 态 + clarify.request 事件 + **不超时**等待（1s 轮询查

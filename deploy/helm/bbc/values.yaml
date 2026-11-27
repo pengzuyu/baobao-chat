@@ -53,6 +53,7 @@ config:
   seedDemo: "0"                        # compose: BBC_SEED_DEMO（alice/bob 演示种子；部署保持 0，联调置 1 免 admin bootstrap）
   otelEndpoint: http://otel-collector.observability.svc.cluster.local:4318   # compose: BBC_OTEL_EXPORTER_OTLP_ENDPOINT
   mailDomain: bbc.io                   # compose: BBC_MAIL_DOMAIN；邮箱统一后缀唯一权威源（首超管+单建/导入/注册+mail 懒开户；前端经 /config/public 运行时取；2026-11-26 brand.json mail_domain 字段退役）
+  updaterPubkey: ""                    # compose: BBC_UPDATER_PUBKEY；updater minisign 公钥（与 tauri.conf.json plugins.updater.pubkey 同值；register 验签用，空=跳过）
   oidcIssuer: ""                       # compose: BBC_OIDC_ISSUER（生态应用 OIDC 登录的对外 issuer；
                                        #   空=按监听地址推导，内网 NodePort 场景须显式配 http://<node-ip>:30808）
 

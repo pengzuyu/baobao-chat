@@ -14,7 +14,7 @@ import { downloadBlob, http, postMultipart } from '../../../shared/api/http';
 const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK === '1';
 
 /** Tauri WebView 注入标记（无则落盘链不可用——web 预览仅市场浏览） */
-function isTauriAvailable(): boolean {
+export function isTauriAvailable(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
@@ -130,6 +130,18 @@ export interface PluginLocalState {
   mcpServers?: { name: string; kind: 'stdio' | 'http'; url: string | null; authDeclared?: boolean }[];
   /** 用户侧身份开关（plugin-state.json useIdentity） */
   useIdentity?: boolean;
+}
+
+// ---- 本机已装清单（已安装页对账：服务端安装记录 ∪ 本机安装目录）----
+
+/** 本机安装目录概览条目（壳 plugin_list_local 镜像；manifest/readme 与服务端 DTO 同形状） */
+export interface LocalPlugin {
+  pluginId: string;
+  enabled: boolean;
+  activeVersion: string;
+  versions: string[];
+  manifest: PluginManifest;
+  readme?: string;
 }
 
 // ---- 服务端调用 ----
@@ -356,12 +368,20 @@ export async function installPlugin(pluginId: string, version?: string): Promise
   await installLocal(resp.plugin_id, resp.version, resp.download_url);
 }
 
-/** 卸载（服务端记态 + 删本地目录；keepConfig 默认保留用户配置 D22 §5.2） */
-export async function uninstallPlugin(pluginId: string, keepConfig = true): Promise<void> {
+/**
+ * 卸载（服务端记态 + 删本地目录；keepConfig 默认保留用户配置 D22 §5.2）。
+ * serverRecorded=false=「仅本机」条目：服务端本就无安装记录（卸载接口对不存在的
+ * 插件回「插件不存在」），只删本机
+ */
+export async function uninstallPlugin(
+  pluginId: string,
+  keepConfig = true,
+  serverRecorded = true,
+): Promise<void> {
   if (isTauriAvailable()) {
     await invoke('plugin_remove_local', { pluginId, keepConfig });
   }
-  await uninstallOnServer(pluginId);
+  if (serverRecorded) await uninstallOnServer(pluginId);
 }
 
 // ---- 本地态（壳 command 包装）----
@@ -375,6 +395,43 @@ export async function fetchLocalState(pluginId: string): Promise<PluginLocalStat
 export async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
   if (!isTauriAvailable()) throw new Error('需要桌面端');
   await invoke('plugin_set_enabled', { pluginId, enabled });
+}
+
+/**
+ * 本机已装插件：Agent 实际装配到的工具面只认本机安装目录，服务端安装记录经
+ * 数据重置/换账号可能缺失——已安装页据本清单补出「仅本机」条目。
+ * web 预览/调用失败降级空
+ */
+export async function fetchLocalPlugins(): Promise<LocalPlugin[]> {
+  if (!isTauriAvailable()) return [];
+  try {
+    const list = await invoke<LocalPlugin[]>('plugin_list_local');
+    return list ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** 「仅本机」条目 → PluginEntry（字段取本机清单；服务端无记录故无装机数/更新时间） */
+export function localToEntry(lp: LocalPlugin): PluginEntry {
+  return {
+    id: '',
+    plugin_id: lp.pluginId,
+    name: lp.manifest.name || lp.pluginId,
+    description: lp.manifest.description,
+    category: lp.manifest.category ?? '',
+    policy: 3,
+    status: 'local',
+    current_version: lp.activeVersion,
+    manifest: lp.manifest,
+    readme: lp.readme,
+    installs: 0,
+    updated_at: 0,
+    created_at: 0,
+    installed: true,
+    version: lp.activeVersion,
+    has_update: false,
+  };
 }
 
 /** 用户侧身份开关（HTTP MCP 注入统一身份；装配即时重推） */

@@ -1,0 +1,69 @@
+# =============================================================================
+# BaobaoChat 官网独立站（K8s；2026-11-27 拍板：独立 NodePort，不动 30808 主入口）
+#
+# 30880 → 官网静态 + /update/release-info.json 反代（发布联动：管理后台发布后
+# 官网下载区自动跟进；下载直链指回主入口 30808 真实地址）。
+# 前提：bbc-app Service 存在（同 ns；NodePort/ClusterIP 均可，反代走 Service 名）。
+#
+# 替换项（部署前 sed 或 kubectl set image）：
+#   __IMAGE__  官网镜像，如 172.16.105.109:30003/pengzuyu/bbc-website:0.1.1
+#   __RELEASE_HOST__  主入口对外地址，如 172.16.105.109:30808
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bbc-website
+  namespace: baobao-chat
+  labels:
+    app.kubernetes.io/name: bbc-website
+    app.kubernetes.io/component: website
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bbc-website
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bbc-website
+        app.kubernetes.io/component: website
+    spec:
+      containers:
+        - name: website
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: RELEASE_HOST
+              value: "__RELEASE_HOST__"
+          readinessProbe:
+            httpGet: { path: /website-ok, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /website-ok, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 30m, memory: 48Mi }
+            limits: { cpu: 300m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bbc-website
+  namespace: baobao-chat
+  labels:
+    app.kubernetes.io/name: bbc-website
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: bbc-website
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30881

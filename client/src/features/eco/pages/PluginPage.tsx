@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  Alert, Card, Drawer, Flex, Form, Input, List, Modal, Select, Space, Switch, Tabs, Tag, Typography, Upload,
+  Alert, Card, Drawer, Flex, Form, Input, List, Modal, message, Select, Space, Switch, Tabs, Tag, Typography, Upload,
 } from 'antd';
 import type { UploadFile } from 'antd';
 import {
@@ -21,12 +21,17 @@ import { Empty } from '../../../shared/ui/Empty';
 import { SkeletonList } from '../../../shared/ui/Skeleton';
 import { MarkdownText } from '../../../shared/components/MarkdownText';
 import {
-  fetchLocalState, fetchMyPlugins, fetchPluginCatalog, fetchPluginDetail,
-  installPlugin, setPluginEnabled, setPluginUseIdentity, uninstallPlugin, uploadMyPlugin,
-  writePluginConfig,
-  type CatalogQuery, type PluginEntry, type PluginLocalState, type PluginVersion,
+  fetchLocalPlugins, fetchLocalState, fetchMyPlugins, fetchPluginCatalog, fetchPluginDetail,
+  installPlugin, isTauriAvailable, localToEntry, setPluginEnabled, setPluginUseIdentity, uninstallPlugin,
+  uploadMyPlugin, writePluginConfig,
+  type CatalogQuery, type LocalPlugin, type PluginEntry, type PluginLocalState, type PluginVersion,
 } from '../api/plugins';
 import { AgentSubNav } from '../../agent/components/AgentSubNav';
+import { pathsToFiles } from '../../../shared/attachments';
+import { useFileDrop } from '../../../shared/attachments/hooks';
+
+/** 桌面端才有本机安装目录；web 预览不做对账（否则已装的全被误标本机未装） */
+const DESKTOP = isTauriAvailable();
 
 const CATEGORIES = ['', 'devops', 'kb', 'im', 'office', 'other'];
 /** 平台凭证占位（RT 调用层按受众票逐请求动态注入——D38 单票制）；敏感项快捷填充写此值 */
@@ -94,9 +99,24 @@ export function PluginPage() {
   const [uploadNotes, setUploadNotes] = useState('');
   const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState('');
+  // 桌面端整窗拖拽（上传弹窗打开期间生效；HTML5 onDrop 在 Tauri 下不触发，
+  // 原生拖拽只给路径，经 pathsToFiles 读回 File 走与点击相同的分支）
+  const dragOver = useFileDrop(uploadOpen, (paths) => {
+    void pathsToFiles(paths)
+      .then((files) => {
+        const zip = files.find((f) => /\.zip$/i.test(f.name));
+        if (zip) setUploadFile(zip);
+        else void message.warning('插件包须为 .zip 文件');
+      })
+      .catch((e) => void message.error(e instanceof Error ? e.message : String(e)));
+  });
   // 详情抽屉
   const [detail, setDetail] = useState<{ plugin: PluginEntry; versions: PluginVersion[] } | null>(null);
   const [local, setLocal] = useState<PluginLocalState | null>(null);
+  // 本机安装目录全量（对账用；local 是抽屉当前这一个）
+  const [localPlugins, setLocalPlugins] = useState<LocalPlugin[]>([]);
+  // 服务端安装记录是否加载成功（失败时无从判断某条是否「仅本机」，不贴标签）
+  const [serverOk, setServerOk] = useState(true);
   // 配置表单
   const [configDraft, setConfigDraft] = useState<Record<string, string>>({});
   const searchTimer = useRef<number | null>(null);
@@ -112,11 +132,18 @@ export function PluginPage() {
     if (component) query.component = component;
     const fetcher = tab === 'installed' ? fetchMyPlugins() : fetchPluginCatalog(query);
     fetcher
-      .then(setEntries)
+      .then((list) => {
+        setServerOk(true);
+        setEntries(list);
+      })
       .catch((e) => {
+        setServerOk(false);
         setEntries([]);
         setError(`插件目录加载失败（${e instanceof Error ? e.message : '网络错误'}）`);
       });
+    // 本机安装目录独立拉取（对账用）：自降级空不拒——服务端列表失败时本机
+    // 已装的仍可见可管，错误语义照旧由上面的主列表决定
+    void fetchLocalPlugins().then(setLocalPlugins);
   }, [q, category, component, tab]);
   useEffect(reload, [reload]);
 
@@ -131,6 +158,27 @@ export function PluginPage() {
       })
       .catch(() => setLocal(null));
   }, [detail]);
+
+  // 本机对账：服务端安装记录与本机安装目录各是一份真相——Agent 装配只认本机
+  // （壳 assemble_mcp_servers），服务端记录经数据重置/换账号可能缺失
+  const localById = useMemo(
+    () => new Map(localPlugins.map((p) => [p.pluginId, p] as const)),
+    [localPlugins],
+  );
+  const serverIds = useMemo(() => new Set(entries?.map((e) => e.plugin_id)), [entries]);
+  /** 服务端安装记录里查无此条：详情/卸载只走本机（无详情口；卸载接口回「插件不存在」） */
+  const serverKnown = (pluginId: string) => serverIds.has(pluginId);
+  /** 「仅本机」标签：已安装页、服务端记录加载成功却查无此条（对 Agent 生效，但此前页面不可见） */
+  const isLocalOnly = (pluginId: string) => tab === 'installed' && serverOk && !serverKnown(pluginId);
+  // 已安装页=服务端记录 ∪ 本机目录：「仅本机」补卡片（可见、可禁用、可卸载）
+  const shown = useMemo(() => {
+    if (!entries) return null;
+    if (tab !== 'installed') return entries;
+    const known = new Set(entries.map((e) => e.plugin_id));
+    return [...entries, ...localPlugins.filter((p) => !known.has(p.pluginId)).map(localToEntry)];
+  }, [entries, localPlugins, tab]);
+  // 抽屉当前插件在本机确有安装（activeVersion 空=卸载保留配置的骨架目录）
+  const localInstalled = !!local?.activeVersion;
 
   const doInstall = (e: PluginEntry) => {
     // 权限确认（D22 §6.3：身份使用显著提示；force 免确认由服务端策略面控制，此处统一提示）
@@ -195,7 +243,7 @@ export function PluginPage() {
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: () =>
-        uninstallPlugin(e.plugin_id, true)
+        uninstallPlugin(e.plugin_id, true, serverKnown(e.plugin_id))
           .then(() => {
             setNotice(`${e.name} 已卸载`);
             reload();
@@ -218,6 +266,15 @@ export function PluginPage() {
   const openDetail = (e: PluginEntry) => {
     setDetail(null);
     setConfigDraft({});
+    // 服务端无记录也就无详情口——本机清单 + 版本目录即详情
+    const lp = localById.get(e.plugin_id);
+    if (lp && !serverKnown(e.plugin_id)) {
+      setDetail({
+        plugin: e,
+        versions: lp.versions.map((version) => ({ id: version, version, created_at: 0 })),
+      });
+      return;
+    }
     void fetchPluginDetail(e.plugin_id)
       .then(setDetail)
       .catch((err) => setError(`详情加载失败：${err instanceof Error ? err.message : '未知错误'}`));
@@ -235,8 +292,6 @@ export function PluginPage() {
     if (searchTimer.current) window.clearTimeout(searchTimer.current);
     searchTimer.current = window.setTimeout(() => setQ(value), 300);
   };
-
-  const shown = useMemo(() => entries ?? null, [entries]);
 
   // 配置表单 keys（2026-11-25 拍板自动发现）：清单声明 configKeys ∪ mcp 定义
   // 实际引用的 ${CONFIG:key}；secret = 清单 configSecrets ∪ headers 引用发现
@@ -368,7 +423,7 @@ export function PluginPage() {
             label: (
               <Space size={4}>
                 <CheckCircle2 size={14} /> 已安装
-                {entries?.length !== undefined && tab === 'installed' ? `（${entries.length}）` : ''}
+                {tab === 'installed' && shown ? `（${shown.length}）` : ''}
               </Space>
             ),
           },
@@ -424,8 +479,9 @@ export function PluginPage() {
       >
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            上传后进入个人区：仅自己可见可装；进公共市场需管理员审核发布
+            上传后进入个人区：仅自己可见可装；进公共市场需管理员审核发布（支持整窗拖入 .zip）
           </Typography.Text>
+          {dragOver ? <Typography.Text type="warning" style={{ fontSize: 12 }}>松开鼠标，自动填入 .zip 包</Typography.Text> : null}
           <Space size={8} wrap>
             <Upload
               accept=".zip"
@@ -460,6 +516,11 @@ export function PluginPage() {
         <Flex wrap="wrap" gap={12}>
           {shown.map((e) => {
             const policy = POLICY_META[e.policy];
+            // 本机对账（见 localById/serverIds）：服务端记为已装但本机无安装目录
+            // =更换设备/文件被移除——Agent 当前用不了
+            const onDevice = !DESKTOP || localById.has(e.plugin_id);
+            const localOnly = isLocalOnly(e.plugin_id);
+            const missingOnDevice = e.installed && !onDevice;
             return (
               <Card
                 key={e.plugin_id}
@@ -487,10 +548,25 @@ export function PluginPage() {
                       自用
                     </Tag>
                   ) : null}
+                  {localOnly ? (
+                    <Tag
+                      color="orange"
+                      title="本机已安装且对 Agent 生效，但服务端没有安装记录（数据重置、更换账号或记录被清除后的遗留）。可在此禁用或卸载"
+                    >
+                      仅本机
+                    </Tag>
+                  ) : null}
+                  {missingOnDevice ? (
+                    <Tag color="orange" title="服务端有安装记录，但本机没有安装文件（更换设备或文件被移除）——Agent 当前不可用">
+                      本机未装
+                    </Tag>
+                  ) : null}
                 </Flex>
                 <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
                   {e.plugin_id} · v{e.current_version}
-                  {e.installed && e.version ? `（本地 v${e.version}）` : ''}
+                  {e.installed && onDevice
+                    ? `（本地 v${localById.get(e.plugin_id)?.activeVersion ?? e.version}）`
+                    : ''}
                   {/* D39：装机数（个人插件不展示——仅本人可装无参考意义） */}
                   {!e.owner_user_id && e.installs > 0 ? ` · ${e.installs} 人安装` : ''}
                 </Typography.Text>
@@ -501,7 +577,7 @@ export function PluginPage() {
                 ) : null}
                 <BadgeTags e={e} />
                 <Space size={8} wrap style={{ marginTop: 8 }}>
-                  {!e.installed || e.has_update ? (
+                  {!e.installed || e.has_update || missingOnDevice ? (
                     <Button
                       loading={busyId === e.plugin_id}
                       onClick={(ev) => {
@@ -511,7 +587,7 @@ export function PluginPage() {
                       data-testid={`bbc-plugin-install-${e.plugin_id}`}
                     >
                       {e.has_update ? <RefreshCw size={12} /> : <Download size={12} />}
-                      {e.has_update ? '更新' : '安装'}
+                      {e.has_update ? '更新' : missingOnDevice ? '装到本机' : '安装'}
                     </Button>
                   ) : null}
                   {e.installed ? (
@@ -565,6 +641,15 @@ export function PluginPage() {
               {detail.plugin.manifest?.description || detail.plugin.description}
             </Typography.Paragraph>
 
+            {/* 仅本机（对账）：本机已装且对 Agent 生效，服务端无安装记录 */}
+            {isLocalOnly(detail.plugin.plugin_id) ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="仅本机：服务端没有这条安装记录，但本机已安装且对 Agent 生效。可在此禁用或卸载"
+              />
+            ) : null}
+
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {/* D39：最近更新 + 装机数（个人插件不展示装机数） */}
               {detail.plugin.updated_at ? `最近更新 ${fmtDate(detail.plugin.updated_at)}` : ''}
@@ -583,7 +668,7 @@ export function PluginPage() {
               </div>
             ) : null}
 
-            {detail.plugin.installed && local ? (
+            {local && localInstalled ? (
               <div>
                 <Typography.Text strong>本地状态</Typography.Text>
                 <div style={{ marginTop: 8 }}>
@@ -604,7 +689,7 @@ export function PluginPage() {
 
             {/* 用户侧身份开关（2026-11-25 拍板）：HTTP MCP 以我的身份调用；
                 作者声明 usesIdentity 的恒注入——只读展示（声明优先，D22 §6.3/D38） */}
-            {detail.plugin.installed && local && (identityTargets.length > 0 || detail.plugin.manifest?.usesIdentity) ? (
+            {local && localInstalled && (identityTargets.length > 0 || detail.plugin.manifest?.usesIdentity) ? (
               <div>
                 <Typography.Text strong>身份调用</Typography.Text>
                 <div style={{ marginTop: 8 }}>

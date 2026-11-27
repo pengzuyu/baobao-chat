@@ -5,6 +5,8 @@
  * - bridge：文件选择（plugin-dialog 多选）/ 粘贴图片落盘 / 元数据 / Finder 定位；
  * - hooks：useFileDrop（Tauri 原生拖拽事件——窗口 dragDropEnabled 缺省 true，
  *   HTML5 onDrop 不触发，必须走 onDragDropEvent）+ useImagePaste（剪贴板图片）。
+ * - 拖拽接入两分层（2026-11-27 收敛）：只要路径 → useFileDrop 一行；
+ *   要字节/File → useFileDrop + pathsToFiles 两行。
  *
  * 纯浏览器 dev/preview 下 invoke 不可用：选择/粘贴入口 try/catch 提示（附件是
  * 壳功能，mock 桥不提供剧本）。
@@ -46,6 +48,26 @@ export async function statAttachments(paths: string[]): Promise<AttachmentMeta[]
 /** 本地图片 asset URL（缩略图/预览渲染；需壳侧已授权——发送/粘贴路径已登记） */
 export function assetUrl(path: string): string {
   return convertFileSrc(path);
+}
+
+/**
+ * Tauri 拖拽路径数组 → File 数组（2026-11-27，自发版页上传上收为共享工具）。
+ * 用途：需要自己读字节（直传/sha256/解包解析）的拖拽场景；只要路径的场景
+ * 直接用 useFileDrop 回调里的 paths，不必转。链路：壳 sys_grant_asset_paths
+ * 授权当次路径（运行时 scope 不落盘）→ asset 协议 fetch（响应带窗口源 CORS 头）
+ * 读回 blob 转 File。纯浏览器 dev：invoke 不可用会抛错，HTML5 拖拽走 Dragger
+ * 原生路径不经此。
+ */
+export async function pathsToFiles(paths: string[]): Promise<File[]> {
+  await invoke('sys_grant_asset_paths', { paths });
+  const out: File[] = [];
+  for (const p of paths) {
+    const name = p.split(/[\\/]/).pop() || p;
+    const res = await fetch(convertFileSrc(p));
+    if (!res.ok) throw new Error(`读取拖入文件失败：HTTP ${res.status}（${name}）`);
+    out.push(new File([await res.blob()], name));
+  }
+  return out;
 }
 
 /** 在文件管理器中定位 */

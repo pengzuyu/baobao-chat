@@ -12,6 +12,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.1
 	github.com/mozillazg/go-pinyin v0.21.0
 	github.com/zitadel/oidc/v3 v3.52.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/image v0.48.0
 	golang.org/x/text v0.44.0
 )
@@ -42,7 +43,7 @@ require (
 	go.opentelemetry.io/otel v1.46.0 // indirect
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
-	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 )

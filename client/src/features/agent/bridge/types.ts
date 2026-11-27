@@ -369,8 +369,8 @@ export const SESSION_STATUS_LABELS: Record<SessionStatus, string> = {
 /** 权限模式官方中文名与一句话说明（D13-A1 §2；full-auto 升档需二次确认） */
 export const AGENT_MODE_OPTIONS: Array<{ value: PermissionMode; label: string; desc: string }> = [
   { value: 'ask', label: '变更前确认', desc: '任何变更（写文件/执行命令）前都先问你' },
-  { value: 'auto-edit', label: '自主', desc: '文件修改自动执行；危险命令仍需审批' },
-  { value: 'full-auto', label: '完全控制', desc: '文件+白名单命令全自动，仅"永不全自动清单"保留审批' },
+  { value: 'auto-edit', label: '自主', desc: '文件修改与命令自动执行；仅危险命令、触人操作、敏感及工作区外读取需审批' },
+  { value: 'full-auto', label: '完全控制', desc: '在自主档基础上，读取工作区外文件也不再审批；危险命令与触人操作仍需审批' },
 ];
 
 /** 风险级中文（工具卡/审批卡徽标） */

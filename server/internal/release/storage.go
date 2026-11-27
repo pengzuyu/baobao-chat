@@ -108,8 +108,10 @@ ORDER BY published_at DESC, id DESC`
 // PublishVersion 整版本发布：该版本全部 draft 行 → published（published_at=now）。
 // 返回影响行数（0=无可发布草稿——要么不存在，要么已发布）。
 func (s *Store) PublishVersion(ctx context.Context, tenantID int64, channel, version string) (int64, error) {
+	// 撤回后可重新发布（0.1.6 修：revoked 也是「已登记未分发」的制品，重新发布=
+	// 重新进入分发且 publish_at 提升为 now，立即成为线上版本；draft/revoked 一并捞起）
 	const q = `UPDATE client_release SET status = 'published', published_at = now(), updated_at = now()
-WHERE tenant_id = $1 AND channel = $2 AND version = $3 AND status = 'draft'`
+WHERE tenant_id = $1 AND channel = $2 AND version = $3 AND status IN ('draft', 'revoked')`
 	tag, err := s.db.Exec(ctx, q, tenantID, channel, version)
 	if err != nil {
 		return 0, fmt.Errorf("release: publish: %w", err)
@@ -140,9 +142,10 @@ WHERE tenant_id = $1 AND channel = $2 AND version = $3 AND status = 'published'`
 	return tag.RowsAffected(), nil
 }
 
-// DeleteDraft 删除单条草稿（仅 draft；已发布只能撤回）
+// DeleteDraft 删除单条记录（draft/revoked 可删——撤回版已不在分发，删记录即可；
+// published 不可删，只能撤回后再删。制品文件保留在对象存储不动）
 func (s *Store) DeleteDraft(ctx context.Context, tenantID, id int64) error {
-	const q = `DELETE FROM client_release WHERE tenant_id = $1 AND id = $2 AND status = 'draft'`
+	const q = `DELETE FROM client_release WHERE tenant_id = $1 AND id = $2 AND status IN ('draft', 'revoked')`
 	tag, err := s.db.Exec(ctx, q, tenantID, id)
 	if err != nil {
 		return fmt.Errorf("release: delete: %w", err)

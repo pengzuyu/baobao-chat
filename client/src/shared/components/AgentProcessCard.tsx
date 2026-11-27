@@ -216,6 +216,7 @@ export function Elapsed({ startedAt }: { startedAt: number }) {
  * - 工具执行数 = 工具行（子任务行不计入，另计子 agent 数——stages 投影中
  *   其 name 前缀为「子任务」）
  * - durMs 缺省（未收口）省略用时段；仅基于 stages（landed 卡/其他端查看者可算）
+ * - 计数为 0 的段不显示（2026-11-26 用户口径：没派子 agent 就不出「0 个子agent」）
  */
 export function agentStatsText(stages: AgentStage[], durMs?: number | null): string {
   let llmCalls = 0;
@@ -240,9 +241,9 @@ export function agentStatsText(stages: AgentStage[], durMs?: number | null): str
   }
   return [
     durMs != null ? `用时 ${formatDuration(Math.round(durMs / 1000))}` : null,
-    `${llmCalls} 次LLM调用`,
-    `${tools} 次工具执行`,
-    `${subs} 个子agent`,
+    llmCalls > 0 ? `${llmCalls} 次LLM调用` : null,
+    tools > 0 ? `${tools} 次工具执行` : null,
+    subs > 0 ? `${subs} 个子agent` : null,
   ]
     .filter(Boolean)
     .join(' · ');

@@ -12,6 +12,7 @@
     "updater:default",
     "process:allow-restart",
     "dialog:default",
-    "deep-link:default"
+    "deep-link:default",
+    "websocket:default"
   ]
 }

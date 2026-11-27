@@ -414,15 +414,26 @@ func (s *S3) PresignGet(ctx context.Context, key string, ttl time.Duration) (str
 	return s.presign(ctx, http.MethodGet, key, url.Values{}, ttl)
 }
 
+// PresignPutRelease bbc-releases 桶的 PUT 预签名（D39 客户端安装包直传专用：
+// 该桶匿名只读，/update/releases/ 302 直链与官网下载都从这里出；主桶 bbc-data
+// 是私有桶，此前误用主桶签名导致对象落位与下载/校验拉取不一致——0.1.18 修正）
+func (s *S3) PresignPutRelease(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	return s.presignBucket(ctx, "bbc-releases", http.MethodPut, key, url.Values{}, ttl)
+}
+
 // presign 手签 v4 query（S3 presigned 语义：UNSIGNED-PAYLOAD）：
 // 规范路径=/{bucket}/{key}（不含 /oss 前缀）+ 对外 host → 签后把前缀拼回最终 URL
 func (s *S3) presign(ctx context.Context, method, key string, q url.Values, ttl time.Duration) (string, error) {
+	return s.presignBucket(ctx, s.bucket, method, key, q, ttl)
+}
+
+func (s *S3) presignBucket(ctx context.Context, bucket, method, key string, q url.Values, ttl time.Duration) (string, error) {
 	creds, err := s.creds.Retrieve(ctx)
 	if err != nil {
 		return "", fmt.Errorf("s3: creds: %w", err)
 	}
 	q.Set("X-Amz-Expires", strconv.FormatInt(int64(ttl.Seconds()), 10))
-	u := s.publicBase + "/" + s.bucket + "/" + key + "?" + q.Encode()
+	u := s.publicBase + "/" + bucket + "/" + key + "?" + q.Encode()
 	req, err := http.NewRequest(method, u, nil)
 	if err != nil {
 		return "", err
@@ -582,3 +593,22 @@ type closerReader struct {
 }
 
 func (c *closerReader) Close() error { return c.closeFn() }
+
+// OpenBucket 指定桶的对象只读流（D39 客户端发布：register 时从 bbc-releases 拉回
+// 制品做验签/版本校验；与 OpenKey 同形态，仅桶不同）
+func (s *S3) OpenBucket(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	if err != nil {
+		if isNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("s3: get %s/%s: %w", bucket, key, err)
+	}
+	return out.Body, nil
+}
+
+// GetReleaseObject bbc-releases 桶对象只读流（D39 客户端发布 Fetcher：register
+// 时拉回制品做服务端验签/版本一致性校验）
+func (s *S3) GetReleaseObject(ctx context.Context, storageKey string) (io.ReadCloser, error) {
+	return s.OpenBucket(ctx, "bbc-releases", "releases/"+storageKey)
+}

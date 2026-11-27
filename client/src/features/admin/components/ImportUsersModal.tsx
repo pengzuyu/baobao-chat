@@ -16,6 +16,8 @@ import * as XLSX from 'xlsx';
 import { Alert, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { FileUp } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
+import { pathsToFiles } from '../../../shared/attachments';
+import { useFileDrop } from '../../../shared/attachments/hooks';
 import { useMailDomain } from '../../../shared/publicConfig';
 import { Button } from '../../../shared/ui/Button';
 import { batchImportUsers, type DeptNode, type ImportInputRow, type ImportResult } from '../api/admin';
@@ -128,6 +130,17 @@ export function ImportUsersModal({
       setError('Excel 解析失败（支持 .xlsx/.xls；首列=姓名）');
     }
   };
+
+  // 桌面端整窗拖拽（弹窗打开期间生效）：拖入 Excel 读回 File 走同一解析链
+  useFileDrop(open, (paths) => {
+    void pathsToFiles(paths)
+      .then((files) => {
+        const f = files.find((x) => /\.(xlsx|xls|csv)$/i.test(x.name));
+        if (f) void pickFile(f);
+        else setError('导入文件须为 Excel（.xlsx/.xls）或 .csv');
+      })
+      .catch((e) => setError(`读取拖入文件失败：${e instanceof Error ? e.message : String(e)}`));
+  });
 
   const backToPaste = () => {
     setExcelRows(null);

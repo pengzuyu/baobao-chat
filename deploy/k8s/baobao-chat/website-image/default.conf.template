@@ -1,0 +1,36 @@
+# =============================================================================
+# BaobaoChat 官网独立站（K8s 独立端口形态，2026-11-27 拍板：不动 30808 主入口）
+#
+# 职责：
+#   /                      → 官网静态（Hero/功能/路线图/下载区）
+#   /update/release-info.json → 反代 bbc-app 动态清单（D21 联动语义：发布管理
+#                              发布后官网下载区自动跟进；RELEASE_HOST 让服务端
+#                              baseURL 推导指向主入口，下载直链跳主入口真实地址）
+#   /update/               → 同上反代（下载区直链兜底）
+# 环境变量（nginx 官方 envsubst 机制，Deployment 注入）：
+#   RELEASE_HOST  主入口对外地址（host:port），如 172.16.105.109:30808
+# =============================================================================
+server {
+  listen 80;
+  server_name _;
+
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # 健康探测（compose website 同款约定）
+  location = /website-ok { access_log off; return 200 "ok\n"; }
+
+  # 动态清单反代：Host 头改写为主入口地址，服务端 baseURL 推导出真实下载直链
+  location = /update/release-info.json {
+    proxy_set_header Host ${RELEASE_HOST};
+    proxy_pass http://bbc-app;
+  }
+  location /update/ {
+    proxy_set_header Host ${RELEASE_HOST};
+    proxy_pass http://bbc-app;
+  }
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}

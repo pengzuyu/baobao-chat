@@ -16,12 +16,13 @@ import type { InputRef } from 'antd';
 import { AtSign, Bot, Mic, Paperclip, Smile, Square, Trash2, X } from 'lucide-react';
 import {
   MAX_ATTACHMENTS,
+  pathsToFiles,
   pickAttachmentPaths,
   savePastedImage,
   statAttachments,
 } from '../../../shared/attachments';
 import { AttachmentStrip, type StripItem } from '../../../shared/attachments/components';
-import { useImagePaste } from '../../../shared/attachments/hooks';
+import { useFileDrop, useImagePaste } from '../../../shared/attachments/hooks';
 import type { AttachmentPayload } from '../../agent/bridge/types';
 import { Button } from '../../../shared/ui/Button';
 import { useImeGuard } from '../../../shared/hooks/useImeGuard';
@@ -156,6 +157,20 @@ export function MessageInput({
   useImagePaste(!!agentMode, (bytes) => {
     void savePastedImage(bytes)
       .then((path) => addAgentPaths([path]))
+      .catch((e: unknown) => message.error(e instanceof Error ? e.message : String(e)));
+  });
+  // 桌面端整窗拖拽（2026-11-27 补齐回形针 tooltip 许诺的「拖入」）：agentMode
+  // 附件走路径引用（statAttachments 校验，与点击/粘贴同径）；普通模式拖入按
+  // 发送文件流程取首个（与点击单选一致，进 FileSendPreview 预览）
+  const dragOver = useFileDrop(true, (paths) => {
+    if (agentMode) {
+      void addAgentPaths(paths);
+      return;
+    }
+    void pathsToFiles(paths)
+      .then((files) => {
+        if (files[0]) onPickFile?.(files[0]);
+      })
       .catch((e: unknown) => message.error(e instanceof Error ? e.message : String(e)));
   });
   // 回复卡「追问」：外部信号触发聚焦（徽标已由 ChatPage 置 agentMode）
@@ -474,12 +489,15 @@ export function MessageInput({
       style={{
         position: 'relative', // @提及/表情/斜杠面板 absolute 锚定基准（缺失则漂到窗口左上，2026-11-10 真机）
         flexShrink: 0,
-        borderTop: `1px solid ${agentMode ? `color-mix(in srgb, ${token.colorPrimary} 45%, transparent)` : token.colorBorderSecondary}`,
+        borderTop: `1px solid ${dragOver ? token.colorPrimary : agentMode ? `color-mix(in srgb, ${token.colorPrimary} 45%, transparent)` : token.colorBorderSecondary}`,
         padding: '8px 12px 12px',
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
         background: agentMode ? `color-mix(in srgb, ${token.colorPrimary} 6%, transparent)` : undefined,
+        outline: dragOver ? `1px dashed ${token.colorPrimary}` : undefined,
+        outlineOffset: -2,
+        borderRadius: 4,
       }}
     >
       {agentMode && agentAtts.length > 0 ? (
@@ -568,7 +586,7 @@ export function MessageInput({
             <AtSign size={17} />
           </Button>
         </Tooltip>
-        <Tooltip title={agentMode ? '附加文件给 Agent（也可拖入/粘贴）' : '发送文件/图片'}>
+        <Tooltip title={agentMode ? '附加文件给 Agent（也可拖入/粘贴）' : '发送文件/图片（也可拖入窗口）'}>
           <Button
             variant="text"
             size="small"
@@ -600,17 +618,22 @@ export function MessageInput({
             if (f) onPickFile?.(f);
           }}
         />
-        <Tooltip title="语音（最长 60 秒）">
-          <Button
-            variant="text"
-            size="small"
-            data-testid="voice-btn"
-            style={{ width: 28, height: 28, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
-            onClick={() => void startVoice()}
-          >
-            <Mic size={17} />
-          </Button>
-        </Tooltip>
+        {/* 语音入口机器人模式下隐藏（2026-11-27）：录音会走 sendVoiceFlow 直接发进
+            会话（对其他人可见），违背机器人模式「消息仅本机零痕迹」不变量——
+            文件/粘贴/拖拽三附件入口均已分流，语音暂无「给 Agent」通道故整入口收起 */}
+        {!agentMode && (
+          <Tooltip title="语音（最长 60 秒）">
+            <Button
+              variant="text"
+              size="small"
+              data-testid="voice-btn"
+              style={{ width: 28, height: 28, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: token.colorTextSecondary }}
+              onClick={() => void startVoice()}
+            >
+              <Mic size={17} />
+            </Button>
+          </Tooltip>
+        )}
         {/* 机器人模式徽标（行末右上角；margin-left:auto 只推自己，操作按钮保持原位） */}
         {agentMode ? (
           <Button

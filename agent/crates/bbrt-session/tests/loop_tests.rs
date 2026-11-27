@@ -170,8 +170,6 @@ fn deps<M: bbrt_aigw::ChatClient + 'static>(
         wal: Arc::new(NoopEventLog),
         sink,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     }
 }
@@ -644,8 +642,6 @@ fn set_mode_takes_effect_on_next_tool_gate() {
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mgr = SessionManager::new(d, None);
@@ -795,8 +791,6 @@ fn wal_records_monotonic_events() {
         wal: log.clone(),
         sink,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new("s-6".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
@@ -879,8 +873,6 @@ fn compaction_triggers_on_long_history() {
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: cfg,
     };
     let mut runner = SessionRunner::new("s-7".into(), "/tmp/ws".into(), PermissionMode::Ask, None);
@@ -1425,8 +1417,6 @@ fn manager_switch_model_emits() {
         wal: log.clone(),
         sink: sink.clone(),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mgr = SessionManager::new(d, None);
@@ -1511,8 +1501,6 @@ fn capture_deps(model: Arc<CapturingModel>) -> LoopDeps {
         wal: Arc::new(NoopEventLog),
         sink: Arc::new(CollectSink::default()),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     }
 }
@@ -1571,8 +1559,6 @@ fn switch_model_override_persists() {
         wal: Arc::new(NoopEventLog),
         sink: sink.clone(),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mgr = SessionManager::new(d, Some(store.clone()));
@@ -1707,8 +1693,6 @@ fn wait_deps(model: Arc<FakeWaitModel>, wal: Arc<SnapLog>, sink: Arc<CollectSink
         wal,
         sink,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     }
 }
@@ -1937,8 +1921,6 @@ fn run_command_background_returns_task_id_and_finishes() {
         wal: wal.clone(),
         sink: sink.clone(),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let started = std::time::Instant::now();
@@ -2062,8 +2044,6 @@ fn run_command_sync_times_out_into_background() {
         wal: wal.clone(),
         sink: sink.clone(),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(
@@ -2208,8 +2188,6 @@ fn run_command_background_must_pass_gate() {
         wal: wal.clone(),
         sink: sink.clone(),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner =
@@ -2385,8 +2363,6 @@ fn manager_persists_scene_form_and_conv_id() {
         wal: Arc::new(NoopEventLog),
         sink,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     // embedded：form=embedded + conv_id

@@ -178,7 +178,9 @@ function MarqueeTitle({ text }: { text: string }) {
 /** 会话行 label（2026-11-24 单行化）：状态点 + 💬来源标 + 跑马灯标题 + 状态 chip +
  *  行末时间（悬停切换为 重命名/删除 动作位——WeChat 同款位复用，不额外占宽）。
  *  重命名=行内编辑（Enter 提交/Esc 取消/失焦提交，限长 60 对齐 RT rename 截断）；
- *  删除只触发回调，危险确认弹窗在页面层。origin=无 workspace 时的来源文案 */
+ *  删除只触发回调，危险确认弹窗在页面层。origin=无 workspace 时的来源文案。
+ *  2026-11-27 用户拍板：空闲不显状态（点/chip/悬停提示都不出「空闲」字样，行归纯标题+时间），
+ *  其余状态（运行/等待/暂停/错误/已结束）照常显示 */
 function SessionRowLabel({
   s,
   embedded,
@@ -202,6 +204,10 @@ function SessionRowLabel({
     setEditing(false);
     if (t && t !== s.title) onRename(s.id, t);
   };
+
+  // 空闲=无状态展示（2026-11-27 拍板）：点/chip/悬停提示里的「空闲」全部不出
+  const hasStatus = s.status !== 'idle';
+  const statusText = hasStatus ? SESSION_STATUS_LABELS[s.status] : '';
 
   if (editing) {
     return (
@@ -235,20 +241,22 @@ function SessionRowLabel({
   return (
     <span
       style={{ display: 'inline-flex', verticalAlign: 'middle', alignItems: 'center', gap: 8, minWidth: 0, width: '100%', lineHeight: 1.4 }}
-      title={`${s.title} · ${SESSION_STATUS_LABELS[s.status]} · ${s.workspace ? displayPath(s.workspace) : origin}`}
+      title={`${s.title}${statusText ? ` · ${statusText}` : ''} · ${s.workspace ? displayPath(s.workspace) : origin}`}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <Badge status={statusBadge(s.status)} />
+      {hasStatus ? <Badge status={statusBadge(s.status)} /> : null}
       {embedded ? (
         <span title="来自聊天会话（IM @Agent）" style={{ color: token.colorPrimary, display: 'inline-flex', flexShrink: 0 }}>
           <Bot size={11} aria-hidden />
         </span>
       ) : null}
       <MarqueeTitle text={s.title} />
-      <Tag color={statusTagColor(s.status)} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 4, flexShrink: 0 }}>
-        {SESSION_STATUS_LABELS[s.status]}
-      </Tag>
+      {hasStatus ? (
+        <Tag color={statusTagColor(s.status)} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 4, flexShrink: 0 }}>
+          {statusText}
+        </Tag>
+      ) : null}
       {hover ? (
         <span style={{ display: 'inline-flex', gap: 2, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
           <Button

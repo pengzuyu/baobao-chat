@@ -42,8 +42,8 @@ pub use executor::{
 };
 pub use expert::{
     apply_override, assemble, parse_manifest, AssemblePolicy, AssembledExpert, Dropped,
-    ExpertConstraints, ExpertCtx, ExpertError, ExpertIndex, ExpertManifest, ExpertPick,
-    ExpertResult, ExpertSource, FastPicker, ManifestTools,
+    ExpertConstraints, ExpertCtx, ExpertError, ExpertIndex, ExpertManifest, ExpertResult,
+    ManifestTools,
 };
 pub use loop_runner::{
     EventLog, LoopDeps, NoopEventLog, PermissionDecision, PermissionResponse, Scene, SessionRunner,
@@ -61,4 +61,4 @@ pub use state::{
     permission_resolved, request_permission, resume, retry_from_error, SessionState,
     TransitionError,
 };
-pub use subagent::{FanoutPlanner, FastPlanner, ProbeResult, ProbeSpec};
+pub use subagent::{ProbeResult, ProbeSpec, SubagentKindDef, SPAWN_SUBAGENTS_TOOL, SUBAGENT_KINDS};

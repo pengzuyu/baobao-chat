@@ -26,6 +26,8 @@ type Host<'a> = State<'a, Arc<AgentHost>>;
 const PLUGIN_MAX_BYTES: usize = 10 << 20;
 /// 单文件上限（SKILL.md/命令/专家/server.js 均远小于此）
 const PLUGIN_FILE_MAX_BYTES: usize = 4 << 20;
+/// 本机 README 读取上限（与服务端 PluginMaxReadmeBytes 一致，D39：超限不读不截断）
+const PLUGIN_README_MAX_BYTES: usize = 64 << 10;
 
 /// 前端传输单元（content_b64 = 文件内容 base64）
 #[derive(Deserialize)]
@@ -195,6 +197,25 @@ pub fn plugin_set_enabled(host: Host, plugin_id: String, enabled: bool) -> Resul
     Ok(())
 }
 
+/// 本机已装版本目录名（x.y.z 升序；local_state 与已装清单共用）
+fn installed_versions(root: &std::path::Path) -> Vec<String> {
+    let mut versions: Vec<String> = Vec::new();
+    if let Ok(rd) = fs::read_dir(root) {
+        for entry in rd.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            if let Some(name) = entry.file_name().to_str() {
+                if valid_version(name) {
+                    versions.push(name.to_string());
+                }
+            }
+        }
+    }
+    versions.sort();
+    versions
+}
+
 /// 本地态（已安装页对照：版本线/激活版/启禁/config 值——secret 经钥匙串回读）
 #[tauri::command(async)]
 pub fn plugin_local_state(host: Host, plugin_id: String) -> Result<Value, String> {
@@ -203,19 +224,7 @@ pub fn plugin_local_state(host: Host, plugin_id: String) -> Result<Value, String
         return Ok(Value::Null);
     }
     let state = read_state(&root);
-    let mut versions: Vec<String> = Vec::new();
-    if let Ok(rd) = fs::read_dir(&root) {
-        for entry in rd.flatten() {
-            if entry.path().is_dir() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if valid_version(name) {
-                        versions.push(name.to_string());
-                    }
-                }
-            }
-        }
-    }
-    versions.sort();
+    let versions = installed_versions(&root);
     let config = Value::Object(read_plugin_config(&root));
     let active_version = state.get("activeVersion").and_then(Value::as_str).unwrap_or("");
     let (discovered, servers) = (!active_version.is_empty())
@@ -235,6 +244,223 @@ pub fn plugin_local_state(host: Host, plugin_id: String) -> Result<Value, String
         "mcpServers": servers,
         "useIdentity": state.get("useIdentity").and_then(Value::as_bool).unwrap_or(false),
     }))
+}
+
+/// 本机已装插件清单（已安装页对账）：Agent 装配只认本机安装目录
+/// （agent_bridge::assemble_mcp_servers），服务端安装记录可能缺失——数据
+/// 重置、换账号、记录被清除后的本机遗留照样对 Agent 生效。页面拿本清单与
+/// /eco/plugins/mine 做并集，「仅本机」条目据此可见、可禁用、可卸载。
+/// 纯本地只读，不访问服务端
+#[tauri::command(async)]
+pub fn plugin_list_local(host: Host) -> Result<Value, String> {
+    Ok(Value::Array(scan_local_plugins(
+        &host.data_dir().join("eco/plugins"),
+    )))
+}
+
+/// 扫描 eco/plugins：合法 id 目录升序；未安装态（见 local_plugin_summary）剔除
+fn scan_local_plugins(plugins_dir: &std::path::Path) -> Vec<Value> {
+    let Ok(rd) = fs::read_dir(plugins_dir) else {
+        return vec![];
+    };
+    let mut ids: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|id| valid_plugin_id(id))
+        .collect();
+    ids.sort();
+    ids.iter()
+        .filter_map(|id| local_plugin_summary(&plugins_dir.join(id), id))
+        .collect()
+}
+
+/// 单个本机插件概览：activeVersion 为空=未安装（卸载保留配置的骨架目录、
+/// state 缺失或损坏）→ None。版本目录缺失仍算已装（Agent 装配不上，但用户
+/// 要能看见并有入口清掉）——清单/README 降级空值
+fn local_plugin_summary(root: &PathBuf, plugin_id: &str) -> Option<Value> {
+    let state = read_state(root);
+    let active = state
+        .get("activeVersion")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if active.is_empty() {
+        return None;
+    }
+    let ver_dir = root.join(active);
+    Some(json!({
+        "pluginId": plugin_id,
+        "enabled": state.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+        "activeVersion": active,
+        "versions": installed_versions(root),
+        "manifest": local_manifest(&ver_dir, plugin_id, active),
+        "readme": read_local_readme(&ver_dir),
+    }))
+}
+
+/// 清单所在目录（三目录名规范，首个带 plugin.json 者）
+fn manifest_dir(ver_dir: &std::path::Path) -> Option<&'static str> {
+    [".bbc-plugin", ".claude-plugin", ".zcode-plugin"]
+        .into_iter()
+        .find(|dir| ver_dir.join(dir).join("plugin.json").is_file())
+}
+
+/// 插件清单原文（manifest_dir/plugin.json；缺失或损坏=None）
+fn read_plugin_json(ver_dir: &std::path::Path) -> Option<Value> {
+    let dir = manifest_dir(ver_dir)?;
+    let text = fs::read_to_string(ver_dir.join(dir).join("plugin.json")).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// 字符串字段（非空才取）
+fn non_empty(v: Option<&Value>) -> Option<String> {
+    v.and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+}
+
+/// 组件目录：清单声明路径优先，缺省约定目录（同 Go 校验器 join 口径）
+fn component_dir(raw: &Value, key: &str, default: &str) -> String {
+    non_empty(raw.get(key)).unwrap_or_else(|| default.to_string())
+}
+
+/// bbc.config 条目的 key
+fn config_key(c: &Value) -> &str {
+    c.get("key").and_then(Value::as_str).unwrap_or("")
+}
+
+/// 目录内文件计数（keep 判定文件名；max_depth=向下递归的目录层数，0=只认
+/// 顶层）。目录不存在=0
+fn count_dir_files(dir: &std::path::Path, max_depth: usize, keep: &dyn Fn(&str) -> bool) -> usize {
+    let mut n = 0;
+    let Ok(rd) = fs::read_dir(dir) else {
+        return 0;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if max_depth > 0 {
+                n += count_dir_files(&path, max_depth - 1, keep);
+            }
+        } else if entry.file_name().to_str().is_some_and(keep) {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn is_skill_md(name: &str) -> bool {
+    name == "SKILL.md"
+}
+
+fn is_md(name: &str) -> bool {
+    name.ends_with(".md")
+}
+
+/// 盘上清单 → 服务端 PluginManifest 同形状（已安装页「仅本机」条目直接当
+/// PluginEntry.manifest 用）。组件计数与 Go 校验器同口径：skills=SKILL.md
+/// （顶层或一层子目录）、commands/agents=顶层 *.md、mcpServers=server 数、
+/// hooks=声明文件或 hooks/hooks.json；身份=声明 x-bbc-auth 或引用
+/// ${BBC_USER_*} 变量（authAudiences 仅取 x-bbc-auth 的 http server url）。
+/// 空值字段不下发（omitempty 同语义）
+fn local_manifest(ver_dir: &std::path::Path, plugin_id: &str, fallback_version: &str) -> Value {
+    let raw = read_plugin_json(ver_dir).unwrap_or(Value::Null);
+    let bbc = raw.get("bbc");
+    let mcp_doc = crate::agent_bridge::read_plugin_mcp_doc(ver_dir);
+    let servers = mcp_doc
+        .as_ref()
+        .and_then(|d| d.get("mcpServers"))
+        .and_then(Value::as_object);
+    let mcp_servers = servers.map_or(0, |m| m.len());
+    let mut auth_audiences: Vec<String> = servers
+        .into_iter()
+        .flat_map(|m| m.values())
+        .filter(|def| def.get("x-bbc-auth").is_some_and(|a| !a.is_null()))
+        .filter_map(|def| non_empty(def.get("url")))
+        .collect();
+    auth_audiences.sort();
+    let mcp_text = mcp_doc.map(|d| d.to_string()).unwrap_or_default();
+    let uses_identity = !auth_audiences.is_empty()
+        || ["${BBC_USER_TOKEN}", "${BBC_USER_ID}", "${BBC_USER_NAME}"]
+            .iter()
+            .any(|v| mcp_text.contains(v));
+    let hooks = match non_empty(raw.get("hooks")) {
+        Some(rel) => ver_dir.join(rel.trim_start_matches("./")).exists(),
+        None => ver_dir.join("hooks/hooks.json").exists(),
+    };
+    let config: Vec<&Value> = bbc
+        .and_then(|b| b.get("config"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+    let config_keys: Vec<&str> = config
+        .iter()
+        .map(|c| config_key(c))
+        .filter(|k| !k.is_empty())
+        .collect();
+    let config_secrets: Vec<&str> = config
+        .iter()
+        .filter(|c| c.get("type").and_then(Value::as_str) == Some("secret"))
+        .map(|c| config_key(c))
+        .collect();
+    let skills_dir = ver_dir.join(component_dir(&raw, "skills", "skills"));
+    let commands_dir = ver_dir.join(component_dir(&raw, "commands", "commands"));
+    let agents_dir = ver_dir.join(component_dir(&raw, "agents", "agents"));
+    let skills = count_dir_files(&skills_dir, 1, &is_skill_md);
+    let commands = count_dir_files(&commands_dir, 0, &is_md);
+    let agents = count_dir_files(&agents_dir, 0, &is_md);
+    let mut m = json!({
+        "name": non_empty(raw.get("name")).unwrap_or_else(|| plugin_id.to_string()),
+        "version": non_empty(raw.get("version"))
+            .unwrap_or_else(|| fallback_version.to_string()),
+        "description": non_empty(raw.get("description")).unwrap_or_default(),
+        "components": {
+            "skills": skills,
+            "mcpServers": mcp_servers,
+            "commands": commands,
+            "agents": agents,
+            "hooks": hooks,
+        },
+        "usesIdentity": uses_identity,
+    });
+    for key in ["risk", "category"] {
+        if let Some(v) = non_empty(bbc.and_then(|b| b.get(key))) {
+            m[key] = json!(v);
+        }
+    }
+    if let Some(v) = bbc
+        .and_then(|b| b.get("netAllow"))
+        .filter(|v| v.as_array().is_some_and(|a| !a.is_empty()))
+    {
+        m["netAllow"] = v.clone();
+    }
+    if !config_keys.is_empty() {
+        m["configKeys"] = json!(config_keys);
+        m["configSecrets"] = json!(config_secrets);
+    }
+    if !auth_audiences.is_empty() {
+        m["authAudiences"] = json!(auth_audiences);
+    }
+    m
+}
+
+/// 本机 README（D39 同口径：包根优先、清单目录次之，命中即止；超限不读
+/// 不截断；CRLF→LF 归一）
+fn read_local_readme(ver_dir: &std::path::Path) -> Option<String> {
+    let mut candidates = vec![ver_dir.join("README.md")];
+    if let Some(dir) = manifest_dir(ver_dir) {
+        candidates.push(ver_dir.join(dir).join("README.md"));
+    }
+    for path in candidates {
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        if bytes.len() > PLUGIN_README_MAX_BYTES {
+            return None;
+        }
+        return Some(String::from_utf8_lossy(&bytes).replace("\r\n", "\n"));
+    }
+    None
 }
 
 /// mcp 定义扫描（配置项自动发现 + server 概览）：
@@ -595,5 +821,126 @@ fn remove_plugin_experts(host: &Host, plugin_id: &str) {
                 let _ = fs::remove_file(e.path());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 临时目录树：{tmp}/bbc-plugin-test-{pid}/{name}（用例自建 eco/plugins 层级）
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("bbc-plugin-test-{}", std::process::id()))
+            .join(name);
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn put(path: &std::path::Path, body: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+
+    /// .md 组件正文（计数只看文件名，内容无关）
+    const MD: &str = "---\nname: x\n---\n";
+
+    /// 盘上事实 → 服务端清单同形状（组件计数/身份/配置键/README 各一项）
+    #[test]
+    fn 仅本机清单_镜像服务端清单形状() {
+        let plugins = scratch("mirror");
+        let ver = plugins.join("demo-helper/1.2.3");
+        put(
+            &ver.join(".bbc-plugin/plugin.json"),
+            r#"{"name":"demo-helper","version":"1.2.3","description":"演示","skills":"./skills","bbc":{"risk":"low","category":"devops","netAllow":["10.0.0.1"],"config":[{"key":"api_key","type":"secret"},{"key":"base_url","type":"string"}]}}"#,
+        );
+        put(
+            &ver.join(".mcp.json"),
+            r#"{"mcpServers":{"a":{"url":"https://a.example.com/mcp","x-bbc-auth":{"type":"obo"}},"b":{"command":"node","env":{"T":"${BBC_USER_TOKEN}"}}}}"#,
+        );
+        put(&ver.join("skills/SKILL.md"), MD);
+        put(&ver.join("skills/nested/SKILL.md"), MD);
+        put(&ver.join("skills/deep/x/SKILL.md"), MD); // 二层子目录不计
+        put(&ver.join("commands/deploy.md"), "# deploy");
+        put(&ver.join("commands/notes.txt"), "not md"); // 非 .md 不计
+        put(&ver.join("agents/reviewer.md"), MD);
+        put(&ver.join("README.md"), "hello\r\nworld");
+        put(
+            &plugins.join("demo-helper/plugin-state.json"),
+            r#"{"activeVersion":"1.2.3","enabled":false}"#,
+        );
+
+        let list = scan_local_plugins(&plugins);
+        assert_eq!(list.len(), 1);
+        let s = &list[0];
+        assert_eq!(s["pluginId"], "demo-helper");
+        assert_eq!(s["enabled"], false);
+        assert_eq!(s["activeVersion"], "1.2.3");
+        assert_eq!(s["versions"], json!(["1.2.3"]));
+        assert_eq!(s["readme"], "hello\nworld");
+        let m = &s["manifest"];
+        assert_eq!(
+            m["components"],
+            json!({"skills": 2, "mcpServers": 2, "commands": 1, "agents": 1, "hooks": false})
+        );
+        assert_eq!(m["risk"], "low");
+        assert_eq!(m["category"], "devops");
+        assert_eq!(m["netAllow"], json!(["10.0.0.1"]));
+        assert_eq!(m["configKeys"], json!(["api_key", "base_url"]));
+        assert_eq!(m["configSecrets"], json!(["api_key"]));
+        assert_eq!(m["usesIdentity"], true);
+        assert_eq!(m["authAudiences"], json!(["https://a.example.com/mcp"]));
+        let _ = fs::remove_dir_all(&plugins);
+    }
+
+    /// 未安装态剔除（卸载保留配置的骨架/非法 id）；版本目录缺失仍列出（要能看见并清掉）
+    #[test]
+    fn 仅本机清单_未安装态剔除_残缺目录仍列出() {
+        let plugins = scratch("skip");
+        put(&plugins.join("kept/config.json"), r#"{"k":"v"}"#); // 无 activeVersion
+        put(
+            &plugins.join("Bad_ID/plugin-state.json"),
+            r#"{"activeVersion":"1.0.0"}"#,
+        ); // 非法 id
+        put(
+            &plugins.join("broken/plugin-state.json"),
+            r#"{"activeVersion":"9.9.9"}"#,
+        ); // 版本目录不存在
+        put(
+            &plugins.join("plain/0.1.0/.zcode-plugin/plugin.json"),
+            r#"{"name":"plain","version":"0.1.0","description":"缺省目录约定"}"#,
+        );
+        put(
+            &plugins.join("plain/0.1.0/.mcp.json"),
+            r#"{"mcpServers":{"x":{"url":"http://127.0.0.1:9/mcp"}}}"#,
+        );
+        put(&plugins.join("plain/0.1.0/skills/SKILL.md"), MD);
+        put(&plugins.join("plain/0.1.0/hooks/hooks.json"), "{}");
+        put(
+            &plugins.join("plain/plugin-state.json"),
+            r#"{"activeVersion":"0.1.0"}"#,
+        );
+
+        let list = scan_local_plugins(&plugins);
+        let ids: Vec<&str> = list
+            .iter()
+            .map(|s| s["pluginId"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["broken", "plain"]);
+        // 残缺：清单缺失回退 id/版本号，缺省启用，README 无
+        assert_eq!(list[0]["enabled"], true);
+        assert_eq!(list[0]["manifest"]["name"], "broken");
+        assert_eq!(list[0]["manifest"]["version"], "9.9.9");
+        assert_eq!(list[0]["versions"], json!([]));
+        assert!(list[0]["readme"].is_null());
+        // 缺省目录约定 + hooks.json；未声明身份/风险 → 空值字段不下发（omitempty）
+        assert_eq!(
+            list[1]["manifest"]["components"],
+            json!({"skills": 1, "mcpServers": 1, "commands": 0, "agents": 0, "hooks": true})
+        );
+        assert_eq!(list[1]["manifest"]["usesIdentity"], false);
+        assert!(list[1]["manifest"].get("risk").is_none());
+        assert!(list[1]["manifest"].get("authAudiences").is_none());
+        let _ = fs::remove_dir_all(&plugins);
     }
 }

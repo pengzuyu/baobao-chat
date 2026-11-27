@@ -208,6 +208,16 @@ pub fn sys_reveal_path(path: String) -> Result<(), String> {
     tauri_plugin_opener::reveal_item_in_dir(path).map_err(|e| e.to_string())
 }
 
+/// 拖入文件路径 → webview asset scope 运行时授权（发布管理页拖拽上传用：
+/// Tauri 拖拽只给绝对路径，前端经 convertFileSrc+fetch 读回字节前须授权）。
+/// 只加当次运行时 scope 不落盘（对比图片气泡的 AssetGrants 持久授权：
+/// 上传场景用完即弃，重启失效，授权面最窄）
+#[tauri::command(async)]
+pub fn sys_grant_asset_paths(app: tauri::AppHandle, paths: Vec<String>) -> Result<usize, String> {
+    crate::asset_grants::allow_scope(&app, &paths);
+    Ok(paths.len())
+}
+
 /// 会话删除时的附件显示授权清理（agent_delete_session 内联调用；命令供测试/兜底）
 #[tauri::command(async)]
 pub fn agent_asset_revoke_session(

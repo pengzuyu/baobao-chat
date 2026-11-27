@@ -1,6 +1,6 @@
 [package]
 name = "baobaochat-client"
-version = "0.1.2"
+version = "0.1.8"
 description = "BaobaoChat 客户端（Tauri 2 壳）"
 authors = ["BaobaoChat"]
 edition = "2021"
@@ -27,6 +27,10 @@ tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 # 自动更新（16 篇 §5.1：ed25519 签名 manifest + /update/ 静态源；pubkey 未配置时禁用）
 tauri-plugin-updater = "2"
+# WebSocket（0.1.4）：macOS WKWebView 拒绝 tauri:// 页面的 ws:// 出站（custom scheme
+# origin 的 socket 限制，dev 的 http://localhost:5173 无此问题）——传输改由 Rust 侧
+# 插件连接（@tauri-apps/plugin-websocket 前端对应），WebView 限制不再生效
+tauri-plugin-websocket = "2"
 # relaunch（D21：更新装完一键重启）
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }

@@ -7,6 +7,7 @@ package release
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
 )
@@ -69,4 +70,22 @@ func schemeOf(r *http.Request) string {
 		return "https"
 	}
 	return "http"
+}
+// HandleReleaseDownload GET /update/releases/{key...} —— 制品下载 302 兜底。
+// 接入层 nginx 部署形态：该路径由 nginx 直出对象存储，本路由不会被命中；
+// 无接入层部署（bbc-app NodePort 直连，现网形态）：本服务 302 到对象存储匿名
+// 直链（bbc-releases 桶只读公开，D39）。映射与清单 fileURL 一一对应：
+//   /update/releases/<storage_key> → <ObjectPublicBase>/bbc-releases/releases/<storage_key>
+func (m *Module) HandleReleaseDownload(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if key == "" || strings.Contains(key, "..") || strings.ContainsAny(key, `\`+"\x00") {
+		http.NotFound(w, r) // 防御：空键/路径穿越（ServeMux 已清理路径，此处兜底直调）
+		return
+	}
+	base := strings.TrimSuffix(m.opts.ObjectPublicBase, "/")
+	if base == "" {
+		http.Error(w, `{"error":"release download not configured"}`, http.StatusNotFound)
+		return
+	}
+	http.Redirect(w, r, base+"/bbc-releases/releases/"+key, http.StatusFound)
 }

@@ -34,7 +34,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bbrt"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "bbrt-aigw",
  "bbrt-context",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-aigw"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-context"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -72,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-hostapi"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "bbrt-protocol",
  "serde",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-mcp"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "bbrt-protocol",
  "rustls",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-memory"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-protocol"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-sec"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-session"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "base64",
  "bbrt-aigw",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-store"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "rusqlite",
  "serde",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "bbrt-tools"
-version = "0.1.2"
+version = "0.1.8"
 dependencies = [
  "bbrt-aigw",
  "bbrt-context",

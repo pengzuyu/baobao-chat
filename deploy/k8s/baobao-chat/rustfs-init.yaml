@@ -57,7 +57,10 @@ spec:
                 '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::bbc-releases/*"]}]}' || true
               aws s3api put-bucket-cors --bucket bbc-data --cors-configuration \
                 '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","POST","HEAD"],"AllowedHeaders":["content-type","x-amz-*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3600}]}' || true
-              echo "[rustfs-init] 桶初始化完成：bbc-data(版本化) / bbc-backup / bbc-releases(匿名只读·D39)（CORS 已配）"
+              # bbc-releases 同款 CORS（D39 安装包浏览器直传 PUT 到此桶；漏配曾致 0.1.6 上传 OPTIONS 预检被拒）
+              aws s3api put-bucket-cors --bucket bbc-releases --cors-configuration \
+                '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","POST","HEAD"],"AllowedHeaders":["content-type","x-amz-*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3600}]}' || true
+              echo "[rustfs-init] 桶初始化完成：bbc-data(版本化) / bbc-backup / bbc-releases(匿名只读·D39)（CORS 已配含 bbc-releases）"
           resources:
             requests: {cpu: 1m, memory: 16Mi}
             limits: {cpu: 500m, memory: 256Mi}

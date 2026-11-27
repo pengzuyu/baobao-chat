@@ -6,6 +6,8 @@
  * - 收口：过程完整折叠为一行统计（✓ 用时 · N次LLM调用 · N次工具 · N个子agent——
  *   复用 stagesFromStream+agentStatsText 两端口径单一来源），正文常开；点击折叠行展开
  * - 未决审批/提问与 error 行强制展开（不可折叠藏起——口径延续自回合气泡时代）
+ * - 尾部系统提示（最终回答之后到达：回合收口后切权限模式/会话结束）不进过程区，
+ *   落回合最末（2026-11-26）
  * - memo 逐条引用比较（appendDelta 保旧条目引用稳定是前提，2026-11-11 卡顿口径延续）
  */
 
@@ -174,7 +176,13 @@ export const TurnBlock = memo(
         break;
       }
     }
-    const processItems = lastAnswerIdx >= 0 ? items.filter((_, i) => i !== lastAnswerIdx) : items;
+    // 尾部系统提示（最终回答之后到达：回合收口后切权限模式/会话结束等）不属于过程——
+    // 从过程区切出落回合最末（2026-11-26 修「切模式提示跑到上一个回答正文上方、还随
+    // 过程折叠藏起」）；最终回答之前的系统提示照旧归过程区
+    let tailStart = items.length;
+    while (tailStart > lastAnswerIdx + 1 && items[tailStart - 1].kind === 'system') tailStart -= 1;
+    const tailItems = items.slice(tailStart);
+    const processItems = items.filter((_, i) => i !== lastAnswerIdx && i < tailStart);
     const lastAnswer = lastAnswerIdx >= 0 ? (items[lastAnswerIdx] as Extract<StreamItem, { kind: 'agentText' }>) : null;
 
     // 未决审批/提问/错误不可折叠藏起（口径延续）
@@ -308,6 +316,8 @@ export const TurnBlock = memo(
             </button>
           </div>
         ) : null}
+        {/* 尾部系统提示：回合最末（最终回答之后到达的切模式提示/会话结束等） */}
+        {tailItems.length > 0 ? renderStreamItems(tailItems, onRespond) : null}
       </div>
     );
   },

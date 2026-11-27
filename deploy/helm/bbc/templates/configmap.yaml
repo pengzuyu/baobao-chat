@@ -15,6 +15,9 @@ data:
   BBC_UPDATE_CHANNEL: {{ .Values.config.updateChannel | quote }}
   BBC_OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelEndpoint | quote }}
   BBC_MAIL_DOMAIN: {{ .Values.config.mailDomain | default "bbc.io" | quote }}
+  # updater minisign 公钥（0.1.5）：与 client/src-tauri/tauri.conf.json plugins.updater.pubkey
+  # 同值——register 登记时服务端强制验签+包内版本一致性校验；空=跳过校验
+  BBC_UPDATER_PUBKEY: {{ .Values.config.updaterPubkey | default "" | quote }}
   BBC_OIDC_ISSUER: {{ .Values.config.oidcIssuer | default "" | quote }}
   BBC_REDIS_ADDR: {{ .Values.externalServices.redis.address | quote }}
   BBC_S3_ENDPOINT: {{ .Values.externalServices.s3.endpoint | quote }}

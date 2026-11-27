@@ -127,8 +127,6 @@ fn skill_catalog_listed_in_system_only() {
         wal: Arc::new(NoopEventLog),
         sink: Arc::new(CollectSink(Mutex::new(vec![]))),
         skills: Arc::new(Mutex::new(SkillIndex::scan(&eco))),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new("s-skl".into(), "/ws".into(), PermissionMode::Ask, None);
@@ -276,8 +274,6 @@ fn pick_tools_not_narrowed_by_skill_declarations() {
         wal: Arc::new(bbrt_session::loop_runner::NoopEventLog),
         sink: Arc::new(CollectSink(std::sync::Mutex::new(vec![]))),
         skills: Arc::new(Mutex::new(skills)),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = bbrt_session::loop_runner::SessionRunner::new(
@@ -320,8 +316,6 @@ fn pick_tools_keeps_full_when_undeclared() {
         wal: Arc::new(bbrt_session::loop_runner::NoopEventLog),
         sink: Arc::new(CollectSink(std::sync::Mutex::new(vec![]))),
         skills: Arc::new(Mutex::new(skills)),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = bbrt_session::loop_runner::SessionRunner::new(

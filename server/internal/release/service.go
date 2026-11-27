@@ -14,6 +14,13 @@ import (
 type Options struct {
 	// PublicBase 兜底对外地址（如 http://bbc.example.internal；空=完全按请求推导）
 	PublicBase string
+	// ObjectPublicBase 对象存储对外基址 scheme://host（BBC_S3_PUBLIC_ENDPOINT，如 RustFS
+	// NodePort）；空=未配置，/update/releases/ 下载路由 404。接入层 nginx 部署形态下该
+	// 路径由 nginx 直出对象存储，本字段不被消费
+	ObjectPublicBase string
+	// UpdaterPubkey updater minisign 公钥（BBC_UPDATER_PUBKEY，即 tauri.conf.json 的
+	// pubkey 值）；空=register 跳过验签（仅记录），非空时登记强制验签+版本一致性校验
+	UpdaterPubkey string
 }
 
 // Module 客户端发布模块
@@ -21,12 +28,13 @@ type Module struct {
 	store     *Store
 	opts      Options
 	presigner Presigner // nil=未启用对象存储（上传接口报错提示）
+	fetcher   Fetcher   // nil=register 跳过服务端校验（验签+版本一致性）
 	auditFn   auditHook // nil=不记审计
 }
 
-// NewModule 装配（presigner 可为 nil；audit 可为 nil）
-func NewModule(db *pgxpool.Pool, opts Options, presigner Presigner, audit auditHook) *Module {
-	return &Module{store: NewStore(db), opts: opts, presigner: presigner, auditFn: audit}
+// NewModule 装配（presigner/fetcher/audit 均可为 nil）
+func NewModule(db *pgxpool.Pool, opts Options, presigner Presigner, fetcher Fetcher, audit auditHook) *Module {
+	return &Module{store: NewStore(db), opts: opts, presigner: presigner, fetcher: fetcher, auditFn: audit}
 }
 
 // Store 暴露存储层（api/update handler 用）

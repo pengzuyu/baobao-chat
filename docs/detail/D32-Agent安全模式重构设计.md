@@ -6,17 +6,18 @@
   1. **确认疲劳**：「永不全自动清单」（网络出站/任意命令/git push）三档永不确定，full-auto 用户仍被频繁打断——与 ZCode 实战形态（edit 档文件自动、guarded 档全自动+危险名单拦）差距集中在 matrix() 两处；
   2. **平台一致性与移植**：Seatbelt 仅 macOS；launcher.rs 全文件 unix-only（`std::os::unix`、无 cfg 门控）→ **bbrt sidecar 现编不过 Windows**，而 Windows 桌面在发布面（build-desktop.ps1）；
   3. **ZCode 对照实测**（2026-11-17 本机探针）：ZCode 当前会话 shell 无 OS 沙箱（写 HOME//tmp/工作区外全通+网络 200+无 sandbox-exec 包装）——实战纯靠权限层。宽松的权限站在沙箱/词法/checkpoint 底座上；本篇同向收敛。
+- **修订（2026-11-26，用户拍板「用黑名单」）**：自主档改黑名单口径——任意命令/白名单命令/名单外工具 auto-edit+ 自动，自主档只剩「危险规则/公司域写/敏感读/工作区外读」四类弹卡；危险规则库升为默认档第一道防线并加固（20→29 条+词法归一）。§1 拍板 #1「任意命令 → full-auto 自动」与 #6「unknown 统一走任意命令首次确认」作废，详见 §11。
 
 ## 1. 拍板点（勿重提）
 
 | # | 决策 | 内容 |
 |---|------|------|
-| 1 | **矩阵放宽对齐 ZCode** | 网络出站/git push（普通）→ auto-edit+ 自动；任意命令 → full-auto 自动；白名单命令 full-auto 自动（不变）；高危命令三档双确认保留；**CorpWrite 唯一保留三档确认**（效果落他人/共享面，不可撤回）+ Session 级记忆 |
+| 1 | **矩阵放宽对齐 ZCode** | 网络出站/git push（普通）→ auto-edit+ 自动；任意命令 → full-auto 自动；白名单命令 full-auto 自动（不变）；高危命令三档双确认保留；**CorpWrite 唯一保留三档确认**（效果落他人/共享面，不可撤回）+ Session 级记忆。**2026-11-26 修订**：任意命令/白名单命令改 auto-edit+ 自动（§11，原「任意命令 → full-auto 自动」作废） |
 | 2 | **删 Seatbelt（sandbox A 层）** | SandboxLevel/detect()/DegradedInfo/sandbox-exec profile 全退场；launcher 收缩为纯进程管理器（B 层生命周期全保留）；**词法层 C（path.rs/network.rs）保留**=矩阵底座 |
 | 3 | **`BBC_SANDBOX=1` 标记保留** | 环境标记与 Seatbelt 解耦、名字不改避免无谓 churn；现由 DetachedCommand 后台命令与外部孤儿扫描沿用（原唯一消费方 bbrt-delegate/procmgr.rs 已随委派域退役 2026-11-19） |
 | 4 | **白名单语义收紧** | 白名单=「系统构建工具直调」专属；「执行一个文件」形态（解释器+文件参数/npm run/make 等任务运行器）与复合控制运算符形态一律不匹配 → 落 ArbitraryCommand（详见 §5） |
 | 5 | **暗墙否决缓议** | 敏感路径拒读清单/内容脱敏探针/env strip 三件**不做**（理由=agent 有拿 token 去办事的正当场景；`${BBC_USER_TOKEN}` 按需注入不受影响）；已知情接受风险见 §6；方案存档 §9 备复活 |
-| 6 | unknown 工具维持现状 | classify_action 未注册工具已按 ArbitraryCommand 最严档（gate.rs:199），MCP manifest 自报类别**不做**（自报不可信，unknown 统一走任意命令首次确认+记忆） |
+| 6 | unknown 工具维持现状 | classify_action 未注册工具已按 ArbitraryCommand 最严档（gate.rs:199），MCP manifest 自报类别**不做**（自报不可信，unknown 统一走任意命令首次确认+记忆）。**2026-11-26 修订**：unknown 工具随任意命令档在 auto-edit+ 自动（§11）；「MCP 自报类别不做」不变——static_category 名单仍是工具分类的唯一来源，只是名单外不再等于「必弹」 |
 | 7 | D13-A2 部分推翻 | 「永不全自动清单」四类中网络/git push 移出（CorpWrite 保留；委派档后随委派域退役）——D13 篇与 09 篇 §4.1/§4.4 追记注记 |
 
 ## 2. 现状锚点（2026-11-17 逐行核对）
@@ -44,6 +45,8 @@
 | 高危命令 | 🔶双 | 🔶双 | 🔶双 | 不变 |
 | unknown 工具 | 🔶 | 🔶 | 🔶 | 不变（=任意命令语义，可记忆） |
 | **CorpWrite** | 🔶 | 🔶 | 🔶+Session | **永不确定→仍三档🔶**，唯一保留硬闸 |
+
+> **2026-11-26 修订（§11）**：白名单命令 / 任意命令 / unknown 工具三行改为 **ask 🔶 / auto-edit ✅ / full-auto ✅**，其余行不变。自主档与完全控制档的差别自此仅剩读审批（工作区外读，见 09 篇同日读审批化注记）。
 
 ### 3.2 函数级改动
 
@@ -80,6 +83,7 @@
 - 模式承诺三行：ask=没你点头改不了一个字节 / auto-edit=文件自动改（有 checkpoint 可回滚）、动作要问 / full-auto=全自动，仅危险与触人要问；
 - 弹窗衰减：Session 记忆（本篇 MVP 不做 Permanent 记忆管理 UI）；
 - 同任务弹窗对比（修 bug+跑测试+commit）：ask≈5 次 / auto-edit≈1 次 / full-auto=0 次。
+- **2026-11-26 修订（§11）**：自主档=黑名单口径，首句承诺自此成立——同任务弹窗 auto-edit 1 次 → **0 次**（跑测试/构建/脚本与名单外工具不再弹）；仍弹的只有危险规则/公司域写/敏感读/工作区外读四类。
 
 ## 8. 提交切分与验收
 
@@ -104,3 +108,43 @@
 | D13 | 篇头追记：Part A 矩阵 A2「永不全自动清单」四类中两类移出（网络/git push），CorpWrite 保留；Part B Seatbelt 全层退场（Baseline 概念随 SandboxLevel 消失，进程生命周期保留） |
 | 09 篇 | §4.1 管线第 5 步「沙箱校验」描述改「进程生命周期管理（超时/杀组/截断）」；§4.4 处置表对应行追记 |
 | D11 | §2.5 sandbox/ 模块描述同步（若含 Seatbelt 措辞） |
+
+## 11. 2026-11-26 修订：自主档改黑名单口径（用户拍板）
+
+**起因**：用户报障「为什么 skill 读取和代码检索的工具都要审批」，追问「能不能用黑名单？白名单要审批的命令太多，做事一点都不顺畅」。本机 runtime.db 实锤（任务会话 19:09–19:11 三张卡）：`skill`、`mcp.phebs.list_repos`、`mcp.phebs.search_code`。
+
+**根因**：黑名单（危险规则+CorpWrite+敏感读）之上还压着一层白名单——自主档下任意命令/白名单命令逐次确认（授权记忆按命令原文精确记，参数一变再弹），static_category 名单外的工具同弹（`skill`/`memory_read` 漏登记；第三方 MCP 裸名编译期不可知，永远进不了名单）。与 §7「弹窗出现=这事不可逆或碰到别人」及前端自主档文案「文件修改自动执行；危险命令仍需审批」相悖。
+
+**拍板（勿重提）**：
+
+| # | 决策 | 内容 |
+|---|------|------|
+| 1 | **自主档=黑名单口径** | 矩阵 `WhitelistCommand \| ArbitraryCommand => mode != Ask`；自主档只剩四类弹卡：危险规则（红卡双确认）/ 公司域写 / 敏感文件读 / 工作区外读 |
+| 2 | **工作区外读在自主档仍然弹** | 沿用同日读审批化口径；完全控制档较自主档仅多放开这一项 |
+| 3 | **外传类命令不设确认** | curl 带上传参数/scp/rsync 远端等全自动，与完全控制档现状一致；§6 已知情接受的风险面不变（默认档即暴露面，范围从 opt-in 的 full-auto 扩大到全体自主档用户） |
+| 4 | **其余不动** | 确认档（ask）逐次确认照旧；IM 内嵌固定 ask；定时任务默认档 |
+
+**配套加固——规则库升为默认档第一道防线**。仓库外探针实测原库（按空白切分的 token 匹配）的绕过与缺口：
+
+| 命令形态 | 加固前 | 处理 |
+|---|---|---|
+| `curl … \| sh`（管道两边不带空格）、`\| /bin/sh`、`bash <(curl …)` | 未命中 | 词法归一（拆连写分隔符、程序名取 basename）+ 新规则 `remote-script-procsub` |
+| `echo ok;sudo id`、换行分段、`(sudo id)`、反引号命令替换、`{ sudo id; }` | 未命中（分隔符不是独立 token，其后永远不是「段首」） | 同上；换行归一为 `;` |
+| `FOO=1 sudo id`、`env -i sudo id`、`/usr/bin/sudo id`、`/bin/rm -rf ~/…` | 未命中 | 段首环境赋值/透传包装器（env/exec/xargs…）及其选项剔除、程序名取 basename |
+| `bash -c "cd x && rm -rf /etc"` | 旧实现碰巧命中 | 引号感知切分后须对解释器 `-c`/`-e` 的字符串载荷递归切分，否则反成回归 |
+| `git push --force origin feat/x`、`+refspec` 强推、删远端分支 | 未命中（仅保护 main/master） | 强推放宽到任意分支；新增 `force-push-refspec`、`remote-branch-delete` |
+| `git reset --hard`、`git clean -f`、整树 `checkout`/`restore`、`git stash drop/clear` | 无规则 | 新类别 GitDataLoss（5 条）——丢弃未提交/未跟踪改动，git 无法找回 |
+| `rm -rf .`/`./`/`..`/`*`/`.git`、`find -delete`、`rm -rf /*`、`${HOME}` | 无规则 | 新增 `destructive-delete-cwd`、`find-delete`；SYS_PATHS 补 `/*` 与 `${HOME}` 两形态 |
+
+实现要点（`bbrt-sec/src/danger_rules.rs`）：`scan_tokens` 引号感知词法（引号保留在 token 内，整段成对的外层引号剥掉——`git commit -m "run sudo apt"` 不因归一变成误命中）；通配 `*` 只在单个命令段内匹配（`git status && echo push -f` 不再跨段误命中）；候选项 `\*`=字面星号（`rm -rf *`）。内置规则 20→29 条。`static_category` 补登记 `skill`/`memory_read`（只读）、`memory_forget`（编辑档）。
+
+**已知边界**（词法规则固有，接受）：挡不住刻意混淆——部分加引号的程序名、`python -c` 内的调用、变量拼接、base64；`sudo`/`timeout` 等包装之后的内层命令不过内层规则（`sudo` 自身双确认兜底）；token 统一小写致 `-d`/`-D` 不可区分，故未收 `git branch -D`；`git restore --staged .`（无害的整树取消暂存）会被整树丢弃规则误命中。
+
+**验证**：bbrt-sec 93+9、bbrt-tools 60+55+4（新增 `tests/gate_blacklist_test.rs` 走真实 check/execute/risk_of_call 入口）、bbrt-session 全套件、bbrt 1+1 全绿；`everyday_dev_commands_pass_after_normalization` 锁定 23 条日常开发命令零误命中。
+
+**剩真机验收**：
+- [ ] 自主档任务会话跑修 bug 流程（改文件+跑测试+commit）零弹卡
+- [ ] `skill` 与第三方 MCP 工具（phebs search_code/list_repos）不再弹卡，工具卡风险级不再误标中危
+- [ ] 自主档下 `git reset --hard`/`rm -rf .`/`echo ok;sudo id` 仍红卡双确认
+- [ ] 确认档行为无回归（逐次确认照旧）
+- [ ] 工作区外读：自主档仍弹、完全控制档不弹

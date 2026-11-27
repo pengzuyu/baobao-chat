@@ -68,12 +68,26 @@ node "$ROOT/scripts/brand/gen.mjs" --check
 ENV_PROD="$ROOT/client/.env.production"
 REL_CONF="$ROOT/client/src-tauri/tauri.release.conf.json"
 INSECURE=$([[ "$URL" == http://* ]] && echo true || echo false)
-cleanup() { rm -f "$ENV_PROD" "$REL_CONF"; }
+# .env.local 隔离（0.1.6 修）：vite build 也会读 .env.local——本机联调遗留键（如
+# VITE_WS_BASE=ws://localhost）会渗进出包产物（vite env 优先级 .env.[mode] 高于
+# .env.local，但未在 .env.production 显式声明的键不受压制）。构建期挪走，结束恢复
+ENV_LOCAL="$ROOT/client/.env.local"
+ENV_LOCAL_BAK=""
+if [ -f "$ENV_LOCAL" ]; then
+  ENV_LOCAL_BAK="$ENV_LOCAL.buildbak"
+  mv "$ENV_LOCAL" "$ENV_LOCAL_BAK"
+  echo "[build-desktop] ⚠ 检测到 client/.env.local（本机联调遗留），构建期已隔离防键渗透，结束后恢复"
+fi
+cleanup() {
+  rm -f "$ENV_PROD" "$REL_CONF"
+  if [ -n "$ENV_LOCAL_BAK" ] && [ ! -f "$ENV_LOCAL" ]; then mv "$ENV_LOCAL_BAK" "$ENV_LOCAL"; fi
+}
 trap cleanup EXIT
 
 cat > "$ENV_PROD" <<EOF
 # build-desktop.sh 生成（临时，勿提交）：v0.1 统一 http（D21）
 VITE_API_BASE=$URL/api/v1
+VITE_WS_BASE=${URL/http:/ws:}/ws/connect
 EOF
 
 cat > "$REL_CONF" <<EOF

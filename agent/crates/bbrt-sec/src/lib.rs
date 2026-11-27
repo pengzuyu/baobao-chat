@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | [`errors`] | 沙箱错误码常量 8020–8026（引用的 8002/8006 一并集中） | 09 §6.4 |
 //! | [`gate`] | permission_gate()：①策略②权限点③矩阵④记忆⑤不可信⑥confirm | 09 §4.1 + D13-A2 |
-//! | [`danger_rules`] | 危险命令规则库（内置 20 条 + 租户热更） | 09 §4.4 + D13-A5 |
+//! | [`danger_rules`] | 危险命令规则库（内置 29 条 + 租户热更） | 09 §4.4 + D13-A5 |
 //! | [`memory`] | 三级授权记忆 once/session/permanent（**权限记忆**，非知识记忆） | 09 §4.2 |
 //! | [`masking`] | 打码模式库（AK/SK、JWT、password=、私钥块）+ args_digest | 09 §7.2 |
 //! | [`sandbox`] | L2 路径/网络校验 + L4 rlimit + L3/L5 Seatbelt 执行器 + violation | D13-B9/B10 |

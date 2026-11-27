@@ -89,6 +89,10 @@ export function classifyTool(tool: string): ToolFamilyMeta {
       return { family: 'web', label: '网络', icon: Globe };
     case 'ask_user':
       return { family: 'ask', label: '提问', icon: HelpCircle };
+    case 'spawn_subagents':
+      // 子 agent 通用派发入口（2026-11-26 起由主 Agent 显式工具调用发起）：
+      // 卡上动作词用「派发子 agent」，子任务过程走子 Agent 卡/侧栏 run 流
+      return { family: 'generic', label: '派发子 agent', icon: Radar };
     default:
       break;
   }
@@ -109,6 +113,11 @@ function pickStr(args: Record<string, unknown>, keys: string[]): string | undefi
 
 /** 头部行内关键参数（单行截断展示）：路径/查询/命令/URL…… */
 export function toolHeadParam(tool: string, args: Record<string, unknown>): string | undefined {
+  // 派发子 agent：关键参数=任务条数（tasks 是对象数组，generic 分支按「首个字符串值」取不到）
+  if (tool === 'spawn_subagents') {
+    const n = Array.isArray(args.tasks) ? args.tasks.length : 0;
+    return n > 0 ? `${n} 个子任务` : undefined;
+  }
   const meta = classifyTool(tool);
   switch (meta.family) {
     case 'fileRead':

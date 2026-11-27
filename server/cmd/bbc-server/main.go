@@ -1288,10 +1288,15 @@ func main() {
 	// 客户端发布管理（D39）：管理后台上传→发布→/update/* 动态清单（pgPool nil=内存模式不可用）
 	if pgPool != nil {
 		var releasePresigner release.Presigner
+		var releaseFetcher release.Fetcher
 		if s3s, ok := fileStore.(*filestore.S3); ok {
 			releasePresigner = s3s // Local 后端不支持直传票据（管理上传会提示需对象存储）
+			releaseFetcher = s3s   // register 时拉回制品做验签/版本校验（0.1.5）
 		}
-		releaseMod := release.NewModule(pgPool, release.Options{}, releasePresigner,
+		releaseMod := release.NewModule(pgPool, release.Options{
+			ObjectPublicBase: envOr("BBC_S3_PUBLIC_ENDPOINT", ""), // /update/releases/ 302 兜底（无接入层形态）
+			UpdaterPubkey:    envOr("BBC_UPDATER_PUBKEY", ""),      // 空=register 跳过验签（仅告警日志）
+		}, releasePresigner, releaseFetcher,
 			func(ctx context.Context, action, target string) {
 				uid, _ := strconv.ParseInt(httpx.Claims(ctx).Subject, 10, 64)
 				_ = adminSvc.RecordAudit(ctx, bbcpg.DefaultTenantID, uid, action, target, nil)

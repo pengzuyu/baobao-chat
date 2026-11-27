@@ -2,12 +2,19 @@
 package release
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+
+	errx "github.com/baobaochat/server/internal/platform/errors"
 
 	"github.com/baobaochat/server/internal/platform/httpx"
 	bbcpg "github.com/baobaochat/server/internal/platform/pgxpool"
@@ -42,7 +49,7 @@ func (m *Module) HandlePresign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := StorageKeyFor(req.Version, req.Platform, req.Filename)
-	url, err := m.presigner.PresignPutObject(r.Context(), "releases/"+key, presignTTL)
+	url, err := m.presigner.PresignPutRelease(r.Context(), "releases/"+key, presignTTL)
 	if err != nil {
 		httpx.Fail(w, r, err)
 		return
@@ -67,6 +74,46 @@ func (m *Module) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.StorageKey == "" {
 		in.StorageKey = StorageKeyFor(in.Version, in.Platform, in.Filename)
+	}
+	// 服务端校验（0.1.5）：验签 + 包内版本一致性（fetcher 与 pubkey 均就绪才启用；
+	// 前端已做识别与预检，这里是防「错文件/换包未换签名/版本填错」的最终闸）。
+	// 业务性失败→9001 带详情（前端信封 message 优先透出）；环境性失败→打日志留 trace_id 排查
+	if m.fetcher != nil && m.opts.UpdaterPubkey != "" && strings.HasSuffix(in.Filename, ".app.tar.gz") {
+		rc, err := m.fetcher.GetReleaseObject(r.Context(), in.StorageKey)
+		if err != nil {
+			log.Printf("[release] register %s/%s 拉取制品失败: %v", in.Version, in.Platform, err)
+			httpx.Fail(w, r, err)
+			return
+		}
+		data, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			log.Printf("[release] register %s/%s 读取制品失败: %v", in.Version, in.Platform, err)
+			httpx.Fail(w, r, err)
+			return
+		}
+		if int64(len(data)) != in.Size {
+			log.Printf("[release] register %s/%s 大小不符: 登记 %d 实际 %d", in.Version, in.Platform, in.Size, len(data))
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, fmt.Sprintf("文件大小不符：登记 %d 字节，存储实际 %d 字节（直传不完整？请重传）", in.Size, len(data))))
+			return
+		}
+		if err := VerifyMinisign(m.opts.UpdaterPubkey, in.Signature, data); err != nil {
+			log.Printf("[release] register %s/%s 验签失败: %v", in.Version, in.Platform, err)
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, err.Error()))
+			return
+		}
+		pkgVer, err := ExtractPkgVersion(bytes.NewReader(data))
+		if err != nil {
+			log.Printf("[release] register %s/%s 解包失败: %v", in.Version, in.Platform, err)
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, err.Error()))
+			return
+		}
+		if pkgVer != "" && pkgVer != in.Version {
+			log.Printf("[release] register %s/%s 版本不一致: 包内 %s 登记 %s", in.Version, in.Platform, pkgVer, in.Version)
+			httpx.Fail(w, r, errx.New(errx.CodeBadRequest, fmt.Sprintf("版本号不一致：包内 Info.plist 为 %s，登记为 %s（以上传的包为准修正版本号）", pkgVer, in.Version)))
+			return
+		}
+		log.Printf("[release] register %s/%s 校验通过（%d 字节）", in.Version, in.Platform, len(data))
 	}
 	uid, _ := strconv.ParseInt(httpx.Claims(r.Context()).Subject, 10, 64)
 	rec, err := m.store.Upsert(r.Context(), bbcpg.DefaultTenantID, &Record{

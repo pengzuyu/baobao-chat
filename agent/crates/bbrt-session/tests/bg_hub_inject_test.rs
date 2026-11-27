@@ -92,8 +92,6 @@ fn deps(model: Arc<CaptureModel>, sink: Arc<CollectSink>) -> LoopDeps {
         wal: Arc::new(NoopEventLog),
         sink,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: Default::default(),
     }
 }

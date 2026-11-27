@@ -151,24 +151,14 @@ fn sse_line(data: &str) -> String {
     format!("data: {data}\n\n")
 }
 
-/// fanout 判定轮（FastPlanner 首个默认档请求的响应：不分解）
-fn planner_noop() -> String {
-    format!(
-        "{}{}{}",
-        sse_line(r#"{"choices":[{"delta":{"content":"{\"complex\": false}"}}]}"#),
-        sse_line(
-            r#"{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#
-        ),
-        sse_line("[DONE]")
-    )
-}
-
 #[test]
 fn e2e_full_runtime_process() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("foo.txt"), "hello runtime").unwrap();
 
-    // 剧本（栈：pop 顺序与请求相反；先压第二轮再第一轮）
+    // 剧本（栈：pop 顺序与请求相反；先压第二轮再第一轮）。用户发消息后的
+    // 第一个请求就是主请求——2026-11-26 前此处还压着一轮「隐藏判定」的响应
+    // （任务分解判定先于主请求跑，用户只见「正在处理」），该前置调用已退役
     let round1 = format!(
         "{}{}{}{}",
         sse_line(
@@ -190,7 +180,7 @@ fn e2e_full_runtime_process() {
         ),
         sse_line("[DONE]")
     );
-    let script = Arc::new(Mutex::new(vec![round2, round1, planner_noop()]));
+    let script = Arc::new(Mutex::new(vec![round2, round1]));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     serve_mock_gateway(listener, script);

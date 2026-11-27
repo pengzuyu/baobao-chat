@@ -4,6 +4,8 @@
 
 > **⚠ 2026-11-17 D32 落地注记（部分推翻，权威=[D32](detail/D32-Agent安全模式重构设计.md)）**：§4.1 门控矩阵已放宽——任意命令 full-auto 自动、网络出站/git push/委派 auto-edit+ 自动；CorpWrite（doc_write/im_send）为唯一三档确认类（Session 记忆可用，§4.2 永久限制扩至 file_upload/app_write）；「永不全自动清单」仅剩 CorpWrite+高危命令。§4.3 管线第 5 步「沙箱校验」收缩为**进程生命周期管理**（超时/杀组/输出截断/RSS 看门狗）——Seatbelt OS 层退场，命令写路径防线=词法预检（L2）唯一，网络防线=NetPolicy 白名单唯一。§4.4 处置表不变。白名单语义收紧=构建工具直调专属（详见 D32 §5）。
 
+> **⚠ 2026-11-26 黑名单口径修订（自主档，权威=[D32 §11](detail/D32-Agent安全模式重构设计.md)）**：§4.1 矩阵中**任意命令/白名单命令/未登记工具改为 ask 逐次确认、auto-edit+ 自动**（原「任意命令 full-auto 自动」作废）；自主档只剩四类确认：危险规则（双确认）/公司域写/敏感文件读/工作区外读。§4.4 规则库同日加固并升为默认档第一道防线：匹配前词法归一（连写分隔符拆分、换行分段、段首环境赋值/透传包装器剔除、程序名取 basename、解释器 `-c` 字符串载荷递归切分，通配不跨命令段），强推由仅 main/master 放宽到任意分支，新增不可逆规则（整树 `rm`/`find -delete`/`git reset --hard`/`clean -f`/整树 checkout·restore/`stash drop|clear`/删远端分支），内置 20→29 条。
+
 > **⚠ 2026-11-23 用户拍板修订（推翻 §4.4 拒绝类）**：危险规则库「直接拒绝（Deny）」整档退役——原 10 条 Deny（sudo 提权/mkfs·dd 磁盘破坏/关机/`curl|sh` 管道执行远端脚本/force push 保护分支/fork 炸弹等）降级并入双重确认：规则库命中一律红卡长按、三档皆弹（full-auto 不豁免）、禁永久记忆，放行与否由用户裁决，**不再有不经确认的直接拦截路径**；8021 错误码随之退役（码位保留不复用）。同轮确认：文件专用工具面（read_file/list_dir/write_file/edit_file+搜索，ReadOnly 全档自动/写类 auto-edit+ 自动）与 AGENTS.md 白名单通道（免确认记忆）保留不动。
 
 > **⚠ 2026-11-26 读审批化修订（推翻 B10「读边界 v0.1 收紧」）**：read_file/list_dir/search_files 的「读限制在工作区内（越界 8020 硬拦）」退役——恢复 B10 原始「全盘可读」口径并叠加审批层：**工作区内读自动；工作区外未授权读在 ask/auto-edit 弹审批卡（本次/本会话该目录树两种记忆）、full-auto 放行（拍板）；敏感文件（.env*/密钥/凭据清单命中）三档皆弹红卡、仅「本次」**；用户随消息附带的文件视为已授权（工作区外/敏感都不弹）。实现=bbrt-tools builtin/read_access.rs（门控追加判定+执行层统一校验——子代理/专家直调 execute 同表拦截）；审批预览新增 `Preview::Read{path,sensitive}`（preview_kind=read/read-sensitive）。8020 语义收窄为「读未授权拦截」（violation 审计码不变）、8026 语义改为「敏感文件需批准读取」。`run_command` 只读命令（cat 等）暂不纳入（拍板：命令通道维持现状）。永久级读授权不存在。

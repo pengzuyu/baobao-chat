@@ -9,6 +9,8 @@ import { useMemo, useRef, useState } from 'react';
 import { Alert, Form, Input, Modal, Select, Space, Tag } from 'antd';
 import { FileText, Paperclip, Send } from 'lucide-react';
 import { Button } from '../../../shared/ui/Button';
+import { pathsToFiles } from '../../../shared/attachments';
+import { useFileDrop } from '../../../shared/attachments/hooks';
 import type { MailAttachment, SendMailResp, SharedMailboxView } from '../model/types';
 import { uploadFileSmart } from '../../im/api/files';
 import { discardDraft, saveDraft } from '../api/mail';
@@ -43,11 +45,12 @@ export function ComposeModal({ onClose, onSend, sharedOwnerBoxes = [], onSendAs,
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const pickFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+  const pickFiles = async (files: FileList | File[] | null) => {
+    const arr = files ? Array.from(files) : [];
+    if (arr.length === 0) return;
     setUploading(true);
     try {
-      for (const f of Array.from(files)) {
+      for (const f of arr) {
         // 文件域上传（不挂会话；mail 附件语义）；失败跳过该个（不打断多选）
         const res = await uploadFileSmart(f).catch(() => null);
         if (res?.id) {
@@ -59,6 +62,14 @@ export function ComposeModal({ onClose, onSend, sharedOwnerBoxes = [], onSendAs,
       if (fileRef.current) fileRef.current.value = '';
     }
   }
+
+  // 桌面端整窗拖拽（写信窗挂载即生效；HTML5 onDrop 在 Tauri 下不触发）：
+  // 拖入路径读回 File 复用同一上传链（多文件逐个上传，失败跳过不打断）
+  useFileDrop(true, (paths) => {
+    void pathsToFiles(paths)
+      .then((files) => pickFiles(files))
+      .catch(() => undefined);
+  });
   const [result, setResult] = useState<SendMailResp | null>(null);
 
   const ownerBoxes = useMemo(() => sharedOwnerBoxes.filter((b) => b.is_owner), [sharedOwnerBoxes]);

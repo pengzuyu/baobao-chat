@@ -7,10 +7,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Dropdown, Flex, Input, Modal, Select, Space, Tag, Typography, theme } from 'antd';
+import { Alert, Dropdown, Flex, Input, Modal, message, Select, Space, Tag, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import { CalendarDays, Download, Ellipsis, Upload } from 'lucide-react';
 import { errText } from '../../../shared/api/http';
+import { pathsToFiles } from '../../../shared/attachments';
+import { useFileDrop } from '../../../shared/attachments/hooks';
 import { Button } from '../../../shared/ui/Button';
 import {
   fetchWorkdayYear,
@@ -294,6 +296,17 @@ export function CalendarPage() {
     reader.onload = () => setImportText(String(reader.result ?? ''));
     reader.readAsText(file, 'utf-8');
   };
+
+  // 桌面端整窗拖拽（导入弹窗打开期间生效）：拖入 .json 读回 File 走同一预览链
+  useFileDrop(importOpen, (paths) => {
+    void pathsToFiles(paths)
+      .then((files) => {
+        const j = files.find((f) => /\.json$/i.test(f.name) || f.type === 'application/json');
+        if (j) pickFile(j);
+        else void message.warning('日历导入须为 .json 文件');
+      })
+      .catch((e) => void message.error(e instanceof Error ? e.message : String(e)));
+  });
 
   const cellBg = (d: WorkdayDay): string => {
     const override = d.source !== 'default';

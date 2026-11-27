@@ -19,6 +19,8 @@ import type { ColumnsType } from 'antd/es/table';
 import type { UploadFile } from 'antd';
 import { Package, Plus, Puzzle, Upload as UploadIcon } from 'lucide-react';
 import { errText, http, postMultipart } from '../../../shared/api/http';
+import { pathsToFiles } from '../../../shared/attachments';
+import { useFileDrop } from '../../../shared/attachments/hooks';
 import { Button } from '../../../shared/ui/Button';
 
 interface PluginRow {
@@ -65,6 +67,17 @@ export function PluginGovernancePage() {
   const [pubNotes, setPubNotes] = useState('');
   const [pubPolicy, setPubPolicy] = useState(3);
   const [uploading, setUploading] = useState(false);
+  // 桌面端整窗拖拽（公共插件面板展开期间生效）：拖入路径读回 File（.zip 守卫，
+  // 反馈走页面 notice/error 与本页其它操作同径）
+  const dragOver = useFileDrop(pubOpen, (paths) => {
+    void pathsToFiles(paths)
+      .then((files) => {
+        const zip = files.find((f) => /\.zip$/i.test(f.name));
+        if (zip) setPubFile(zip);
+        else setError('插件包须为 .zip 文件');
+      })
+      .catch((e) => setError(`读取拖入文件失败：${e instanceof Error ? e.message : String(e)}`));
+  });
   // 版本线展开行（Table expandable）
   const [verRow, setVerRow] = useState<string | null>(null);
   const [versions, setVersions] = useState<VersionRow[]>([]);
@@ -349,8 +362,9 @@ export function PluginGovernancePage() {
         <Space direction="vertical" size={8} style={{ marginBottom: 12 }}>
           <Typography.Text type="secondary">
             公共插件（全员可见；policy=force 时用户端免确认自动推装）。个人插件请走插件页「上传插件」。
-            已下架插件可直接上传新版本（先「重新上架」，再展开版本线发布新版本）
+            已下架插件可直接上传新版本（先「重新上架」，再展开版本线发布新版本）（支持整窗拖入 .zip）
           </Typography.Text>
+          {dragOver ? <Typography.Text type="warning">松开鼠标，自动填入 .zip 包</Typography.Text> : null}
           <Upload
             accept=".zip"
             maxCount={1}

@@ -7,6 +7,7 @@
 //! - [`git`]：git_status / git_diff（经沙箱跑 git）；git_commit / git_push（v0.1 拒绝 8028）
 //! - [`http`]：http_fetch（NetPolicy 白名单 + 沙箱 curl）
 //! - [`memory`]：memory_save（bbrt-memory W1 模型写入路径）
+//! - [`subagent`]：spawn_subagents（子 agent 通用派发薄门面——执行在 session 循环专用路径）
 //!
 //! 各实现返回 [`ExecOutput`]（成功）或 [`ToolBlock`]（带 8020-8026/8002 错误码的阻断），
 //! 脱敏统一由 pipeline 第 7 步完成（D11 §6），本层不重复打码——例外是 violation
@@ -24,6 +25,7 @@ pub(crate) mod read_access;
 pub mod search;
 pub mod sessions;
 pub mod skill;
+pub mod subagent;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -233,4 +235,7 @@ pub(crate) fn register_all(registry: &mut ToolRegistry) {
     registry.register(projects::use_project_def());
     // 任务感知工作台：历史对话检索/翻页/通读/最近会话（四形态由参数组合推断）
     registry.register(sessions::session_search_def());
+    // 子 agent 通用派发入口（loop_runner 拦截，仅注册可发现性；2026-11-26 起由
+    // 主 Agent 以工具调用显式发起——前置隐藏判定 planner 退役）
+    registry.register(subagent::spawn_subagents_def());
 }

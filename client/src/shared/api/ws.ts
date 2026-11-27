@@ -12,8 +12,109 @@
 
 import { ApiError, getErrorText } from './http';
 import { maskUrl, pushLog } from '../log/devlog';
+import WebSocketPlugin from '@tauri-apps/plugin-websocket';
 
 export const PROTOCOL_VERSION = 1;
+
+/** Tauri 宿主判定（updater.ts 同款局部惯例）：插件传输仅 Tauri 宿主可用 */
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+/**
+ * 传输层抽象（0.1.4）：macOS WKWebView 拒绝 tauri:// 自定义 scheme 页面的 ws://
+ * 出站（custom scheme origin 的 socket 限制；dev 的 http://localhost:5173 无此问题，
+ * 生产包 IM 实时链全断，2026-11-27 真机实锤）——Tauri 宿主改走
+ * tauri-plugin-websocket（Rust 侧连接），浏览器 dev 仍走原生 WebSocket。
+ * 两实现共用 onData/onDisconnected 回调：状态机/心跳/ack/重连逻辑零改动。
+ */
+interface WsTransport {
+  /** 连接可用（可 send）——插件路径无 readyState，自维护 */
+  readonly open: boolean;
+  /** 发送文本帧；抛异常=发送失败（上层转 failed 态） */
+  send(text: string): void;
+  /** 主动关闭（登出/清理）：幂等，触发前先摘回调防循环 */
+  close(): void;
+}
+
+class NativeTransport implements WsTransport {
+  private ws: WebSocket | null;
+  constructor(
+    ws: WebSocket,
+    onData: (text: string) => void,
+    onDisconnected: (code: number, reason: string) => void,
+  ) {
+    this.ws = ws;
+    ws.onmessage = (ev) => onData(String(ev.data));
+    ws.onclose = (ev) => {
+      this.ws = null; // 先摘：onclose 链路里的 cleanup 不会再 close 一次
+      onDisconnected(ev.code, ev.reason);
+    };
+    // onerror 统一走随后触发的 onclose（与既有语义一致）
+  }
+  get open(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+  send(text: string): void {
+    if (!this.ws) throw new Error('WS 未连接');
+    this.ws.send(text);
+  }
+  close(): void {
+    if (this.ws) {
+      const ws = this.ws;
+      this.ws = null;
+      ws.onopen = null;
+      ws.onclose = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.close();
+    }
+  }
+}
+
+class PluginTransport implements WsTransport {
+  private opened = false;
+  private closed = false;
+  private unlisten: (() => void) | null = null;
+  constructor(
+    private readonly pws: WebSocketPlugin,
+    onData: (text: string) => void,
+    onDisconnected: (code: number, reason: string) => void,
+  ) {
+    // connect resolve 即已打开；断开/错误以 'Close' tagged message 进 listener
+    this.opened = true;
+    this.unlisten = pws.addListener((msg) => {
+      if (msg.type === 'Text') onData(msg.data);
+      else if (msg.type === 'Close') {
+        if (this.closed) return;
+        this.closed = true;
+        this.opened = false;
+        onDisconnected(msg.data?.code ?? 1006, msg.data?.reason ?? '');
+      }
+      // Ping/Pong 协议帧由 tungstenite 自动应答/忽略；Binary 信封协议不用
+    });
+  }
+  get open(): boolean {
+    return this.opened;
+  }
+  send(text: string): void {
+    if (!this.opened) throw new Error('WS 未连接');
+    // 插件 send 为异步：失败即连接已坏（断开详情由插件 'Close' 消息保证送达），
+    // 这里仅防未处理 rejection，ack 配对交给 10s 超时兜底
+    this.pws.send(text).catch((err) => {
+      pushLog({ level: 'warn', source: 'ws', message: `WS 发送失败：${String(err)}`, data: {} });
+    });
+  }
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.opened = false;
+    const u = this.unlisten;
+    this.unlisten = null;
+    u?.();
+    this.pws.disconnect().catch(() => {}); // fire-and-forget
+  }
+}
 
 /**
  * WS 基址解析（同源推导，2026-11-09 拍板固定域名方案的配套）：
@@ -85,7 +186,7 @@ interface PendingCall {
 }
 
 export class WsClient {
-  private socket: WebSocket | null = null;
+  private transport: WsTransport | null = null;
   private status: WsStatus = 'idle';
   private idSeq = 0;
   private pending = new Map<string, PendingCall>(); // ack 配对表：请求 id → 回调
@@ -157,27 +258,18 @@ export class WsClient {
     if (!this.connectArgs) return;
     const { url, token, deviceId } = this.connectArgs;
     this.setStatus('connecting');
-    const ws = new WebSocket(`${url}?token=${encodeURIComponent(token)}&did=${encodeURIComponent(deviceId)}&v=${PROTOCOL_VERSION}`);
-    this.socket = ws;
-
-    ws.onopen = () => {
-      this.reconnectAttempt = 0;
-      this.lastRecvAt = Date.now();
-      this.setStatus('online');
-      this.startHeartbeat();
-      this.onResync?.(); // 连接/重连成功 → 增量同步（14 篇 §4.2）
-    };
-    ws.onmessage = (ev: MessageEvent) => this.handleMessage(String(ev.data));
-    ws.onclose = (ev: CloseEvent) => {
+    const url2 = `${url}?token=${encodeURIComponent(token)}&did=${encodeURIComponent(deviceId)}&v=${PROTOCOL_VERSION}`;
+    const onData = (text: string) => this.handleMessage(text);
+    const onDisconnected = (code: number, reason: string) => {
       const failedPending = this.pending.size; // cleanup 清空前取数：并进断开详情条
       this.cleanup();
       // 认证失败 4001：服务端关闭且不重连（14 篇 §2.1）
-      if (ev.code === 4001) {
+      if (code === 4001) {
         pushLog({
           level: 'error',
           source: 'ws',
           message: 'WS 认证失败被服务端关闭（code 4001），已触发登出',
-          data: { code: ev.code, reason: ev.reason, failed_pending: failedPending },
+          data: { code, reason, failed_pending: failedPending },
         });
         this.manualClosed = true;
         this.setStatus('idle');
@@ -188,20 +280,48 @@ export class WsClient {
         pushLog({
           level: 'warn',
           source: 'ws',
-          message: `WS 连接断开（code ${ev.code}${ev.reason ? `：${ev.reason}` : ''}，${failedPending} 个未决请求失败），稍后重连`,
-          data: { code: ev.code, reason: ev.reason, failed_pending: failedPending, attempt: this.reconnectAttempt },
+          message: `WS 连接断开（code ${code}${reason ? `：${reason}` : ''}，${failedPending} 个未决请求失败），稍后重连`,
+          data: { code, reason, failed_pending: failedPending, attempt: this.reconnectAttempt },
         });
         this.scheduleReconnect();
       }
     };
-    ws.onerror = () => {
-      // onclose 随后触发，统一走重连调度
-    };
+    if (isTauri()) {
+      // 插件传输（0.1.4）：Rust 侧连接绕开 WKWebView 对 tauri:// 页面的 ws:// 限制。
+      // connect resolve=已打开；握手失败（网络/401 拒）走 catch，按 1006 断开处理
+      WebSocketPlugin.connect(url2)
+        .then((pws) => {
+          if (this.manualClosed || this.transport !== null) {
+            pws.disconnect().catch(() => {}); // 连接返回前已登出/清理：直接丢弃
+            return;
+          }
+          this.transport = new PluginTransport(pws, onData, onDisconnected);
+          this.handleOpened();
+        })
+        .catch((err) => {
+          if (this.manualClosed) return;
+          onDisconnected(1006, String(err));
+        });
+    } else {
+      // 浏览器 dev：原生 WebSocket（http://localhost:5173 页面无 scheme 限制）
+      const ws = new WebSocket(url2);
+      this.transport = new NativeTransport(ws, onData, onDisconnected);
+      ws.onopen = () => this.handleOpened();
+    }
+  }
+
+  /** 连接/重连成功（两传输共用）：复位重连计数 + 心跳 + 增量同步 */
+  private handleOpened(): void {
+    this.reconnectAttempt = 0;
+    this.lastRecvAt = Date.now();
+    this.setStatus('online');
+    this.startHeartbeat();
+    this.onResync?.(); // 连接/重连成功 → 增量同步（14 篇 §4.2）
   }
 
   private sendOnce(type: string, payload: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      if (!this.transport || !this.transport.open) {
         reject(new Error('WS 未连接'));
         return;
       }
@@ -213,7 +333,7 @@ export class WsClient {
         reject(new Error(`ack 超时：${type}`)); // 10s 无 ack → 上层重试
       }, ACK_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timer });
-      this.socket.send(JSON.stringify(envelope));
+      this.transport.send(JSON.stringify(envelope));
     });
   }
 
@@ -249,14 +369,17 @@ export class WsClient {
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      const socket = this.socket;
-      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      const transport = this.transport;
+      if (!transport || !transport.open) return;
       // 60s 无任何下行 → 判定半开，主动断开触发重连
+      // （close 内部已摘断开回调，onclose 链不会走——显式清 pending 并调度重连）
       if (Date.now() - this.lastRecvAt > DEAD_AFTER_MS) {
-        socket.close();
+        transport.close();
+        this.cleanup();
+        this.scheduleReconnect();
         return;
       }
-      socket.send(JSON.stringify({ v: PROTOCOL_VERSION, id: `c-hb-${++this.idSeq}`, type: 'ping', ts: Date.now(), payload: {} }));
+      transport.send(JSON.stringify({ v: PROTOCOL_VERSION, id: `c-hb-${++this.idSeq}`, type: 'ping', ts: Date.now(), payload: {} }));
     }, HEARTBEAT_MS);
   }
 
@@ -284,13 +407,10 @@ export class WsClient {
       p.reject(new Error('连接已断开'));
     });
     this.pending.clear();
-    if (this.socket) {
-      this.socket.onopen = null;
-      this.socket.onmessage = null;
-      this.socket.onclose = null;
-      this.socket.onerror = null;
-      this.socket.close();
-      this.socket = null;
+    if (this.transport) {
+      const transport = this.transport;
+      this.transport = null;
+      transport.close(); // 两实现内部各自摘断开回调，close 后不再回环触发 onDisconnected
     }
   }
 

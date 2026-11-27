@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 
 	errx "github.com/baobaochat/server/internal/platform/errors"
@@ -58,9 +59,15 @@ func OK(w http.ResponseWriter, r *http.Request, data any) {
 	write(w, r, http.StatusOK, errx.CodeOK, data, "")
 }
 
-// Fail 业务失败：错误归一化 + 按错误码段映射 HTTP 状态
+// Fail 业务失败：错误归一化 + 按错误码段映射 HTTP 状态。
+// 服务端错段（9xxx）同步落详情日志：归一化对客户端吃掉内部细节（14 篇 §7 安全口径），
+// 「靠 trace_id 排查」必须由日志侧补全原始错误，否则 trace_id 无从查起
+// （2026-11-27 客户端发布验签 9004 事故的排查卡点：访问日志只有一行 500）。
 func Fail(w http.ResponseWriter, r *http.Request, err error) {
 	e := errx.From(err)
+	if e.Code >= 9000 {
+		log.Printf("[http] %s %s %d trace=%s err=%v", r.Method, r.URL.Path, HTTPStatus(e.Code), TraceID(r.Context()), err)
+	}
 	write(w, r, HTTPStatus(e.Code), e.Code, nil, e.Msg)
 }
 

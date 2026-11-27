@@ -223,8 +223,6 @@ fn wal_replay_recovers_user_turn_after_fix() {
         wal: Arc::new(log.clone()),
         sink: Arc::new(CollectSink(Mutex::new(vec![]))),
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mut runner = SessionRunner::new(
@@ -281,8 +279,6 @@ fn manager_workspace_of() {
         wal: Arc::new(bbrt_session::NoopEventLog),
         sink,
         skills: Arc::new(Mutex::new(bbrt_session::SkillIndex::default())),
-        fanout: None,
-        experts: None,
         budget: BudgetConfig::default(),
     };
     let mgr = SessionManager::new(deps, None);
