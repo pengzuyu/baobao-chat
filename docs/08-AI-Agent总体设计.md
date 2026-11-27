@@ -117,7 +117,7 @@ Agent 是 BaobaoChat 的一等公民（00 篇 §2.2）：一个运行在员工�
 │ ● 修复登录│                                                 │ ┌命令执行──────┐ │
 │ ○ 重构鉴权│  user: 帮我修复登录超时 bug                       │ │ cargo test   │ │
 │ ○ 写周报  │  agent: 我先定位相关代码…                         │ │ [y] [n] [a]  │ │
-│ ──────── │  v tool: search_files("session timeout")    ok   │ └──────────────┘ │
+│ ──────── │  v tool: grep_files("session timeout")    ok   │ └──────────────┘ │
 │ + 新会话  │  v tool: edit_file auth.rs (+8/-4, diff 已批)     │ ┌编辑请求──────┐ │
 │          │  > 终端: cargo test --lib                        │ │ auth.rs ±12  │ │
 │ 📁 工作区 │    running 12 passed ...                        │ │ [查看diff]    │ │
@@ -265,7 +265,7 @@ compacting: 快模型将"最旧一半轮次"摘要为归档段(bullet)
 
 | 维度 | 可并行（探查类） | 不可并行（修改类） |
 |---|---|---|
-| 工具集 | read_file / list_dir / search_files / glob / kb_query / doc_read（只读子集） | write_file / edit_file / run_command / git 写 / app 写 / im_send |
+| 工具集 | read_file / list_dir / glob_files / grep_files / kb_query / doc_read（只读子集） | write_file / edit_file / run_command / git 写 / app 写 / im_send |
 | 并发 | 最多 3 个子 Agent 同时探查 | 一律主循环串行执行（避免工作区冲突与权限记忆混乱） |
 | 上下文 | 独立窗口（不含主历史，仅任务指令） | 主窗口 |
 | 寿命 | 单步数 ≤ 15，超限自杀并返回部分结果 | — |
@@ -406,7 +406,7 @@ new → starting → active ⇄ thinking ⇄ tool_running            │
 
 | 场景 | 处理 |
 |---|---|
-| 超大仓库 / 巨量命中 | search_files 上限 200 条 + 提示收窄；仓库索引懒构建（首用后台建，限速） |
+| 超大仓库 / 巨量命中 | glob_files/grep_files 上限 200 条 + 提示收窄；仓库索引懒构建（首用后台建，限速） |
 | compaction 后仍超限 | 报 8010，建议精简任务/新建会话/升档更大窗口模型 |
 | ai-gateway 故障 | 会话暂停并明确报错；IM 等基础功能不受影响（02 篇 §7，Runtime 独立进程） |
 | OBO 续签失败（权限被收回/登出） | 会话 paused；续签即重算 scope（03 篇 §6.4），收敛后继续或提示 |

@@ -72,7 +72,7 @@ impl ToolExecutor for AllowTools {
         // 与真实注册表同形：派发入口在主 Agent 工具面里
         vec![
             ToolSpec {
-                name: "search_files".into(),
+                name: "grep_files".into(),
                 description: "检索".into(),
                 input_schema: serde_json::json!({"type":"object"}),
             },
@@ -259,7 +259,7 @@ impl ChatClient for ProbeModel {
                 Ok(StreamEvent::ToolCallBegin {
                     index: 0,
                     id: format!("pc-{n}"),
-                    name: "search_files".into(),
+                    name: "grep_files".into(),
                 }),
                 Ok(StreamEvent::ToolCallDelta {
                     index: 0,
@@ -301,7 +301,7 @@ fn spawn_subagents_runs_two_probes_and_returns_digest() {
     let mut runner = new_runner("s-fan");
     runner.run_turn("梳理这个项目的认证与配置", &deps, None);
 
-    // 工具经完整管线执行（每子任务 1 次 search_files）
+    // 工具经完整管线执行（每子任务 1 次 grep_files）
     let executed = tools.0.lock().unwrap().clone();
     assert_eq!(
         executed.len(),
@@ -572,7 +572,7 @@ impl ChatClient for AdjustableModel {
                 Ok(StreamEvent::ToolCallBegin {
                     index: 0,
                     id: "adj-1".into(),
-                    name: "search_files".into(),
+                    name: "grep_files".into(),
                 }),
                 Ok(StreamEvent::ToolCallDelta {
                     index: 0,

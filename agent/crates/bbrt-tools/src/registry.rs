@@ -166,19 +166,13 @@ mod tests {
     fn 内置清单_风险级与类别映射() {
         let reg = ToolRegistry::builtin();
         // D13-A2 行 1：只读
-        for name in [
-            "read_file",
-            "list_dir",
-            "search_files",
-            "git_status",
-            "git_diff",
-        ] {
+        for name in ["read_file", "list_dir", "glob_files", "grep_files"] {
             let d = reg.get(name).unwrap_or_else(|| panic!("{name} 未注册"));
             assert_eq!(d.category, ActionCategory::ReadOnly, "{name}");
             assert_eq!(d.risk, RiskLevel::Low, "{name}");
         }
         // 行 2：文件编辑
-        for name in ["write_file", "edit_file", "git_commit"] {
+        for name in ["write_file", "edit_file", "memory_forget"] {
             let d = reg.get(name).unwrap();
             assert_eq!(d.category, ActionCategory::FileEdit, "{name}");
         }
@@ -191,10 +185,8 @@ mod tests {
             reg.get("http_fetch").unwrap().category,
             ActionCategory::NetworkEgress
         );
-        assert_eq!(
-            reg.get("git_push").unwrap().category,
-            ActionCategory::GitPush
-        );
+        // git 四件 2026-11-27 整域退役：push 门禁语义由 shell 命令层表达
+        //（run_command git push 跟档、force 进危险规则库；外名防御在 gate.static_category）
         // 记忆写入：低风险（gate 未知工具兜底任意命令档，见 pipeline 注释）
         assert_eq!(reg.get("memory_save").unwrap().risk, RiskLevel::Low);
         // 未注册

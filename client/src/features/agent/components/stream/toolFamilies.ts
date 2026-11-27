@@ -9,8 +9,8 @@ import {
   Brain,
   FilePen,
   FilePlus,
+  FileSearch,
   FileText,
-  GitBranch,
   Globe,
   HelpCircle,
   Plug,
@@ -27,7 +27,6 @@ export type ToolFamily =
   | 'fileEdit'
   | 'search'
   | 'terminal'
-  | 'git'
   | 'web'
   | 'memory'
   | 'ask'
@@ -37,7 +36,7 @@ export type ToolFamily =
 
 export interface ToolFamilyMeta {
   family: ToolFamily;
-  /** 头部动作词（中文；git/memory 按具体工具细分） */
+  /** 头部动作词（中文；memory 按具体工具细分） */
   label: string;
   icon: LucideIcon;
 }
@@ -51,13 +50,6 @@ export function splitMcpName(tool: string): { server: string; rest: string } | n
   }
   return null;
 }
-
-const GIT_LABELS: Record<string, string> = {
-  git_status: 'Git 状态',
-  git_diff: 'Git 差异',
-  git_commit: 'Git 提交',
-  git_push: 'Git 推送',
-};
 
 const MEMORY_LABELS: Record<string, string> = {
   memory_save: '记忆保存',
@@ -81,8 +73,10 @@ export function classifyTool(tool: string): ToolFamilyMeta {
       return { family: 'fileWrite', label: '写入', icon: FilePlus };
     case 'edit_file':
       return { family: 'fileEdit', label: '编辑', icon: FilePen };
-    case 'search_files':
-      return { family: 'search', label: '搜索', icon: Search };
+    case 'glob_files':
+      return { family: 'search', label: '找文件', icon: FileSearch };
+    case 'grep_files':
+      return { family: 'search', label: '搜内容', icon: Search };
     case 'run_command':
       return { family: 'terminal', label: '终端', icon: Terminal };
     case 'http_fetch':
@@ -96,7 +90,6 @@ export function classifyTool(tool: string): ToolFamilyMeta {
     default:
       break;
   }
-  if (GIT_LABELS[tool]) return { family: 'git', label: GIT_LABELS[tool], icon: GitBranch };
   if (MEMORY_LABELS[tool]) return { family: 'memory', label: MEMORY_LABELS[tool], icon: Brain };
   return { family: 'generic', label: tool, icon: Wrench };
 }

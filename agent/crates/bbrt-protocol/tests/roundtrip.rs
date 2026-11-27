@@ -224,7 +224,7 @@ fn all_runtime_to_host() -> Vec<RuntimeToHost> {
             session_id: "sess-1".into(),
             sub_id: "sub-1".into(),
             task_digest: "定位超时来源".into(),
-            tool_subset: vec!["read_file".into(), "search_files".into()],
+            tool_subset: vec!["read_file".into(), "grep_files".into()],
         },
         RuntimeToHost::SubagentEvent {
             session_id: "sess-1".into(),

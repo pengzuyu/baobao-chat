@@ -84,7 +84,7 @@
 | fileRead | read_file / list_dir | Read / LS | 「读取/列目录」+路径(+行区间) | 参数+结果摘要（行数等） |
 | fileWrite | write_file | Write | 「写入」+路径 · N行/N字节（args.content 计算） | 内容预览 |
 | fileEdit | edit_file | Edit/Update | 「编辑」+路径 | **old/new 全量红绿行 diff**（精确替换语义，无需 diff 算法；外部 old_string/new_string 同取） |
-| search | search_files | Grep/Glob | 「搜索」+query | 参数+命中摘要 |
+| search | glob_files / grep_files | Grep/Glob | 「找文件」「搜内容」+pattern | 参数+命中摘要 |
 | terminal | run_command | Bash/Shell | 「终端」+`$ 命令` 单行截断 | 命令全文+输出块+exit code |
 | git | git_* | — | 「Git」+动作词（状态/差异/提交/推送） | 参数+结果 |
 | web | http_fetch | WebFetch/WebSearch | 「网络」+URL/查询 | 参数+结果摘要 |

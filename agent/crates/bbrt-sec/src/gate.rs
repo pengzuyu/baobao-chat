@@ -177,7 +177,7 @@ fn static_category(tool: &str) -> Option<ActionCategory> {
         // mail_send 落 CorpWrite——归一化缺失时三者均落兜底档，此处补齐登记）；
         // B1 感知面九件（2026-11-23，mcpgw 供给全 low）；
         // B3 schedule_list（mcp.local 供给，只读）
-        "read_file" | "list_dir" | "search_files" | "glob" | "git_status" | "git_diff"
+        "read_file" | "list_dir" | "glob" | "glob_files" | "grep_files"
         | "kb_query" | "doc_read" | "im_history" | "mail_read" | "org_search" | "im_convs"
         | "im_search" | "kb_spaces" | "kb_nodes" | "calendar_query" | "file_list" | "presences"
         | "schedule_list"
@@ -194,8 +194,11 @@ fn static_category(tool: &str) -> Option<ActionCategory> {
         // 记忆工具：仅写本机记忆目录（D15 §2.2 W1：风险级低，全档放行，
         // 归入只读档即"三档自动"语义；密钥特征拒写由 bbrt-memory 落盘侧兜底）
         "memory_save" | "memory.save" => Some(ActionCategory::ReadOnly),
-        // 文件编辑（A2 行 2）；memory_forget=删除记忆条目（随 ToolDef 声明归编辑档）
-        "write_file" | "edit_file" | "git_commit" | "memory_forget" => {
+        // 文件编辑（A2 行 2）；memory_forget=删除记忆条目（随 ToolDef 声明归编辑档）。
+        // git_commit/git_status/git_diff 随 2026-11-27 git 工具整域退役出表——git 统一走
+        // run_command，门禁在命令层表达（读子命令=shell_readonly 只读档；push 下方
+        // git_push 映射保留：防第三方 MCP 同名工具绕档的外名防御，builtin 不再注册）
+        "write_file" | "edit_file" | "memory_forget" => {
             Some(ActionCategory::FileEdit)
         }
         // 网络出站（A2 行 6）
@@ -207,7 +210,8 @@ fn static_category(tool: &str) -> Option<ActionCategory> {
         // 到点执行仍受 D35 任务权限与 full-auto 权限点约束）
         "doc_write" | "im_send" | "file_upload" | "app_write" | "mail_send" | "group_create"
         | "group_invite" | "schedule_create" | "schedule_cancel" => Some(ActionCategory::CorpWrite),
-        // git push（A2 行 8，永不全自动）
+        // git push（A2 行 8）：builtin git_push 工具已退役（2026-11-27），映射保留作
+        // 外名防御（第三方 MCP 同名工具仍归 GitPush 档，凭据语义不被任意命令档稀释）
         "git_push" => Some(ActionCategory::GitPush),
         // 委派编码（A2 行 9）
         // 子 Agent 只读探查（A2 行 10）；spawn_subagents=子 agent 通用派发入口
@@ -558,8 +562,8 @@ mod tests {
         for tool in [
             "read_file",
             "list_dir",
-            "search_files",
-            "git_status",
+            "glob_files",
+            "grep_files",
             "doc_read",
         ] {
             for mode in MODES {
@@ -580,7 +584,7 @@ mod tests {
     #[test]
     fn row2_file_edit_ask_confirm_others_allow() {
         let f = Fixture::new();
-        for tool in ["write_file", "edit_file", "git_commit"] {
+        for tool in ["write_file", "edit_file", "memory_forget"] {
             let d = permission_gate(
                 PermissionMode::Ask,
                 &call(tool, &json!({"path":"a"})),
@@ -1407,9 +1411,14 @@ mod tests {
         let rm_args = json!({"command": "rm -rf /etc/x"});
         let rm = call("run_command", &rm_args);
         assert_eq!(classify_action(&rm, &f.ctx()).risk_level(), "high");
-        // git_status 在 gate 是只读档，风险级应同步 low（旧静态表标 medium）
+        // shell 只读 git（git_status/git_diff 工具 2026-11-27 退役）：git status 经
+        // shell_readonly 归只读档，风险级同步 low（旧静态表标 medium 的口径随退役消亡）
         assert_eq!(
-            classify_action(&call("git_status", &json!({})), &f.ctx()).risk_level(),
+            classify_action(&call("run_command", &json!({"command": "git status"})), &f.ctx()).risk_level(),
+            "low"
+        );
+        assert_eq!(
+            classify_action(&call("run_command", &json!({"command": "git diff HEAD~1"})), &f.ctx()).risk_level(),
             "low"
         );
     }

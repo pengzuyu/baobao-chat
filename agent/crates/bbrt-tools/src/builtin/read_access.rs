@@ -17,7 +17,7 @@
 //!   search.rs 统一入口。执行层校验保证子代理/专家直调 execute 时同样被拦
 //!   （他们没有审批链，未授权读会收到 Blocked 提示回主会话授权）。
 //!
-//! 适用工具：read_file / list_dir / search_files。
+//! 适用工具：read_file / list_dir / glob_files / grep_files。
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -31,15 +31,15 @@ use bbrt_sec::sandbox::path::{is_sensitive_file, read_realpath};
 
 use super::{deny, ExecEnv, ToolBlock};
 
-/// 读工具参数名（read_file/list_dir 用 path，search_files 用 path 可缺省=工作区）
-pub(crate) const READ_TOOLS: &[&str] = &["read_file", "list_dir", "search_files"];
+/// 读工具参数名（path 可缺省=工作区，四个读工具同口径）
+pub(crate) const READ_TOOLS: &[&str] = &["read_file", "list_dir", "glob_files", "grep_files"];
 
 /// 工具名是否读审批适用
 pub(crate) fn is_read_tool(tool: &str) -> bool {
     READ_TOOLS.contains(&tool)
 }
 
-/// 从工具参数提取读取目标（缺省=工作区根，search_files 口径）
+/// 从工具参数提取读取目标（缺省=工作区根，glob_files/grep_files 同口径）
 pub(crate) fn read_target(workspace: &Path, args: &serde_json::Value) -> PathBuf {
     args.get("path")
         .and_then(|v| v.as_str())

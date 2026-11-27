@@ -75,7 +75,7 @@ impl ChatClient for ScriptModel {
                 Ok(StreamEvent::ToolCallBegin {
                     index: 0,
                     id: "ec-1".into(),
-                    name: "git_diff".into(),
+                    name: "grep_files".into(),
                 }),
                 Ok(StreamEvent::ToolCallDelta {
                     index: 0,
@@ -136,7 +136,7 @@ impl ToolExecutor for AllowTools {
         Ok(())
     }
     fn tool_specs(&self) -> Vec<ToolSpec> {
-        ["read_file", "search_files", "git_diff", "kb.search"]
+        ["read_file", "glob_files", "grep_files", "kb.search"]
             .into_iter()
             .map(|n| ToolSpec {
                 name: n.into(),
@@ -155,7 +155,7 @@ display: 代码评审专家
 persona: |
   你是资深评审员。输出：阻断问题/建议/风险评级三段结构。
 tools:
-  builtin: [read_file, git_diff, run_command]
+  builtin: [read_file, grep_files, run_command]
   mcp:    [kb.search, oa.lookup]
 skills: [corp.review-standards]
 constraints:
@@ -195,7 +195,7 @@ fn assemble_filters_and_builds_system() {
     );
 
     // 声明 5 项：run_command 未注册、oa.lookup 未注册+策略禁用 → 留 3
-    assert_eq!(a.tool_names, vec!["read_file", "git_diff", "kb.search"]);
+    assert_eq!(a.tool_names, vec!["read_file", "grep_files", "kb.search"]);
     let dropped_names: Vec<&str> = a.dropped_tools.iter().map(|d| d.name.as_str()).collect();
     assert!(dropped_names.contains(&"run_command"));
     assert!(dropped_names.contains(&"oa.lookup"));
@@ -269,7 +269,7 @@ fn run_expert_full_chain() {
         .iter()
         .all(|(s, model_)| s.contains("资深评审员") && model_ == "bbc-default"));
     // 工具真实执行（经白名单子集）
-    assert_eq!(*tools.0.lock().unwrap(), vec!["git_diff"]);
+    assert_eq!(*tools.0.lock().unwrap(), vec!["grep_files"]);
     // WAL：activate（act=expert:{persona}:{activation}）→ done
     let entries = log.0.lock().unwrap().clone();
     let types: Vec<&str> = entries.iter().map(|(_, t, _)| t.as_str()).collect();

@@ -801,7 +801,7 @@ export class MockAgentBridge implements AgentBridge {
         { runId: 'r-42', task: '核对报销制度里的票据要求与审批链' },
       ];
       for (const sub of subs) {
-        this.emit({ type: 'subagentSpawn', sessionId: sid, runId: sub.runId, taskDigest: sub.task, toolSubset: ['read_file', 'search_files'] });
+        this.emit({ type: 'subagentSpawn', sessionId: sid, runId: sub.runId, taskDigest: sub.task, toolSubset: ['read_file', 'glob_files'] });
       }
       for (const sub of subs) {
         this.emit({
@@ -811,7 +811,7 @@ export class MockAgentBridge implements AgentBridge {
           item: {
             kind: 'tool_call',
             callId: `${sub.runId}-c1`,
-            tool: 'search_files',
+            tool: 'grep_files',
             argsMasked: '{"query":"差旅 票据"}',
             risk: 'low',
           },

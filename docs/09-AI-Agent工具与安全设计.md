@@ -8,7 +8,7 @@
 
 > **⚠ 2026-11-23 用户拍板修订（推翻 §4.4 拒绝类）**：危险规则库「直接拒绝（Deny）」整档退役——原 10 条 Deny（sudo 提权/mkfs·dd 磁盘破坏/关机/`curl|sh` 管道执行远端脚本/force push 保护分支/fork 炸弹等）降级并入双重确认：规则库命中一律红卡长按、三档皆弹（full-auto 不豁免）、禁永久记忆，放行与否由用户裁决，**不再有不经确认的直接拦截路径**；8021 错误码随之退役（码位保留不复用）。同轮确认：文件专用工具面（read_file/list_dir/write_file/edit_file+搜索，ReadOnly 全档自动/写类 auto-edit+ 自动）与 AGENTS.md 白名单通道（免确认记忆）保留不动。
 
-> **⚠ 2026-11-26 读审批化修订（推翻 B10「读边界 v0.1 收紧」）**：read_file/list_dir/search_files 的「读限制在工作区内（越界 8020 硬拦）」退役——恢复 B10 原始「全盘可读」口径并叠加审批层：**工作区内读自动；工作区外未授权读在 ask/auto-edit 弹审批卡（本次/本会话该目录树两种记忆）、full-auto 放行（拍板）；敏感文件（.env*/密钥/凭据清单命中）三档皆弹红卡、仅「本次」**；用户随消息附带的文件视为已授权（工作区外/敏感都不弹）。实现=bbrt-tools builtin/read_access.rs（门控追加判定+执行层统一校验——子代理/专家直调 execute 同表拦截）；审批预览新增 `Preview::Read{path,sensitive}`（preview_kind=read/read-sensitive）。8020 语义收窄为「读未授权拦截」（violation 审计码不变）、8026 语义改为「敏感文件需批准读取」。`run_command` 只读命令（cat 等）暂不纳入（拍板：命令通道维持现状）。永久级读授权不存在。
+> **⚠ 2026-11-26 读审批化修订（推翻 B10「读边界 v0.1 收紧」）**：read_file/list_dir/glob_files/grep_files（search_files 2026-11-27 拆分为后两者）的「读限制在工作区内（越界 8020 硬拦）」退役——恢复 B10 原始「全盘可读」口径并叠加审批层：**工作区内读自动；工作区外未授权读在 ask/auto-edit 弹审批卡（本次/本会话该目录树两种记忆）、full-auto 放行（拍板）；敏感文件（.env*/密钥/凭据清单命中）三档皆弹红卡、仅「本次」**；用户随消息附带的文件视为已授权（工作区外/敏感都不弹）。实现=bbrt-tools builtin/read_access.rs（门控追加判定+执行层统一校验——子代理/专家直调 execute 同表拦截）；审批预览新增 `Preview::Read{path,sensitive}`（preview_kind=read/read-sensitive）。8020 语义收窄为「读未授权拦截」（violation 审计码不变）、8026 语义改为「敏感文件需批准读取」。`run_command` 只读命令（cat 等）暂不纳入（拍板：命令通道维持现状）。永久级读授权不存在。
 
 | 项 | 内容 |
 |---|---|
@@ -56,13 +56,11 @@
 |---|---|---|---|---|
 | read_file | 读工作区文件（行区间，08 篇 §4.3） | 低 | 全模式自动 | — |
 | list_dir | 目录列举（含忽略规则 .gitignore 感知） | 低 | 全模式自动 | — |
-| search_files | grep（内容）/ glob（文件名）检索 | 低 | 全模式自动 | — |
+| glob_files | 文件名/路径 glob 检索（** 跨段；2026-11-27 由 search_files 拆分） | 低 | 全模式自动 | — |
+| grep_files | 内容正则检索（行号/计数/三输出模式；2026-11-27 由 search_files 拆分） | 低 | 全模式自动 | — |
 | write_file | 新建/整文件覆写 | 中 | ask 确认；auto-edit+ 自动 | — |
 | edit_file | 精确串替换（old/new，多 hunk） | 中 | ask 确认；auto-edit+ 自动 | — |
-| run_command | 执行脚本/命令（沙箱 §4.3） | 高 | 全模式确认（记忆可免，§4.2）；用户须具备 `agent:tool:run_command` | 权限点见左 |
-| git_status / git_diff | 查看工作区状态与差异 | 低 | 全模式自动 | — |
-| git_commit | 本地提交（含检查点链） | 中 | ask 确认；auto-edit+ 自动 | — |
-| git_push / git 远端操作 | 推送远端 | 高 | 全模式确认；默认策略可禁用 | 凭据走钥匙串 §7.2 |
+| run_command | 执行脚本/命令（沙箱 §4.3）；**git 全部走此通道**（2026-11-27 git 专用工具整域退役：读子命令 shell_readonly 只读档自动、push 跟档、force 进危险规则库双确认） | 高 | 全模式确认（记忆可免，§4.2）；用户须具备 `agent:tool:run_command` | 权限点见左 |
 | http_fetch | HTTP GET，仅内网白名单（§3.2.4） | 中 | ask 确认；auto-edit+ 确认 | — |
 | kb_query | 知识库混合检索 | 低 | 全模式自动 | OBO `kb:query:use` |
 | doc_read | 读知识库文档详情与全文分块（**B1 2026-11-23** 以 kb 域供给；旧文档中心域版本已随瘦身移除） | 低 | 全模式自动 | OBO `doc:file:view` |
@@ -109,13 +107,9 @@
 | 风险 | 覆盖用户未预期内容；路径逃逸改工作区外文件 |
 | 缓解 | realpath 白名单校验；修改前检查点（08 篇 §4.4）；ask 模式 diff 逐 hunk 审批（§3.4.1）；大文件覆写二次确认 |
 
-**3.2.3 git_commit / git 远端（中/高）**
+**3.2.3 git_commit / git 远端（2026-11-27 已随 git 专用工具整域退役）**
 
-| 项 | 设计 |
-|---|---|
-| 参数 | message、files[]（commit）；remote、branch、force(push) |
-| 风险 | 提交敏感文件入历史；force push 破坏远端；push 泄露到错误远端 |
-| 缓解 | commit 前 `.gitignore` 外敏感文件扫描（§7.2 模式库）；push 默认禁用需用户在设置开启+确认；`--force` 到保护分支双重确认（§4.4 规则，2026-11-23 由直接拒绝降级）；远端仅允许 https(s):// 且凭据从钥匙串按需注入（§7.2） |
+git 工作流统一经 run_command 表达，风险控制在命令层：只读子命令（status/log/diff/show 等）由 shell_readonly 只读分类器全档自动；普通 push 跟档（auto-edit+ 自动）；`--force`/`reset --hard` 等命中危险规则库三档双确认（§4.4，2026-11-23 口径延续）。凭据注入（钥匙串）挂账命令层方案，tools/list 不再广播恒 8028 的占位工具。
 
 **3.2.4 http_fetch（中）**
 
@@ -150,7 +144,7 @@
 
 ### 3.4 确认交互卡片
 
-**3.4.1 编辑 diff 预览卡（write_file/edit_file/git_commit）**
+**3.4.1 编辑 diff 预览卡（write_file/edit_file）**
 
 ```
 ┌ 编辑请求: auth.rs (+8/-4) ──────────── [全部接受] [拒绝] ┐
@@ -194,11 +188,11 @@
 
 | 工具\模式 | ask | auto-edit | full-auto |
 |---|---|---|---|
-| read_file / list_dir / search_files / git_status / git_diff / kb_query / doc_read | A | A | A |
-| write_file / edit_file / git_commit | C | A | A |
-| run_command | C | C | C（记忆/白名单前缀可免） |
+| read_file / list_dir / glob_files / grep_files / kb_query / doc_read | A | A | A |
+| write_file / edit_file / memory_forget | C | A | A |
+| run_command（任意命令；**只读子命令与只读 git 子命令除外=A/A/A**） | C | A | A（2026-11-26 修订跟档） |
 | http_fetch / file_upload | C | C | C（内网白名单 GET 可记忆） |
-| git_push | C | C | C（默认策略可整体禁用） |
+| run_command git push（普通） | C | A | A（跟档，D32；force 类进危险规则库三档双确认） |
 | doc_write / im_send / app 高危 | C | C | C（**永不全自动**，§7.3） |
 | app 低危 | A | A | A |
 | app 中危 | C | A | A |
@@ -369,7 +363,7 @@
 | 系统钥匙串读取（如 git push 凭据） | 单独授权弹窗（与工具确认卡分离，8028 可拒）；值**脱敏展示**（仅尾 4 位）；值仅注入目标进程 env/参数，**不进入模型上下文与 UI DOM** |
 | 输出中的密钥/token | 打码模式库（AK/SK、JWT、`password=`、`token:`、私钥块等）在**进入上下文前**替换 `***`；打码同步作用于展示与审计 args_digest |
 | .env 类文件 | `.env*`、`*.pem`、`id_rsa*`、`*credentials*`、`.npmrc` 等默认拒读（8026）；用户按文件显式授权后可读，但关键值仍打码 |
-| 修改前敏感扫描 | git_commit / file_upload 前对内容跑打码模式库，命中则阻断并提示 |
+| 修改前敏感扫描 | file_upload 前对内容跑打码模式库，命中则阻断并提示 |
 
 ### 7.3 提示注入防御
 

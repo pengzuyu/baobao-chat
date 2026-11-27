@@ -1,13 +1,14 @@
 //! bbrt-tools：工具注册表与执行管线（D11 §2.4 / §6）。
 //!
 //! 职责：
-//! - [`registry`]：工具注册表（内置 12 个：fs×4 / search×1 / cmd×1 / git×4 / http×1 /
-//!   memory×1），每条 ToolDef 携带 D13-A2 动作类别与风险级；
+//! - [`registry`]：工具注册表（内置，每条 ToolDef 携带 D13-A2 动作类别与风险级；
+//!   2026-11-27 工具面改造：search×1→glob_files+grep_files 拆分，git×4 整域退役
+//!   ——git 统一经 run_command 通道，门禁在命令层表达）；
 //! - [`pipeline`]：[`PipelineExecutor`] 实现 `bbrt_session::ToolExecutor` 契约
 //!   （check/execute/record_grant/tool_specs），对应 D11 §6 九步管线的
 //!   ①注册查询→②permission_gate→③确认卡→④沙箱校验→⑤执行→⑥脱敏；
 //! - [`builtin`]：内置工具实现（read_file 摘录/敏感拒读、write/edit 白名单、
-//!   search_files 递归匹配、run_command 沙箱执行、git 只读+8028、http_fetch
+//!   glob_files/grep_files 检索、run_command 沙箱执行、http_fetch
 //!   白名单+沙箱 curl、memory_save 直通 MemoryEngine）；
 //! - [`config`]：[`ToolsConfig`]（工作区/例外可写/网络白名单/沙箱执行器/记忆引擎/
 //!   journal 回调）与 violation → SQLite 适配器。

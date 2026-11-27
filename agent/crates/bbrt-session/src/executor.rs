@@ -80,8 +80,8 @@ pub trait ToolExecutor: Send + Sync {
     /// 实现方兜底，行为与退役前一致）。
     fn risk_of_call(&self, call: &ToolInvocation) -> &'static str {
         match call.name.as_str() {
-            "read_file" | "list_dir" | "search_files" | "glob" => "low",
-            "write_file" | "edit_file" | "git_status" | "git_diff" => "medium",
+            "read_file" | "list_dir" | "glob_files" | "grep_files" => "low",
+            "write_file" | "edit_file" => "medium",
             _ => "high",
         }
     }

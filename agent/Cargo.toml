@@ -19,6 +19,9 @@ uuid = { version = "1", features = ["v4"] }
 # 默认特性（tiff/avif/bmp/qoi 等）全关，控制二进制体积与编译时间
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 base64 = "0.22"
+# grep_files 内容检索正则引擎（2026-11-27 工具面改造：search_files 拆 glob_files+grep_files）；
+# 默认特性（unicode）保留——中文/全角等字符类是搜索刚需
+regex = { version = "1", default-features = false, features = ["std", "unicode"] }
 bbrt-protocol = { path = "crates/bbrt-protocol" }
 bbrt-sec = { path = "crates/bbrt-sec" }
 bbrt-memory = { path = "crates/bbrt-memory" }

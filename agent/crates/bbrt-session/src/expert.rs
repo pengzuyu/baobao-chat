@@ -977,7 +977,7 @@ icon: review.png
 persona: |
   你是资深评审员。逐文件审查 diff，输出：阻断问题/建议/风险评级三段结构。
 tools:
-  builtin: [read_file, search_files, git_diff, run_command]
+  builtin: [read_file, glob_files, grep_files, run_command]
   apps:   [oa.lookup]
   mcp:    [kb.search]
 skills: [corp.review-standards]
@@ -1001,7 +1001,7 @@ signature: abc123
         assert_eq!(m.kind, "local");
         assert_eq!(
             m.tools.builtin,
-            vec!["read_file", "search_files", "git_diff", "run_command"]
+            vec!["read_file", "glob_files", "grep_files", "run_command"]
         );
         assert_eq!(m.tools.apps, vec!["oa.lookup"]);
         assert_eq!(m.tools.mcp, vec!["kb.search"]);

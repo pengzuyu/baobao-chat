@@ -73,12 +73,9 @@ const WORKSPACE_BOUND_TOOLS: &[&str] = &[
     "list_dir",
     "write_file",
     "edit_file",
-    "search_files",
+    "glob_files",
+    "grep_files",
     "run_command",
-    "git_status",
-    "git_diff",
-    "git_commit",
-    "git_push",
 ];
 
 impl PipelineExecutor {
@@ -537,12 +534,9 @@ impl ToolExecutor for PipelineExecutor {
             "list_dir" => builtin::fs::list_dir(&env, &args),
             "write_file" => builtin::fs::write_file(&env, &args),
             "edit_file" => builtin::fs::edit_file(&env, &args),
-            "search_files" => builtin::search::search_files(&env, &args),
+            "glob_files" => builtin::search::glob_files(&env, &args),
+            "grep_files" => builtin::search::grep_files(&env, &args),
             "run_command" => builtin::cmd::run(&env, &args),
-            "git_status" => builtin::git::git_status(&env, &args),
-            "git_diff" => builtin::git::git_diff(&env, &args),
-            "git_commit" => builtin::git::git_commit(&env, &args),
-            "git_push" => builtin::git::git_push(&env, &args),
             "http_fetch" => builtin::http::fetch(&env, &args),
             "memory_save" => {
                 let ws = self.session_ws_path(&call.session_id);
@@ -787,13 +781,6 @@ fn build_preview(name: &str, args: &Value) -> ToolPreview {
                 content: format!("编辑 {path}\n- {}\n+ {}", head(old, 200), head(new, 200)),
             }
         }
-        "git_commit" => ToolPreview {
-            kind: "diff".into(),
-            content: format!(
-                "提交信息：{}",
-                args.get("message").and_then(Value::as_str).unwrap_or("")
-            ),
-        },
         _ => ToolPreview {
             kind: "none".into(),
             content: String::new(),

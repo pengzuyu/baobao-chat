@@ -137,9 +137,9 @@ bbrt-tools/src/
 ├─ dispatcher.rs     # 只读并行判定（parallel_safe 白名单）与串行化
 └─ builtin/
    ├─ fs.rs          # read_file / list_dir / write_file / edit_file
-   ├─ search.rs      # search_files(grep/glob，命中 ≤200)
+   ├─ search.rs      # glob_files（路径 glob）+ grep_files（内容正则，行号/计数）
    ├─ cmd.rs         # run_command（转 sec.sandbox 执行）
-   ├─ git.rs         # git_status / git_diff / git_commit / git_push（钥匙串注入）
+   # （git.rs 已于 2026-11-27 整域退役：git 统一走 run_command，门禁在命令层）
    ├─ http.rs        # http_fetch（内网白名单 GET）
 ```
 
@@ -424,7 +424,7 @@ function execute_pipeline(session, call):
   emit(tool.result, ok, summary, truncated, exit_code, durationMs)
 ```
 
-只读并行：read_file/list_dir/search_files/glob/kb_query/doc_read 且 parallel_safe → 可交子 Agent（§7）或并行分发；修改类一律主循环串行（08 §4.5）。修改类首次执行前：`git_snapshot()` → checkpoint.created(pre-edit)（同批共用，间隔 >5min 或跨任务再建，08 §4.4）。
+只读并行：read_file/list_dir/glob_files/grep_files/kb_query/doc_read 且 parallel_safe → 可交子 Agent（§7）或并行分发；修改类一律主循环串行（08 §4.5）。修改类首次执行前：`git_snapshot()` → checkpoint.created(pre-edit)（同批共用，间隔 >5min 或跨任务再建，08 §4.4）。
 
 ## 7. 子 Agent 调度器（session/loop_runner + tools/dispatcher）
 
@@ -433,7 +433,7 @@ function fanout(session, subtasks):        # 触发：快模型判定 complex（
   subs = subtasks.take(3)                  # 并发 ≤3（探查类，只读子集）
   for s in subs:
      ctx = 独立上下文 = system(只读探查角色) + 任务指令（仅 s，无主历史） 
-         + 工具子集 {read_file, list_dir, search_files, glob, kb_query, doc_read}
+         + 工具子集 {read_file, list_dir, glob_files, grep_files, kb_query, doc_read}
      emit(subagent.spawn, subId, taskDigest, toolSubset)
      spawn(sub_loop, steps_limit=15, model=快)
   join:                                    # 任一失败不阻塞

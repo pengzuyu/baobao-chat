@@ -442,7 +442,11 @@ pub fn run_command_def() -> ToolDef {
                       (cmd string/array forms also accepted); cwd defaults to the workspace. \
                       Runs synchronously by default: past 300s it automatically moves to the \
                       background (without interruption) and returns a task id — fetch the \
-                      result later via task.wait. No need to predict duration; just call it"
+                      result later via task.wait. No need to predict duration; just call it. \
+                      Also the channel for git workflows (status/diff/log/add/commit/push — \
+                      read-only git subcommands are auto-approved by the permission layer, \
+                      push follows the permission mode) and for find/grep forms the dedicated \
+                      search tools do not cover"
             .into(),
         input_schema: json!({
             "type": "object",

@@ -49,7 +49,7 @@ icon: review.png
 persona: |                         # 人设与输出契约（system prompt 增量）
   你是资深评审员。逐文件审查 diff，输出：阻断问题/建议/风险评级三段结构。
 tools:                             # 工具白名单（只能引用运行时已注册工具的子集）
-  builtin: [read_file, search_files, git_diff, run_command]   # 本地内置（编译期，仅文件/命令/git 类）
+  builtin: [read_file, glob_files, grep_files, run_command]   # 本地内置（编译期，仅文件/命令类）
   apps:   [oa.lookup]              # 生态应用工具（经 MCP 网关供给，连接期发现注册，§6.1）
   mcp:    [kb.search]              # MCP 网关/外部 server 工具（连接期 list_tools 动态发现，§6.1）
 skills: [corp.review-standards]    # 绑定的技能包（SKILL.md，10 篇格式）

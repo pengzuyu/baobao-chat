@@ -2,7 +2,8 @@
 //!
 //! 覆盖面对照任务口径：
 //! - registry 注册/查询/未注册 8002；read_file 正常/截断/敏感 8026/越界 8020；
-//! - write/edit 白名单内外与 journal 回调；search_files 命中/递归/200 上限；
+//! - write/edit 白名单内外与 journal 回调；glob_files/grep_files 检索（glob/正则/
+//!   行号/三输出模式/跳过目录与根豁免/二进制嗅探）；
 //! - run_command 真实沙箱 echo/越界写 violation+blocked/Baseline 降级；
 //! - gate 集成（ask 确认卡预览、full-auto 任意命令首次确认、只读全档放行）；
 //! - record_grant session 记忆命中 / 高危永久拒绝；memory_save 落盘 MEMORY.md；
@@ -137,7 +138,7 @@ fn blocked_code(out: ToolOutcome) -> (u32, String) {
 fn 注册表_内置清单查询与未注册8002() {
     let f = Fixture::new();
     let ex = f.executor();
-    // specs 覆盖内置 12 工具 + D20 ask_user（loop_runner 拦截、仅注册可发现性）
+    // specs 覆盖内置工具全集（git 四件 2026-11-27 整域退役，git 走 run_command）
     let specs = ex.tool_specs();
     let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
     for expect in [
@@ -145,12 +146,9 @@ fn 注册表_内置清单查询与未注册8002() {
         "list_dir",
         "write_file",
         "edit_file",
-        "search_files",
+        "glob_files",
+        "grep_files",
         "run_command",
-        "git_status",
-        "git_diff",
-        "git_commit",
-        "git_push",
         "http_fetch",
         "memory_save",
         "ask_user",
@@ -383,64 +381,180 @@ fn edit_file_old未命中不动文件() {
 }
 
 // ---------------------------------------------------------------------------
-// search_files
+// glob_files / grep_files（2026-11-27 工具面改造：search_files 双语义拆分）
 // ---------------------------------------------------------------------------
 
 #[test]
-fn search_files_内容子串递归命中() {
+fn grep_files_正则命中带行号() {
     let f = Fixture::new();
     fs::create_dir_all(f.ws.path().join("deep").join("deeper")).unwrap();
-    fs::write(f.ws.path().join("top.md"), "nothing here").unwrap();
-    fs::write(f.ws.path().join("deep").join("m1.rs"), "fn needle() {}\n").unwrap();
+    fs::write(f.ws.path().join("top.md"), "nothing here\n").unwrap();
+    fs::write(f.ws.path().join("deep").join("m1.rs"), "fn needle() {}\nother\n").unwrap();
     fs::write(
         f.ws.path().join("deep").join("deeper").join("m2.rs"),
-        "x\nneedle_found\n",
+        "x\nneedle_found\nneedle_again\n",
     )
     .unwrap();
     let ex = f.executor();
     let (summary, truncated, _, _) = ok_of(ex.execute(
         PermissionMode::Ask,
-        &call("search_files", serde_json::json!({"pattern": "needle"})),
+        &call("grep_files", serde_json::json!({"pattern": "needle\\w*"})),
     ));
     assert!(!truncated);
-    assert!(
-        summary.contains("m1.rs:fn needle() {}"),
-        "命中行格式: {summary}"
-    );
-    assert!(summary.contains("m2.rs:needle_found"));
+    // 行号格式 path:line:text；正则词尾匹配全中
+    assert!(summary.contains("m1.rs:1:fn needle() {}"), "命中行格式: {summary}");
+    assert!(summary.contains("m2.rs:2:needle_found"));
+    assert!(summary.contains("m2.rs:3:needle_again"));
     assert!(!summary.contains("top.md"), "未命中文件不应出现");
 }
 
 #[test]
-fn search_files_glob文件名匹配() {
+fn grep_files_ignore_case与glob过滤() {
     let f = Fixture::new();
-    fs::write(f.ws.path().join("main.rs"), "").unwrap();
-    fs::write(f.ws.path().join("lib.rs"), "").unwrap();
-    fs::write(f.ws.path().join("notes.txt"), "").unwrap();
+    fs::write(f.ws.path().join("a.rs"), "Password = 1\n").unwrap();
+    fs::write(f.ws.path().join("b.md"), "password = 2\n").unwrap();
     let ex = f.executor();
-    let (summary, _, _, _) = ok_of(ex.execute(
+    // 默认大小写敏感：只中小写命中文件
+    let (s1, _, _, _) = ok_of(ex.execute(
         PermissionMode::Ask,
-        &call("search_files", serde_json::json!({"pattern": "*.rs"})),
+        &call("grep_files", serde_json::json!({"pattern": "password"})),
     ));
-    assert!(summary.contains("main.rs"));
-    assert!(summary.contains("lib.rs"));
-    assert!(!summary.contains("notes.txt"));
+    assert!(s1.contains("b.md"));
+    assert!(!s1.contains("a.rs"));
+    // ignore_case 两文件全中
+    let (s2, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "grep_files",
+            serde_json::json!({"pattern": "password", "ignore_case": true}),
+        ),
+    ));
+    assert!(s2.contains("a.rs") && s2.contains("b.md"), "{s2}");
+    // glob 过滤只搜 .rs
+    let (s3, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "grep_files",
+            serde_json::json!({"pattern": "password", "ignore_case": true, "glob": "*.rs"}),
+        ),
+    ));
+    assert!(s3.contains("a.rs"));
+    assert!(!s3.contains("b.md"), "glob 过滤应排除 .md: {s3}");
 }
 
 #[test]
-fn search_files_200条上限截断标注() {
+fn grep_files_files与count模式() {
+    let f = Fixture::new();
+    fs::write(f.ws.path().join("a.txt"), "x\nhit\nhit\n").unwrap();
+    fs::write(f.ws.path().join("b.txt"), "hit\n").unwrap();
+    let ex = f.executor();
+    let (sf, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "grep_files",
+            serde_json::json!({"pattern": "hit", "output_mode": "files"}),
+        ),
+    ));
+    assert_eq!(sf.lines().count(), 2, "files 模式每文件一行: {sf}");
+    let (sc, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "grep_files",
+            serde_json::json!({"pattern": "hit", "output_mode": "count"}),
+        ),
+    ));
+    assert!(sc.contains("a.txt:2"), "count 模式 path:count: {sc}");
+    assert!(sc.contains("b.txt:1"), "{sc}");
+}
+
+#[test]
+fn grep_files_非法正则8002() {
+    let f = Fixture::new();
+    let ex = f.executor();
+    let (code, msg) = blocked_code(ex.execute(
+        PermissionMode::Ask,
+        &call("grep_files", serde_json::json!({"pattern": "a(b"})),
+    ));
+    assert_eq!(code, 8002);
+    assert!(msg.contains("正则"), "{msg}");
+}
+
+#[test]
+fn grep_files_跳过目录与根豁免() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.ws.path().join("target")).unwrap();
+    fs::write(f.ws.path().join("target").join("gen.rs"), "needle here\n").unwrap();
+    fs::write(f.ws.path().join("keep.rs"), "needle here\n").unwrap();
+    // 二进制文件（头部含 NUL）静默跳过
+    fs::write(f.ws.path().join("blob.bin"), b"\x00\x01needle\x00").unwrap();
+    let ex = f.executor();
+    let (s1, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("grep_files", serde_json::json!({"pattern": "needle"})),
+    ));
+    assert!(s1.contains("keep.rs"));
+    assert!(!s1.contains("target"), "构建产物目录默认跳过: {s1}");
+    assert!(!s1.contains("blob.bin"), "二进制文件跳过: {s1}");
+    // 显式 path 指入跳过目录 → 根豁免，可命中
+    let (s2, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call(
+            "grep_files",
+            serde_json::json!({"pattern": "needle", "path": "target"}),
+        ),
+    ));
+    assert!(s2.contains("gen.rs"), "根指向构建目录时豁免跳过: {s2}");
+}
+
+#[test]
+fn glob_files_文件名与路径glob() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.ws.path().join("src").join("lib")).unwrap();
+    fs::write(f.ws.path().join("main.rs"), "").unwrap();
+    fs::write(f.ws.path().join("notes.txt"), "").unwrap();
+    fs::write(f.ws.path().join("src").join("api.rs"), "").unwrap();
+    fs::write(f.ws.path().join("src").join("lib").join("util.rs"), "").unwrap();
+    let ex = f.executor();
+    // 不含 / 的 pattern：对文件名任意深度匹配
+    let (s1, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("glob_files", serde_json::json!({"pattern": "*.rs"})),
+    ));
+    assert!(
+        s1.contains("main.rs") && s1.contains("api.rs") && s1.contains("util.rs"),
+        "{s1}"
+    );
+    assert!(!s1.contains("notes.txt"));
+    // 含 / 的 pattern：对相对路径匹配，** 跨段
+    let (s2, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("glob_files", serde_json::json!({"pattern": "src/**/*.rs"})),
+    ));
+    assert!(s2.contains("api.rs") && s2.contains("util.rs"), "{s2}");
+    assert!(!s2.contains("main.rs"), "** 路径 glob 不含根外文件: {s2}");
+    // 单星不跨段
+    let (s3, _, _, _) = ok_of(ex.execute(
+        PermissionMode::Ask,
+        &call("glob_files", serde_json::json!({"pattern": "src/*.rs"})),
+    ));
+    assert!(s3.contains("api.rs"));
+    assert!(!s3.contains("util.rs"), "单星不应跨段: {s3}");
+}
+
+#[test]
+fn glob_files_200条上限截断标注() {
     let f = Fixture::new();
     let dir = f.ws.path().join("many");
     fs::create_dir_all(&dir).unwrap();
     for i in 0..250 {
-        fs::write(dir.join(format!("hit{i:03}.txt")), "needle").unwrap();
+        fs::write(dir.join(format!("hit{i:03}.txt")), "").unwrap();
     }
     let ex = f.executor();
     let (summary, truncated, _, _) = ok_of(ex.execute(
         PermissionMode::Ask,
         &call(
-            "search_files",
-            serde_json::json!({"pattern": "needle", "path": "many"}),
+            "glob_files",
+            serde_json::json!({"pattern": "*.txt", "path": "many"}),
         ),
     ));
     assert!(truncated, "250 命中 > 200 上限");
@@ -448,30 +562,28 @@ fn search_files_200条上限截断标注() {
     assert_eq!(summary.lines().count(), 201); // 200 行 + 标注行
 }
 
-/// 2026-11-23 修「search_files 卡死」回归：命中行超 200 字节且第 200 字节
-/// 落在多字节字符中间（现场 panic 原文：'为' bytes 198..201）——旧实现
-/// &line[..200] 直接 panic 杀会话循环线程（UI 永久执行中且无法停止），
-/// 现回退最近字符边界截断。67 个'为'（201 字节）+needle：截断点=198。
+/// 2026-11-23 修「search 卡死」回归（grep_files 承接）：命中行超长且截断点落在
+/// 多字节字符中间时旧实现 &line[..N] 直接 panic 杀会话循环线程（UI 永久执行中
+/// 且无法停止）。现按字符截断（200 字符）——250 个'为'（750 字节）截到 200 字符，
+/// 不 panic 且不切半字符（无 U+FFFD）。
 #[test]
-fn search_files_多字节截断不panic() {
+fn grep_files_多字节截断不panic() {
     let f = Fixture::new();
     fs::write(
         f.ws.path().join("a2a-doc.md"),
-        format!("{}needle\n", "为".repeat(67)),
+        format!("{}needle\n", "为".repeat(250)),
     )
     .unwrap();
     let ex = f.executor();
-    // 修复前本调用 panic（测试进程直接失败）
     let (summary, _, _, _) = ok_of(ex.execute(
         PermissionMode::Ask,
-        &call("search_files", serde_json::json!({"pattern": "needle"})),
+        &call("grep_files", serde_json::json!({"pattern": "needle"})),
     ));
     assert!(summary.contains("a2a-doc.md"), "命中文件应在结果中: {summary}");
-    // 展示行按字符边界截到 66 个'为'（198 字节）——不 panic 且不切半字符
-    assert!(
-        summary.contains(&"为".repeat(66)),
-        "截断应落在字符边界: {summary}"
-    );
+    assert!(!summary.contains('\u{FFFD}'), "不得切半字符: {summary}");
+    let first = summary.lines().next().unwrap_or("");
+    let body = first.rsplit(':').next().unwrap_or("");
+    assert_eq!(body.chars().count(), 200, "展示行恰 200 字符: {first}");
 }
 
 // ---------------------------------------------------------------------------
@@ -930,8 +1042,10 @@ fn masking_输出password被打码() {
     assert!(!summary.contains("hunter2secret"), "明文密码不得出现在结果");
 }
 
+/// git 专用工具 2026-11-27 整域退役：git 统一经 run_command 通道——只读子命令
+/// （shell_readonly PLAIN 表）在 ask 档零审批直执行，输出/退出码与原工具等价。
 #[test]
-fn git_status_经沙箱真实执行() {
+fn run_command_git_只读子命令ask直执行() {
     let f = Fixture::new();
     // 测试准备：真实 git init + 未跟踪文件（不经过被测代码）
     let ok = std::process::Command::new("git")
@@ -943,30 +1057,27 @@ fn git_status_经沙箱真实执行() {
     assert!(ok.success(), "git init 失败");
     fs::write(f.ws.path().join("README.md"), "# t\n").unwrap();
     let ex = f.executor();
+    // check：ask 档只读分类 → Allow（零审批，等价原 git_status 工具的 ReadOnly 档）
+    match ex.check(
+        PermissionMode::Ask,
+        &call(
+            "run_command",
+            serde_json::json!({"command": "git status --porcelain=v1 --branch"}),
+        ),
+    ) {
+        CheckOutcome::Allow { .. } => {}
+        other => panic!("git status 应只读自动放行，实际 {other:?}"),
+    }
     let (summary, _, exit_code, _) = ok_of(ex.execute(
         PermissionMode::Ask,
-        &call("git_status", serde_json::json!({})),
+        &call(
+            "run_command",
+            serde_json::json!({"command": "git status --porcelain=v1 --branch"}),
+        ),
     ));
     assert_eq!(exit_code, Some(0), "git 输出: {summary}");
-    assert!(
-        summary.contains("?? README.md"),
-        "porcelain 输出: {summary}"
-    );
+    assert!(summary.contains("?? README.md"), "porcelain 输出: {summary}");
     assert!(summary.contains("## "), "分支头行: {summary}");
-}
-
-#[test]
-fn git_commit与push_v01拒绝8028() {
-    let f = Fixture::new();
-    let ex = f.executor();
-    for (name, args) in [
-        ("git_commit", serde_json::json!({"message": "x"})),
-        ("git_push", serde_json::json!({})),
-    ] {
-        let (code, msg) = blocked_code(ex.execute(PermissionMode::Ask, &call(name, args)));
-        assert_eq!(code, 8028, "{name}");
-        assert!(msg.contains("钥匙串"));
-    }
 }
 
 #[test]

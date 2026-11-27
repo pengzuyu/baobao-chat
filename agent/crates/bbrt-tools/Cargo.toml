@@ -8,6 +8,8 @@ edition.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# grep_files 内容检索正则（2026-11-27 search_files 拆分）
+regex = { workspace = true }
 thiserror = { workspace = true }
 bbrt-protocol = { workspace = true }
 bbrt-sec = { workspace = true }

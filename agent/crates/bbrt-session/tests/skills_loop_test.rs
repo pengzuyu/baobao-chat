@@ -201,7 +201,7 @@ impl ChatClient for ToolsCaptureModel {
     }
 }
 
-/// 三工具注册表（read_file/list_dir/search_files）
+/// 三工具注册表（read_file/list_dir/grep_files）
 struct ThreeTools;
 impl ToolExecutor for ThreeTools {
     fn check(&self, _m: PermissionMode, _c: &ToolInvocation) -> CheckOutcome {
@@ -226,7 +226,7 @@ impl ToolExecutor for ThreeTools {
         Ok(())
     }
     fn tool_specs(&self) -> Vec<ToolSpec> {
-        ["read_file", "list_dir", "search_files"]
+        ["read_file", "list_dir", "grep_files"]
             .into_iter()
             .map(|n| ToolSpec {
                 name: n.into(),
@@ -256,7 +256,7 @@ fn pick_tools_not_narrowed_by_skill_declarations() {
                 name: "audit".into(),
                 description: String::new(),
                 triggers: vec!["部署".into()],
-                allowed_tools: vec!["search_files".into()],
+                allowed_tools: vec!["grep_files".into()],
                 risk: "low".into(),
                 body: "审计流程".into(),
                 dir: "/tmp/skills/audit".into(),

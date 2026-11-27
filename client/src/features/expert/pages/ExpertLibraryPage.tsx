@@ -25,7 +25,7 @@ display: 我的专家
 persona: |
   你是……（角色与输出契约）
 tools:
-  builtin: [read_file, git_diff]
+  builtin: [read_file, glob_files, grep_files]
 constraints:
   max_steps: 40
   write_policy: readonly

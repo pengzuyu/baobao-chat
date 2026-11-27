@@ -800,7 +800,7 @@ mod tests {
                 "sess-old",
                 2,
                 "tool.call",
-                r#"{"call_id":"c1","tool":"git_status","args":"{}"}"#,
+                r#"{"call_id":"c1","tool":"read_file","args":"{}"}"#,
             )
             .unwrap();
         say(
@@ -820,7 +820,7 @@ mod tests {
 
         let hits = search(&store, "登录超时", DIALOG, None);
         assert_eq!(hits.len(), 1);
-        assert_eq!(search(&store, "git_status", ALL, None).len(), 1);
+        assert_eq!(search(&store, "read_file", ALL, None).len(), 1);
         for t in ["agent_event_fts", "agent_event_fts_tri"] {
             assert_eq!(fts_count(&store, t), 2, "{t} 只应含两类入索引事件");
         }

@@ -2,12 +2,15 @@
 //!
 //! 模块划分与工具清单：
 //! - [`fs`]：read_file / list_dir / write_file / edit_file
-//! - [`search`]：search_files（递归 glob 文件名 + 内容子串，命中 ≤200）
+//! - [`search`]：glob_files（文件名/路径 glob）+ grep_files（内容正则，行号+计数）
 //! - [`cmd`]：run_command（经 bbrt-sec SandboxLauncher 真实沙箱执行）
-//! - [`git`]：git_status / git_diff（经沙箱跑 git）；git_commit / git_push（v0.1 拒绝 8028）
 //! - [`http`]：http_fetch（NetPolicy 白名单 + 沙箱 curl）
 //! - [`memory`]：memory_save（bbrt-memory W1 模型写入路径）
 //! - [`subagent`]：spawn_subagents（子 agent 通用派发薄门面——执行在 session 循环专用路径）
+//!
+//! git 不设专用工具（2026-11-27 整域退役：模型经 run_command 跑 git，读子命令由
+//! shell_readonly 只读分类器自动放行、push 跟档、force 类进危险规则库——
+//! 门禁语义在命令层表达，与 zcode/Claude Code 同构）。
 //!
 //! 各实现返回 [`ExecOutput`]（成功）或 [`ToolBlock`]（带 8020-8026/8002 错误码的阻断），
 //! 脱敏统一由 pipeline 第 7 步完成（D11 §6），本层不重复打码——例外是 violation
@@ -16,7 +19,6 @@
 pub mod ask_user;
 pub mod cmd;
 pub mod fs;
-pub mod git;
 pub mod http;
 pub mod memory;
 pub mod plugins;
@@ -209,12 +211,9 @@ pub(crate) fn register_all(registry: &mut ToolRegistry) {
     registry.register(fs::list_dir_def());
     registry.register(fs::write_file_def());
     registry.register(fs::edit_file_def());
-    registry.register(search::search_files_def());
+    registry.register(search::glob_files_def());
+    registry.register(search::grep_files_def());
     registry.register(cmd::run_command_def());
-    registry.register(git::git_status_def());
-    registry.register(git::git_diff_def());
-    registry.register(git::git_commit_def());
-    registry.register(git::git_push_def());
     registry.register(http::http_fetch_def());
     registry.register(memory::memory_save_def());
     registry.register(memory::memory_forget_def());

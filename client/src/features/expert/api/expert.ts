@@ -56,7 +56,7 @@ const mockExperts = (): MockRow[] => [
   {
     id: 'eco-1', expert_id: 'corp.code-reviewer', version: '1.2.0', display: '代码评审专家',
     summary: '逐文件审查 diff，输出阻断/建议/风险评级三段结构。', source: 1, status: 2,
-    manifest: 'id: corp.code-reviewer\ntype: local\nversion: 1.2.0\ndisplay: 代码评审专家\npersona: |\n  逐文件审查 diff，输出三段结构。\ntools:\n  builtin: [read_file, git_diff]\nsource: company\n',
+    manifest: 'id: corp.code-reviewer\ntype: local\nversion: 1.2.0\ndisplay: 代码评审专家\npersona: |\n  逐文件审查 diff，输出三段结构。\ntools:\n  builtin: [read_file, glob_files, grep_files]\nsource: company\n',
   },
   {
     id: 'eco-2', expert_id: 'corp.test-writer', version: '1.0.0', display: '测试专家',
