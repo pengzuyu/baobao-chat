@@ -13,17 +13,23 @@
  * 2026-11-26：注册/回执/首登改密三卡补 margin:auto 与登录卡对齐（此前仅登录卡居中）；
  * 注册表单工号/邮箱从 extra 提示改为框内动态只读预览——输入姓名防抖取服务端
  * /auth/empno-preview（真实查重递增，预览不占用，注册以回执为准），生僻字降级占位。
+ * 2026-11-27：QQ 式登录改造——账号框回归受控文本（手输/自动填充可直接登录），
+ * AccountPicker 下拉=「最近登录」历史账号+组织搜索二段式；记住密码/自动登录双复选框
+ * （默认双勾保持旧版重开直达；自动登录全局互斥、登录即重申，勾选联动记住密码），
+ * 挂载预填最近账号与记住的口令；首登改密成功同步新口令进本地记忆。
  */
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { Alert, Button, Card, Flex, Form, Input, Typography } from 'antd';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Alert, Button, Card, Checkbox, Flex, Form, Input, Typography } from 'antd';
+import type { InputRef } from 'antd';
 import { Navigate } from 'react-router-dom';
 import { errText, getErrorText } from '../../../shared/api/http';
 import { Logo } from '../../../shared/ui/Logo';
 import { APP_NAME, COPYRIGHT, TAGLINE } from '../../../shared/brand';
 import { useAuthStore } from '../store/auth';
 import { apiEmpnoPreview, apiRegister, apiSetupStatus, type RegisterResult, type UserCard } from '../api/auth';
-import { UserPicker } from '../components/UserPicker';
+import { AccountPicker } from '../components/AccountPicker';
+import { authAccountsList, authAccountsRemove, authLoginPasswordGet, authLoginPasswordSet, type RememberedAccount } from '../bridge/accounts';
 
 /** 认证页居中壳 + 品牌区（D26-O3 内联化）
  *  2026-11-23 真机：外壳不再随文档滚动，认证页改用 height:100% + 自身 overflowY，
@@ -72,9 +78,67 @@ export function LoginPage() {
   const lockSecondsLeft = useLockCountdown(lockUntil);
   const locked = lockSecondsLeft > 0;
 
-  // 搜人选账号（2026-11-12）：下拉选中后自动填充工号，不再手填
+  // 账号：受控文本 + 可选选中组织用户（手输工号/邮箱/手机号可直接登录，自动填充可感知）
+  const [account, setAccount] = useState('');
   const [picked, setPicked] = useState<UserCard | null>(null);
   const [pickError, setPickError] = useState('');
+
+  // QQ 式账号记忆（2026-11-27）：历史账号 + 记住密码/自动登录双开关。
+  // 默认双勾=保持旧版「登录过重开直达」体验；升级迁移见 store.restoreLogin
+  const [remembered, setRemembered] = useState<RememberedAccount[]>([]);
+  const [rememberPwd, setRememberPwd] = useState(true);
+  const [autoLogin, setAutoLogin] = useState(true);
+  const [form] = Form.useForm();
+  const passwordRef = useRef<InputRef>(null);
+
+  /** 选历史账号：填账号文本与勾选态；记住密码则回填口令（无存证焦点进口令框） */
+  const pickRemembered = async (a: RememberedAccount) => {
+    setAccount(a.account);
+    setPicked({ employee_no: a.account, display_name: a.name || a.account, org_path: '' });
+    setRememberPwd(a.rememberPwd);
+    setAutoLogin(a.autoLogin);
+    setPickError('');
+    const pwd = a.rememberPwd ? await authLoginPasswordGet(a.account).catch(() => null) : null;
+    if (pwd) {
+      form.setFieldValue('password', pwd);
+    } else {
+      passwordRef.current?.focus();
+    }
+  };
+
+  /** 删除历史账号（本地记忆+钥匙串口令一并清）；删的是当前选中账号则清空表单防误用 */
+  const removeRemembered = (a: RememberedAccount) => {
+    void authAccountsRemove(a.account).catch(() => undefined);
+    setRemembered((prev) => prev.filter((x) => x.account !== a.account));
+    if ((picked?.employee_no ?? account.trim()) === a.account) {
+      setPicked(null);
+      setAccount('');
+      form.setFieldValue('password', undefined);
+    }
+  };
+
+  // 挂载预填（QQ 行为，仅 Tauri 有记忆）：最近账号 + 记住的口令 + 该账号的开关勾选态
+  useEffect(() => {
+    let alive = true;
+    authAccountsList()
+      .then(async (list) => {
+        if (!alive || list.length === 0) return;
+        const last = list[0];
+        setRemembered(list);
+        setAccount(last.account);
+        setPicked({ employee_no: last.account, display_name: last.name || last.account, org_path: '' });
+        setRememberPwd(last.rememberPwd);
+        setAutoLogin(last.autoLogin);
+        if (last.rememberPwd) {
+          const pwd = await authLoginPasswordGet(last.account).catch(() => null);
+          if (alive && pwd) form.setFieldValue('password', pwd);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [form]);
 
   // 自助注册（M4）：login=登录 / register=注册表单 / registered=成功回执（展示工号）
   const [mode, setMode] = useState<'login' | 'register' | 'registered'>('login');
@@ -180,6 +244,12 @@ export function LoginPage() {
       setPwdBusy(true);
       setPwdError('');
       void changePassword(oldPwd, newPwd)
+        .then(() => {
+          // 新口令同步本地记忆（该账号勾过记住密码才存）——否则自动登录兜底拿旧口令必撞 1001
+          const uid = user?.uid;
+          const entry = uid ? remembered.find((x) => x.account === uid) : undefined;
+          if (uid && entry?.rememberPwd) void authLoginPasswordSet(uid, newPwd).catch(() => undefined);
+        })
         .catch((e) => setPwdError(e instanceof Error ? e.message : '改密失败，请重试'))
         .finally(() => setPwdBusy(false));
     };
@@ -306,24 +376,64 @@ export function LoginPage() {
         <AuthBrand title={APP_NAME} sub={TAGLINE} />
 
         <Form
+          form={form}
           layout="vertical"
           disabled={locked}
           onFinish={(values) => {
-            if (!picked) {
-              setPickError('请先搜索并选择账号');
+            // 账号口径：选中组织用户用工号；否则直接采信输入文本（自动填充/手输均可登录）
+            const acct = (picked?.employee_no ?? account).trim();
+            if (!acct) {
+              setPickError('请输入账号（工号 / 邮箱 / 手机号），或从历史账号中选择');
               return;
             }
             setPickError('');
-            void login(picked.employee_no, String(values.password ?? ''));
+            void login(acct, String(values.password ?? ''), { rememberPwd, autoLogin });
           }}
         >
           <Form.Item label="账号">
-            <UserPicker selected={picked} onSelect={setPicked} disabled={locked} />
+            <AccountPicker
+              account={account}
+              onAccountChange={setAccount}
+              selected={picked}
+              onSelect={setPicked}
+              remembered={remembered}
+              onPickRemembered={(a) => void pickRemembered(a)}
+              onRemoveRemembered={removeRemembered}
+              disabled={locked}
+            />
             {pickError ? <Alert type="error" showIcon message={pickError} data-testid="login-pick-error" style={{ marginTop: 8 }} /> : null}
           </Form.Item>
           <Form.Item name="password" label="口令" rules={[{ required: true, message: '请输入口令' }]}>
-            <Input.Password placeholder="请输入口令" autoComplete="current-password" size="large" />
+            <Input.Password ref={passwordRef} placeholder="请输入口令" autoComplete="current-password" size="large" />
           </Form.Item>
+
+          {/* QQ 式双开关：勾自动登录联动勾住记住密码；取消记住密码连带取消自动登录 */}
+          <Flex justify="space-between" style={{ marginBottom: 12 }}>
+            <Checkbox
+              checked={rememberPwd}
+              disabled={locked || autoLogin}
+              onChange={(e) => {
+                const v = e.target.checked;
+                setRememberPwd(v);
+                if (!v) setAutoLogin(false);
+              }}
+              data-testid="login-remember-pwd"
+            >
+              记住密码
+            </Checkbox>
+            <Checkbox
+              checked={autoLogin}
+              disabled={locked}
+              onChange={(e) => {
+                const v = e.target.checked;
+                setAutoLogin(v);
+                if (v) setRememberPwd(true);
+              }}
+              data-testid="login-auto-login"
+            >
+              自动登录
+            </Checkbox>
+          </Flex>
 
           {/* 错误码→中文文案（不依赖服务端 message） */}
           {error && !locked ? <Alert type="error" showIcon message={getErrorText(error.code)} style={{ marginBottom: 8 }} /> : null}

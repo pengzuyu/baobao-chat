@@ -59,7 +59,8 @@ fn ms_to_local(ms: i64) -> NaiveDateTime {
         .unwrap_or_else(|| Local.timestamp_millis_opt(0).unwrap().naive_local())
 }
 
-fn write_atomic(path: &Path, data: &str) -> Result<(), String> {
+/// 原子写（tmp+rename，无 fsync）：定时任务清单与登录账号记忆等本地 JSON 共用
+pub(crate) fn write_atomic(path: &Path, data: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("目录创建失败：{e}"))?;
     }
